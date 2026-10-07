@@ -54,6 +54,7 @@
         buildInputs = with pkgs; [
           rustc
           cargo
+          ffmpeg_4
           rust-analyzer
           rustfmt
           libglvnd

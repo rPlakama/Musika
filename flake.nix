@@ -17,6 +17,10 @@
           rustc
           cargo
           rust-analyzer
+          rustfmt
+
+          qt6.qtbase
+          qt6.qtwayland
         ];
       };
     };

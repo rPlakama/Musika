@@ -9,7 +9,7 @@ ApplicationWindow {
 
     Button {
         anchors.centerIn: parent
-        text: "Hello World!"
+        text: "Ping Server"
         onClicked: Backend.say_hello()
     }
 }

@@ -51,11 +51,15 @@
           rustPlatform.bindgenHook # drop if no crate needs libclang -- which is prob the case;;
         ];
 
+        # Should be a proper way to organize this, perhaps when in build time to actually adjust
+        # the shell, since it exposes all, in case which can, or cannot, be used at all.
         buildInputs = with pkgs; [
           rustc
           cargo
           ffmpeg_4
           rust-analyzer
+          sqlite
+          sqlite-analyzer
           rustfmt
           libglvnd
           qt

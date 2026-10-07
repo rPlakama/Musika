@@ -5,3 +5,5 @@ edition = "2024"
 
 [dependencies]
 qtbridge = "0.3.0"
+reqwest = "0.13.5"
+tokio = { version = "1.53.2", features = [ "rt-multi-thread"] }

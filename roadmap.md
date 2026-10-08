@@ -4,8 +4,9 @@
 [X] -- Init Rust;
 [X] -- Init HTTP;
 [] -- Bridge to Navidrome API
-    -> Usrname/Passwd write using Sqlite;
-    -> Login Screen in QT;
+    -> Usrname/Passwd write using Sqlite; _[X]_
+    -> Login Screen in QT; _[X]_
+    -> Wireup qml.rs <--> main.rs <--> sqlite.rs <--> http.rs, objective: Functional Login Screen that can ping if password is wrong, notice, use ENC to write down the DB;
 [] -- Local Playback thought streaming using FFMPEG or MPV, maybe.;
 [] -- Init Playable System
 [] -- Initial Design

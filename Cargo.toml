@@ -4,7 +4,8 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+anyhow = "1.0.104"
 qtbridge = "0.3.0"
 reqwest = "0.13.5"
-sqlx = "0.9.0"
-tokio = { version = "1.53.2", features = [ "rt-multi-thread"] }
+sqlx = { version = "0.9", features = [ "sqlite-deserialize", "sqlite", "runtime-tokio" ] }
+tokio = { version = "1.53.2", features = [ "rt", "macros", "rt-multi-thread"] }

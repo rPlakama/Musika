@@ -5,11 +5,31 @@ import musika
 ApplicationWindow {
 
     visible: true
-    title: qsTr("Minimal QML app")
+    title: qsTr("Musika")
 
-    Button {
+    Item {
+        id: main_login
+        width: 200
+        height: 100
         anchors.centerIn: parent
-        text: "Ping Server"
-        onClicked: Backend.say_hello()
+
+        TextField {
+            id: usernameField
+            placeholderText: qsTr("Enter Username")
+
+            anchors {
+                top: parent.top
+                horizontalCenter: parent.horizontalCenter
+            }
+        }
+
+        TextField {
+            id: passwordField
+            placeholderText: qsTr("Enter Password")
+            anchors {
+                bottom: parent.bottom
+                horizontalCenter: parent.horizontalCenter
+            }
+        }
     }
 }

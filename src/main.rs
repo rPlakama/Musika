@@ -2,6 +2,7 @@ use qtbridge::{QApp, qobject};
 use std::sync::OnceLock;
 use tokio::runtime::Runtime;
 mod http_client;
+mod sqlite;
 
 fn runtime() -> &'static Runtime {
     static RT: OnceLock<Runtime> = OnceLock::new();
@@ -14,10 +15,10 @@ pub struct Backend {}
 #[qobject(Singleton)]
 impl Backend {
     #[qslot]
-    fn say_hello(&self) {
-        println!("Hello World!");
 
-        runtime().spawn(http_client::http_call());
+    fn login_in(&self) {
+        let mut username = String::new(); // Init usr
+        let mut password = String::new(); // Init Passwd
     }
 }
 

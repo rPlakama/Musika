@@ -4,7 +4,8 @@
 [X] -- Init Rust;
 [X] -- Init HTTP;
 [] -- Bridge to Navidrome API
-    -> Subsonic API requires psswd and usrnm, therefore, it would be useful to store/read/write the usrnm and psswd, which can be encrypted with ENC. Therefore, I guess... QLite.
+    -> Usrname/Passwd write using Sqlite;
+    -> Login Screen in QT;
 [] -- Local Playback thought streaming using FFMPEG or MPV, maybe.;
 [] -- Init Playable System
 [] -- Initial Design

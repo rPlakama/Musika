@@ -69,8 +69,14 @@
         QT_VERSION_MAJOR = "6";
 
         shellHook = ''
-          export QML2_IMPORT_PATH="${qt}/lib/qt-6/qml''${QML2_IMPORT_PATH:+:$QML2_IMPORT_PATH}"
-          export QT_PLUGIN_PATH="${qt}/lib/qt-6/plugins''${QT_PLUGIN_PATH:+:$QT_PLUGIN_PATH}"
+          	export QML_IMPORT_PATH="${qt}/lib/qt-6/qml''${QML_IMPORT_PATH:+:$QML_IMPORT_PATH}"
+          	export QML2_IMPORT_PATH="${qt}/lib/qt-6/qml''${QML2_IMPORT_PATH:+:$QML2_IMPORT_PATH}"
+          	export QT_PLUGIN_PATH="${qt}/lib/qt-6/plugins''${QT_PLUGIN_PATH:+:$QT_PLUGIN_PATH}"
+          		cat > .qmlls.ini <<EOF
+          [General]
+          no-cmake-calls=true
+          importPaths=${qt}/lib/qt-6/qml
+          EOF
         '';
       };
     };

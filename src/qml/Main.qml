@@ -3,32 +3,35 @@ import QtQuick.Controls
 import musika
 
 ApplicationWindow {
-
     visible: true
     title: qsTr("Musika")
 
     Item {
         id: main_login
         width: 200
-        height: 100
+        height: 150
         anchors.centerIn: parent
 
-        TextField {
-            id: usernameField
-            placeholderText: qsTr("Enter Username")
+        Column {
+            anchors.fill: parent
+            spacing: 10
 
-            anchors {
-                top: parent.top
-                horizontalCenter: parent.horizontalCenter
+            TextField {
+                id: serverURLField
+                placeholderText: qsTr("Enter ServerURL")
+                anchors.horizontalCenter: parent.horizontalCenter
             }
-        }
 
-        TextField {
-            id: passwordField
-            placeholderText: qsTr("Enter Password")
-            anchors {
-                bottom: parent.bottom
-                horizontalCenter: parent.horizontalCenter
+            TextField {
+                id: usernameField
+                placeholderText: qsTr("Enter Username")
+                anchors.horizontalCenter: parent.horizontalCenter
+            }
+
+            TextField {
+                id: passwordField
+                placeholderText: qsTr("Enter Password")
+                anchors.horizontalCenter: parent.horizontalCenter
             }
         }
     }

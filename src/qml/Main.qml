@@ -18,20 +18,24 @@ ApplicationWindow {
 
             TextField {
                 id: serverURLField
-                placeholderText: qsTr("Enter ServerURL")
-                anchors.horizontalCenter: parent.horizontalCenter
+                text: backend.serverUrl
+                onEditingFinished: backend.serverUrl = serverURLField.text
             }
-
             TextField {
                 id: usernameField
-                placeholderText: qsTr("Enter Username")
-                anchors.horizontalCenter: parent.horizontalCenter
+                text: backend.username
+                onEditingFinished: backend.username = usernameField.text
             }
 
             TextField {
                 id: passwordField
-                placeholderText: qsTr("Enter Password")
-                anchors.horizontalCenter: parent.horizontalCenter
+                text: backend.password
+                onEditingFinished: backend.password = passwordField.text
+            }
+
+            button {
+                text: "Log in"
+                onClicked: backend.login()
             }
         }
     }

@@ -62,6 +62,7 @@
           sqlite-analyzer
           rustfmt
           libglvnd
+          sqlx-cli
           qt
         ];
 

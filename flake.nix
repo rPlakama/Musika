@@ -60,6 +60,7 @@
           rust-analyzer
           sqlite
           sqlite-analyzer
+          sqls
           rustfmt
           libglvnd
           sqlx-cli

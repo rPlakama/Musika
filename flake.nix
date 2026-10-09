@@ -63,6 +63,7 @@
           sqls
           rustfmt
           libglvnd
+          openssl
           sqlx-cli
           qt
         ];

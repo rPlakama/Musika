@@ -1,42 +1,46 @@
-use crate::qml::Backend;
-use sqlx::sqlite::SqlitePool;
+use std::str::FromStr;
 
-// First lest receive the writtings for user/password/serverURL
+use anyhow::Result;
+use sqlx::sqlite::{SqliteConnectOptions, SqlitePool, SqlitePoolOptions};
 
-// qml::Backend { server_url: val }
+pub async fn init_pool() -> Result<SqlitePool> {
+    let url = std::env::var("DATABASE_URL").unwrap_or_else(|_| "sqlite:app.db".to_string());
 
-#[tokio::main]
-async fn main() -> anyhow::Result<()> {
-    let db = SqlitePool::connect(&std::env::var("DATABASE_URL")?).await?;
+    let options = SqliteConnectOptions::from_str(&url)?
+        .create_if_missing(true)
+        .foreign_keys(true);
 
-    sqlx::migrate!("./migrations").run(&db).await?;
+    let pool = SqlitePoolOptions::new()
+        .max_connections(5)
+        .connect_with(options)
+        .await?;
 
-    // Insert
+    sqlx::migrate!("./migrations").run(&pool).await?;
 
-    let username = "placeholder".to_string(); // <-- Receive it from main? Perhaps, or something else.
-    let password = "placeholder".to_string(); // <-- same as above
-    let server_url = "placeholder".to_string(); // Yeah
+    Ok(pool)
+}
 
-    let rec = sqlx::query!(
-        "INSERT INTO users (username, password, serverURL) VALUES (?1, ?2, ?3) RETURNING id",
-        username,
-        password,
-        server_url,
-    )
-    .fetch_one(&db)
-    .await?;
+pub async fn save_credentials(
+    pool: &SqlitePool,
+    username: &str,
+    password: &str,
+    server_url: &str,
+) -> Result<()> {
+    let mut tx = pool.begin().await?;
 
-    println!("Inserted user id {}", rec.id);
+    sqlx::query("DELETE FROM users WHERE username = ?1 AND serverURL = ?2")
+        .bind(username)
+        .bind(server_url)
+        .execute(&mut *tx)
+        .await?;
 
-    // Read it back
-    let user = sqlx::query!(
-        "SELECT id, username, password FROM users WHERE id = ?1",
-        rec.id
-    )
-    .fetch_one(&db)
-    .await?;
+    sqlx::query("INSERT INTO users (username, password, serverURL) VALUES (?1, ?2, ?3)")
+        .bind(username)
+        .bind(password)
+        .bind(server_url)
+        .execute(&mut *tx)
+        .await?;
 
-    println!("Fetched: {} <{}>", user.username, user.password);
-
+    tx.commit().await?;
     Ok(())
 }

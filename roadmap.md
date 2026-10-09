@@ -6,7 +6,7 @@
 [] -- Bridge to Navidrome API
     -> Usrname/Passwd write using Sqlite; _[X]_
     -> Login Screen in QT; _[X]_
-    -> Wireup qml.rs <--> main.rs [X] <--> sqlite.rs <--> http.rs, objective: Functional Login Screen that can ping if password is wrong, notice, use ENC to write down the DB;
+    -> Wireup qml.rs <--> main.rs <--> sqlite.rs <--> http.rs, objective: Functional Login Screen that can ping if password is wrong, notice, use ENC to write down the DB; _[X]_ (ENC pending)
     -> Elaborating current ideia:
 
     User types into QML fields → set_username/set_password/set_server_url fire → fields update on Backend, still on the Qt thread.

@@ -1,12 +1,13 @@
-use qtbridge::qobject;
-use sqlx::SqlitePool;
-#[derive(Default)]
+use qtbridge::{qobject, QmlObject};
 
+#[derive(Default)]
 pub struct Backend {
     server_url: String,
     username: String,
     password: String,
-    pool: Option<SqlitePool>,
+    status_message: String,
+    busy: bool,
+    logged_in: bool,
 }
 
 #[qobject(Singleton)]
@@ -29,6 +30,13 @@ impl Backend {
         Write = set_password,
         Notify = password_changed
     );
+    qproperty!(
+        "statusMessage",
+        Member = status_message,
+        Notify = status_message_changed
+    );
+    qproperty!("busy", Member = busy, Notify = busy_changed);
+    qproperty!("loggedIn", Member = logged_in, Notify = logged_in_changed);
 
     fn set_server_url(&mut self, v: String) {
         self.server_url = v;
@@ -49,15 +57,71 @@ impl Backend {
     fn username_changed(&mut self);
     #[qsignal]
     fn password_changed(&mut self);
+    #[qsignal]
+    fn status_message_changed(&mut self);
+    #[qsignal]
+    fn busy_changed(&mut self);
+    #[qsignal]
+    fn logged_in_changed(&mut self);
 
     #[qslot]
-    fn login(&self) {
-        let Some(pool) = self.pool.clone() else {
-            eprintln!("Login called before pool was set!");
-            return;
-        };
-        let username = self.username.clone();
+    fn login(&mut self) {
+        let server_url = self.server_url.trim().to_string();
+        let username = self.username.trim().to_string();
         let password = self.password.clone();
-        let server_url = self.server_url.clone();
+
+        if server_url.is_empty() || username.is_empty() || password.is_empty() {
+            self.status_message = "Server, username and password are all required.".to_string();
+            self.status_message_changed();
+            return;
+        }
+
+        self.busy = true;
+        self.busy_changed();
+        self.status_message = format!("Connecting to {server_url}…");
+        self.status_message_changed();
+
+        let invoker = self.get_qml_method_invoker();
+        let pool = crate::pool().cloned();
+
+        crate::runtime().spawn(async move {
+            match crate::http_client::authenticate(&server_url, &username, &password).await {
+                Ok(()) => {
+                    if let Some(pool) = pool.as_ref() {
+                        if let Err(err) = crate::sqlite::save_credentials(
+                            pool, &username, &password, &server_url,
+                        )
+                        .await
+                        {
+                            eprintln!("Failed to persist credentials: {err:#}");
+                        }
+                    }
+                    invoker.invoke_method("login_succeeded");
+                }
+                Err(err) => {
+                    qtbridge::invoke_method!(invoker, "login_failed", format!("{err:#}"));
+                }
+            }
+        });
+    }
+
+    #[qslot]
+    fn login_succeeded(&mut self) {
+        self.busy = false;
+        self.busy_changed();
+        self.logged_in = true;
+        self.logged_in_changed();
+        self.status_message = "Logged in.".to_string();
+        self.status_message_changed();
+    }
+
+    #[qslot]
+    fn login_failed(&mut self, message: String) {
+        self.busy = false;
+        self.busy_changed();
+        self.logged_in = false;
+        self.logged_in_changed();
+        self.status_message = message;
+        self.status_message_changed();
     }
 }

@@ -4,12 +4,14 @@ import musika
 
 ApplicationWindow {
     visible: true
+    width: 320
+    height: 280
     title: qsTr("Musika")
 
     Item {
         id: main_login
-        width: 200
-        height: 150
+        width: 240
+        height: 210
         anchors.centerIn: parent
 
         Column {
@@ -18,24 +20,40 @@ ApplicationWindow {
 
             TextField {
                 id: serverURLField
-                text: backend.serverUrl
-                onEditingFinished: backend.serverUrl = serverURLField.text
+                width: parent.width
+                placeholderText: qsTr("Server URL")
+                text: Backend.serverURL
+                onEditingFinished: Backend.serverURL = text
             }
             TextField {
                 id: usernameField
-                text: backend.username
-                onEditingFinished: backend.username = usernameField.text
+                width: parent.width
+                placeholderText: qsTr("Username")
+                text: Backend.username
+                onEditingFinished: Backend.username = text
             }
-
             TextField {
                 id: passwordField
-                text: backend.password
-                onEditingFinished: backend.password = passwordField.text
+                width: parent.width
+                placeholderText: qsTr("Password")
+                echoMode: TextInput.Password
+                text: Backend.password
+                onEditingFinished: Backend.password = text
             }
 
-            button {
-                text: "Log in"
-                onClicked: backend.login()
+            Button {
+                width: parent.width
+                enabled: !Backend.busy
+                text: Backend.busy ? qsTr("Logging in…") : qsTr("Log in")
+                onClicked: Backend.login()
+            }
+
+            Text {
+                width: parent.width
+                wrapMode: Text.WordWrap
+                color: Backend.loggedIn ? "#2e7d32" : "#c62828"
+                text: Backend.statusMessage
+                visible: Backend.statusMessage.length > 0
             }
         }
     }

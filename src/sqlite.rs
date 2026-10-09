@@ -3,7 +3,7 @@ use sqlx::sqlite::SqlitePool;
 
 // First lest receive the writtings for user/password/serverURL
 
-    qml::Backend { server_url: val }
+// qml::Backend { server_url: val }
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {

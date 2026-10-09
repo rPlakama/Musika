@@ -1,10 +1,12 @@
 use qtbridge::qobject;
+use sqlx::SqlitePool;
 #[derive(Default)]
 
 pub struct Backend {
     server_url: String,
     username: String,
     password: String,
+    pool: Option<SqlitePool>,
 }
 
 #[qobject(Singleton)]
@@ -49,5 +51,13 @@ impl Backend {
     fn password_changed(&mut self);
 
     #[qslot]
-    fn login(&self) {}
+    fn login(&self) {
+        let Some(pool) = self.pool.clone() else {
+            eprintln!("Login called before pool was set!");
+            return;
+        };
+        let username = self.username.clone();
+        let password = self.password.clone();
+        let server_url = self.server_url.clone();
+    }
 }

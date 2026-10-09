@@ -30,8 +30,10 @@ fn main() {
         eprintln!("database pool was already initialised");
     }
 
-    QApp::new()
-        .register::<qml::Backend>()
-        .load_qml(include_bytes!("qml/Main.qml"))
+    let mut app = QApp::new();
+    qtbridge::include_bytes_qml!("qml", "app");
+
+    app.register::<qml::Backend>()
+        .load_qml_from_file("qrc:/app/qml/Main.qml")
         .run();
 }

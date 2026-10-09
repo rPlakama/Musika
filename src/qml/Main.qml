@@ -8,53 +8,31 @@ ApplicationWindow {
     height: 280
     title: qsTr("Musika")
 
-    Item {
-        id: main_login
-        width: 240
-        height: 210
-        anchors.centerIn: parent
+    Component {
+        id: loginScreen
+        Login {}
+    }
 
-        Column {
-            anchors.fill: parent
-            spacing: 10
+    Component {
+        id: homeScreen
+        Home {}
+    }
 
-            TextField {
-                id: serverURLField
-                width: parent.width
-                placeholderText: qsTr("Server URL")
-                text: Backend.serverURL
-                onEditingFinished: Backend.serverURL = text
-            }
-            TextField {
-                id: usernameField
-                width: parent.width
-                placeholderText: qsTr("Username")
-                text: Backend.username
-                onEditingFinished: Backend.username = text
-            }
-            TextField {
-                id: passwordField
-                width: parent.width
-                placeholderText: qsTr("Password")
-                echoMode: TextInput.Password
-                text: Backend.password
-                onEditingFinished: Backend.password = text
-            }
+    StackView {
+        id: stack
+        anchors.fill: parent
+        initialItem: loginScreen
 
-            Button {
-                width: parent.width
-                enabled: !Backend.busy
-                text: Backend.busy ? qsTr("Logging in…") : qsTr("Log in")
-                onClicked: Backend.login()
-            }
-
-            Text {
-                width: parent.width
-                wrapMode: Text.WordWrap
-                color: Backend.loggedIn ? "#2e7d32" : "#c62828"
-                text: Backend.statusMessage
-                visible: Backend.statusMessage.length > 0
+        Connections {
+            target: Backend
+            function onLogged_in_changed() {
+                if (Backend.loggedIn)
+                    stack.replace(homeScreen)
+                else
+                    stack.replace(loginScreen)
             }
         }
     }
+
+    Component.onCompleted: Backend.startup()
 }

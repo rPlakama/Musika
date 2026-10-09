@@ -5,7 +5,6 @@ use sqlx::sqlite::{SqliteConnectOptions, SqlitePool, SqlitePoolOptions};
 
 use crate::crypto;
 
-#[allow(dead_code)] // Wired into auto-login on a later roadmap step.
 pub struct Credentials {
     pub username: String,
     pub password: String,
@@ -56,7 +55,6 @@ pub async fn save_credentials(
     Ok(())
 }
 
-#[allow(dead_code)] // Wired into auto-login on a later roadmap step.
 pub async fn load_credentials(pool: &SqlitePool) -> Result<Option<Credentials>> {
     let row: Option<(String, String, String)> = sqlx::query_as(
         "SELECT username, password, serverURL FROM users ORDER BY id DESC LIMIT 1",

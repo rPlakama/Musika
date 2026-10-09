@@ -106,6 +106,33 @@ impl Backend {
     }
 
     #[qslot]
+    fn startup(&mut self) {
+        let invoker = self.get_qml_method_invoker();
+        let Some(pool) = crate::pool().cloned() else {
+            return;
+        };
+
+        crate::runtime().spawn(async move {
+            match crate::sqlite::load_credentials(&pool).await {
+                Ok(Some(credentials)) => {
+                    if crate::http_client::authenticate(
+                        &credentials.server_url,
+                        &credentials.username,
+                        &credentials.password,
+                    )
+                    .await
+                    .is_ok()
+                    {
+                        invoker.invoke_method("login_succeeded");
+                    }
+                }
+                Ok(None) => {}
+                Err(err) => eprintln!("Failed to load saved credentials: {err:#}"),
+            }
+        });
+    }
+
+    #[qslot]
     fn login_succeeded(&mut self) {
         self.busy = false;
         self.busy_changed();

@@ -27,9 +27,9 @@ ApplicationWindow {
             target: Backend
             function onLogged_in_changed() {
                 if (Backend.loggedIn)
-                    stack.replace(homeScreen)
+                    stack.replace(homeScreen);
                 else
-                    stack.replace(loginScreen)
+                    stack.replace(loginScreen);
             }
         }
     }

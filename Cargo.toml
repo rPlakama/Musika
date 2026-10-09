@@ -12,5 +12,6 @@ openssl = "0.10.81"
 qtbridge = "0.3.0"
 reqwest = { version = "0.13.5", features = [ "json" ] }
 serde = { version = "1.0", features = [ "derive" ] }
+serde_json = "1.0"
 sqlx = { version = "0.9", features = [ "sqlite-deserialize", "sqlite", "runtime-tokio" ] }
 tokio = { version = "1.53.2", features = [ "rt", "macros", "rt-multi-thread"] }

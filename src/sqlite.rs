@@ -1,6 +1,9 @@
+use crate::qml::Backend;
 use sqlx::sqlite::SqlitePool;
 
 // First lest receive the writtings for user/password/serverURL
+
+    qml::Backend { server_url: val }
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -9,6 +12,7 @@ async fn main() -> anyhow::Result<()> {
     sqlx::migrate!("./migrations").run(&db).await?;
 
     // Insert
+
     let username = "placeholder".to_string(); // <-- Receive it from main? Perhaps, or something else.
     let password = "placeholder".to_string(); // <-- same as above
     let server_url = "placeholder".to_string(); // Yeah

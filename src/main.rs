@@ -12,7 +12,8 @@ fn runtime() -> &'static Runtime {
 
 fn main() {
     QApp::new()
-        .register::<qml::Backend>()
+        .register::<qml::Backend>() // Wire to qml module;; Theres shall be build a verification if
+        // logged is true..
         .load_qml(include_bytes!("qml/Main.qml"))
         .run();
 }

@@ -3,6 +3,7 @@ use sqlx::SqlitePool;
 use std::sync::OnceLock;
 use tokio::runtime::Runtime;
 
+mod crypto;
 mod http_client;
 mod qml;
 mod sqlite;

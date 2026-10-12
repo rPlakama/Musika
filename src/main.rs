@@ -4,15 +4,28 @@ use std::sync::OnceLock;
 use tokio::runtime::Runtime;
 
 mod api;
+mod covers;
 mod crypto;
+mod db;
 mod http_client;
+mod index;
+mod keybind;
+mod library;
+mod player;
 mod qml;
+mod search;
 mod sqlite;
 
-static POOL: OnceLock<SqlitePool> = OnceLock::new();
+static DBS: OnceLock<db::Dbs> = OnceLock::new();
 
+/// The four databases opened at start-up.
+pub fn dbs() -> Option<&'static db::Dbs> {
+    DBS.get()
+}
+
+/// Convenience accessor for the credentials database.
 pub fn pool() -> Option<&'static SqlitePool> {
-    POOL.get()
+    dbs().map(|dbs| &dbs.credentials)
 }
 
 pub fn runtime() -> &'static Runtime {
@@ -23,12 +36,12 @@ pub fn runtime() -> &'static Runtime {
 fn main() {
     dotenvy::dotenv().ok();
 
-    let pool = runtime()
-        .block_on(sqlite::init_pool())
-        .expect("failed to initialise the database");
+    let dbs = runtime()
+        .block_on(db::init())
+        .expect("failed to initialise the databases");
 
-    if POOL.set(pool).is_err() {
-        eprintln!("database pool was already initialised");
+    if DBS.set(dbs).is_err() {
+        eprintln!("databases were already initialised");
     }
 
     let mut app = QApp::new();

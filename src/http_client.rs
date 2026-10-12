@@ -1,8 +1,8 @@
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use md5::{Digest, Md5};
 use reqwest::Url;
-use serde::de::DeserializeOwned;
 use serde::Deserialize;
+use serde::de::DeserializeOwned;
 
 const API_VERSION: &str = "1.16.1";
 const CLIENT_NAME: &str = "musika";
@@ -36,10 +36,17 @@ impl SubsonicClient {
     /// Useful for endpoints that return something other than JSON, such as
     /// `stream` or `getCoverArt`, whose URLs can be handed straight to QML.
     pub fn endpoint_url(&self, method: &str, params: &[(&str, String)]) -> Result<Url> {
+        self.resource_url(&format!("{method}.view"), params)
+    }
+
+    /// Builds a URL for an arbitrary `/rest/<resource>` path, including the
+    /// authentication parameters. Used for endpoints whose file name is not
+    /// `<method>.view` (for example `hls.m3u8`).
+    pub fn resource_url(&self, resource: &str, params: &[(&str, String)]) -> Result<Url> {
         let salt = generate_salt();
         let token = md5_token(&self.password, &salt);
 
-        let mut url = Url::parse(&format!("{}/rest/{method}.view", self.base))
+        let mut url = Url::parse(&format!("{}/rest/{resource}", self.base))
             .with_context(|| format!("Invalid server URL: {}", self.base))?;
 
         {
@@ -89,31 +96,92 @@ impl SubsonicClient {
         envelope.response.into_result()
     }
 
-    /// Verifies the credentials against the server (`ping.view`).
-    pub async fn ping(&self) -> Result<()> {
-        self.call::<serde_json::Value>("ping", &[]).await.map(|_| ())
-    }
-
-    /// URL for streaming a track, usable directly as a QML media source.
-    #[allow(dead_code)] // Reused by playback/cover caching on later roadmap steps.
-    pub fn stream_url(&self, id: &str) -> Result<Url> {
-        self.endpoint_url("stream", &[("id", id.to_string())])
-    }
-
-    /// URL for a cover art image, usable directly as a QML `Image` source.
-    #[allow(dead_code)] // Reused by playback/cover caching on later roadmap steps.
-    pub fn cover_art_url(&self, id: &str, size: Option<u32>) -> Result<Url> {
-        let mut params = vec![("id", id.to_string())];
+    /// Fetches cover art, optionally conditionally.
+    ///
+    /// When `etag`/`last_modified` are supplied they are sent as
+    /// `If-None-Match` / `If-Modified-Since`; the server may then answer
+    /// `304 Not Modified`, in which case [`CoverArt::not_modified`] is `true`
+    /// and no bytes are transferred.
+    pub async fn get_cover_art(
+        &self,
+        id: &str,
+        size: Option<u32>,
+        etag: Option<&str>,
+        last_modified: Option<&str>,
+    ) -> Result<CoverArt> {
+        let mut params: Vec<(&str, String)> = vec![("id", id.to_string())];
         if let Some(size) = size {
             params.push(("size", size.to_string()));
         }
-        self.endpoint_url("getCoverArt", &params)
+        let url = self.endpoint_url("getCoverArt", &params)?;
+
+        let mut request = self.http.get(url);
+        if let Some(etag) = etag {
+            request = request.header(reqwest::header::IF_NONE_MATCH, etag);
+        }
+        if let Some(last_modified) = last_modified {
+            request = request.header(reqwest::header::IF_MODIFIED_SINCE, last_modified);
+        }
+
+        let response = request
+            .send()
+            .await
+            .context("Could not reach the server")?;
+
+        if response.status() == reqwest::StatusCode::NOT_MODIFIED {
+            return Ok(CoverArt {
+                not_modified: true,
+                etag: etag.map(str::to_string),
+                last_modified: last_modified.map(str::to_string),
+                content_type: None,
+                bytes: Vec::new(),
+            });
+        }
+
+        if !response.status().is_success() {
+            bail!("Server returned HTTP {} for cover art", response.status());
+        }
+
+        let header = |name: reqwest::header::HeaderName| {
+            response
+                .headers()
+                .get(name)
+                .and_then(|value| value.to_str().ok())
+                .map(str::to_string)
+        };
+        let etag = header(reqwest::header::ETAG);
+        let last_modified = header(reqwest::header::LAST_MODIFIED);
+        let content_type = header(reqwest::header::CONTENT_TYPE);
+        let bytes = response
+            .bytes()
+            .await
+            .context("Could not read cover art body")?
+            .to_vec();
+
+        Ok(CoverArt {
+            not_modified: false,
+            etag,
+            last_modified,
+            content_type,
+            bytes,
+        })
     }
+}
+
+/// Result of a cover-art request. See [`SubsonicClient::get_cover_art`].
+pub struct CoverArt {
+    pub not_modified: bool,
+    pub etag: Option<String>,
+    pub last_modified: Option<String>,
+    pub content_type: Option<String>,
+    pub bytes: Vec<u8>,
 }
 
 /// Convenience wrapper used by the login flow.
 pub async fn authenticate(server_url: &str, username: &str, password: &str) -> Result<()> {
-    SubsonicClient::new(server_url, username, password).ping().await
+    SubsonicClient::new(server_url, username, password)
+        .ping()
+        .await
 }
 
 #[derive(Debug, Deserialize)]

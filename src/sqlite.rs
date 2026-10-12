@@ -1,7 +1,5 @@
-use std::str::FromStr;
-
 use anyhow::Result;
-use sqlx::sqlite::{SqliteConnectOptions, SqlitePool, SqlitePoolOptions};
+use sqlx::sqlite::SqlitePool;
 
 use crate::crypto;
 
@@ -9,23 +7,6 @@ pub struct Credentials {
     pub username: String,
     pub password: String,
     pub server_url: String,
-}
-
-pub async fn init_pool() -> Result<SqlitePool> {
-    let url = std::env::var("DATABASE_URL").unwrap_or_else(|_| "sqlite:app.db".to_string());
-
-    let options = SqliteConnectOptions::from_str(&url)?
-        .create_if_missing(true)
-        .foreign_keys(true);
-
-    let pool = SqlitePoolOptions::new()
-        .max_connections(5)
-        .connect_with(options)
-        .await?;
-
-    sqlx::migrate!("./migrations").run(&pool).await?;
-
-    Ok(pool)
 }
 
 pub async fn save_credentials(

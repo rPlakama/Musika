@@ -1,0 +1,250 @@
+//! Keyboard binding engine (Neovim-flavoured).
+//!
+//! Bindings are sequences of tokens separated by spaces (for example
+//! `"space f"` or `"escape escape"`). A [`Keymap`] is fed one token at a time
+//! and reports whether a binding fired, a longer sequence is still being typed,
+//! or nothing matched.
+//!
+//! [`token_from_qt`] turns a Qt key event (`key` + `modifiers`) into a token,
+//! so the UI only has to forward raw values.
+
+/// A resolved user intention. Behaviour is wired to these as the movementation
+/// lands; for now the engine only classifies input.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Action {
+    ScrollDown,
+    ScrollUp,
+    MoveLeft,
+    MoveUp,
+    MoveDown,
+    MoveRight,
+    Top,
+    Bottom,
+    Search,
+    VisualMode,
+    Enter,
+    Back,
+}
+
+impl Action {
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::ScrollDown => "scroll_down",
+            Self::ScrollUp => "scroll_up",
+            Self::MoveLeft => "move_left",
+            Self::MoveUp => "move_up",
+            Self::MoveDown => "move_down",
+            Self::MoveRight => "move_right",
+            Self::Top => "top",
+            Self::Bottom => "bottom",
+            Self::Search => "search",
+            Self::VisualMode => "visual_mode",
+            Self::Enter => "enter",
+            Self::Back => "back",
+        }
+    }
+}
+
+/// Result of feeding a token to a [`Keymap`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Outcome {
+    /// A complete binding fired.
+    Action(Action),
+    /// The tokens so far are the start of at least one binding.
+    Pending,
+    /// No binding matches.
+    None,
+}
+
+/// The default binding table.
+fn defaults() -> Vec<(&'static str, Action)> {
+    vec![
+        ("ctrl-n", Action::ScrollDown),
+        ("ctrl-p", Action::ScrollUp),
+        ("space f", Action::Search),
+        ("h", Action::MoveLeft),
+        ("j", Action::MoveDown),
+        ("k", Action::MoveUp),
+        ("l", Action::MoveRight),
+        ("g g", Action::Top),
+        ("shift-g", Action::Bottom),
+        ("escape escape", Action::VisualMode),
+        ("enter", Action::Enter),
+        ("q", Action::Back),
+    ]
+}
+
+/// A stateful, sequence-aware keymap.
+pub struct Keymap {
+    bindings: Vec<(&'static str, Action)>,
+    pending: Vec<String>,
+}
+
+impl Default for Keymap {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Keymap {
+    pub fn new() -> Self {
+        Self {
+            bindings: defaults(),
+            pending: Vec::new(),
+        }
+    }
+
+    pub fn reset(&mut self) {
+        self.pending.clear();
+    }
+
+    #[allow(dead_code)]
+    pub fn is_pending(&self) -> bool {
+        !self.pending.is_empty()
+    }
+
+    /// Feeds one token; see [`Outcome`].
+    pub fn feed(&mut self, token: &str) -> Outcome {
+        self.pending.push(token.to_string());
+        let sequence = self.pending.join(" ");
+
+        if let Some(action) = self.exact(&sequence) {
+            self.pending.clear();
+            return Outcome::Action(action);
+        }
+        if self.has_prefix(&sequence) {
+            return Outcome::Pending;
+        }
+
+        // The accumulated tokens dead-end: drop them and retry this token on
+        // its own (covers, e.g., a stray token before a valid sequence).
+        self.pending.clear();
+        if let Some(action) = self.exact(token) {
+            return Outcome::Action(action);
+        }
+        if self.has_prefix(token) {
+            self.pending.push(token.to_string());
+            return Outcome::Pending;
+        }
+        Outcome::None
+    }
+
+    fn exact(&self, sequence: &str) -> Option<Action> {
+        self.bindings
+            .iter()
+            .find(|(keys, _)| *keys == sequence)
+            .map(|(_, action)| *action)
+    }
+
+    fn has_prefix(&self, sequence: &str) -> bool {
+        let prefix = format!("{sequence} ");
+        self.bindings
+            .iter()
+            .any(|(keys, _)| keys.starts_with(&prefix))
+    }
+}
+
+// Qt key / modifier constants (qnamespace.h), kept here so the module has no
+// Qt dependency of its own.
+const QT_KEY_SPACE: i32 = 0x20;
+const QT_KEY_ESCAPE: i32 = 0x0100_0000;
+const QT_KEY_TAB: i32 = 0x0100_0001;
+const QT_KEY_BACKSPACE: i32 = 0x0100_0003;
+const QT_KEY_ENTER: i32 = 0x0100_0004;
+const QT_KEY_HOME: i32 = 0x0100_0010;
+const QT_KEY_END: i32 = 0x0100_0011;
+const QT_KEY_LEFT: i32 = 0x0100_0012;
+const QT_KEY_UP: i32 = 0x0100_0013;
+const QT_KEY_RIGHT: i32 = 0x0100_0014;
+const QT_KEY_DOWN: i32 = 0x0100_0015;
+const QT_KEY_PAGEUP: i32 = 0x0100_0016;
+const QT_KEY_PAGEDOWN: i32 = 0x0100_0017;
+
+const QT_SHIFT: i32 = 0x0200_0000;
+const QT_CTRL: i32 = 0x0400_0000;
+const QT_ALT: i32 = 0x0800_0000;
+
+/// Converts a Qt key event into a canonical token, or `None` for keys we do
+/// not bind.
+pub fn token_from_qt(key: i32, modifiers: i32) -> Option<String> {
+    let base = match key {
+        QT_KEY_SPACE => "space".to_string(),
+        QT_KEY_ESCAPE => "escape".to_string(),
+        QT_KEY_TAB => "tab".to_string(),
+        QT_KEY_BACKSPACE => "backspace".to_string(),
+        QT_KEY_ENTER | 0x0100_0005 => "enter".to_string(), // Return or Enter
+        QT_KEY_HOME => "home".to_string(),
+        QT_KEY_END => "end".to_string(),
+        QT_KEY_LEFT => "left".to_string(),
+        QT_KEY_UP => "up".to_string(),
+        QT_KEY_RIGHT => "right".to_string(),
+        QT_KEY_DOWN => "down".to_string(),
+        QT_KEY_PAGEUP => "pageup".to_string(),
+        QT_KEY_PAGEDOWN => "pagedown".to_string(),
+        0x41..=0x5A => ((key as u8 + 32) as char).to_string(), // A-Z
+        0x30..=0x39 => (key as u8 as char).to_string(),        // 0-9
+        _ => return None,
+    };
+
+    let token = if modifiers & QT_CTRL != 0 {
+        format!("ctrl-{base}")
+    } else if modifiers & QT_ALT != 0 {
+        format!("alt-{base}")
+    } else if modifiers & QT_SHIFT != 0 {
+        format!("shift-{base}")
+    } else {
+        base
+    };
+    Some(token)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn single_token_binding() {
+        let mut keymap = Keymap::new();
+        assert_eq!(keymap.feed("ctrl-n"), Outcome::Action(Action::ScrollDown));
+        assert_eq!(keymap.feed("j"), Outcome::Action(Action::MoveDown));
+    }
+
+    #[test]
+    fn sequences_need_all_tokens() {
+        let mut keymap = Keymap::new();
+        assert_eq!(keymap.feed("g"), Outcome::Pending);
+        assert_eq!(keymap.feed("g"), Outcome::Action(Action::Top));
+
+        assert_eq!(keymap.feed("space"), Outcome::Pending);
+        assert_eq!(keymap.feed("f"), Outcome::Action(Action::Search));
+
+        assert_eq!(keymap.feed("escape"), Outcome::Pending);
+        assert_eq!(keymap.feed("escape"), Outcome::Action(Action::VisualMode));
+    }
+
+    #[test]
+    fn dead_end_resets_and_retries() {
+        let mut keymap = Keymap::new();
+        assert_eq!(keymap.feed("g"), Outcome::Pending);
+        // Second token does not continue `g g`; the single `j` still fires.
+        assert_eq!(keymap.feed("j"), Outcome::Action(Action::MoveDown));
+        assert!(!keymap.is_pending());
+    }
+
+    #[test]
+    fn unknown_key_is_none() {
+        let mut keymap = Keymap::new();
+        assert_eq!(keymap.feed("f13"), Outcome::None);
+    }
+
+    #[test]
+    fn qt_tokens() {
+        assert_eq!(token_from_qt(0x4A, 0).as_deref(), Some("j")); // Key_J
+        assert_eq!(token_from_qt(0x4E, QT_CTRL).as_deref(), Some("ctrl-n"));
+        assert_eq!(token_from_qt(0x47, QT_SHIFT).as_deref(), Some("shift-g"));
+        assert_eq!(token_from_qt(QT_KEY_SPACE, 0).as_deref(), Some("space"));
+        assert_eq!(token_from_qt(QT_KEY_ESCAPE, 0).as_deref(), Some("escape"));
+        assert_eq!(token_from_qt(QT_KEY_DOWN, 0).as_deref(), Some("down"));
+        assert_eq!(token_from_qt(0x0100_0009, 0), None); // unbound special key
+    }
+}

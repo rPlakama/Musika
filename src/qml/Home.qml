@@ -134,6 +134,30 @@ Item {
         searchOverlay.openWith(text);
     }
 
+    // P-8: returning from an artist entry always lands on Main — the plain
+    // album list, unfiltered and out of any other segment or search.
+    function leaveArtistEntry() {
+        showSegment(0);
+    }
+
+    // Single album-page push used by the album list, the artist entry and the
+    // search overlay, so every surface lands in the same page with the same
+    // header payload.
+    function openAlbum(albumId, title, artist, year, tracks, cover) {
+        var meta = [];
+        if (year.length > 0)
+            meta.push(year);
+        if (tracks.length > 0)
+            meta.push(tracks + " songs");
+        contentStack.push(albumEntryComponent, {
+            albumId: albumId,
+            albumTitle: title,
+            albumArtist: artist,
+            albumCover: cover,
+            albumMeta: meta.join("   ·   ")
+        });
+    }
+
     // Actions dispatched from the global key handler, scoped to the active
     // region: movement only ever affects the region the cursor is in.
     function handleAction(action) {
@@ -226,9 +250,11 @@ Item {
                 nowPlayingExpanded = false;
                 return;
             }
-            if (contentStack.depth > 1) {
+            // P-8: an artist entry is a detour — back lands on Main.
+            if (contentStack.currentItem && contentStack.currentItem.exitsToMain)
+                root.leaveArtistEntry();
+            else if (contentStack.depth > 1)
                 contentStack.pop();
-            }
             return;
         }
 
@@ -335,20 +361,8 @@ Item {
                     Component {
                         id: albumListComponent
                         AlbumList {
-                            onAlbumActivated: (albumId, title, artist, year, tracks, cover) => {
-                                var meta = [];
-                                if (year.length > 0)
-                                    meta.push(year);
-                                if (tracks.length > 0)
-                                    meta.push(tracks + " songs");
-                                contentStack.push(albumEntryComponent, {
-                                    albumId: albumId,
-                                    albumTitle: title,
-                                    albumArtist: artist,
-                                    albumCover: cover,
-                                    albumMeta: meta.join("   ·   ")
-                                });
-                            }
+                            onAlbumActivated: (albumId, title, artist, year, tracks, cover) =>
+                                root.openAlbum(albumId, title, artist, year, tracks, cover)
                         }
                     }
 
@@ -360,7 +374,21 @@ Item {
                     Component {
                         id: artistListComponent
                         ArtistList {
-                            onArtistActivated: (artist) => contentStack.replace(albumListComponent, { artistFilter: artist })
+                            onArtistActivated: (artistId, artistName, artistCover) =>
+                                contentStack.push(artistEntryComponent, {
+                                    artistId: artistId,
+                                    artistName: artistName,
+                                    artistCover: artistCover
+                                })
+                        }
+                    }
+
+                    Component {
+                        id: artistEntryComponent
+                        ArtistEntry {
+                            onBack: root.leaveArtistEntry()
+                            onAlbumActivated: (albumId, title, artist, year, tracks, cover) =>
+                                root.openAlbum(albumId, title, artist, year, tracks, cover)
                         }
                     }
 
@@ -446,21 +474,14 @@ Item {
         // A search song hit goes through the same command pump as external
         // IPC, so the flow stays scriptable and single-sourced.
         onSongActivated: (id) => Backend.handleCommand("play_song_in_album " + id)
-        onAlbumActivated: (albumId, title, artist, year, tracks, cover) => {
-            var meta = [];
-            if (year.length > 0)
-                meta.push(year);
-            if (tracks.length > 0)
-                meta.push(tracks + " songs");
-            contentStack.push(albumEntryComponent, {
-                albumId: albumId,
-                albumTitle: title,
-                albumArtist: artist,
-                albumCover: cover,
-                albumMeta: meta.join("   ·   ")
-            });
-        }
-        onArtistActivated: (artist) => contentStack.replace(albumListComponent, { artistFilter: artist })
+        onAlbumActivated: (albumId, title, artist, year, tracks, cover) =>
+            root.openAlbum(albumId, title, artist, year, tracks, cover)
+        onArtistActivated: (artistId, artistName, artistCover) =>
+            contentStack.push(artistEntryComponent, {
+                artistId: artistId,
+                artistName: artistName,
+                artistCover: artistCover
+            })
     }
 
     QueueDrawer {

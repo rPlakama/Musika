@@ -25,19 +25,21 @@ section at the bottom.
 
 Order = trust/correctness > unblocking > user value > effort.
 
-1. **ARC-25** — partial-fetch guard before the destructive purge (data loss).
-2. **ARC-5** — errors to toasts instead of `eprintln!`.
-3. **VI-11** — `gg`/`G` in every list (high priority: already-bound motions that
+1. **S-8** — Songs column follows a single album match (top priority:
+   album-scoped search reads in track order).
+2. **ARC-25** — partial-fetch guard before the destructive purge (data loss).
+3. **ARC-5** — errors to toasts instead of `eprintln!`.
+4. **VI-11** — `gg`/`G` in every list (high priority: already-bound motions that
    dead-end).
-4. **UI-17 + Q-3** — shuffle is the last inert control; wire it + repeat.
-5. **UI-22** — empty/error states (P0, half-landed).
-6. **VI-2** — mode machine; unblocks VI-3/4/7/12/13/14/15.
-7. **S-4 + Q-10** — search scope order/priority (Songs first) and song
+5. **UI-17 + Q-3** — shuffle is the last inert control; wire it + repeat.
+6. **UI-22** — empty/error states (P0, half-landed).
+7. **VI-2** — mode machine; unblocks VI-3/4/7/12/13/14/15.
+8. **S-4 + Q-10** — search scope order/priority (Songs first) and song
    activation opening fullscreen.
-8. **LYR-8** — smooth centre-follow + edge fades.
-9. **ARC-24 + ARC-33** — `catalog_epoch` + `schema_generation` in every meta.
-10. **ARC-29 + ARC-30** — content-addressed covers + hash-keyed colors.
-11. **VI-4** — visual selection (rows + count badge).
+9. **LYR-8** — smooth centre-follow + edge fades.
+10. **ARC-24 + ARC-33** — `catalog_epoch` + `schema_generation` in every meta.
+11. **ARC-29 + ARC-30** — content-addressed covers + hash-keyed colors.
+12. **VI-4** — visual selection (rows + count badge).
 
 ## Must have
 
@@ -239,6 +241,43 @@ The product is incomplete without these.
   - **Why:** no way to value tracks; `getStarred`/`star` endpoints unused.
   - **Details:** `s`/`*` toggle, favorites filter.
 
+- [ ] **P-8 · ArtistEntry page (Navidrome-style)** — P2 · (ARTISTENTRYSTUDY.md; P-2, CACHE-5)
+  - **Why:** artists are a dead end today (activation filters `AlbumList`); the
+    media cache also needs a per-artist chooser ("cache the whole artist"), and
+    Navidrome's artist entry is the reference: image, favorite, stars,
+    biography, actions, download size.
+  - **Details:**
+    - entry: round avatar, name+server tag, action row, collapsible biography,
+      album list reusing the `AlbumList` row; keybar `Enter` album · `Space`
+      play all · `s` favorite · `1..5` rate · `c` cache · `r` refresh · `Esc`;
+    - favorite → `star`/`unstar` with fetch-on-open + optimistic + revert;
+    - stars → `set_rating`, whole row hidden when the server has no artist
+      ratings (capability flag);
+    - description → `getArtistInfo2`/`getArtistInfo`, cached in library.db
+      `artist_info(artist_id, biography, url, fetched_at)`, `r` refreshes;
+    - In-Cache → DB4 `media_rule(kind='artist')`; label Off / queued `n of N` /
+      `Cached · bytes` (bytes = `SUM(songs.size)`); OFF prunes rule-owned files
+      unless pinned;
+    - staleness: removed albums/artists and changed fingerprints delete the
+      cached blobs (at least the file) + rows after a successful sync; all
+      under `~/.config/musika/`;
+    - backend: `requestArtist`, `requestArtistInfo`, `starArtist`,
+      `rateArtist`, `setArtistCache` + `artist`/`artist_info`/`artist_cache`
+      channels; `artist_info` migration.
+  - **Milestones (ARTISTENTRYSTUDY.md §6):** A shell/navigation · B favorite +
+    stars · C biography · D cache rule + purge · E polish/docs.
+  - **Now (partial):** A landed — `ArtistEntry.qml` (only circle = round
+    avatar; name + server tag; four-column **cover grid**, titles + year/count
+    under the covers, `h/j/k/l` + Enter with a highlighted cell) is pushed from
+    `ArtistList` Enter and from artist hits in search (both signals now carry
+    artist id + cover, so the header paints instantly); Enter opens
+    `AlbumEntry`, `Esc`/back always returns to Main unfiltered (`showSegment(0)`,
+    out of the Artists segment or a search result). Backend `requestArtist(id)`
+    + `artist` channel returns the artist plus its albums by `albums.artist_id`
+    (static SQL; id-based, so same-named artists never mix — unit-tested).
+    B favorite/stars, C biography, D cache rule + staleness purge,
+    E keybar/mouse polish open.
+
 - [ ] **P-4 · Playlists** — P2 · (M6, roadmap)
   - **Why:** sidebar segment is a placeholder.
   - **Details:** index + view + play; create/edit later.
@@ -292,6 +331,20 @@ The product is incomplete without these.
   - **Details:** one "Most played" list when the query is empty
     (`songs.play_count` desc, then title); while typing, boost FTS hits by
     `play_count`; keep the selected row across scope/order changes.
+
+- [ ] **S-8 · Songs column follows a single album match (track order)** — P1 · **top priority** · (search follow-up)
+  - **Why:** when a query resolves to exactly one album, the Songs column still
+    ranks hits by FTS score, scattering the album's tracks; it should read (and
+    play) in track order so search doubles as album navigation.
+  - **Details:** in `search_json`: if `albums.len() == 1`, replace the ranked
+    song list with that album's tracks ordered by `(disc_number, track)` from
+    `library.db` (no server call); 0 or >1 album matches keep today's
+    `search::search` rank. Payload gains `album_context` so the overlay can
+    label the scope while activation keeps the existing album-queue behavior;
+    cursor, counts and keyboard flow unchanged.
+  - **Verify:** "kid a" (one album) → Songs lists that album in track order and
+    Enter plays from the selection; "radiohead" (many) → rank order; unit test
+    for the ordering/selection helper.
 
 
 - [ ] **UI-8 · Rows sized as viewport fractions** — P1 · (MD16)
@@ -660,9 +713,12 @@ The product is incomplete without these.
   - **Why:** Symfonium parity: favorites, playlists, genres, and artists flagged
     "in download cache" auto-download existing + future content; rule removal
     prunes unless pinned.
-  - **Details:** favorites from `library.db.starred`; artist rule by `artist_id`;
-    genre rule; playlist when indexed (P-4); re-evaluated after every successful
-    library sync (queue missing, prune uncovered).
+  - **Details:** choose whole containers, Symfonium-style: artist
+    (`ref_id = artist_id`; chooser = the ArtistEntry In-Cache button, P-8),
+    album (`ref_id = album_id`), playlist once indexed (P-4), genre; favorites
+    from `library.db.starred`; every rule downloads existing content and
+    catches new content on each sync; re-evaluated after every successful
+    library sync (queue missing, prune uncovered unless pinned).
 
 - [ ] **CACHE-6 · Quality & network policy** — P2 · (MEDIACACHESTUDY.md §2/§8)
   - **Details:** transcode via `stream?maxBitRate=&format=` (fingerprint includes
@@ -1296,10 +1352,10 @@ Kept for rationale; the tree already carries these.
 | Bucket | Open | Solved |
 |--------|------|--------|
 | Must have | 8 | — |
-| Should have | 61 | 3 |
+| Should have | 63 | 3 |
 | Quick wins | 0 | 43 |
 | Solved (reference) | — | 36 |
-| **Total** | **69** | **83** |
+| **Total** | **71** | **83** |
 
 ### Coverage by area
 
@@ -1307,9 +1363,9 @@ Kept for rationale; the tree already carries these.
 |------|------|--------|
 | Vi modal engine | 11 | 10 |
 | Queue & playback grammar | 4 | 6 |
-| Player & media features | 4 | 2 |
+| Player & media features | 5 | 2 |
 | Lyrics pipeline | 3 | 7 |
-| Search | 2 | 6 |
+| Search | 3 | 6 |
 | UI microdesigns | 13 | 28 |
 | Dynamic color | 1 | 5 |
 | Architecture & robustness | 22 | 15 |

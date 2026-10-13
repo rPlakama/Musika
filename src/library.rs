@@ -355,6 +355,34 @@ pub async fn albums(pool: &SqlitePool, artist: Option<&str>, order: &str) -> Res
     Ok(rows)
 }
 
+/// Albums of one artist by id (ArtistEntry grid), ordered by one of
+/// [`ALBUM_ORDERS`]. Static SQL, like [`albums`].
+pub async fn artist_albums(
+    pool: &SqlitePool,
+    artist_id: &str,
+    order: &str,
+) -> Result<Vec<AlbumRow>> {
+    let sql: &'static str = match order {
+        "Name" => {
+            "SELECT id, name AS title, artist, year, song_count, cover_art
+             FROM albums WHERE artist_id = ?1 ORDER BY name"
+        }
+        "Year" => {
+            "SELECT id, name AS title, artist, year, song_count, cover_art
+             FROM albums WHERE artist_id = ?1 ORDER BY year DESC, name"
+        }
+        _ => {
+            "SELECT id, name AS title, artist, year, song_count, cover_art
+             FROM albums WHERE artist_id = ?1 ORDER BY year, name"
+        }
+    };
+    let rows = sqlx::query_as::<_, AlbumRow>(sql)
+        .bind(artist_id)
+        .fetch_all(pool)
+        .await?;
+    Ok(rows)
+}
+
 /// All artists, ordered by name.
 pub async fn artists(pool: &SqlitePool) -> Result<Vec<ArtistRow>> {
     let rows = sqlx::query_as::<_, ArtistRow>(
@@ -555,5 +583,59 @@ mod tests {
         assert_eq!(cycle_album_order("Year", -1), "Name");
         // Unknown values snap back to the first order.
         assert_eq!(cycle_album_order("", 1), "Name");
+    }
+
+    #[tokio::test]
+    async fn artist_albums_follow_the_id_not_the_name() {
+        let pool = memory_pool().await;
+        for (id, name) in [("a1", "Radiohead"), ("a2", "Radiohead"), ("a3", "Muse")] {
+            sqlx::query("INSERT INTO artists (id, name) VALUES (?1, ?2)")
+                .bind(id)
+                .bind(name)
+                .execute(&pool)
+                .await
+                .unwrap();
+        }
+        for (id, artist_id, name, year) in [
+            ("al1", "a1", "Kid A", 2000),
+            ("al2", "a1", "OK Computer", 1997),
+            ("al3", "a2", "Kid A", 2000),
+            ("al4", "a3", "Origin of Symmetry", 2001),
+        ] {
+            sqlx::query(
+                "INSERT INTO albums (id, artist_id, name, artist, year)
+                 VALUES (?1, ?2, ?3, 'same-name', ?4)",
+            )
+            .bind(id)
+            .bind(artist_id)
+            .bind(name)
+            .bind(year)
+            .execute(&pool)
+            .await
+            .unwrap();
+        }
+
+        // Same display name, different id: the id decides.
+        let ids = |albums: Vec<AlbumRow>| -> Vec<String> {
+            albums.into_iter().map(|album| album.id).collect()
+        };
+        assert_eq!(
+            ids(artist_albums(&pool, "a1", "Year").await.unwrap()),
+            vec!["al1", "al2"]
+        );
+        assert_eq!(
+            ids(artist_albums(&pool, "a2", "Year").await.unwrap()),
+            vec!["al3"]
+        );
+        assert_eq!(
+            ids(artist_albums(&pool, "a1", "Name").await.unwrap()),
+            vec!["al1", "al2"]
+        );
+        assert!(
+            artist_albums(&pool, "missing", "Name")
+                .await
+                .unwrap()
+                .is_empty()
+        );
     }
 }

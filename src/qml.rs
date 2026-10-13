@@ -735,6 +735,28 @@ impl Backend {
         });
     }
 
+    #[qslot(qml_name = "requestArtist")]
+    fn request_artist(&mut self, artist_id: String) {
+        let invoker = self.get_qml_method_invoker();
+        let Some(dbs) = crate::dbs().cloned() else {
+            return;
+        };
+        let order = if self.album_order.is_empty() {
+            crate::library::ALBUM_ORDERS[0].to_string()
+        } else {
+            self.album_order.clone()
+        };
+        crate::runtime().spawn(async move {
+            match load_artist_json(&dbs, &artist_id, &order).await {
+                Ok(Some(json)) => {
+                    qtbridge::invoke_method!(invoker, "emitData", "artist".to_string(), json);
+                }
+                Ok(None) => eprintln!("library: artist {artist_id} is not indexed"),
+                Err(err) => eprintln!("library: could not read artist: {err:#}"),
+            }
+        });
+    }
+
     #[qslot(qml_name = "requestAlbumSongs")]
     fn request_album_songs(&mut self, album_id: String) {
         let invoker = self.get_qml_method_invoker();
@@ -1488,23 +1510,8 @@ async fn load_albums_json(
     let albums = crate::library::albums(&dbs.library, filter, order).await?;
     let covers = crate::covers::url_map(&dbs.covers).await?;
     let rows: Vec<serde_json::Value> = albums
-        .into_iter()
-        .map(|album| {
-            let cover = album
-                .cover_art
-                .as_deref()
-                .and_then(|id| covers.get(id))
-                .cloned()
-                .unwrap_or_default();
-            serde_json::json!({
-                "id": album.id,
-                "title": album.title,
-                "artist": album.artist,
-                "year": album.year,
-                "song_count": album.song_count,
-                "cover": cover,
-            })
-        })
+        .iter()
+        .map(|album| album_json(album, &covers))
         .collect();
     Ok(serde_json::to_string(&rows)?)
 }
@@ -1525,23 +1532,69 @@ async fn load_artists_json(dbs: &crate::db::Dbs) -> anyhow::Result<String> {
     let artists = crate::library::artists(&dbs.library).await?;
     let covers = crate::covers::url_map(&dbs.covers).await?;
     let rows: Vec<serde_json::Value> = artists
-        .into_iter()
-        .map(|artist| {
-            let cover = artist
-                .cover_art
-                .as_deref()
-                .and_then(|id| covers.get(id))
-                .cloned()
-                .unwrap_or_default();
-            serde_json::json!({
-                "id": artist.id,
-                "name": artist.name,
-                "album_count": artist.album_count,
-                "cover": cover,
-            })
-        })
+        .iter()
+        .map(|artist| artist_json(artist, &covers))
         .collect();
     Ok(serde_json::to_string(&rows)?)
+}
+
+/// One artist (library.db) with cover URL and its albums, for ArtistEntry.
+async fn load_artist_json(
+    dbs: &crate::db::Dbs,
+    id: &str,
+    order: &str,
+) -> anyhow::Result<Option<String>> {
+    let Some(artist) = crate::library::artist(&dbs.library, id).await? else {
+        return Ok(None);
+    };
+    let albums = crate::library::artist_albums(&dbs.library, id, order).await?;
+    let covers = crate::covers::url_map(&dbs.covers).await?;
+    let mut value = artist_json(&artist, &covers);
+    value["albums"] = serde_json::Value::Array(
+        albums
+            .iter()
+            .map(|album| album_json(album, &covers))
+            .collect(),
+    );
+    Ok(Some(value.to_string()))
+}
+
+fn artist_json(
+    artist: &crate::library::ArtistRow,
+    covers: &HashMap<String, String>,
+) -> serde_json::Value {
+    let cover = artist
+        .cover_art
+        .as_deref()
+        .and_then(|id| covers.get(id))
+        .cloned()
+        .unwrap_or_default();
+    serde_json::json!({
+        "id": artist.id,
+        "name": artist.name,
+        "album_count": artist.album_count,
+        "cover": cover,
+    })
+}
+
+fn album_json(
+    album: &crate::library::AlbumRow,
+    covers: &HashMap<String, String>,
+) -> serde_json::Value {
+    let cover = album
+        .cover_art
+        .as_deref()
+        .and_then(|id| covers.get(id))
+        .cloned()
+        .unwrap_or_default();
+    serde_json::json!({
+        "id": album.id,
+        "title": album.title,
+        "artist": album.artist,
+        "year": album.year,
+        "song_count": album.song_count,
+        "cover": cover,
+    })
 }
 
 fn song_rows_json(

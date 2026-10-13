@@ -19,11 +19,11 @@ import QtQuick.Layouts
 import musika
 import "Theme.js" as Theme
 
-// All indexed artists. Enter (or click) opens the artist's albums.
+// All indexed artists. Enter (or click) opens the artist entry.
 Rectangle {
     id: root
 
-    signal artistActivated(string artist)
+    signal artistActivated(string artistId, string artistName, string artistCover)
 
     color: Palette.surface
 
@@ -41,6 +41,7 @@ Rectangle {
         for (var i = 0; i < rows.length; i++) {
             var artist = rows[i];
             artists.append({
+                artistId: artist.id,
                 artistName: artist.name,
                 albumCount: String(artist.album_count),
                 cover: artist.cover ? artist.cover : ""
@@ -54,7 +55,7 @@ Rectangle {
     function activateCurrent() {
         var artist = artists.get(list.currentIndex);
         if (artist)
-            root.artistActivated(artist.artistName);
+            root.artistActivated(artist.artistId, artist.artistName, artist.cover);
     }
 
     function handleAction(action) {
@@ -120,6 +121,7 @@ Rectangle {
             delegate: Rectangle {
                 id: row
                 required property int index
+                required property string artistId
                 required property string artistName
                 required property string albumCount
                 required property string cover
@@ -193,7 +195,7 @@ Rectangle {
                 TapHandler {
                     onTapped: {
                         list.currentIndex = row.index;
-                        root.artistActivated(row.artistName);
+                        root.artistActivated(row.artistId, row.artistName, row.cover);
                     }
                 }
             }

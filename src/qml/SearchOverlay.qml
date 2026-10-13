@@ -35,7 +35,7 @@ Item {
 
     signal songActivated(string id)
     signal albumActivated(string albumId, string title, string artist, string year, string tracks, string cover)
-    signal artistActivated(string name)
+    signal artistActivated(string artistId, string artistName, string artistCover)
 
     // Keep rendering while the close fade runs (the panel owns the opacity).
     visible: opened || panel.opacity > 0
@@ -161,7 +161,7 @@ Item {
         else if (activeColumn === 1)
             root.albumActivated(hit.id, hit.title, hit.artist, hit.year, hit.tracks, hit.cover);
         else
-            root.artistActivated(hit.title);
+            root.artistActivated(hit.id, hit.title, hit.cover);
         close();
     }
 

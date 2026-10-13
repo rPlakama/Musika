@@ -212,7 +212,7 @@ pub async fn url_map(pool: &SqlitePool) -> Result<HashMap<String, String>> {
 async fn touch(pool: &SqlitePool, id: &str) -> Result<()> {
     sqlx::query("UPDATE covers SET fetched_at = ?2 WHERE id = ?1")
         .bind(id)
-        .bind(now())
+        .bind(crate::consts::now_secs().to_string())
         .execute(pool)
         .await?;
     Ok(())
@@ -248,7 +248,7 @@ async fn upsert(
     .bind(size)
     .bind(etag)
     .bind(last_modified)
-    .bind(now())
+    .bind(crate::consts::now_secs().to_string())
     .execute(pool)
     .await?;
     Ok(())
@@ -293,14 +293,6 @@ fn md5_hex(bytes: &[u8]) -> String {
     let mut hasher = Md5::new();
     hasher.update(bytes);
     hex::encode(hasher.finalize())
-}
-
-fn now() -> String {
-    let secs = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|duration| duration.as_secs())
-        .unwrap_or(0);
-    secs.to_string()
 }
 
 #[cfg(test)]

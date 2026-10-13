@@ -21,3 +21,12 @@ pub const FETCH_CONCURRENCY: usize = 8;
 
 /// Default player volume before mpv/UI overrides.
 pub const DEFAULT_VOLUME: f64 = 70.0;
+
+/// Seconds since the Unix epoch (0 on clock errors), shared by every cache
+/// timestamp (ARC-36; replaces four local `now()` helpers).
+pub fn now_secs() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_secs() as i64)
+        .unwrap_or(0)
+}

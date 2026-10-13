@@ -94,13 +94,19 @@ The app is unsafe or misleading without these.
 - [ ] **ARC-12 · Poison-safe player lock** — P1 · (O10)
   - **Why:** `lock().unwrap()` on the reader thread can panic the UI tick.
 
-- [ ] **ARC-25 · Refuse destructive replace/purge on partial fetches** — P1 · (DB analysis)
+- [x] **ARC-25 · Refuse destructive replace/purge on partial fetches** — P1 · (DB analysis)
   - **Why:** a failed artist/album fetch is logged and skipped, then
     `library::replace` wipes the tables and covers/lyrics purges evict the
     missing ids — one HTTP hiccup deletes cached content.
   - **Details:** fail the sync or carry failed ids forward before `replace`;
     audit `getIndexes(ifModifiedSince)` partial-index semantics; run cover/
     lyric purges only when the fetch was complete.
+  - **Now:** `fetch_artists`/`fetch_albums` collect every failed id (and task
+    panics) and `ensure_complete` bails with "N of M fetches failed … nothing
+    was changed" before `replace` or any purge runs; unit test covers it.
+    Navidrome audit (server/subsonic/browsing.go): `getIndexes` returns the
+    *complete* index when the last scan is newer than `ifModifiedSince`,
+    otherwise an empty index — no partial replace hazard on the target server.
 
 - [ ] **ARC-34 · `.unwrap()` audit — 8 production sites; recover or surface, never abort** — P1 · (ARC-12, ARC-5)
   - **Why:** a poisoned player `Mutex` or a failed runtime/DB init panics the
@@ -481,6 +487,13 @@ The product is incomplete without these.
       generate the Theme.js colour copies; shape/motion/type stay there);
     - library projections: shared `const` column fragments or one builder per
       entity (ARC-11).
+  - **Now (partial):** `consts::now_secs()` replaces the four local `now()`
+    helpers (covers binds `.to_string()` at its two write sites); new
+    `cache::purge_missing` collapses the lyric and color purge seams (covers
+    keeps its own loop because it also removes files), with a unit test.
+    Open: the qml.rs `emit_async!` scaffold + shared client constructor,
+    `log_error!` routing (ARC-5), palette/Theme role single source, and the
+    library projection fragments.
   - **Verify:** audit counts drop (`now` 4→1, `spawn` 17→~4, `eprintln` 44→~5,
     `SubsonicClient::new` 7→2), `cargo test` stays green, no visual diff.
 
@@ -554,6 +567,52 @@ The product is incomplete without these.
   - **Details:** `schema_generation` + `catalog_epoch` (+ `generator` where
     relevant) in library/search/covers/lyrics/colors meta; migrations seed
     them; verify/startup repair compare both values.
+
+- [ ] **ARC-37 · Complete the IPC command surface (scriptable parity)** — P2 · (IPC audit)
+  - **Why:** the socket only reaches commands that happen to flow through
+    `keyHandler.dispatch`, so transport/queue/library slots the UI can call have
+    no command spelling; scripts cannot do everything a keyboard can, unknown
+    commands are dropped silently, and nothing ever replies.
+  - **Inventory (Backend slots vs command spellings):**
+    - reachable today: `play_pause`, `next_track`/`prev_track`, `mute`,
+      `volume_up`/`volume_down`, `order_next`/`order_prev`, `yank`/`paste`,
+      `toggle_fullscreen`, `search`, `visual_mode`, `queue_toggle`,
+      `play_song_in_album <id>`, `lyrics_refresh`, `colors_refresh`, and the
+      movement verbs (`move_*`, `enter`, `back`, `queue_up/down/remove`);
+    - missing: `playerStop`, `playerSeek`, absolute `playerSetVolume`,
+      `queueJump`/`queueMove` with arguments, `playAlbum <id> [start]`,
+      `playSong <id>`, `syncLibrary`, `requestSearch <query>` (search opens
+      blank), and a `status` query for the read-only properties.
+  - **Plan:**
+    1. Rust command registry (`commands.rs`): `name [args...]` -> handler on
+       `Backend`; strict whitespace parsing, numeric validation (seek >= 0 and
+       clamped to duration, volume 0-100, queue indices bounds-checked),
+       aliases (`next`/`next_track`, `pause`, `toggle`).
+    2. `handleCommand` parses in Rust first: a registry hit calls the slot
+       directly (no QML round-trip); unknown strings fall through to the
+       existing `command_issued` pump, so UI action strings and
+       `play_song_in_album <id>` keep working (move that parse into Rust as an
+       alias too).
+    3. Replies: `ipc::serve` handlers return `Option<String>`; the socket
+       writes `ok [detail]` / `err <message>` per line (fire-and-forget for UI
+       action strings). `status` replies with playback state / title / artist /
+       position / duration / queue index+len / volume / muted / syncing.
+    4. `help` lists the registry (name, args, description); reuse for VI-15's
+       `:help`.
+    5. Safety: no shell, no interpolation into commands; unknown names get an
+       error instead of silence.
+  - **Draft surface:** `play`, `pause`, `play_pause`, `stop`, `next`,
+    `previous`, `seek <sec|+N|-N>`, `volume <0-100>`, `volume_up/down [step]`,
+    `mute [on|off|toggle]`, `queue_toggle`, `queue_jump <i>`,
+    `queue_move <from> <to>`, `queue_remove <i>`, `play_song <id>`,
+    `play_album <id> [start]`, `play_song_in_album <id>`, `search [query]`,
+    `sync`, `lyrics_refresh`, `colors_refresh`, `order_next`/`order_prev`,
+    `fullscreen`, `pane_cycle`, `visual_mode`, `status`, `help`.
+  - **Milestones:** P0 registry + transport verbs with replies + parser tests;
+    P1 queue/library commands; P2 `status`/`help` + README matrix; P3
+    `search <query>` and `:command` reuse (VI-13).
+  - **Verify:** socket integration test (temp `MUSIKA_IPC_SOCKET`) drives
+    seek/volume/queue_move and reads replies; README IPC examples updated.
 
 - [ ] **CACHE-1 · DB4 `media.db` + `media/` blobs** — P2 · (roadmap Media cache)
   - **Why:** audio is never stored; playback dies without network.
@@ -1203,11 +1262,11 @@ Kept for rationale; the tree already carries these.
 
 | Bucket | Open | Solved |
 |--------|------|--------|
-| Must have | 9 | — |
-| Should have | 61 | 2 |
+| Must have | 8 | — |
+| Should have | 62 | 2 |
 | Quick wins | 0 | 43 |
 | Solved (reference) | — | 36 |
-| **Total** | **70** | **81** |
+| **Total** | **70** | **82** |
 
 ### Coverage by area
 
@@ -1220,7 +1279,7 @@ Kept for rationale; the tree already carries these.
 | Search | 2 | 6 |
 | UI microdesigns | 13 | 28 |
 | Dynamic color | 1 | 5 |
-| Architecture & robustness | 22 | 14 |
+| Architecture & robustness | 22 | 15 |
 | Media cache / offline | 7 | 0 |
 | Auth / startup | 1 | 2 |
 | Docs & process | 1 | 2 |

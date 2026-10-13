@@ -28,6 +28,7 @@
 
 use std::path::Path;
 
+use crate::consts::now_secs;
 use anyhow::{Context, Result};
 use image::imageops::FilterType;
 use material_colors::color::Rgb;
@@ -266,7 +267,7 @@ async fn touch(pool: &SqlitePool, cover_hash: &str, mode: SourceMode) -> Result<
     .bind(cover_hash)
     .bind(mode.name())
     .bind(SEED_ENGINE)
-    .bind(now())
+    .bind(now_secs())
     .execute(pool)
     .await?;
     Ok(())
@@ -292,7 +293,7 @@ async fn store(
     .bind(SEED_ENGINE)
     .bind(color.as_argb_u32() as i64)
     .bind(colorfulness)
-    .bind(now())
+    .bind(now_secs())
     .execute(pool)
     .await?;
     Ok(())
@@ -365,11 +366,4 @@ pub(super) fn rgb_from_argb(argb: u32) -> Rgb {
         ((argb >> 8) & 0xff) as u8,
         (argb & 0xff) as u8,
     )
-}
-
-fn now() -> i64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|duration| duration.as_secs() as i64)
-        .unwrap_or(0)
 }

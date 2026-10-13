@@ -20,6 +20,7 @@ use std::sync::OnceLock;
 use tokio::runtime::Runtime;
 
 mod api;
+mod cache;
 mod colors;
 mod consts;
 mod covers;

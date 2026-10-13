@@ -117,7 +117,8 @@ where
         done: 10,
         total: 100,
     });
-    let fetched_artists = fetch_artists(&client, &artist_ids).await;
+    // ARC-25: abort before any destructive step when a fetch was skipped.
+    let fetched_artists = fetch_artists(&client, &artist_ids).await?;
 
     let mut album_ids: Vec<String> = fetched_artists
         .iter()
@@ -132,7 +133,7 @@ where
         done: 40,
         total: 100,
     });
-    let fetched_albums = fetch_albums(&client, &album_ids).await;
+    let fetched_albums = fetch_albums(&client, &album_ids).await?;
 
     let artists: Vec<ArtistID3> = fetched_artists
         .into_iter()
@@ -248,8 +249,27 @@ async fn refresh_covers(dbs: &Dbs, client: &Arc<SubsonicClient>) -> CoverReport 
     }
 }
 
-async fn fetch_artists(client: &Arc<SubsonicClient>, ids: &[String]) -> Vec<ArtistWithAlbumsID3> {
+/// Fails the sync when any fetch was skipped, so the destructive phase below
+/// (wholesale replace + cover/lyric/color purges) never runs on a partial
+/// library (ARC-25).
+fn ensure_complete(failed: &[String], total: usize) -> Result<()> {
+    if failed.is_empty() {
+        return Ok(());
+    }
+    anyhow::bail!(
+        "{} of {} fetches failed (first: {}); nothing was changed",
+        failed.len(),
+        total,
+        failed[0]
+    );
+}
+
+async fn fetch_artists(
+    client: &Arc<SubsonicClient>,
+    ids: &[String],
+) -> Result<Vec<ArtistWithAlbumsID3>> {
     let mut out = Vec::new();
+    let mut failed: Vec<String> = Vec::new();
     for chunk in ids.chunks(crate::consts::FETCH_CONCURRENCY) {
         let mut set = JoinSet::new();
         for id in chunk {
@@ -263,16 +283,27 @@ async fn fetch_artists(client: &Arc<SubsonicClient>, ids: &[String]) -> Vec<Arti
         while let Some(joined) = set.join_next().await {
             match joined {
                 Ok((_id, Ok(artist))) => out.push(artist),
-                Ok((id, Err(err))) => eprintln!("index: failed to fetch artist {id}: {err:#}"),
-                Err(err) => eprintln!("index: an artist fetch task failed: {err}"),
+                Ok((id, Err(err))) => {
+                    eprintln!("index: failed to fetch artist {id}: {err:#}");
+                    failed.push(id);
+                }
+                Err(err) => {
+                    eprintln!("index: an artist fetch task failed: {err}");
+                    failed.push("<task>".to_string());
+                }
             }
         }
     }
-    out
+    ensure_complete(&failed, ids.len())?;
+    Ok(out)
 }
 
-async fn fetch_albums(client: &Arc<SubsonicClient>, ids: &[String]) -> Vec<AlbumWithSongsID3> {
+async fn fetch_albums(
+    client: &Arc<SubsonicClient>,
+    ids: &[String],
+) -> Result<Vec<AlbumWithSongsID3>> {
     let mut out = Vec::new();
+    let mut failed: Vec<String> = Vec::new();
     for chunk in ids.chunks(crate::consts::FETCH_CONCURRENCY) {
         let mut set = JoinSet::new();
         for id in chunk {
@@ -286,10 +317,34 @@ async fn fetch_albums(client: &Arc<SubsonicClient>, ids: &[String]) -> Vec<Album
         while let Some(joined) = set.join_next().await {
             match joined {
                 Ok((_id, Ok(album))) => out.push(album),
-                Ok((id, Err(err))) => eprintln!("index: failed to fetch album {id}: {err:#}"),
-                Err(err) => eprintln!("index: an album fetch task failed: {err}"),
+                Ok((id, Err(err))) => {
+                    eprintln!("index: failed to fetch album {id}: {err:#}");
+                    failed.push(id);
+                }
+                Err(err) => {
+                    eprintln!("index: an album fetch task failed: {err}");
+                    failed.push("<task>".to_string());
+                }
             }
         }
     }
-    out
+    ensure_complete(&failed, ids.len())?;
+    Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn complete_fetches_pass_and_partial_ones_fail() {
+        assert!(ensure_complete(&[], 10).is_ok());
+
+        let err = ensure_complete(&["al-1".to_string()], 10).unwrap_err();
+        assert!(err.to_string().contains("1 of 10"));
+        assert!(err.to_string().contains("al-1"));
+
+        let err = ensure_complete(&["a".to_string(), "b".to_string()], 3).unwrap_err();
+        assert!(err.to_string().contains("2 of 3"));
+    }
 }

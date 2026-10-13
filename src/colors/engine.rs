@@ -22,7 +22,6 @@
 
 use std::collections::BTreeMap;
 use std::path::Path;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result};
 use material_colors::color::Rgb;
@@ -32,6 +31,7 @@ use sqlx::sqlite::SqlitePool;
 
 use super::scheme::{self, Spec, VariantChoice};
 use super::seed::{self, SourceMode};
+use crate::consts::now_secs;
 use crate::db::Dbs;
 
 /// Generation knobs. Anything that changes the role map must be part of the
@@ -318,7 +318,7 @@ async fn store(
     .bind(dark)
     .bind(generator)
     .bind(&scheme.role_hash)
-    .bind(now())
+    .bind(now_secs())
     .execute(pool)
     .await?;
     Ok(())
@@ -330,33 +330,12 @@ pub async fn purge(dbs: &Dbs) -> Result<usize> {
 }
 
 pub async fn purge_with(colors: &SqlitePool, covers: &SqlitePool) -> Result<usize> {
-    let ids: Vec<String> = sqlx::query_scalar("SELECT cover_art FROM cover_color")
-        .fetch_all(colors)
-        .await?;
-    if ids.is_empty() {
-        return Ok(0);
-    }
-
     let existing: std::collections::HashSet<String> = sqlx::query_scalar("SELECT id FROM covers")
         .fetch_all(covers)
         .await?
         .into_iter()
         .collect();
-
-    let stale: Vec<&String> = ids.iter().filter(|id| !existing.contains(*id)).collect();
-    if stale.is_empty() {
-        return Ok(0);
-    }
-
-    let mut tx = colors.begin().await?;
-    for id in &stale {
-        sqlx::query("DELETE FROM cover_color WHERE cover_art = ?1")
-            .bind(*id)
-            .execute(&mut *tx)
-            .await?;
-    }
-    tx.commit().await?;
-    Ok(stale.len())
+    crate::cache::purge_missing(colors, "cover_color", "cover_art", &existing).await
 }
 
 /// Canonical hash of a role map (BTreeMap → stable JSON → md5). The UI treats
@@ -376,11 +355,4 @@ fn parse_hex_seed(value: &str) -> Option<u32> {
     u32::from_str_radix(hex, 16)
         .ok()
         .map(|rgb| 0xFF00_0000 | rgb)
-}
-
-fn now() -> i64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|duration| duration.as_secs() as i64)
-        .unwrap_or(0)
 }

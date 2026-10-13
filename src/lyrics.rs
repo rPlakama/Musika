@@ -34,6 +34,7 @@ use sqlx::FromRow;
 use sqlx::sqlite::SqlitePool;
 
 use crate::api::LyricsList;
+use crate::consts::now_secs;
 use crate::db::Dbs;
 use crate::http_client::SubsonicClient;
 
@@ -237,7 +238,7 @@ pub async fn backfill(
     }
 
     let rows = cached_rows(&dbs.lyrics).await?;
-    let candidates = candidates(&songs, &rows, now(), limit);
+    let candidates = candidates(&songs, &rows, now_secs(), limit);
     let mut report = BackfillReport { fetched: 0 };
 
     for chunk in candidates.chunks(crate::consts::FETCH_CONCURRENCY) {
@@ -405,7 +406,7 @@ async fn store(pool: &SqlitePool, document: &Document) -> Result<()> {
     .bind(&document.lang)
     .bind(document.offset_ms)
     .bind(&document.text)
-    .bind(now())
+    .bind(now_secs())
     .execute(&mut *tx)
     .await?;
 
@@ -429,33 +430,12 @@ async fn store(pool: &SqlitePool, document: &Document) -> Result<()> {
 
 /// Removes lyric rows whose song id is absent from `library`.
 pub async fn purge_with(lyrics: &SqlitePool, library: &SqlitePool) -> Result<usize> {
-    let ids: Vec<String> = sqlx::query_scalar("SELECT song_id FROM lyrics")
-        .fetch_all(lyrics)
-        .await?;
-    if ids.is_empty() {
-        return Ok(0);
-    }
-
     let existing: std::collections::HashSet<String> = sqlx::query_scalar("SELECT id FROM songs")
         .fetch_all(library)
         .await?
         .into_iter()
         .collect();
-
-    let stale: Vec<&String> = ids.iter().filter(|id| !existing.contains(*id)).collect();
-    if stale.is_empty() {
-        return Ok(0);
-    }
-
-    let mut tx = lyrics.begin().await?;
-    for id in &stale {
-        sqlx::query("DELETE FROM lyrics WHERE song_id = ?1")
-            .bind(*id)
-            .execute(&mut *tx)
-            .await?;
-    }
-    tx.commit().await?;
-    Ok(stale.len())
+    crate::cache::purge_missing(lyrics, "lyrics", "song_id", &existing).await
 }
 
 // ---------------------------------------------------------------------------
@@ -703,7 +683,7 @@ fn structured_document(song_id: &str, list: &LyricsList) -> Option<Document> {
 // ---------------------------------------------------------------------------
 
 fn miss_expired(fetched_at: i64) -> bool {
-    now() - fetched_at > MISS_TTL_SECS
+    now_secs() - fetched_at > MISS_TTL_SECS
 }
 
 /// Whether a cache hit must be re-requested. Synced documents are trusted
@@ -717,14 +697,7 @@ fn cache_is_stale(document: &Document, fetched_at: i64) -> bool {
     if document.source == "none" {
         return miss_expired(fetched_at);
     }
-    now() - fetched_at > UNSYNCED_TTL_SECS
-}
-
-fn now() -> i64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|duration| duration.as_secs() as i64)
-        .unwrap_or(0)
+    now_secs() - fetched_at > UNSYNCED_TTL_SECS
 }
 
 #[cfg(test)]
@@ -909,14 +882,14 @@ mod tests {
 
     #[test]
     fn unsynced_cache_expires_but_synced_does_not() {
-        let old = now() - UNSYNCED_TTL_SECS - 1;
-        let fresh = now();
+        let old = now_secs() - UNSYNCED_TTL_SECS - 1;
+        let fresh = now_secs();
 
         assert!(cache_is_stale(&Document::plain("s", "legacy", "a"), old));
         assert!(!cache_is_stale(&Document::plain("s", "legacy", "a"), fresh));
         assert!(cache_is_stale(
             &Document::missing("s"),
-            now() - MISS_TTL_SECS - 1
+            now_secs() - MISS_TTL_SECS - 1
         ));
         assert!(!cache_is_stale(&Document::missing("s"), fresh));
 
@@ -973,7 +946,7 @@ mod tests {
         store(&pool, &miss).await.unwrap();
         let (loaded, _) = load_cached(&pool, "s3").await.unwrap().unwrap();
         assert_eq!(loaded.source, "none");
-        assert!(!miss_expired(now()));
+        assert!(!miss_expired(now_secs()));
     }
 
     #[tokio::test]

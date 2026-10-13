@@ -190,11 +190,35 @@ pub struct CoverArt {
     pub bytes: Vec<u8>,
 }
 
+/// What the server reports in the ping envelope: `type` (e.g. `navidrome`,
+/// `subsonic`, `gonic`, …) and `serverVersion`.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ServerInfo {
+    pub kind: String,
+    pub version: String,
+}
+
 /// Convenience wrapper used by the login flow.
-pub async fn authenticate(server_url: &str, username: &str, password: &str) -> Result<()> {
+pub async fn authenticate(server_url: &str, username: &str, password: &str) -> Result<ServerInfo> {
     SubsonicClient::new(server_url, username, password)
         .ping()
         .await
+}
+
+/// Extracts the server identity from a ping body.
+pub(crate) fn server_info(body: &serde_json::Value) -> ServerInfo {
+    ServerInfo {
+        kind: body
+            .get("type")
+            .and_then(|value| value.as_str())
+            .unwrap_or_default()
+            .to_string(),
+        version: body
+            .get("serverVersion")
+            .and_then(|value| value.as_str())
+            .unwrap_or_default()
+            .to_string(),
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -322,9 +346,10 @@ mod tests {
 
     #[test]
     fn auth_code_without_message_still_maps_to_credentials_error() {
-        let envelope: Envelope<serde_json::Value> =
-            serde_json::from_str(r#"{"subsonic-response":{"status":"failed","error":{"code":40}}}"#)
-                .unwrap();
+        let envelope: Envelope<serde_json::Value> = serde_json::from_str(
+            r#"{"subsonic-response":{"status":"failed","error":{"code":40}}}"#,
+        )
+        .unwrap();
 
         let err = envelope.response.into_result().unwrap_err();
         assert!(err.to_string().contains("Wrong username or password"));
@@ -332,9 +357,10 @@ mod tests {
 
     #[test]
     fn other_errors_are_not_masked_as_auth_failures() {
-        let envelope: Envelope<serde_json::Value> =
-            serde_json::from_str(r#"{"subsonic-response":{"status":"failed","error":{"code":70}}}"#)
-                .unwrap();
+        let envelope: Envelope<serde_json::Value> = serde_json::from_str(
+            r#"{"subsonic-response":{"status":"failed","error":{"code":70}}}"#,
+        )
+        .unwrap();
 
         let err = envelope.response.into_result().unwrap_err();
         assert!(err.to_string().contains("code 70"));

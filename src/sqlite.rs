@@ -23,6 +23,8 @@ pub struct Credentials {
     pub username: String,
     pub password: String,
     pub server_url: String,
+    /// Server implementation from the ping envelope (`navidrome`, `subsonic`, …).
+    pub server_type: String,
 }
 
 pub async fn save_credentials(
@@ -30,6 +32,7 @@ pub async fn save_credentials(
     username: &str,
     password: &str,
     server_url: &str,
+    server_type: &str,
 ) -> Result<()> {
     let encrypted_password = crypto::encrypt_password(password)?;
 
@@ -41,30 +44,54 @@ pub async fn save_credentials(
         .execute(&mut *tx)
         .await?;
 
-    sqlx::query("INSERT INTO users (username, password, serverURL) VALUES (?1, ?2, ?3)")
-        .bind(username)
-        .bind(encrypted_password)
-        .bind(server_url)
-        .execute(&mut *tx)
-        .await?;
+    sqlx::query(
+        "INSERT INTO users (username, password, serverURL, server_type)
+         VALUES (?1, ?2, ?3, ?4)",
+    )
+    .bind(username)
+    .bind(encrypted_password)
+    .bind(server_url)
+    .bind(server_type)
+    .execute(&mut *tx)
+    .await?;
 
     tx.commit().await?;
     Ok(())
 }
 
+/// Updates the stored server implementation after a fresh ping (cached
+/// logins refresh the discriminator without re-encrypting the password).
+pub async fn set_server_type(
+    pool: &SqlitePool,
+    username: &str,
+    server_url: &str,
+    server_type: &str,
+) -> Result<()> {
+    sqlx::query("UPDATE users SET server_type = ?1 WHERE username = ?2 AND serverURL = ?3")
+        .bind(server_type)
+        .bind(username)
+        .bind(server_url)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
 pub async fn load_credentials(pool: &SqlitePool) -> Result<Option<Credentials>> {
-    let row: Option<(String, String, String)> =
-        sqlx::query_as("SELECT username, password, serverURL FROM users ORDER BY id DESC LIMIT 1")
-            .fetch_optional(pool)
-            .await?;
+    let row: Option<(String, String, String, String)> = sqlx::query_as(
+        "SELECT username, password, serverURL, server_type
+         FROM users ORDER BY id DESC LIMIT 1",
+    )
+    .fetch_optional(pool)
+    .await?;
 
     match row {
-        Some((username, encrypted_password, server_url)) => {
+        Some((username, encrypted_password, server_url, server_type)) => {
             let password = crypto::decrypt_password(&encrypted_password)?;
             Ok(Some(Credentials {
                 username,
                 password,
                 server_url,
+                server_type,
             }))
         }
         None => Ok(None),

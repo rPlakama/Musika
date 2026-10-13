@@ -55,6 +55,7 @@ pub struct Backend {
     queue_index: i64,
     queue_length: i64,
     album_order: String,
+    server_type: String,
 }
 
 #[qobject(Singleton)]
@@ -169,6 +170,11 @@ impl Backend {
         Member = album_order,
         Notify = album_order_changed
     );
+    qproperty!(
+        "serverType",
+        Member = server_type,
+        Notify = server_type_changed
+    );
 
     fn set_server_url(&mut self, v: String) {
         self.server_url = v;
@@ -248,6 +254,8 @@ impl Backend {
     #[qsignal]
     fn album_order_changed(&mut self);
     #[qsignal]
+    fn server_type_changed(&mut self);
+    #[qsignal]
     fn library_changed(&mut self);
     /// User skip (transport/keyboard/IPC), so the skip buttons can bloom.
     #[qsignal(qml_name = "trackSkipped")]
@@ -282,15 +290,21 @@ impl Backend {
 
         crate::runtime().spawn(async move {
             match crate::http_client::authenticate(&server_url, &username, &password).await {
-                Ok(()) => {
+                Ok(info) => {
                     if let Some(pool) = pool.as_ref() {
-                        if let Err(err) =
-                            crate::sqlite::save_credentials(pool, &username, &password, &server_url)
-                                .await
+                        if let Err(err) = crate::sqlite::save_credentials(
+                            pool,
+                            &username,
+                            &password,
+                            &server_url,
+                            &info.kind,
+                        )
+                        .await
                         {
                             eprintln!("Failed to persist credentials: {err:#}");
                         }
                     }
+                    qtbridge::invoke_method!(invoker, "noteServerType", info.kind.clone());
                     invoker.invoke_method("login_succeeded");
                     spawn_index_sync(sync_finish, sync_progress, server_url, username, password);
                 }
@@ -331,7 +345,20 @@ impl Backend {
                     .await;
 
                     match ping {
-                        Ok(Ok(())) => {
+                        Ok(Ok(info)) => {
+                            qtbridge::invoke_method!(invoker, "noteServerType", info.kind.clone());
+                            if credentials.server_type != info.kind {
+                                if let Err(err) = crate::sqlite::set_server_type(
+                                    &pool,
+                                    &credentials.username,
+                                    &credentials.server_url,
+                                    &info.kind,
+                                )
+                                .await
+                                {
+                                    eprintln!("Failed to refresh server type: {err:#}");
+                                }
+                            }
                             invoker.invoke_method("login_succeeded");
                             spawn_index_sync(
                                 sync_finish,
@@ -382,6 +409,22 @@ impl Backend {
         self.logged_in_changed();
         self.status_message = message;
         self.status_message_changed();
+    }
+
+    /// Records the server implementation reported by the ping envelope
+    /// (`navidrome`, `subsonic`, …); drives the status-bar badge. Unknown
+    /// servers fall back to the generic Subsonic icon.
+    #[qslot(qml_name = "noteServerType")]
+    fn note_server_type(&mut self, kind: String) {
+        let kind = if kind.trim().is_empty() {
+            "subsonic".to_string()
+        } else {
+            kind.trim().to_ascii_lowercase()
+        };
+        if self.server_type != kind {
+            self.server_type = kind;
+            self.server_type_changed();
+        }
     }
 
     /// Forwards a raw Qt key event to the keybind engine.

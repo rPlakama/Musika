@@ -858,9 +858,11 @@ pub struct Users {
 // ---------------------------------------------------------------------------
 
 impl SubsonicClient {
-    /// `ping` — checks connectivity and credentials.
-    pub async fn ping(&self) -> Result<()> {
-        self.call::<Value>("ping", &[]).await.map(|_| ())
+    /// `ping` — checks connectivity and credentials; reports what the server
+    /// says it is (the envelope's `type`/`serverVersion`).
+    pub async fn ping(&self) -> Result<crate::http_client::ServerInfo> {
+        let body = self.call::<Value>("ping", &[]).await?;
+        Ok(crate::http_client::server_info(&body))
     }
 
     /// `getLicense` — software license details.

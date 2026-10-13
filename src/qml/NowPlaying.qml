@@ -449,11 +449,11 @@ Rectangle {
                             Layout.fillHeight: true
                             clip: true
                             model: lyricModel
-                            spacing: lyricsView.height * 0.018
+                            spacing: Theme.fontSize("body", root.height) * 0.9
                             boundsBehavior: Flickable.StopAtBounds
                             visible: root.lyricsAvailable
 
-                            delegate: Item {
+                            delegate: FadeText {
                                 id: lyricLine
                                 required property int index
                                 required property real t
@@ -467,34 +467,28 @@ Rectangle {
                                     ? Math.abs(index - root.activeLyric) : -1
 
                                 width: lyricsView.width
-                                height: textItem.height
+                                text: lyricLine.line
+                                horizontalAlignment: Text.AlignHCenter
+                                color: lyricLine.active ? Theme.onSurface : Theme.onSurfaceVariant
+                                font.pixelSize: Theme.fontSize("body", root.height)
+                                wrapMode: Text.WordWrap
+                                animated: false
+                                transformOrigin: Item.Center
+                                opacity: lyricLine.distance < 0
+                                    ? Theme.contentDim
+                                    : (lyricLine.active
+                                        ? 1.0
+                                        : (lyricLine.distance === 1 ? Theme.contentDim : Theme.contentDimFar))
+                                scale: lyricLine.active ? Theme.lyricsEmphasis : 1.0
 
-                                FadeText {
-                                    id: textItem
-                                    anchors.fill: parent
-                                    text: lyricLine.line
-                                    horizontalAlignment: Text.AlignHCenter
-                                    color: lyricLine.active ? Theme.onSurface : Theme.onSurfaceVariant
-                                    font.pixelSize: Theme.fontSize("body", root.height)
-                                    wrapMode: Text.WordWrap
-                                    animated: false
-                                    transformOrigin: Item.Center
-                                    opacity: lyricLine.distance < 0
-                                        ? Theme.contentDim
-                                        : (lyricLine.active
-                                            ? 1.0
-                                            : (lyricLine.distance === 1 ? Theme.contentDim : Theme.contentDimFar))
-                                    scale: lyricLine.active ? Theme.lyricsEmphasis : 1.0
-
-                                    Behavior on opacity {
-                                        NumberAnimation { duration: Theme.motion.quick; easing.type: Easing.Bezier; easing.bezierCurve: Theme.ease.standard }
-                                    }
-                                    Behavior on scale {
-                                        NumberAnimation { duration: Theme.motion.quick; easing.type: Easing.Bezier; easing.bezierCurve: Theme.ease.standard }
-                                    }
-                                    Behavior on color {
-                                        ColorAnimation { duration: Theme.motion.micro; easing.type: Easing.Bezier; easing.bezierCurve: Theme.ease.standard }
-                                    }
+                                Behavior on opacity {
+                                    NumberAnimation { duration: Theme.motion.quick; easing.type: Easing.Bezier; easing.bezierCurve: Theme.ease.standard }
+                                }
+                                Behavior on scale {
+                                    NumberAnimation { duration: Theme.motion.quick; easing.type: Easing.Bezier; easing.bezierCurve: Theme.ease.standard }
+                                }
+                                Behavior on color {
+                                    ColorAnimation { duration: Theme.motion.micro; easing.type: Easing.Bezier; easing.bezierCurve: Theme.ease.standard }
                                 }
                             }
                         }
@@ -578,19 +572,8 @@ Rectangle {
                                     : (index === root.queueIndex ? Theme.surfaceContainer : "transparent")
 
                                 FadeText {
-                                    id: tag
                                     anchors.left: parent.left
-                                    anchors.verticalCenter: parent.verticalCenter
-                                    width: queueList.width * 0.12
-                                    text: index === root.queueIndex ? "Now" : (index < root.queueIndex ? "Prev" : "Next")
-                                    color: index === root.queueIndex ? Theme.primary : Theme.onSurfaceVariant
-                                    font.pixelSize: Theme.fontSize("label", root.height)
-                                    font.bold: index === root.queueIndex
-                                    animated: false
-                                }
-
-                                FadeText {
-                                    anchors.left: tag.right
+                                    anchors.leftMargin: queueList.width * 0.01
                                     anchors.right: durationLabel.left
                                     anchors.rightMargin: queueList.width * 0.01
                                     anchors.verticalCenter: parent.verticalCenter

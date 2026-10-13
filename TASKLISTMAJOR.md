@@ -141,10 +141,13 @@ work is); solved/partial tasks add **Now** with the current evidence.
 - [ ] **P-2 · Starred/favorites view + toggle** — P2 · (CRITIQUE Ph3.2)
   - **Why:** no way to value tracks; `getStarred`/`star` endpoints unused.
   - **Details:** `s`/`*` toggle, favorites filter.
-- [ ] **P-3 · Real lyrics + synced animation** — P2 · (M6, MD29, CRITIQUE Ph3.3)
+- [ ] **P-3 · Real lyrics + synced animation** — P2 · (M6, MD29, CRITIQUE Ph3.3, roadmap "Lyrics" design)
   - **Why:** NowPlaying still shows hardcoded placeholder lyrics (NowPlaying.qml).
-  - **Details:** Subsonic `getLyrics`/LRC; active-line highlight + auto-scroll
-    in the 50/50 pane (already split); empty state when none.
+  - **Details:** DB5 `lyrics.db` cache; `getLyricsBySongId` (OpenSubsonic
+    `songLyrics`) first, legacy `getLyrics` fallback, local `.lrc` override;
+    on-demand + prefetch next N, miss TTL, purge on sync; NowPlaying renders
+    active-line highlight + auto-scroll in the 50/50 pane; empty state when
+    none. Milestones L0–L5 in the roadmap.
 - [ ] **P-4 · Playlists** — P2 · (M6, roadmap)
   - **Why:** sidebar segment is a placeholder.
   - **Details:** index + view + play; create/edit later.

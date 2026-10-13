@@ -45,6 +45,7 @@ DB2a = index of content (library.db)
 DB2b = search index (search.db, FTS5)
 DB3 = cover cache (covers.db + covers/)
 DB4 = media cache (media.db + media/), see "Media cache" design below
+DB5 = lyric cache (lyrics.db), see "Lyrics" design below
 
 # Design itself (UI/UIX)
 
@@ -261,6 +262,77 @@ Open questions:
     -> zbus vs a ready-made `mpris-server` crate (weight vs control);
     -> Rate fixed at 1.0 for v1 (fine unless speed/pitch lands);
     -> whether to expose the queue as the MPRIS playlist or keep it internal.
+
+# Lyrics -- design (Subsonic / OpenSubsonic, multiDB)
+
+Research:
+    -> `getLyrics` (Subsonic 1.2.0): optional artist/title in, plain
+       `lyrics{artist,title,value}` out. No id, no timestamps, fuzzy match --
+       fallback only.
+    -> `getLyricsBySongId` (OpenSubsonic extension `songLyrics` v1): song id in,
+       `lyricsList.structuredLyrics[]` out with `lang`, `offset`, `synced`,
+       `line[{start(ms), value}]`. Primary endpoint. `enhanced=true` (v2) adds
+       `kind`, `cueLine` and `agents` for karaoke -- out of scope for v1.
+    -> discovery: `getOpenSubsonicExtensions` lists `songLyrics`; responses set
+       `openSubsonic: true`. Servers without it may still serve `getLyrics`.
+    -> `lang` is free-form: `xxx`/`und` mean unspecified; never assume ISO.
+    -> server-side sources: embedded SYLT/USLT tags, `.lrc`/text sidecars,
+       external providers; `synced` is true only when timings exist.
+    -> Navidrome implements the extension in current releases (verify per
+       version); synced when the source carries timestamps.
+
+MultiDB placement:
+    -> DB5 = lyrics.db (text only, no blob directory), new pool in `Dbs`,
+       `migrations_lyrics`; purge domain independent, exactly like covers.
+    -> library.db stays lean (no lyric blobs); search.db untouched.
+    -> schema:
+       lyrics(song_id TEXT PRIMARY KEY, source TEXT, synced INTEGER,
+              lang TEXT, offset_ms INTEGER, text TEXT, fetched_at INTEGER)
+       lyric_line(song_id TEXT, idx INTEGER, start_ms INTEGER, value TEXT)
+       -- lines only for synced lyrics; plain text lives in `text`.
+    -> user override: `~/.config/musika/lyrics/<song_id>.lrc` (or .txt) wins
+       over the DB and is never purged.
+
+Fetch policy:
+    -> on-demand: NowPlaying asks for the current song; misses cached as
+       source='none' and retried after a TTL or manual refresh; hits kept
+       (songs carry no `changed` field, so there is no per-song invalidation).
+    -> prefetch: when the queue loads or a track starts, request lyrics for the
+       next N tracks, bounded concurrency (reuse FETCH_CONCURRENCY=8).
+    -> no full-library sweep (request amplification); `:lyrics sync` can
+       backfill per album/artist later.
+    -> fallback chain: local override -> getLyricsBySongId ->
+       getLyrics(artist, title) -> none.
+
+Read path:
+    -> Backend.requestLyrics(songId) -> tokio task -> dataReady("lyrics", json)
+       with {source, synced, lang, offset_ms, lines:[{t, text}]}.
+    -> NowPlaying: synced -> active-line highlight + auto-scroll to center
+       (`quick` scroll / `micro` highlight, motion tokens); plain -> static
+       scrollable text; none -> "No lyrics" empty state.
+    -> playback position already flows through `Backend.position`; apply the
+       OpenSubsonic `offset` before comparing.
+
+Sync & purge:
+    -> after a successful library sync, delete lyric rows whose song id no
+       longer exists in library.db (same policy as covers); overrides kept.
+    -> capability (`songLyrics` yes/no) cached in lyrics.db meta at login.
+
+Milestones:
+    -> L0: `getLyricsBySongId` + types + extension probe in api.rs;
+    -> L1: DB5 + migrations_lyrics + `Dbs` pool; store/read path;
+    -> L2: `requestLyrics` + plain rendering in NowPlaying (kills the hardcoded
+       placeholder, MD28);
+    -> L3: synced rendering (highlight, auto-scroll, offset) + empty state;
+    -> L4: prefetch next N, miss TTL, purge-on-sync, local `.lrc` override;
+    -> L5 optional: karaoke v2 (word-level cueLine, translations), lyric search
+       via search.db FTS5, `:lyrics` commands.
+
+Open questions:
+    -> store raw LRC vs normalized lines (normalize at write for O(1) lookup);
+    -> miss TTL default (7 days?) and the manual refresh key;
+    -> language choice when several `structuredLyrics` exist (first synced main);
+    -> whether to expose an offline "lyrics available" filter.
 
 # Review findings (see CRITIQUE.md)
 

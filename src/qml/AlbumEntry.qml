@@ -17,6 +17,7 @@
 import QtQuick
 import QtQuick.Layouts
 import QtQuick.Effects
+import QtQuick.VectorImage
 import musika
 import "Theme.js" as Theme
 
@@ -195,7 +196,7 @@ Rectangle {
 
             Rectangle {
                 id: backButton
-                implicitWidth: backLabel.implicitWidth + root.width * 0.04
+                implicitWidth: backContent.implicitWidth + root.width * 0.04
                 implicitHeight: root.height * 0.045
                 radius: Theme.radius
                 color: (root.onToolbar || backHover.hovered)
@@ -212,12 +213,33 @@ Rectangle {
                     }
                 }
 
-                FadeText {
-                    id: backLabel
+                // "<icon> ESC" (D-6: VectorImage + CurveRenderer, white-baked
+                // asset in a fixed frame sized from the button).
+                Row {
+                    id: backContent
                     anchors.centerIn: parent
-                    text: "<- ESC"
-                    color: Palette.onSurface
-                    font.pixelSize: root.height * 0.022
+                    spacing: root.height * 0.01
+
+                    Item {
+                        anchors.verticalCenter: parent.verticalCenter
+                        width: root.height * 0.026
+                        height: width
+
+                        VectorImage {
+                            anchors.centerIn: parent
+                            source: "qrc:/app/icons/arrow-left-svgrepo-com.svg"
+                            preferredRendererType: VectorImage.CurveRenderer
+                            width: parent.width * 0.85
+                            height: width
+                        }
+                    }
+
+                    FadeText {
+                        anchors.verticalCenter: parent.verticalCenter
+                        text: "ESC"
+                        color: Palette.onSurface
+                        font.pixelSize: root.height * 0.022
+                    }
                 }
 
                 HoverHandler {

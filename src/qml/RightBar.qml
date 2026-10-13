@@ -110,33 +110,30 @@ Rectangle {
             Layout.fillWidth: true
         }
 
-        // Order (left → right): Last, API status, progress, sync icon.
+        // One status line: "Last Sync: <status>, <provider>".
         FadeText {
-            text: "Last: " + root.lastSyncText()
-            color: Palette.onSurfaceVariant
-            font.pixelSize: Theme.fontSize("label", root.height)
-        }
-
-        // Server identity as text, from the ping envelope's `type`:
-        // "Up to date with Navidrome" / "… with Subsonic".
-        FadeText {
-            text: Backend.librarySyncing
-                ? "Syncing…"
-                : (root.serverName().length > 0
-                    ? "Up to date with " + root.serverName()
-                    : "Up to date")
+            text: {
+                var status = Backend.librarySyncing ? "Syncing…" : root.lastSyncText();
+                var provider = root.serverName();
+                return "Last Sync: " + status + (provider.length > 0 ? ", " + provider : "");
+            }
             color: Backend.librarySyncing ? Palette.tertiary : Palette.onSurfaceVariant
             font.pixelSize: Theme.fontSize("label", root.height)
         }
 
-        // Determinate progress across the last reported stage. Invisible when
-        // idle or full.
+        // Determinate progress across the last reported stage. Collapsed to a
+        // 2px tick when idle, expanding while a sync runs (the cluster is
+        // right-anchored, so the bar grows/shrinks toward the sync icon).
         Rectangle {
             id: track
-            Layout.preferredWidth: root.width * 0.12
+            Layout.preferredWidth: Backend.librarySyncing ? root.width * 0.12 : 2
             Layout.preferredHeight: Math.max(2, root.height * 0.16)
             color: Palette.outlineVariant
-            visible: Backend.librarySyncing && Backend.syncProgress < 1
+            clip: true
+
+            Behavior on Layout.preferredWidth {
+                NumberAnimation { duration: Theme.motion.standard; easing.type: Easing.Bezier; easing.bezierCurve: Theme.ease.standard }
+            }
 
             Rectangle {
                 width: track.width * Math.max(0, Math.min(1, Backend.syncProgress))

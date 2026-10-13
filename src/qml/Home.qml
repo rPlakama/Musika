@@ -328,16 +328,16 @@ Item {
 
                         Item {
                             Layout.alignment: Qt.AlignVCenter
-                            width: hintBar.height * 0.44
+                            width: hintBar.height * 0.48
                             height: width
 
                             VectorImage {
                                 anchors.centerIn: parent
                                 source: "qrc:/app/icons/arrow-right-svgrepo-com.svg"
                                 preferredRendererType: VectorImage.CurveRenderer
-                                width: parent.width * 0.72
+                                width: parent.width * 0.85
                                 height: width
-                                opacity: 0.72
+                                opacity: 0.85
                             }
                         }
 

@@ -1,6 +1,6 @@
 //! Database layout for Musika.
 //!
-//! Four independent SQLite databases live under `~/.config/musika` (each with
+//! Five independent SQLite databases live under `~/.config/musika` (each with
 //! its own connection pool, so separate worker threads can write without
 //! contending on a single writer lock):
 //!
@@ -8,6 +8,7 @@
 //! - `library.db`     — artists / albums / songs metadata (DB2a)
 //! - `search.db`      — FTS5 index over song metadata (DB2b)
 //! - `covers.db`      — cover-art cache index; blobs sit in `covers/` (DB3)
+//! - `lyrics.db`      — lyric cache (DB5)
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -15,13 +16,14 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 use sqlx::sqlite::{SqliteJournalMode, SqlitePool, SqlitePoolOptions};
 
-/// The four databases, opened and migrated at start-up.
+/// The five databases, opened and migrated at start-up.
 #[derive(Clone)]
 pub struct Dbs {
     pub credentials: SqlitePool,
     pub library: SqlitePool,
     pub search: SqlitePool,
     pub covers: SqlitePool,
+    pub lyrics: SqlitePool,
 }
 
 /// Opens every database and applies its migrations.
@@ -38,11 +40,15 @@ pub async fn init() -> Result<Dbs> {
     let covers = open_file(&covers_path()?, 5).await?;
     sqlx::migrate!("./migrations_covers").run(&covers).await?;
 
+    let lyrics = open_file(&lyrics_path()?, 3).await?;
+    sqlx::migrate!("./migrations_lyrics").run(&lyrics).await?;
+
     Ok(Dbs {
         credentials,
         library,
         search,
         covers,
+        lyrics,
     })
 }
 
@@ -85,6 +91,10 @@ pub fn search_path() -> Result<PathBuf> {
 
 pub fn covers_path() -> Result<PathBuf> {
     db_path("covers.db", "MUSIKA_COVERS_FILE")
+}
+
+pub fn lyrics_path() -> Result<PathBuf> {
+    db_path("lyrics.db", "MUSIKA_LYRICS_FILE")
 }
 
 /// Plain-text mirror of the library, for external tools such as `rg`.

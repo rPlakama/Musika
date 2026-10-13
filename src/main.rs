@@ -12,6 +12,7 @@ mod index;
 mod ipc;
 mod keybind;
 mod library;
+mod lyrics;
 mod player;
 mod qml;
 mod search;
@@ -19,7 +20,7 @@ mod sqlite;
 
 static DBS: OnceLock<db::Dbs> = OnceLock::new();
 
-/// The four databases opened at start-up.
+/// The five databases opened at start-up.
 pub fn dbs() -> Option<&'static db::Dbs> {
     DBS.get()
 }

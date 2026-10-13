@@ -566,6 +566,46 @@ pub struct Lyrics {
     pub value: String,
 }
 
+/// One entry of the OpenSubsonic `songLyrics` extension
+/// (`getLyricsBySongId`): per-song lyrics, optionally time-synced.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct StructuredLyrics {
+    pub display_artist: Option<String>,
+    pub display_title: Option<String>,
+    pub lang: Option<String>,
+    /// `true` when every `line` carries a `start` timestamp.
+    pub synced: bool,
+    /// Milliseconds added to every `start` (OpenSubsonic `offset`).
+    pub offset: Option<i64>,
+    #[serde(deserialize_with = "one_or_many")]
+    pub line: Vec<LyricLine>,
+}
+
+/// A single lyric line; `start` is present for synced lyrics.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct LyricLine {
+    pub start: Option<i64>,
+    pub value: String,
+}
+
+/// Response payload of `getLyricsBySongId`.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct LyricsList {
+    #[serde(deserialize_with = "one_or_many")]
+    pub structured_lyrics: Vec<StructuredLyrics>,
+}
+
+/// An OpenSubsonic API extension advertised by `getOpenSubsonicExtensions`.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct OpenSubsonicExtension {
+    pub name: String,
+    pub versions: Vec<i64>,
+}
+
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct PodcastChannel {
@@ -1275,6 +1315,21 @@ impl SubsonicClient {
         ]);
         let body = self.call::<Value>("getLyrics", &params).await?;
         extract(body, "lyrics")
+    }
+
+    /// `getLyricsBySongId` — OpenSubsonic `songLyrics` extension: per-song and
+    /// optionally synced lyrics.
+    pub async fn get_lyrics_by_song_id(&self, id: &str) -> Result<LyricsList> {
+        let params = [("id", id.to_string())];
+        let body = self.call::<Value>("getLyricsBySongId", &params).await?;
+        extract(body, "lyricsList")
+    }
+
+    /// `getOpenSubsonicExtensions` — the extensions this server advertises, used
+    /// to decide whether `getLyricsBySongId` is worth calling.
+    pub async fn get_open_subsonic_extensions(&self) -> Result<Vec<OpenSubsonicExtension>> {
+        let body = self.call::<Value>("getOpenSubsonicExtensions", &[]).await?;
+        extract(body, "openSubsonicExtensions")
     }
 
     /// `getAvatar` — URL of a user's avatar image.

@@ -151,6 +151,11 @@ where
     });
     let covers = refresh_covers(dbs, &client).await;
 
+    // 5. lyric cache: drop entries for songs that left the library
+    if let Err(err) = crate::lyrics::purge(dbs).await {
+        eprintln!("index: lyric cache purge failed: {err:#}");
+    }
+
     progress(SyncProgress {
         message: "Done".to_string(),
         done: 100,

@@ -18,26 +18,29 @@ Rectangle {
     property int queueCursor: 0
     property int queueIndex: -1
 
-    // TODO(M6): real lyrics with sync; the marked line is a placeholder stub.
-    property int currentLyric: 4
-    readonly property var lyricLines: [
-        "In the deepest ocean",
-        "The bottom of the sea",
-        "Your eyes",
-        "They turn me",
-        "Why should I stay here?",
-        "Why should I stay?",
-        "I'd be crazy not to follow",
-        "Follow where you lead",
-        "Your eyes",
-        "They turn me",
-        "Turn me on to phantoms",
-        "I follow to the edge of the earth",
-        "And fall off",
-        "Everybody leaves",
-        "If they get the chance",
-        "And this is my chance"
-    ]
+    // Lyrics (override → cache → server; see src/lyrics.rs).
+    property bool lyricsSynced: false
+    property bool lyricsAvailable: false
+    property string lyricsSource: ""
+    property string lyricsLang: ""
+    property int lyricsOffset: 0
+
+    // Active synced line, matched against the offset-corrected position.
+    readonly property int activeLyric: {
+        var count = lyricModel.count;
+        if (!lyricsSynced || count === 0)
+            return -1;
+        var position = Math.round(Backend.position * 1000) - lyricsOffset;
+        var active = -1;
+        for (var i = 0; i < count; i++) {
+            var start = lyricModel.get(i).t;
+            if (start >= 0 && start <= position)
+                active = i;
+            else if (start > position)
+                break;
+        }
+        return active;
+    }
 
     function formatTime(seconds) {
         var total = Math.max(0, Math.floor(seconds || 0));
@@ -55,8 +58,8 @@ Rectangle {
     }
 
     function scrollLyrics(delta) {
-        var maxY = Math.max(0, lyricsFlick.contentHeight - lyricsFlick.height);
-        lyricsFlick.contentY = Math.max(0, Math.min(maxY, lyricsFlick.contentY + delta));
+        var limit = Math.max(0, lyricsView.contentHeight - lyricsView.height);
+        lyricsView.contentY = Math.max(0, Math.min(limit, lyricsView.contentY + delta));
     }
 
     function moveQueueCursor(delta) {
@@ -81,6 +84,46 @@ Rectangle {
         queueCursor = Math.max(0, Math.min(data.index, Math.max(0, queueItems.count - 1)));
         queueList.currentIndex = queueCursor;
         queueList.positionViewAtIndex(queueCursor, ListView.Contain);
+    }
+
+    function applyLyrics(payload) {
+        var data = JSON.parse(payload);
+        if (data.song_id !== Backend.currentSongId)
+            return; // stale response for a track we already left
+
+        lyricsSource = data.source;
+        lyricsSynced = data.synced;
+        lyricsLang = data.lang ? data.lang : "";
+        lyricsOffset = data.offset_ms ? data.offset_ms : 0;
+
+        lyricModel.clear();
+        for (var i = 0; i < data.lines.length; i++) {
+            lyricModel.append({
+                t: data.lines[i].t === null || data.lines[i].t === undefined ? -1 : data.lines[i].t,
+                text: data.lines[i].text
+            });
+        }
+        lyricsAvailable = lyricModel.count > 0 && data.source !== "none";
+
+        lyricsView.contentY = 0;
+        if (lyricsSynced && activeLyric >= 0)
+            lyricsView.positionViewAtIndex(activeLyric, ListView.Center);
+    }
+
+    function lyricsTag() {
+        if (!lyricsAvailable)
+            return "";
+        var tag = lyricsSource.length > 0 ? lyricsSource : "";
+        if (lyricsSynced)
+            tag += " · synced";
+        if (lyricsLang.length > 0)
+            tag += " · " + lyricsLang;
+        return tag;
+    }
+
+    onActiveLyricChanged: {
+        if (lyricsSynced && activeLyric >= 0 && lyricsView.count > 0)
+            lyricsView.positionViewAtIndex(activeLyric, ListView.Center);
     }
 
     // Fullscreen keys, scoped to the focused pane. Esc/back stays with Home.
@@ -141,6 +184,7 @@ Rectangle {
         if (visible) {
             pane = 0;
             Backend.requestQueue();
+            Backend.requestLyrics();
         }
     }
 
@@ -149,11 +193,21 @@ Rectangle {
         function onDataReady(channel, payload) {
             if (channel === "queue" && root.visible)
                 root.applyQueue(payload);
+            else if (channel === "lyrics" && root.visible)
+                root.applyLyrics(payload);
+        }
+        function onCurrent_song_id_changed() {
+            if (root.visible)
+                Backend.requestLyrics();
         }
     }
 
     ListModel {
         id: queueItems
+    }
+
+    ListModel {
+        id: lyricModel
     }
 
     ColumnLayout {
@@ -377,7 +431,7 @@ Rectangle {
                             Item { Layout.fillWidth: true }
 
                             FadeText {
-                                text: "placeholder · M6"
+                                text: root.lyricsTag()
                                 color: Theme.onSurfaceVariant
                                 font.pixelSize: Theme.fontSize("label", root.height)
                             }
@@ -389,37 +443,45 @@ Rectangle {
                             color: root.pane === 1 ? Theme.primary : Theme.outlineVariant
                         }
 
-                        Flickable {
-                            id: lyricsFlick
+                        ListView {
+                            id: lyricsView
                             Layout.fillWidth: true
                             Layout.fillHeight: true
                             clip: true
-                            contentWidth: width
-                            contentHeight: lyricsColumn.height
+                            model: lyricModel
+                            spacing: lyricsView.height * 0.018
                             boundsBehavior: Flickable.StopAtBounds
+                            visible: root.lyricsAvailable
 
-                            Column {
-                                id: lyricsColumn
-                                width: lyricsFlick.width
-                                spacing: lyricsFlick.height * 0.018
+                            delegate: FadeText {
+                                id: lyricLine
+                                required property int index
+                                required property real t
+                                required property string text
 
-                                Repeater {
-                                    model: root.lyricLines
+                                width: lyricsView.width
+                                text: index === root.activeLyric ? "> " + lyricLine.text + "  <" : lyricLine.text
+                                color: index === root.activeLyric ? Theme.primary : Theme.onSurfaceVariant
+                                font.pixelSize: Theme.fontSize("body", root.height)
+                                font.bold: index === root.activeLyric
+                                wrapMode: Text.WordWrap
+                                animated: false
 
-                                    delegate: FadeText {
-                                        required property int index
-                                        required property string modelData
-
-                                        width: lyricsColumn.width
-                                        text: index === root.currentLyric ? "> " + modelData + "  <" : modelData
-                                        color: index === root.currentLyric ? Theme.primary : Theme.onSurfaceVariant
-                                        font.pixelSize: Theme.fontSize("body", root.height)
-                                        font.bold: index === root.currentLyric
-                                        wrapMode: Text.WordWrap
-                                        animated: false
-                                    }
+                                Behavior on color {
+                                    ColorAnimation { duration: Theme.motion.micro; easing.type: Easing.Bezier; easing.bezierCurve: Theme.ease.standard }
                                 }
                             }
+                        }
+
+                        FadeText {
+                            Layout.fillWidth: true
+                            Layout.fillHeight: true
+                            visible: !root.lyricsAvailable
+                            text: "No lyrics"
+                            color: Theme.onSurfaceVariant
+                            font.pixelSize: Theme.fontSize("label", root.height)
+                            horizontalAlignment: Text.AlignHCenter
+                            verticalAlignment: Text.AlignVCenter
                         }
                     }
                 }

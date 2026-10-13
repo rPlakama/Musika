@@ -154,31 +154,42 @@ work is); solved/partial tasks add **Now** with the current evidence.
 
 ## 4. Lyrics pipeline (`LYR`) — roadmap "Lyrics" design
 
-- [ ] **LYR-1 · API: `getLyricsBySongId` + OpenSubsonic probe** — P2 · (roadmap L0)
+- [x] **LYR-1 · API: `getLyricsBySongId` + OpenSubsonic probe** — P2 · (roadmap L0)
   - **Why:** only the OpenSubsonic `songLyrics` endpoint returns per-song and
     synced lyrics; legacy `getLyrics` (artist/title, plain) is a fuzzy fallback.
   - **Details:** types for `lyricsList.structuredLyrics` (`lang`, `offset`,
     `synced`, `line[{start, value}]`); call `getOpenSubsonicExtensions`, cache the
     capability (`songLyrics` v1; ignore `enhanced` v2 for now).
-- [ ] **LYR-2 · DB5 cache (`lyrics.db`) + purge-on-sync** — P2 · (roadmap L1)
+  - **Now:** `api.rs` has `StructuredLyrics`/`LyricLine`/`LyricsList`/
+    `OpenSubsonicExtension`, `get_lyrics_by_song_id`, `get_open_subsonic_extensions`.
+- [x] **LYR-2 · DB5 cache (`lyrics.db`) + purge-on-sync** — P2 · (roadmap L1)
   - **Why:** multiDB style: re-fetchable content gets its own pool, keeps
     library.db lean and the purge domain independent, exactly like covers.
   - **Details:** `migrations_lyrics`, new pool in `Dbs`, schema
     `lyrics(song_id, source, synced, lang, offset_ms, text, fetched_at)` +
     `lyric_line(song_id, idx, start_ms, value)`; delete rows whose song id is
     missing from library.db after a successful sync; no blob directory.
-- [ ] **LYR-3 · `requestLyrics` + plain rendering in NowPlaying** — P2 · (roadmap L2)
+  - **Now:** `migrations_lyrics/20261013000001_lyrics.sql` (`lyrics`,
+    `lyric_line` FK-cascade, `lyrics_meta`); `Dbs.lyrics` + `lyrics_path()`;
+    `lyrics.rs::purge_with` called from `index.rs` after a successful sync.
+- [x] **LYR-3 · `requestLyrics` + plain rendering in NowPlaying** — P2 · (roadmap L2)
   - **Why:** the redesigned fullscreen pane still shows the hardcoded
     `lyricLines` placeholder (`TODO(M6)` in NowPlaying.qml).
   - **Details:** `Backend.requestLyrics(songId)` -> tokio ->
     `dataReady("lyrics")` JSON; render plain text; "No lyrics" empty state;
     fallback chain override -> bySongId -> legacy `getLyrics`.
-- [ ] **LYR-4 · Synced rendering: highlight + auto-scroll + offset** — P2 · (roadmap L3)
+  - **Now:** `Backend.currentSongId` + `requestLyrics()`; `lyrics.rs::fetch`
+    (override → cache → FTS5-era server chain); NowPlaying renders lines or a
+    centered "No lyrics"; source/lang tag in the header.
+- [x] **LYR-4 · Synced rendering: highlight + auto-scroll + offset** — P2 · (roadmap L3)
   - **Why:** synced lyrics are the point of the feature; the pane currently
     fakes the active line (`currentLyric` stub).
   - **Details:** compare `Backend.position` (minus OpenSubsonic `offset`) against
     `start`; active line `primary`/bold (`micro`), scroll-to-center (`quick`);
     no animation for unsynced text.
+  - **Now:** `activeLyric` binding applies `offset_ms`; `> … <` marker plus
+    `micro` color; `positionViewAtIndex(…, Center)` on line change; plain
+    lyrics stay static.
 - [ ] **LYR-5 · Prefetch, miss TTL, local `.lrc` override** — P2 · (roadmap L4)
   - **Why:** avoids per-open latency and request storms, and lets users supply
     their own synced lyrics.
@@ -186,6 +197,8 @@ work is); solved/partial tasks add **Now** with the current evidence.
     `FETCH_CONCURRENCY=8`); cache misses as `source='none'` with TTL (~7 days)
     plus manual refresh; `~/.config/musika/lyrics/<song_id>.lrc` wins over the
     DB and is never purged.
+  - **Now:** `.lrc`/`.txt` override and the 7-day miss TTL landed with LYR-3;
+    prefetch-next-N and manual refresh are still open.
 - [ ] **LYR-6 · Optional: karaoke v2, lyric FTS, `:lyrics`** — P3 · (roadmap L5)
   - **Why:** word-level timing and lyric search are stretch goals; server
     support for `enhanced` varies.
@@ -382,7 +395,7 @@ work is); solved/partial tasks add **Now** with the current evidence.
 | Vi modal engine | 18 | 2 |
 | Queue & grammar | 7 | 1 |
 | Player features | 6 | 0 |
-| Lyrics pipeline | 6 | 0 |
+| Lyrics pipeline | 2 | 4 |
 | Search | 2 | 3 |
 | UI microdesigns | 22 | 5 |
 | Architecture | 18 | 5 |

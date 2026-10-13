@@ -1,0 +1,747 @@
+//! Lyrics pipeline.
+//!
+//! Resolution order:
+//!
+//!   local override (`~/.config/musika/lyrics/<song_id>.lrc|.txt`)
+//!     → OpenSubsonic `getLyricsBySongId` (per-song, optionally synced)
+//!     → legacy `getLyrics` (artist/title, plain)
+//!
+//! Everything lands in `lyrics.db` (DB5). Misses are cached as
+//! `source = 'none'` with a TTL so opening the same song twice does not
+//! hammer the server; a failed *request* is never cached as a miss.
+
+use std::path::PathBuf;
+
+use anyhow::Result;
+use sqlx::sqlite::SqlitePool;
+use sqlx::FromRow;
+
+use crate::api::LyricsList;
+use crate::db::Dbs;
+use crate::http_client::SubsonicClient;
+
+/// How long a cached miss is trusted before asking the server again.
+const MISS_TTL_SECS: i64 = 7 * 24 * 60 * 60;
+
+/// A cached (or freshly fetched) lyric document.
+#[derive(Debug, Clone)]
+pub struct Document {
+    pub song_id: String,
+    /// `lrc` | `subsonic` | `legacy` | `none`.
+    pub source: String,
+    pub synced: bool,
+    pub lang: Option<String>,
+    pub offset_ms: i64,
+    pub text: String,
+    pub lines: Vec<Line>,
+}
+
+/// One rendered lyric line; `start_ms` is `None` for plain lyrics.
+#[derive(Debug, Clone)]
+pub struct Line {
+    pub start_ms: Option<i64>,
+    pub value: String,
+}
+
+impl Document {
+    pub fn missing(song_id: &str) -> Self {
+        Self {
+            song_id: song_id.to_string(),
+            source: "none".to_string(),
+            synced: false,
+            lang: None,
+            offset_ms: 0,
+            text: String::new(),
+            lines: Vec::new(),
+        }
+    }
+
+    /// The payload sent to QML over the `lyrics` dataReady channel.
+    pub fn to_json(&self) -> String {
+        let lines: Vec<serde_json::Value> = self
+            .lines
+            .iter()
+            .map(|line| serde_json::json!({ "t": line.start_ms, "text": line.value }))
+            .collect();
+        serde_json::json!({
+            "song_id": self.song_id,
+            "source": self.source,
+            "synced": self.synced,
+            "lang": self.lang,
+            "offset_ms": self.offset_ms,
+            "lines": lines,
+        })
+        .to_string()
+    }
+
+    fn plain(song_id: &str, source: &str, text: &str) -> Self {
+        let lines = text
+            .lines()
+            .map(str::trim_end)
+            .filter(|line| !line.trim().is_empty())
+            .map(|line| Line {
+                start_ms: None,
+                value: line.to_string(),
+            })
+            .collect();
+        Self {
+            song_id: song_id.to_string(),
+            source: source.to_string(),
+            synced: false,
+            lang: None,
+            offset_ms: 0,
+            text: text.trim().to_string(),
+            lines,
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Entry points
+// ---------------------------------------------------------------------------
+
+/// Resolves lyrics for `song_id`, consulting the override, the cache and the
+/// server (when `client` is available), in that order.
+pub async fn fetch(dbs: &Dbs, client: Option<&SubsonicClient>, song_id: &str) -> Result<Document> {
+    if let Some(document) = override_document(song_id) {
+        return Ok(document);
+    }
+
+    if let Some((document, fetched_at)) = load_cached(&dbs.lyrics, song_id).await? {
+        let is_miss = document.source == "none";
+        if !is_miss || !miss_expired(fetched_at) {
+            return Ok(document);
+        }
+    }
+
+    let Some(client) = client else {
+        return Ok(Document::missing(song_id));
+    };
+
+    let mut errored = false;
+
+    // Per-song OpenSubsonic endpoint, when the server advertises it.
+    if song_lyrics_supported(dbs, client).await {
+        match client.get_lyrics_by_song_id(song_id).await {
+            Ok(list) => {
+                if let Some(document) = structured_document(song_id, &list) {
+                    store(&dbs.lyrics, &document).await?;
+                    return Ok(document);
+                }
+            }
+            Err(err) => {
+                errored = true;
+                eprintln!("lyrics: getLyricsBySongId failed for {song_id}: {err:#}");
+            }
+        }
+    }
+
+    // Legacy fallback: artist/title match, plain text only.
+    if let Some(song) = crate::library::song(&dbs.library, song_id).await? {
+        match client
+            .get_lyrics(song.artist.as_deref(), Some(song.title.as_str()))
+            .await
+        {
+            Ok(legacy) if !legacy.value.trim().is_empty() => {
+                let document = Document::plain(song_id, "legacy", &legacy.value);
+                store(&dbs.lyrics, &document).await?;
+                return Ok(document);
+            }
+            Ok(_) => {}
+            Err(err) => {
+                errored = true;
+                eprintln!("lyrics: legacy getLyrics failed for {song_id}: {err:#}");
+            }
+        }
+    }
+
+    let document = Document::missing(song_id);
+    if !errored {
+        store(&dbs.lyrics, &document).await?;
+    }
+    Ok(document)
+}
+
+/// Deletes cached lyrics whose song left the library.
+pub async fn purge(dbs: &Dbs) -> Result<usize> {
+    purge_with(&dbs.lyrics, &dbs.library).await
+}
+
+// ---------------------------------------------------------------------------
+// Store / load
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, FromRow)]
+struct CachedRow {
+    song_id: String,
+    source: String,
+    synced: i64,
+    lang: Option<String>,
+    offset_ms: i64,
+    text: String,
+    fetched_at: i64,
+}
+
+async fn load_cached(pool: &SqlitePool, song_id: &str) -> Result<Option<(Document, i64)>> {
+    let row = sqlx::query_as::<_, CachedRow>(
+        "SELECT song_id, source, synced, lang, offset_ms, text, fetched_at
+         FROM lyrics WHERE song_id = ?1",
+    )
+    .bind(song_id)
+    .fetch_optional(pool)
+    .await?;
+
+    let Some(row) = row else { return Ok(None) };
+    let synced = row.synced != 0;
+    let lines = if synced {
+        sqlx::query_as::<_, (Option<i64>, String)>(
+            "SELECT start_ms, value FROM lyric_line WHERE song_id = ?1 ORDER BY idx",
+        )
+        .bind(song_id)
+        .fetch_all(pool)
+        .await?
+        .into_iter()
+        .map(|(start_ms, value)| Line { start_ms, value })
+        .collect()
+    } else {
+        row.text
+            .lines()
+            .filter(|line| !line.trim().is_empty())
+            .map(|line| Line {
+                start_ms: None,
+                value: line.to_string(),
+            })
+            .collect()
+    };
+
+    Ok(Some((
+        Document {
+            song_id: row.song_id,
+            source: row.source,
+            synced,
+            lang: row.lang,
+            offset_ms: row.offset_ms,
+            text: row.text,
+            lines,
+        },
+        row.fetched_at,
+    )))
+}
+
+async fn store(pool: &SqlitePool, document: &Document) -> Result<()> {
+    let mut tx = pool.begin().await?;
+
+    sqlx::query("DELETE FROM lyric_line WHERE song_id = ?1")
+        .bind(&document.song_id)
+        .execute(&mut *tx)
+        .await?;
+
+    sqlx::query(
+        "INSERT INTO lyrics (song_id, source, synced, lang, offset_ms, text, fetched_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+         ON CONFLICT(song_id) DO UPDATE SET
+             source = excluded.source,
+             synced = excluded.synced,
+             lang = excluded.lang,
+             offset_ms = excluded.offset_ms,
+             text = excluded.text,
+             fetched_at = excluded.fetched_at",
+    )
+    .bind(&document.song_id)
+    .bind(&document.source)
+    .bind(document.synced as i64)
+    .bind(&document.lang)
+    .bind(document.offset_ms)
+    .bind(&document.text)
+    .bind(now())
+    .execute(&mut *tx)
+    .await?;
+
+    if document.synced {
+        for (idx, line) in document.lines.iter().enumerate() {
+            sqlx::query(
+                "INSERT INTO lyric_line (song_id, idx, start_ms, value) VALUES (?1, ?2, ?3, ?4)",
+            )
+            .bind(&document.song_id)
+            .bind(idx as i64)
+            .bind(line.start_ms)
+            .bind(&line.value)
+            .execute(&mut *tx)
+            .await?;
+        }
+    }
+
+    tx.commit().await?;
+    Ok(())
+}
+
+/// Removes lyric rows whose song id is absent from `library`.
+pub async fn purge_with(lyrics: &SqlitePool, library: &SqlitePool) -> Result<usize> {
+    let ids: Vec<String> = sqlx::query_scalar("SELECT song_id FROM lyrics")
+        .fetch_all(lyrics)
+        .await?;
+    if ids.is_empty() {
+        return Ok(0);
+    }
+
+    let existing: std::collections::HashSet<String> = sqlx::query_scalar("SELECT id FROM songs")
+        .fetch_all(library)
+        .await?
+        .into_iter()
+        .collect();
+
+    let stale: Vec<&String> = ids.iter().filter(|id| !existing.contains(*id)).collect();
+    if stale.is_empty() {
+        return Ok(0);
+    }
+
+    let mut tx = lyrics.begin().await?;
+    for id in &stale {
+        sqlx::query("DELETE FROM lyrics WHERE song_id = ?1")
+            .bind(*id)
+            .execute(&mut *tx)
+            .await?;
+    }
+    tx.commit().await?;
+    Ok(stale.len())
+}
+
+// ---------------------------------------------------------------------------
+// Capability probe
+// ---------------------------------------------------------------------------
+
+/// Whether the server advertises the OpenSubsonic `songLyrics` extension.
+///
+/// The answer is cached in `lyrics_meta`; when the probe itself fails we assume
+/// support and let `getLyricsBySongId` decide.
+async fn song_lyrics_supported(dbs: &Dbs, client: &SubsonicClient) -> bool {
+    if let Ok(Some(value)) = meta_get(&dbs.lyrics, "song_lyrics").await {
+        return value == "yes";
+    }
+
+    match client.get_open_subsonic_extensions().await {
+        Ok(extensions) => {
+            let supported = extensions
+                .iter()
+                .any(|extension| extension.name == "songLyrics" && !extension.versions.is_empty());
+            let _ = meta_set(
+                &dbs.lyrics,
+                "song_lyrics",
+                if supported { "yes" } else { "no" },
+            )
+            .await;
+            supported
+        }
+        Err(err) => {
+            eprintln!("lyrics: could not probe OpenSubsonic extensions: {err:#}");
+            true
+        }
+    }
+}
+
+async fn meta_get(pool: &SqlitePool, key: &str) -> Result<Option<String>> {
+    let value: Option<String> =
+        sqlx::query_scalar("SELECT value FROM lyrics_meta WHERE key = ?1")
+            .bind(key)
+            .fetch_optional(pool)
+            .await?;
+    Ok(value)
+}
+
+async fn meta_set(pool: &SqlitePool, key: &str, value: &str) -> Result<()> {
+    sqlx::query(
+        "INSERT INTO lyrics_meta (key, value) VALUES (?1, ?2)
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+    )
+    .bind(key)
+    .bind(value)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Local override
+// ---------------------------------------------------------------------------
+
+/// `<config>/lyrics/<song_id>.lrc` (synced) or `.txt` (plain) wins over the
+/// server and is never cached or purged.
+fn override_document(song_id: &str) -> Option<Document> {
+    let safe = sanitize_id(song_id)?;
+    let dir = override_dir()?;
+
+    for extension in ["lrc", "txt"] {
+        let path = dir.join(format!("{safe}.{extension}"));
+        let Ok(text) = std::fs::read_to_string(&path) else {
+            continue;
+        };
+        if text.trim().is_empty() {
+            continue;
+        }
+
+        if extension == "lrc" {
+            let (synced, lines) = parse_lrc(&text);
+            let plain = lines
+                .iter()
+                .map(|line| line.value.as_str())
+                .collect::<Vec<_>>()
+                .join("\n");
+            return Some(Document {
+                song_id: song_id.to_string(),
+                source: "lrc".to_string(),
+                synced,
+                lang: None,
+                offset_ms: 0,
+                text: plain,
+                lines,
+            });
+        }
+
+        return Some(Document::plain(song_id, "lrc", &text));
+    }
+
+    None
+}
+
+fn override_dir() -> Option<PathBuf> {
+    crate::db::config_dir().ok().map(|dir| dir.join("lyrics"))
+}
+
+/// Keeps the override file name safe: ids with separators are ignored.
+fn sanitize_id(song_id: &str) -> Option<String> {
+    if song_id.is_empty() {
+        return None;
+    }
+    let safe: String = song_id
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
+        .collect();
+    (safe.len() == song_id.len()).then_some(safe)
+}
+
+/// Parses LRC text into `(synced, lines)`. Metadata tags (`[ar:…]`) are
+/// skipped; a line may carry several timestamps.
+fn parse_lrc(text: &str) -> (bool, Vec<Line>) {
+    let mut lines = Vec::new();
+    let mut synced = false;
+
+    for raw in text.lines() {
+        let mut rest = raw.trim_end();
+        let mut starts = Vec::new();
+
+        while rest.starts_with('[') {
+            let Some(end) = rest.find(']') else { break };
+            if let Some(start) = parse_timestamp(&rest[1..end]) {
+                starts.push(start);
+                synced = true;
+            }
+            rest = &rest[end + 1..];
+        }
+
+        let value = rest.trim();
+        if value.is_empty() {
+            continue;
+        }
+
+        if starts.is_empty() {
+            lines.push(Line {
+                start_ms: None,
+                value: value.to_string(),
+            });
+        } else {
+            for start in starts {
+                lines.push(Line {
+                    start_ms: Some(start),
+                    value: value.to_string(),
+                });
+            }
+        }
+    }
+
+    (synced, lines)
+}
+
+/// `mm:ss`, `mm:ss.x`, `mm:ss.xx` or `mm:ss.xxx` to milliseconds.
+fn parse_timestamp(tag: &str) -> Option<i64> {
+    let (minutes, rest) = tag.split_once(':')?;
+    let minutes: i64 = minutes.trim().parse().ok()?;
+
+    let (seconds, fraction) = match rest.split_once('.') {
+        Some((seconds, fraction)) => (seconds, Some(fraction)),
+        None => (rest, None),
+    };
+    let seconds: i64 = seconds.trim().parse().ok()?;
+
+    let millis = match fraction {
+        Some(fraction) => {
+            let digits: String = fraction.chars().take(3).collect();
+            let value: i64 = digits.parse().ok()?;
+            match digits.len() {
+                1 => value * 100,
+                2 => value * 10,
+                _ => value,
+            }
+        }
+        None => 0,
+    };
+
+    Some(minutes * 60_000 + seconds * 1_000 + millis)
+}
+
+// ---------------------------------------------------------------------------
+// Server payloads
+// ---------------------------------------------------------------------------
+
+/// Picks a structured entry (synced preferred) and normalizes it.
+fn structured_document(song_id: &str, list: &LyricsList) -> Option<Document> {
+    let entry = list
+        .structured_lyrics
+        .iter()
+        .find(|entry| entry.synced && !entry.line.is_empty())
+        .or_else(|| {
+            list.structured_lyrics
+                .iter()
+                .find(|entry| !entry.line.is_empty())
+        })?;
+
+    let mut lines: Vec<Line> = entry
+        .line
+        .iter()
+        .filter(|line| !line.value.trim().is_empty())
+        .map(|line| Line {
+            start_ms: line.start,
+            value: line.value.clone(),
+        })
+        .collect();
+
+    if lines.is_empty() {
+        return None;
+    }
+
+    // Only call it synced when every line can actually be timed.
+    let synced = entry.synced && lines.iter().all(|line| line.start_ms.is_some());
+    if !synced {
+        for line in &mut lines {
+            line.start_ms = None;
+        }
+    }
+
+    let text = lines
+        .iter()
+        .map(|line| line.value.as_str())
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    Some(Document {
+        song_id: song_id.to_string(),
+        source: "subsonic".to_string(),
+        synced,
+        lang: entry.lang.clone(),
+        offset_ms: entry.offset.unwrap_or(0),
+        text,
+        lines,
+    })
+}
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+fn miss_expired(fetched_at: i64) -> bool {
+    now() - fetched_at > MISS_TTL_SECS
+}
+
+fn now() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_secs() as i64)
+        .unwrap_or(0)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::str::FromStr;
+
+    use super::*;
+    use crate::api::{LyricLine, StructuredLyrics};
+    use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
+
+    async fn lyrics_pool() -> SqlitePool {
+        let options = SqliteConnectOptions::from_str("sqlite::memory:").unwrap();
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect_with(options)
+            .await
+            .unwrap();
+        sqlx::migrate!("./migrations_lyrics").run(&pool).await.unwrap();
+        pool
+    }
+
+    async fn library_pool() -> SqlitePool {
+        let options = SqliteConnectOptions::from_str("sqlite::memory:").unwrap();
+        SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect_with(options)
+            .await
+            .unwrap()
+    }
+
+    #[test]
+    fn lrc_parsing_keeps_timestamps_and_skips_metadata() {
+        let text = "[ar:Radiohead]\n[00:12.34]First line\n[01:02.5][01:04.00]Twice";
+        let (synced, lines) = parse_lrc(text);
+        assert!(synced);
+        assert_eq!(lines.len(), 3);
+        assert_eq!(lines[0].start_ms, Some(12_340));
+        assert_eq!(lines[0].value, "First line");
+        assert_eq!(lines[1].start_ms, Some(62_500));
+        assert_eq!(lines[2].start_ms, Some(64_000));
+    }
+
+    #[test]
+    fn plain_text_without_timestamps_is_unsynced() {
+        let (synced, lines) = parse_lrc("just words\nno timing here");
+        assert!(!synced);
+        assert_eq!(lines.len(), 2);
+        assert!(lines.iter().all(|line| line.start_ms.is_none()));
+    }
+
+    #[test]
+    fn structured_selection_prefers_synced_and_normalizes() {
+        let list = LyricsList {
+            structured_lyrics: vec![
+                StructuredLyrics {
+                    synced: false,
+                    line: vec![LyricLine {
+                        start: None,
+                        value: "plain".to_string(),
+                    }],
+                    ..StructuredLyrics::default()
+                },
+                StructuredLyrics {
+                    synced: true,
+                    offset: Some(250),
+                    line: vec![
+                        LyricLine {
+                            start: Some(1_000),
+                            value: "first".to_string(),
+                        },
+                        LyricLine {
+                            start: Some(2_000),
+                            value: "second".to_string(),
+                        },
+                    ],
+                    ..StructuredLyrics::default()
+                },
+            ],
+        };
+
+        let document = structured_document("s1", &list).unwrap();
+        assert_eq!(document.source, "subsonic");
+        assert!(document.synced);
+        assert_eq!(document.offset_ms, 250);
+        assert_eq!(document.lines.len(), 2);
+        assert_eq!(document.lines[1].start_ms, Some(2_000));
+    }
+
+    #[test]
+    fn partially_timed_entries_fall_back_to_plain() {
+        let list = LyricsList {
+            structured_lyrics: vec![StructuredLyrics {
+                synced: true,
+                line: vec![
+                    LyricLine {
+                        start: Some(1_000),
+                        value: "timed".to_string(),
+                    },
+                    LyricLine {
+                        start: None,
+                        value: "untimed".to_string(),
+                    },
+                ],
+                ..StructuredLyrics::default()
+            }],
+        };
+
+        let document = structured_document("s1", &list).unwrap();
+        assert!(!document.synced);
+        assert!(document.lines.iter().all(|line| line.start_ms.is_none()));
+    }
+
+    #[tokio::test]
+    async fn synced_documents_round_trip_through_the_cache() {
+        let pool = lyrics_pool().await;
+        let document = Document {
+            song_id: "s1".to_string(),
+            source: "subsonic".to_string(),
+            synced: true,
+            lang: Some("eng".to_string()),
+            offset_ms: 100,
+            text: "one\ntwo".to_string(),
+            lines: vec![
+                Line {
+                    start_ms: Some(500),
+                    value: "one".to_string(),
+                },
+                Line {
+                    start_ms: Some(1_500),
+                    value: "two".to_string(),
+                },
+            ],
+        };
+
+        store(&pool, &document).await.unwrap();
+        let (loaded, fetched_at) = load_cached(&pool, "s1").await.unwrap().unwrap();
+
+        assert_eq!(loaded.source, "subsonic");
+        assert!(loaded.synced);
+        assert_eq!(loaded.offset_ms, 100);
+        assert_eq!(loaded.lines.len(), 2);
+        assert_eq!(loaded.lines[0].start_ms, Some(500));
+        assert!(fetched_at > 0);
+    }
+
+    #[tokio::test]
+    async fn plain_documents_round_trip_and_misses_too() {
+        let pool = lyrics_pool().await;
+
+        let document = Document::plain("s2", "legacy", "alpha\n\nbeta");
+        store(&pool, &document).await.unwrap();
+        let (loaded, _) = load_cached(&pool, "s2").await.unwrap().unwrap();
+        assert!(!loaded.synced);
+        assert_eq!(loaded.lines.len(), 2);
+        assert_eq!(loaded.lines[1].value, "beta");
+
+        let miss = Document::missing("s3");
+        store(&pool, &miss).await.unwrap();
+        let (loaded, _) = load_cached(&pool, "s3").await.unwrap().unwrap();
+        assert_eq!(loaded.source, "none");
+        assert!(!miss_expired(now()));
+    }
+
+    #[tokio::test]
+    async fn purge_removes_lyrics_for_songs_that_left_the_library() {
+        let lyrics = lyrics_pool().await;
+        let library = library_pool().await;
+        sqlx::query("CREATE TABLE songs (id TEXT PRIMARY KEY)")
+            .execute(&library)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO songs (id) VALUES ('keep')")
+            .execute(&library)
+            .await
+            .unwrap();
+
+        store(&lyrics, &Document::plain("keep", "legacy", "a"))
+            .await
+            .unwrap();
+        store(&lyrics, &Document::plain("gone", "legacy", "b"))
+            .await
+            .unwrap();
+
+        let removed = purge_with(&lyrics, &library).await.unwrap();
+        assert_eq!(removed, 1);
+        assert!(load_cached(&lyrics, "keep").await.unwrap().is_some());
+        assert!(load_cached(&lyrics, "gone").await.unwrap().is_none());
+    }
+}

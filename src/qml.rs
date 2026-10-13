@@ -29,6 +29,7 @@ pub struct Backend {
     current_album: String,
     current_cover_art: String,
     current_cover_url: String,
+    current_song_id: String,
     playback_state: String,
     position: f64,
     duration: f64,
@@ -112,6 +113,11 @@ impl Backend {
         Notify = current_cover_url_changed
     );
     qproperty!(
+        "currentSongId",
+        Member = current_song_id,
+        Notify = current_song_id_changed
+    );
+    qproperty!(
         "playbackState",
         Member = playback_state,
         Notify = playback_state_changed
@@ -178,6 +184,8 @@ impl Backend {
     fn current_cover_art_changed(&mut self);
     #[qsignal]
     fn current_cover_url_changed(&mut self);
+    #[qsignal]
+    fn current_song_id_changed(&mut self);
     #[qsignal(qml_name = "dataReady")]
     fn data_ready(&mut self, channel: String, payload: String);
     #[qsignal(qml_name = "errorRaised")]
@@ -784,6 +792,47 @@ impl Backend {
         self.sync_player();
     }
 
+    /// Requests lyrics for the current track (override → cache → server).
+    #[qslot(qml_name = "requestLyrics")]
+    fn request_lyrics(&mut self) {
+        let invoker = self.get_qml_method_invoker();
+        let Some(dbs) = crate::dbs().cloned() else {
+            return;
+        };
+        let Some(song_id) = self.player.current().map(|track| track.id.clone()) else {
+            return;
+        };
+
+        crate::runtime().spawn(async move {
+            let client = match crate::sqlite::load_credentials(&dbs.credentials).await {
+                Ok(Some(credentials)) => Some(SubsonicClient::new(
+                    &credentials.server_url,
+                    &credentials.username,
+                    &credentials.password,
+                )),
+                Ok(None) => None,
+                Err(err) => {
+                    eprintln!("lyrics: could not load credentials: {err:#}");
+                    None
+                }
+            };
+
+            let document = match crate::lyrics::fetch(&dbs, client.as_ref(), &song_id).await {
+                Ok(document) => document,
+                Err(err) => {
+                    eprintln!("lyrics: could not load lyrics for {song_id}: {err:#}");
+                    crate::lyrics::Document::missing(&song_id)
+                }
+            };
+            qtbridge::invoke_method!(
+                invoker,
+                "emitData",
+                "lyrics".to_string(),
+                document.to_json()
+            );
+        });
+    }
+
     /// Lets the UI hand keyboard focus back to the global key handler (e.g.
     /// when leaving a text field), so vi bindings resume.
     #[qslot(qml_name = "releaseFocus")]
@@ -805,8 +854,9 @@ impl Backend {
 
     /// Publishes the player state to the QML properties.
     fn sync_player(&mut self) {
-        let (title, artist, album, cover_art, cover_url) = match self.player.current() {
+        let (song_id, title, artist, album, cover_art, cover_url) = match self.player.current() {
             Some(track) => (
+                track.id.clone(),
                 track.title.clone(),
                 track.artist.clone(),
                 track.album.clone(),
@@ -819,8 +869,13 @@ impl Backend {
                 String::new(),
                 String::new(),
                 String::new(),
+                String::new(),
             ),
         };
+        if self.current_song_id != song_id {
+            self.current_song_id = song_id;
+            self.current_song_id_changed();
+        }
         self.current_title = title;
         self.current_title_changed();
         self.current_artist = artist;

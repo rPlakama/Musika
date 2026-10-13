@@ -6,4 +6,5 @@ result/
 noctalia/
 *.md
 !TASKLISTMAJOR.md
+!README.md
 DankMaterialShell/

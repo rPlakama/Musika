@@ -212,9 +212,27 @@ Item {
                     blur: 0.35
                 }
 
-            SearchBar {
-                Layout.fillWidth: true
-            }
+                SearchBar {
+                    id: searchBar
+                    Layout.fillWidth: true
+
+                    onSongActivated: (id) => Backend.playSong(id)
+                    onAlbumActivated: (albumId, title, artist, year, tracks, cover) => {
+                        var meta = [];
+                        if (year.length > 0)
+                            meta.push(year);
+                        if (tracks.length > 0)
+                            meta.push(tracks + " songs");
+                        contentStack.push(albumEntryComponent, {
+                            albumId: albumId,
+                            albumTitle: title,
+                            albumArtist: artist,
+                            albumCover: cover,
+                            albumMeta: meta.join("   ·   ")
+                        });
+                    }
+                    onArtistActivated: (artist) => contentStack.replace(albumListComponent, { artistFilter: artist })
+                }
 
                 StackView {
                     id: contentStack

@@ -555,6 +555,39 @@ impl Backend {
         });
     }
 
+    /// Fetches an album's description ("notes") from the server.
+    #[qslot(qml_name = "requestAlbumInfo")]
+    fn request_album_info(&mut self, album_id: String) {
+        let invoker = self.get_qml_method_invoker();
+        let Some(dbs) = crate::dbs().cloned() else {
+            return;
+        };
+        crate::runtime().spawn(async move {
+            let notes = album_notes(&dbs, &album_id).await;
+            let json = serde_json::json!({ "notes": notes }).to_string();
+            qtbridge::invoke_method!(invoker, "emitData", "album_info".to_string(), json);
+        });
+    }
+
+    /// Global library search (artists > albums > songs) for the search bar.
+    #[qslot(qml_name = "requestSearch")]
+    fn request_search(&mut self, query: String) {
+        let invoker = self.get_qml_method_invoker();
+        let Some(dbs) = crate::dbs().cloned() else {
+            return;
+        };
+        crate::runtime().spawn(async move {
+            let json = match search_json(&dbs, &query).await {
+                Ok(json) => json,
+                Err(err) => {
+                    eprintln!("search: {err:#}");
+                    "{\"artists\":[],\"albums\":[],\"songs\":[]}".to_string()
+                }
+            };
+            qtbridge::invoke_method!(invoker, "emitData", "search".to_string(), json);
+        });
+    }
+
     /// Floating palette search over the FTS5 index in `search.db`.
     #[qslot(qml_name = "requestPalette")]
     fn request_palette(&mut self, query: String) {
@@ -877,8 +910,7 @@ async fn load_artists_json(dbs: &crate::db::Dbs) -> anyhow::Result<String> {
 fn song_rows_json(
     songs: &[crate::library::SongRow],
     covers: &HashMap<String, String>,
-) -> anyhow::Result<String> {
-    let rows: Vec<serde_json::Value> = songs
+) -> anyhow::Result<String> {    let rows: Vec<serde_json::Value> = songs
         .iter()
         .map(|song| {
             let cover = song
@@ -904,6 +936,83 @@ fn song_rows_json(
 async fn album_tracks_json(dbs: &crate::db::Dbs, album_id: &str) -> anyhow::Result<String> {
     let songs = crate::library::album_songs(&dbs.library, album_id).await?;
     tracks_json(dbs, songs).await
+}
+
+/// Fetches an album's description text from the server (`getAlbumInfo2`).
+async fn album_notes(dbs: &crate::db::Dbs, album_id: &str) -> String {
+    let Ok(Some(credentials)) = crate::sqlite::load_credentials(&dbs.credentials).await else {
+        return String::new();
+    };
+    let client = SubsonicClient::new(
+        &credentials.server_url,
+        &credentials.username,
+        &credentials.password,
+    );
+    match client.get_album_info2(album_id).await {
+        Ok(info) => info.notes.unwrap_or_default(),
+        Err(err) => {
+            eprintln!("album: could not fetch info for {album_id}: {err:#}");
+            String::new()
+        }
+    }
+}
+
+fn cover_url(id: Option<&str>, covers: &HashMap<String, String>) -> String {
+    id.and_then(|id| covers.get(id)).cloned().unwrap_or_default()
+}
+
+async fn search_json(dbs: &crate::db::Dbs, query: &str) -> anyhow::Result<String> {
+    if query.trim().is_empty() {
+        return Ok("{\"artists\":[],\"albums\":[],\"songs\":[]}".to_string());
+    }
+
+    let (artists, albums, songs) = crate::library::search(&dbs.library, query, 20).await?;
+    let covers = crate::covers::url_map(&dbs.covers).await?;
+
+    let artist_rows: Vec<serde_json::Value> = artists
+        .into_iter()
+        .map(|artist| {
+            serde_json::json!({
+                "id": artist.id,
+                "name": artist.name,
+                "album_count": artist.album_count,
+                "cover": cover_url(artist.cover_art.as_deref(), &covers),
+            })
+        })
+        .collect();
+    let album_rows: Vec<serde_json::Value> = albums
+        .into_iter()
+        .map(|album| {
+            serde_json::json!({
+                "id": album.id,
+                "title": album.title,
+                "artist": album.artist,
+                "year": album.year,
+                "song_count": album.song_count,
+                "cover": cover_url(album.cover_art.as_deref(), &covers),
+            })
+        })
+        .collect();
+    let song_rows: Vec<serde_json::Value> = songs
+        .iter()
+        .map(|song| {
+            serde_json::json!({
+                "id": song.id,
+                "title": song.title,
+                "artist": song.artist,
+                "album": song.album,
+                "duration": song.duration,
+                "cover": cover_url(song.cover_art.as_deref(), &covers),
+            })
+        })
+        .collect();
+
+    Ok(serde_json::json!({
+        "artists": artist_rows,
+        "albums": album_rows,
+        "songs": song_rows,
+    })
+    .to_string())
 }
 
 /// Builds the queue for a song: its album (starting at that song) when known,

@@ -16,10 +16,10 @@ Rectangle {
     property string albumId: ""
     property bool onToolbar: false
     property string albumCover: ""
-    property string albumTitle: "In Rainbows"
-    property string albumArtist: "Radiohead"
-    property string albumMeta: "2007   ·   Art rock, Alternative   ·   10 songs"
-    property string albumNotes: "In Rainbows was released in 2007 as a pay-what-you-want download. Recorded in Oxfordshire and Wales, it moves through warmer, more rhythm-driven arrangements than its predecessor."
+    property string albumTitle: ""
+    property string albumArtist: ""
+    property string albumMeta: ""
+    property string albumNotes: ""
 
     color: Theme.surface
 
@@ -36,6 +36,12 @@ Rectangle {
         if (root.albumId === "")
             return;
         Backend.requestAlbumSongs(root.albumId);
+        Backend.requestAlbumInfo(root.albumId);
+    }
+
+    function applyInfo(payload) {
+        var info = JSON.parse(payload);
+        root.albumNotes = info.notes ? info.notes : "";
     }
 
     function apply(payload) {
@@ -88,6 +94,8 @@ Rectangle {
         function onDataReady(channel, payload) {
             if (channel === "album_songs")
                 root.apply(payload);
+            else if (channel === "album_info")
+                root.applyInfo(payload);
         }
         function onLibrary_changed() {
             root.reload();
@@ -209,11 +217,14 @@ Rectangle {
             FadeText {
                 Layout.fillWidth: true
                 Layout.topMargin: root.height * 0.008
+                visible: root.albumNotes.length > 0
                 text: root.albumNotes
                 color: Theme.onSurfaceVariant
                 font.pixelSize: root.height * 0.02
                 lineHeight: 1.25
                 wrapMode: Text.WordWrap
+                maximumLineCount: 3
+                elide: Text.ElideRight
             }
         }
 

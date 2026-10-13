@@ -44,6 +44,7 @@ DB1 = usrname stuff
 DB2a = index of content (library.db)
 DB2b = search index (search.db, FTS5)
 DB3 = cover cache (covers.db + covers/)
+DB4 = media cache (media.db + media/), see "Media cache" design below
 
 # Design itself (UI/UIX)
 
@@ -67,6 +68,47 @@ right bar (status) Amount of albums/songs/artists, sync progress, if its syncing
 inferior bar being the play itself.
 
 If user (enter) in inferior bar (Clicks it) it enter (mainscreen) mode, where album cover (by the left side) and Lyris by the right side.
+
+## Floating search (design; replaces the single-list palette)
+
+One floating panel centered over the shell, dim backdrop behind it, square
+(radius 3) surfaceContainerHigh with a primary hairline border. Search is a
+modal layer: the current view stays behind the dim, nothing navigates away.
+
+Column order left -> right: Songs | Albums | Artists. Each column is a stack
+of result rows; the active column's header takes the primary accent while the
+others dim. Lookup priority (Artists > Albums > Songs) only picks the column
+the cursor starts in.
+
+    +----------------------------------------------------------------------+
+    |  ⌕  pink floyd                                       Esc close        |
+    +---------------------+----------------------+-------------------------+
+    | Songs           3   | Albums           2   | Artists            1    |
+    |---------------------|----------------------|-------------------------|
+    | [art] Time   4:32   | [art] The Wall 1979  | (o) Pink Floyd  14 alb  |
+    | [art] Money  6:22   | [art] Meddle  1971   | (o) Pink Floyd...       |
+    | [art] Comfortably   |                      |                         |
+    |       Numb   5:06   |                      |                         |
+    +---------------------+----------------------+-------------------------+
+    | Enter open/play    h/l column    j/k row    / query    Esc close      |
+    +----------------------------------------------------------------------+
+
+Row anatomy: square art thumb (round avatar for artists), title, muted
+subtitle (song: artist · album; album: artist · year; artist: N albums),
+right-aligned kind tag; highlighted row uses secondaryContainer.
+
+Widths: Songs 40%, Albums 32%, Artists 28%; panel 70% width / 65% height of
+the window, every size/margin/font a fraction of its container (no px).
+
+Flow: type filters all three columns from one `search.db` (FTS5) request,
+debounced ~120ms; per-column "no matches" line; skeleton while in flight;
+mouse parity (click row activates, hover mirrors cursor, backdrop dismisses);
+100ms cubic-bezier fade/rise for the panel, results refresh in place.
+
+Keys: type filters; Tab or h/l moves between columns; j/k walks rows; Enter
+plays a song, opens an album or artist; Esc closes and returns focus to the
+previous region. Counts (3j, 5l) and n/N in-results come later with the rest
+of normal mode.
 
 ## Implementation (static shell, no movementation yet)
 
@@ -93,6 +135,54 @@ If user (enter) in inferior bar (Clicks it) it enter (mainscreen) mode, where al
     -> Visual mode: regions blur, selection squares show their titles; unselected not highlighted; _[X]_
     -> Keys: Shift+Enter fullscreen player; Space play/pause anywhere; Shift+Space F search; ESC leaves search; _[X]_
     -> Keyboard/vi movementation, block focus (double-ESC), global search binding; _[]_
+
+# Media cache -- design (Symfonium-inspired)
+
+Goal: play from disk when possible and survive flaky/absent network, without
+unbounded disk growth.
+
+DB4 = media cache (media.db + media/), one row per downloaded song:
+
+    song_id UNIQUE, file, size, kind, rule_id, hash, etag, last_modified, last_used
+    kind = playback | rolling | permanent | rule
+    rule_id points at the auto-download rule that owns the file (NULL otherwise)
+
+Cache tiers (mirroring Symfonium):
+    -> playback: caches the current track while it plays and pre-caches the
+       next N queue tracks (player.rs owns the queue); purged freely; never
+       counted as offline-available;
+    -> rolling: fixed max size, evicts least-recently-used first;
+    -> permanent: explicit "Keep offline", never auto-removed, no size cap;
+    -> rule: files owned by an auto-download rule; re-evaluated on every sync
+       and removed when no longer covered (promoted to permanent if pinned).
+
+Auto-download rules (the user-facing part):
+    -> Favorites: starring a song/album/artist caches it (and later additions);
+    -> Artist in download cache: flag an artist ("Configure auto cache") and
+       every album/song of that artist is downloaded -- existing ones right
+       away, new ones on each sync;
+    -> Playlist and Genre rules likewise (album-level for artists: all songs);
+    -> all rule downloads are visible in the offline filter and removable by
+       clearing the rule; "Move to permanent" pins a rule/rolling file.
+
+Offline playback flow:
+    -> build_track checks media::cached_path(song_id) first, then falls back to
+       the stream URL; when a cached copy exists mpv gets the local file path;
+    -> downloads: original or transcoded per settings (bitrate cap); written to
+       .tmp and atomically renamed, exactly like covers.rs;
+    -> "prefer server when online" / "prefer server on Wi-Fi" so a low-bitrate
+       cached copy does not shadow the stream;
+    -> Wi-Fi-only downloads, max simultaneous downloads (reuse FETCH_CONCURRENCY=8);
+    -> status: per-item cache state (cached / partial / queued) + global
+       used-bytes vs cap shown in the right bar.
+
+Sync integration:
+    -> after a successful library sync, evaluate rules -> queue missing songs;
+    -> prune rule-owned files no longer covered and rolling overflow;
+    -> failures retried next sync, never fatal (same policy as covers).
+
+Start: playback cache only (no UI). Then permanent/rolling + rules (favorite
+artist auto-download first), then offline filter + storage UI.
 
 # Review findings (see CRITIQUE.md)
 

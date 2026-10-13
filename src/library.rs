@@ -163,6 +163,56 @@ pub async fn song_search_rows(pool: &SqlitePool) -> Result<Vec<SongSearchRow>> {
 ///
 /// Only album- and artist-level art is cached: songs inherit their album's
 /// cover, which keeps the cache bounded (per-song ids exploded it).
+/// Global search across artists, albums and songs (in that priority), by
+/// case-insensitive substring match.
+pub async fn search(
+    pool: &SqlitePool,
+    query: &str,
+    limit: i64,
+) -> Result<(Vec<ArtistRow>, Vec<AlbumRow>, Vec<SongRow>)> {
+    let escaped = query.replace('\\', "\\\\").replace('%', "\\%").replace('_', "\\_");
+    let like = format!("%{escaped}%");
+
+    let artists = sqlx::query_as::<_, ArtistRow>(
+        "SELECT id, name, album_count, cover_art
+         FROM artists
+         WHERE name LIKE ?1 ESCAPE '\\'
+         ORDER BY name
+         LIMIT ?2",
+    )
+    .bind(&like)
+    .bind(limit)
+    .fetch_all(pool)
+    .await?;
+
+    let albums = sqlx::query_as::<_, AlbumRow>(
+        "SELECT id, name AS title, artist, year, song_count, cover_art
+         FROM albums
+         WHERE name LIKE ?1 ESCAPE '\\' OR artist LIKE ?1 ESCAPE '\\'
+         ORDER BY artist, name
+         LIMIT ?2",
+    )
+    .bind(&like)
+    .bind(limit)
+    .fetch_all(pool)
+    .await?;
+
+    let songs = sqlx::query_as::<_, SongRow>(
+        "SELECT s.id, s.title, s.artist, s.album, s.album_id, s.track, s.duration,
+                COALESCE(al.cover_art, s.cover_art) AS cover_art
+         FROM songs s LEFT JOIN albums al ON al.id = s.album_id
+         WHERE s.title LIKE ?1 ESCAPE '\\' OR s.artist LIKE ?1 ESCAPE '\\'
+         ORDER BY s.artist, s.album, s.track
+         LIMIT ?2",
+    )
+    .bind(&like)
+    .bind(limit)
+    .fetch_all(pool)
+    .await?;
+
+    Ok((artists, albums, songs))
+}
+
 pub async fn referenced_cover_ids(pool: &SqlitePool) -> Result<std::collections::BTreeSet<String>> {
     let ids: Vec<String> = sqlx::query_scalar(
         "SELECT cover_art FROM artists WHERE cover_art IS NOT NULL

@@ -273,7 +273,7 @@ Item {
                 TextField {
                     id: field
                     Layout.fillWidth: true
-                    placeholderText: "Search artists, albums and songs…"
+                    placeholderText: "Search anything"
                     placeholderTextColor: Theme.onSurfaceVariant
                     color: Theme.onSurface
                     font.pixelSize: panel.height * 0.045

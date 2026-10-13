@@ -280,6 +280,7 @@ Rectangle {
                     color: Theme.onSurfaceVariant
                     font.pixelSize: songRow.height * 0.32
                     horizontalAlignment: Text.AlignRight
+                    animated: false
                 }
                 FadeText {
                     anchors.verticalCenter: parent.verticalCenter
@@ -291,6 +292,7 @@ Rectangle {
                     color: Theme.onSurface
                     font.pixelSize: songRow.height * 0.36
                     elide: Text.ElideRight
+                    animated: false
                 }
                 FadeText {
                     id: songDuration
@@ -300,6 +302,7 @@ Rectangle {
                     text: songRow.duration
                     color: Theme.onSurfaceVariant
                     font.pixelSize: songRow.height * 0.32
+                    animated: false
                 }
 
                 TapHandler {

@@ -184,6 +184,10 @@ impl Backend {
     fn error_raised(&mut self, kind: String, message: String);
     #[qsignal(qml_name = "commandIssued")]
     fn command_issued(&mut self, command: String);
+    #[qsignal(qml_name = "loginRequired")]
+    fn login_required(&mut self);
+    #[qsignal(qml_name = "loginPending")]
+    fn login_pending(&mut self);
     #[qsignal]
     fn playback_state_changed(&mut self);
     #[qsignal]
@@ -254,26 +258,53 @@ impl Backend {
         crate::runtime().spawn(async move {
             match crate::sqlite::load_credentials(&pool).await {
                 Ok(Some(credentials)) => {
-                    if crate::http_client::authenticate(
-                        &credentials.server_url,
-                        &credentials.username,
-                        &credentials.password,
+                    // Cached login: show a loading screen while we ping.
+                    invoker.invoke_method("login_pending");
+
+                    let ping = tokio::time::timeout(
+                        std::time::Duration::from_millis(5000),
+                        crate::http_client::authenticate(
+                            &credentials.server_url,
+                            &credentials.username,
+                            &credentials.password,
+                        ),
                     )
-                    .await
-                    .is_ok()
-                    {
-                        invoker.invoke_method("login_succeeded");
-                        spawn_index_sync(
-                            sync_finish,
-                            sync_progress,
-                            credentials.server_url,
-                            credentials.username,
-                            credentials.password,
-                        );
+                    .await;
+
+                    match ping {
+                        Ok(Ok(())) => {
+                            invoker.invoke_method("login_succeeded");
+                            spawn_index_sync(
+                                sync_finish,
+                                sync_progress,
+                                credentials.server_url,
+                                credentials.username,
+                                credentials.password,
+                            );
+                        }
+                        Ok(Err(err)) => {
+                            qtbridge::invoke_method!(
+                                invoker,
+                                "login_failed",
+                                format!("{err:#}")
+                            );
+                        }
+                        Err(_) => {
+                            qtbridge::invoke_method!(
+                                invoker,
+                                "login_failed",
+                                "Timed out waiting for server".to_string()
+                            );
+                        }
                     }
                 }
-                Ok(None) => {}
-                Err(err) => eprintln!("Failed to load saved credentials: {err:#}"),
+                Ok(None) => {
+                    invoker.invoke_method("login_required");
+                }
+                Err(err) => {
+                    eprintln!("Failed to load saved credentials: {err:#}");
+                    invoker.invoke_method("login_required");
+                }
             }
         });
     }

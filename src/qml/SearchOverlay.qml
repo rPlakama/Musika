@@ -4,10 +4,11 @@ import QtQuick.Layouts
 import musika
 import "Theme.js" as Theme
 
-// Floating global search (Shift Space F): one panel with Songs | Albums |
-// Artists columns, filtered live from the library. It is a modal layer opened
-// from any region; typing filters, Tab/h/l switch columns, Up/Down walk rows,
-// Enter opens/plays, Esc closes and returns focus to the previous region.
+// Floating global search (Shift Space F): one modal panel with Artists |
+// Albums | Songs columns (RowLayout weights 28/32/40), filtered live from the
+// library. Typing mode: keys type, Tab/arrows navigate, Esc -> normal mode.
+// Normal mode: hjkl navigates, i re-enters typing, Enter opens/plays, Esc
+// closes and returns focus to the previous region.
 Item {
     id: root
 
@@ -21,7 +22,7 @@ Item {
     signal artistActivated(string name)
 
     visible: opened
-    z: 30
+    z: Theme.zOverlay
 
     function open() {
         opened = true;
@@ -171,7 +172,7 @@ Item {
                 id: artist.id,
                 title: artist.name,
                 subtitle: "",
-                meta: artist.album_count + " alb",
+                meta: artist.album_count + " albums",
                 cover: artist.cover
             });
         }
@@ -219,14 +220,14 @@ Item {
         }
     }
 
-    // Dim backdrop; click outside to dismiss.
+    // Dim backdrop (the one sanctioned scrim); click outside to dismiss.
     Rectangle {
         anchors.fill: parent
-        color: "#000000"
-        opacity: root.opened ? 0.5 : 0
+        color: Theme.scrim
+        opacity: root.opened ? Theme.scrimOpacity : 0
 
         Behavior on opacity {
-            NumberAnimation { duration: Theme.duration }
+            NumberAnimation { duration: Theme.motion.standard; easing.type: Easing.Bezier; easing.bezierCurve: Theme.ease.standard }
         }
 
         TapHandler {
@@ -236,21 +237,22 @@ Item {
 
     Rectangle {
         id: panel
-        anchors.centerIn: parent
         width: root.width * 0.70
         height: root.height * 0.65
+        // Rise into place (preferred over scale, motion §3.1).
+        x: (root.width - width) / 2
+        y: (root.height - height) / 2 + (root.opened ? 0 : height * 0.04)
         color: Theme.surfaceContainerHigh
         radius: Theme.radius
         border.color: Theme.primary
         border.width: Math.max(1, root.height * Theme.hairlineRatio)
         opacity: root.opened ? 1 : 0
-        scale: root.opened ? 1 : 0.98
 
         Behavior on opacity {
-            NumberAnimation { duration: Theme.duration; easing.type: Easing.Bezier; easing.bezierCurve: Theme.easeOut }
+            NumberAnimation { duration: Theme.motion.standard; easing.type: Easing.Bezier; easing.bezierCurve: Theme.ease.decelerate }
         }
-        Behavior on scale {
-            NumberAnimation { duration: Theme.duration; easing.type: Easing.Bezier; easing.bezierCurve: Theme.easeOut }
+        Behavior on y {
+            NumberAnimation { duration: Theme.motion.standard; easing.type: Easing.Bezier; easing.bezierCurve: Theme.ease.decelerate }
         }
 
         ColumnLayout {
@@ -271,7 +273,7 @@ Item {
                 TextField {
                     id: field
                     Layout.fillWidth: true
-                    placeholderText: "Search songs, albums and artists…"
+                    placeholderText: "Search artists, albums and songs…"
                     placeholderTextColor: Theme.onSurfaceVariant
                     color: Theme.onSurface
                     font.pixelSize: panel.height * 0.045
@@ -309,13 +311,29 @@ Item {
                     }
                 }
 
-                FadeText {
-                    text: "Esc close"
-                    color: Theme.onSurfaceVariant
-                    font.pixelSize: panel.height * 0.032
+                // Mode chip: INSERT while typing, NORMAL while navigating.
+                Rectangle {
+                    implicitWidth: modeChipLabel.implicitWidth + panel.height * 0.05
+                    implicitHeight: panel.height * 0.06
+                    radius: Theme.radius
+                    color: Theme.surfaceContainerHighest
+                    border.width: Math.max(1, root.height * Theme.hairlineRatio)
+                    border.color: root.typing ? Theme.tertiary : Theme.primary
+
+                    FadeText {
+                        id: modeChipLabel
+                        anchors.centerIn: parent
+                        text: root.typing ? "INSERT" : "NORMAL"
+                        color: root.typing ? Theme.tertiary : Theme.primary
+                        font.pixelSize: Theme.fontSize("label", panel.height)
+                        font.bold: true
+                        font.letterSpacing: panel.height * 0.006
+                        animated: false
+                    }
                 }
             }
 
+            // Column widths are RowLayout weights (28/32/40), not pixels.
             RowLayout {
                 Layout.fillWidth: true
                 Layout.fillHeight: true
@@ -389,11 +407,14 @@ Item {
                 }
             }
 
+            // One cheat sheet, per mode (no duplicate Esc hint).
             FadeText {
                 Layout.fillWidth: true
-                text: "Enter open/play   ·   Tab column   ·   ↑/↓ row   ·   Esc close"
+                text: root.typing
+                    ? "Type to filter   ·   Tab/↑/↓ navigate   ·   Enter open/play   ·   Esc normal mode"
+                    : "h/l columns   ·   j/k rows   ·   i type   ·   Enter open/play   ·   Esc close"
                 color: Theme.onSurfaceVariant
-                font.pixelSize: panel.height * 0.03
+                font.pixelSize: Theme.fontSize("label", panel.height)
                 horizontalAlignment: Text.AlignHCenter
             }
         }

@@ -152,11 +152,13 @@ Rectangle {
                         text: row.artistName
                         color: Theme.onSurface
                         font.pixelSize: row.height * 0.26
+                        animated: false
                     }
                     FadeText {
                         text: row.albumCount + " albums"
                         color: Theme.onSurfaceVariant
                         font.pixelSize: row.height * 0.2
+                        animated: false
                     }
                 }
 

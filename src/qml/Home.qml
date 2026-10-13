@@ -1,15 +1,15 @@
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
-import QtQuick.Effects
 import "Theme.js" as Theme
 
 // Library shell: status bar on top, sidebar | main below it, player bar at the
 // bottom.
 //
 // Focus model (vi-like): `activeRegion` is the cursor and its border stays lit
-// at all times. Ctrl-W enters region mode: the regions blur, their titles
-// show inside the selection squares, j/k cycles candidates, Enter accepts.
+// at all times. Ctrl-W enters region mode: a scrim dims the shell and the
+// region titles show inside the selection squares, j/k cycles candidates,
+// Enter accepts.
 Item {
     id: root
 
@@ -24,6 +24,24 @@ Item {
     readonly property real playH: height * Theme.playerRatio
     readonly property real sideW: width * Theme.sidebarRatio
     readonly property real bodyH: height - barH - playH
+
+    // View transitions (motion §3.1): fade in with decelerate, fade out with
+    // accelerate. One factory reused by push/pop/replace.
+    component EnterView: Transition {
+        NumberAnimation {
+            property: "opacity"; from: 0; to: 1
+            duration: Theme.motion.standard
+            easing.type: Easing.Bezier; easing.bezierCurve: Theme.ease.decelerate
+        }
+    }
+
+    component ExitView: Transition {
+        NumberAnimation {
+            property: "opacity"; from: 1; to: 0
+            duration: Theme.motion.quick
+            easing.type: Easing.Bezier; easing.bezierCurve: Theme.ease.accelerate
+        }
+    }
 
     function rootFor(index) {
         switch (index) {
@@ -128,6 +146,11 @@ Item {
         }
 
         if (action === "back") {
+            // Fullscreen is the topmost context: back leaves it first.
+            if (nowPlayingExpanded) {
+                nowPlayingExpanded = false;
+                return;
+            }
             if (contentStack.depth > 1) {
                 contentStack.pop();
             }
@@ -178,12 +201,6 @@ Item {
             id: topBar
             Layout.fillWidth: true
             Layout.preferredHeight: root.barH
-
-            layer.enabled: root.visualMode
-            layer.effect: MultiEffect {
-                blurEnabled: true
-                blur: 0.35
-            }
         }
 
         RowLayout {
@@ -197,12 +214,6 @@ Item {
                 Layout.fillHeight: true
 
                 onSegmentActivated: (index) => root.showSegment(index)
-
-                layer.enabled: root.visualMode
-                layer.effect: MultiEffect {
-                    blurEnabled: true
-                    blur: 0.35
-                }
             }
 
             ColumnLayout {
@@ -210,12 +221,6 @@ Item {
                 Layout.fillWidth: true
                 Layout.fillHeight: true
                 spacing: 0
-
-                layer.enabled: root.visualMode
-                layer.effect: MultiEffect {
-                    blurEnabled: true
-                    blur: 0.35
-                }
 
                 // Search is global scope (Shift Space F); this is just the hint.
                 Rectangle {
@@ -239,26 +244,12 @@ Item {
                     Layout.fillHeight: true
                     initialItem: albumListComponent
 
-                    pushEnter: Transition {
-                        NumberAnimation { property: "opacity"; from: 0; to: 1; duration: Theme.duration; easing.type: Easing.Bezier; easing.bezierCurve: Theme.easeOut }
-                        NumberAnimation { property: "scale"; from: 0.985; to: 1; duration: Theme.duration; easing.type: Easing.Bezier; easing.bezierCurve: Theme.easeOut }
-                    }
-                    pushExit: Transition {
-                        NumberAnimation { property: "opacity"; from: 1; to: 0; duration: Theme.duration }
-                    }
-                    popEnter: Transition {
-                        NumberAnimation { property: "opacity"; from: 0; to: 1; duration: Theme.duration; easing.type: Easing.Bezier; easing.bezierCurve: Theme.easeOut }
-                        NumberAnimation { property: "scale"; from: 0.985; to: 1; duration: Theme.duration; easing.type: Easing.Bezier; easing.bezierCurve: Theme.easeOut }
-                    }
-                    popExit: Transition {
-                        NumberAnimation { property: "opacity"; from: 1; to: 0; duration: Theme.duration }
-                    }
-                    replaceEnter: Transition {
-                        NumberAnimation { property: "opacity"; from: 0; to: 1; duration: Theme.duration; easing.type: Easing.Bezier; easing.bezierCurve: Theme.easeOut }
-                    }
-                    replaceExit: Transition {
-                        NumberAnimation { property: "opacity"; from: 1; to: 0; duration: Theme.duration }
-                    }
+                    pushEnter: EnterView {}
+                    pushExit: ExitView {}
+                    popEnter: EnterView {}
+                    popExit: ExitView {}
+                    replaceEnter: EnterView {}
+                    replaceExit: ExitView {}
 
                     Component {
                         id: albumListComponent
@@ -322,12 +313,6 @@ Item {
             id: player
             Layout.fillWidth: true
             Layout.preferredHeight: root.playH
-
-            layer.enabled: root.visualMode
-            layer.effect: MultiEffect {
-                blurEnabled: true
-                blur: 0.35
-            }
         }
     }
 
@@ -337,7 +322,7 @@ Item {
         visible: opacity > 0
 
         Behavior on opacity {
-            NumberAnimation { duration: Theme.duration; easing.type: Easing.Bezier; easing.bezierCurve: Theme.easeOut }
+            NumberAnimation { duration: Theme.motion.emphasized; easing.type: Easing.Bezier; easing.bezierCurve: Theme.ease.standard }
         }
     }
 
@@ -348,7 +333,7 @@ Item {
         anchors.bottomMargin: root.playH + root.height * 0.02
         width: root.width * 0.42
         height: root.height * 0.06
-        z: 20
+        z: Theme.zToast
         onRetry: Backend.syncLibrary()
     }
 
@@ -381,6 +366,19 @@ Item {
         }
     }
 
+    // Visual mode dims, it does not blur (R2): the focus border is the only
+    // feedback, and blur stays reserved for modal scrims.
+    Rectangle {
+        anchors.fill: parent
+        color: Theme.scrim
+        opacity: root.visualMode ? Theme.scrimOpacity : 0
+        z: Theme.zRegion - 1
+
+        Behavior on opacity {
+            NumberAnimation { duration: Theme.motion.standard; easing.type: Easing.Bezier; easing.bezierCurve: Theme.ease.standard }
+        }
+    }
+
     // Region borders = the vi cursor, positioned from the layout ratios.
     // 0 = sidebar, 1 = main, 2 = status (top), 3 = player (bottom).
     Repeater {
@@ -404,7 +402,7 @@ Item {
             y: index === 2 ? 0 : (index === 3 ? root.height - root.playH : root.barH)
             width: (index === 2 || index === 3) ? root.width : (index === 1 ? root.width - root.sideW : root.sideW)
             height: index === 2 ? root.barH : (index === 3 ? root.playH : root.bodyH)
-            z: 10
+            z: Theme.zRegion
             color: "transparent"
             // Visual mode highlights only the candidate; otherwise only the
             // active (cursor) region is outlined.
@@ -412,8 +410,9 @@ Item {
             border.width: (candidate ? 3 : 2) * unit
             border.color: modelData.color
 
-            Behavior on border.width {
-                NumberAnimation { duration: Theme.duration; easing.type: Easing.Bezier; easing.bezierCurve: Theme.easeOut }
+            // Width is instant (R5); only the colour eases.
+            Behavior on border.color {
+                ColorAnimation { duration: Theme.motion.micro; easing.type: Easing.Bezier; easing.bezierCurve: Theme.ease.standard }
             }
 
             // Region title shown only while choosing in visual mode.

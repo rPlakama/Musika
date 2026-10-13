@@ -80,8 +80,12 @@ Item {
                     required property string cover
 
                     width: list.width
-                    height: root.height * 0.115
+                    height: root.height * 0.12
                     color: index === root.cursor ? Theme.secondaryContainer : "transparent"
+
+                    Behavior on color {
+                        ColorAnimation { duration: Theme.motion.quick; easing.type: Easing.Bezier; easing.bezierCurve: Theme.ease.standard }
+                    }
 
                     Rectangle {
                         id: thumb
@@ -102,16 +106,34 @@ Item {
                         }
                     }
 
-                    FadeText {
+                    // Two-line cell: title over a muted subtitle, never one
+                    // string in one colour.
+                    Column {
                         anchors.left: thumb.right
                         anchors.leftMargin: row.height * 0.18
                         anchors.right: metaLabel.left
                         anchors.rightMargin: row.height * 0.18
                         anchors.verticalCenter: parent.verticalCenter
-                        text: row.subtitle.length > 0 ? row.title + "   " + row.subtitle : row.title
-                        color: index === root.cursor ? Theme.onSecondaryContainer : Theme.onSurface
-                        font.pixelSize: row.height * 0.34
-                        elide: Text.ElideRight
+                        spacing: row.height * 0.04
+
+                        FadeText {
+                            width: parent.width
+                            text: row.title
+                            color: index === root.cursor ? Theme.onSecondaryContainer : Theme.onSurface
+                            font.pixelSize: Theme.clamp(row.height * 0.3, 12, 18)
+                            elide: Text.ElideRight
+                            animated: false
+                        }
+
+                        FadeText {
+                            width: parent.width
+                            visible: row.subtitle.length > 0
+                            text: row.subtitle
+                            color: index === root.cursor ? Theme.onSecondaryContainer : Theme.onSurfaceVariant
+                            font.pixelSize: Theme.clamp(row.height * 0.24, 10, 14)
+                            elide: Text.ElideRight
+                            animated: false
+                        }
                     }
 
                     FadeText {
@@ -120,8 +142,9 @@ Item {
                         anchors.rightMargin: row.height * 0.18
                         anchors.verticalCenter: parent.verticalCenter
                         text: row.meta
-                        color: Theme.onSurfaceVariant
-                        font.pixelSize: row.height * 0.28
+                        color: index === root.cursor ? Theme.onSecondaryContainer : Theme.onSurfaceVariant
+                        font.pixelSize: Theme.clamp(row.height * 0.26, 10, 14)
+                        animated: false
                     }
 
                     HoverHandler {

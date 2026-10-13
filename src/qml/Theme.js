@@ -1,16 +1,57 @@
 .pragma library
 
-// Material You 3-like palette (dark) + layout ratios for Musika.
+// Material You 3-like palette (dark) + tokens for Musika.
 // Import in QML with: import "Theme.js" as Theme
 //
 // Everything is proportional: sizes are expressed as fractions of a container
 // (usually the component's own width/height or the window), never as fixed px.
+// The only sanctioned pixel values are clamps (fontSize) and hairlines.
+//
+// See materialyou3idea.md for the rationale behind the token sets.
 
-var radius = 3 // Global corner roundness.
+// ---------------------------------------------------------------------------
+// Shape (R3): binary + one. Square is the default; soft only for interactive
+// surfaces; full-circle only for artist avatars.
+// ---------------------------------------------------------------------------
+var radius = 3 // Global soft corner roundness.
+var shapeSquare = 0
 
-// Motion: soft, cubic-bezier easing.
-var duration = 100
-var easeOut = [0.2, 0, 0, 1]
+function shapeFull(size) {
+    return size * 0.5
+}
+
+// ---------------------------------------------------------------------------
+// Motion (R4/R5): tiers, not one global duration. If the next keystroke can
+// race the animation, use instant/micro.
+// ---------------------------------------------------------------------------
+var motion = {
+    instant: 0,        // mode switches, cursor moves, showcmd
+    micro: 80,         // hover/press layers, region focus border
+    quick: 120,        // toasts in, row cursor, column switch
+    standard: 160,     // view push/pop/replace, overlay in/out
+    emphasized: 240,   // fullscreen player, first paint of a context
+    lazy: 320          // toast out, nothing keyboard-critical
+}
+
+var ease = {
+    standard: [0.2, 0, 0, 1],
+    decelerate: [0.05, 0.7, 0.1, 1],
+    accelerate: [0.3, 0, 0.8, 0.15]
+}
+
+// Legacy aliases; new code uses motion.* / ease.*.
+var duration = motion.quick
+var easeOut = ease.standard
+
+// ---------------------------------------------------------------------------
+// Layering (z) — a single ladder so future surfaces don't invent values.
+// ---------------------------------------------------------------------------
+var zRegion = 10
+var zToast = 20
+var zOverlay = 30
+var zCommand = 40
+var zWhichKey = 50
+var zTooltip = 60
 
 // Top-level layout ratios (fraction of the window).
 var sidebarRatio = 0.15
@@ -20,10 +61,14 @@ var playerRatio = 0.115
 // 1px-ish hairlines, but proportional so they survive scaling.
 var hairlineRatio = 0.0018
 
-// Surfaces
+// ---------------------------------------------------------------------------
+// Surfaces (R1): hierarchy is tonal, never shadows.
+// ---------------------------------------------------------------------------
 var background = "#141218"
 var onBackground = "#E6E0E9"
 var surface = "#141218"
+var surfaceDim = "#141218"
+var surfaceBright = "#3B383E"
 var surfaceContainerLowest = "#0F0D13"
 var surfaceContainerLow = "#1D1B20"
 var surfaceContainer = "#211F26"
@@ -42,8 +87,57 @@ var secondary = "#CCC2DC"
 var secondaryContainer = "#4A4458"
 var onSecondaryContainer = "#E8DEF8"
 var tertiary = "#EFB8C8"
+var tertiaryContainer = "#633B48"
+var onTertiaryContainer = "#FFD8E4"
 var error = "#F2B8B5"
+var errorContainer = "#8C1D18"
+var onErrorContainer = "#F9DEDC"
+
+// Inverse + tint (reserved; no shadows).
+var inverseSurface = "#E6E0E9"
+var onInverseSurface = "#322F35"
+var surfaceTint = "#D0BCFF"
 
 // Lines
 var outline = "#938F99"
 var outlineVariant = "#49454F"
+
+// ---------------------------------------------------------------------------
+// Modal scrim (R2): the one place blur/dim is allowed.
+// ---------------------------------------------------------------------------
+var scrim = "#000000"
+var scrimOpacity = 0.5
+
+// ---------------------------------------------------------------------------
+// State layers (R6): overlay colors on the base surface, pre-mixed AARRGGBB.
+// ---------------------------------------------------------------------------
+var stateHover = "#14E6E0E9"            // 8% onSurface
+var statePress = "#1AE6E0E9"            // 10% onSurface
+var stateDrag = "#29E6E0E9"             // 16% onSurface
+var stateFocus = "#1AD0BCFF"            // 10% primary
+var stateDisabledContainer = "#1F36343B" // 12% surfaceContainerHighest
+var stateDisabledContent = "#61E6E0E9"   // 38% onSurface
+
+// ---------------------------------------------------------------------------
+// Typography roles (R7): proportional fractions with pixel clamps so labels
+// never get tiny on large displays or dominate small windows.
+// ---------------------------------------------------------------------------
+var type = {
+    display: [0.055, 22, 44],  // NowPlaying title
+    headline: [0.04, 18, 32],  // album/section titles
+    title: [0.032, 14, 24],    // region headers, column headers
+    body: [0.024, 12, 18],     // list rows, subtitles
+    label: [0.02, 10, 14],     // hints, keys, meta, counts
+    mono: [0.02, 10, 14]       // timecodes, counts, showcmd
+}
+
+function clamp(value, min, max) {
+    return Math.max(min, Math.min(max, value))
+}
+
+function fontSize(role, reference) {
+    var spec = type[role]
+    if (!spec)
+        return reference * 0.02
+    return clamp(reference * spec[0], spec[1], spec[2])
+}

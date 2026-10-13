@@ -9,23 +9,28 @@ Rectangle {
     property string message: ""
     property string kind: ""
     property bool shown: false
+    // Motion: quick in, lazy out (nothing keyboard-critical blocks on it).
+    property real fadeDuration: Theme.motion.quick
+
+    readonly property bool syncing: kind === "sync"
 
     signal retry()
 
-    color: Theme.surfaceContainerHighest
+    color: syncing ? Theme.tertiaryContainer : Theme.errorContainer
     radius: Theme.radius
-    border.width: Math.max(1, height * 0.03)
-    border.color: kind === "sync" ? Theme.tertiary : Theme.error
+    border.width: Math.max(1, height * Theme.hairlineRatio)
+    border.color: syncing ? Theme.tertiary : Theme.error
     opacity: shown ? 1 : 0
     visible: opacity > 0
 
     Behavior on opacity {
-        NumberAnimation { duration: Theme.duration; easing.type: Easing.Bezier; easing.bezierCurve: Theme.easeOut }
+        NumberAnimation { duration: root.fadeDuration; easing.type: Easing.Bezier; easing.bezierCurve: Theme.ease.standard }
     }
 
     function show(kind, message) {
         root.kind = kind;
         root.message = message;
+        root.fadeDuration = Theme.motion.quick;
         root.shown = true;
         hideTimer.restart();
     }
@@ -33,7 +38,10 @@ Rectangle {
     Timer {
         id: hideTimer
         interval: 6000
-        onTriggered: root.shown = false
+        onTriggered: {
+            root.fadeDuration = Theme.motion.lazy;
+            root.shown = false;
+        }
     }
 
     RowLayout {
@@ -44,20 +52,22 @@ Rectangle {
 
         FadeText {
             text: "⚠"
-            color: root.kind === "sync" ? Theme.tertiary : Theme.error
-            font.pixelSize: root.height * 0.36
+            color: root.syncing ? Theme.onTertiaryContainer : Theme.onErrorContainer
+            font.pixelSize: Theme.clamp(root.height * 0.36, 12, 18)
+            animated: false
         }
 
         FadeText {
             Layout.fillWidth: true
             text: root.message
-            color: Theme.onSurface
-            font.pixelSize: root.height * 0.3
+            color: root.syncing ? Theme.onTertiaryContainer : Theme.onErrorContainer
+            font.pixelSize: Theme.clamp(root.height * 0.3, 12, 18)
             elide: Text.ElideRight
+            animated: false
         }
 
         Rectangle {
-            visible: root.kind === "sync"
+            visible: root.syncing
             implicitWidth: retryLabel.implicitWidth + root.height * 0.5
             implicitHeight: root.height * 0.62
             radius: Theme.radius
@@ -68,7 +78,8 @@ Rectangle {
                 anchors.centerIn: parent
                 text: "Retry"
                 color: Theme.onPrimaryContainer
-                font.pixelSize: root.height * 0.28
+                font.pixelSize: Theme.clamp(root.height * 0.28, 10, 14)
+                animated: false
             }
 
             HoverHandler {

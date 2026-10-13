@@ -165,11 +165,13 @@ Rectangle {
                         text: row.title
                         color: Theme.onSurface
                         font.pixelSize: row.height * 0.24
+                        animated: false
                     }
                     FadeText {
                         text: row.artist + (row.year.length > 0 ? "  ·  " + row.year : "")
                         color: Theme.onSurfaceVariant
                         font.pixelSize: row.height * 0.19
+                        animated: false
                     }
                 }
 
@@ -180,6 +182,7 @@ Rectangle {
                     text: row.tracks + " tracks"
                     color: Theme.onSurfaceVariant
                     font.pixelSize: row.height * 0.19
+                    animated: false
                 }
 
                 HoverHandler {

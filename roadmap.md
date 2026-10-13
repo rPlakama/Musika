@@ -186,8 +186,7 @@ artist auto-download first), then offline filter + storage UI.
 
 # Review findings (see CRITIQUE.md)
 
-Per-critic task list: TASKS.md
-Microdesign task list: MICRODESIGNS.md
+Master task list: TASKLISTMAJOR.md
 
 # P0 -- Correctness / robustness
 

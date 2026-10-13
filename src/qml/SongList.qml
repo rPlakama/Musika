@@ -161,11 +161,13 @@ Rectangle {
                         text: row.title
                         color: Theme.onSurface
                         font.pixelSize: row.height * 0.26
+                        animated: false
                     }
                     FadeText {
                         text: row.artist + (row.album.length > 0 ? "  ·  " + row.album : "")
                         color: Theme.onSurfaceVariant
                         font.pixelSize: row.height * 0.2
+                        animated: false
                     }
                 }
 
@@ -176,6 +178,7 @@ Rectangle {
                     text: row.duration
                     color: Theme.onSurfaceVariant
                     font.pixelSize: row.height * 0.2
+                    animated: false
                 }
 
                 TapHandler {

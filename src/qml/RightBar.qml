@@ -39,8 +39,10 @@ Rectangle {
         return Math.floor(days / 365) + "y";
     }
 
-    // The status panel has no cursor of its own; consume actions quietly.
+    // The status panel has no cursor of its own; Enter triggers a sync.
     function handleAction(action) {
+        if (action === "enter")
+            Backend.syncLibrary();
     }
 
     // Bottom divider.
@@ -58,15 +60,26 @@ Rectangle {
         anchors.rightMargin: root.width * 0.012
         spacing: root.width * 0.015
 
-        FadeText {
-            text: "LIBRARY"
-            color: Theme.primary
-            font.pixelSize: root.height * 0.24
-            font.bold: true
-            font.letterSpacing: root.height * 0.03
-            // Title stays larger, but yields with "…" when space runs out.
-            Layout.maximumWidth: root.width * 0.22
-            elide: Text.ElideRight
+        // Mode chip (N4 placeholder): always shows the mode; NORMAL until a
+        // global mode machine exists.
+        Rectangle {
+            implicitWidth: modeLabel.implicitWidth + root.height * 0.36
+            implicitHeight: root.height * 0.5
+            radius: Theme.radius
+            color: Theme.surfaceContainerHighest
+            border.color: Theme.primary
+            border.width: Math.max(1, root.height * Theme.hairlineRatio)
+
+            FadeText {
+                id: modeLabel
+                anchors.centerIn: parent
+                text: "NORMAL"
+                color: Theme.primary
+                font.pixelSize: Theme.fontSize("label", root.height)
+                font.bold: true
+                font.letterSpacing: root.height * 0.025
+                animated: false
+            }
         }
 
         Item {
@@ -76,7 +89,7 @@ Rectangle {
         FadeText {
             text: Backend.librarySyncing ? "Syncing…" : "Up to date"
             color: Backend.librarySyncing ? Theme.tertiary : Theme.onSurfaceVariant
-            font.pixelSize: root.height * 0.17
+            font.pixelSize: Theme.fontSize("label", root.height)
         }
 
         // Determinate progress across the last reported stage.
@@ -93,9 +106,8 @@ Rectangle {
 
                 Behavior on width {
                     NumberAnimation {
-                        duration: Theme.duration
-                        easing.type: Easing.Bezier
-                        easing.bezierCurve: Theme.easeOut
+                        duration: Theme.motion.quick
+                        easing.type: Easing.Linear
                     }
                 }
             }
@@ -106,7 +118,6 @@ Rectangle {
             Layout.preferredWidth: syncLabel.implicitWidth + root.height * 0.4
             Layout.preferredHeight: root.height * 0.6
             radius: Theme.radius
-            opacity: Backend.librarySyncing ? 0.6 : 1
             color: !Backend.librarySyncing && syncHover.hovered
                 ? Theme.primary
                 : Theme.primaryContainer
@@ -114,9 +125,9 @@ Rectangle {
             FadeText {
                 id: syncLabel
                 anchors.centerIn: parent
-                text: Backend.librarySyncing ? "Syncing…" : "Sync library"
-                color: Theme.onPrimaryContainer
-                font.pixelSize: root.height * 0.17
+                text: "Sync library"
+                color: Backend.librarySyncing ? Theme.stateDisabledContent : Theme.onPrimaryContainer
+                font.pixelSize: Theme.fontSize("label", root.height)
             }
 
             HoverHandler {
@@ -132,7 +143,7 @@ Rectangle {
         FadeText {
             text: "Last sync: " + root.lastSyncText()
             color: Theme.onSurfaceVariant
-            font.pixelSize: root.height * 0.15
+            font.pixelSize: Theme.fontSize("label", root.height)
         }
     }
 }

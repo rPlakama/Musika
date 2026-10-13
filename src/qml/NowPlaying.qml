@@ -26,10 +26,10 @@ Rectangle {
             Layout.fillHeight: true
             spacing: root.width * 0.03
 
-            // Cover + track info.
+            // Cover + track info. Pane split is 50/50: cover left, lyrics right.
             ColumnLayout {
                 Layout.fillHeight: true
-                Layout.preferredWidth: root.width * 0.4
+                Layout.preferredWidth: root.width * 0.5
                 spacing: root.height * 0.02
 
                 Rectangle {
@@ -62,7 +62,7 @@ Rectangle {
                     Layout.fillWidth: true
                     text: Backend.currentTitle.length > 0 ? Backend.currentTitle : "No track playing"
                     color: Theme.onSurface
-                    font.pixelSize: root.height * 0.036
+                    font.pixelSize: Theme.clamp(root.height * 0.036, 18, 32)
                     font.bold: true
                     elide: Text.ElideRight
                 }
@@ -71,7 +71,7 @@ Rectangle {
                     Layout.fillWidth: true
                     text: Backend.currentArtist + (Backend.currentAlbum.length > 0 ? "  ·  " + Backend.currentAlbum : "")
                     color: Theme.onSurfaceVariant
-                    font.pixelSize: root.height * 0.022
+                    font.pixelSize: Theme.clamp(root.height * 0.022, 12, 18)
                     elide: Text.ElideRight
                 }
             }
@@ -130,80 +130,99 @@ Rectangle {
             }
         }
 
-        // Fullscreen transport bar
+        // Fullscreen transport bar: seek row on top, transport centred below.
         Rectangle {
             Layout.fillWidth: true
-            Layout.preferredHeight: root.height * 0.08
+            Layout.preferredHeight: root.height * 0.1
             color: Theme.surfaceContainer
             radius: Theme.radius
 
-            RowLayout {
+            ColumnLayout {
                 anchors.fill: parent
-                anchors.margins: root.height * 0.015
-                spacing: root.width * 0.015
-
-                FadeText {
-                    text: root.formatTime(Backend.position)
-                    color: Theme.onSurfaceVariant
-                    font.pixelSize: root.height * 0.02
-                }
-
-                Rectangle {
-                    id: fsSeekTrack
-                    Layout.fillWidth: true
-                    Layout.preferredHeight: 6
-                    color: Theme.outlineVariant
-                    radius: 3
-
-                    Rectangle {
-                        width: fsSeekTrack.width * (Backend.duration > 0 ? Math.min(1, Backend.position / Backend.duration) : 0)
-                        height: parent.height
-                        color: Theme.primary
-                        radius: 3
-                    }
-
-                    MouseArea {
-                        anchors.fill: parent
-                        onPressed: (mouse) => {
-                            if (Backend.duration > 0)
-                                Backend.playerSeek(Math.max(0, Math.min(1, mouse.x / width)) * Backend.duration);
-                        }
-                    }
-                }
-
-                FadeText {
-                    text: root.formatTime(Backend.duration)
-                    color: Theme.onSurfaceVariant
-                    font.pixelSize: root.height * 0.02
-                }
+                anchors.margins: root.height * 0.012
+                spacing: root.height * 0.006
 
                 RowLayout {
-                    spacing: 8
-                    IconButton {
-                        Layout.preferredWidth: 32
-                        Layout.preferredHeight: 32
-                        symbol: "⏮"
-                        onClicked: Backend.playerPrevious()
+                    Layout.fillWidth: true
+                    spacing: root.width * 0.015
+
+                    FadeText {
+                        text: root.formatTime(Backend.position)
+                        color: Theme.onSurfaceVariant
+                        font.pixelSize: Theme.clamp(root.height * 0.02, 10, 14)
                     }
-                    IconButton {
-                        Layout.preferredWidth: 36
-                        Layout.preferredHeight: 36
-                        symbol: Backend.playbackState === "playing" ? "⏸" : "▶"
-                        accent: true
-                        onClicked: Backend.playerToggle()
+
+                    Rectangle {
+                        id: fsSeekTrack
+                        Layout.fillWidth: true
+                        Layout.preferredHeight: Math.max(2, root.height * 0.008)
+                        color: Theme.outlineVariant
+                        radius: Theme.radius
+
+                        Rectangle {
+                            width: fsSeekTrack.width * (Backend.duration > 0 ? Math.min(1, Backend.position / Backend.duration) : 0)
+                            height: parent.height
+                            color: Theme.primary
+                            radius: Theme.radius
+
+                            Behavior on width {
+                                NumberAnimation { duration: Theme.motion.quick; easing.type: Easing.Linear }
+                            }
+                        }
+
+                        MouseArea {
+                            anchors.fill: parent
+                            onPressed: (mouse) => {
+                                if (Backend.duration > 0)
+                                    Backend.playerSeek(Math.max(0, Math.min(1, mouse.x / width)) * Backend.duration);
+                            }
+                        }
                     }
-                    IconButton {
-                        Layout.preferredWidth: 32
-                        Layout.preferredHeight: 32
-                        symbol: "⏭"
-                        onClicked: Backend.playerNext()
+
+                    FadeText {
+                        text: root.formatTime(Backend.duration)
+                        color: Theme.onSurfaceVariant
+                        font.pixelSize: Theme.clamp(root.height * 0.02, 10, 14)
                     }
                 }
 
-                FadeText {
-                    text: "ESC to exit fullscreen"
-                    color: Theme.onSurfaceVariant
-                    font.pixelSize: root.height * 0.016
+                Item {
+                    Layout.fillWidth: true
+                    Layout.fillHeight: true
+
+                    // Transport centred on the bar; play/pause is the anchor.
+                    RowLayout {
+                        anchors.horizontalCenter: parent.horizontalCenter
+                        anchors.verticalCenter: parent.verticalCenter
+                        spacing: root.width * 0.01
+                        IconButton {
+                            Layout.preferredWidth: root.height * 0.05
+                            Layout.preferredHeight: root.height * 0.05
+                            symbol: "⏮"
+                            onClicked: Backend.playerPrevious()
+                        }
+                        IconButton {
+                            Layout.preferredWidth: root.height * 0.056
+                            Layout.preferredHeight: root.height * 0.056
+                            symbol: Backend.playbackState === "playing" ? "⏸" : "▶"
+                            accent: true
+                            onClicked: Backend.playerToggle()
+                        }
+                        IconButton {
+                            Layout.preferredWidth: root.height * 0.05
+                            Layout.preferredHeight: root.height * 0.05
+                            symbol: "⏭"
+                            onClicked: Backend.playerNext()
+                        }
+                    }
+
+                    FadeText {
+                        anchors.right: parent.right
+                        anchors.verticalCenter: parent.verticalCenter
+                        text: "Esc to exit fullscreen"
+                        color: Theme.onSurfaceVariant
+                        font.pixelSize: Theme.clamp(root.height * 0.016, 10, 14)
+                    }
                 }
             }
         }

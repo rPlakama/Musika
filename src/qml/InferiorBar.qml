@@ -52,6 +52,10 @@ Rectangle {
                 : 0)
             height: parent.height
             color: Theme.primary
+
+            Behavior on width {
+                NumberAnimation { duration: Theme.motion.quick; easing.type: Easing.Linear }
+            }
         }
     }
 
@@ -77,14 +81,15 @@ Rectangle {
         }
     }
 
-    RowLayout {
+    Item {
         anchors.fill: parent
         anchors.leftMargin: root.width * 0.013
         anchors.rightMargin: root.width * 0.013
-        spacing: root.width * 0.012
 
-        // Current track.
+        // Current track (left).
         RowLayout {
+            anchors.left: parent.left
+            anchors.verticalCenter: parent.verticalCenter
             spacing: root.height * 0.12
 
             Rectangle {
@@ -112,23 +117,22 @@ Rectangle {
                     text: Backend.currentTitle.length > 0 ? Backend.currentTitle : "Nothing playing"
                     color: Theme.onSurface
                     font.pixelSize: root.height * 0.18
+                    animated: false
                 }
                 FadeText {
                     text: Backend.currentArtist
                     color: Theme.onSurfaceVariant
                     font.pixelSize: root.height * 0.15
+                    animated: false
                 }
             }
         }
 
-        Item {
-            Layout.fillWidth: true
-        }
-
-        // Transport.
+        // Transport, centred on the bar: play/pause is the visual anchor.
         RowLayout {
+            anchors.horizontalCenter: parent.horizontalCenter
+            anchors.verticalCenter: parent.verticalCenter
             spacing: root.height * 0.05
-            Layout.alignment: Qt.AlignVCenter
 
             IconButton {
                 Layout.preferredWidth: root.height * 0.46
@@ -146,7 +150,7 @@ Rectangle {
             IconButton {
                 Layout.preferredWidth: root.height * 0.56
                 Layout.preferredHeight: root.height * 0.56
-                symbol: Backend.playbackState === "playing" ? "❚❚" : "▶"
+                symbol: Backend.playbackState === "playing" ? "⏸" : "▶"
                 symbolRatio: 0.6
                 accent: true
                 onClicked: Backend.playerToggle()
@@ -167,25 +171,24 @@ Rectangle {
             }
         }
 
-        Item {
-            Layout.fillWidth: true
-        }
-
-        // Time and volume.
+        // Time and volume (right).
         RowLayout {
+            anchors.right: parent.right
+            anchors.verticalCenter: parent.verticalCenter
             spacing: root.height * 0.12
-            Layout.alignment: Qt.AlignVCenter
 
             FadeText {
                 text: root.formatTime(Backend.position) + " / " + root.formatTime(Backend.duration)
                 color: Theme.onSurfaceVariant
                 font.pixelSize: root.height * 0.15
+                animated: false
             }
 
             FadeText {
                 text: "🔊"
                 color: Theme.onSurfaceVariant
                 font.pixelSize: root.height * 0.18
+                animated: false
             }
 
             Rectangle {

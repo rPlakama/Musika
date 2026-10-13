@@ -561,6 +561,45 @@ The product is incomplete without these.
   - **Details:** animate small `contentY` corrections for search/queue,
     crossfade lists on payload swap (`quick`), keep lyric follow in LYR-8.
 
+- [ ] **UI-42 · SuperiorBar: API-backed server + user identity** — P2 · (RightBar audit)
+  - **Why:** the top bar (today `RightBar.qml`) only shows a capitalized
+    `Backend.serverType`; it never says who is connected. The Subsonic/
+    Navidrome API already answers that, so the bar should own the identity.
+  - **Details:**
+    - rename/extract `RightBar.qml` → `SuperiorBar.qml` with explicit zones:
+      brand/mode | spacer | identity | sync cluster;
+    - identity from the API: `username` (login/stored) + server type and
+      `serverVersion`/`openSubsonic` from the ping envelope, rendered as
+      `user@server` (or a `getUser` avatar via `getAvatar_url` once available);
+    - plumb the missing fields: `ping()` currently exposes only `type` —
+      capture `serverVersion`/`openSubsonic` in the backend and notify, plus
+      `Backend.username` display;
+    - keep the existing mode chip, "Last Sync" text, progress tick and
+      spinning sync button; identity is a FadeText with `elide`, no dead space;
+    - offline/logged-out states: show "offline"/user only when known.
+  - **Verify:** `getUser`/ping fields surfaced on login + reconnect; bar reads
+    `user@Navidrome`; no overlap at minimum window width (pairs with UI-43).
+
+- [ ] **UI-43 · Text bounds sweep: a rectangle around every label** — P2 · (QML audit)
+  - **Why:** several FadeText/Text items rely on implicit widths in Row/Column
+    layouts, so long titles/subtitles can overlap neighbours or clip boxes
+    (the SuperiorBar was fixed in `3221461`; the rest of the tree was not).
+  - **Details:**
+    - audit every `FadeText`/`Text` and give it a bounded slot: a Rectangle/
+      Item container with both anchors set, or `Layout.fillWidth` +
+      `elide`/`wrapMode`, so geometry never depends on text length;
+    - prefer a small reusable `LabelBox` (or `TextSlot`) component with
+      `text`/`color`/`elide` props and a sized parent; use it in lists,
+      headers, bars, overlays;
+    - grep patterns for the sweep: `FadeText` without `width|anchors.right|
+      Layout.fillWidth`, `Column {` rows holding two unbounded texts, fixed
+      `x:` positioning of labels;
+    - keep the elide/wrap rule per context (rows elide, lyrics/notes wrap) and
+      don't regress the MY3 type roles.
+  - **Verify:** resize a window down to the minimum in every view (albums,
+    songs, artists, ArtistEntry, album page, search, queue, fullscreen) with
+    absurdly long metadata; no overlaps/clipped labels; `qmllint` clean.
+
 
 - [ ] **THM-6 · Rewrite the color engine on DMS's pipeline** — P2 · (MATUGENSTUDY.md; roadmap T5+)
   - **Why:** DMS cleanly separates seed extraction, palette specs, caching,
@@ -1484,10 +1523,10 @@ Kept for rationale; the tree already carries these.
 | Bucket | Open | Solved |
 |--------|------|--------|
 | Must have | 8 | — |
-| Should have | 63 | 4 |
+| Should have | 65 | 4 |
 | Quick wins | 0 | 43 |
 | Solved (reference) | — | 36 |
-| **Total** | **71** | **84** |
+| **Total** | **73** | **84** |
 
 ### Coverage by area
 
@@ -1498,7 +1537,7 @@ Kept for rationale; the tree already carries these.
 | Player & media features | 5 | 2 |
 | Lyrics pipeline | 3 | 7 |
 | Search | 3 | 6 |
-| UI microdesigns | 13 | 28 |
+| UI microdesigns | 15 | 28 |
 | Dynamic color | 1 | 5 |
 | Architecture & robustness | 22 | 15 |
 | Media cache / offline | 7 | 0 |

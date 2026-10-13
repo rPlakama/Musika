@@ -309,7 +309,7 @@ The product is incomplete without these.
     - edits are owner-only and server-authoritative: optimistic UI, refetch the
       playlist after every mutation, revert + toast on failure.
   - **Details:**
-    - new DB7 `playlists.db` like lyrics/colors (`migrations_playlists/`,
+    - new DB8 `playlists.db` like lyrics/colors (`migrations_playlists/`,
       `src/playlists.rs`, `Dbs.playlists`, `MUSIKA_PLAYLISTS_FILE`); purely a
       disposable cache — the server stays the source of truth:
       - `playlist(id PK, name, comment, owner, public, song_count, duration,
@@ -352,7 +352,7 @@ The product is incomplete without these.
       Noctalia scripts and the README grammar stay single-sourced.
   - **Modules/modifications:** `api.rs` (endpoints exist — add fixture tests;
     cover-mosaic input), `src/playlists.rs` + `migrations_playlists/` (new),
-    `db.rs` (DB7 pool/path, "seven databases" doc), `index.rs` (refresh +
+    `db.rs` (DB8 pool/path; update the module doc pool list), `index.rs` (refresh +
     purge hooks, `SyncReport.playlists`), `qml.rs` (slots/channels/queue
     builder), `PlaylistList/PlaylistEntry/PlaylistPicker/Prompt.qml` (new),
     `SideBar.qml` (enable), `Home.qml` (routing), `keybind.rs`, `ipc.rs`/
@@ -360,7 +360,7 @@ The product is incomplete without these.
   - **Incrementals (each shippable):**
     - **I0 read-only segment** — live `getPlaylists` (no DB yet) into
       `PlaylistList`, SideBar enabled; verify the segment lists real names.
-    - **I1 DB7 index** — migrations, `playlists.rs` refresh/read helpers,
+    - **I1 DB8 index** — migrations, `playlists.rs` refresh/read helpers,
       sync/login/segment hooks, purge; verify the list survives offline.
     - **I2 view + play** — lazy `getPlaylist` contents into `PlaylistEntry`;
       ordered rows, `Enter` play-from, `Space` play-all; verify duplicate

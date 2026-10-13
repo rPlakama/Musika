@@ -176,6 +176,13 @@ Item {
             return;
         }
 
+        // Fullscreen is modal for navigation: transport and pane keys belong
+        // to the player view while it is open (Esc and Space stay global).
+        if (nowPlayingExpanded) {
+            nowPlaying.handleAction(action);
+            return;
+        }
+
         // Between the left bar and main, h/l move directionally.
         if (action === "move_left" && activeRegion === 1) {
             activeRegion = 0;
@@ -327,6 +334,7 @@ Item {
     }
 
     NowPlaying {
+        id: nowPlaying
         anchors.fill: parent
         opacity: root.nowPlayingExpanded ? 1 : 0
         visible: opacity > 0

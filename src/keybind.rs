@@ -27,6 +27,9 @@ pub enum Action {
     ToggleFullscreen,
     PlayPause,
     InsertMode,
+    NextTrack,
+    PrevTrack,
+    PaneCycle,
     QueueToggle,
     QueueUp,
     QueueDown,
@@ -51,6 +54,9 @@ impl Action {
             Self::ToggleFullscreen => "toggle_fullscreen",
             Self::PlayPause => "play_pause",
             Self::InsertMode => "insert_mode",
+            Self::NextTrack => "next_track",
+            Self::PrevTrack => "prev_track",
+            Self::PaneCycle => "pane_cycle",
             Self::QueueToggle => "queue_toggle",
             Self::QueueUp => "queue_up",
             Self::QueueDown => "queue_down",
@@ -88,6 +94,9 @@ fn defaults() -> Vec<(&'static str, Action)> {
         ("enter", Action::Enter),
         ("shift-enter", Action::ToggleFullscreen),
         ("i", Action::InsertMode),
+        ("n", Action::NextTrack),
+        ("p", Action::PrevTrack),
+        ("tab", Action::PaneCycle),
         ("escape", Action::Back),
         ("q", Action::Back),
         ("ctrl-q", Action::QueueToggle),
@@ -335,5 +344,13 @@ mod tests {
         let mut keymap = Keymap::new();
         assert_eq!(keymap.feed("d"), Outcome::Pending);
         assert_eq!(keymap.feed("d"), Outcome::Action(Action::QueueRemove));
+    }
+
+    #[test]
+    fn transport_and_pane_keys() {
+        let mut keymap = Keymap::new();
+        assert_eq!(keymap.feed("n"), Outcome::Action(Action::NextTrack));
+        assert_eq!(keymap.feed("p"), Outcome::Action(Action::PrevTrack));
+        assert_eq!(keymap.feed("tab"), Outcome::Action(Action::PaneCycle));
     }
 }

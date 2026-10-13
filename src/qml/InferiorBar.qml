@@ -34,13 +34,7 @@ Rectangle {
 
     // Speaker icon by volume tier: muted / silent / low (≤33) / high.
     function volumeIcon() {
-        if (Backend.muted)
-            return "qrc:/app/icons/vol-mute-svgrepo-com.svg";
-        if (Backend.volume <= 0)
-            return "qrc:/app/icons/vol-zero-svgrepo-com.svg";
-        if (Backend.volume <= 33)
-            return "qrc:/app/icons/vol-low-svgrepo-com.svg";
-        return "qrc:/app/icons/vol-high-svgrepo-com.svg";
+        return Theme.volumeIcon(Backend.volume, Backend.muted);
     }
 
     // Scoped controls while the player bar is the active region.

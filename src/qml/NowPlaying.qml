@@ -29,10 +29,16 @@ Rectangle {
 
     color: Palette.background
 
+    /// Click/tap on the exit button (the header chip); Home leaves fullscreen.
+    signal exitRequested()
+
     // 0 = transport, 1 = lyrics, 2 = queue.
     property int pane: 0
     property int queueCursor: 0
     property int queueIndex: -1
+    // One queue payload after a reorder keeps the moved cursor instead of
+    // snapping back to the playing track (Q-9).
+    property bool _reordering: false
 
     // Lyrics (override → cache → server; see src/lyrics.rs).
     property bool lyricsSynced: false
@@ -76,7 +82,7 @@ Rectangle {
             return "Space play/pause   ·   h/l seek   ·   Ctrl-N/P track   ·   m mute   ·   -/+ volume   ·   Tab lyrics   ·   Esc exit";
         if (pane === 1)
             return "j/k scroll   ·   Ctrl-N/P track   ·   Tab queue   ·   Esc exit";
-        return "j/k select   ·   Enter jump   ·   Ctrl-N/P track   ·   Tab transport   ·   Esc exit";
+        return "j/k select   ·   Alt-J/K move   ·   Enter jump   ·   Ctrl-N/P track   ·   Tab transport   ·   Esc exit";
     }
 
     function scrollLyrics(delta) {
@@ -103,7 +109,12 @@ Rectangle {
             });
         }
         queueIndex = data.index;
-        queueCursor = Math.max(0, Math.min(data.index, Math.max(0, queueItems.count - 1)));
+        if (root._reordering) {
+            root._reordering = false;
+            queueCursor = Math.max(0, Math.min(queueItems.count - 1, queueCursor));
+        } else {
+            queueCursor = Math.max(0, Math.min(data.index, Math.max(0, queueItems.count - 1)));
+        }
         queueList.currentIndex = queueCursor;
         queueList.positionViewAtIndex(queueCursor, ListView.Contain);
     }
@@ -193,7 +204,21 @@ Rectangle {
             moveQueueCursor(-1);
         else if (action === "move_down")
             moveQueueCursor(1);
-        else if (action === "enter") {
+        else if (action === "queue_up" && queueCursor > 0) {
+            root._reordering = true;
+            Backend.queueMove(queueCursor, queueCursor - 1);
+            queueCursor -= 1;
+            queueList.currentIndex = queueCursor;
+            queueList.positionViewAtIndex(queueCursor, ListView.Contain);
+            return;
+        } else if (action === "queue_down" && queueCursor < queueItems.count - 1) {
+            root._reordering = true;
+            Backend.queueMove(queueCursor, queueCursor + 1);
+            queueCursor += 1;
+            queueList.currentIndex = queueCursor;
+            queueList.positionViewAtIndex(queueCursor, ListView.Contain);
+            return;
+        } else if (action === "enter") {
             if (queueCursor >= 0)
                 Backend.queueJump(queueCursor);
         } else if (action === "move_left")
@@ -256,10 +281,59 @@ Rectangle {
                 elide: Text.ElideRight
             }
 
-            FadeText {
-                text: "Esc exit full"
-                color: Palette.onSurfaceVariant
-                font.pixelSize: Theme.fontSize("label", root.height)
+            // Exit chip, same style as the AlbumEntry back button: exit icon +
+            // "ESC" inside the tonal rectangle (D-6 SymbolIcon, strong glyph).
+            Rectangle {
+                id: exitButton
+                implicitWidth: exitContent.implicitWidth + root.width * 0.02
+                implicitHeight: root.height * 0.045
+                radius: Theme.radius
+                color: exitHover.hovered ? Palette.secondaryContainer : Palette.surfaceContainerHigh
+                border.color: Palette.outlineVariant
+                border.width: Math.max(1, root.height * Theme.hairlineRatio)
+
+                Behavior on color {
+                    ColorAnimation {
+                        duration: Theme.motion.quick
+                        easing.type: Easing.Bezier
+                        easing.bezierCurve: Theme.ease.standard
+                    }
+                }
+
+                Row {
+                    id: exitContent
+                    anchors.centerIn: parent
+                    spacing: root.height * 0.01
+
+                    Item {
+                        anchors.verticalCenter: parent.verticalCenter
+                        width: root.height * 0.026
+                        height: width
+
+                        SymbolIcon {
+                            anchors.centerIn: parent
+                            source: "qrc:/app/icons/exit-2-svgrepo-com.svg"
+                            symbolColor: Theme.iconStrong
+                            width: parent.width * 0.85
+                            height: width
+                        }
+                    }
+
+                    FadeText {
+                        anchors.verticalCenter: parent.verticalCenter
+                        text: "ESC"
+                        color: Palette.onSurface
+                        font.pixelSize: root.height * 0.022
+                    }
+                }
+
+                HoverHandler {
+                    id: exitHover
+                    cursorShape: Qt.PointingHandCursor
+                }
+                TapHandler {
+                    onTapped: root.exitRequested()
+                }
             }
         }
 
@@ -417,6 +491,52 @@ Rectangle {
                             iconSource: "qrc:/app/icons/skip-next-circle-solid-svgrepo-com.svg"
                             symbolRatio: 0.9
                             onClicked: Backend.playerNext()
+                        }
+                    }
+
+                    // Volume cluster (P-7), right-anchored so play/pause stays
+                    // centred: tiered icon (click = mute) + compact bar.
+                    RowLayout {
+                        anchors.right: parent.right
+                        anchors.rightMargin: root.width * 0.012
+                        anchors.verticalCenter: parent.verticalCenter
+                        spacing: root.width * 0.008
+
+                        IconButton {
+                            Layout.preferredWidth: root.height * 0.04
+                            Layout.preferredHeight: root.height * 0.04
+                            iconSource: Theme.volumeIcon(Backend.volume, Backend.muted)
+                            symbolRatio: 0.95
+                            onClicked: Backend.playerToggleMute()
+                        }
+
+                        Rectangle {
+                            id: volumeTrack
+                            Layout.preferredWidth: root.width * 0.06
+                            Layout.preferredHeight: Math.max(2, root.height * 0.006)
+                            color: Palette.outlineVariant
+                            radius: Theme.radius
+
+                            Rectangle {
+                                width: parent.width * Math.max(0, Math.min(1, Backend.volume / 100))
+                                height: parent.height
+                                radius: Theme.radius
+                                color: Backend.muted ? Palette.outline : Palette.primary
+
+                                Behavior on width {
+                                    NumberAnimation { duration: Theme.motion.quick; easing.type: Easing.Linear }
+                                }
+                            }
+
+                            MouseArea {
+                                anchors.fill: parent
+                                cursorShape: Qt.PointingHandCursor
+                                onPressed: (mouse) => Backend.playerSetVolume(Math.max(0, Math.min(1, mouse.x / width)) * 100)
+                                onPositionChanged: (mouse) => {
+                                    if (pressed)
+                                        Backend.playerSetVolume(Math.max(0, Math.min(1, mouse.x / width)) * 100);
+                                }
+                            }
                         }
                     }
                 }

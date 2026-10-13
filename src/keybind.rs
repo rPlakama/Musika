@@ -111,6 +111,9 @@ pub enum Outcome {
 ///
 /// - `j`/`k` keep the list cursor (and scrolling); `n`/`p` and `Ctrl-N`/
 ///   `Ctrl-P` skip tracks wherever a list owns focus (VI-10).
+/// - `Shift-J`/`Shift-K` and `Alt-J`/`Alt-K` move the selected queue track
+///   down/up.
+/// - `i` starts typing: it opens the floating search in INSERT mode.
 /// - `Enter` is context-confirm: open/play a row, jump in the queue, go back
 ///   on the album toolbar, sync in the status bar, commit in visual mode.
 /// - `Esc`, `q` and `Ctrl-[` are the same Back action; Esc additionally steps
@@ -152,6 +155,8 @@ fn defaults() -> Vec<(&'static str, Action)> {
         ("ctrl-q", Action::QueueToggle),
         ("shift-k", Action::QueueUp),
         ("shift-j", Action::QueueDown),
+        ("alt-k", Action::QueueUp),
+        ("alt-j", Action::QueueDown),
         ("d d", Action::QueueRemove),
     ]
 }
@@ -447,6 +452,16 @@ mod tests {
         assert_eq!(token_from_qt(0x2D, 0).as_deref(), Some("-"));
         assert_eq!(token_from_qt(0x3D, QT_SHIFT).as_deref(), Some("shift-="));
         assert_eq!(token_from_qt(0x2B, 0).as_deref(), Some("+"));
+    }
+
+    #[test]
+    fn queue_reorder_keys() {
+        let mut keymap = Keymap::new();
+        assert_eq!(keymap.feed("shift-j"), Outcome::Action(Action::QueueDown));
+        assert_eq!(keymap.feed("shift-k"), Outcome::Action(Action::QueueUp));
+        assert_eq!(keymap.feed("alt-j"), Outcome::Action(Action::QueueDown));
+        assert_eq!(keymap.feed("alt-k"), Outcome::Action(Action::QueueUp));
+        assert_eq!(token_from_qt(0x4A, QT_ALT).as_deref(), Some("alt-j"));
     }
 
     #[test]

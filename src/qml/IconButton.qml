@@ -16,7 +16,6 @@
 
 import QtQuick
 import QtQuick.Effects
-import QtQuick.VectorImage
 import musika
 import "Theme.js" as Theme
 
@@ -193,16 +192,13 @@ Rectangle {
             color: !root.enabled ? Theme.stateDisabledContent : root.symbolColor
         }
 
-        VectorImage {
+        SymbolIcon {
             anchors.centerIn: parent
             visible: glyphA.iconGlyph.toString().length > 0
             source: glyphA.iconGlyph
-            // CurveRenderer has built-in AA; the default GeometryRenderer
-            // flattens curves and looks aliased at icon sizes.
-            preferredRendererType: VectorImage.CurveRenderer
+            symbolColor: root.enabled ? root.symbolColor : Theme.stateDisabledContent
             width: root.width * root.symbolRatio
             height: width
-            opacity: root.enabled ? 1 : 0.38
         }
 
         Behavior on opacity {
@@ -228,15 +224,13 @@ Rectangle {
             color: !root.enabled ? Theme.stateDisabledContent : root.symbolColor
         }
 
-        VectorImage {
+        SymbolIcon {
             anchors.centerIn: parent
             visible: glyphB.iconGlyph.toString().length > 0
             source: glyphB.iconGlyph
-            // CurveRenderer has built-in AA (roadmap D-6).
-            preferredRendererType: VectorImage.CurveRenderer
+            symbolColor: root.enabled ? root.symbolColor : Theme.stateDisabledContent
             width: root.width * root.symbolRatio
             height: width
-            opacity: root.enabled ? 1 : 0.38
         }
 
         Behavior on opacity {

@@ -42,6 +42,7 @@ function shapeFull(size) {
 // ---------------------------------------------------------------------------
 var motion = {
     instant: 0,        // mode switches, cursor moves, showcmd
+    flash: 30,         // fullscreen enter/leave highlight fade
     micro: 80,         // hover/press layers, region focus border
     quick: 120,        // toasts in, row cursor, column switch
     standard: 160,     // view push/pop/replace, overlay in/out
@@ -175,4 +176,16 @@ function fontSize(role, reference) {
     if (!spec)
         return reference * 0.02
     return clamp(reference * spec[0], spec[1], spec[2])
+}
+
+// Speaker icon by volume tier: muted / silent / low (≤33) / high. Shared by
+// the player bar and the fullscreen transport (Q-4/P-7).
+function volumeIcon(volume, muted) {
+    if (muted)
+        return "qrc:/app/icons/vol-mute-svgrepo-com.svg"
+    if (volume <= 0)
+        return "qrc:/app/icons/vol-zero-svgrepo-com.svg"
+    if (volume <= 33)
+        return "qrc:/app/icons/vol-low-svgrepo-com.svg"
+    return "qrc:/app/icons/vol-high-svgrepo-com.svg"
 }

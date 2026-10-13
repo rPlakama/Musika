@@ -593,9 +593,12 @@ Small, bounded, high-value changes.
     only after the search/queue modal captures, so Space does not leak while an
     overlay owns input (typing fields consume it as text).
 
-- [ ] **VI-19 · `i` is dead outside search** — P3 · (MD33)
+- [x] **VI-19 · `i` is dead outside search** — P3 · (MD33)
   - **Why:** `InsertMode` is bound globally but only the overlay consumes it.
   - **Details:** scope the binding or consume it (mode indicator). 
+  - **Now:** consumed — `i` opens the floating search in INSERT mode from any
+    region (`Home`), while inside the overlay the modal routing re-enters
+    typing; documented in the keymap semantics and the README.
 
 - [x] **VI-20 · keyTimer comment/mechanism drift** — P3 · (MD34)
   - **Why:** the comment claims bare Space is deferred; it resolves immediately —
@@ -604,7 +607,7 @@ Small, bounded, high-value changes.
   - **Now:** the timer comment now names `g g`/`shift-space f` as the deferred
     sequences and states that bare Space fires immediately.
 
-- [ ] **Q-9 · Fullscreen queue & transport polish** — P2 · (fullscreen review)
+- [x] **Q-9 · Fullscreen queue & transport polish** — P2 · (fullscreen review)
   - **Why:** queue rows wear debug-ish `Prev`/`Next` tags, the order cannot be
     changed from the keyboard, and fullscreen transport uses bare `n`/`p`
     while the rest of the app standardises on `Ctrl-N`/`Ctrl-P`.
@@ -615,6 +618,10 @@ Small, bounded, high-value changes.
     - `Alt-j` / `Alt-k` move the selected track down/up in the queue;
     - fullscreen transport keeps `Ctrl-N` / `Ctrl-P` for next/previous track
       (not bare `n`/`p`) so the ergonomics stay consistent everywhere.
+  - **Now:** tags already gone; `alt-j`/`alt-k` bound to QueueDown/QueueUp
+    (alongside Shift-J/K) and the fullscreen queue pane reorders, with a
+    one-payload `_reordering` guard so the cursor does not snap back to the
+    playing track; the pane hint shows `Alt-J/K move`. `Ctrl-N/P` are global.
 
 - [x] **Q-10 · Song activation enters Fullscreen Playback** — P2 · (roadmap D-4)
   - **Why:** activating a song is the deliberate "listen now" verb; the user
@@ -630,11 +637,13 @@ Small, bounded, high-value changes.
     it pushes the page.
 
 
-- [ ] **P-7 · Fullscreen controls completeness** — P2 · (U6)
+- [x] **P-7 · Fullscreen controls completeness** — P2 · (U6)
   - **Why:** transport + seek landed, but volume/mute are absent in fullscreen.
   - **Details:** reuse IconButton/state layers; keep play/pause centered.
-  - **Now:** global `m`/`-`/`+` volume keys work and are listed in the
-    fullscreen keybar; an on-screen slider/mute control is still absent.
+  - **Now:** right-anchored volume cluster in the fullscreen transport: tiered
+    icon (click = mute) plus a compact draggable bar, sharing
+    `Theme.volumeIcon` with the player bar, so play/pause stays centered;
+    `m`/`-`/`+` remain global.
 
 
 - [ ] **LYR-5 · Prefetch, miss TTL, local `.lrc` override** — P2 · (roadmap L4)
@@ -1136,17 +1145,17 @@ Kept for rationale; the tree already carries these.
 |--------|------|--------|
 | Must have | 9 | — |
 | Should have | 60 | 2 |
-| Quick wins | 29 | 14 |
+| Quick wins | 26 | 17 |
 | Solved (reference) | — | 36 |
-| **Total** | **98** | **52** |
+| **Total** | **95** | **55** |
 
 ### Coverage by area
 
 | Area | Open | Solved |
 |------|------|--------|
-| Vi modal engine | 12 | 9 |
-| Queue & playback grammar | 5 | 5 |
-| Player & media features | 6 | 0 |
+| Vi modal engine | 11 | 10 |
+| Queue & playback grammar | 4 | 6 |
+| Player & media features | 5 | 1 |
 | Lyrics pipeline | 5 | 5 |
 | Search | 2 | 6 |
 | UI microdesigns | 30 | 11 |

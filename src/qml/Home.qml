@@ -18,7 +18,6 @@ import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
 import QtQuick.Effects
-import QtQuick.VectorImage
 import musika
 import "Theme.js" as Theme
 
@@ -181,6 +180,13 @@ Item {
         // Search is global scope: open the floating search from any region.
         if (action === "search") {
             searchOverlay.open();
+            return;
+        }
+        // `i` starts typing: opens the floating search in INSERT mode from any
+        // region (VI-19); inside the overlay the modal routing above re-enters
+        // typing instead.
+        if (action === "insert_mode") {
+            searchOverlay.openWith("");
             return;
         }
         // In visual mode, navigation selects a candidate region; Enter commits.
@@ -348,16 +354,15 @@ Item {
 
                         Item {
                             Layout.alignment: Qt.AlignVCenter
-                            Layout.preferredWidth: hintBar.height * 0.48
-                            Layout.preferredHeight: hintBar.height * 0.48
+                            width: hintBar.height * 0.48
+                            height: width
 
-                            VectorImage {
+                            SymbolIcon {
                                 anchors.centerIn: parent
-                                source: "qrc:/app/icons/arrow-right-svgrepo-com.svg"
-                                preferredRendererType: VectorImage.CurveRenderer
+                                source: "qrc:/app/icons/arrow-left-svgrepo-com.svg"
+                                symbolColor: Palette.onSurfaceVariant
                                 width: parent.width * 0.85
                                 height: width
-                                opacity: 0.85
                             }
                         }
 
@@ -454,6 +459,8 @@ Item {
         opacity: root.nowPlayingExpanded ? 1 : 0
         visible: opacity > 0
 
+        onExitRequested: root.nowPlayingExpanded = false
+
         // Same niri-like backdrop blur as the shell: the fullscreen player is
         // the backdrop when the search overlay opens from inside it.
         layer.enabled: root.visualMode || searchOverlay.opened
@@ -465,8 +472,10 @@ Item {
             autoPaddingEnabled: false
         }
 
+        // Enter/leave fullscreen is a highlight flip, not a scene change:
+        // keep it near-instant (`flash`), never the emphasized view speed.
         Behavior on opacity {
-            NumberAnimation { duration: Theme.motion.emphasized; easing.type: Easing.Bezier; easing.bezierCurve: Theme.ease.standard }
+            NumberAnimation { duration: Theme.motion.flash; easing.type: Easing.Bezier; easing.bezierCurve: Theme.ease.standard }
         }
     }
 

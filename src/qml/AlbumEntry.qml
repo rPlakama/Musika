@@ -17,7 +17,6 @@
 import QtQuick
 import QtQuick.Layouts
 import QtQuick.Effects
-import QtQuick.VectorImage
 import musika
 import "Theme.js" as Theme
 
@@ -31,7 +30,7 @@ import "Theme.js" as Theme
 Rectangle {
     id: root
 
-    signal back()
+    signal back
 
     property string albumId: ""
     property bool onToolbar: false
@@ -178,9 +177,18 @@ Rectangle {
         anchors.fill: parent
         visible: coverBackdrop.visible
         gradient: Gradient {
-            GradientStop { position: 0.0; color: root.withAlpha(Palette.surface, 0.82) }
-            GradientStop { position: 0.38; color: root.withAlpha(Palette.surface, 0.30) }
-            GradientStop { position: 1.0; color: root.withAlpha(Palette.surface, 1.0) }
+            GradientStop {
+                position: 0.0
+                color: root.withAlpha(Palette.surface, 0.82)
+            }
+            GradientStop {
+                position: 0.38
+                color: root.withAlpha(Palette.surface, 0.30)
+            }
+            GradientStop {
+                position: 1.0
+                color: root.withAlpha(Palette.surface, 1.0)
+            }
         }
     }
 
@@ -199,9 +207,7 @@ Rectangle {
                 implicitWidth: backContent.implicitWidth + root.width * 0.04
                 implicitHeight: root.height * 0.045
                 radius: Theme.radius
-                color: (root.onToolbar || backHover.hovered)
-                    ? Palette.secondaryContainer
-                    : Palette.surfaceContainerHigh
+                color: (root.onToolbar || backHover.hovered) ? Palette.secondaryContainer : Palette.surfaceContainerHigh
                 border.color: root.onToolbar ? Palette.primary : Palette.outlineVariant
                 border.width: Math.max(1, root.height * Theme.hairlineRatio)
 
@@ -213,8 +219,8 @@ Rectangle {
                     }
                 }
 
-                // "<icon> ESC" (D-6: VectorImage + CurveRenderer, white-baked
-                // asset in a fixed frame sized from the button).
+                // "<icon> ESC" (SymbolIcon: white-baked asset, re-coloured to
+                // the fixed strong glyph tone; fixed frame from the button).
                 Row {
                     id: backContent
                     anchors.centerIn: parent
@@ -225,10 +231,10 @@ Rectangle {
                         width: root.height * 0.026
                         height: width
 
-                        VectorImage {
+                        SymbolIcon {
                             anchors.centerIn: parent
-                            source: "qrc:/app/icons/arrow-left-svgrepo-com.svg"
-                            preferredRendererType: VectorImage.CurveRenderer
+                            source: "qrc:/app/icons/exit-2-svgrepo-com.svg"
+                            symbolColor: Theme.iconStrong
                             width: parent.width * 0.85
                             height: width
                         }
@@ -271,9 +277,7 @@ Rectangle {
                 id: coverBox
                 Layout.preferredWidth: root.coverSide
                 Layout.preferredHeight: root.coverSide
-                Layout.alignment: root.sideBySide
-                    ? (Qt.AlignLeft | Qt.AlignVCenter)
-                    : Qt.AlignHCenter
+                Layout.alignment: root.sideBySide ? (Qt.AlignLeft | Qt.AlignVCenter) : Qt.AlignHCenter
                 radius: Theme.radius
                 color: Palette.primaryContainer
                 clip: true
@@ -369,9 +373,7 @@ Rectangle {
 
                 width: songList.width
                 height: root.height * 0.055
-                color: (ListView.isCurrentItem && !root.onToolbar)
-                    ? Palette.secondaryContainer
-                    : (index % 2 === 0 ? Palette.surface : Palette.surfaceContainerLowest)
+                color: (ListView.isCurrentItem && !root.onToolbar) ? Palette.secondaryContainer : (index % 2 === 0 ? Palette.surface : Palette.surfaceContainerLowest)
 
                 Behavior on color {
                     ColorAnimation {

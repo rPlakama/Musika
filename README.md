@@ -173,8 +173,8 @@ browsing never paints a palette.
 | Playback | `Space` play/pause, `n`/`p` or `Ctrl-N`/`Ctrl-P` next/prev, `m` mute, `-`/`+` volume |
 | Library | `Shift-H`/`Shift-L` album order (Artist → Name → Year) |
 | Clipboard | `y` yank the playing track, `Shift-P`/`Ctrl-V` paste into search |
-| Queue | `Ctrl-Q` drawer, `Shift-J`/`Shift-K` reorder, `d d` remove, `Enter` jump |
-| Search | `Shift Space F` floating search (Songs | Albums | Artists) |
+| Queue | `Ctrl-Q` drawer, `Shift-J`/`Shift-K` or `Alt-J`/`Alt-K` reorder, `d d` remove, `Enter` jump |
+| Search | `Shift Space F` floating search, or `i` to start typing (Songs | Albums | Artists) |
 
 Fullscreen (`Shift-Enter`) adds a lyrics/queue split with its own pane keybar.
 

@@ -205,10 +205,10 @@ Rectangle {
                 }
             }
 
-            VectorImage {
+            SymbolIcon {
                 anchors.centerIn: parent
                 source: "qrc:/app/icons/reload-ui-2-svgrepo-com.svg"
-                preferredRendererType: VectorImage.CurveRenderer
+                symbolColor: Palette.onSurfaceVariant
                 width: root.height * 0.29
                 height: width
                 opacity: Backend.librarySyncing ? 0.38 : (syncHover.hovered ? 1.0 : 0.85)

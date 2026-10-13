@@ -152,7 +152,7 @@ Rectangle {
                 Layout.preferredHeight: root.height * 0.56
                 symbol: Backend.playbackState === "playing" ? "⏸" : "▶"
                 symbolRatio: 0.6
-                accent: true
+                symbolColor: Theme.iconStrong
                 onClicked: Backend.playerToggle()
             }
             IconButton {

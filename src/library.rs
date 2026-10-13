@@ -149,6 +149,14 @@ pub async fn status(pool: &SqlitePool) -> Result<LibraryStatus> {
     Ok(status)
 }
 
+/// Every song id in the library, for derived-cache backfills.
+pub async fn song_ids(pool: &SqlitePool) -> Result<Vec<String>> {
+    let ids = sqlx::query_scalar("SELECT id FROM songs")
+        .fetch_all(pool)
+        .await?;
+    Ok(ids)
+}
+
 /// Returns the columns needed to rebuild the FTS index.
 pub async fn song_search_rows(pool: &SqlitePool) -> Result<Vec<SongSearchRow>> {
     let rows =
@@ -337,6 +345,26 @@ pub async fn song(pool: &SqlitePool, id: &str) -> Result<Option<SongRow>> {
     Ok(row)
 }
 
+/// Exact song lookup by artist/title (case-insensitive), for clipboard paste.
+/// `artist = None` matches any artist.
+pub async fn find_song_id(
+    pool: &SqlitePool,
+    artist: Option<&str>,
+    title: &str,
+) -> Result<Option<String>> {
+    let row: Option<Option<String>> = sqlx::query_scalar(
+        "SELECT id FROM songs
+         WHERE lower(title) = lower(?1)
+           AND (?2 = '' OR lower(COALESCE(artist, '')) = lower(?2))
+         LIMIT 1",
+    )
+    .bind(title)
+    .bind(artist.unwrap_or(""))
+    .fetch_optional(pool)
+    .await?;
+    Ok(row.flatten())
+}
+
 /// A single album by id.
 pub async fn album(pool: &SqlitePool, id: &str) -> Result<Option<AlbumRow>> {
     let row = sqlx::query_as::<_, AlbumRow>(
@@ -421,4 +449,53 @@ fn unix_now() -> u64 {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|duration| duration.as_secs())
         .unwrap_or(0)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::str::FromStr;
+
+    use super::*;
+
+    async fn memory_pool() -> SqlitePool {
+        let options = sqlx::sqlite::SqliteConnectOptions::from_str("sqlite::memory:").unwrap();
+        let pool = sqlx::sqlite::SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect_with(options)
+            .await
+            .unwrap();
+        sqlx::migrate!("./migrations_library")
+            .run(&pool)
+            .await
+            .unwrap();
+        pool
+    }
+
+    #[tokio::test]
+    async fn finds_songs_by_artist_and_title_case_insensitively() {
+        let pool = memory_pool().await;
+        sqlx::query(
+            "INSERT INTO songs (id, title, artist) VALUES ('s1', 'Weird Fishes', 'Radiohead')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let by_both = find_song_id(&pool, Some("radiohead"), "WEIRD fishes")
+            .await
+            .unwrap();
+        assert_eq!(by_both.as_deref(), Some("s1"));
+
+        // No artist in the pasted text: title-only match.
+        let by_title = find_song_id(&pool, None, "Weird Fishes").await.unwrap();
+        assert_eq!(by_title.as_deref(), Some("s1"));
+
+        // Wrong artist must not match.
+        assert!(
+            find_song_id(&pool, Some("Muse"), "Weird Fishes")
+                .await
+                .unwrap()
+                .is_none()
+        );
+    }
 }

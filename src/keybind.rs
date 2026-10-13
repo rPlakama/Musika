@@ -30,6 +30,8 @@ pub enum Action {
     NextTrack,
     PrevTrack,
     PaneCycle,
+    Yank,
+    Paste,
     QueueToggle,
     QueueUp,
     QueueDown,
@@ -57,6 +59,8 @@ impl Action {
             Self::NextTrack => "next_track",
             Self::PrevTrack => "prev_track",
             Self::PaneCycle => "pane_cycle",
+            Self::Yank => "yank",
+            Self::Paste => "paste",
             Self::QueueToggle => "queue_toggle",
             Self::QueueUp => "queue_up",
             Self::QueueDown => "queue_down",
@@ -97,6 +101,8 @@ fn defaults() -> Vec<(&'static str, Action)> {
         ("n", Action::NextTrack),
         ("p", Action::PrevTrack),
         ("tab", Action::PaneCycle),
+        ("y", Action::Yank),
+        ("shift-p", Action::Paste),
         ("escape", Action::Back),
         ("q", Action::Back),
         ("ctrl-q", Action::QueueToggle),
@@ -352,5 +358,12 @@ mod tests {
         assert_eq!(keymap.feed("n"), Outcome::Action(Action::NextTrack));
         assert_eq!(keymap.feed("p"), Outcome::Action(Action::PrevTrack));
         assert_eq!(keymap.feed("tab"), Outcome::Action(Action::PaneCycle));
+    }
+
+    #[test]
+    fn clipboard_verbs() {
+        let mut keymap = Keymap::new();
+        assert_eq!(keymap.feed("y"), Outcome::Action(Action::Yank));
+        assert_eq!(keymap.feed("shift-p"), Outcome::Action(Action::Paste));
     }
 }

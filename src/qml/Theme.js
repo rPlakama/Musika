@@ -108,6 +108,10 @@ var outlineVariant = "#49454F"
 var scrim = "#000000"
 var scrimOpacity = 0.5
 
+// Fixed glyphs: play/pause stays white on every surface and every seeded
+// palette (UI-31); it is the one glyph that never follows the theme roles.
+var iconStrong = "#FFFFFF"
+
 // ---------------------------------------------------------------------------
 // State layers (R6): overlay colors on the base surface, pre-mixed AARRGGBB.
 // ---------------------------------------------------------------------------

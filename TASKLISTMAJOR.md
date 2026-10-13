@@ -98,6 +98,20 @@ work is); solved/partial tasks add **Now** with the current evidence.
   - **Why:** the comment claims bare Space is deferred; it resolves immediately —
     only `g g`/`shift-space …` are.
   - **Details:** fix the comment or make deferral per-binding (ties to VI-9).
+- [ ] **VI-21 · Global yank/paste (`y`/`P`) to the system clipboard** — P1 · **high priority** · (CRITIQUE Ph2 operators)
+  - **Why:** copying a track out of the app and pasting a track reference back
+    in are the two most basic Neovim-style verbs; today the system clipboard is
+    unreachable from the keyboard.
+  - **Details:** global (any region) `y` yanks the playing track as
+    `Artist - Title` to the system clipboard; `P` reads the clipboard and plays
+    the first library match (accepts `Artist - Title` or `musika:song/<id>`).
+    `p` stays track-previous for now — the transport rebind and the full
+    operator grammar (`yy`, `p`/`P` queue append/play-next) land with VI-8;
+    yanking a cursor row / visual selection follows VI-4.
+  - **Now:** v1 landed — `keybind.rs` `yank`/`paste` actions (`y`, `shift-p`);
+    `Main.qml` hidden `TextEdit` clipboard bridge + global dispatch;
+    `Backend.pasteClipboard` resolves via `library::find_song_id` and queues
+    with album context; unit tests for the binding and the lookup.
 
 ## 2. Queue & playback grammar (`Q`)
 
@@ -209,7 +223,10 @@ work is); solved/partial tasks add **Now** with the current evidence.
     plus manual refresh; `~/.config/musika/lyrics/<song_id>.lrc` wins over the
     DB and is never purged.
   - **Now:** `.lrc`/`.txt` override and the 7-day miss TTL landed with LYR-3;
-    prefetch-next-N and manual refresh are still open.
+    plain hits revalidate after 24 h (a `.lrc` added to Navidrome later is
+    picked up), legacy `getLyrics` LRC text is parsed, and line timing is
+    trusted over the server `synced` flag; sync now tops up missing/expired
+    lyrics (bounded, ARC-35); prefetch-next-N and manual refresh are still open.
 - [ ] **LYR-6 · Optional: karaoke v2, lyric FTS, `:lyrics`** — P3 · (roadmap L5)
   - **Why:** word-level timing and lyric search are stretch goals; server
     support for `enhanced` varies.
@@ -337,6 +354,61 @@ work is); solved/partial tasks add **Now** with the current evidence.
     AlbumEntry, PlaybackNode, SearchOverlay).
 - [ ] **UI-27 · Separators / font ratios** — P3 · (MD36/MD37)
   - **Why:** "  ·  ", "   " and "·" coexist; title fractions 0.24/0.26/0.26.
+- [ ] **UI-28 · Album page hero cover header** — P2 · (roadmap "Album page cover" D-3)
+  - **Why:** the centered `0.32 × height` cover reads small on wide panes
+    (≈ 16% of pane width) and leaves the description stacked under wide dead
+    margins (`AlbumEntry.qml:156-188`).
+  - **Details:** header row (square cover left, description right);
+    `headerH = min(mainH*0.44, 512 + 2m)`, `cover = clamp(mainH*0.42, 160,
+    512)`; no upscaling past the 512 px cache; the same grid drops to one
+    column below ~900 px (cover centered over the description); songs keep
+    ≥ 40% height; MY3 radius/hairline/hierarchy per D-3.
+  - **Now:** `AlbumEntry.qml` header is a `GridLayout` — cover
+    `clamp(0.42h, 160, 512)` left of the description (one column under
+    900 px), fixed `headerHeight` when side by side; build + qmllint clean.
+    Visual acceptance at 1366/1920/2560 still pending.
+- [ ] **UI-29 · Album page ambience backdrop** — P2 · (roadmap "Album page cover" D-5)
+  - **Why:** the album page reads flat next to its own art; a blurred copy
+    ties the hero to the theme without inventing a new color.
+  - **Details:** full-pane blurred `albumCover` copy (`MultiEffect` blur
+    1.0/64, saturation 0.6) behind the header, `Palette.surface` gradient
+    α 0.82 → 0.30 → 1.0, `standard` fade-in, hidden without art; the one
+    sanctioned non-modal blur (R2 amended).
+  - **Now:** landed in `AlbumEntry.qml`; visual acceptance (bright/dark
+    covers, songs-boundary seam) pending.
+- [ ] **UI-30 · Manual sync shows `Syncing…`, not `Up to date`** — P2 · (sync-state review)
+  - **Why:** `RightBar.qml:90` renders `librarySyncing ? "Syncing…" :
+    "Up to date"`, but the button/tap path (`RightBar.qml:45,139` →
+    `Backend.syncLibrary`) never sets `library_syncing` — only the
+    auto/login path (`qml.rs:1074`, invoking `librarySyncStarted`) does. A
+    manual sync therefore reads "Up to date" for its whole duration, with the
+    progress track parked at 0.
+  - **Details:** enter the syncing state at the start of the manual
+    `syncLibrary` slot (`qml.rs:434`), reusing `library_sync_started` (set
+    `library_syncing`/`sync_progress`/`sync_message` before spawning);
+    `librarySyncFinished` already clears it, including the failure path. Add
+    the re-entrancy guard there too (a second click while syncing is ignored
+    — ties ARC-28). Acceptance: the status flips to `Syncing…` within one
+    frame of the click and returns to `Up to date`/the result message on
+    completion or error.
+- [x] **UI-31 · Play/pause loses its filled background (icon-only, all contexts)** — P2 · (icon-language review)
+  - **Why:** play/pause is the only `IconButton` drawn with the `accent`
+    container (`IconButton.qml:21,36,51`; used at `InferiorBar.qml:155` and
+    `NowPlaying.qml:388`). The filled square competes with the transport's
+    focus ring, breaks the monochrome glyph language (UI-18) and reads as a
+    FAB rather than a transport control (R1/R3: hierarchy is tonal, not extra
+    chrome).
+  - **Details:** drop `accent: true` at both call sites; once no caller uses
+    it, remove the `accent` property and its `onPrimaryContainer`/`onPrimary`
+    and `stateFocus`-on-hover branches so the glyph uses the standard state
+    layers (R6), keeping the focus hairline. Sizes, centring and
+    `symbolRatio` stay. Decision: play/pause is always white
+    (`Theme.iconStrong`), the one glyph that never follows the seeded palette
+    or the theme roles.
+  - **Now:** `IconButton` has no `accent` (transparent root, `symbolColor`
+    override, standard state layers + hairline); `InferiorBar` and
+    `NowPlaying` set `symbolColor: Theme.iconStrong` (`#FFFFFF`). Build +
+    qmllint clean; visual check pending.
 
 ## 7. Dynamic color (`THM`) — roadmap "Dynamic color" design
 
@@ -571,6 +643,23 @@ work is); solved/partial tasks add **Now** with the current evidence.
       unwraps are deliberate.
     - policy: tests keep their unwraps; prefer `expect("<what>")` when a
       failure message would save debugging time.
+- [ ] **ARC-35 · Sync button runs the complete fetch pass (index, covers, lyrics)** — P1 · **high priority**
+  - **Why:** the Sync button is the user's "make everything current" verb, but
+    lyrics were only ever fetched on demand, so a fully synced library could
+    still have no lyrics; an up-to-date index also short-circuited most of the
+    derived-cache work.
+  - **Details:** `index::sync_library` must run the same passes in both
+    branches (changed / up-to-date): index (`getIndexes`/`getArtist`/
+    `getAlbum`), covers (`getCoverArt`), a bounded lyric backfill
+    (`getLyricsBySongId` → legacy `getLyrics`), then the lyric/color purges;
+    colors stay play-scoped and are never swept. The duplicate manual/login
+    pipelines (ARC-8) must call this same core; cancellable sync (ARC-3)
+    wraps it.
+  - **Now:** landed — `lyrics::backfill` (cap `SYNC_BACKFILL_LIMIT = 64`,
+    concurrency 8, misses re-checked after the 7-day TTL) runs from both
+    branches via `index::refresh_lyrics`; `SyncReport.lyrics` shows the count
+    in the finish message and the startup log. Open: ARC-8 pipeline merge,
+    ARC-3 cancellation/timeouts, per-item progress for the backfill.
 
 ## 9. Media cache / offline (`CACHE`) — roadmap design
 
@@ -622,14 +711,14 @@ work is); solved/partial tasks add **Now** with the current evidence.
 
 | Area | Open | Solved |
 |------|------|--------|
-| Vi modal engine | 18 | 2 |
+| Vi modal engine | 19 | 2 |
 | Queue & grammar | 6 | 3 |
 | Player features | 6 | 0 |
 | Lyrics pipeline | 5 | 5 |
 | Search | 2 | 3 |
-| UI microdesigns | 22 | 5 |
+| UI microdesigns | 25 | 6 |
 | Dynamic color | 1 | 5 |
-| Architecture | 29 | 5 |
+| Architecture | 30 | 5 |
 | Media cache | 7 | 0 |
 | Auth/startup | 2 | 1 |
 | Docs | 1 | 1 |

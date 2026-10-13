@@ -11,6 +11,7 @@
 //! hammer the server; a failed *request* is never cached as a miss.
 
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use anyhow::Result;
 use sqlx::FromRow;
@@ -22,6 +23,16 @@ use crate::http_client::SubsonicClient;
 
 /// How long a cached miss is trusted before asking the server again.
 const MISS_TTL_SECS: i64 = 7 * 24 * 60 * 60;
+
+/// How many missing/expired songs one sync pass will fetch lyrics for.
+pub const SYNC_BACKFILL_LIMIT: usize = 64;
+
+/// Bounded concurrency for the sync backfill (mirrors the index fetchers).
+const FETCH_CONCURRENCY: usize = 8;
+
+/// How long a cached *plain* document is trusted: Navidrome may gain a `.lrc`
+/// for a track later, so an unsynced hit must be revalidated eventually.
+const UNSYNCED_TTL_SECS: i64 = 24 * 60 * 60;
 
 /// A cached (or freshly fetched) lyric document.
 #[derive(Debug, Clone)]
@@ -96,6 +107,31 @@ impl Document {
     }
 }
 
+/// Legacy `getLyrics` text: parsed as LRC when it carries timestamps, kept
+/// plain otherwise. Servers frequently answer the legacy endpoint with the
+/// raw `.lrc` file, and dropping those tags would render it unsynced.
+fn legacy_document(song_id: &str, value: &str) -> Document {
+    let (synced, lines) = parse_lrc(value);
+    if !synced {
+        return Document::plain(song_id, "legacy", value);
+    }
+
+    let text = lines
+        .iter()
+        .map(|line| line.value.as_str())
+        .collect::<Vec<_>>()
+        .join("\n");
+    Document {
+        song_id: song_id.to_string(),
+        source: "legacy".to_string(),
+        synced,
+        lang: None,
+        offset_ms: 0,
+        text,
+        lines,
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Entry points
 // ---------------------------------------------------------------------------
@@ -108,8 +144,7 @@ pub async fn fetch(dbs: &Dbs, client: Option<&SubsonicClient>, song_id: &str) ->
     }
 
     if let Some((document, fetched_at)) = load_cached(&dbs.lyrics, song_id).await? {
-        let is_miss = document.source == "none";
-        if !is_miss || !miss_expired(fetched_at) {
+        if !cache_is_stale(&document, fetched_at) {
             return Ok(document);
         }
     }
@@ -136,14 +171,15 @@ pub async fn fetch(dbs: &Dbs, client: Option<&SubsonicClient>, song_id: &str) ->
         }
     }
 
-    // Legacy fallback: artist/title match, plain text only.
+    // Legacy fallback: artist/title match. Some servers answer the legacy
+    // endpoint with the raw `.lrc`, so timestamps are parsed when present.
     if let Some(song) = crate::library::song(&dbs.library, song_id).await? {
         match client
             .get_lyrics(song.artist.as_deref(), Some(song.title.as_str()))
             .await
         {
             Ok(legacy) if !legacy.value.trim().is_empty() => {
-                let document = Document::plain(song_id, "legacy", &legacy.value);
+                let document = legacy_document(song_id, &legacy.value);
                 store(&dbs.lyrics, &document).await?;
                 return Ok(document);
             }
@@ -160,6 +196,102 @@ pub async fn fetch(dbs: &Dbs, client: Option<&SubsonicClient>, song_id: &str) ->
         store(&dbs.lyrics, &document).await?;
     }
     Ok(document)
+}
+
+/// Outcome of one bounded sync backfill pass.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct BackfillReport {
+    /// Songs selected for fetching (capped by `limit`).
+    pub candidates: usize,
+    /// Candidates that ended up with real lyrics.
+    pub fetched: usize,
+}
+
+/// Fetches lyrics for songs that have no cached row, or whose miss TTL
+/// expired. Bounded and best-effort: one failed song never aborts the pass.
+///
+/// This is the sync button's lyric pass — the only place lyrics are fetched
+/// outside playback. It is capped so a big library is topped up over several
+/// syncs instead of one request storm.
+pub async fn backfill(
+    dbs: &Dbs,
+    client: &Arc<SubsonicClient>,
+    limit: usize,
+) -> Result<BackfillReport> {
+    let songs = crate::library::song_ids(&dbs.library).await?;
+    if songs.is_empty() {
+        return Ok(BackfillReport::default());
+    }
+
+    let rows = cached_rows(&dbs.lyrics).await?;
+    let candidates = candidates(&songs, &rows, now(), limit);
+    let mut report = BackfillReport {
+        candidates: candidates.len(),
+        fetched: 0,
+    };
+
+    for chunk in candidates.chunks(FETCH_CONCURRENCY) {
+        let mut set = tokio::task::JoinSet::new();
+        for song_id in chunk {
+            let dbs = dbs.clone();
+            let client = Arc::clone(client);
+            let song_id = song_id.clone();
+            set.spawn(async move {
+                let result = fetch(&dbs, Some(client.as_ref()), &song_id).await;
+                (song_id, result)
+            });
+        }
+
+        while let Some(joined) = set.join_next().await {
+            match joined {
+                Ok((_id, Ok(document))) => {
+                    if document.source != "none" {
+                        report.fetched += 1;
+                    }
+                }
+                Ok((id, Err(err))) => {
+                    eprintln!("lyrics: sync backfill failed for {id}: {err:#}");
+                }
+                Err(err) => eprintln!("lyrics: sync backfill task failed: {err}"),
+            }
+        }
+    }
+
+    Ok(report)
+}
+
+async fn cached_rows(pool: &SqlitePool) -> Result<Vec<(String, String, i64)>> {
+    let rows = sqlx::query_as::<_, (String, String, i64)>(
+        "SELECT song_id, source, fetched_at FROM lyrics",
+    )
+    .fetch_all(pool)
+    .await?;
+    Ok(rows)
+}
+
+/// Songs worth (re)fetching: no row at all, or a miss past its TTL.
+fn candidates(
+    songs: &[String],
+    rows: &[(String, String, i64)],
+    now: i64,
+    limit: usize,
+) -> Vec<String> {
+    use std::collections::HashMap;
+
+    let known: HashMap<&str, (&str, i64)> = rows
+        .iter()
+        .map(|(id, source, fetched_at)| (id.as_str(), (source.as_str(), *fetched_at)))
+        .collect();
+
+    songs
+        .iter()
+        .filter(|id| match known.get(id.as_str()) {
+            None => true,
+            Some((source, fetched_at)) => *source == "none" && now - *fetched_at > MISS_TTL_SECS,
+        })
+        .take(limit)
+        .cloned()
+        .collect()
 }
 
 /// Deletes cached lyrics whose song left the library.
@@ -517,8 +649,12 @@ fn structured_document(song_id: &str, list: &LyricsList) -> Option<Document> {
         return None;
     }
 
-    // Only call it synced when every line can actually be timed.
-    let synced = entry.synced && lines.iter().all(|line| line.start_ms.is_some());
+    // Trust the line data over the server flag: some providers mark the whole
+    // entry unsynced while still sending `start` on every line. When the flag
+    // says synced but a line lacks a timestamp, the known starts are kept and
+    // the untimed line simply never activates.
+    let all_timed = lines.iter().all(|line| line.start_ms.is_some());
+    let synced = all_timed || entry.synced;
     if !synced {
         for line in &mut lines {
             line.start_ms = None;
@@ -548,6 +684,20 @@ fn structured_document(song_id: &str, list: &LyricsList) -> Option<Document> {
 
 fn miss_expired(fetched_at: i64) -> bool {
     now() - fetched_at > MISS_TTL_SECS
+}
+
+/// Whether a cache hit must be re-requested. Synced documents are trusted
+/// forever (songs carry no server-side "changed" signal to revalidate
+/// against); misses and plain documents expire so a `.lrc` added later is
+/// picked up.
+fn cache_is_stale(document: &Document, fetched_at: i64) -> bool {
+    if document.synced {
+        return false;
+    }
+    if document.source == "none" {
+        return miss_expired(fetched_at);
+    }
+    now() - fetched_at > UNSYNCED_TTL_SECS
 }
 
 fn now() -> i64 {
@@ -647,7 +797,7 @@ mod tests {
     }
 
     #[test]
-    fn partially_timed_entries_fall_back_to_plain() {
+    fn partially_timed_entries_keep_their_known_starts() {
         let list = LyricsList {
             structured_lyrics: vec![StructuredLyrics {
                 synced: true,
@@ -666,8 +816,93 @@ mod tests {
         };
 
         let document = structured_document("s1", &list).unwrap();
-        assert!(!document.synced);
-        assert!(document.lines.iter().all(|line| line.start_ms.is_none()));
+        assert!(document.synced);
+        assert_eq!(document.lines[0].start_ms, Some(1_000));
+        assert_eq!(document.lines[1].start_ms, None);
+    }
+
+    #[test]
+    fn server_unsynced_flag_does_not_hide_line_timing() {
+        // Some providers mark the entry unsynced while still sending `start`
+        // on every line; the data wins over the flag.
+        let list = LyricsList {
+            structured_lyrics: vec![StructuredLyrics {
+                synced: false,
+                line: vec![
+                    LyricLine {
+                        start: Some(0),
+                        value: "one".to_string(),
+                    },
+                    LyricLine {
+                        start: Some(5_990),
+                        value: "two".to_string(),
+                    },
+                ],
+                ..StructuredLyrics::default()
+            }],
+        };
+
+        let document = structured_document("s1", &list).unwrap();
+        assert!(document.synced);
+        assert_eq!(document.lines[1].start_ms, Some(5_990));
+    }
+
+    #[test]
+    fn navidrome_synced_payload_is_not_downgraded() {
+        // Trimmed getLyricsBySongId payload: synced true, empty-value lines
+        // between the lyrics (the live probe for "Muscle Museum").
+        let payload = serde_json::json!({
+            "structuredLyrics": [{
+                "displayArtist": "Muse",
+                "displayTitle": "Muscle Museum",
+                "lang": "xxx",
+                "synced": true,
+                "line": [
+                    { "start": 0, "value": "Muscle Museum (soulwax remix)" },
+                    { "start": 4840, "value": "" },
+                    { "start": 5990, "value": "She had something to confess to" },
+                    { "start": 10250, "value": "But you don’t have the time so" }
+                ]
+            }]
+        });
+        let list: LyricsList = serde_json::from_value(payload).unwrap();
+
+        let document = structured_document("s1", &list).unwrap();
+        assert!(document.synced);
+        assert_eq!(document.lines.len(), 3, "empty lines are dropped");
+        assert_eq!(document.lines[1].start_ms, Some(5_990));
+        assert_eq!(document.lang.as_deref(), Some("xxx"));
+    }
+
+    #[test]
+    fn legacy_lrc_text_is_parsed_when_timed() {
+        let document = legacy_document("s1", "[00:01.00]first\n[00:02.50]second");
+        assert_eq!(document.source, "legacy");
+        assert!(document.synced);
+        assert_eq!(document.lines[0].start_ms, Some(1_000));
+        assert_eq!(document.lines[1].start_ms, Some(2_500));
+
+        let plain = legacy_document("s2", "just words\nno timing here");
+        assert!(!plain.synced);
+        assert!(plain.lines.iter().all(|line| line.start_ms.is_none()));
+    }
+
+    #[test]
+    fn unsynced_cache_expires_but_synced_does_not() {
+        let old = now() - UNSYNCED_TTL_SECS - 1;
+        let fresh = now();
+
+        assert!(cache_is_stale(&Document::plain("s", "legacy", "a"), old));
+        assert!(!cache_is_stale(&Document::plain("s", "legacy", "a"), fresh));
+        assert!(cache_is_stale(
+            &Document::missing("s"),
+            now() - MISS_TTL_SECS - 1
+        ));
+        assert!(!cache_is_stale(&Document::missing("s"), fresh));
+
+        let mut synced = Document::plain("s", "subsonic", "a");
+        synced.synced = true;
+        assert!(!cache_is_stale(&synced, old), "synced hits never expire");
     }
 
     #[tokio::test]
@@ -745,5 +980,33 @@ mod tests {
         assert_eq!(removed, 1);
         assert!(load_cached(&lyrics, "keep").await.unwrap().is_some());
         assert!(load_cached(&lyrics, "gone").await.unwrap().is_none());
+    }
+
+    #[test]
+    fn backfill_candidates_skip_hits_and_fresh_misses() {
+        let now = 1_000_000;
+        let songs = vec![
+            "a".to_string(),
+            "b".to_string(),
+            "c".to_string(),
+            "d".to_string(),
+        ];
+        let rows = vec![
+            ("a".to_string(), "subsonic".to_string(), now - 10),
+            ("b".to_string(), "none".to_string(), now - 10),
+            (
+                "c".to_string(),
+                "none".to_string(),
+                now - MISS_TTL_SECS - 10,
+            ),
+        ];
+
+        // a = hit, b = fresh miss (skip); c = expired miss, d = unknown.
+        assert_eq!(
+            candidates(&songs, &rows, now, 10),
+            vec!["c".to_string(), "d".to_string()]
+        );
+        // The cap bounds one sync pass.
+        assert_eq!(candidates(&songs, &rows, now, 1).len(), 1);
     }
 }

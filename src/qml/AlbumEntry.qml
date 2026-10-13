@@ -1,9 +1,12 @@
 import QtQuick
 import QtQuick.Layouts
+import QtQuick.Effects
 import musika
 import "Theme.js" as Theme
 
-// Album entry: cover on top, then the album description, then its songs.
+// Album entry: hero cover beside the album description, then its songs.
+// The art doubles as the ambience: a blurred copy fades into the theme
+// surface behind the header (roadmap D-5).
 //
 // Set `albumId` to load the real track list from library.db; clicking a song
 // queues the album at that track. The descriptive fields are still placeholders
@@ -21,11 +24,23 @@ Rectangle {
     property string albumMeta: ""
     property string albumNotes: ""
 
+    // Header geometry (roadmap "Album page cover" D-3): the hero cover is
+    // sized from the pane height, beside the description when there is room
+    // and stacked over it on narrow panes.
+    readonly property real headerHeight: Math.min(height * 0.44, 512 + height * 0.02)
+    readonly property real coverSide: Math.max(160, Math.min(height * 0.42, 512))
+    readonly property bool sideBySide: width >= 900
+
     color: Palette.surface
 
     function formatTime(seconds) {
         var total = Math.max(0, Math.floor(seconds || 0));
         return Math.floor(total / 60) + ":" + ("0" + (total % 60)).slice(-2);
+    }
+
+    // A color with a replaced alpha, for the ambience gradient stops.
+    function withAlpha(color, alpha) {
+        return Qt.rgba(color.r, color.g, color.b, alpha);
     }
 
     ListModel {
@@ -102,6 +117,48 @@ Rectangle {
         }
     }
 
+    // Ambience (D-5): the album art itself, blurred and scaled by the GPU
+    // layer, then washed into the theme surface by the gradient below. This is
+    // the one non-modal blur: content-derived ambience, never elevation
+    // (R2 amended). Hidden when the album has no art.
+    Image {
+        id: coverBackdrop
+        anchors.fill: parent
+        source: root.albumCover
+        fillMode: Image.PreserveAspectCrop
+        asynchronous: true
+        cache: false
+        opacity: (status === Image.Ready && root.albumCover.length > 0) ? 1 : 0
+        visible: opacity > 0
+
+        layer.enabled: visible
+        layer.effect: MultiEffect {
+            blurEnabled: true
+            blur: 1.0
+            blurMax: 64
+            saturation: 0.6
+            autoPaddingEnabled: false
+        }
+
+        Behavior on opacity {
+            NumberAnimation {
+                duration: Theme.motion.standard
+                easing.type: Easing.Bezier
+                easing.bezierCurve: Theme.ease.standard
+            }
+        }
+    }
+
+    Rectangle {
+        anchors.fill: parent
+        visible: coverBackdrop.visible
+        gradient: Gradient {
+            GradientStop { position: 0.0; color: root.withAlpha(Palette.surface, 0.82) }
+            GradientStop { position: 0.38; color: root.withAlpha(Palette.surface, 0.30) }
+            GradientStop { position: 1.0; color: root.withAlpha(Palette.surface, 1.0) }
+        }
+    }
+
     ColumnLayout {
         anchors.fill: parent
         anchors.margins: root.width * 0.02
@@ -152,16 +209,24 @@ Rectangle {
             }
         }
 
-        // Cover (top), kept square and centred.
-        Item {
-            id: coverBox
+        // Header (D-3): cover hero + description. The grid collapses to one
+        // column on narrow panes, which stacks the description under the
+        // centered cover without a second layout.
+        GridLayout {
+            id: header
             Layout.fillWidth: true
-            Layout.preferredHeight: root.height * 0.32
+            Layout.preferredHeight: root.sideBySide ? root.headerHeight : implicitHeight
+            columns: root.sideBySide ? 2 : 1
+            columnSpacing: root.width * 0.025
+            rowSpacing: root.height * 0.012
 
             Rectangle {
-                anchors.centerIn: parent
-                width: Math.min(coverBox.width, coverBox.height)
-                height: width
+                id: coverBox
+                Layout.preferredWidth: root.coverSide
+                Layout.preferredHeight: root.coverSide
+                Layout.alignment: root.sideBySide
+                    ? (Qt.AlignLeft | Qt.AlignVCenter)
+                    : Qt.AlignHCenter
                 radius: Theme.radius
                 color: Palette.primaryContainer
                 clip: true
@@ -181,50 +246,51 @@ Rectangle {
                     visible: coverImage.status !== Image.Ready
                     text: "COVER"
                     color: Palette.onPrimaryContainer
-                    font.pixelSize: coverBox.height * 0.12
-                    font.letterSpacing: coverBox.height * 0.02
+                    font.pixelSize: root.coverSide * 0.12
+                    font.letterSpacing: root.coverSide * 0.02
                 }
             }
-        }
 
-        // Description.
-        ColumnLayout {
-            Layout.fillWidth: true
-            spacing: root.height * 0.006
+            // Description.
+            ColumnLayout {
+                Layout.fillWidth: true
+                Layout.alignment: Qt.AlignVCenter
+                spacing: root.height * 0.006
 
-            FadeText {
-                Layout.fillWidth: true
-                text: root.albumTitle
-                color: Palette.onSurface
-                font.pixelSize: root.height * 0.036
-                font.bold: true
-                elide: Text.ElideRight
-            }
-            FadeText {
-                Layout.fillWidth: true
-                text: root.albumArtist
-                color: Palette.primary
-                font.pixelSize: root.height * 0.024
-                elide: Text.ElideRight
-            }
-            FadeText {
-                Layout.fillWidth: true
-                text: root.albumMeta
-                color: Palette.onSurfaceVariant
-                font.pixelSize: root.height * 0.02
-                elide: Text.ElideRight
-            }
-            FadeText {
-                Layout.fillWidth: true
-                Layout.topMargin: root.height * 0.008
-                visible: root.albumNotes.length > 0
-                text: root.albumNotes
-                color: Palette.onSurfaceVariant
-                font.pixelSize: root.height * 0.02
-                lineHeight: 1.25
-                wrapMode: Text.WordWrap
-                maximumLineCount: 3
-                elide: Text.ElideRight
+                FadeText {
+                    Layout.fillWidth: true
+                    text: root.albumTitle
+                    color: Palette.onSurface
+                    font.pixelSize: root.height * 0.036
+                    font.bold: true
+                    elide: Text.ElideRight
+                }
+                FadeText {
+                    Layout.fillWidth: true
+                    text: root.albumArtist
+                    color: Palette.primary
+                    font.pixelSize: root.height * 0.024
+                    elide: Text.ElideRight
+                }
+                FadeText {
+                    Layout.fillWidth: true
+                    text: root.albumMeta
+                    color: Palette.onSurfaceVariant
+                    font.pixelSize: root.height * 0.02
+                    elide: Text.ElideRight
+                }
+                FadeText {
+                    Layout.fillWidth: true
+                    Layout.topMargin: root.height * 0.008
+                    visible: root.albumNotes.length > 0
+                    text: root.albumNotes
+                    color: Palette.onSurfaceVariant
+                    font.pixelSize: root.height * 0.02
+                    lineHeight: 1.25
+                    wrapMode: Text.WordWrap
+                    maximumLineCount: 3
+                    elide: Text.ElideRight
+                }
             }
         }
 

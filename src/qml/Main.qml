@@ -28,6 +28,29 @@ ApplicationWindow {
                 return;
             }
 
+            // Clipboard verbs (VI-21): `y` yanks the playing track to the
+            // system clipboard, `P` pastes a track reference back into
+            // playback.
+            if (action === "yank") {
+                var yanked = Backend.currentArtist.length > 0
+                    ? Backend.currentArtist + " - " + Backend.currentTitle
+                    : Backend.currentTitle;
+                if (yanked.length > 0) {
+                    clipboard.text = yanked;
+                    clipboard.selectAll();
+                    clipboard.copy();
+                }
+                return;
+            }
+            if (action === "paste") {
+                clipboard.text = "";
+                clipboard.selectAll();
+                clipboard.paste();
+                if (clipboard.text.length > 0)
+                    Backend.pasteClipboard(clipboard.text);
+                return;
+            }
+
             // Shift+Enter toggles the fullscreen player globally; the screen
             // that owns the state implements `toggleFullscreen`.
             if (action === "toggle_fullscreen") {
@@ -40,6 +63,15 @@ ApplicationWindow {
             var current = stack.currentItem;
             if (current && current.handleAction)
                 current.handleAction(action);
+        }
+
+        // System clipboard bridge (VI-21): the hidden TextEdit is the only
+        // QML-side clipboard accessor; yank writes, paste reads.
+        TextEdit {
+            id: clipboard
+            width: 0
+            height: 0
+            visible: false
         }
 
         Keys.onPressed: (event) => {

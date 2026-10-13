@@ -32,6 +32,8 @@ pub struct SyncReport {
     pub albums: usize,
     pub songs: usize,
     pub covers: CoverReport,
+    /// Lyrics fetched by the bounded sync backfill.
+    pub lyrics: usize,
 }
 
 /// Coarse progress update emitted while a sync runs.
@@ -73,12 +75,15 @@ where
             done: 100,
             total: 100,
         });
-        // The library is unchanged, but the cover cache may still need topping
-        // up (first run interrupted, or covers that previously failed).
+        // The library is unchanged, but the derived caches may still need
+        // topping up (first run interrupted, or entries that previously
+        // failed): covers, then a bounded lyric backfill.
         let covers = refresh_covers(dbs, &client).await;
+        let lyrics = refresh_lyrics(dbs, &client, &mut progress).await;
         return Ok(SyncReport {
             updated: false,
             covers,
+            lyrics,
             ..SyncReport::default()
         });
     }
@@ -163,7 +168,10 @@ where
         eprintln!("index: lyric cache purge failed: {err:#}");
     }
 
-    // 6. color cache: drop schemes whose cover vanished from covers.db
+    // 6. bounded lyric backfill (the sync button's lyric pass)
+    let lyrics = refresh_lyrics(dbs, &client, &mut progress).await;
+
+    // 7. color cache: drop schemes whose cover vanished from covers.db
     if let Err(err) = crate::colors::purge(dbs).await {
         eprintln!("index: color cache purge failed: {err:#}");
     }
@@ -180,7 +188,28 @@ where
         albums: albums.len(),
         songs: songs.len(),
         covers,
+        lyrics,
     })
+}
+
+/// Sync-time lyric pass: fetches songs without lyrics or past their miss TTL,
+/// capped by [`crate::lyrics::SYNC_BACKFILL_LIMIT`]. Best effort.
+async fn refresh_lyrics<F>(dbs: &Dbs, client: &Arc<SubsonicClient>, progress: &mut F) -> usize
+where
+    F: FnMut(SyncProgress),
+{
+    progress(SyncProgress {
+        message: "Fetching lyrics…".to_string(),
+        done: 85,
+        total: 100,
+    });
+    match crate::lyrics::backfill(dbs, client, crate::lyrics::SYNC_BACKFILL_LIMIT).await {
+        Ok(report) => report.fetched,
+        Err(err) => {
+            eprintln!("index: lyric backfill failed: {err:#}");
+            0
+        }
+    }
 }
 
 /// Revalidates/downloads referenced covers and purges the rest.

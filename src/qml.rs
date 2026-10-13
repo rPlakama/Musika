@@ -486,10 +486,7 @@ impl Backend {
                     qtbridge::invoke_method!(
                         finish_invoker,
                         "librarySyncFinished",
-                        format!(
-                            "{} artists, {} albums, {} songs",
-                            report.artists, report.albums, report.songs
-                        )
+                        sync_summary(&report)
                     );
                 }
                 Err(err) => {
@@ -983,6 +980,51 @@ impl Backend {
         });
     }
 
+    /// Plays the first library match for pasted clipboard text (VI-21):
+    /// `musika:song/<id>` or `Artist - Title`, the format `y` yanks.
+    #[qslot(qml_name = "pasteClipboard")]
+    fn paste_clipboard(&mut self, text: String) {
+        let invoker = self.get_qml_method_invoker();
+        let Some(dbs) = crate::dbs().cloned() else {
+            return;
+        };
+        let text = text.trim().to_string();
+        if text.is_empty() {
+            return;
+        }
+
+        crate::runtime().spawn(async move {
+            let song_id = if let Some(id) = text.strip_prefix("musika:song/") {
+                let id = id.trim();
+                (!id.is_empty()).then(|| id.to_string())
+            } else {
+                let (artist, title) = match text.split_once(" - ") {
+                    Some((artist, title)) => (Some(artist.trim()), title.trim()),
+                    None => (None, text.as_str()),
+                };
+                match crate::library::find_song_id(&dbs.library, artist, title).await {
+                    Ok(id) => id,
+                    Err(err) => {
+                        eprintln!("clipboard: lookup failed: {err:#}");
+                        None
+                    }
+                }
+            };
+
+            let Some(song_id) = song_id else {
+                eprintln!("clipboard: nothing in the library matches the pasted text");
+                return;
+            };
+
+            match song_queue_json(&dbs, &song_id).await {
+                Ok((json, start)) => {
+                    qtbridge::invoke_method!(invoker, "playerLoad", json, start);
+                }
+                Err(err) => eprintln!("clipboard: could not queue pasted song: {err:#}"),
+            }
+        });
+    }
+
     /// Lets the UI hand keyboard focus back to the global key handler (e.g.
     /// when leaving a text field), so vi bindings resume.
     #[qslot(qml_name = "releaseFocus")]
@@ -1054,6 +1096,18 @@ impl Backend {
     }
 }
 
+/// Status-bar summary of a finished sync; lyrics only when any were fetched.
+fn sync_summary(report: &crate::index::SyncReport) -> String {
+    let mut summary = format!(
+        "{} artists, {} albums, {} songs",
+        report.artists, report.albums, report.songs
+    );
+    if report.lyrics > 0 {
+        summary.push_str(&format!(", {} lyrics", report.lyrics));
+    }
+    summary
+}
+
 /// Kicks off a background index sync (used after a successful login).
 ///
 /// Progress is reported back for the status bar; failures are only logged, as
@@ -1087,16 +1141,17 @@ fn spawn_index_sync(
         match crate::index::sync_library(&dbs, client, progress).await {
             Ok(report) => {
                 eprintln!(
-                    "index: library updated: {} artists, {} albums, {} songs, {} new covers",
-                    report.artists, report.albums, report.songs, report.covers.downloaded
+                    "index: library updated: {} artists, {} albums, {} songs, {} lyrics, {} new covers",
+                    report.artists,
+                    report.albums,
+                    report.songs,
+                    report.lyrics,
+                    report.covers.downloaded
                 );
                 qtbridge::invoke_method!(
                     finish_invoker,
                     "librarySyncFinished",
-                    format!(
-                        "{} artists, {} albums, {} songs",
-                        report.artists, report.albums, report.songs
-                    )
+                    sync_summary(&report)
                 );
             }
             Err(err) => {

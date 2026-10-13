@@ -12,13 +12,15 @@ Rectangle {
 
     property string symbol: "▶"
     property real symbolRatio: 0.5
-    property bool accent: false
+    // Glyph colour; play/pause overrides it with the fixed `Theme.iconStrong`
+    // (white, UI-31).
+    property color symbolColor: Palette.onSurface
     property alias hovered: hover.hovered
 
     signal clicked()
 
     radius: Theme.radius
-    color: accent ? Palette.onPrimaryContainer : "transparent"
+    color: "transparent"
     border.width: activeFocus ? Math.max(1, width * Theme.hairlineRatio) : 0
     border.color: Palette.primary
 
@@ -33,7 +35,7 @@ Rectangle {
             if (root.activeFocus)
                 return Theme.stateFocus;
             if (hover.hovered)
-                return root.accent ? Theme.stateFocus : Theme.stateHover;
+                return Theme.stateHover;
             return "transparent";
         }
 
@@ -46,9 +48,7 @@ Rectangle {
         anchors.centerIn: parent
         text: root.symbol
         font.pixelSize: root.width * root.symbolRatio
-        color: !root.enabled
-            ? Theme.stateDisabledContent
-            : (root.accent ? Palette.onPrimary : Palette.onSurface)
+        color: !root.enabled ? Theme.stateDisabledContent : root.symbolColor
         animated: false
     }
 

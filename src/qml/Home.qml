@@ -232,7 +232,7 @@ Item {
         layer.enabled: root.visualMode || searchOverlay.opened
         layer.effect: MultiEffect {
             blurEnabled: true
-            blur: 1.0
+            blur: 0.5
             blurMax: 48
             saturation: 0.6
             autoPaddingEnabled: false
@@ -368,7 +368,7 @@ Item {
         layer.enabled: root.visualMode || searchOverlay.opened
         layer.effect: MultiEffect {
             blurEnabled: true
-            blur: 1.0
+            blur: 0.5
             blurMax: 48
             saturation: 0.6
             autoPaddingEnabled: false

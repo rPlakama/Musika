@@ -1086,9 +1086,9 @@ Kept for rationale; the tree already carries these.
 |--------|------|--------|
 | Must have | 9 | — |
 | Should have | 62 | — |
-| Quick wins | 42 | — |
-| Solved (reference) | — | 36 |
-| **Total** | **113** | **36** |
+| Quick wins | 39 | — |
+| Solved (reference) | — | 39 |
+| **Total** | **110** | **39** |
 
 ### Coverage by area
 
@@ -1099,7 +1099,7 @@ Kept for rationale; the tree already carries these.
 | Player & media features | 6 | 0 |
 | Lyrics pipeline | 5 | 5 |
 | Search | 4 | 3 |
-| UI microdesigns | 34 | 7 |
+| UI microdesigns | 31 | 10 |
 | Dynamic color | 1 | 5 |
 | Architecture & robustness | 29 | 6 |
 | Media cache / offline | 7 | 0 |

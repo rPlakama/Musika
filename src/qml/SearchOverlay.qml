@@ -70,6 +70,10 @@ Item {
             moveRow(-1);
         else if (action === "move_down")
             moveRow(1);
+        else if (action === "scroll_up")
+            moveRow(-1);
+        else if (action === "scroll_down")
+            moveRow(1);
         else if (action === "enter")
             activate();
     }
@@ -286,6 +290,12 @@ Item {
                             event.accepted = true;
                         } else if (event.key === Qt.Key_Backtab) {
                             root.moveColumn(-1);
+                            event.accepted = true;
+                        } else if (event.key === Qt.Key_N && (event.modifiers & Qt.ControlModifier)) {
+                            root.moveRow(1);
+                            event.accepted = true;
+                        } else if (event.key === Qt.Key_P && (event.modifiers & Qt.ControlModifier)) {
+                            root.moveRow(-1);
                             event.accepted = true;
                         }
                     }

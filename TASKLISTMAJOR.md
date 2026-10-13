@@ -103,15 +103,19 @@ work is); solved/partial tasks add **Now** with the current evidence.
     in are the two most basic Neovim-style verbs; today the system clipboard is
     unreachable from the keyboard.
   - **Details:** global (any region) `y` yanks the playing track as
-    `Artist - Title` to the system clipboard; `P` reads the clipboard and plays
-    the first library match (accepts `Artist - Title` or `musika:song/<id>`).
+    `Artist - Title` to the system clipboard; `P`/`Ctrl-V` paste the clipboard
+    into the floating search field (`SearchOverlay.openWith`), so the text is
+    visible and correctable before Enter plays the selection — raw clipboard
+    text is never rejected in the background.
     `p` stays track-previous for now — the transport rebind and the full
     operator grammar (`yy`, `p`/`P` queue append/play-next) land with VI-8;
     yanking a cursor row / visual selection follows VI-4.
-  - **Now:** v1 landed — `keybind.rs` `yank`/`paste` actions (`y`, `shift-p`);
-    `Main.qml` hidden `TextEdit` clipboard bridge + global dispatch;
-    `Backend.pasteClipboard` resolves via `library::find_song_id` and queues
-    with album context; unit tests for the binding and the lookup.
+  - **Now:** v1 landed — `keybind.rs` `yank`/`paste` actions (`y`, `shift-p`,
+    and system `ctrl-v` so clipboard managers like Noctalia can paste);
+    `Main.qml` hidden `TextEdit` clipboard bridge + global dispatch (focused
+    text fields still consume Ctrl-V themselves); `Home.pasteSearch` opens
+    the search overlay with the text in the field via
+    `SearchOverlay.openWith`; unit tests for the binding.
 
 ## 2. Queue & playback grammar (`Q`)
 
@@ -405,10 +409,53 @@ work is); solved/partial tasks add **Now** with the current evidence.
     `symbolRatio` stay. Decision: play/pause is always white
     (`Theme.iconStrong`), the one glyph that never follows the seeded palette
     or the theme roles.
-  - **Now:** `IconButton` has no `accent` (transparent root, `symbolColor`
-    override, standard state layers + hairline); `InferiorBar` and
-    `NowPlaying` set `symbolColor: Theme.iconStrong` (`#FFFFFF`). Build +
-    qmllint clean; visual check pending.
+  - **Now:** `IconButton` has no `accent` (transparent root, standard state
+    layers + hairline) and draws either a text glyph or an SVG (`iconSource`,
+    rendered with `VectorImage` so no QtSvg plugin is needed);
+    `InferiorBar`/`NowPlaying` use the white transport SVGs from `src/icons/`
+    (play/pause/next plus a mirrored copy of the skip icon for previous,
+    embedded via a second `include_bytes_qml!` under `qrc:/app/icons/`;
+    shuffle/stop stay glyphs for now), swapping with a `quick` (120 ms)
+    crossfade. Build + qmllint clean; visual check pending.
+- [ ] **UI-32 · Unlimited horizontal collapse (responsive plan)** — P2 · (window policy)
+  - **Why:** `Main.qml:27` clamps the window at `Screen.width * 0.4`; Qt itself
+    permits any width (`minimumWidth` can be 0), so the floor is self-imposed.
+    Tiling users (niri/Hyprland side slots) should be able to squeeze the
+    window and still reach every action, instead of the window refusing to
+    shrink.
+  - **Plan:**
+    1. **R0 window policy:** drop the width clamp (`minimumWidth: 0`, keep
+       `minimumHeight` for now); initial size/ratio unchanged. The
+       compositor's own floor (decorations) is then the only limit.
+    2. **R1 breakpoints:** add `Theme.breakpoints = { mini: 420, narrow: 640,
+       compact: 900 }` + `Theme.isNarrow(width)` so every component shares one
+       vocabulary (AlbumEntry's ad-hoc `width >= 900` becomes `compact`;
+       logical-px clamps are sanctioned here like `fontSize`).
+    3. **R2 shell (`Home.qml`):** the 15% sidebar collapses to a segment strip
+       below `narrow` (or hides; keys/segments still switch views) and the
+       main area takes the rest; focus-border contract unchanged.
+    4. **R3 bars:** `RightBar` elides the sync message, hides the mode chip
+       and indexed counts below `mini`, keeps state + sync button;
+       `InferiorBar` drops the volume slider then the time labels below
+       `narrow` (seek stays), tightens transport spacing, and below `mini`
+       keeps only prev/play/next.
+    5. **R4 content:** `AlbumEntry` cover caps at `min(coverSide, width - 2m)`
+       and the header stacks below `compact`; list rows hide the right-hand
+       meta (tracks/duration) below `mini` and elide to title+artist;
+       `SearchOverlay` switches to a single active column below `narrow`
+       (Tab still cycles) instead of squeezing 28/32/40; fullscreen
+       `NowPlaying` stacks or shows one pane at a time below `compact`;
+       `QueueDrawer`/`Toast` width clamp to `width - 2*margin`.
+    6. **R5 text audit:** every collidable label gets `elide:
+       Text.ElideRight`; audit `implicitWidth` bindings that could resist the
+       collapse.
+    7. **R6 verification:** drag to 700/500/320/160 px with shell, album,
+       fullscreen, search, queue and toast open; keyboard-only pass at each
+       width; no clipped hairlines/overlaps; confirm the Wayland compositor
+       clamps only to its own minimum.
+  - **Acceptance:** continuous resize down to ~160 px with no layout errors
+    or warnings and every primary action still keyboard-reachable; no
+    component overflows its pane.
 
 ## 7. Dynamic color (`THM`) — roadmap "Dynamic color" design
 
@@ -716,7 +763,7 @@ work is); solved/partial tasks add **Now** with the current evidence.
 | Player features | 6 | 0 |
 | Lyrics pipeline | 5 | 5 |
 | Search | 2 | 3 |
-| UI microdesigns | 25 | 6 |
+| UI microdesigns | 26 | 6 |
 | Dynamic color | 1 | 5 |
 | Architecture | 30 | 5 |
 | Media cache | 7 | 0 |

@@ -1,3 +1,19 @@
+// Musika — a keyboard-driven music player.
+// Copyright (C) 2026 rPlakama <rPlakama@proton.me>
+//
+// This program is free software; you can redistribute it and/or modify
+// it under the terms of the GNU General Public License as published by
+// the Free Software Foundation; either version 2 of the License, or
+// (at your option) any later version.
+//
+// This program is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU General Public License for more details.
+//
+// You should have received a copy of the GNU General Public License
+// along with this program; if not, see <https://www.gnu.org/licenses/>.
+
 import QtQuick
 import QtQuick.Layouts
 import musika
@@ -206,6 +222,12 @@ Rectangle {
             if (root.visible)
                 Backend.requestLyrics();
         }
+        function onTrackSkipped(forward) {
+            if (forward)
+                nextButton.bloom();
+            else
+                previousButton.bloom();
+        }
     }
 
     ListModel {
@@ -374,25 +396,29 @@ Rectangle {
                         spacing: root.width * 0.012
 
                         IconButton {
+                            id: previousButton
                             Layout.preferredWidth: root.height * 0.05
                             Layout.preferredHeight: root.height * 0.05
-                            symbol: "⏮"
-                            symbolRatio: 0.6
+                            iconSource: "qrc:/app/icons/skip-previous-solid-svgrepo-com.svg"
+                            symbolRatio: 0.9
                             onClicked: Backend.playerPrevious()
                         }
                         IconButton {
                             Layout.preferredWidth: root.height * 0.058
                             Layout.preferredHeight: root.height * 0.058
-                            symbol: Backend.playbackState === "playing" ? "⏸" : "▶"
                             symbolRatio: 0.6
+                            iconSource: Backend.playbackState === "playing"
+                                ? "qrc:/app/icons/pause-svgrepo-com.svg"
+                                : "qrc:/app/icons/play-1001-svgrepo-com.svg"
                             symbolColor: Theme.iconStrong
                             onClicked: Backend.playerToggle()
                         }
                         IconButton {
+                            id: nextButton
                             Layout.preferredWidth: root.height * 0.05
                             Layout.preferredHeight: root.height * 0.05
-                            symbol: "⏭"
-                            symbolRatio: 0.6
+                            iconSource: "qrc:/app/icons/skip-next-circle-solid-svgrepo-com.svg"
+                            symbolRatio: 0.9
                             onClicked: Backend.playerNext()
                         }
                     }

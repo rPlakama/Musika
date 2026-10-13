@@ -1,3 +1,19 @@
+// Musika — a keyboard-driven music player.
+// Copyright (C) 2026 rPlakama <rPlakama@proton.me>
+//
+// This program is free software; you can redistribute it and/or modify
+// it under the terms of the GNU General Public License as published by
+// the Free Software Foundation; either version 2 of the License, or
+// (at your option) any later version.
+//
+// This program is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU General Public License for more details.
+//
+// You should have received a copy of the GNU General Public License
+// along with this program; if not, see <https://www.gnu.org/licenses/>.
+
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
@@ -25,13 +41,21 @@ Item {
     z: Theme.zOverlay
 
     function open() {
+        openWith("");
+    }
+
+    /// Opens in typing mode with `text` already in the field. Paste (VI-21)
+    /// uses this so the user sees the clipboard text and can correct it in
+    /// place before choosing a result.
+    function openWith(text) {
         opened = true;
-        field.text = "";
         clearResults();
         activeColumn = 0;
-        loading = false;
+        field.text = text;
+        loading = text.length > 0;
         typing = true;
         field.forceActiveFocus();
+        field.cursorPosition = field.text.length;
     }
 
     function close() {

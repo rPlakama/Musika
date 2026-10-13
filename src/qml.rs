@@ -1,3 +1,19 @@
+// Musika — a keyboard-driven music player.
+// Copyright (C) 2026 rPlakama <rPlakama@proton.me>
+//
+// This program is free software; you can redistribute it and/or modify
+// it under the terms of the GNU General Public License as published by
+// the Free Software Foundation; either version 2 of the License, or
+// (at your option) any later version.
+//
+// This program is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU General Public License for more details.
+//
+// You should have received a copy of the GNU General Public License
+// along with this program; if not, see <https://www.gnu.org/licenses/>.
+
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -217,6 +233,9 @@ impl Backend {
     fn queue_length_changed(&mut self);
     #[qsignal]
     fn library_changed(&mut self);
+    /// User skip (transport/keyboard/IPC), so the skip buttons can bloom.
+    #[qsignal(qml_name = "trackSkipped")]
+    fn track_skipped(&mut self, forward: bool);
     #[qsignal(qml_name = "focusMain")]
     fn focus_main(&mut self);
 
@@ -764,6 +783,7 @@ impl Backend {
         self.player.next();
         self.sync_player();
         self.emit_queue();
+        self.track_skipped(true);
     }
 
     #[qslot(qml_name = "playerPrevious")]
@@ -771,6 +791,7 @@ impl Backend {
         self.player.previous();
         self.sync_player();
         self.emit_queue();
+        self.track_skipped(false);
     }
 
     #[qslot(qml_name = "playerStop")]
@@ -977,51 +998,6 @@ impl Backend {
                 eprintln!("colors: could not invalidate {cover}: {err:#}");
             }
             invoker.invoke_method("requestColors");
-        });
-    }
-
-    /// Plays the first library match for pasted clipboard text (VI-21):
-    /// `musika:song/<id>` or `Artist - Title`, the format `y` yanks.
-    #[qslot(qml_name = "pasteClipboard")]
-    fn paste_clipboard(&mut self, text: String) {
-        let invoker = self.get_qml_method_invoker();
-        let Some(dbs) = crate::dbs().cloned() else {
-            return;
-        };
-        let text = text.trim().to_string();
-        if text.is_empty() {
-            return;
-        }
-
-        crate::runtime().spawn(async move {
-            let song_id = if let Some(id) = text.strip_prefix("musika:song/") {
-                let id = id.trim();
-                (!id.is_empty()).then(|| id.to_string())
-            } else {
-                let (artist, title) = match text.split_once(" - ") {
-                    Some((artist, title)) => (Some(artist.trim()), title.trim()),
-                    None => (None, text.as_str()),
-                };
-                match crate::library::find_song_id(&dbs.library, artist, title).await {
-                    Ok(id) => id,
-                    Err(err) => {
-                        eprintln!("clipboard: lookup failed: {err:#}");
-                        None
-                    }
-                }
-            };
-
-            let Some(song_id) = song_id else {
-                eprintln!("clipboard: nothing in the library matches the pasted text");
-                return;
-            };
-
-            match song_queue_json(&dbs, &song_id).await {
-                Ok((json, start)) => {
-                    qtbridge::invoke_method!(invoker, "playerLoad", json, start);
-                }
-                Err(err) => eprintln!("clipboard: could not queue pasted song: {err:#}"),
-            }
         });
     }
 

@@ -7,28 +7,28 @@ Source sections refer to `CRITIQUE.md`.
 
 ## Nvim logic (CRITIQUE §2)
 
-- [x] **N1 (P1)** Rework "visual mode" into a real pane/window mode (or implement
+- [ ] **N1 (P1)** Rework "visual mode" into a real pane/window mode (or implement
   `Ctrl-w h/j/k/l`); reserve "visual" for content selection.
-- [x] **N2a (P1)** Motion counts: `3j`, `5l` (= +5 s seek), etc.
+- [ ] **N2a (P1)** Motion counts: `3j`, `5l` (= +5 s seek), etc.
 - [ ] **N2b (P2)** Operator + motion grammar and text objects (`d`, `y`, `cw`, `i(`).
-- [x] **N3 (P1)** Single `ESC` / `Ctrl-[` returns to normal; keep `ESC ESC` as an alias.
-- [x] **N4 (P1)** Explicit mode state machine; show current mode in the status bar.
-- [x] **N5a (P1)** Command line (`:`) with a few commands (`:q`, `:sync`, `:set`).
-- [x] **N5b (P1)** `/` search-in-list with `n`/`N`.
+- [ ] **N3 (P1)** Single `ESC` / `Ctrl-[` returns to normal; keep `ESC ESC` as an alias.
+- [ ] **N4 (P1)** Explicit mode state machine; show current mode in the status bar.
+- [ ] **N5a (P1)** Command line (`:`) with a few commands (`:q`, `:sync`, `:set`).
+- [ ] **N5b (P1)** `/` search-in-list with `n`/`N`.
 - [ ] **N6 (P1)** Resolve `Space`: leader (vi convention) vs play/pause.
 - [ ] **N7 (P1)** Drop `Ctrl-N`/`Ctrl-P` scroll duplication (keep `j/k`).
-- [x] **N8a (P1)** Implement `gg`/`G` (Top/Bottom) — currently dead bindings.
-- [x] **N8b (P1)** which-key / showcmd for pending sequences.
-- [x] **N8c (P2)** `?` / `:help` cheatsheet overlay.
+- [ ] **N8a (P1)** Implement `gg`/`G` (Top/Bottom) — currently dead bindings.
+- [ ] **N8b (P1)** which-key / showcmd for pending sequences.
+- [ ] **N8c (P2)** `?` / `:help` cheatsheet overlay.
 - [ ] **N9 (P2)** Disambiguate overloaded keys (`Enter`, `q`) and document them.
 
 ## Music-player features (CRITIQUE §3)
 
-- [x] **M1 (P2)** Queue view: reorder, remove, "play next", "add to queue".
+- [ ] **M1 (P2)** Queue view: reorder, remove, "play next", "add to queue".
 - [x] **M2 (P0)** Playback context: any "play" builds a proper queue (album/list),
   not a 1-track queue.
 - [ ] **M3 (P2)** Shuffle / repeat (one / all); wire the inert `⤨` button.
-- [x] **M4 (P2)** Volume + mute in the UI (and mpv volume binding).
+- [ ] **M4 (P2)** Volume + mute in the UI (and mpv volume binding).
 - [ ] **M5 (P2)** Scrobble playback back to Navidrome (`scrobble`); report play counts.
 - [ ] **M6 (P2)** Lyrics, Playlists, Radio, Download caching (currently placeholders).
 - [x] **M7 (P0)** MPRIS/D-Bus now-playing: metadata forwarded to mpv (via IPC);
@@ -39,14 +39,14 @@ Source sections refer to `CRITIQUE.md`.
 
 ## UIX / interaction (CRITIQUE §4)
 
-- [x] **U1 (P1)** Discoverability: keyboard hints + which-key/help (overlaps N8b/N8c).
+- [ ] **U1 (P1)** Discoverability: keyboard hints + which-key/help (overlaps N8b/N8c).
 - [ ] **U2 (P1)** Visible keyboard-focus state on individual controls (Back, Sync, segments).
-- [ ] **U3 (P2)** Convey play/pause with icons, not colour alone.
-- [ ] **U4 (P2)** Remove the duplicate "Sync library" button (sidebar vs status bar).
+- [x] **U3 (P2)** Convey play/pause with icons, not colour alone.
+- [x] **U4 (P2)** Remove the duplicate "Sync library" button (sidebar vs status bar).
 - [ ] **U5 (P2)** Re-evaluate the rotated "LIBRARY" title (scanability).
-- [x] **U6 (P2)** Add controls to the fullscreen player (seek/volume/transport).
-- [ ] **U7 (P1)** Wire the search field to real results (overlaps N5b).
-- [x] **U8 (P0)** Empty/error states for album-with-no-songs, failed sync, failed playback.
+- [ ] **U6 (P2)** Add controls to the fullscreen player (seek/volume/transport).
+- [x] **U7 (P1)** Wire the search field to real results (overlaps N5b).
+- [ ] **U8 (P0)** Empty/error states for album-with-no-songs, failed sync, failed playback.
 - [ ] **U9 (P2)** Retune transition timing (100 ms is abrupt; ~150–200 ms).
 - [ ] **U10 (P2)** Guard fractional sizing so labels never get tiny on large displays.
 - [ ] **U11 (P2)** Close mouse/keyboard parity gaps.
@@ -60,8 +60,8 @@ Source sections refer to `CRITIQUE.md`.
 - [ ] **A5 (P1)** Cancellable sync + HTTP retry/backoff/rate-limit.
 - [ ] **A6 (P1)** Harden server assumptions (file-structure vs ID3 ids); handle `getIndexes.child`.
 - [x] **A7 (P0)** mpv cleanup on abnormal exit (watchdog) + no orphaned processes.
-- [x] **A8 (P0)** Replace pervasive `eprintln!` with surfaced errors (overlaps U8).
-- [ ] **A9 (P2)** Avoid leaking the auth token in process argv / mirror file.
+- [ ] **A8 (P0)** Replace pervasive `eprintln!` with surfaced errors (overlaps U8).
+- [x] **A9 (P2)** Avoid leaking the auth token in process argv / mirror file.
 - [ ] **A10 (P2)** Fix docs drift (roadmap: "right bar", "Space+F", stale durations).
 
 ## Prioritised rollup (CRITIQUE §6)
@@ -110,9 +110,9 @@ Dead & duplicated subsystems first (see the systems review).
   `COVER_SIZE`/`FETCH_CONCURRENCY` (covers + index).
 - [ ] **O13 (P2)** Stop masking errors as "Wrong username or password"; only
   fall back to that for real auth failures (`http_client.rs:211`).
-- [ ] **O14 (P2)** Fix the `palette_ready` race: mark ready only after a
+- [x] **O14 (P2)** Fix the `palette_ready` race: mark ready only after a
   successful rebuild, not before (`qml.rs:868`).
-- [ ] **O15 (P2)** Address palette corpus churn/collisions: rebuilding the
+- [x] **O15 (P2)** Address palette corpus churn/collisions: rebuilding the
   whole tmpfs tree and truncating names to 240 bytes can drop songs
   (`search.rs:119`).
 - [ ] **O16 (P2)** Harden the mpv supervisor: avoid `sh -c` string building for

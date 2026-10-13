@@ -39,6 +39,8 @@ Rectangle {
     property string albumArtist: ""
     property string albumMeta: ""
     property string albumNotes: ""
+    // UI-14: album notes clamp to three lines until clicked.
+    property bool notesExpanded: false
 
     // Header geometry (roadmap "Album page cover" D-3): the hero cover is
     // sized from the pane height, beside the description when there is room
@@ -48,11 +50,6 @@ Rectangle {
     readonly property bool sideBySide: width >= 900
 
     color: Palette.surface
-
-    function formatTime(seconds) {
-        var total = Math.max(0, Math.floor(seconds || 0));
-        return Math.floor(total / 60) + ":" + ("0" + (total % 60)).slice(-2);
-    }
 
     // A color with a replaced alpha, for the ambience gradient stops.
     function withAlpha(color, alpha) {
@@ -83,7 +80,7 @@ Rectangle {
             songs.append({
                 track: song.track ? String(song.track) : String(i + 1),
                 title: song.title,
-                duration: root.formatTime(song.duration)
+                duration: Theme.formatTime(song.duration)
             });
         }
     }
@@ -91,17 +88,6 @@ Rectangle {
     Component.onCompleted: reload()
 
     function handleAction(action) {
-        // Ctrl-N / Ctrl-P are transport skips on the album page; the list
-        // cursor stays on j/k, so browsing never scrolls the wrong thing.
-        if (action === "scroll_down") {
-            Backend.playerNext();
-            return;
-        }
-        if (action === "scroll_up") {
-            Backend.playerPrevious();
-            return;
-        }
-
         if (root.onToolbar) {
             // Cursor is on the toolbar (Back). Down returns to the songs.
             if (action === "move_down" && songs.count > 0) {
@@ -287,15 +273,6 @@ Rectangle {
                     anchors.fill: parent
                     source: root.albumCover
                 }
-
-                FadeText {
-                    anchors.centerIn: parent
-                    visible: coverImage.status !== Image.Ready
-                    text: "COVER"
-                    color: Palette.onPrimaryContainer
-                    font.pixelSize: root.coverSide * 0.12
-                    font.letterSpacing: root.coverSide * 0.02
-                }
             }
 
             // Description.
@@ -327,6 +304,7 @@ Rectangle {
                     elide: Text.ElideRight
                 }
                 FadeText {
+                    id: notesText
                     Layout.fillWidth: true
                     Layout.topMargin: root.height * 0.008
                     visible: root.albumNotes.length > 0
@@ -335,8 +313,18 @@ Rectangle {
                     font.pixelSize: root.height * 0.02
                     lineHeight: 1.25
                     wrapMode: Text.WordWrap
-                    maximumLineCount: 3
-                    elide: Text.ElideRight
+                    // UI-14: clamped to three lines; click expands.
+                    maximumLineCount: root.notesExpanded ? 1000 : 3
+                    elide: root.notesExpanded ? Text.ElideNone : Text.ElideRight
+
+                    HoverHandler {
+                        enabled: root.albumNotes.length > 0
+                        cursorShape: Qt.PointingHandCursor
+                    }
+                    TapHandler {
+                        enabled: root.albumNotes.length > 0
+                        onTapped: root.notesExpanded = !root.notesExpanded
+                    }
                 }
             }
         }

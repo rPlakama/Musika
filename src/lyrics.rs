@@ -309,6 +309,16 @@ pub async fn purge(dbs: &Dbs) -> Result<usize> {
     purge_with(&dbs.lyrics, &dbs.library).await
 }
 
+/// Drops the cached document for one song, forcing the next fetch to hit the
+/// server again (manual `lyrics_refresh`; LYR-5).
+pub async fn invalidate(lyrics: &SqlitePool, song_id: &str) -> Result<()> {
+    sqlx::query("DELETE FROM lyrics WHERE song_id = ?1")
+        .bind(song_id)
+        .execute(lyrics)
+        .await?;
+    Ok(())
+}
+
 // ---------------------------------------------------------------------------
 // Store / load
 // ---------------------------------------------------------------------------
@@ -964,6 +974,17 @@ mod tests {
         let (loaded, _) = load_cached(&pool, "s3").await.unwrap().unwrap();
         assert_eq!(loaded.source, "none");
         assert!(!miss_expired(now()));
+    }
+
+    #[tokio::test]
+    async fn invalidate_drops_the_cached_document() {
+        let pool = lyrics_pool().await;
+        store(&pool, &Document::plain("s9", "subsonic", "one\ntwo"))
+            .await
+            .unwrap();
+
+        invalidate(&pool, "s9").await.unwrap();
+        assert!(load_cached(&pool, "s9").await.unwrap().is_none());
     }
 
     #[tokio::test]

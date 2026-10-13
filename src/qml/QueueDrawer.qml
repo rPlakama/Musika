@@ -32,13 +32,6 @@ Item {
     visible: opened || panel.opacity > 0
     z: 25
 
-    function formatTime(seconds) {
-        if (!seconds || seconds <= 0)
-            return "";
-        var total = Math.floor(seconds);
-        return Math.floor(total / 60) + ":" + ("0" + (total % 60)).slice(-2);
-    }
-
     function open() {
         opened = true;
         cursor = Math.max(0, nowPlaying);
@@ -65,8 +58,8 @@ Item {
             var track = data.items[i];
             items.append({
                 title: track.title,
-                subtitle: (track.artist ? track.artist : "") + (track.album ? "  ·  " + track.album : ""),
-                duration: formatTime(track.duration),
+                subtitle: (track.artist ? track.artist : "") + (track.album ? " · " + track.album : ""),
+                duration: Theme.formatTime(track.duration),
                 cover: track.cover
             });
         }
@@ -81,9 +74,9 @@ Item {
             close();
             return;
         }
-        if (action === "move_up" || action === "scroll_up")
+        if (action === "move_up")
             cursor = Math.max(0, cursor - 1);
-        else if (action === "move_down" || action === "scroll_down")
+        else if (action === "move_down")
             cursor = Math.min(items.count - 1, cursor + 1);
         else if (action === "enter")
             Backend.queueJump(cursor);

@@ -28,9 +28,19 @@ Item {
     property int timeoutMs: 5000
     property int remaining: timeoutMs
 
+    // AUTH-2: any Back (Esc/q) cancels the wait and drops to login.
+    function handleAction(action) {
+        if (action === "back")
+            root.timedOut();
+    }
+
     Rectangle {
         anchors.fill: parent
         color: Palette.background
+
+        TapHandler {
+            onTapped: root.timedOut()
+        }
     }
 
     Column {
@@ -48,9 +58,17 @@ Item {
 
         FadeText {
             width: parent.width
-            text: "(timeout " + root.remaining + "ms)"
+            text: "Timeout in " + Math.ceil(root.remaining / 1000) + "s"
             color: Palette.onSurfaceVariant
             font.pixelSize: root.height * 0.03
+            horizontalAlignment: Text.AlignHCenter
+        }
+
+        FadeText {
+            width: parent.width
+            text: "Esc or click to sign in"
+            color: Palette.outline
+            font.pixelSize: root.height * 0.02
             horizontalAlignment: Text.AlignHCenter
         }
 

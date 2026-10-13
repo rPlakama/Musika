@@ -189,3 +189,13 @@ function volumeIcon(volume, muted) {
         return "qrc:/app/icons/vol-low-svgrepo-com.svg"
     return "qrc:/app/icons/vol-high-svgrepo-com.svg"
 }
+
+// Shared "m:ss" (h:mm:ss past the hour), used by every time label (UI-26).
+function formatTime(seconds) {
+    var total = Math.max(0, Math.floor(seconds || 0))
+    var h = Math.floor(total / 3600)
+    var m = Math.floor((total % 3600) / 60)
+    var s = total % 60
+    var mm = (h > 0 && m < 10 ? "0" : "") + m
+    return (h > 0 ? h + ":" + mm : String(m)) + ":" + (s < 10 ? "0" : "") + s
+}

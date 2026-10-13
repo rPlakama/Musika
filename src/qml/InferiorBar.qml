@@ -25,13 +25,6 @@ Rectangle {
 
     color: Palette.surfaceContainer
 
-    function formatTime(seconds) {
-        var total = Math.max(0, Math.floor(seconds || 0));
-        var minutes = Math.floor(total / 60);
-        var rest = total % 60;
-        return minutes + ":" + (rest < 10 ? "0" : "") + rest;
-    }
-
     // Speaker icon by volume tier: muted / silent / low (≤33) / high.
     function volumeIcon() {
         return Theme.volumeIcon(Backend.volume, Backend.muted);
@@ -157,12 +150,6 @@ Rectangle {
             spacing: root.height * 0.05
 
             IconButton {
-                Layout.preferredWidth: root.height * 0.46
-                Layout.preferredHeight: root.height * 0.46
-                iconSource: "qrc:/app/icons/random-svgrepo-com.svg"
-                symbolRatio: 0.65
-            }
-            IconButton {
                 id: previousButton
                 Layout.preferredWidth: root.height * 0.46
                 Layout.preferredHeight: root.height * 0.46
@@ -216,7 +203,7 @@ Rectangle {
             spacing: root.height * 0.12
 
             FadeText {
-                text: root.formatTime(Backend.position) + " / " + root.formatTime(Backend.duration)
+                text: Theme.formatTime(Backend.position) + " / " + Theme.formatTime(Backend.duration)
                 color: Palette.onSurfaceVariant
                 font.pixelSize: root.height * 0.15
                 animated: false

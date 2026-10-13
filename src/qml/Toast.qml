@@ -30,6 +30,8 @@ Rectangle {
     property real fadeDuration: Theme.motion.quick
 
     readonly property bool syncing: kind === "sync"
+    // UI-23: playback errors get a retry too.
+    readonly property bool retryable: kind === "sync" || kind === "playback"
 
     signal retry()
 
@@ -84,7 +86,7 @@ Rectangle {
         }
 
         Rectangle {
-            visible: root.syncing
+            visible: root.retryable
             implicitWidth: retryLabel.implicitWidth + root.height * 0.5
             implicitHeight: root.height * 0.62
             radius: Theme.radius

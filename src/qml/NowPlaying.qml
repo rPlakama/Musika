@@ -43,6 +43,7 @@ Rectangle {
     // Lyrics (override → cache → server; see src/lyrics.rs).
     property bool lyricsSynced: false
     property bool lyricsAvailable: false
+    property bool lyricsLoading: false
     property string lyricsSource: ""
     property string lyricsLang: ""
     property int lyricsOffset: 0
@@ -68,13 +69,6 @@ Rectangle {
                 break;
         }
         return active;
-    }
-
-    function formatTime(seconds) {
-        var total = Math.max(0, Math.floor(seconds || 0));
-        var minutes = Math.floor(total / 60);
-        var rest = total % 60;
-        return minutes + ":" + (rest < 10 ? "0" : "") + rest;
     }
 
     function keyHints() {
@@ -105,7 +99,7 @@ Rectangle {
             var track = data.items[i];
             queueItems.append({
                 title: track.title,
-                duration: formatTime(track.duration)
+                duration: Theme.formatTime(track.duration)
             });
         }
         queueIndex = data.index;
@@ -128,7 +122,10 @@ Rectangle {
         lyricsSynced = data.synced;
         lyricsLang = data.lang ? data.lang : "";
         lyricsOffset = data.offset_ms ? data.offset_ms : 0;
+        lyricsLoading = false;
 
+        // Quick fade so a track change does not snap the lines (LYR-9).
+        lyricsView.opacity = 0;
         lyricModel.clear();
         for (var i = 0; i < data.lines.length; i++) {
             lyricModel.append({
@@ -139,6 +136,7 @@ Rectangle {
         lyricsAvailable = lyricModel.count > 0 && data.source !== "none";
 
         lyricsView.contentY = 0;
+        Qt.callLater(function() { lyricsView.opacity = 1; });
         if (lyricsSynced && activeLyric >= 0)
             lyricsView.positionViewAtIndex(activeLyric, ListView.Center);
     }
@@ -147,9 +145,8 @@ Rectangle {
         if (!lyricsAvailable)
             return "";
         var tag = lyricsSource.length > 0 ? lyricsSource : "";
-        if (lyricsSynced)
-            tag += " · synced";
-        if (lyricsLang.length > 0)
+        // `xxx`/`und` mean "unspecified" in OpenSubsonic; never show them.
+        if (lyricsLang.length > 0 && lyricsLang !== "xxx" && lyricsLang !== "und")
             tag += " · " + lyricsLang;
         return tag;
     }
@@ -230,6 +227,7 @@ Rectangle {
     onVisibleChanged: {
         if (visible) {
             pane = 0;
+            lyricsLoading = true;
             Backend.requestQueue();
             Backend.requestLyrics();
         }
@@ -244,8 +242,10 @@ Rectangle {
                 root.applyLyrics(payload);
         }
         function onCurrent_song_id_changed() {
-            if (root.visible)
+            if (root.visible) {
+                root.lyricsLoading = true;
                 Backend.requestLyrics();
+            }
         }
         function onTrackSkipped(forward) {
             if (forward)
@@ -407,7 +407,7 @@ Rectangle {
                     spacing: root.width * 0.008
 
                     FadeText {
-                        text: root.formatTime(Backend.position)
+                        text: Theme.formatTime(Backend.position)
                         color: Palette.onSurfaceVariant
                         font.pixelSize: Theme.fontSize("mono", root.height)
                         animated: false
@@ -442,7 +442,7 @@ Rectangle {
                     }
 
                     FadeText {
-                        text: root.formatTime(Backend.duration)
+                        text: Theme.formatTime(Backend.duration)
                         color: Palette.onSurfaceVariant
                         font.pixelSize: Theme.fontSize("mono", root.height)
                         animated: false
@@ -585,6 +585,25 @@ Rectangle {
                                 color: Palette.onSurfaceVariant
                                 font.pixelSize: Theme.fontSize("label", root.height)
                             }
+
+                            // Synced as a small MY3 chip in `label` type.
+                            Rectangle {
+                                visible: root.lyricsAvailable && root.lyricsSynced
+                                implicitWidth: syncedLabel.implicitWidth + root.height * 0.02
+                                implicitHeight: root.height * 0.026
+                                radius: Theme.radius
+                                color: Palette.secondaryContainer
+
+                                FadeText {
+                                    id: syncedLabel
+                                    anchors.centerIn: parent
+                                    text: "SYNCED"
+                                    color: Palette.onSecondaryContainer
+                                    font.pixelSize: Theme.fontSize("label", root.height)
+                                    font.letterSpacing: root.height * 0.001
+                                    animated: false
+                                }
+                            }
                         }
 
                         Rectangle {
@@ -602,6 +621,10 @@ Rectangle {
                             spacing: root.lyricSize * 0.9
                             boundsBehavior: Flickable.StopAtBounds
                             visible: root.lyricsAvailable
+
+                            Behavior on opacity {
+                                NumberAnimation { duration: Theme.motion.quick; easing.type: Easing.Bezier; easing.bezierCurve: Theme.ease.standard }
+                            }
 
                             delegate: FadeText {
                                 id: lyricLine
@@ -648,7 +671,18 @@ Rectangle {
                         FadeText {
                             Layout.fillWidth: true
                             Layout.fillHeight: true
-                            visible: !root.lyricsAvailable
+                            visible: root.lyricsLoading
+                            text: "Loading lyrics…"
+                            color: Palette.onSurfaceVariant
+                            font.pixelSize: Theme.fontSize("label", root.height)
+                            horizontalAlignment: Text.AlignHCenter
+                            verticalAlignment: Text.AlignVCenter
+                        }
+
+                        FadeText {
+                            Layout.fillWidth: true
+                            Layout.fillHeight: true
+                            visible: !root.lyricsAvailable && !root.lyricsLoading
                             text: "No lyrics"
                             color: Palette.onSurfaceVariant
                             font.pixelSize: Theme.fontSize("label", root.height)

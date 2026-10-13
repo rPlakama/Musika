@@ -919,6 +919,13 @@ impl Backend {
         self.sync_player();
     }
 
+    /// Retries the current track after a playback error (UI-23).
+    #[qslot(qml_name = "retryPlayback")]
+    fn retry_playback(&mut self) {
+        self.player.play_current();
+        self.sync_player();
+    }
+
     // -----------------------------------------------------------------------
     // Queue (drawer)
     // -----------------------------------------------------------------------
@@ -1019,6 +1026,8 @@ impl Backend {
         let Some(song_id) = self.player.current().map(|track| track.id.clone()) else {
             return;
         };
+        // LYR-5: warm the cache for the next few queue tracks, bounded.
+        let upcoming = self.player.upcoming(3);
 
         crate::runtime().spawn(async move {
             let client = match crate::sqlite::load_credentials(&dbs.credentials).await {
@@ -1047,6 +1056,32 @@ impl Backend {
                 "lyrics".to_string(),
                 document.to_json()
             );
+
+            for id in upcoming {
+                if let Err(err) = crate::lyrics::fetch(&dbs, client.as_ref(), &id).await {
+                    eprintln!("lyrics: prefetch for {id} failed: {err:#}");
+                }
+            }
+        });
+    }
+
+    /// Manual lyric refresh (`lyrics_refresh`): drops the current song's cache
+    /// row and re-requests, so a server-side change shows up immediately.
+    #[qslot(qml_name = "refreshLyrics")]
+    fn refresh_lyrics(&mut self) {
+        let invoker = self.get_qml_method_invoker();
+        let Some(dbs) = crate::dbs().cloned() else {
+            return;
+        };
+        let Some(song_id) = self.player.current().map(|track| track.id.clone()) else {
+            return;
+        };
+
+        crate::runtime().spawn(async move {
+            if let Err(err) = crate::lyrics::invalidate(&dbs.lyrics, &song_id).await {
+                eprintln!("lyrics: could not invalidate {song_id}: {err:#}");
+            }
+            invoker.invoke_method("requestLyrics");
         });
     }
 
@@ -1169,61 +1204,141 @@ impl Backend {
 
     /// Publishes the player state to the QML properties.
     fn sync_player(&mut self) {
-        let (song_id, title, artist, album, cover_art, cover_url) = match self.player.current() {
+        // ARC-10: only emit when a value actually changed — the 500 ms tick
+        // must not republish every string on every frame. Compare first (no
+        // clones), clone only the fields that changed.
+        let (
+            present,
+            id_changed,
+            title_changed,
+            artist_changed,
+            album_changed,
+            art_changed,
+            url_changed,
+        ) = match self.player.current() {
             Some(track) => (
-                track.id.clone(),
-                track.title.clone(),
-                track.artist.clone(),
-                track.album.clone(),
-                track.cover_art.clone(),
-                track.cover_url.clone(),
+                true,
+                self.current_song_id != track.id,
+                self.current_title != track.title,
+                self.current_artist != track.artist,
+                self.current_album != track.album,
+                self.current_cover_art != track.cover_art,
+                self.current_cover_url != track.cover_url,
             ),
-            None => (
-                String::new(),
-                String::new(),
-                String::new(),
-                String::new(),
-                String::new(),
-                String::new(),
-            ),
+            None => (false, false, false, false, false, false, false),
         };
-        if self.current_song_id != song_id {
-            self.current_song_id = song_id;
-            self.current_song_id_changed();
-        }
-        self.current_title = title;
-        self.current_title_changed();
-        self.current_artist = artist;
-        self.current_artist_changed();
-        self.current_album = album;
-        self.current_album_changed();
-        if self.current_cover_art != cover_art {
-            self.current_cover_art = cover_art;
-            self.current_cover_art_changed();
-        }
-        if self.current_cover_url != cover_url {
-            self.current_cover_url = cover_url;
-            self.current_cover_url_changed();
+
+        if !present {
+            if !self.current_song_id.is_empty() {
+                self.current_song_id.clear();
+                self.current_song_id_changed();
+            }
+            if !self.current_title.is_empty() {
+                self.current_title.clear();
+                self.current_title_changed();
+            }
+            if !self.current_artist.is_empty() {
+                self.current_artist.clear();
+                self.current_artist_changed();
+            }
+            if !self.current_album.is_empty() {
+                self.current_album.clear();
+                self.current_album_changed();
+            }
+            if !self.current_cover_art.is_empty() {
+                self.current_cover_art.clear();
+                self.current_cover_art_changed();
+            }
+            if !self.current_cover_url.is_empty() {
+                self.current_cover_url.clear();
+                self.current_cover_url_changed();
+            }
+        } else {
+            if id_changed {
+                self.current_song_id = self
+                    .player
+                    .current()
+                    .map(|track| track.id.clone())
+                    .unwrap_or_default();
+                self.current_song_id_changed();
+            }
+            if title_changed {
+                self.current_title = self
+                    .player
+                    .current()
+                    .map(|track| track.title.clone())
+                    .unwrap_or_default();
+                self.current_title_changed();
+            }
+            if artist_changed {
+                self.current_artist = self
+                    .player
+                    .current()
+                    .map(|track| track.artist.clone())
+                    .unwrap_or_default();
+                self.current_artist_changed();
+            }
+            if album_changed {
+                self.current_album = self
+                    .player
+                    .current()
+                    .map(|track| track.album.clone())
+                    .unwrap_or_default();
+                self.current_album_changed();
+            }
+            if art_changed {
+                self.current_cover_art = self
+                    .player
+                    .current()
+                    .map(|track| track.cover_art.clone())
+                    .unwrap_or_default();
+                self.current_cover_art_changed();
+            }
+            if url_changed {
+                self.current_cover_url = self
+                    .player
+                    .current()
+                    .map(|track| track.cover_url.clone())
+                    .unwrap_or_default();
+                self.current_cover_url_changed();
+            }
         }
 
-        self.playback_state = self.player.state().name().to_string();
-        self.playback_state_changed();
-        self.duration = self.player.duration();
-        self.duration_changed();
-        self.position = self.player.position();
-        self.position_changed();
-        if self.volume != self.player.volume() {
-            self.volume = self.player.volume();
+        let state = self.player.state().name().to_string();
+        if self.playback_state != state {
+            self.playback_state = state;
+            self.playback_state_changed();
+        }
+        let duration = self.player.duration();
+        if self.duration != duration {
+            self.duration = duration;
+            self.duration_changed();
+        }
+        let position = self.player.position();
+        if self.position != position {
+            self.position = position;
+            self.position_changed();
+        }
+        let volume = self.player.volume();
+        if self.volume != volume {
+            self.volume = volume;
             self.volume_changed();
         }
-        if self.muted != self.player.muted() {
-            self.muted = self.player.muted();
+        let muted = self.player.muted();
+        if self.muted != muted {
+            self.muted = muted;
             self.muted_changed();
         }
-        self.queue_index = self.player.index() as i64;
-        self.queue_index_changed();
-        self.queue_length = self.player.len() as i64;
-        self.queue_length_changed();
+        let queue_index = self.player.index() as i64;
+        if self.queue_index != queue_index {
+            self.queue_index = queue_index;
+            self.queue_index_changed();
+        }
+        let queue_length = self.player.len() as i64;
+        if self.queue_length != queue_length {
+            self.queue_length = queue_length;
+            self.queue_length_changed();
+        }
     }
 }
 

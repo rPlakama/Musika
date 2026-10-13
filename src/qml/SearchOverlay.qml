@@ -115,10 +115,6 @@ Item {
             moveRow(-1);
         else if (action === "move_down")
             moveRow(1);
-        else if (action === "scroll_up")
-            moveRow(-1);
-        else if (action === "scroll_down")
-            moveRow(1);
         else if (action === "enter")
             activate();
     }
@@ -169,14 +165,6 @@ Item {
         close();
     }
 
-    function formatTime(seconds) {
-        if (!seconds || seconds <= 0)
-            return "";
-        var minutes = Math.floor(seconds / 60);
-        var rest = Math.floor(seconds % 60);
-        return minutes + ":" + (rest < 10 ? "0" + rest : rest);
-    }
-
     function apply(payload) {
         if (!root.opened || field.text.length === 0)
             return;
@@ -192,8 +180,8 @@ Item {
             songResults.append({
                 id: song.id,
                 title: song.title,
-                subtitle: (song.artist ? song.artist : "") + (song.album ? "  ·  " + song.album : ""),
-                meta: formatTime(song.duration),
+                subtitle: (song.artist ? song.artist : "") + (song.album ? " · " + song.album : ""),
+                meta: Theme.formatTime(song.duration),
                 cover: song.cover
             });
         }
@@ -447,8 +435,8 @@ Item {
             FadeText {
                 Layout.fillWidth: true
                 text: root.typing
-                    ? "Type to filter   ·   Tab/↑/↓ navigate   ·   Enter open/play   ·   Esc normal mode"
-                    : "h/l columns   ·   j/k rows   ·   i type   ·   Enter open/play   ·   Esc close"
+                    ? "Type to filter  ·  Tab/↑/↓ navigate  ·  Enter open/play  ·  Esc normal mode"
+                    : "h/l columns  ·  j/k rows  ·  i type  ·  Enter open/play  ·  Esc close"
                 color: Palette.onSurfaceVariant
                 font.pixelSize: Theme.fontSize("label", panel.height)
                 horizontalAlignment: Text.AlignHCenter

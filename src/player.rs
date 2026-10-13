@@ -133,6 +133,16 @@ impl Player {
     pub fn current(&self) -> Option<&Track> {
         self.queue.get(self.index)
     }
+
+    /// Ids of the next `count` tracks after the current one (LYR-5 prefetch).
+    pub fn upcoming(&self, count: usize) -> Vec<String> {
+        self.queue
+            .iter()
+            .skip(self.index + 1)
+            .take(count)
+            .map(|track| track.id.clone())
+            .collect()
+    }
     pub fn volume(&self) -> f64 {
         self.volume
     }
@@ -374,22 +384,34 @@ impl Player {
 
         // Run mpv under a tiny supervisor shell that watches our PID and
         // terminates mpv if we die (even on SIGKILL, where Drop never runs).
-        let parent = std::process::id();
-        let mpris = mpris_script_arg();
-        let script = format!(
-            "mpv{mpris} --no-video --idle=yes --no-terminal --really-quiet \
-             --input-ipc-server='{socket}' & MPV=$!; \
-             trap 'kill -TERM $MPV 2>/dev/null; exit 0' TERM INT; \
-             while kill -0 {parent} 2>/dev/null; do sleep 0.5; done; \
-             kill -TERM $MPV 2>/dev/null",
-            mpris = mpris,
-            socket = socket.display(),
-            parent = parent,
-        );
+        // Args are passed positionally -- no shell string interpolation
+        // (ARC-16): $0 is the label, $1 the parent PID, the rest goes to mpv.
+        let parent = std::process::id().to_string();
+        let socket_arg = format!("--input-ipc-server={}", socket.display());
 
-        let spawn = Command::new("sh")
+        let mut command = Command::new("sh");
+        command
             .arg("-c")
-            .arg(script)
+            .arg(
+                "parent=$1; shift; mpv \"$@\" & MPV=$!; \
+                 trap 'kill -TERM $MPV 2>/dev/null; exit 0' TERM INT; \
+                 while kill -0 \"$parent\" 2>/dev/null; do sleep 0.5; done; \
+                 kill -TERM $MPV 2>/dev/null",
+            )
+            .arg("musika-supervisor")
+            .arg(&parent)
+            .arg("--no-video")
+            .arg("--idle=yes")
+            .arg("--no-terminal")
+            .arg("--really-quiet")
+            .arg(&socket_arg);
+        if let Ok(script) = std::env::var("MUSIKA_MPRIS_SCRIPT") {
+            if !script.is_empty() {
+                command.arg(format!("--script={script}"));
+            }
+        }
+
+        let spawn = command
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null())
@@ -481,9 +503,10 @@ fn connect_retry(path: &Path, timeout: Duration) -> Option<UnixStream> {
 }
 
 fn signal(pid: u32, signal: &str) {
-    let _ = Command::new("sh")
-        .arg("-c")
-        .arg(format!("kill -{signal} {pid}"))
+    // Direct `kill` binary, never `sh -c` (ARC-16).
+    let _ = Command::new("kill")
+        .arg(format!("-{signal}"))
+        .arg(pid.to_string())
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())

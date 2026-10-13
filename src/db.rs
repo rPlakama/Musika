@@ -47,7 +47,12 @@ pub struct Dbs {
 /// Opens every database and applies its migrations.
 pub async fn init() -> Result<Dbs> {
     let credentials = open_file(&credentials_path()?, 5).await?;
-    sqlx::migrate!("./migrations").run(&credentials).await?;
+    // Two early no-op migrations were removed (ARC-18); ignore them if this
+    // database already applied them.
+    sqlx::migrate!("./migrations")
+        .set_ignore_missing(true)
+        .run(&credentials)
+        .await?;
 
     let library = open_file(&library_path()?, 5).await?;
     sqlx::migrate!("./migrations_library").run(&library).await?;

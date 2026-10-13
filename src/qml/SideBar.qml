@@ -27,16 +27,33 @@ Rectangle {
     signal segmentActivated(int index)
 
     property int selected: 0
-    readonly property var segments: ["Albums", "Songs", "Artists", "Playlists", "Radio"]
+    // UI-6: Playlists/Radio are placeholders — visibly disabled, not fake-active.
+    readonly property var segments: [
+        { label: "Albums", enabled: true },
+        { label: "Songs", enabled: true },
+        { label: "Artists", enabled: true },
+        { label: "Playlists", enabled: false },
+        { label: "Radio", enabled: false }
+    ]
 
     color: Palette.surfaceContainerLow
 
+    function moveSelection(delta) {
+        var next = selected;
+        for (var step = 0; step < segments.length; step++) {
+            next = (next + delta + segments.length) % segments.length;
+            if (segments[next].enabled)
+                break;
+        }
+        selected = next;
+    }
+
     function handleAction(action) {
-        if (action === "move_up" || action === "scroll_up")
-            selected = Math.max(0, selected - 1);
-        else if (action === "move_down" || action === "scroll_down")
-            selected = Math.min(segments.length - 1, selected + 1);
-        else if (action === "enter")
+        if (action === "move_up")
+            moveSelection(-1);
+        else if (action === "move_down")
+            moveSelection(1);
+        else if (action === "enter" && segments[selected].enabled)
             segmentActivated(selected);
     }
 
@@ -73,14 +90,18 @@ Rectangle {
             delegate: Rectangle {
                 id: segment
                 required property int index
-                required property string modelData
+                required property var modelData
+
+                readonly property bool usable: modelData.enabled
 
                 Layout.fillWidth: true
                 implicitHeight: root.height * 0.064
                 radius: Theme.radius
-                color: segment.index === root.selected
-                    ? Palette.secondaryContainer
-                    : (segmentHover.hovered ? Palette.surfaceContainerHigh : "transparent")
+                color: !usable
+                    ? "transparent"
+                    : (segment.index === root.selected
+                        ? Palette.secondaryContainer
+                        : (segmentHover.hovered ? Palette.surfaceContainerHigh : "transparent"))
 
                 Behavior on color {
                     ColorAnimation {
@@ -97,25 +118,29 @@ Rectangle {
                     anchors.bottom: parent.bottom
                     width: root.width * 0.02
                     color: Palette.primary
-                    visible: segment.index === root.selected
+                    visible: segment.usable && segment.index === root.selected
                 }
 
                 FadeText {
                     anchors.verticalCenter: parent.verticalCenter
                     anchors.left: parent.left
                     anchors.leftMargin: root.width * 0.1
-                    text: segment.modelData
-                    color: segment.index === root.selected ? Palette.onSecondaryContainer : Palette.onSurfaceVariant
+                    text: segment.modelData.label
+                    color: !segment.usable
+                        ? Theme.stateDisabledContent
+                        : (segment.index === root.selected ? Palette.onSecondaryContainer : Palette.onSurfaceVariant)
                     font.pixelSize: root.height * 0.022
-                    font.bold: segment.index === root.selected
+                    font.bold: segment.usable && segment.index === root.selected
                 }
 
                 HoverHandler {
                     id: segmentHover
+                    enabled: segment.usable
                     cursorShape: Qt.PointingHandCursor
                 }
 
                 TapHandler {
+                    enabled: segment.usable
                     onTapped: {
                         root.selected = segment.index;
                         root.segmentActivated(segment.index);

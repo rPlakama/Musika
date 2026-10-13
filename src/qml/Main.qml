@@ -193,6 +193,10 @@ ApplicationWindow {
                 Backend.refreshColors();
                 return;
             }
+            if (command === "lyrics_refresh") {
+                Backend.refreshLyrics();
+                return;
+            }
             // Pump, don't re-enter: a command may call back into the backend,
             // which is still borrowed while this signal is being emitted.
             Qt.callLater(() => keyHandler.dispatch(command));

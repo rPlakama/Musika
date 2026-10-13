@@ -319,62 +319,6 @@ Item {
                 Layout.fillHeight: true
                 spacing: 0
 
-                // Search is global scope (Shift Space F); this is just the hint.
-                Rectangle {
-                    id: hintBar
-                    Layout.fillWidth: true
-                    Layout.preferredHeight: root.height * 0.045
-                    color: Palette.surface
-
-                    FadeText {
-                        anchors.left: parent.left
-                        anchors.leftMargin: root.width * 0.02
-                        anchors.verticalCenter: parent.verticalCenter
-                        text: "Shift Space F for Search"
-                        color: Palette.onSurfaceVariant
-                        font.pixelSize: hintBar.height * 0.42
-                    }
-
-                    // Order hint: keys -- arrow -- current order type. Follows
-                    // D-6/RightBar: fixed transparent frame, sizes from the bar
-                    // (never from the SVG's intrinsic size), VectorImage with
-                    // CurveRenderer, white-baked asset.
-                    RowLayout {
-                        anchors.right: parent.right
-                        anchors.rightMargin: root.width * 0.02
-                        anchors.verticalCenter: parent.verticalCenter
-                        spacing: hintBar.height * 0.18
-
-                        FadeText {
-                            Layout.alignment: Qt.AlignVCenter
-                            text: "Shift-H / Shift-L"
-                            color: Palette.onSurfaceVariant
-                            font.pixelSize: hintBar.height * 0.42
-                        }
-
-                        Item {
-                            Layout.alignment: Qt.AlignVCenter
-                            width: hintBar.height * 0.48
-                            height: width
-
-                            SymbolIcon {
-                                anchors.centerIn: parent
-                                source: "qrc:/app/icons/arrow-left-svgrepo-com.svg"
-                                symbolColor: Palette.onSurfaceVariant
-                                width: parent.width * 0.85
-                                height: width
-                            }
-                        }
-
-                        FadeText {
-                            Layout.alignment: Qt.AlignVCenter
-                            text: Backend.albumOrder
-                            color: Palette.onSurfaceVariant
-                            font.pixelSize: hintBar.height * 0.42
-                        }
-                    }
-                }
-
                 StackView {
                     id: contentStack
                     Layout.fillWidth: true
@@ -487,7 +431,12 @@ Item {
         width: root.width * 0.42
         height: root.height * 0.06
         z: Theme.zToast
-        onRetry: Backend.syncLibrary()
+        onRetry: {
+            if (toast.kind === "sync")
+                Backend.syncLibrary();
+            else
+                Backend.retryPlayback();
+        }
     }
 
     SearchOverlay {
@@ -575,11 +524,13 @@ Item {
     // Region borders = the vi cursor, positioned from the layout ratios.
     // 0 = sidebar, 1 = main, 2 = status (top), 3 = player (bottom).
     Repeater {
+        // UI-1: one state colour for every region — the frame marks focus, not
+        // identity, so all four use the primary accent.
         model: [
-            { color: Palette.primary, title: "LIBRARY", rotated: true },
-            { color: Palette.tertiary, title: "MAIN", rotated: false },
-            { color: Palette.secondary, title: "STATUS", rotated: false },
-            { color: Palette.error, title: "PLAYER", rotated: false }
+            { title: "LIBRARY", rotated: true },
+            { title: "MAIN", rotated: false },
+            { title: "STATUS", rotated: false },
+            { title: "PLAYER", rotated: false }
         ]
 
         delegate: Rectangle {
@@ -602,7 +553,7 @@ Item {
             // no region highlight may show above it.
             visible: !root.nowPlayingExpanded && (root.visualMode ? candidate : active)
             border.width: (candidate ? 3 : 2) * unit
-            border.color: modelData.color
+            border.color: Palette.primary
 
             // Width is instant (R5); only the colour eases.
             Behavior on border.color {
@@ -613,11 +564,10 @@ Item {
             Text {
                 anchors.centerIn: parent
                 text: regionBox.modelData.title
-                color: regionBox.modelData.color
-                font.pixelSize: regionBox.modelData.rotated ? root.height * 0.04 : root.height * 0.03
+                color: Palette.primary
+                font.pixelSize: root.height * 0.03
                 font.bold: true
                 font.letterSpacing: root.height * 0.008
-                rotation: regionBox.modelData.rotated ? -90 : 0
                 opacity: root.visualMode ? 1 : 0
             }
         }

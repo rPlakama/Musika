@@ -40,9 +40,9 @@ Rectangle {
 
     function apply(payload) {
         albums.clear();
-        var list = JSON.parse(payload);
-        for (var i = 0; i < list.length; i++) {
-            var album = list[i];
+        var rows = JSON.parse(payload);
+        for (var i = 0; i < rows.length; i++) {
+            var album = rows[i];
             albums.append({
                 albumId: album.id,
                 title: album.title,
@@ -52,6 +52,9 @@ Rectangle {
                 cover: album.cover ? album.cover : ""
             });
         }
+        // UI-10: a cursor row exists from the first paint.
+        if (albums.count > 0 && (list.currentIndex < 0 || list.currentIndex >= albums.count))
+            list.currentIndex = 0;
     }
 
     Component.onCompleted: reload()
@@ -67,9 +70,9 @@ Rectangle {
     function handleAction(action) {
         if (albums.count === 0)
             return;
-        if (action === "move_up" || action === "scroll_up")
+        if (action === "move_up")
             list.currentIndex = Math.max(0, list.currentIndex - 1);
-        else if (action === "move_down" || action === "scroll_down")
+        else if (action === "move_down")
             list.currentIndex = Math.min(albums.count - 1, list.currentIndex + 1);
         else if (action === "enter")
             activateCurrent();
@@ -121,7 +124,9 @@ Rectangle {
                 anchors.verticalCenter: parent.verticalCenter
                 anchors.right: parent.right
                 anchors.rightMargin: root.width * 0.02
-                text: albums.count + " indexed"
+                // Order lives here now (UI-2 moved the hint strip out; UI-4
+                // keeps counts in the sidebar only).
+                text: "Order: " + Backend.albumOrder
                 color: Palette.onSurfaceVariant
                 font.pixelSize: root.height * 0.021
             }
@@ -151,7 +156,9 @@ Rectangle {
                 height: ListView.view ? ListView.view.height * 0.105 : 0
                 color: ListView.isCurrentItem
                     ? Palette.secondaryContainer
-                    : (index % 2 === 0 ? Palette.surface : Palette.surfaceContainerLowest)
+                    : (rowHover.hovered
+                        ? Palette.surfaceContainerHigh
+                        : (index % 2 === 0 ? Palette.surface : Palette.surfaceContainerLowest))
 
                 Behavior on color {
                     ColorAnimation {
@@ -169,7 +176,7 @@ Rectangle {
                     width: row.height * 0.78
                     height: row.height * 0.78
                     radius: Theme.radius
-                    color: rowHover.hovered ? Palette.primaryContainer : Palette.surfaceContainerHigh
+                    color: Palette.surfaceContainerHigh
                     clip: true
 
                     CoverImage {
@@ -187,11 +194,11 @@ Rectangle {
                     FadeText {
                         text: row.title
                         color: Palette.onSurface
-                        font.pixelSize: row.height * 0.24
+                        font.pixelSize: row.height * 0.26
                         animated: false
                     }
                     FadeText {
-                        text: row.artist + (row.year.length > 0 ? "  ·  " + row.year : "")
+                        text: row.artist + (row.year.length > 0 ? " · " + row.year : "")
                         color: Palette.onSurfaceVariant
                         font.pixelSize: row.height * 0.19
                         animated: false

@@ -28,8 +28,6 @@
 /// lands; for now the engine only classifies input.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Action {
-    ScrollDown,
-    ScrollUp,
     MoveLeft,
     MoveUp,
     MoveDown,
@@ -62,8 +60,6 @@ pub enum Action {
 impl Action {
     pub fn name(self) -> &'static str {
         match self {
-            Self::ScrollDown => "scroll_down",
-            Self::ScrollUp => "scroll_up",
             Self::MoveLeft => "move_left",
             Self::MoveUp => "move_up",
             Self::MoveDown => "move_down",

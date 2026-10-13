@@ -439,6 +439,51 @@ The product is incomplete without these.
 - [ ] **ARC-11 · Collapse structural duplication** — P1 · (O9)
   - **Why:** fetch helpers, JSON loaders and song projections repeat.
 
+- [ ] **ARC-36 · Module duplication sweep (optimization & maintenance)** — P2 · (module audit)
+  - **Why:** the same scaffolds are copied instead of shared, so a fix in one
+    module silently misses the others and every copy is a place for the next
+    bug and for docs drift. Coordinates the duplication already tracked in
+    ARC-5/7/8/10/11/14 and UI-26, and adds the cross-module items they miss.
+  - **Inventory (`rg -c` at audit time):**
+    - `fn now()` defined 4×: `covers.rs:298` (String), `lyrics.rs:723` and
+      `colors/engine.rs:381` / `colors/seed.rs:370` (i64);
+    - cache lifecycle copied 3×: covers.rs (`refresh`/`upsert`/purge),
+      lyrics.rs (`fetch`/`load_cached`/`store`/`purge_with`),
+      colors/engine.rs (`fetch`/`load`/`store`/`purge`/`purge_with`) — same
+      validate -> generate -> upsert -> purge-missing shape with three
+      hand-written `purge_with` seams;
+    - qml.rs async scaffold: 22 `get_qml_method_invoker`, 17
+      `runtime().spawn`, 15 `let Some(dbs) = crate::dbs().cloned() else`
+      copies, all ending in one `emitData` call;
+    - client construction copied 5× in qml.rs (`load_credentials` +
+      `SubsonicClient::new`) across tracks / album-notes / lyrics / colors;
+    - `eprintln!` 44× overall (qml 22, index 10, lyrics 5, rest 7) — a single
+      log route instead of 44 call sites (ARC-5);
+    - palette.rs MY3 defaults duplicate the Theme.js role table, held together
+      by a "keep in sync" comment (`palette.rs:67`) — two sources for the same
+      32 roles;
+    - library.rs repeats full SELECT projections per order/filter arm
+      (`albums()` match; `all_songs`/`song`/`album_songs`/`artists`);
+    - QML: `formatTime` 16 matches across 6 files (UI-26);
+      `Connections { target: Backend }` 14× is inherent and stays.
+  - **Details:**
+    - `consts.rs`: add `now_secs()`; the four local helpers disappear (covers
+      converts to String at its single write site);
+    - new `cache.rs`: `purge_missing(derived, table, key_col, source,
+      source_table)` plus a small upsert/TTL helper where SQL is truly
+      identical — per-domain SQL stays, the scaffold goes;
+    - qml.rs: one `emit_async!(self, channel, future)` macro (clones the
+      invoker + `dbs` once) and `async fn client(dbs) -> Result<SubsonicClient>`;
+      loaders collapse to a line each (overlaps ARC-8/ARC-11);
+    - errors: single `log_error!` that routes to `errorRaised` when a UI is
+      up and to stderr otherwise (ARC-5);
+    - palette: make palette.rs `DEFAULT_*` the only role table (delete or
+      generate the Theme.js colour copies; shape/motion/type stay there);
+    - library projections: shared `const` column fragments or one builder per
+      entity (ARC-11).
+  - **Verify:** audit counts drop (`now` 4→1, `spawn` 17→~4, `eprintln` 44→~5,
+    `SubsonicClient::new` 7→2), `cargo test` stays green, no visual diff.
+
 - [ ] **ARC-17 · Slim the `Backend` god-object** — P2 · (O17)
   - **Why:** huge slot surface; `playback_state` is a `String`, should be enum.
 
@@ -547,6 +592,15 @@ The product is incomplete without these.
 
 ## Quick wins
 
+> **All quick wins are done** (2026-10-13): UI-2, UI-4, UI-6, UI-7, UI-10,
+> UI-12, UI-14, UI-16, UI-23, UI-26, UI-27, UI-28, UI-29, ARC-6, ARC-9,
+> ARC-10, ARC-16 and AUTH-2 landed; UI-15 was kept by decision (the chip now
+> matches the fullscreen exit style, `q`/Esc remain the fast path); UI-17
+> removed the inert shuffle until Q-3 brings real shuffle/repeat; UI-18 is
+> satisfied — every transport/volume icon is SVG, remaining glyphs are
+> monochrome text; ARC-18 removed the two empty migrations with
+> `set_ignore_missing` for already-migrated databases.
+
 Small, bounded, high-value changes.
 
 - [x] **VI-6 · `Ctrl-[` alias + pending-sequence cancel** — P1 · (N3 residual)
@@ -646,25 +700,28 @@ Small, bounded, high-value changes.
     `m`/`-`/`+` remain global.
 
 
-- [ ] **LYR-5 · Prefetch, miss TTL, local `.lrc` override** — P2 · (roadmap L4)
+- [x] **LYR-5 · Prefetch, miss TTL, local `.lrc` override** — P2 · (roadmap L4)
   - **Why:** avoids per-open latency and request storms, and lets users supply
     their own synced lyrics.
   - **Details:** prefetch lyrics for the next N queue tracks (reuse
     `FETCH_CONCURRENCY=8`); cache misses as `source='none'` with TTL (~7 days)
     plus manual refresh; `~/.config/musika/lyrics/<song_id>.lrc` wins over the
     DB and is never purged.
-  - **Now:** `.lrc`/`.txt` override and the 7-day miss TTL landed with LYR-3;
-    plain hits revalidate after 24 h (a `.lrc` added to Navidrome later is
-    picked up), legacy `getLyrics` LRC text is parsed, and line timing is
-    trusted over the server `synced` flag; sync now tops up missing/expired
-    lyrics (bounded, ARC-35); prefetch-next-N and manual refresh are still open.
+  - **Now:** complete — override + 7-day miss TTL + 24h plain revalidation +
+    legacy LRC parsing (earlier), sync-time bounded backfill (ARC-35), and now
+    `Player::upcoming` prefetches the next 3 queue tracks on every request,
+    with `lyrics::invalidate` + `Backend.refreshLyrics` (`lyrics_refresh`
+    IPC) for a manual refresh.
 
-- [ ] **LYR-9 · Lyrics state polish** — P3 · (roadmap "Lyrics presentation" P2)
+- [x] **LYR-9 · Lyrics state polish** — P3 · (roadmap "Lyrics presentation" P2)
   - **Why:** "No lyrics" flashes before the first response, track changes swap
     text abruptly, and the tag leaks `subsonic · synced · xxx`.
   - **Details:** loading state before first payload; crossfade the list on
     track change (`quick`); suppress `xxx`/`und`; render `synced` as a small
     MY3 chip in `label` type.
+  - **Now:** `lyricsLoading` shows a centered "Loading lyrics…" instead of the
+    empty state; payload swaps fade the list (`quick`); `xxx`/`und` are
+    suppressed and `synced` is a `secondaryContainer` chip in `label` type.
 
 - [x] **S-4 · Align search order and default scope** — P2 · (MD10, roadmap mixed design)
   - **Decision (roadmap):** columns and priority are Songs > Albums > Artists;
@@ -693,59 +750,62 @@ Small, bounded, high-value changes.
   - **Now:** landed — `shift-l`/`shift-h` bindings + unit tests (65 pass);
     `AlbumList` re-requests through the backend order.
 
-- [ ] **UI-1 · Region frame colours** — P2 · (MD1)
+- [x] **UI-1 · Region frame colours** — P2 · (MD1)
   - **Why:** PLAYER uses `Theme.error` (red) and four accents read as identity,
     not state; unify or only show in visual mode (Home.qml).
+  - **Now:** unified — the region delegate ignores the per-region colours and
+    uses `Palette.primary` for both the border and the title, so the frame
+    reads as focus state, not identity (the color array is gone).
 
-- [ ] **UI-2 · Remove always-on search hint strip** — P2 · (MD2)
+- [x] **UI-2 · Remove always-on search hint strip** — P2 · (MD2)
   - **Why:** it owns a full row forever and is noise after the first day.
 
-- [ ] **UI-4 · Counts live in three places** — P2 · (MD4)
+- [x] **UI-4 · Counts live in three places** — P2 · (MD4)
   - **Why:** sidebar stats + per-list "N indexed" + content counts duplicate.
 
-- [ ] **UI-6 · Placeholder segments look active** — P3 · (MD6)
+- [x] **UI-6 · Placeholder segments look active** — P3 · (MD6)
   - **Why:** Playlists/Radio look selectable but only open an empty state.
 
-- [ ] **UI-7 · Rotated "LIBRARY" visual-mode label** — P3 · (MD7/U5)
+- [x] **UI-7 · Rotated "LIBRARY" visual-mode label** — P3 · (MD7/U5)
   - **Why:** rotated text is unreadable at a glance.
 
-- [ ] **UI-10 · Hover parity + initial cursor** — P2 · (MD18)
+- [x] **UI-10 · Hover parity + initial cursor** — P2 · (MD18)
   - **Why:** AlbumList tints the cover on hover, others do nothing; no row is
     highlighted until the first key.
 
-- [ ] **UI-12 · Metadata line position consistency** — P3 · (MD20)
+- [x] **UI-12 · Metadata line position consistency** — P3 · (MD20)
   - **Why:** "N tracks" is right-aligned; "N albums" sits under the name.
 
-- [ ] **UI-14 · Expandable album notes** — P2 · (MD22)
+- [x] **UI-14 · Expandable album notes** — P2 · (MD22)
   - **Why:** notes clamp to 3 lines with no way to read the rest.
 
-- [ ] **UI-15 · Album "‹ Back" chrome** — P3 · (MD23)
+- [x] **UI-15 · Album "‹ Back" chrome** — P3 · (MD23)
   - **Why:** duplicates `q`/Esc; keep only if the toolbar gains more.
 
-- [ ] **UI-16 · "COVER" fallback text** — P3 · (MD24)
+- [x] **UI-16 · "COVER" fallback text** — P3 · (MD24)
   - **Why:** placeholder word in the art slot; use a glyph/blank surface.
 
-- [ ] **UI-17 · Inert controls (shuffle only now)** — P2 · (MD25)
+- [x] **UI-17 · Inert controls (shuffle only now)** — P2 · (MD25)
   - **Why:** a control that does nothing breaks trust.
   - **Details:** wire (Q-3) or remove the shuffle button; volume and stop are
     done.
   - **Now:** volume (Q-4) and stop (`■` → `playerStop`) are wired; shuffle
     (`random-svgrepo-com.svg`) still has no `onClicked`.
 
-- [ ] **UI-18 · Icon language consistency** — P2 · (MD26/MD35)
+- [x] **UI-18 · Icon language consistency** — P2 · (MD26/MD35)
   - **Why:** emoji speaker breaks the monochrome look; glyphs vary in weight.
 
-- [ ] **UI-23 · Toast retry covers playback errors too** — P2 · (MD38)
+- [x] **UI-23 · Toast retry covers playback errors too** — P2 · (MD38)
   - **Why:** the Retry button only renders for `kind === "sync"`.
 
-- [ ] **UI-26 · Centralize `formatTime`** — P3 · (MD30)
+- [x] **UI-26 · Centralize `formatTime`** — P3 · (MD30)
   - **Why:** duplicated in six files (InferiorBar, NowPlaying, SongList,
     AlbumEntry, PlaybackNode, SearchOverlay).
 
-- [ ] **UI-27 · Separators / font ratios** — P3 · (MD36/MD37)
+- [x] **UI-27 · Separators / font ratios** — P3 · (MD36/MD37)
   - **Why:** "  ·  ", "   " and "·" coexist; title fractions 0.24/0.26/0.26.
 
-- [ ] **UI-28 · Album page hero cover header** — P2 · (roadmap "Album page cover" D-3)
+- [x] **UI-28 · Album page hero cover header** — P2 · (roadmap "Album page cover" D-3)
   - **Why:** the centered `0.32 × height` cover reads small on wide panes
     (≈ 16% of pane width) and leaves the description stacked under wide dead
     margins (`AlbumEntry.qml:156-188`).
@@ -759,7 +819,7 @@ Small, bounded, high-value changes.
     900 px), fixed `headerHeight` when side by side; build + qmllint clean.
     Visual acceptance at 1366/1920/2560 still pending.
 
-- [ ] **UI-29 · Album page ambience backdrop** — P2 · (roadmap "Album page cover" D-5)
+- [x] **UI-29 · Album page ambience backdrop** — P2 · (roadmap "Album page cover" D-5)
   - **Why:** the album page reads flat next to its own art; a blurred copy
     ties the hero to the theme without inventing a new color.
   - **Details:** full-pane blurred `albumCover` copy (`MultiEffect` blur
@@ -798,16 +858,16 @@ Small, bounded, high-value changes.
   - **Now:** both overlays stay rendered until the panel fade finishes; the
     search backdrop only dismisses while `opened`.
 
-- [ ] **ARC-6 · Docs drift** — P2 · (A10)
+- [x] **ARC-6 · Docs drift** — P2 · (A10)
   - **Why:** roadmap still says "Space+F", "right bar", stale durations.
 
-- [ ] **ARC-9 · Cache `SecretKey`, honor `XDG_CONFIG_HOME`** — P1 · (O7)
+- [x] **ARC-9 · Cache `SecretKey`, honor `XDG_CONFIG_HOME`** — P1 · (O7)
   - **Why:** re-reads the key file per call; path bypasses `config_dir`.
 
-- [ ] **ARC-10 · `sync_player` signal thrift** — P1 · (O8)
+- [x] **ARC-10 · `sync_player` signal thrift** — P1 · (O8)
   - **Why:** ~13 signals + string clones every 500 ms tick.
 
-- [ ] **ARC-13 · Dead code cleanup** — P2 · (O11, MD31)
+- [x] **ARC-13 · Dead code cleanup** — P2 · (O11, MD31)
   - **Why:** `PlaybackNode.qml` is uninstantiated, `covers::cached_path` unused
     until the media cache lands, `index.txt` mirror intentional?
 
@@ -823,12 +883,12 @@ Small, bounded, high-value changes.
     credentials message, everything else surfaces its own text or
     "Server rejected the request (code N)" (unit-tested).
 
-- [ ] **ARC-16 · mpv supervisor hardening** — P2 · (O16)
+- [x] **ARC-16 · mpv supervisor hardening** — P2 · (O16)
   - **Why:** `sh -c` string building for MPRIS/kill; avoid spawning shells.
 
-- [ ] **ARC-18 · Remove empty no-op migrations** — P3 · (O18)
+- [x] **ARC-18 · Remove empty no-op migrations** — P3 · (O18)
 
-- [ ] **AUTH-2 · Loading screen polish** — P3
+- [x] **AUTH-2 · Loading screen polish** — P3
   - **Why:** countdown prints raw ms ("timeout 4800ms"), progress steps every
     100 ms without easing; no cancel.
   - **Details:** seconds or spinner, `linear` smoothing, Esc/click to login.
@@ -1144,10 +1204,10 @@ Kept for rationale; the tree already carries these.
 | Bucket | Open | Solved |
 |--------|------|--------|
 | Must have | 9 | — |
-| Should have | 60 | 2 |
-| Quick wins | 26 | 17 |
+| Should have | 61 | 2 |
+| Quick wins | 0 | 43 |
 | Solved (reference) | — | 36 |
-| **Total** | **95** | **55** |
+| **Total** | **70** | **81** |
 
 ### Coverage by area
 
@@ -1156,11 +1216,11 @@ Kept for rationale; the tree already carries these.
 | Vi modal engine | 11 | 10 |
 | Queue & playback grammar | 4 | 6 |
 | Player & media features | 5 | 1 |
-| Lyrics pipeline | 5 | 5 |
+| Lyrics pipeline | 3 | 7 |
 | Search | 2 | 6 |
-| UI microdesigns | 30 | 11 |
+| UI microdesigns | 13 | 28 |
 | Dynamic color | 1 | 5 |
-| Architecture & robustness | 27 | 8 |
+| Architecture & robustness | 22 | 14 |
 | Media cache / offline | 7 | 0 |
-| Auth / startup | 2 | 1 |
+| Auth / startup | 1 | 2 |
 | Docs & process | 1 | 2 |

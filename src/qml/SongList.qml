@@ -29,29 +29,27 @@ Rectangle {
         id: songs
     }
 
-    function formatTime(seconds) {
-        var total = Math.max(0, Math.floor(seconds || 0));
-        return Math.floor(total / 60) + ":" + ("0" + (total % 60)).slice(-2);
-    }
-
     function reload() {
         Backend.requestSongs();
     }
 
     function apply(payload) {
         songs.clear();
-        var list = JSON.parse(payload);
-        for (var i = 0; i < list.length; i++) {
-            var song = list[i];
+        var rows = JSON.parse(payload);
+        for (var i = 0; i < rows.length; i++) {
+            var song = rows[i];
             songs.append({
                 songId: song.id,
                 title: song.title,
                 artist: song.artist ? song.artist : "",
                 album: song.album ? song.album : "",
-                duration: formatTime(song.duration),
+                duration: Theme.formatTime(song.duration),
                 cover: song.cover ? song.cover : ""
             });
         }
+        // UI-10: a cursor row exists from the first paint.
+        if (songs.count > 0 && (list.currentIndex < 0 || list.currentIndex >= songs.count))
+            list.currentIndex = 0;
     }
 
     function activateCurrent() {
@@ -61,16 +59,6 @@ Rectangle {
     }
 
     function handleAction(action) {
-        // Ctrl-N / Ctrl-P skip tracks (VI-10); j/k keeps the list cursor.
-        if (action === "scroll_up") {
-            Backend.playerPrevious();
-            return;
-        }
-        if (action === "scroll_down") {
-            Backend.playerNext();
-            return;
-        }
-
         if (songs.count === 0)
             return;
         if (action === "move_up")
@@ -120,14 +108,6 @@ Rectangle {
                 font.pixelSize: root.height * 0.035
                 font.bold: true
             }
-            FadeText {
-                anchors.verticalCenter: parent.verticalCenter
-                anchors.right: parent.right
-                anchors.rightMargin: root.width * 0.02
-                text: songs.count + " indexed"
-                color: Palette.onSurfaceVariant
-                font.pixelSize: root.height * 0.021
-            }
         }
 
         ListView {
@@ -154,7 +134,9 @@ Rectangle {
                 height: ListView.view ? ListView.view.height * 0.09 : 0
                 color: ListView.isCurrentItem
                     ? Palette.secondaryContainer
-                    : (index % 2 === 0 ? Palette.surface : Palette.surfaceContainerLowest)
+                    : (rowHover.hovered
+                        ? Palette.surfaceContainerHigh
+                        : (index % 2 === 0 ? Palette.surface : Palette.surfaceContainerLowest))
 
                 Behavior on color {
                     ColorAnimation {
@@ -194,7 +176,7 @@ Rectangle {
                         animated: false
                     }
                     FadeText {
-                        text: row.artist + (row.album.length > 0 ? "  ·  " + row.album : "")
+                        text: row.artist + (row.album.length > 0 ? " · " + row.album : "")
                         color: Palette.onSurfaceVariant
                         font.pixelSize: row.height * 0.2
                         animated: false
@@ -212,6 +194,7 @@ Rectangle {
                 }
 
                 HoverHandler {
+                    id: rowHover
                     cursorShape: Qt.PointingHandCursor
                 }
 

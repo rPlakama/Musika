@@ -37,15 +37,18 @@ Rectangle {
 
     function apply(payload) {
         artists.clear();
-        var list = JSON.parse(payload);
-        for (var i = 0; i < list.length; i++) {
-            var artist = list[i];
+        var rows = JSON.parse(payload);
+        for (var i = 0; i < rows.length; i++) {
+            var artist = rows[i];
             artists.append({
                 artistName: artist.name,
                 albumCount: String(artist.album_count),
                 cover: artist.cover ? artist.cover : ""
             });
         }
+        // UI-10: a cursor row exists from the first paint.
+        if (artists.count > 0 && (list.currentIndex < 0 || list.currentIndex >= artists.count))
+            list.currentIndex = 0;
     }
 
     function activateCurrent() {
@@ -57,9 +60,9 @@ Rectangle {
     function handleAction(action) {
         if (artists.count === 0)
             return;
-        if (action === "move_up" || action === "scroll_up")
+        if (action === "move_up")
             list.currentIndex = Math.max(0, list.currentIndex - 1);
-        else if (action === "move_down" || action === "scroll_down")
+        else if (action === "move_down")
             list.currentIndex = Math.min(artists.count - 1, list.currentIndex + 1);
         else if (action === "enter")
             activateCurrent();
@@ -104,14 +107,6 @@ Rectangle {
                 font.pixelSize: root.height * 0.035
                 font.bold: true
             }
-            FadeText {
-                anchors.verticalCenter: parent.verticalCenter
-                anchors.right: parent.right
-                anchors.rightMargin: root.width * 0.02
-                text: artists.count + " indexed"
-                color: Palette.onSurfaceVariant
-                font.pixelSize: root.height * 0.021
-            }
         }
 
         ListView {
@@ -135,7 +130,9 @@ Rectangle {
                 height: ListView.view ? ListView.view.height * 0.105 : 0
                 color: ListView.isCurrentItem
                     ? Palette.secondaryContainer
-                    : (index % 2 === 0 ? Palette.surface : Palette.surfaceContainerLowest)
+                    : (rowHover.hovered
+                        ? Palette.surfaceContainerHigh
+                        : (index % 2 === 0 ? Palette.surface : Palette.surfaceContainerLowest))
 
                 Behavior on color {
                     ColorAnimation {
@@ -174,15 +171,22 @@ Rectangle {
                         font.pixelSize: row.height * 0.26
                         animated: false
                     }
-                    FadeText {
-                        text: row.albumCount + " albums"
-                        color: Palette.onSurfaceVariant
-                        font.pixelSize: row.height * 0.2
-                        animated: false
-                    }
+                }
+
+                // UI-12: counts share the right-aligned column, like "N tracks"
+                // in the album list.
+                FadeText {
+                    anchors.verticalCenter: parent.verticalCenter
+                    anchors.right: parent.right
+                    anchors.rightMargin: row.viewWidth * 0.02
+                    text: row.albumCount + " albums"
+                    color: Palette.onSurfaceVariant
+                    font.pixelSize: row.height * 0.19
+                    animated: false
                 }
 
                 HoverHandler {
+                    id: rowHover
                     cursorShape: Qt.PointingHandCursor
                 }
 

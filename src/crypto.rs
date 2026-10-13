@@ -118,24 +118,35 @@ impl SecretKey {
     }
 }
 
+/// Process-wide key: the file is read once per run (ARC-9).
+static SECRET_KEY: std::sync::OnceLock<SecretKey> = std::sync::OnceLock::new();
+
+fn secret_key() -> Result<&'static SecretKey> {
+    if let Some(key) = SECRET_KEY.get() {
+        return Ok(key);
+    }
+    let key = SecretKey::load()?;
+    let _ = SECRET_KEY.set(key);
+    Ok(SECRET_KEY.get().expect("secret key just initialised"))
+}
+
 pub fn encrypt_password(password: &str) -> Result<String> {
-    SecretKey::load()?.encrypt(password)
+    secret_key()?.encrypt(password)
 }
 
 pub fn decrypt_password(encoded: &str) -> Result<String> {
-    SecretKey::load()?.decrypt(encoded)
+    secret_key()?.decrypt(encoded)
 }
 
 fn key_path() -> Result<PathBuf> {
     if let Ok(path) = std::env::var("MUSIKA_KEY_FILE") {
-        return Ok(PathBuf::from(path));
+        if !path.is_empty() {
+            return Ok(PathBuf::from(path));
+        }
     }
 
-    let home = std::env::var("HOME").context("HOME is not set")?;
-    Ok(PathBuf::from(home)
-        .join(".config")
-        .join("musika")
-        .join("key"))
+    // Honor XDG_CONFIG_HOME through the shared config-dir helper (ARC-9).
+    Ok(crate::db::config_dir()?.join("key"))
 }
 
 fn write_private(path: &Path, data: &[u8]) -> Result<()> {

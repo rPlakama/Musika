@@ -153,8 +153,8 @@ Rectangle {
             IconButton {
                 Layout.preferredWidth: root.height * 0.46
                 Layout.preferredHeight: root.height * 0.46
-                symbol: "⤨"
-                symbolRatio: 0.55
+                iconSource: "qrc:/app/icons/random-svgrepo-com.svg"
+                symbolRatio: 0.65
             }
             IconButton {
                 id: previousButton

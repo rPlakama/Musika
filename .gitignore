@@ -3,3 +3,6 @@ result
 result/
 .qmlls.ini
 .env
+noctalia/
+*.md
+!TASKLISTMAJOR.md

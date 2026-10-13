@@ -335,7 +335,44 @@ work is); solved/partial tasks add **Now** with the current evidence.
 - [ ] **UI-27 · Separators / font ratios** — P3 · (MD36/MD37)
   - **Why:** "  ·  ", "   " and "·" coexist; title fractions 0.24/0.26/0.26.
 
-## 7. Architecture & robustness (`ARC`)
+## 7. Dynamic color (`THM`) — roadmap "Dynamic color" design
+
+- [ ] **THM-1 · Engine spike: `material-colors` crate, cover → dark scheme** — P2 · (roadmap T0)
+  - **Why:** matugen itself is GPL-2.0, but its engine (`material-colors`) is
+    MIT/Apache-2.0; embedding it avoids a runtime CLI and keeps the licence
+    clean.
+  - **Details:** add `material-colors` (+ decode); replicate matugen's pipeline
+    (resize 112, QuantizerCelebi @128, CAM16 chroma >= 5, `Score`, TonalSpot,
+    dark scheme); fixture-image unit test asserts roles; no DB/QML yet.
+- [ ] **THM-2 · DB6 `colors.db` + hash invalidation + purge-on-sync** — P2 · (roadmap T1)
+  - **Why:** generation is CPU work; the cache needs its own pool and must
+    re-run when the cover bytes change.
+  - **Details:** `migrations_colors` (`cover_color(cover_art PK, cover_hash,
+    scheme, seed, dark JSON, generator, generated_at)` + `colors_meta`);
+    `Dbs.colors` + `colors_path()`; read compares `covers.hash`; post-sync pass
+    purges rows whose cover id vanished from covers.db.
+- [ ] **THM-3 · `requestColors` play-scoped generation + `dataReady("colors")`** — P2 · (roadmap T2)
+  - **Why:** only the playing cover should cost decode+quantize; a library-wide
+    sweep is request amplification and must never happen.
+  - **Details:** `Backend.requestColors()` mirrors `requestLyrics`; triggered on
+    `currentCoverArt` change while playing (coalesced; one in-flight job per
+    cover; stale-guard on cover art); payload
+    `{cover_art, cover_hash, scheme, dark}`; static fallback on failure.
+- [ ] **THM-4 · `Palette` singleton + QML role sweep + colour motion** — P2 · (roadmap T3)
+  - **Why:** `Theme.js` is a static pragma-library, so dynamic roles need a
+    notifying singleton; a cover swap should recolor, not repaint.
+  - **Details:** `Palette.qml` (pragma Singleton) defaults from Theme.js,
+    `apply(payload)` from the `colors` channel; migrate `Theme.<role>` to
+    `Palette.<role>`; `micro`/`standard` colour behaviour; error/region/mode
+    roles stay semantic, state layers stay fixed overlays.
+- [ ] **THM-5 · Smart variant + contrast/lightness + manual refresh** — P3 · (roadmap T4)
+  - **Why:** grayscale covers should not get a loud accent; power users want
+    contrast control and a way to force regeneration.
+  - **Details:** port `smart_scheme` colorfulness mapping (>70 vibrant, 20-70
+    tonal spot, 6-20 neutral, <6 monochrome); settings for scheme/contrast;
+    `:theme refresh` (or IPC) deletes the current row and re-requests.
+
+## 8. Architecture & robustness (`ARC`)
 
 - [ ] **ARC-1 · Cross-DB coherence repair path** — P1 · (A3)
   - **Why:** library/search/covers writes can diverge on interruption.
@@ -384,8 +421,43 @@ work is); solved/partial tasks add **Now** with the current evidence.
   - **Now:** mpv receives the stream URL over the IPC socket, not argv.
 - [x] **ARC-23 · Palette race + corpus churn** — P2 · (O14/O15)
   - **Now:** FTS5 path replaced the tmpfs corpus entirely.
+- [ ] **ARC-24 · Shared sync epoch across the five DBs** — P1 · (DB analysis)
+  - **Why:** only library.db knows when it last synced; search/covers/lyrics
+    can silently lag after a failed step and nothing can detect it.
+  - **Details:** `meta(key, value)` in every DB (`search_meta`, `covers_meta`
+    to match library/lyrics); publish `catalog_epoch` last in the sync
+    pipeline; on a failed step publish no epoch and skip destructive purges;
+    the UI can flag stale derived data.
+- [ ] **ARC-25 · Refuse destructive replace/purge on partial fetches** — P1 · (DB analysis)
+  - **Why:** a failed artist/album fetch is logged and skipped, then
+    `library::replace` wipes the tables and covers/lyrics purges evict the
+    missing ids — one HTTP hiccup deletes cached content.
+  - **Details:** fail the sync or carry failed ids forward before `replace`;
+    audit `getIndexes(ifModifiedSince)` partial-index semantics; run cover/
+    lyric purges only when the fetch was complete.
+- [ ] **ARC-26 · ATTACH-based purges/joins** — P2 · (DB analysis)
+  - **Why:** `lyrics::purge_with` and `covers::refresh` materialize every id
+    in Rust and cross-DB lookups are duplicated (`song_cover_ids`,
+    `COALESCE(al.cover_art, s.cover_art)`).
+  - **Details:** dedicated maintenance connection that ATTACHes the DBs;
+    anti-join purge (`NOT IN (SELECT id FROM lib.songs)`) and cross-DB
+    resolution in SQL; keep the per-DB pools for normal I/O.
+- [ ] **ARC-27 · Snapshot credentials + cover URL map** — P2 · (DB analysis)
+  - **Why:** `load_credentials` decrypts on every call and `covers::url_map`
+    scans covers.db on seven request paths (list load, album open, play,
+    search, queue).
+  - **Details:** rebuild an in-memory `{credentials, cover_urls}` snapshot
+    when the catalog epoch changes; check `is_file()` before publishing file
+    URLs; share the stream client instead of re-decrypting.
+- [ ] **ARC-28 · Disposable-DB repair policy** — P2 · (DB analysis)
+  - **Why:** `db::init` failure panics even though four of five DBs are
+    re-fetchable; `index.txt` is written non-atomically; `syncLibrary` has no
+    backend re-entrancy guard.
+  - **Details:** recreate derived DBs on corruption, mark them dirty for
+    resync, keep boot alive when only derived stores fail; tmp+rename the
+    mirror; reject a second concurrent sync.
 
-## 8. Media cache / offline (`CACHE`) — roadmap design
+## 9. Media cache / offline (`CACHE`) — roadmap design
 
 - [ ] **CACHE-1 · DB4 `media.db` + `media/` blobs** — P2 · (roadmap Media cache)
   - **Why:** audio is never stored; playback dies without network.
@@ -407,7 +479,7 @@ work is); solved/partial tasks add **Now** with the current evidence.
   - **Details:** per-item state (cached/partial/queued) + used-bytes vs cap in
     the status bar; offline filter.
 
-## 9. Auth / startup (`AUTH`) — current WIP
+## 10. Auth / startup (`AUTH`) — current WIP
 
 - [x] **AUTH-1 · Startup loading screen for cached login** — P2
   - **Now (working tree):** `loginPending`/`loginRequired` signals; 5 s ping
@@ -420,7 +492,7 @@ work is); solved/partial tasks add **Now** with the current evidence.
   - **Why:** login surface predates the MY3 roles (no container/error tokens,
     clamped type); align with Theme.
 
-## 10. Docs & process (`DOC`)
+## 11. Docs & process (`DOC`)
 
 - [ ] **DOC-1 · Keep design docs in sync with the tree** — P2 · (A10)
   - **Why:** CRITIQUE/roadmap/materialyou3 describe pre-implementation states.
@@ -441,7 +513,8 @@ work is); solved/partial tasks add **Now** with the current evidence.
 | Lyrics pipeline | 6 | 4 |
 | Search | 2 | 3 |
 | UI microdesigns | 22 | 5 |
-| Architecture | 18 | 5 |
+| Dynamic color | 5 | 0 |
+| Architecture | 23 | 5 |
 | Media cache | 7 | 0 |
 | Auth/startup | 2 | 1 |
 | Docs | 2 | 0 |

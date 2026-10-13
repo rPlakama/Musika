@@ -101,86 +101,166 @@ Rectangle {
         anchors.leftMargin: root.width * 0.013
         anchors.rightMargin: root.width * 0.013
 
-        // Current track (left).
+        // Three explicit zones share the bar and can never overlap: the side
+        // zones hold equal preferred widths (so the transport stays dead
+        // centre), every title/composer lives in its own bounded rectangle and
+        // elides with "…" when it cannot fit. The stop control is gone;
+        // `Backend.playerStop` stays for MPRIS, which requires the verb.
         RowLayout {
-            anchors.left: parent.left
-            anchors.verticalCenter: parent.verticalCenter
-            spacing: root.height * 0.12
+            anchors.fill: parent
+            spacing: root.width * 0.013
 
-            Rectangle {
-                Layout.preferredWidth: root.height * 0.62
-                Layout.preferredHeight: root.height * 0.62
-                radius: Theme.radius
-                color: Palette.primaryContainer
-                clip: true
+            // Left zone: cover + title/composer boxes.
+            RowLayout {
+                Layout.fillWidth: true
+                Layout.preferredWidth: root.width * 0.32
+                Layout.alignment: Qt.AlignVCenter
+                spacing: root.height * 0.12
 
-                Image {
-                    anchors.fill: parent
-                    source: Backend.currentCoverUrl
-                    fillMode: Image.PreserveAspectCrop
-                    asynchronous: true
-                    cache: false
-                    visible: status === Image.Ready
+                Rectangle {
+                    Layout.preferredWidth: root.height * 0.62
+                    Layout.preferredHeight: root.height * 0.62
+                    radius: Theme.radius
+                    color: Palette.primaryContainer
+                    clip: true
+
+                    Image {
+                        anchors.fill: parent
+                        source: Backend.currentCoverUrl
+                        fillMode: Image.PreserveAspectCrop
+                        asynchronous: true
+                        cache: false
+                        visible: status === Image.Ready
+                    }
+                }
+
+                ColumnLayout {
+                    Layout.fillWidth: true
+                    Layout.alignment: Qt.AlignVCenter
+                    spacing: root.height * 0.03
+
+                    Rectangle {
+                        Layout.fillWidth: true
+                        Layout.preferredHeight: titleText.implicitHeight
+                        color: "transparent"
+
+                        FadeText {
+                            id: titleText
+                            anchors.fill: parent
+                            text: Backend.currentTitle.length > 0 ? Backend.currentTitle : "Nothing playing"
+                            color: Palette.onSurface
+                            font.pixelSize: root.height * 0.18
+                            elide: Text.ElideRight
+                            animated: false
+                        }
+                    }
+
+                    Rectangle {
+                        Layout.fillWidth: true
+                        Layout.preferredHeight: artistText.implicitHeight
+                        color: "transparent"
+
+                        FadeText {
+                            id: artistText
+                            anchors.fill: parent
+                            text: Backend.currentArtist
+                            color: Palette.onSurfaceVariant
+                            font.pixelSize: root.height * 0.15
+                            elide: Text.ElideRight
+                            animated: false
+                        }
+                    }
                 }
             }
 
-            Column {
+            // Centre zone: transport rectangles (previous, pause/play, skip).
+            RowLayout {
                 Layout.alignment: Qt.AlignVCenter
-                spacing: root.height * 0.03
+                spacing: root.height * 0.05
+
+                IconButton {
+                    id: previousButton
+                    Layout.preferredWidth: root.height * 0.46
+                    Layout.preferredHeight: root.height * 0.46
+                    iconSource: "qrc:/app/icons/skip-previous-solid-svgrepo-com.svg"
+                    symbolRatio: 0.9
+                    onClicked: Backend.playerPrevious()
+                }
+                IconButton {
+                    Layout.preferredWidth: root.height * 0.56
+                    Layout.preferredHeight: root.height * 0.56
+                    symbolRatio: 0.6
+                    iconSource: Backend.playbackState === "playing"
+                        ? "qrc:/app/icons/pause-svgrepo-com.svg"
+                        : "qrc:/app/icons/play-1001-svgrepo-com.svg"
+                    symbolColor: Theme.iconStrong
+                    onClicked: Backend.playerToggle()
+                }
+                IconButton {
+                    id: nextButton
+                    Layout.preferredWidth: root.height * 0.46
+                    Layout.preferredHeight: root.height * 0.46
+                    iconSource: "qrc:/app/icons/skip-next-circle-solid-svgrepo-com.svg"
+                    symbolRatio: 0.9
+                    onClicked: Backend.playerNext()
+                }
+            }
+
+            // Right zone: elapsed/duration + volume, right-aligned; the time
+            // box shrinks (elides) before the volume cluster can collide.
+            RowLayout {
+                Layout.fillWidth: true
+                Layout.preferredWidth: root.width * 0.32
+                Layout.alignment: Qt.AlignVCenter
+                spacing: root.height * 0.12
 
                 FadeText {
-                    text: Backend.currentTitle.length > 0 ? Backend.currentTitle : "Nothing playing"
-                    color: Palette.onSurface
-                    font.pixelSize: root.height * 0.18
-                    animated: false
-                }
-                FadeText {
-                    text: Backend.currentArtist
+                    Layout.fillWidth: true
+                    Layout.alignment: Qt.AlignVCenter | Qt.AlignRight
+                    text: Theme.formatTime(Backend.position) + " / " + Theme.formatTime(Backend.duration)
                     color: Palette.onSurfaceVariant
                     font.pixelSize: root.height * 0.15
+                    horizontalAlignment: Text.AlignRight
+                    elide: Text.ElideRight
                     animated: false
                 }
-            }
-        }
 
-        // Transport, centred on the bar: play/pause is the visual anchor.
-        RowLayout {
-            anchors.horizontalCenter: parent.horizontalCenter
-            anchors.verticalCenter: parent.verticalCenter
-            spacing: root.height * 0.05
+                IconButton {
+                    Layout.preferredWidth: root.height * 0.34
+                    Layout.preferredHeight: root.height * 0.34
+                    iconSource: root.volumeIcon()
+                    symbolRatio: 0.95
+                    onClicked: Backend.playerToggleMute()
+                }
 
-            IconButton {
-                id: previousButton
-                Layout.preferredWidth: root.height * 0.46
-                Layout.preferredHeight: root.height * 0.46
-                iconSource: "qrc:/app/icons/skip-previous-solid-svgrepo-com.svg"
-                symbolRatio: 0.9
-                onClicked: Backend.playerPrevious()
-            }
-            IconButton {
-                Layout.preferredWidth: root.height * 0.56
-                Layout.preferredHeight: root.height * 0.56
-                symbolRatio: 0.6
-                iconSource: Backend.playbackState === "playing"
-                    ? "qrc:/app/icons/pause-svgrepo-com.svg"
-                    : "qrc:/app/icons/play-1001-svgrepo-com.svg"
-                symbolColor: Theme.iconStrong
-                onClicked: Backend.playerToggle()
-            }
-            IconButton {
-                id: nextButton
-                Layout.preferredWidth: root.height * 0.46
-                Layout.preferredHeight: root.height * 0.46
-                iconSource: "qrc:/app/icons/skip-next-circle-solid-svgrepo-com.svg"
-                symbolRatio: 0.9
-                onClicked: Backend.playerNext()
-            }
-            IconButton {
-                Layout.preferredWidth: root.height * 0.46
-                Layout.preferredHeight: root.height * 0.46
-                symbol: "■"
-                symbolRatio: 0.5
-                onClicked: Backend.playerStop()
+                Rectangle {
+                    id: volumeTrack
+                    Layout.preferredWidth: root.width * 0.07
+                    Layout.preferredHeight: Math.max(2, root.height * 0.05)
+                    color: Palette.outlineVariant
+                    radius: Theme.radius
+
+                    Rectangle {
+                        width: parent.width * Math.max(0, Math.min(1, Backend.volume / 100))
+                        height: parent.height
+                        radius: Theme.radius
+                        color: Backend.muted ? Palette.outline : Palette.primary
+
+                        Behavior on width {
+                            NumberAnimation { duration: Theme.motion.quick; easing.type: Easing.Linear }
+                        }
+                    }
+
+                    MouseArea {
+                        anchors.fill: parent
+                        cursorShape: Qt.PointingHandCursor
+                        onPressed: (mouse) => Backend.playerSetVolume(Math.max(0, Math.min(1, mouse.x / width)) * 100)
+                        onPositionChanged: (mouse) => {
+                            if (pressed)
+                                Backend.playerSetVolume(Math.max(0, Math.min(1, mouse.x / width)) * 100);
+                        }
+                    }
+                }
             }
         }
 
@@ -193,57 +273,6 @@ Rectangle {
                     nextButton.press();
                 else
                     previousButton.press();
-            }
-        }
-
-        // Time and volume (right).
-        RowLayout {
-            anchors.right: parent.right
-            anchors.verticalCenter: parent.verticalCenter
-            spacing: root.height * 0.12
-
-            FadeText {
-                text: Theme.formatTime(Backend.position) + " / " + Theme.formatTime(Backend.duration)
-                color: Palette.onSurfaceVariant
-                font.pixelSize: root.height * 0.15
-                animated: false
-            }
-
-            IconButton {
-                Layout.preferredWidth: root.height * 0.34
-                Layout.preferredHeight: root.height * 0.34
-                iconSource: root.volumeIcon()
-                symbolRatio: 0.95
-                onClicked: Backend.playerToggleMute()
-            }
-
-            Rectangle {
-                id: volumeTrack
-                Layout.preferredWidth: root.width * 0.07
-                Layout.preferredHeight: Math.max(2, root.height * 0.05)
-                color: Palette.outlineVariant
-                radius: Theme.radius
-
-                Rectangle {
-                    width: parent.width * Math.max(0, Math.min(1, Backend.volume / 100))
-                    height: parent.height
-                    radius: Theme.radius
-                    color: Backend.muted ? Palette.outline : Palette.primary
-
-                    Behavior on width {
-                        NumberAnimation { duration: Theme.motion.quick; easing.type: Easing.Linear }
-                    }
-                }
-
-                MouseArea {
-                    anchors.fill: parent
-                    cursorShape: Qt.PointingHandCursor
-                    onPressed: (mouse) => Backend.playerSetVolume(Math.max(0, Math.min(1, mouse.x / width)) * 100)
-                    onPositionChanged: (mouse) => {
-                        if (pressed)
-                            Backend.playerSetVolume(Math.max(0, Math.min(1, mouse.x / width)) * 100);
-                    }
-                }
             }
         }
     }

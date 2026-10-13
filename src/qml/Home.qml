@@ -353,7 +353,7 @@ Item {
 
                             VectorImage {
                                 anchors.centerIn: parent
-                                source: "qrc:/app/icons/arrow-left-svgrepo-com.svg"
+                                source: "qrc:/app/icons/arrow-right-svgrepo-com.svg"
                                 preferredRendererType: VectorImage.CurveRenderer
                                 width: parent.width * 0.85
                                 height: width

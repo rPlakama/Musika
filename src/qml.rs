@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use qtbridge::{QmlMethodInvoker, QmlObject, qobject};
@@ -27,6 +28,7 @@ pub struct Backend {
     current_artist: String,
     current_album: String,
     current_cover_art: String,
+    current_cover_url: String,
     playback_state: String,
     position: f64,
     duration: f64,
@@ -105,6 +107,11 @@ impl Backend {
         Notify = current_cover_art_changed
     );
     qproperty!(
+        "currentCoverUrl",
+        Member = current_cover_url,
+        Notify = current_cover_url_changed
+    );
+    qproperty!(
         "playbackState",
         Member = playback_state,
         Notify = playback_state_changed
@@ -170,6 +177,12 @@ impl Backend {
     #[qsignal]
     fn current_cover_art_changed(&mut self);
     #[qsignal]
+    fn current_cover_url_changed(&mut self);
+    #[qsignal(qml_name = "dataReady")]
+    fn data_ready(&mut self, channel: String, payload: String);
+    #[qsignal(qml_name = "errorRaised")]
+    fn error_raised(&mut self, kind: String, message: String);
+    #[qsignal]
     fn playback_state_changed(&mut self);
     #[qsignal]
     fn position_changed(&mut self);
@@ -181,6 +194,8 @@ impl Backend {
     fn queue_length_changed(&mut self);
     #[qsignal]
     fn library_changed(&mut self);
+    #[qsignal(qml_name = "focusMain")]
+    fn focus_main(&mut self);
 
     #[qslot]
     fn login(&mut self) {
@@ -283,8 +298,8 @@ impl Backend {
 
     /// Forwards a raw Qt key event to the keybind engine.
     ///
-    /// Returns the action name when a binding fires, otherwise an empty string
-    /// (the token was part of a sequence or unbound).
+    /// Returns the action name when a binding fires, `"PENDING"` when more
+    /// input (or a timeout) is needed, otherwise an empty string.
     #[qslot(qml_name = "keyEvent")]
     fn key_event(&mut self, key: i32, modifiers: i32) -> String {
         let Some(token) = crate::keybind::token_from_qt(key, modifiers) else {
@@ -293,6 +308,16 @@ impl Backend {
         };
 
         match self.keymap.feed(&token) {
+            Outcome::Action(action) => action.name().to_string(),
+            Outcome::Pending => "PENDING".to_string(),
+            Outcome::None => String::new(),
+        }
+    }
+
+    /// Resolves a deferred key sequence after the inter-key timeout.
+    #[qslot(qml_name = "keyTimeout")]
+    fn key_timeout(&mut self) -> String {
+        match self.keymap.feed_timeout() {
             Outcome::Action(action) => action.name().to_string(),
             Outcome::Pending | Outcome::None => String::new(),
         }
@@ -411,19 +436,29 @@ impl Backend {
             };
 
             match crate::index::sync_library(&dbs, client, progress).await {
-                Ok(report) => qtbridge::invoke_method!(
-                    finish_invoker,
-                    "librarySyncFinished",
-                    format!(
-                        "{} artists, {} albums, {} songs",
-                        report.artists, report.albums, report.songs
-                    )
-                ),
-                Err(err) => qtbridge::invoke_method!(
-                    finish_invoker,
-                    "librarySyncFinished",
-                    format!("Sync failed: {err:#}")
-                ),
+                Ok(report) => {
+                    qtbridge::invoke_method!(
+                        finish_invoker,
+                        "librarySyncFinished",
+                        format!(
+                            "{} artists, {} albums, {} songs",
+                            report.artists, report.albums, report.songs
+                        )
+                    );
+                }
+                Err(err) => {
+                    qtbridge::invoke_method!(
+                        finish_invoker,
+                        "librarySyncFinished",
+                        format!("Sync failed: {err:#}")
+                    );
+                    qtbridge::invoke_method!(
+                        finish_invoker,
+                        "raiseError",
+                        "sync".to_string(),
+                        format!("{err:#}")
+                    );
+                },
             };
         });
     }
@@ -441,61 +476,102 @@ impl Backend {
     }
 
     // -----------------------------------------------------------------------
-    // Library reads (synchronous: local SQLite, tiny)
+    // Async library reads (never block the Qt thread)
     // -----------------------------------------------------------------------
 
-    /// JSON array of albums for the central list.
-    #[qslot(qml_name = "loadAlbums")]
-    fn load_albums(&mut self) -> String {
-        let Some(dbs) = crate::dbs().cloned() else {
-            return "[]".to_string();
-        };
-        let albums = crate::runtime().block_on(crate::library::albums(&dbs.library));
-        match albums {
-            Ok(albums) => serde_json::to_string(&albums).unwrap_or_else(|_| "[]".to_string()),
-            Err(err) => {
-                eprintln!("library: could not read albums: {err:#}");
-                "[]".to_string()
-            }
-        }
+    /// Delivers an async payload to QML via the `dataReady` signal.
+    #[qslot(qml_name = "emitData")]
+    fn emit_data(&mut self, channel: String, payload: String) {
+        self.data_ready(channel, payload);
     }
 
-    /// JSON array of an album's songs, in track order.
-    #[qslot(qml_name = "loadAlbumSongs")]
-    fn load_album_songs(&mut self, album_id: String) -> String {
-        let Some(dbs) = crate::dbs().cloned() else {
-            return "[]".to_string();
-        };
-        let songs = crate::runtime()
-            .block_on(crate::library::album_songs(&dbs.library, &album_id));
-        match songs {
-            Ok(songs) => serde_json::to_string(&songs).unwrap_or_else(|_| "[]".to_string()),
-            Err(err) => {
-                eprintln!("library: could not read album songs: {err:#}");
-                "[]".to_string()
-            }
-        }
+    /// Reports an error to the UI (`kind` is e.g. "sync" / "playback").
+    #[qslot(qml_name = "raiseError")]
+    fn raise_error(&mut self, kind: String, message: String) {
+        self.error_raised(kind, message);
     }
 
-    // -----------------------------------------------------------------------
-    // Cover cache
-    // -----------------------------------------------------------------------
-
-    /// Filesystem URL of a cached cover, or an empty string if not cached.
-    #[qslot(qml_name = "coverUrl")]
-    fn cover_url(&mut self, cover_id: String) -> String {
-        if cover_id.is_empty() {
-            return String::new();
-        }
+    #[qslot(qml_name = "requestAlbums")]
+    fn request_albums(&mut self, artist: String) {
+        let invoker = self.get_qml_method_invoker();
         let Some(dbs) = crate::dbs().cloned() else {
-            return String::new();
+            return;
         };
-        match crate::runtime().block_on(crate::covers::cached_path(&dbs.covers, &cover_id)) {
-            Ok(Some(path)) => reqwest::Url::from_file_path(&path)
-                .map(|url| url.to_string())
-                .unwrap_or_default(),
-            _ => String::new(),
-        }
+        crate::runtime().spawn(async move {
+            match load_albums_json(&dbs, &artist).await {
+                Ok(json) => {
+                    qtbridge::invoke_method!(invoker, "emitData", "albums".to_string(), json);
+                }
+                Err(err) => eprintln!("library: could not read albums: {err:#}"),
+            }
+        });
+    }
+
+    #[qslot(qml_name = "requestSongs")]
+    fn request_songs(&mut self) {
+        let invoker = self.get_qml_method_invoker();
+        let Some(dbs) = crate::dbs().cloned() else {
+            return;
+        };
+        crate::runtime().spawn(async move {
+            match load_songs_json(&dbs).await {
+                Ok(json) => {
+                    qtbridge::invoke_method!(invoker, "emitData", "songs".to_string(), json);
+                }
+                Err(err) => eprintln!("library: could not read songs: {err:#}"),
+            }
+        });
+    }
+
+    #[qslot(qml_name = "requestArtists")]
+    fn request_artists(&mut self) {
+        let invoker = self.get_qml_method_invoker();
+        let Some(dbs) = crate::dbs().cloned() else {
+            return;
+        };
+        crate::runtime().spawn(async move {
+            match load_artists_json(&dbs).await {
+                Ok(json) => {
+                    qtbridge::invoke_method!(invoker, "emitData", "artists".to_string(), json);
+                }
+                Err(err) => eprintln!("library: could not read artists: {err:#}"),
+            }
+        });
+    }
+
+    #[qslot(qml_name = "requestAlbumSongs")]
+    fn request_album_songs(&mut self, album_id: String) {
+        let invoker = self.get_qml_method_invoker();
+        let Some(dbs) = crate::dbs().cloned() else {
+            return;
+        };
+        crate::runtime().spawn(async move {
+            match load_album_songs_json(&dbs, &album_id).await {
+                Ok(json) => {
+                    qtbridge::invoke_method!(invoker, "emitData", "album_songs".to_string(), json);
+                }
+                Err(err) => eprintln!("library: could not read album songs: {err:#}"),
+            }
+        });
+    }
+
+    /// Floating palette search over the FTS5 index in `search.db`.
+    #[qslot(qml_name = "requestPalette")]
+    fn request_palette(&mut self, query: String) {
+        let invoker = self.get_qml_method_invoker();
+        let Some(dbs) = crate::dbs().cloned() else {
+            return;
+        };
+
+        crate::runtime().spawn(async move {
+            match crate::search::search_palette(&dbs.search, &query, 50).await {
+                Ok(hits) => {
+                    let json = serde_json::to_string(&hits).unwrap_or_else(|_| "[]".to_string());
+                    qtbridge::invoke_method!(invoker, "emitData", "palette".to_string(), json);
+                }
+                Err(err) => eprintln!("palette: search failed: {err:#}"),
+            }
+        });
     }
 
     // -----------------------------------------------------------------------
@@ -505,44 +581,55 @@ impl Backend {
     /// Queues an album (from `library.db`) and starts playing at `start`.
     #[qslot(qml_name = "playAlbum")]
     fn play_album(&mut self, album_id: String, start: i64) {
+        let invoker = self.get_qml_method_invoker();
         let Some(dbs) = crate::dbs().cloned() else {
             return;
         };
-
-        let tracks = crate::runtime().block_on(async move {
-            let songs = crate::library::album_songs(&dbs.library, &album_id).await?;
-            let credentials = crate::sqlite::load_credentials(&dbs.credentials).await?;
-            let Some(credentials) = credentials else {
-                return Err(anyhow::anyhow!("no saved credentials to stream with"));
-            };
-            let client = SubsonicClient::new(
-                &credentials.server_url,
-                &credentials.username,
-                &credentials.password,
-            );
-
-            let mut tracks = Vec::new();
-            for song in songs {
-                let url = client.stream_url(&song.id)?;
-                tracks.push(crate::player::Track {
-                    id: song.id,
-                    title: song.title,
-                    artist: song.artist.unwrap_or_default(),
-                    album: song.album.unwrap_or_default(),
-                    duration: song.duration.unwrap_or(0) as f64,
-                    url: url.to_string(),
-                    cover_art: song.cover_art.unwrap_or_default(),
-                });
+        crate::runtime().spawn(async move {
+            match album_tracks_json(&dbs, &album_id).await {
+                Ok(json) => {
+                    qtbridge::invoke_method!(invoker, "playerLoad", json, start);
+                }
+                Err(err) => {
+                    eprintln!("player: could not start playback: {err:#}");
+                    qtbridge::invoke_method!(invoker, "raiseError", "playback".to_string(), format!("{err:#}"));
+                }
             }
-            Ok::<_, anyhow::Error>(tracks)
         });
+    }
 
-        match tracks {
+    /// Queues a single song by id.
+    #[qslot(qml_name = "playSong")]
+    fn play_song(&mut self, song_id: String) {
+        let invoker = self.get_qml_method_invoker();
+        let Some(dbs) = crate::dbs().cloned() else {
+            return;
+        };
+        crate::runtime().spawn(async move {
+            match song_queue_json(&dbs, &song_id).await {
+                Ok((json, start)) => {
+                    qtbridge::invoke_method!(invoker, "playerLoad", json, start);
+                }
+                Err(err) => {
+                    eprintln!("player: could not play song: {err:#}");
+                    qtbridge::invoke_method!(invoker, "raiseError", "playback".to_string(), format!("{err:#}"));
+                }
+            }
+        });
+    }
+
+    /// Loads a serialized queue into the player (runs on the Qt thread).
+    #[qslot(qml_name = "playerLoad")]
+    fn player_load(&mut self, tracks_json: String, start: i64) {
+        match serde_json::from_str::<Vec<crate::player::Track>>(&tracks_json) {
             Ok(tracks) => {
                 self.player.load(tracks, start.max(0) as usize);
                 self.sync_player();
             }
-            Err(err) => eprintln!("player: could not start playback: {err:#}"),
+            Err(err) => {
+                eprintln!("player: bad queue payload: {err}");
+                self.error_raised("playback".to_string(), format!("Bad queue payload: {err}"));
+            }
         }
     }
 
@@ -577,6 +664,13 @@ impl Backend {
         self.sync_player();
     }
 
+    /// Lets the UI hand keyboard focus back to the global key handler (e.g.
+    /// when leaving a text field), so vi bindings resume.
+    #[qslot(qml_name = "releaseFocus")]
+    fn release_focus(&mut self) {
+        self.focus_main();
+    }
+
     /// Periodic pump from the UI: updates position and advances on track end.
     #[qslot]
     fn tick(&mut self) {
@@ -591,14 +685,16 @@ impl Backend {
 
     /// Publishes the player state to the QML properties.
     fn sync_player(&mut self) {
-        let (title, artist, album, cover_art) = match self.player.current() {
+        let (title, artist, album, cover_art, cover_url) = match self.player.current() {
             Some(track) => (
                 track.title.clone(),
                 track.artist.clone(),
                 track.album.clone(),
                 track.cover_art.clone(),
+                track.cover_url.clone(),
             ),
             None => (
+                String::new(),
                 String::new(),
                 String::new(),
                 String::new(),
@@ -613,6 +709,8 @@ impl Backend {
         self.current_album_changed();
         self.current_cover_art = cover_art;
         self.current_cover_art_changed();
+        self.current_cover_url = cover_url;
+        self.current_cover_url_changed();
 
         self.playback_state = self.player.state().name().to_string();
         self.playback_state_changed();
@@ -679,7 +777,170 @@ fn spawn_index_sync(
                     "librarySyncFinished",
                     format!("Sync failed: {err:#}")
                 );
+                qtbridge::invoke_method!(
+                    finish_invoker,
+                    "raiseError",
+                    "sync".to_string(),
+                    format!("{err:#}")
+                );
             }
         }
     });
+}
+
+/// Builds a playable [`crate::player::Track`] from an indexed song.
+fn build_track(
+    client: &SubsonicClient,
+    song: crate::library::SongRow,
+    covers: &HashMap<String, String>,
+) -> anyhow::Result<crate::player::Track> {
+    let url = client.stream_url(&song.id)?;
+    let cover_art = song.cover_art.unwrap_or_default();
+    let cover_url = covers.get(&cover_art).cloned().unwrap_or_default();
+    Ok(crate::player::Track {
+        id: song.id,
+        title: song.title,
+        artist: song.artist.unwrap_or_default(),
+        album: song.album.unwrap_or_default(),
+        duration: song.duration.unwrap_or(0) as f64,
+        url: url.to_string(),
+        cover_art,
+        cover_url,
+    })
+}
+
+// ---------------------------------------------------------------------------
+// Off-thread list loaders (produce JSON with resolved cover URLs)
+// ---------------------------------------------------------------------------
+
+async fn load_albums_json(dbs: &crate::db::Dbs, artist: &str) -> anyhow::Result<String> {
+    let filter = (!artist.is_empty()).then_some(artist);
+    let albums = crate::library::albums(&dbs.library, filter).await?;
+    let covers = crate::covers::url_map(&dbs.covers).await?;
+    let rows: Vec<serde_json::Value> = albums
+        .into_iter()
+        .map(|album| {
+            let cover = album
+                .cover_art
+                .as_deref()
+                .and_then(|id| covers.get(id))
+                .cloned()
+                .unwrap_or_default();
+            serde_json::json!({
+                "id": album.id,
+                "title": album.title,
+                "artist": album.artist,
+                "year": album.year,
+                "song_count": album.song_count,
+                "cover": cover,
+            })
+        })
+        .collect();
+    Ok(serde_json::to_string(&rows)?)
+}
+
+async fn load_songs_json(dbs: &crate::db::Dbs) -> anyhow::Result<String> {
+    let songs = crate::library::all_songs(&dbs.library).await?;
+    let covers = crate::covers::url_map(&dbs.covers).await?;
+    song_rows_json(&songs, &covers)
+}
+
+async fn load_album_songs_json(dbs: &crate::db::Dbs, album_id: &str) -> anyhow::Result<String> {
+    let songs = crate::library::album_songs(&dbs.library, album_id).await?;
+    let covers = crate::covers::url_map(&dbs.covers).await?;
+    song_rows_json(&songs, &covers)
+}
+
+async fn load_artists_json(dbs: &crate::db::Dbs) -> anyhow::Result<String> {
+    let artists = crate::library::artists(&dbs.library).await?;
+    let covers = crate::covers::url_map(&dbs.covers).await?;
+    let rows: Vec<serde_json::Value> = artists
+        .into_iter()
+        .map(|artist| {
+            let cover = artist
+                .cover_art
+                .as_deref()
+                .and_then(|id| covers.get(id))
+                .cloned()
+                .unwrap_or_default();
+            serde_json::json!({
+                "id": artist.id,
+                "name": artist.name,
+                "album_count": artist.album_count,
+                "cover": cover,
+            })
+        })
+        .collect();
+    Ok(serde_json::to_string(&rows)?)
+}
+
+fn song_rows_json(
+    songs: &[crate::library::SongRow],
+    covers: &HashMap<String, String>,
+) -> anyhow::Result<String> {
+    let rows: Vec<serde_json::Value> = songs
+        .iter()
+        .map(|song| {
+            let cover = song
+                .cover_art
+                .as_deref()
+                .and_then(|id| covers.get(id))
+                .cloned()
+                .unwrap_or_default();
+            serde_json::json!({
+                "id": song.id,
+                "title": song.title,
+                "artist": song.artist,
+                "album": song.album,
+                "track": song.track,
+                "duration": song.duration,
+                "cover": cover,
+            })
+        })
+        .collect();
+    Ok(serde_json::to_string(&rows)?)
+}
+
+async fn album_tracks_json(dbs: &crate::db::Dbs, album_id: &str) -> anyhow::Result<String> {
+    let songs = crate::library::album_songs(&dbs.library, album_id).await?;
+    tracks_json(dbs, songs).await
+}
+
+/// Builds the queue for a song: its album (starting at that song) when known,
+/// otherwise just the song itself.
+async fn song_queue_json(dbs: &crate::db::Dbs, song_id: &str) -> anyhow::Result<(String, i64)> {
+    let Some(song) = crate::library::song(&dbs.library, song_id).await? else {
+        return Err(anyhow::anyhow!("song not found in index"));
+    };
+    let (songs, start) = match song.album_id.as_deref() {
+        Some(album_id) if !album_id.is_empty() => {
+            let album = crate::library::album_songs(&dbs.library, album_id).await?;
+            let index = album.iter().position(|s| s.id == song.id).unwrap_or(0) as i64;
+            (album, index)
+        }
+        _ => (vec![song], 0),
+    };
+    Ok((tracks_json(dbs, songs).await?, start))
+}
+
+async fn tracks_json(
+    dbs: &crate::db::Dbs,
+    songs: Vec<crate::library::SongRow>,
+) -> anyhow::Result<String> {
+    let credentials = crate::sqlite::load_credentials(&dbs.credentials).await?;
+    let Some(credentials) = credentials else {
+        return Err(anyhow::anyhow!("no saved credentials to stream with"));
+    };
+    let client = SubsonicClient::new(
+        &credentials.server_url,
+        &credentials.username,
+        &credentials.password,
+    );
+    let covers = crate::covers::url_map(&dbs.covers).await?;
+
+    let mut tracks = Vec::with_capacity(songs.len());
+    for song in songs {
+        tracks.push(build_track(&client, song, &covers)?);
+    }
+    Ok(serde_json::to_string(&tracks)?)
 }

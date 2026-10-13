@@ -8,9 +8,13 @@
 
 var radius = 3 // Global corner roundness.
 
+// Motion: soft, cubic-bezier easing.
+var duration = 100
+var easeOut = [0.2, 0, 0, 1]
+
 // Top-level layout ratios (fraction of the window).
 var sidebarRatio = 0.15
-var rightBarRatio = 0.19
+var topBarRatio = 0.09
 var playerRatio = 0.115
 
 // 1px-ish hairlines, but proportional so they survive scaling.

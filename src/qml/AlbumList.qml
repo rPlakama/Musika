@@ -3,12 +3,14 @@ import QtQuick.Layouts
 import musika
 import "Theme.js" as Theme
 
-// Central pane: the indexed album list, fed from library.db. Clicking a row
-// queues the album and starts playback.
+// Central pane: the indexed album list, fed asynchronously from library.db.
+// Clicking a row opens the album page.
 Rectangle {
     id: root
 
-    signal albumActivated(string albumId, string title, string artist, string year, string tracks, string coverArt)
+    signal albumActivated(string albumId, string title, string artist, string year, string tracks, string cover)
+
+    property string artistFilter: ""
 
     color: Theme.surface
 
@@ -17,8 +19,12 @@ Rectangle {
     }
 
     function reload() {
+        Backend.requestAlbums(root.artistFilter);
+    }
+
+    function apply(payload) {
         albums.clear();
-        var list = JSON.parse(Backend.loadAlbums());
+        var list = JSON.parse(payload);
         for (var i = 0; i < list.length; i++) {
             var album = list[i];
             albums.append({
@@ -27,15 +33,39 @@ Rectangle {
                 artist: album.artist ? album.artist : "",
                 year: album.year ? String(album.year) : "",
                 tracks: String(album.song_count),
-                coverArt: album.cover_art ? album.cover_art : ""
+                cover: album.cover ? album.cover : ""
             });
         }
     }
 
     Component.onCompleted: reload()
 
+    onArtistFilterChanged: reload()
+
+    function activateCurrent() {
+        var album = albums.get(list.currentIndex);
+        if (album)
+            root.albumActivated(album.albumId, album.title, album.artist, album.year, album.tracks, album.cover);
+    }
+
+    function handleAction(action) {
+        if (albums.count === 0)
+            return;
+        if (action === "move_up" || action === "scroll_up")
+            list.currentIndex = Math.max(0, list.currentIndex - 1);
+        else if (action === "move_down" || action === "scroll_down")
+            list.currentIndex = Math.min(albums.count - 1, list.currentIndex + 1);
+        else if (action === "enter")
+            activateCurrent();
+        list.positionViewAtIndex(list.currentIndex, ListView.Contain);
+    }
+
     Connections {
         target: Backend
+        function onDataReady(channel, payload) {
+            if (channel === "albums")
+                root.apply(payload);
+        }
         function onLibrary_changed() {
             root.reload();
         }
@@ -50,7 +80,7 @@ Rectangle {
             Layout.fillWidth: true
             implicitHeight: root.height * 0.1
 
-            Text {
+            FadeText {
                 anchors.verticalCenter: parent.verticalCenter
                 anchors.left: parent.left
                 anchors.leftMargin: root.width * 0.02
@@ -60,7 +90,7 @@ Rectangle {
                 font.bold: true
             }
 
-            Text {
+            FadeText {
                 anchors.verticalCenter: parent.verticalCenter
                 anchors.right: parent.right
                 anchors.rightMargin: root.width * 0.02
@@ -86,13 +116,23 @@ Rectangle {
                 required property string artist
                 required property string year
                 required property string tracks
-                required property string coverArt
+                required property string cover
 
                 readonly property real viewWidth: ListView.view ? ListView.view.width : 0
 
                 width: viewWidth
                 height: ListView.view ? ListView.view.height * 0.105 : 0
-                color: index % 2 === 0 ? Theme.surface : Theme.surfaceContainerLowest
+                color: ListView.isCurrentItem
+                    ? Theme.secondaryContainer
+                    : (index % 2 === 0 ? Theme.surface : Theme.surfaceContainerLowest)
+
+                Behavior on color {
+                    ColorAnimation {
+                        duration: Theme.duration
+                        easing.type: Easing.Bezier
+                        easing.bezierCurve: Theme.easeOut
+                    }
+                }
 
                 Rectangle {
                     id: cover
@@ -107,7 +147,7 @@ Rectangle {
 
                     Image {
                         anchors.fill: parent
-                        source: row.coverArt.length > 0 ? Backend.coverUrl(row.coverArt) : ""
+                        source: row.cover
                         fillMode: Image.PreserveAspectCrop
                         asynchronous: true
                         cache: false
@@ -121,19 +161,19 @@ Rectangle {
                     anchors.leftMargin: row.viewWidth * 0.02 + row.height * 0.78 + row.viewWidth * 0.02
                     spacing: row.height * 0.05
 
-                    Text {
+                    FadeText {
                         text: row.title
                         color: Theme.onSurface
                         font.pixelSize: row.height * 0.24
                     }
-                    Text {
+                    FadeText {
                         text: row.artist + (row.year.length > 0 ? "  ·  " + row.year : "")
                         color: Theme.onSurfaceVariant
                         font.pixelSize: row.height * 0.19
                     }
                 }
 
-                Text {
+                FadeText {
                     anchors.verticalCenter: parent.verticalCenter
                     anchors.right: parent.right
                     anchors.rightMargin: row.viewWidth * 0.02
@@ -147,7 +187,10 @@ Rectangle {
                 }
 
                 TapHandler {
-                    onTapped: root.albumActivated(row.albumId, row.title, row.artist, row.year, row.tracks, row.coverArt)
+                    onTapped: {
+                        list.currentIndex = row.index;
+                        root.albumActivated(row.albumId, row.title, row.artist, row.year, row.tracks, row.cover);
+                    }
                 }
             }
         }

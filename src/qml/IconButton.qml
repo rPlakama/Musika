@@ -19,7 +19,15 @@ Rectangle {
         ? (hover.hovered ? Theme.primary : Theme.onPrimaryContainer)
         : (hover.hovered ? Theme.surfaceContainerHighest : "transparent")
 
-    Text {
+    Behavior on color {
+        ColorAnimation {
+            duration: Theme.duration
+            easing.type: Easing.Bezier
+            easing.bezierCurve: Theme.easeOut
+        }
+    }
+
+    FadeText {
         anchors.centerIn: parent
         text: root.symbol
         font.pixelSize: root.width * root.symbolRatio

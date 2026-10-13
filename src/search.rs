@@ -4,9 +4,8 @@
 //! never wait on the library writer. It stores its own copy of the indexed
 //! columns, because SQLite cannot join across databases.
 
-#![allow(dead_code)] // Query helpers are prepared before the UI wires up search.
-
 use anyhow::Result;
+use serde::Serialize;
 use sqlx::sqlite::SqlitePool;
 use sqlx::FromRow;
 
@@ -19,6 +18,7 @@ pub struct SearchHit {
     pub title: String,
     pub artist: Option<String>,
     pub album: Option<String>,
+    #[allow(dead_code)]
     pub duration: Option<i32>,
 }
 
@@ -52,8 +52,9 @@ pub async fn rebuild(pool: &SqlitePool, rows: &[SongSearchRow]) -> Result<()> {
 
 /// Full-text search over song title, artist and album.
 ///
-/// Input is tokenised on whitespace and each token is quoted, so punctuation
-/// and FTS5 operators typed by the user are treated literally.
+/// Input is tokenised on whitespace; each token is quoted and treated as a
+/// prefix, so punctuation and FTS5 operators typed by the user are literal and
+/// `radio` matches `Radiohead` while the palette is being typed.
 pub async fn search(pool: &SqlitePool, raw: &str, limit: i64) -> Result<Vec<SearchHit>> {
     let query = fts_query(raw);
     if query.is_empty() {
@@ -78,9 +79,46 @@ pub async fn search(pool: &SqlitePool, raw: &str, limit: i64) -> Result<Vec<Sear
 
 fn fts_query(raw: &str) -> String {
     raw.split_whitespace()
-        .map(|token| format!("\"{}\"", token.replace('"', "\"\"")))
+        .map(|token| format!("\"{}\"*", token.replace('"', "\"\"")))
         .collect::<Vec<_>>()
         .join(" ")
+}
+
+// ---------------------------------------------------------------------------
+// Floating palette (FTS5 over `search.db`)
+// ---------------------------------------------------------------------------
+
+/// A palette hit: the song id plus the display label.
+#[derive(Debug, Clone, Serialize)]
+pub struct PaletteHit {
+    pub id: String,
+    pub label: String,
+}
+
+/// Palette search: runs the FTS5 query and formats each hit as
+/// `title - artist - album`, skipping fields the server left empty.
+pub async fn search_palette(pool: &SqlitePool, raw: &str, limit: i64) -> Result<Vec<PaletteHit>> {
+    let hits = search(pool, raw, limit).await?;
+    Ok(hits
+        .into_iter()
+        .map(|hit| {
+            let label = palette_label(&hit);
+            PaletteHit {
+                id: hit.song_id,
+                label,
+            }
+        })
+        .collect())
+}
+
+fn palette_label(hit: &SearchHit) -> String {
+    [Some(hit.title.as_str()), hit.artist.as_deref(), hit.album.as_deref()]
+        .into_iter()
+        .flatten()
+        .map(str::trim)
+        .filter(|part| !part.is_empty())
+        .collect::<Vec<_>>()
+        .join(" - ")
 }
 
 #[cfg(test)]
@@ -126,7 +164,42 @@ mod tests {
 
     #[test]
     fn query_quotes_every_token() {
-        assert_eq!(fts_query("hello world"), "\"hello\" \"world\"");
+        assert_eq!(fts_query("hello world"), "\"hello\"* \"world\"*");
         assert_eq!(fts_query(""), "");
+    }
+
+    #[tokio::test]
+    async fn palette_matches_prefixes_and_labels_hits() {
+        let pool = memory_pool().await;
+
+        let rows = vec![
+            SongSearchRow {
+                id: "1".to_string(),
+                title: "Weird Fishes".to_string(),
+                artist: Some("Radiohead".to_string()),
+                album: Some("In Rainbows".to_string()),
+                duration: Some(300),
+            },
+            SongSearchRow {
+                id: "2".to_string(),
+                title: "Everything In Its Right Place".to_string(),
+                artist: None,
+                album: None,
+                duration: None,
+            },
+        ];
+        rebuild(&pool, &rows).await.unwrap();
+
+        let hits = search_palette(&pool, "weird fis", 10).await.unwrap();
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].id, "1");
+        assert_eq!(hits[0].label, "Weird Fishes - Radiohead - In Rainbows");
+
+        let hits = search_palette(&pool, "everything", 10).await.unwrap();
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].id, "2");
+        assert_eq!(hits[0].label, "Everything In Its Right Place");
+
+        assert!(search_palette(&pool, "   ", 10).await.unwrap().is_empty());
     }
 }

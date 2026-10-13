@@ -165,6 +165,21 @@ pub async fn cached_path(pool: &SqlitePool, id: &str) -> Result<Option<std::path
     Ok(path.is_file().then_some(path))
 }
 
+/// Maps every cached cover id to its `file://` URL. Used to resolve art while
+/// loading lists off the UI thread.
+pub async fn url_map(pool: &SqlitePool) -> Result<HashMap<String, String>> {
+    let rows: Vec<(String, String)> =
+        sqlx::query_as("SELECT id, file FROM covers").fetch_all(pool).await?;
+    let dir = crate::db::covers_dir()?;
+    let mut map = HashMap::new();
+    for (id, file) in rows {
+        if let Ok(url) = reqwest::Url::from_file_path(dir.join(&file)) {
+            map.insert(id, url.to_string());
+        }
+    }
+    Ok(map)
+}
+
 async fn touch(pool: &SqlitePool, id: &str) -> Result<()> {
     sqlx::query("UPDATE covers SET fetched_at = ?2 WHERE id = ?1")
         .bind(id)

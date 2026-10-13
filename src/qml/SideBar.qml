@@ -1,14 +1,28 @@
 import QtQuick
 import QtQuick.Layouts
+import musika
 import "Theme.js" as Theme
 
-// Left sidebar: the library segments (Albums / Songs / Artists / Playlists /
-// Radio), a brand header and the library sync entry point.
-// Static: the selection does not move yet.
+// Left sidebar: the library segments. `selected` is this region's cursor and is
+// only moved while the sidebar is the active region.
 Rectangle {
     id: root
 
+    signal segmentActivated(int index)
+
+    property int selected: 0
+    readonly property var segments: ["Albums", "Songs", "Artists", "Playlists", "Radio"]
+
     color: Theme.surfaceContainerLow
+
+    function handleAction(action) {
+        if (action === "move_up" || action === "scroll_up")
+            selected = Math.max(0, selected - 1);
+        else if (action === "move_down" || action === "scroll_down")
+            selected = Math.min(segments.length - 1, selected + 1);
+        else if (action === "enter")
+            segmentActivated(selected);
+    }
 
     Rectangle {
         id: brand
@@ -18,7 +32,7 @@ Rectangle {
         height: root.height * 0.09
         color: "transparent"
 
-        Text {
+        FadeText {
             anchors.verticalCenter: parent.verticalCenter
             anchors.left: parent.left
             anchors.leftMargin: root.width * 0.1
@@ -38,7 +52,7 @@ Rectangle {
         spacing: root.height * 0.004
 
         Repeater {
-            model: ["Albums", "Songs", "Artists", "Playlists", "Radio"]
+            model: root.segments
 
             delegate: Rectangle {
                 id: segment
@@ -48,68 +62,91 @@ Rectangle {
                 Layout.fillWidth: true
                 implicitHeight: root.height * 0.064
                 radius: Theme.radius
-                color: index === 0
+                color: segment.index === root.selected
                     ? Theme.secondaryContainer
                     : (segmentHover.hovered ? Theme.surfaceContainerHigh : "transparent")
 
-                // Accent bar on the active segment.
+                Behavior on color {
+                    ColorAnimation {
+                        duration: Theme.duration
+                        easing.type: Easing.Bezier
+                        easing.bezierCurve: Theme.easeOut
+                    }
+                }
+
+                // Accent bar on the selected segment.
                 Rectangle {
                     anchors.left: parent.left
                     anchors.top: parent.top
                     anchors.bottom: parent.bottom
                     width: root.width * 0.02
                     color: Theme.primary
-                    visible: segment.index === 0
+                    visible: segment.index === root.selected
                 }
 
-                Text {
+                FadeText {
                     anchors.verticalCenter: parent.verticalCenter
                     anchors.left: parent.left
                     anchors.leftMargin: root.width * 0.1
                     text: segment.modelData
-                    color: segment.index === 0 ? Theme.onSecondaryContainer : Theme.onSurfaceVariant
+                    color: segment.index === root.selected ? Theme.onSecondaryContainer : Theme.onSurfaceVariant
                     font.pixelSize: root.height * 0.022
-                    font.bold: segment.index === 0
+                    font.bold: segment.index === root.selected
                 }
 
                 HoverHandler {
                     id: segmentHover
                 }
+
+                TapHandler {
+                    onTapped: {
+                        root.selected = segment.index;
+                        root.segmentActivated(segment.index);
+                    }
+                }
             }
         }
     }
 
-    Rectangle {
-        anchors.left: parent.left
-        anchors.right: parent.right
-        anchors.bottom: syncButton.top
-        anchors.margins: root.width * 0.1
-        height: Math.max(1, root.height * Theme.hairlineRatio)
-        color: Theme.outlineVariant
-    }
-
-    // TODO(movementation): the status bar drives syncing; this is a local entry.
-    Rectangle {
-        id: syncButton
+    // Library quantity statistics (the sync action lives in the top bar).
+    ColumnLayout {
         anchors.left: parent.left
         anchors.right: parent.right
         anchors.bottom: parent.bottom
         anchors.margins: root.width * 0.1
-        height: root.height * 0.058
-        radius: Theme.radius
-        color: syncHover.hovered ? Theme.surfaceContainerHighest : "transparent"
-        border.color: Theme.outlineVariant
-        border.width: Math.max(1, root.width * Theme.hairlineRatio)
+        spacing: root.height * 0.012
 
-        Text {
-            anchors.centerIn: parent
-            text: "⟳  Sync library"
-            color: Theme.onSurfaceVariant
-            font.pixelSize: root.height * 0.021
+        Rectangle {
+            Layout.fillWidth: true
+            Layout.preferredHeight: Math.max(1, root.height * Theme.hairlineRatio)
+            color: Theme.outlineVariant
         }
 
-        HoverHandler {
-            id: syncHover
+        Repeater {
+            model: [
+                { label: "Artists", value: Backend.artistCount },
+                { label: "Albums", value: Backend.albumCount },
+                { label: "Songs", value: Backend.songCount }
+            ]
+
+            delegate: RowLayout {
+                id: stat
+                required property var modelData
+                Layout.fillWidth: true
+
+                FadeText {
+                    Layout.fillWidth: true
+                    text: stat.modelData.label
+                    color: Theme.onSurfaceVariant
+                    font.pixelSize: root.height * 0.02
+                }
+                FadeText {
+                    text: stat.modelData.value
+                    color: Theme.onSurface
+                    font.pixelSize: root.height * 0.02
+                    font.bold: true
+                }
+            }
         }
     }
 }

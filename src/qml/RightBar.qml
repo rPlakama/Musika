@@ -3,146 +3,136 @@ import QtQuick.Layouts
 import musika
 import "Theme.js" as Theme
 
-// Right bar: a read-only status readout for the library.
-//
-// Shows the indexed counts, whether a sync is running, how far along it is and
-// when it last ran. Clicking anywhere on the panel starts a sync (per design).
+// Top status bar: indexed counts, sync state/progress and a sync action.
 Rectangle {
     id: root
 
     color: Theme.surfaceContainerLow
 
+    // Relative "last sync" label: Now / HH:mm / dd / Nw / Nmo / Ny.
     function lastSyncText() {
         var seconds = Number(Backend.lastSync);
         if (!Backend.lastSync || !seconds)
             return "—";
-        return new Date(seconds * 1000).toLocaleString();
+
+        var then = new Date(seconds * 1000);
+        var diff = (Date.now() - then.getTime()) / 1000; // seconds ago
+        if (diff < 60)
+            return "Now";
+
+        var hours = diff / 3600;
+        if (hours < 24)
+            return Qt.formatDateTime(then, "HH:mm");
+
+        var days = hours / 24;
+        if (days < 7)
+            return Qt.formatDateTime(then, "dd");
+
+        var weeks = days / 7;
+        if (weeks < 4)
+            return Math.floor(weeks) + "w";
+
+        var months = days / 30;
+        if (months < 12)
+            return Math.floor(months) + "mo";
+
+        return Math.floor(days / 365) + "y";
     }
 
-    // Left divider.
+    // The status panel has no cursor of its own; consume actions quietly.
+    function handleAction(action) {
+    }
+
+    // Bottom divider.
     Rectangle {
         anchors.left: parent.left
-        anchors.top: parent.top
+        anchors.right: parent.right
         anchors.bottom: parent.bottom
-        width: Math.max(1, root.width * Theme.hairlineRatio)
+        height: Math.max(1, root.height * Theme.hairlineRatio)
         color: Theme.outlineVariant
     }
 
-    ColumnLayout {
+    RowLayout {
         anchors.fill: parent
-        anchors.margins: root.width * 0.08
-        spacing: root.width * 0.06
+        anchors.leftMargin: root.width * 0.012
+        anchors.rightMargin: root.width * 0.012
+        spacing: root.width * 0.015
 
-        Text {
+        FadeText {
             text: "LIBRARY"
             color: Theme.primary
-            font.pixelSize: root.width * 0.06
+            font.pixelSize: root.height * 0.24
             font.bold: true
-            font.letterSpacing: root.width * 0.01
+            font.letterSpacing: root.height * 0.03
+            // Title stays larger, but yields with "…" when space runs out.
+            Layout.maximumWidth: root.width * 0.22
+            elide: Text.ElideRight
         }
 
-        ColumnLayout {
+        Item {
             Layout.fillWidth: true
-            spacing: root.width * 0.03
-
-            Repeater {
-                model: [
-                    { label: "Artists", value: Backend.artistCount },
-                    { label: "Albums", value: Backend.albumCount },
-                    { label: "Songs", value: Backend.songCount }
-                ]
-
-                delegate: RowLayout {
-                    id: stat
-                    required property var modelData
-                    readonly property real fs: width * 0.074
-                    Layout.fillWidth: true
-
-                    Text {
-                        Layout.fillWidth: true
-                        text: stat.modelData.label
-                        color: Theme.onSurfaceVariant
-                        font.pixelSize: stat.fs
-                    }
-                    Text {
-                        text: stat.modelData.value
-                        color: Theme.onSurface
-                        font.pixelSize: stat.fs
-                        font.bold: true
-                    }
-                }
-            }
         }
 
-        Rectangle {
-            Layout.fillWidth: true
-            Layout.preferredHeight: Math.max(1, root.width * Theme.hairlineRatio)
-            color: Theme.outlineVariant
-        }
-
-        Text {
-            text: "SYNC"
-            color: Theme.primary
-            font.pixelSize: root.width * 0.06
-            font.bold: true
-            font.letterSpacing: root.width * 0.01
-        }
-
-        Text {
-            Layout.fillWidth: true
+        FadeText {
             text: Backend.librarySyncing ? "Syncing…" : "Up to date"
             color: Backend.librarySyncing ? Theme.tertiary : Theme.onSurfaceVariant
-            font.pixelSize: root.width * 0.062
-        }
-
-        Text {
-            Layout.fillWidth: true
-            text: Backend.syncMessage
-            color: Theme.onSurfaceVariant
-            font.pixelSize: root.width * 0.05
-            elide: Text.ElideRight
+            font.pixelSize: root.height * 0.17
         }
 
         // Determinate progress across the last reported stage.
         Rectangle {
             id: track
-            Layout.fillWidth: true
-            Layout.preferredHeight: Math.max(2, root.height * 0.007)
+            Layout.preferredWidth: root.width * 0.12
+            Layout.preferredHeight: Math.max(2, root.height * 0.16)
             color: Theme.outlineVariant
 
             Rectangle {
                 width: track.width * Math.max(0, Math.min(1, Backend.syncProgress))
                 height: parent.height
                 color: Backend.librarySyncing ? Theme.tertiary : Theme.primary
+
                 Behavior on width {
-                    NumberAnimation { duration: 150 }
+                    NumberAnimation {
+                        duration: Theme.duration
+                        easing.type: Easing.Bezier
+                        easing.bezierCurve: Theme.easeOut
+                    }
                 }
             }
         }
 
-        Text {
-            Layout.fillWidth: true
+        Rectangle {
+            id: syncButton
+            Layout.preferredWidth: syncLabel.implicitWidth + root.height * 0.4
+            Layout.preferredHeight: root.height * 0.6
+            radius: Theme.radius
+            opacity: Backend.librarySyncing ? 0.6 : 1
+            color: !Backend.librarySyncing && syncHover.hovered
+                ? Theme.primary
+                : Theme.primaryContainer
+
+            FadeText {
+                id: syncLabel
+                anchors.centerIn: parent
+                text: Backend.librarySyncing ? "Syncing…" : "Sync library"
+                color: Theme.onPrimaryContainer
+                font.pixelSize: root.height * 0.17
+            }
+
+            HoverHandler {
+                id: syncHover
+                enabled: !Backend.librarySyncing
+            }
+            TapHandler {
+                enabled: !Backend.librarySyncing
+                onTapped: Backend.syncLibrary()
+            }
+        }
+
+        FadeText {
             text: "Last sync: " + root.lastSyncText()
             color: Theme.onSurfaceVariant
-            font.pixelSize: root.width * 0.05
+            font.pixelSize: root.height * 0.15
         }
-
-        Item {
-            Layout.fillHeight: true
-        }
-
-        Text {
-            Layout.fillWidth: true
-            text: Backend.librarySyncing ? "Syncing…" : "Click to sync"
-            color: Theme.onSurfaceVariant
-            font.pixelSize: root.width * 0.052
-            horizontalAlignment: Text.AlignHCenter
-        }
-    }
-
-    // The whole status panel is the sync affordance.
-    TapHandler {
-        enabled: !Backend.librarySyncing
-        onTapped: Backend.syncLibrary()
     }
 }

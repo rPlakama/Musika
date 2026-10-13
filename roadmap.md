@@ -77,8 +77,49 @@ If user (enter) in inferior bar (Clicks it) it enter (mainscreen) mode, where al
     -> Flexible layout: every size/margin/font is a fraction of its container (no fixed px); _[X]_
     -> RightBar status: live counts, sync state/message, staged progress, last sync (click-to-sync); _[X]_
     -> Keybind engine `keybind.rs`: sequence-aware, Qt token mapping, Backend.keyEvent, global Keys forwarding; _[X]_
-    -> Feed AlbumList/SideBar/search from library.db; _[]_
+    -> Feed AlbumList/SideBar/search from library.db; _[X]_
+    -> Cached covers shown in AlbumList/AlbumEntry/InferiorBar (`coverUrl`); _[X]_
+    -> Album navigation: central StackView album list -> album page -> back; _[X]_
+    -> Keybind dispatch: global handler forwards actions to the current screen; _[X]_
+    -> Focus cursor: active region stays highlighted; region mode (Ctrl-W) picks a region, j/k cycles, Enter accepts; _[X]_
+    -> Scoped movement: each region owns its cursor; keys only affect the active region; _[X]_
+    -> Main region: album list Enter opens album, song Enter plays; sidebar cursor; _[X]_
+    -> Player region: h/l seek, j/k prev/next, Enter play/pause; _[X]_
+    -> Sidebar segments switch the main view (Albums/Songs/Artists; Playlists/Radio placeholders); _[X]_
+    -> Artist opens its filtered albums; global search field (Shift+Space F, focused from any region); _[X]_
+    -> Search query/results (Artists > Albums > Songs priority) wired to library.db; _[]_
+    -> Motion: 100ms cubic-bezier fades/slides between views; soft color transitions; words/titles fade in; _[X]_
+    -> Status bar moved to the top; central pane expands into the freed space; _[X]_
+    -> Visual mode: regions blur, selection squares show their titles; unselected not highlighted; _[X]_
+    -> Keys: Shift+Enter fullscreen player; Space play/pause anywhere; Shift+Space F search; ESC leaves search; _[X]_
     -> Keyboard/vi movementation, block focus (double-ESC), global search binding; _[]_
+
+# Review findings (see CRITIQUE.md)
+
+Per-critic task list: TASKS.md
+
+# P0 -- Correctness / robustness
+
+[] -- In-app error surfacing for sync/playback (toasts + retry), not eprintln;
+[] -- Playback context: any play builds a sensible queue (album/list), not 1 track;
+[] -- Scope the cover cache to album/artist art (stop per-song covers);
+[] -- Remove block_on from the UI thread for lists/covers (async + model);
+[] -- mpv: MPRIS/D-Bus + cleanup on abnormal exit;
+
+# P1 -- Nvim fidelity
+
+[] -- Single ESC / Ctrl-[ returns to normal; show mode in the status bar;
+[] -- Counts (3j, 5l) and . repeat;
+[] -- / search-in-list with n/N; wire global search to real results;
+[] -- which-key/showcmd for pending sequences; implement gg/G; ?/help;
+[] -- Reconsider Space (leader vs play/pause); drop Ctrl-N/P duplication;
+
+# P2 -- Player features
+
+[] -- Queue view + shuffle/repeat + volume + mute;
+[] -- Playlists, radio, lyrics, download caching;
+[] -- Scrobble back to Navidrome; resume-on-launch;
+[] -- Fullscreen controls + a proper now-playing node;
 
 
 

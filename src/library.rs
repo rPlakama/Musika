@@ -160,11 +160,13 @@ pub async fn song_search_rows(pool: &SqlitePool) -> Result<Vec<SongSearchRow>> {
 
 /// Every `coverArt` id referenced by the library, used to drive the cover
 /// cache and to know which cached images became stale.
+///
+/// Only album- and artist-level art is cached: songs inherit their album's
+/// cover, which keeps the cache bounded (per-song ids exploded it).
 pub async fn referenced_cover_ids(pool: &SqlitePool) -> Result<std::collections::BTreeSet<String>> {
     let ids: Vec<String> = sqlx::query_scalar(
         "SELECT cover_art FROM artists WHERE cover_art IS NOT NULL
-         UNION SELECT cover_art FROM albums WHERE cover_art IS NOT NULL
-         UNION SELECT cover_art FROM songs WHERE cover_art IS NOT NULL",
+         UNION SELECT cover_art FROM albums WHERE cover_art IS NOT NULL",
     )
     .fetch_all(pool)
     .await?;
@@ -189,30 +191,93 @@ pub struct SongRow {
     pub title: String,
     pub artist: Option<String>,
     pub album: Option<String>,
+    pub album_id: Option<String>,
     pub track: Option<i32>,
     pub duration: Option<i32>,
     pub cover_art: Option<String>,
 }
 
-/// Albums for the central list, ordered by artist then name.
-pub async fn albums(pool: &SqlitePool) -> Result<Vec<AlbumRow>> {
-    let rows = sqlx::query_as::<_, AlbumRow>(
-        "SELECT id, name AS title, artist, year, song_count, cover_art
-         FROM albums
-         ORDER BY artist, name",
+/// A row for the artist list.
+#[derive(Debug, Clone, FromRow, serde::Serialize)]
+pub struct ArtistRow {
+    pub id: String,
+    pub name: String,
+    pub album_count: i64,
+    pub cover_art: Option<String>,
+}
+
+/// Albums for the central list, optionally filtered by artist name.
+pub async fn albums(pool: &SqlitePool, artist: Option<&str>) -> Result<Vec<AlbumRow>> {
+    let rows = match artist {
+        Some(artist) => {
+            sqlx::query_as::<_, AlbumRow>(
+                "SELECT id, name AS title, artist, year, song_count, cover_art
+                 FROM albums
+                 WHERE artist = ?1
+                 ORDER BY name",
+            )
+            .bind(artist)
+            .fetch_all(pool)
+            .await?
+        }
+        None => {
+            sqlx::query_as::<_, AlbumRow>(
+                "SELECT id, name AS title, artist, year, song_count, cover_art
+                 FROM albums
+                 ORDER BY artist, name",
+            )
+            .fetch_all(pool)
+            .await?
+        }
+    };
+    Ok(rows)
+}
+
+/// All artists, ordered by name.
+pub async fn artists(pool: &SqlitePool) -> Result<Vec<ArtistRow>> {
+    let rows = sqlx::query_as::<_, ArtistRow>(
+        "SELECT id, name, album_count, cover_art FROM artists ORDER BY name",
     )
     .fetch_all(pool)
     .await?;
     Ok(rows)
 }
 
-/// Songs of one album, in disc/track order.
+/// Every song, ordered by artist/album/track. Covers come from the album.
+pub async fn all_songs(pool: &SqlitePool) -> Result<Vec<SongRow>> {
+    let rows = sqlx::query_as::<_, SongRow>(
+        "SELECT s.id, s.title, s.artist, s.album, s.album_id, s.track, s.duration,
+                COALESCE(al.cover_art, s.cover_art) AS cover_art
+         FROM songs s LEFT JOIN albums al ON al.id = s.album_id
+         ORDER BY s.artist, s.album, s.disc_number, s.track, s.title",
+    )
+    .fetch_all(pool)
+    .await?;
+    Ok(rows)
+}
+
+/// A single song by id.
+pub async fn song(pool: &SqlitePool, id: &str) -> Result<Option<SongRow>> {
+    let row = sqlx::query_as::<_, SongRow>(
+        "SELECT s.id, s.title, s.artist, s.album, s.album_id, s.track, s.duration,
+                COALESCE(al.cover_art, s.cover_art) AS cover_art
+         FROM songs s LEFT JOIN albums al ON al.id = s.album_id
+         WHERE s.id = ?1",
+    )
+    .bind(id)
+    .fetch_optional(pool)
+    .await?;
+    Ok(row)
+}
+
+/// Songs of one album, in disc/track order. Covers come from the album.
 pub async fn album_songs(pool: &SqlitePool, album_id: &str) -> Result<Vec<SongRow>> {
     let rows = sqlx::query_as::<_, SongRow>(
-        "SELECT id, title, artist, album, track, duration, cover_art
-         FROM songs
-         WHERE album_id = ?1
-         ORDER BY disc_number, track, title",
+        "SELECT s.id, s.title, s.artist, s.album, s.album_id, s.track, s.duration,
+                COALESCE(al.cover_art, s.cover_art) AS cover_art
+         FROM songs s LEFT JOIN albums al ON al.id = s.album_id
+         WHERE s.album_id = ?1
+         ORDER BY s.disc_number, s.track, s.title",
     )
     .bind(album_id)
     .fetch_all(pool)

@@ -14,7 +14,8 @@ Rectangle {
     signal back()
 
     property string albumId: ""
-    property string albumCoverArt: ""
+    property bool onToolbar: false
+    property string albumCover: ""
     property string albumTitle: "In Rainbows"
     property string albumArtist: "Radiohead"
     property string albumMeta: "2007   ·   Art rock, Alternative   ·   10 songs"
@@ -32,10 +33,14 @@ Rectangle {
     }
 
     function reload() {
-        songs.clear();
         if (root.albumId === "")
             return;
-        var list = JSON.parse(Backend.loadAlbumSongs(root.albumId));
+        Backend.requestAlbumSongs(root.albumId);
+    }
+
+    function apply(payload) {
+        songs.clear();
+        var list = JSON.parse(payload);
         for (var i = 0; i < list.length; i++) {
             var song = list[i];
             songs.append({
@@ -48,8 +53,42 @@ Rectangle {
 
     Component.onCompleted: reload()
 
+    function handleAction(action) {
+        var up = action === "move_up" || action === "scroll_up";
+        var down = action === "move_down" || action === "scroll_down";
+
+        if (root.onToolbar) {
+            // Cursor is on the toolbar (Back). Down returns to the songs.
+            if (down && songs.count > 0) {
+                root.onToolbar = false;
+                songList.currentIndex = 0;
+                songList.positionViewAtIndex(0, ListView.Contain);
+            } else if (action === "enter") {
+                root.back();
+            }
+            return;
+        }
+
+        if (up) {
+            if (songList.currentIndex > 0)
+                songList.currentIndex -= 1;
+            else
+                root.onToolbar = true;
+        } else if (down) {
+            if (songs.count > 0)
+                songList.currentIndex = Math.min(songs.count - 1, songList.currentIndex + 1);
+        } else if (action === "enter") {
+            Backend.playAlbum(root.albumId, songList.currentIndex);
+        }
+        songList.positionViewAtIndex(songList.currentIndex, ListView.Contain);
+    }
+
     Connections {
         target: Backend
+        function onDataReady(channel, payload) {
+            if (channel === "album_songs")
+                root.apply(payload);
+        }
         function onLibrary_changed() {
             root.reload();
         }
@@ -60,18 +99,31 @@ Rectangle {
         anchors.margins: root.width * 0.02
         spacing: root.height * 0.02
 
-        // Toolbar: back + play album.
+        // Toolbar: back.
         RowLayout {
             Layout.fillWidth: true
             spacing: root.width * 0.02
 
             Rectangle {
-                implicitWidth: backLabel.implicitWidth + root.width * 0.03
+                id: backButton
+                implicitWidth: backLabel.implicitWidth + root.width * 0.04
                 implicitHeight: root.height * 0.045
                 radius: Theme.radius
-                color: backHover.hovered ? Theme.surfaceContainerHighest : Theme.surfaceContainerHigh
+                color: (root.onToolbar || backHover.hovered)
+                    ? Theme.secondaryContainer
+                    : Theme.surfaceContainerHigh
+                border.color: root.onToolbar ? Theme.primary : Theme.outlineVariant
+                border.width: Math.max(1, root.height * Theme.hairlineRatio)
 
-                Text {
+                Behavior on color {
+                    ColorAnimation {
+                        duration: Theme.duration
+                        easing.type: Easing.Bezier
+                        easing.bezierCurve: Theme.easeOut
+                    }
+                }
+
+                FadeText {
                     id: backLabel
                     anchors.centerIn: parent
                     text: "‹  Back"
@@ -89,28 +141,6 @@ Rectangle {
 
             Item {
                 Layout.fillWidth: true
-            }
-
-            Rectangle {
-                implicitWidth: playLabel.implicitWidth + root.width * 0.03
-                implicitHeight: root.height * 0.045
-                radius: Theme.radius
-                color: playHover.hovered ? Theme.primary : Theme.primaryContainer
-
-                Text {
-                    id: playLabel
-                    anchors.centerIn: parent
-                    text: "▶  Play album"
-                    color: Theme.onPrimaryContainer
-                    font.pixelSize: root.height * 0.022
-                }
-
-                HoverHandler {
-                    id: playHover
-                }
-                TapHandler {
-                    onTapped: Backend.playAlbum(root.albumId, 0)
-                }
             }
         }
 
@@ -131,16 +161,14 @@ Rectangle {
                 Image {
                     id: coverImage
                     anchors.fill: parent
-                    source: root.albumCoverArt.length > 0
-                        ? Backend.coverUrl(root.albumCoverArt)
-                        : ""
+                    source: root.albumCover
                     fillMode: Image.PreserveAspectCrop
                     asynchronous: true
                     cache: false
                     visible: status === Image.Ready
                 }
 
-                Text {
+                FadeText {
                     anchors.centerIn: parent
                     visible: coverImage.status !== Image.Ready
                     text: "COVER"
@@ -156,7 +184,7 @@ Rectangle {
             Layout.fillWidth: true
             spacing: root.height * 0.006
 
-            Text {
+            FadeText {
                 Layout.fillWidth: true
                 text: root.albumTitle
                 color: Theme.onSurface
@@ -164,21 +192,21 @@ Rectangle {
                 font.bold: true
                 elide: Text.ElideRight
             }
-            Text {
+            FadeText {
                 Layout.fillWidth: true
                 text: root.albumArtist
                 color: Theme.primary
                 font.pixelSize: root.height * 0.024
                 elide: Text.ElideRight
             }
-            Text {
+            FadeText {
                 Layout.fillWidth: true
                 text: root.albumMeta
                 color: Theme.onSurfaceVariant
                 font.pixelSize: root.height * 0.02
                 elide: Text.ElideRight
             }
-            Text {
+            FadeText {
                 Layout.fillWidth: true
                 Layout.topMargin: root.height * 0.008
                 text: root.albumNotes
@@ -196,7 +224,7 @@ Rectangle {
         }
 
         // Songs.
-        Text {
+        FadeText {
             text: "Songs"
             color: Theme.primary
             font.pixelSize: root.height * 0.024
@@ -221,11 +249,19 @@ Rectangle {
 
                 width: songList.width
                 height: root.height * 0.055
-                color: songHover.hovered
-                    ? Theme.surfaceContainerHigh
+                color: (ListView.isCurrentItem && !root.onToolbar)
+                    ? Theme.secondaryContainer
                     : (index % 2 === 0 ? Theme.surface : Theme.surfaceContainerLowest)
 
-                Text {
+                Behavior on color {
+                    ColorAnimation {
+                        duration: Theme.duration
+                        easing.type: Easing.Bezier
+                        easing.bezierCurve: Theme.easeOut
+                    }
+                }
+
+                FadeText {
                     anchors.verticalCenter: parent.verticalCenter
                     anchors.left: parent.left
                     width: songRow.height * 0.6
@@ -234,7 +270,7 @@ Rectangle {
                     font.pixelSize: songRow.height * 0.32
                     horizontalAlignment: Text.AlignRight
                 }
-                Text {
+                FadeText {
                     anchors.verticalCenter: parent.verticalCenter
                     anchors.left: parent.left
                     anchors.leftMargin: songRow.height * 0.8
@@ -245,7 +281,7 @@ Rectangle {
                     font.pixelSize: songRow.height * 0.36
                     elide: Text.ElideRight
                 }
-                Text {
+                FadeText {
                     id: songDuration
                     anchors.verticalCenter: parent.verticalCenter
                     anchors.right: parent.right
@@ -255,12 +291,11 @@ Rectangle {
                     font.pixelSize: songRow.height * 0.32
                 }
 
-                HoverHandler {
-                    id: songHover
-                }
-
                 TapHandler {
-                    onTapped: Backend.playAlbum(root.albumId, songRow.index)
+                    onTapped: {
+                        songList.currentIndex = songRow.index;
+                        Backend.playAlbum(root.albumId, songRow.index);
+                    }
                 }
             }
         }

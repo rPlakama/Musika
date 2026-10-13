@@ -16,7 +16,7 @@ Item {
         width: root.width * 0.224
         spacing: root.height * 0.014
 
-        Text {
+        FadeText {
             width: parent.width
             text: "MUSIKA"
             color: Theme.primary
@@ -92,7 +92,7 @@ Item {
                     ? Theme.surfaceContainerHigh
                     : (loginButton.hovered ? Theme.primary : Theme.primaryContainer)
             }
-            contentItem: Text {
+            contentItem: FadeText {
                 text: loginButton.text
                 color: Theme.onPrimaryContainer
                 horizontalAlignment: Text.AlignHCenter
@@ -101,7 +101,7 @@ Item {
             }
         }
 
-        Text {
+        FadeText {
             width: parent.width
             wrapMode: Text.WordWrap
             color: Backend.loggedIn ? Theme.primary : Theme.error

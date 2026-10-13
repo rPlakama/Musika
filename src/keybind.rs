@@ -24,6 +24,8 @@ pub enum Action {
     VisualMode,
     Enter,
     Back,
+    ToggleFullscreen,
+    PlayPause,
 }
 
 impl Action {
@@ -41,6 +43,8 @@ impl Action {
             Self::VisualMode => "visual_mode",
             Self::Enter => "enter",
             Self::Back => "back",
+            Self::ToggleFullscreen => "toggle_fullscreen",
+            Self::PlayPause => "play_pause",
         }
     }
 }
@@ -61,15 +65,17 @@ fn defaults() -> Vec<(&'static str, Action)> {
     vec![
         ("ctrl-n", Action::ScrollDown),
         ("ctrl-p", Action::ScrollUp),
-        ("space f", Action::Search),
+        ("space", Action::PlayPause),
+        ("shift-space f", Action::Search),
         ("h", Action::MoveLeft),
         ("j", Action::MoveDown),
         ("k", Action::MoveUp),
         ("l", Action::MoveRight),
         ("g g", Action::Top),
         ("shift-g", Action::Bottom),
-        ("escape escape", Action::VisualMode),
+        ("ctrl-w", Action::VisualMode),
         ("enter", Action::Enter),
+        ("shift-enter", Action::ToggleFullscreen),
         ("q", Action::Back),
     ]
 }
@@ -104,29 +110,46 @@ impl Keymap {
     }
 
     /// Feeds one token; see [`Outcome`].
+    ///
+    /// If the tokens so far are also the exact start of a longer binding (e.g.
+    /// `g` for `g g`), the match is deferred to [`Self::feed_timeout`] rather
+    /// than firing immediately.
     pub fn feed(&mut self, token: &str) -> Outcome {
         self.pending.push(token.to_string());
         let sequence = self.pending.join(" ");
 
+        if self.has_prefix(&sequence) {
+            return Outcome::Pending;
+        }
         if let Some(action) = self.exact(&sequence) {
             self.pending.clear();
             return Outcome::Action(action);
-        }
-        if self.has_prefix(&sequence) {
-            return Outcome::Pending;
         }
 
         // The accumulated tokens dead-end: drop them and retry this token on
         // its own (covers, e.g., a stray token before a valid sequence).
         self.pending.clear();
-        if let Some(action) = self.exact(token) {
-            return Outcome::Action(action);
-        }
         if self.has_prefix(token) {
             self.pending.push(token.to_string());
             return Outcome::Pending;
         }
+        if let Some(action) = self.exact(token) {
+            return Outcome::Action(action);
+        }
         Outcome::None
+    }
+
+    /// Resolves a deferred sequence once the inter-key timeout elapses.
+    pub fn feed_timeout(&mut self) -> Outcome {
+        if self.pending.is_empty() {
+            return Outcome::None;
+        }
+        let sequence = self.pending.join(" ");
+        self.pending.clear();
+        match self.exact(&sequence) {
+            Some(action) => Outcome::Action(action),
+            None => Outcome::None,
+        }
     }
 
     fn exact(&self, sequence: &str) -> Option<Action> {
@@ -182,6 +205,7 @@ pub fn token_from_qt(key: i32, modifiers: i32) -> Option<String> {
         QT_KEY_PAGEUP => "pageup".to_string(),
         QT_KEY_PAGEDOWN => "pagedown".to_string(),
         0x41..=0x5A => ((key as u8 + 32) as char).to_string(), // A-Z
+        0x61..=0x7A => (key as u8 as char).to_string(),        // a-z
         0x30..=0x39 => (key as u8 as char).to_string(),        // 0-9
         _ => return None,
     };
@@ -215,11 +239,10 @@ mod tests {
         assert_eq!(keymap.feed("g"), Outcome::Pending);
         assert_eq!(keymap.feed("g"), Outcome::Action(Action::Top));
 
-        assert_eq!(keymap.feed("space"), Outcome::Pending);
+        assert_eq!(keymap.feed("shift-space"), Outcome::Pending);
         assert_eq!(keymap.feed("f"), Outcome::Action(Action::Search));
 
-        assert_eq!(keymap.feed("escape"), Outcome::Pending);
-        assert_eq!(keymap.feed("escape"), Outcome::Action(Action::VisualMode));
+        assert_eq!(keymap.feed("ctrl-w"), Outcome::Action(Action::VisualMode));
     }
 
     #[test]
@@ -241,10 +264,35 @@ mod tests {
     fn qt_tokens() {
         assert_eq!(token_from_qt(0x4A, 0).as_deref(), Some("j")); // Key_J
         assert_eq!(token_from_qt(0x4E, QT_CTRL).as_deref(), Some("ctrl-n"));
+        assert_eq!(token_from_qt(0x57, QT_CTRL).as_deref(), Some("ctrl-w"));
+        assert_eq!(token_from_qt(0x77, QT_CTRL).as_deref(), Some("ctrl-w"));
         assert_eq!(token_from_qt(0x47, QT_SHIFT).as_deref(), Some("shift-g"));
         assert_eq!(token_from_qt(QT_KEY_SPACE, 0).as_deref(), Some("space"));
         assert_eq!(token_from_qt(QT_KEY_ESCAPE, 0).as_deref(), Some("escape"));
         assert_eq!(token_from_qt(QT_KEY_DOWN, 0).as_deref(), Some("down"));
+        assert_eq!(
+            token_from_qt(QT_KEY_ENTER, QT_SHIFT).as_deref(),
+            Some("shift-enter")
+        );
         assert_eq!(token_from_qt(0x0100_0009, 0), None); // unbound special key
+    }
+
+    #[test]
+    fn shift_enter_toggles_fullscreen() {
+        let mut keymap = Keymap::new();
+        assert_eq!(
+            keymap.feed("shift-enter"),
+            Outcome::Action(Action::ToggleFullscreen)
+        );
+    }
+
+    #[test]
+    fn space_plays_and_shift_space_f_searches() {
+        let mut keymap = Keymap::new();
+        assert_eq!(keymap.feed("space"), Outcome::Action(Action::PlayPause));
+
+        let mut keymap = Keymap::new();
+        assert_eq!(keymap.feed("shift-space"), Outcome::Pending);
+        assert_eq!(keymap.feed("f"), Outcome::Action(Action::Search));
     }
 }

@@ -31,6 +31,7 @@ pub struct Track {
     pub duration: f64,
     pub url: String,
     pub cover_art: String,
+    pub cover_url: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -146,6 +147,13 @@ impl Player {
 
         let track = &self.queue[self.index];
         let url = track.url.clone();
+        let metadata = json!({
+            "title": track.title,
+            "artist": track.artist,
+            "album": track.album,
+            "artUrl": track.cover_url,
+            "mpris:artUrl": track.cover_url,
+        });
         self.fallback_duration = track.duration;
 
         {
@@ -159,7 +167,10 @@ impl Player {
             };
         }
 
+        // `mpris:artUrl` / `metadata` feed mpv's MPRIS (when the plugin is
+        // loaded); position and pause state follow automatically.
         self.command(vec![json!("loadfile"), json!(url), json!("replace")]);
+        self.command(vec![json!("set_property"), json!("metadata"), metadata]);
         self.command(vec![json!("set_property"), json!("pause"), json!(false)]);
         self.state = State::Playing;
     }
@@ -264,12 +275,24 @@ impl Player {
         let socket = socket_path();
         let _ = std::fs::remove_file(&socket);
 
-        let spawn = Command::new("mpv")
-            .arg("--no-video")
-            .arg("--idle=yes")
-            .arg("--no-terminal")
-            .arg("--really-quiet")
-            .arg(format!("--input-ipc-server={}", socket.display()))
+        // Run mpv under a tiny supervisor shell that watches our PID and
+        // terminates mpv if we die (even on SIGKILL, where Drop never runs).
+        let parent = std::process::id();
+        let mpris = mpris_script_arg();
+        let script = format!(
+            "mpv{mpris} --no-video --idle=yes --no-terminal --really-quiet \
+             --input-ipc-server='{socket}' & MPV=$!; \
+             trap 'kill -TERM $MPV 2>/dev/null; exit 0' TERM INT; \
+             while kill -0 {parent} 2>/dev/null; do sleep 0.5; done; \
+             kill -TERM $MPV 2>/dev/null",
+            mpris = mpris,
+            socket = socket.display(),
+            parent = parent,
+        );
+
+        let spawn = Command::new("sh")
+            .arg("-c")
+            .arg(script)
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null())
@@ -319,7 +342,9 @@ impl Drop for Player {
     fn drop(&mut self) {
         self.ipc = None;
         if let Some(mut child) = self.child.take() {
-            let _ = child.kill();
+            // The supervisor traps TERM and shuts mpv down; SIGKILL would skip
+            // that, so signal it explicitly instead of `child.kill()`.
+            signal(child.id(), "TERM");
             let _ = child.wait();
         }
         if let Some(socket) = &self.socket {
@@ -334,6 +359,16 @@ fn socket_path() -> PathBuf {
         .unwrap_or_else(|_| PathBuf::from("/tmp/musika-mpv.sock"))
 }
 
+/// Optional `--script=...` to load mpv's MPRIS plugin. Set
+/// `MUSIKA_MPRIS_SCRIPT` to the `mpris.so`/`mpris.lua` path, or drop it into
+/// `~/.config/mpv/scripts` (which mpv loads automatically).
+fn mpris_script_arg() -> String {
+    match std::env::var("MUSIKA_MPRIS_SCRIPT") {
+        Ok(path) if !path.is_empty() => format!(" --script='{path}'"),
+        _ => String::new(),
+    }
+}
+
 fn connect_retry(path: &Path, timeout: Duration) -> Option<UnixStream> {
     let start = Instant::now();
     loop {
@@ -345,6 +380,16 @@ fn connect_retry(path: &Path, timeout: Duration) -> Option<UnixStream> {
         }
         std::thread::sleep(Duration::from_millis(50));
     }
+}
+
+fn signal(pid: u32, signal: &str) {
+    let _ = Command::new("sh")
+        .arg("-c")
+        .arg(format!("kill -{signal} {pid}"))
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status();
 }
 
 fn spawn_reader(stream: UnixStream, shared: Arc<Mutex<Shared>>) {

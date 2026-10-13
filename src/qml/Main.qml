@@ -13,6 +13,67 @@ ApplicationWindow {
     color: Theme.background
     title: qsTr("Musika")
 
+    // Global key handler. It wraps the screen stack so unhandled keys bubble up
+    // to it from whatever holds focus; focused controls (text fields) accept
+    // their keys first, which keeps insert-mode typing working.
+    Item {
+        id: keyHandler
+        anchors.fill: parent
+        focus: true
+
+        function dispatch(action) {
+            // Space pauses/plays globally, regardless of screen or region.
+            if (action === "play_pause") {
+                Backend.playerToggle();
+                return;
+            }
+
+            var current = stack.currentItem;
+            if (current && current.handleAction)
+                current.handleAction(action);
+        }
+
+        Keys.onPressed: (event) => {
+            var action = Backend.keyEvent(event.key, event.modifiers);
+            if (action === "PENDING") {
+                keyTimer.restart();
+                return;
+            }
+            keyTimer.stop();
+            if (action.length > 0) {
+                event.accepted = true;
+                dispatch(action);
+            }
+        }
+
+        StackView {
+            id: stack
+            anchors.fill: parent
+            initialItem: loginScreen
+
+            Connections {
+                target: Backend
+                function onLogged_in_changed() {
+                    if (Backend.loggedIn)
+                        stack.replace(homeScreen);
+                    else
+                        stack.replace(loginScreen);
+                }
+            }
+        }
+
+        // Resolves deferred sequences (e.g. bare Space = play/pause).
+        Timer {
+            id: keyTimer
+            interval: 350
+            onTriggered: {
+                var action = Backend.keyTimeout();
+                if (action.length > 0)
+                    keyHandler.dispatch(action);
+            }
+        }
+    }
+
     Component {
         id: loginScreen
         Login {}
@@ -23,38 +84,11 @@ ApplicationWindow {
         Home {}
     }
 
-    StackView {
-        id: stack
-        anchors.fill: parent
-        initialItem: homeScreen
-
-        Connections {
-            target: Backend
-            function onLogged_in_changed() {
-                if (Backend.loggedIn)
-                    stack.replace(homeScreen);
-                else
-                    stack.replace(loginScreen);
-            }
-        }
-    }
-
-    // Global key handler. It owns focus when no text field is active, so vi
-    // sequences reach the Rust engine; focused controls (e.g. the login fields)
-    // still receive input directly.
-    Item {
-        id: keyHandler
-        anchors.fill: parent
-        focus: true
-
-        Keys.onPressed: (event) => {
-            var action = Backend.keyEvent(event.key, event.modifiers);
-            if (action.length > 0) {
-                event.accepted = true;
-                var current = stack.currentItem;
-                if (current && current.handleAction)
-                    current.handleAction(action);
-            }
+    // Regain keyboard focus (e.g. after leaving the search field).
+    Connections {
+        target: Backend
+        function onFocusMain() {
+            keyHandler.forceActiveFocus();
         }
     }
 

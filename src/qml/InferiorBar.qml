@@ -16,6 +16,20 @@ Rectangle {
         return minutes + ":" + (rest < 10 ? "0" : "") + rest;
     }
 
+    // Scoped controls while the player bar is the active region.
+    function handleAction(action) {
+        if (action === "move_left")
+            Backend.playerSeek(Math.max(0, Backend.position - 5));
+        else if (action === "move_right")
+            Backend.playerSeek(Backend.position + 5);
+        else if (action === "move_up")
+            Backend.playerPrevious();
+        else if (action === "move_down")
+            Backend.playerNext();
+        else if (action === "enter")
+            Backend.playerToggle();
+    }
+
     // Polls the player for position and end-of-track.
     Timer {
         interval: 500
@@ -82,9 +96,7 @@ Rectangle {
 
                 Image {
                     anchors.fill: parent
-                    source: Backend.currentCoverArt.length > 0
-                        ? Backend.coverUrl(Backend.currentCoverArt)
-                        : ""
+                    source: Backend.currentCoverUrl
                     fillMode: Image.PreserveAspectCrop
                     asynchronous: true
                     cache: false
@@ -96,12 +108,12 @@ Rectangle {
                 Layout.alignment: Qt.AlignVCenter
                 spacing: root.height * 0.03
 
-                Text {
+                FadeText {
                     text: Backend.currentTitle.length > 0 ? Backend.currentTitle : "Nothing playing"
                     color: Theme.onSurface
                     font.pixelSize: root.height * 0.18
                 }
-                Text {
+                FadeText {
                     text: Backend.currentArtist
                     color: Theme.onSurfaceVariant
                     font.pixelSize: root.height * 0.15
@@ -164,13 +176,13 @@ Rectangle {
             spacing: root.height * 0.12
             Layout.alignment: Qt.AlignVCenter
 
-            Text {
+            FadeText {
                 text: root.formatTime(Backend.position) + " / " + root.formatTime(Backend.duration)
                 color: Theme.onSurfaceVariant
                 font.pixelSize: root.height * 0.15
             }
 
-            Text {
+            FadeText {
                 text: "🔊"
                 color: Theme.onSurfaceVariant
                 font.pixelSize: root.height * 0.18

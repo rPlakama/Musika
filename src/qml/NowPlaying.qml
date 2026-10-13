@@ -469,26 +469,16 @@ Rectangle {
                                 width: lyricsView.width
                                 height: textItem.height
 
-                                Rectangle {
-                                    anchors.left: parent.left
-                                    anchors.verticalCenter: parent.verticalCenter
-                                    width: Math.max(1, root.width * Theme.hairlineRatio) * 2
-                                    height: textItem.height * 0.9
-                                    color: Theme.primary
-                                    visible: lyricLine.active
-                                }
-
                                 FadeText {
                                     id: textItem
-                                    anchors.left: parent.left
-                                    anchors.leftMargin: root.width * 0.014
-                                    anchors.right: parent.right
+                                    anchors.fill: parent
                                     text: lyricLine.line
+                                    horizontalAlignment: Text.AlignHCenter
                                     color: lyricLine.active ? Theme.onSurface : Theme.onSurfaceVariant
                                     font.pixelSize: Theme.fontSize("body", root.height)
                                     wrapMode: Text.WordWrap
                                     animated: false
-                                    transformOrigin: Item.Left
+                                    transformOrigin: Item.Center
                                     opacity: lyricLine.distance < 0
                                         ? Theme.contentDim
                                         : (lyricLine.active

@@ -37,11 +37,10 @@ pub async fn save_credentials(
 }
 
 pub async fn load_credentials(pool: &SqlitePool) -> Result<Option<Credentials>> {
-    let row: Option<(String, String, String)> = sqlx::query_as(
-        "SELECT username, password, serverURL FROM users ORDER BY id DESC LIMIT 1",
-    )
-    .fetch_optional(pool)
-    .await?;
+    let row: Option<(String, String, String)> =
+        sqlx::query_as("SELECT username, password, serverURL FROM users ORDER BY id DESC LIMIT 1")
+            .fetch_optional(pool)
+            .await?;
 
     match row {
         Some((username, encrypted_password, server_url)) => {

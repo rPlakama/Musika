@@ -6,8 +6,8 @@
 #![allow(dead_code)] // Browse queries are prepared before the library UI lands.
 
 use anyhow::{Context, Result};
-use sqlx::sqlite::SqlitePool;
 use sqlx::FromRow;
+use sqlx::sqlite::SqlitePool;
 
 use crate::api::{AlbumID3, ArtistID3, Child};
 
@@ -120,9 +120,10 @@ pub async fn touch_last_sync(pool: &SqlitePool) -> Result<()> {
 }
 
 pub async fn last_modified(pool: &SqlitePool) -> Result<i64> {
-    let value: Option<String> = sqlx::query_scalar("SELECT value FROM meta WHERE key = 'last_modified'")
-        .fetch_optional(pool)
-        .await?;
+    let value: Option<String> =
+        sqlx::query_scalar("SELECT value FROM meta WHERE key = 'last_modified'")
+            .fetch_optional(pool)
+            .await?;
     Ok(value.and_then(|value| value.parse().ok()).unwrap_or(0))
 }
 
@@ -150,11 +151,10 @@ pub async fn status(pool: &SqlitePool) -> Result<LibraryStatus> {
 
 /// Returns the columns needed to rebuild the FTS index.
 pub async fn song_search_rows(pool: &SqlitePool) -> Result<Vec<SongSearchRow>> {
-    let rows = sqlx::query_as::<_, SongSearchRow>(
-        "SELECT id, title, artist, album, duration FROM songs",
-    )
-    .fetch_all(pool)
-    .await?;
+    let rows =
+        sqlx::query_as::<_, SongSearchRow>("SELECT id, title, artist, album, duration FROM songs")
+            .fetch_all(pool)
+            .await?;
     Ok(rows)
 }
 
@@ -165,7 +165,10 @@ pub async fn search_artists_albums(
     query: &str,
     limit: i64,
 ) -> Result<(Vec<ArtistRow>, Vec<AlbumRow>)> {
-    let escaped = query.replace('\\', "\\\\").replace('%', "\\%").replace('_', "\\_");
+    let escaped = query
+        .replace('\\', "\\\\")
+        .replace('%', "\\%")
+        .replace('_', "\\_");
     let like = format!("%{escaped}%");
 
     let artists = sqlx::query_as::<_, ArtistRow>(
@@ -215,8 +218,7 @@ pub async fn song_cover_ids(
     }
     separated.push_unseparated(")");
 
-    let rows: Vec<(String, Option<String>)> =
-        builder.build_query_as().fetch_all(pool).await?;
+    let rows: Vec<(String, Option<String>)> = builder.build_query_as().fetch_all(pool).await?;
     Ok(rows
         .into_iter()
         .filter_map(|(id, cover_art)| cover_art.map(|cover_art| (id, cover_art)))
@@ -394,8 +396,7 @@ pub async fn write_mirror(pool: &SqlitePool) -> Result<()> {
         std::fs::create_dir_all(parent)
             .with_context(|| format!("failed to create {}", parent.display()))?;
     }
-    std::fs::write(&path, text)
-        .with_context(|| format!("failed to write {}", path.display()))?;
+    std::fs::write(&path, text).with_context(|| format!("failed to write {}", path.display()))?;
     Ok(())
 }
 

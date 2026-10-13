@@ -132,7 +132,14 @@ where
         done: 65,
         total: 100,
     });
-    crate::library::replace(&dbs.library, &artists, &albums, &songs, indexes.last_modified).await?;
+    crate::library::replace(
+        &dbs.library,
+        &artists,
+        &albums,
+        &songs,
+        indexes.last_modified,
+    )
+    .await?;
 
     // 2. search index
     let rows = crate::library::song_search_rows(&dbs.library).await?;

@@ -2,9 +2,9 @@ use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result, anyhow};
 use openssl::rand::rand_bytes;
-use openssl::symm::{decrypt_aead, encrypt_aead, Cipher};
+use openssl::symm::{Cipher, decrypt_aead, encrypt_aead};
 
 const KEY_LEN: usize = 32;
 const NONCE_LEN: usize = 12;
@@ -28,7 +28,10 @@ impl SecretKey {
             let bytes = hex::decode(contents.trim())
                 .with_context(|| format!("key file {} is not valid hex", path.display()))?;
             let key: [u8; KEY_LEN] = bytes.try_into().map_err(|_| {
-                anyhow!("key file {} must contain exactly {KEY_LEN} bytes", path.display())
+                anyhow!(
+                    "key file {} must contain exactly {KEY_LEN} bytes",
+                    path.display()
+                )
             })?;
             return Ok(Self(key));
         }
@@ -113,7 +116,10 @@ fn key_path() -> Result<PathBuf> {
     }
 
     let home = std::env::var("HOME").context("HOME is not set")?;
-    Ok(PathBuf::from(home).join(".config").join("musika").join("key"))
+    Ok(PathBuf::from(home)
+        .join(".config")
+        .join("musika")
+        .join("key"))
 }
 
 fn write_private(path: &Path, data: &[u8]) -> Result<()> {

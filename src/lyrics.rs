@@ -13,8 +13,8 @@
 use std::path::PathBuf;
 
 use anyhow::Result;
-use sqlx::sqlite::SqlitePool;
 use sqlx::FromRow;
+use sqlx::sqlite::SqlitePool;
 
 use crate::api::LyricsList;
 use crate::db::Dbs;
@@ -340,11 +340,10 @@ async fn song_lyrics_supported(dbs: &Dbs, client: &SubsonicClient) -> bool {
 }
 
 async fn meta_get(pool: &SqlitePool, key: &str) -> Result<Option<String>> {
-    let value: Option<String> =
-        sqlx::query_scalar("SELECT value FROM lyrics_meta WHERE key = ?1")
-            .bind(key)
-            .fetch_optional(pool)
-            .await?;
+    let value: Option<String> = sqlx::query_scalar("SELECT value FROM lyrics_meta WHERE key = ?1")
+        .bind(key)
+        .fetch_optional(pool)
+        .await?;
     Ok(value)
 }
 
@@ -573,7 +572,10 @@ mod tests {
             .connect_with(options)
             .await
             .unwrap();
-        sqlx::migrate!("./migrations_lyrics").run(&pool).await.unwrap();
+        sqlx::migrate!("./migrations_lyrics")
+            .run(&pool)
+            .await
+            .unwrap();
         pool
     }
 

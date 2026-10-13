@@ -19,8 +19,8 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use md5::{Digest, Md5};
-use sqlx::sqlite::SqlitePool;
 use sqlx::FromRow;
+use sqlx::sqlite::SqlitePool;
 use tokio::task::JoinSet;
 
 use crate::http_client::SubsonicClient;
@@ -54,8 +54,7 @@ pub async fn refresh(
     referenced: &BTreeSet<String>,
 ) -> Result<CoverReport> {
     let dir = crate::db::covers_dir()?;
-    std::fs::create_dir_all(&dir)
-        .with_context(|| format!("failed to create {}", dir.display()))?;
+    std::fs::create_dir_all(&dir).with_context(|| format!("failed to create {}", dir.display()))?;
 
     let existing: Vec<CoverRow> =
         sqlx::query_as("SELECT id, file, hash, etag, last_modified FROM covers")
@@ -80,7 +79,12 @@ pub async fn refresh(
                 .unwrap_or((None, None));
             set.spawn(async move {
                 let result = client
-                    .get_cover_art(&id, Some(COVER_SIZE), etag.as_deref(), last_modified.as_deref())
+                    .get_cover_art(
+                        &id,
+                        Some(COVER_SIZE),
+                        etag.as_deref(),
+                        last_modified.as_deref(),
+                    )
                     .await;
                 (id, result)
             });
@@ -177,8 +181,9 @@ pub async fn hash(pool: &SqlitePool, id: &str) -> Result<Option<String>> {
 /// Maps every cached cover id to its `file://` URL. Used to resolve art while
 /// loading lists off the UI thread.
 pub async fn url_map(pool: &SqlitePool) -> Result<HashMap<String, String>> {
-    let rows: Vec<(String, String)> =
-        sqlx::query_as("SELECT id, file FROM covers").fetch_all(pool).await?;
+    let rows: Vec<(String, String)> = sqlx::query_as("SELECT id, file FROM covers")
+        .fetch_all(pool)
+        .await?;
     let dir = crate::db::covers_dir()?;
     let mut map = HashMap::new();
     for (id, file) in rows {

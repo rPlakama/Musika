@@ -123,10 +123,7 @@ impl SubsonicClient {
             request = request.header(reqwest::header::IF_MODIFIED_SINCE, last_modified);
         }
 
-        let response = request
-            .send()
-            .await
-            .context("Could not reach the server")?;
+        let response = request.send().await.context("Could not reach the server")?;
 
         if response.status() == reqwest::StatusCode::NOT_MODIFIED {
             return Ok(CoverArt {

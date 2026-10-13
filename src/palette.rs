@@ -101,14 +101,22 @@ macro_rules! apply_role {
 
 #[qobject(Singleton)]
 impl Palette {
-    qproperty!("background", Member = background, Notify = background_changed);
+    qproperty!(
+        "background",
+        Member = background,
+        Notify = background_changed
+    );
     qproperty!(
         "onBackground",
         Member = on_background,
         Notify = on_background_changed
     );
     qproperty!("surface", Member = surface, Notify = surface_changed);
-    qproperty!("surfaceDim", Member = surface_dim, Notify = surface_dim_changed);
+    qproperty!(
+        "surfaceDim",
+        Member = surface_dim,
+        Notify = surface_dim_changed
+    );
     qproperty!(
         "surfaceBright",
         Member = surface_bright,
@@ -139,7 +147,11 @@ impl Palette {
         Member = surface_container_highest,
         Notify = surface_container_highest_changed
     );
-    qproperty!("onSurface", Member = on_surface, Notify = on_surface_changed);
+    qproperty!(
+        "onSurface",
+        Member = on_surface,
+        Notify = on_surface_changed
+    );
     qproperty!(
         "surfaceVariant",
         Member = surface_variant,
@@ -151,7 +163,11 @@ impl Palette {
         Notify = on_surface_variant_changed
     );
     qproperty!("primary", Member = primary, Notify = primary_changed);
-    qproperty!("onPrimary", Member = on_primary, Notify = on_primary_changed);
+    qproperty!(
+        "onPrimary",
+        Member = on_primary,
+        Notify = on_primary_changed
+    );
     qproperty!(
         "primaryContainer",
         Member = primary_container,
@@ -307,10 +323,22 @@ impl Palette {
         }
 
         apply_role!(self, roles, background, "background", background_changed);
-        apply_role!(self, roles, on_background, "on_background", on_background_changed);
+        apply_role!(
+            self,
+            roles,
+            on_background,
+            "on_background",
+            on_background_changed
+        );
         apply_role!(self, roles, surface, "surface", surface_changed);
         apply_role!(self, roles, surface_dim, "surface_dim", surface_dim_changed);
-        apply_role!(self, roles, surface_bright, "surface_bright", surface_bright_changed);
+        apply_role!(
+            self,
+            roles,
+            surface_bright,
+            "surface_bright",
+            surface_bright_changed
+        );
         apply_role!(
             self,
             roles,
@@ -347,7 +375,13 @@ impl Palette {
             surface_container_highest_changed
         );
         apply_role!(self, roles, on_surface, "on_surface", on_surface_changed);
-        apply_role!(self, roles, surface_variant, "surface_variant", surface_variant_changed);
+        apply_role!(
+            self,
+            roles,
+            surface_variant,
+            "surface_variant",
+            surface_variant_changed
+        );
         apply_role!(
             self,
             roles,
@@ -402,7 +436,13 @@ impl Palette {
             on_tertiary_container_changed
         );
         apply_role!(self, roles, error, "error", error_changed);
-        apply_role!(self, roles, error_container, "error_container", error_container_changed);
+        apply_role!(
+            self,
+            roles,
+            error_container,
+            "error_container",
+            error_container_changed
+        );
         apply_role!(
             self,
             roles,
@@ -424,9 +464,21 @@ impl Palette {
             "on_inverse_surface",
             on_inverse_surface_changed
         );
-        apply_role!(self, roles, surface_tint, "surface_tint", surface_tint_changed);
+        apply_role!(
+            self,
+            roles,
+            surface_tint,
+            "surface_tint",
+            surface_tint_changed
+        );
         apply_role!(self, roles, outline, "outline", outline_changed);
-        apply_role!(self, roles, outline_variant, "outline_variant", outline_variant_changed);
+        apply_role!(
+            self,
+            roles,
+            outline_variant,
+            "outline_variant",
+            outline_variant_changed
+        );
         apply_role!(self, roles, scrim, "scrim", scrim_changed);
     }
 

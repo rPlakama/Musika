@@ -75,8 +75,16 @@ impl Backend {
         Member = artist_count,
         Notify = artist_count_changed
     );
-    qproperty!("albumCount", Member = album_count, Notify = album_count_changed);
-    qproperty!("songCount", Member = song_count, Notify = song_count_changed);
+    qproperty!(
+        "albumCount",
+        Member = album_count,
+        Notify = album_count_changed
+    );
+    qproperty!(
+        "songCount",
+        Member = song_count,
+        Notify = song_count_changed
+    );
     qproperty!(
         "syncProgress",
         Member = sync_progress,
@@ -292,11 +300,7 @@ impl Backend {
                             );
                         }
                         Ok(Err(err)) => {
-                            qtbridge::invoke_method!(
-                                invoker,
-                                "login_failed",
-                                format!("{err:#}")
-                            );
+                            qtbridge::invoke_method!(invoker, "login_failed", format!("{err:#}"));
                         }
                         Err(_) => {
                             qtbridge::invoke_method!(
@@ -500,7 +504,7 @@ impl Backend {
                         "sync".to_string(),
                         format!("{err:#}")
                     );
-                },
+                }
             };
         });
     }
@@ -664,7 +668,12 @@ impl Backend {
                 }
                 Err(err) => {
                     eprintln!("player: could not start playback: {err:#}");
-                    qtbridge::invoke_method!(invoker, "raiseError", "playback".to_string(), format!("{err:#}"));
+                    qtbridge::invoke_method!(
+                        invoker,
+                        "raiseError",
+                        "playback".to_string(),
+                        format!("{err:#}")
+                    );
                 }
             }
         });
@@ -684,7 +693,12 @@ impl Backend {
                 }
                 Err(err) => {
                     eprintln!("player: could not play song: {err:#}");
-                    qtbridge::invoke_method!(invoker, "raiseError", "playback".to_string(), format!("{err:#}"));
+                    qtbridge::invoke_method!(
+                        invoker,
+                        "raiseError",
+                        "playback".to_string(),
+                        format!("{err:#}")
+                    );
                 }
             }
         });
@@ -706,11 +720,21 @@ impl Backend {
         crate::runtime().spawn(async move {
             match song_album_payload(&dbs, &song_id).await {
                 Ok(payload) => {
-                    qtbridge::invoke_method!(invoker, "emitData", "song_album".to_string(), payload);
+                    qtbridge::invoke_method!(
+                        invoker,
+                        "emitData",
+                        "song_album".to_string(),
+                        payload
+                    );
                 }
                 Err(err) => {
                     eprintln!("player: could not queue album: {err:#}");
-                    qtbridge::invoke_method!(invoker, "raiseError", "playback".to_string(), format!("{err:#}"));
+                    qtbridge::invoke_method!(
+                        invoker,
+                        "raiseError",
+                        "playback".to_string(),
+                        format!("{err:#}")
+                    );
                 }
             }
         });
@@ -808,7 +832,8 @@ impl Backend {
 
     #[qslot(qml_name = "queueMove")]
     fn queue_move(&mut self, from: i64, to: i64) {
-        self.player.move_item(from.max(0) as usize, to.max(0) as usize);
+        self.player
+            .move_item(from.max(0) as usize, to.max(0) as usize);
         self.emit_queue();
     }
 
@@ -881,28 +906,44 @@ impl Backend {
         self.colors_in_flight = Some(cover.clone());
 
         crate::runtime().spawn(async move {
-            let cover_hash = crate::covers::hash(&dbs.covers, &cover).await.ok().flatten();
-            let (scheme_name, seed, dark) = match crate::colors::fetch(&dbs, &cover).await {
-                Ok(Some(scheme)) => (
-                    serde_json::Value::String(scheme.scheme),
-                    scheme.seed,
-                    serde_json::to_value(&scheme.roles).unwrap_or(serde_json::Value::Null),
-                ),
-                Ok(None) => {
-                    eprintln!("colors: no cached cover for {cover}; keeping static palette");
-                    (serde_json::Value::Null, 0, serde_json::Value::Null)
-                }
-                Err(err) => {
-                    eprintln!("colors: could not generate for {cover}: {err:#}");
-                    (serde_json::Value::Null, 0, serde_json::Value::Null)
-                }
-            };
+            let cover_hash = crate::covers::hash(&dbs.covers, &cover)
+                .await
+                .ok()
+                .flatten();
+            let (scheme_name, seed, role_hash, dark) =
+                match crate::colors::fetch(&dbs, &cover).await {
+                    Ok(Some(scheme)) => (
+                        serde_json::Value::String(scheme.scheme),
+                        scheme.seed,
+                        serde_json::Value::String(scheme.role_hash),
+                        serde_json::to_value(&scheme.roles).unwrap_or(serde_json::Value::Null),
+                    ),
+                    Ok(None) => {
+                        eprintln!("colors: no cached cover for {cover}; keeping static palette");
+                        (
+                            serde_json::Value::Null,
+                            0,
+                            serde_json::Value::Null,
+                            serde_json::Value::Null,
+                        )
+                    }
+                    Err(err) => {
+                        eprintln!("colors: could not generate for {cover}: {err:#}");
+                        (
+                            serde_json::Value::Null,
+                            0,
+                            serde_json::Value::Null,
+                            serde_json::Value::Null,
+                        )
+                    }
+                };
 
             let payload = serde_json::json!({
                 "cover_art": cover,
                 "cover_hash": cover_hash,
                 "scheme": scheme_name,
                 "seed": seed,
+                "role_hash": role_hash,
                 "dark": dark,
             })
             .to_string();
@@ -1165,7 +1206,8 @@ async fn load_artists_json(dbs: &crate::db::Dbs) -> anyhow::Result<String> {
 fn song_rows_json(
     songs: &[crate::library::SongRow],
     covers: &HashMap<String, String>,
-) -> anyhow::Result<String> {    let rows: Vec<serde_json::Value> = songs
+) -> anyhow::Result<String> {
+    let rows: Vec<serde_json::Value> = songs
         .iter()
         .map(|song| {
             let cover = song
@@ -1213,7 +1255,9 @@ async fn album_notes(dbs: &crate::db::Dbs, album_id: &str) -> String {
 }
 
 fn cover_url(id: Option<&str>, covers: &HashMap<String, String>) -> String {
-    id.and_then(|id| covers.get(id)).cloned().unwrap_or_default()
+    id.and_then(|id| covers.get(id))
+        .cloned()
+        .unwrap_or_default()
 }
 
 async fn search_json(dbs: &crate::db::Dbs, query: &str) -> anyhow::Result<String> {
@@ -1221,8 +1265,7 @@ async fn search_json(dbs: &crate::db::Dbs, query: &str) -> anyhow::Result<String
         return Ok("{\"artists\":[],\"albums\":[],\"songs\":[]}".to_string());
     }
 
-    let (artists, albums) =
-        crate::library::search_artists_albums(&dbs.library, query, 20).await?;
+    let (artists, albums) = crate::library::search_artists_albums(&dbs.library, query, 20).await?;
     let songs = crate::search::search(&dbs.search, query, 20).await?;
     let covers = crate::covers::url_map(&dbs.covers).await?;
 

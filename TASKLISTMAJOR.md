@@ -123,7 +123,7 @@ work is); solved/partial tasks add **Now** with the current evidence.
 - [ ] **Q-5 · Gapless + stream-error retry/auto-advance** — P1 · (M8)
   - **Why:** end-of-track errors currently stop the session silently.
 - [ ] **Q-6 · A-B repeat, playback rate, crossfade** — P3 · (M9)
-- [ ] **Q-7 · MPRIS/D-Bus metadata** — P2 · (M7) — solved
+- [x] **Q-7 · MPRIS/D-Bus metadata** — P2 · (M7)
   - **Now:** mpv MPRIS script + metadata via IPC (`mpris:artUrl`).
 - [ ] **Q-8 · Native MPRIS service (`org.mpris.MediaPlayer2.musika`)** — P2 · (roadmap "MPRIS node" design)
   - **Why:** the mpv-mpris script is an extra install; a stock desktop should
@@ -215,7 +215,7 @@ work is); solved/partial tasks add **Now** with the current evidence.
     support for `enhanced` varies.
   - **Details:** `enhanced=true` `cueLine`/`agents`/translations; index lyric
     text in search.db FTS5; `:lyrics sync` backfill per album/artist.
-- [ ] **LYR-7 · Lyrics stage states (kill the `> <` code-art)** — P2 · (roadmap "Lyrics presentation" P0)
+- [x] **LYR-7 · Lyrics stage states (kill the `> <` code-art)** — P2 · (roadmap "Lyrics presentation" P0)
   - **Why:** the active line is ASCII-marked at one uniform font size, so the
     pane reads like a text dump (NowPlaying.qml:456-473).
   - **Details:** active/near/far model: active `body` scaled ×1.12, full
@@ -228,6 +228,9 @@ work is); solved/partial tasks add **Now** with the current evidence.
   - **Pane-sized type:** the font is computed from the lyrics rectangle
     (`pane.height * 0.055`, clamped 10–18) with proportional left/right padding,
     so lines never collide with the pane walls at any window size.
+  - **Now:** `NowPlaying.qml:463-502` — no `> <` marker; active/near/far
+    opacity + scale about the text centre; uniform dim column when unsynced;
+    pane-sized `lyricSize`/`lyricPad`.
 - [ ] **LYR-8 · Smooth centre-follow + edge fades** — P2 · (roadmap "Lyrics presentation" P1)
   - **Why:** `positionViewAtIndex(Center)` teleports each line and every
     500 ms tick fights manual scrolling (NowPlaying.qml:109-110, 124-127).
@@ -395,6 +398,33 @@ work is); solved/partial tasks add **Now** with the current evidence.
     generator tag, so a knob change invalidates); `colors::invalidate` +
     IPC `colors_refresh` (handled in Main.qml; `:theme refresh` waits on the
     command line, VI-13).
+- [ ] **THM-6 · Rewrite the color engine on DMS's pipeline** — P2 · (MATUGENSTUDY.md; roadmap T5+)
+  - **Why:** DMS cleanly separates seed extraction, palette specs, caching,
+    change detection and coalescing; Musika's single-shot engine re-quantizes
+    for every change, cannot reach the 2025/DMS specs, re-applies identical
+    palettes, and keeps its knobs in env vars.
+  - **Details:**
+    - split `colors.rs` into seed/scheme/engine (R0);
+    - source modes: default `Score` + `colorful` (caelestia-style scoring port)
+      + user seed override; seed cache in DB6 keyed `cover_hash|mode|engine`
+      with a bounded LRU (R1);
+    - spec versions 2021/2025/DMS in the generator tag; verify
+      `material-colors 0.5` coverage or port the palette tables (R2);
+    - role-map hash / applied key so identical palettes are a no-op (R3);
+    - single coalescing worker with cancel-last on a low-priority task (R3);
+    - options persist as settings (scheme/source/contrast/spec/seed) instead of
+      `MUSIKA_COLOR_*` env vars; `requestColors` reads them (R4);
+    - `colors_preview(seed)` API for a future theme tab (R4).
+  - **Now (partial):** R0–R2 landed — `src/colors/{seed,scheme,engine}.rs`, with
+    `colors.rs` as facade; DB6 `color_seed` LRU (32) + `cover_color.role_hash`/
+    `colorfulness`; source modes `dominant|colorful|#rrggbb`
+    (`MUSIKA_COLOR_SOURCE`, colorful = caelestia scoring port); specs
+    `2021|2025|dms` (`MUSIKA_COLOR_SPEC`, default `dms`; DMS tables ported from
+    `spec.go`); `role_hash` in the `colors` payload. Open: R3 coalescing worker
+    + no-op apply in `Palette`, R4 persisted settings + `colors_preview`,
+    light/smart mode.
+  - **Study:** `MATUGENSTUDY.md` (DMS pipeline, comparison table, take/leave,
+    milestones R0–R4, risks).
 
 ## 8. Architecture & robustness (`ARC`) — rationale: DBDESIGN.md · wiring: DBWIRING.md
 
@@ -511,6 +541,36 @@ work is); solved/partial tasks add **Now** with the current evidence.
   - **Details:** `schema_generation` + `catalog_epoch` (+ `generator` where
     relevant) in library/search/covers/lyrics/colors meta; migrations seed
     them; verify/startup repair compare both values.
+- [ ] **ARC-34 · `.unwrap()` audit — 8 production sites; recover or surface, never abort** — P1 · (ARC-12, ARC-5)
+  - **Why:** a poisoned player `Mutex` or a failed runtime/DB init panics the
+    whole app; production unwraps hide failure context instead of collecting
+    it. The 82 test unwraps are fixtures and should stay.
+  - **Inventory (90 lines / 94 occurrences, `rg '\\.unwrap\\(\\)' src`):**
+    - production, 8: `player.rs:124,133,166,216,303,322` and the reader thread
+      `player.rs:465` (all `shared.lock().unwrap()`); `main.rs:37`
+      `Runtime::new().unwrap()`; `main.rs:45` is an `expect` on `db::init()`;
+    - tests, 82 lines: `colors.rs` 35, `lyrics.rs` 20, `api.rs` 8,
+      `http_client.rs` 8, `search.rs` 7, `crypto.rs` 4 (leave as-is, excluded
+      from the lint).
+  - **Details:**
+    - `player.rs`: one `fn shared(&self) -> MutexGuard<Shared>` helper (and a
+      local wrapper for the reader's `Arc<Mutex<_>>`) using
+      `unwrap_or_else(PoisonError::into_inner)` — `Shared` is a plain snapshot,
+      poisoning carries no invariant, so recover instead of aborting; closes
+      ARC-12 and guarantees a reader panic can't kill the UI tick.
+    - `main.rs`: initialize the runtime and DBs in `main` with `anyhow`
+      context and exit(1) after printing the error chain (`main() -> Result`
+      or explicit match); remove `Runtime::new().unwrap()` from `runtime()`
+      (the `OnceLock` is filled once in main).
+    - error collection: background paths use the existing report pattern
+      (`SyncReport`/`CoverReport`) or `errorRaised` toasts; no
+      `eprintln!`-only paths (ties ARC-5).
+    - enforcement: `#![cfg_attr(not(test), deny(clippy::unwrap_used,
+      clippy::expect_used))]` in `main.rs` plus a `cargo clippy` gate; a
+      justified site needs an inline `#[allow]` with a reason, so new raw
+      unwraps are deliberate.
+    - policy: tests keep their unwraps; prefer `expect("<what>")` when a
+      failure message would save debugging time.
 
 ## 9. Media cache / offline (`CACHE`) — roadmap design
 
@@ -563,17 +623,29 @@ work is); solved/partial tasks add **Now** with the current evidence.
 | Area | Open | Solved |
 |------|------|--------|
 | Vi modal engine | 18 | 2 |
-| Queue & grammar | 8 | 1 |
+| Queue & grammar | 6 | 3 |
 | Player features | 6 | 0 |
-| Lyrics pipeline | 6 | 4 |
+| Lyrics pipeline | 5 | 5 |
 | Search | 2 | 3 |
 | UI microdesigns | 22 | 5 |
-| Dynamic color | 0 | 5 |
-| Architecture | 28 | 5 |
+| Dynamic color | 1 | 5 |
+| Architecture | 29 | 5 |
 | Media cache | 7 | 0 |
 | Auth/startup | 2 | 1 |
-| Docs | 2 | 0 |
+| Docs | 1 | 1 |
 
-Biggest wins to schedule next: **VI-3** (Ctrl-W panes) + **VI-2** (mode machine)
-unlock most of the vi story; **UI-17/Q-4** (inert controls) and **ARC-5** remove
-the remaining trust breaks; **CACHE-1/2** make the player offline-capable.
+### Next up (ranked)
+
+Order = trust/correctness > unblocking > user value > effort; full tiered
+backlog in `REMAINING.md` (local note).
+
+1. **ARC-25** — partial-fetch guard before the destructive purge (data loss).
+2. **UI-17 + Q-4** — wire the inert shuffle/stop/volume (`player.rs:306`).
+3. **ARC-5** — errors to toasts instead of `eprintln!`.
+4. **UI-22** — empty/error states (P0, half-landed).
+5. **VI-2** — mode machine; unblocks VI-3/4/7/12/13/14/15.
+6. **VI-3** — `Ctrl-W h/j/k/l` panes, retire the blur overlay.
+7. **LYR-8** — smooth centre-follow + edge fades.
+8. **ARC-24 + ARC-33** — `catalog_epoch` + `schema_generation` in every meta.
+9. **ARC-29 + ARC-30** — content-addressed covers + hash-keyed colors.
+10. **VI-4** — visual selection (rows + count badge).

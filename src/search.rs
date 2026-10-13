@@ -5,8 +5,8 @@
 //! columns, because SQLite cannot join across databases.
 
 use anyhow::Result;
-use sqlx::sqlite::SqlitePool;
 use sqlx::FromRow;
+use sqlx::sqlite::SqlitePool;
 
 use crate::library::SongSearchRow;
 
@@ -29,7 +29,9 @@ pub struct SearchHit {
 pub async fn rebuild(pool: &SqlitePool, rows: &[SongSearchRow]) -> Result<()> {
     let mut tx = pool.begin().await?;
 
-    sqlx::query("DELETE FROM song_search").execute(&mut *tx).await?;
+    sqlx::query("DELETE FROM song_search")
+        .execute(&mut *tx)
+        .await?;
 
     for row in rows {
         sqlx::query(
@@ -97,7 +99,10 @@ mod tests {
             .connect_with(options)
             .await
             .unwrap();
-        sqlx::migrate!("./migrations_search").run(&pool).await.unwrap();
+        sqlx::migrate!("./migrations_search")
+            .run(&pool)
+            .await
+            .unwrap();
         pool
     }
 

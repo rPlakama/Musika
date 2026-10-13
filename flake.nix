@@ -107,19 +107,16 @@
           ${pkgs.desktop-file-utils}/bin/desktop-file-validate \
             $out/share/applications/musika.desktop
 
-          # Application icon (PKG-1): hicolor theme, scalable + PNG sizes.
-          install -Dm644 src/icons/P.svg \
+          # Application icon (PKG-1): hicolor theme, scalable + the full PNG
+          # size ladder desktops ask for (16..512).
+          install -Dm644 src/icons/musika.svg \
             $out/share/icons/hicolor/scalable/apps/musika.svg
-          install -d \
-            $out/share/icons/hicolor/48x48/apps \
-            $out/share/icons/hicolor/128x128/apps \
-            $out/share/icons/hicolor/256x256/apps
-          ${pkgs.librsvg}/bin/rsvg-convert -w 48 -h 48 \
-            src/icons/P.svg -o $out/share/icons/hicolor/48x48/apps/musika.png
-          ${pkgs.librsvg}/bin/rsvg-convert -w 128 -h 128 \
-            src/icons/P.svg -o $out/share/icons/hicolor/128x128/apps/musika.png
-          ${pkgs.librsvg}/bin/rsvg-convert -w 256 -h 256 \
-            src/icons/P.svg -o $out/share/icons/hicolor/256x256/apps/musika.png
+          for size in 16 24 32 48 64 128 256 512; do
+            install -d $out/share/icons/hicolor/''${size}x''${size}/apps
+            ${pkgs.librsvg}/bin/rsvg-convert -w $size -h $size \
+              src/icons/musika.svg \
+              -o $out/share/icons/hicolor/''${size}x''${size}/apps/musika.png
+          done
         '';
 
         meta = {

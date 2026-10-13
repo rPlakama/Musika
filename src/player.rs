@@ -234,6 +234,61 @@ impl Player {
         self.play_current();
     }
 
+    /// The current queue, in order.
+    pub fn queue(&self) -> &[Track] {
+        &self.queue
+    }
+
+    /// Jumps to and plays the track at `index`.
+    pub fn jump(&mut self, index: usize) {
+        if index < self.queue.len() {
+            self.index = index;
+            self.play_current();
+        }
+    }
+
+    /// Removes the track at `index` (playing the one that takes its place if it
+    /// was current).
+    pub fn remove(&mut self, index: usize) {
+        if index >= self.queue.len() {
+            return;
+        }
+        let was_current = index == self.index;
+        self.queue.remove(index);
+        if self.queue.is_empty() {
+            self.stop();
+            return;
+        }
+        if index < self.index {
+            self.index -= 1;
+        } else if was_current {
+            if self.index >= self.queue.len() {
+                self.index = self.queue.len() - 1;
+            }
+            self.play_current();
+        }
+    }
+
+    /// Moves the track at `from` to position `to`.
+    pub fn move_item(&mut self, from: usize, to: usize) {
+        if from >= self.queue.len() || to >= self.queue.len() || from == to {
+            return;
+        }
+        let track = self.queue.remove(from);
+        self.queue.insert(to, track);
+        // Track the current index across the reorder.
+        if self.index == from {
+            self.index = to;
+        } else {
+            if from < self.index {
+                self.index -= 1;
+            }
+            if to <= self.index {
+                self.index += 1;
+            }
+        }
+    }
+
     /// Seeks to an absolute position (seconds).
     pub fn seek(&mut self, seconds: f64) {
         let seconds = seconds.max(0.0);

@@ -101,10 +101,15 @@ work is); solved/partial tasks add **Now** with the current evidence.
 
 ## 2. Queue & playback grammar (`Q`)
 
-- [ ] **Q-1 · Queue view (drawer) with reorder/remove** — P2 · (M1, CRITIQUE Ph2.1)
+- [x] **Q-1 · Queue view (drawer) with reorder/remove** — P2 · (M1, CRITIQUE Ph2.1)
   - **Why:** the queue is the primary working document; today it is invisible.
   - **Details:** collapsible pane (`Ctrl-W q`/`:queue`), `j/k` navigation,
     `K/J` reorder, `dd` remove, canonical cursor token, `quick` collapse.
+  - **Now (working tree):** `QueueDrawer.qml` (right drawer, toggled by `Ctrl-Q`
+    / IPC `queue_toggle`); `j/k` + `Ctrl-N/P` move, `Enter` jumps, `Shift-J/K`
+    reorder, `dd` removes; `player.rs` exposes queue/jump/remove/move_item and
+    `emit_queue` publishes over the `queue` dataReady channel. (`Ctrl-W q`/`:queue`
+    not used yet; `quick` easing pending.)
 - [x] **Q-2 · Playback context builds a real queue** — P0 · (M2)
   - **Now:** `playAlbum`/`playSong` load album/list context instead of a single
     track (qml.rs playerLoad/playAlbum).

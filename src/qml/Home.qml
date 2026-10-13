@@ -109,6 +109,16 @@ Item {
             searchOverlay.handleAction(action);
             return;
         }
+        // The queue drawer is modal too.
+        if (queueDrawer.opened) {
+            queueDrawer.handleAction(action);
+            return;
+        }
+        // Ctrl-Q toggles the queue drawer from anywhere.
+        if (action === "queue_toggle") {
+            queueDrawer.toggle();
+            return;
+        }
 
         if (action === "visual_mode") {
             if (nowPlayingExpanded) {
@@ -357,6 +367,11 @@ Item {
             });
         }
         onArtistActivated: (artist) => contentStack.replace(albumListComponent, { artistFilter: artist })
+    }
+
+    QueueDrawer {
+        id: queueDrawer
+        anchors.fill: parent
     }
 
     Connections {

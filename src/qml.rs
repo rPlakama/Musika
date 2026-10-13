@@ -688,6 +688,7 @@ impl Backend {
             Ok(tracks) => {
                 self.player.load(tracks, start.max(0) as usize);
                 self.sync_player();
+                self.emit_queue();
             }
             Err(err) => {
                 eprintln!("player: bad queue payload: {err}");
@@ -706,18 +707,74 @@ impl Backend {
     fn player_next(&mut self) {
         self.player.next();
         self.sync_player();
+        self.emit_queue();
     }
 
     #[qslot(qml_name = "playerPrevious")]
     fn player_previous(&mut self) {
         self.player.previous();
         self.sync_player();
+        self.emit_queue();
     }
 
     #[qslot(qml_name = "playerStop")]
     fn player_stop(&mut self) {
         self.player.stop();
         self.sync_player();
+    }
+
+    // -----------------------------------------------------------------------
+    // Queue (drawer)
+    // -----------------------------------------------------------------------
+
+    /// Publishes the current queue to QML.
+    fn emit_queue(&mut self) {
+        let items: Vec<serde_json::Value> = self
+            .player
+            .queue()
+            .iter()
+            .map(|track| {
+                serde_json::json!({
+                    "id": track.id,
+                    "title": track.title,
+                    "artist": track.artist,
+                    "album": track.album,
+                    "duration": track.duration,
+                    "cover": track.cover_url,
+                })
+            })
+            .collect();
+        let json = serde_json::json!({
+            "index": self.player.index(),
+            "items": items,
+        })
+        .to_string();
+        self.data_ready("queue".to_string(), json);
+    }
+
+    #[qslot(qml_name = "requestQueue")]
+    fn request_queue(&mut self) {
+        self.emit_queue();
+    }
+
+    #[qslot(qml_name = "queueJump")]
+    fn queue_jump(&mut self, index: i64) {
+        self.player.jump(index.max(0) as usize);
+        self.sync_player();
+        self.emit_queue();
+    }
+
+    #[qslot(qml_name = "queueRemove")]
+    fn queue_remove(&mut self, index: i64) {
+        self.player.remove(index.max(0) as usize);
+        self.sync_player();
+        self.emit_queue();
+    }
+
+    #[qslot(qml_name = "queueMove")]
+    fn queue_move(&mut self, from: i64, to: i64) {
+        self.player.move_item(from.max(0) as usize, to.max(0) as usize);
+        self.emit_queue();
     }
 
     /// Seeks to an absolute position (seconds).

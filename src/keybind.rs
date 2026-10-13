@@ -27,6 +27,10 @@ pub enum Action {
     ToggleFullscreen,
     PlayPause,
     InsertMode,
+    QueueToggle,
+    QueueUp,
+    QueueDown,
+    QueueRemove,
 }
 
 impl Action {
@@ -47,6 +51,10 @@ impl Action {
             Self::ToggleFullscreen => "toggle_fullscreen",
             Self::PlayPause => "play_pause",
             Self::InsertMode => "insert_mode",
+            Self::QueueToggle => "queue_toggle",
+            Self::QueueUp => "queue_up",
+            Self::QueueDown => "queue_down",
+            Self::QueueRemove => "queue_remove",
         }
     }
 }
@@ -82,6 +90,10 @@ fn defaults() -> Vec<(&'static str, Action)> {
         ("i", Action::InsertMode),
         ("escape", Action::Back),
         ("q", Action::Back),
+        ("ctrl-q", Action::QueueToggle),
+        ("shift-k", Action::QueueUp),
+        ("shift-j", Action::QueueDown),
+        ("d d", Action::QueueRemove),
     ]
 }
 
@@ -311,5 +323,17 @@ mod tests {
         let mut keymap = Keymap::new();
         assert_eq!(keymap.feed("escape"), Outcome::Action(Action::Back));
         assert_eq!(keymap.feed("i"), Outcome::Action(Action::InsertMode));
+    }
+
+    #[test]
+    fn queue_bindings() {
+        let mut keymap = Keymap::new();
+        assert_eq!(keymap.feed("ctrl-q"), Outcome::Action(Action::QueueToggle));
+        assert_eq!(keymap.feed("shift-j"), Outcome::Action(Action::QueueDown));
+        assert_eq!(keymap.feed("shift-k"), Outcome::Action(Action::QueueUp));
+
+        let mut keymap = Keymap::new();
+        assert_eq!(keymap.feed("d"), Outcome::Pending);
+        assert_eq!(keymap.feed("d"), Outcome::Action(Action::QueueRemove));
     }
 }

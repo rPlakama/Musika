@@ -72,7 +72,8 @@ fn main() {
     qtbridge::include_bytes_qml!("icons", "app");
     crate::mpris::init();
 
-    app.register::<qml::Backend>()
+    app.application_name("musika")
+        .register::<qml::Backend>()
         .register::<palette::Palette>()
         .load_qml_from_file("qrc:/app/qml/Main.qml")
         .run();

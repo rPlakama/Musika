@@ -73,6 +73,8 @@
         nativeBuildInputs = [
           pkgs.pkg-config
           pkgs.makeWrapper
+          pkgs.librsvg # rsvg-convert for the hicolor PNG sizes
+          pkgs.desktop-file-utils # desktop-file-validate
         ];
 
         buildInputs = [
@@ -99,6 +101,25 @@
             --prefix QML_IMPORT_PATH : ${qt}/lib/qt-6/qml \
             --prefix QML2_IMPORT_PATH : ${qt}/lib/qt-6/qml \
             --set-default SSL_CERT_FILE ${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt
+
+          # Desktop entry (PKG-1): launchers, docks, MIME data dirs.
+          install -Dm644 musika.desktop $out/share/applications/musika.desktop
+          ${pkgs.desktop-file-utils}/bin/desktop-file-validate \
+            $out/share/applications/musika.desktop
+
+          # Application icon (PKG-1): hicolor theme, scalable + PNG sizes.
+          install -Dm644 src/icons/P.svg \
+            $out/share/icons/hicolor/scalable/apps/musika.svg
+          install -d \
+            $out/share/icons/hicolor/48x48/apps \
+            $out/share/icons/hicolor/128x128/apps \
+            $out/share/icons/hicolor/256x256/apps
+          ${pkgs.librsvg}/bin/rsvg-convert -w 48 -h 48 \
+            src/icons/P.svg -o $out/share/icons/hicolor/48x48/apps/musika.png
+          ${pkgs.librsvg}/bin/rsvg-convert -w 128 -h 128 \
+            src/icons/P.svg -o $out/share/icons/hicolor/128x128/apps/musika.png
+          ${pkgs.librsvg}/bin/rsvg-convert -w 256 -h 256 \
+            src/icons/P.svg -o $out/share/icons/hicolor/256x256/apps/musika.png
         '';
 
         meta = {

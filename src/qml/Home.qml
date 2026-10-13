@@ -265,8 +265,13 @@ Item {
             return;
         }
 
-        // Between the left bar and main, h/l move directionally.
+        // Between the left bar and main, h/l move directionally. A grid
+        // surface (ArtistEntry, P-8) consumes `h` until its left edge: only
+        // then does the cursor leave for the sidebar.
         if (action === "move_left" && activeRegion === 1) {
+            var content = contentStack.currentItem;
+            if (content && content.moveWithinGrid && content.moveWithinGrid(action))
+                return;
             activeRegion = 0;
             return;
         }

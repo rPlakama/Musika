@@ -1,0 +1,13 @@
+[Desktop Entry]
+Type=Application
+Name=Musika
+GenericName=Music Player
+Comment=Keyboard-driven Subsonic/Navidrome player
+Exec=musika
+Icon=musika
+Terminal=false
+Categories=AudioVideo;Audio;Player;
+Keywords=music;player;subsonic;navidrome;keyboard;
+StartupNotify=true
+StartupWMClass=musika
+SingleMainWindow=true

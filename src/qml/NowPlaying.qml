@@ -350,27 +350,40 @@ Rectangle {
                 Layout.preferredWidth: root.width * 0.48
                 spacing: root.height * 0.012
 
-                Rectangle {
+                // D-3 cover rule, shared with AlbumEntry: a square sized by
+                // the available box and the source ceiling (512), centered in
+                // the flexible area. Width never stretches the container, so
+                // no window shape crops the art.
+                Item {
+                    id: coverArea
                     Layout.fillWidth: true
                     Layout.fillHeight: true
-                    Layout.maximumHeight: width
-                    Layout.alignment: Qt.AlignHCenter
-                    radius: Theme.radius
-                    color: Palette.primaryContainer
-                    clip: true
 
-                    CoverImage {
-                        anchors.fill: parent
-                        source: Backend.currentCoverUrl
-                    }
-
-                    FadeText {
+                    Rectangle {
+                        id: coverBox
+                        readonly property real side: Math.max(
+                            96,
+                            Math.min(root.height * 0.42, 512, parent.width, parent.height))
                         anchors.centerIn: parent
-                        text: "MUSIKA"
-                        color: Palette.onPrimaryContainer
-                        font.pixelSize: Theme.fontSize("title", root.height)
-                        font.letterSpacing: root.height * 0.006
-                        visible: Backend.currentCoverUrl.length === 0
+                        width: side
+                        height: side
+                        radius: Theme.radius
+                        color: Palette.primaryContainer
+                        clip: true
+
+                        CoverImage {
+                            anchors.fill: parent
+                            source: Backend.currentCoverUrl
+                        }
+
+                        FadeText {
+                            anchors.centerIn: parent
+                            text: "MUSIKA"
+                            color: Palette.onPrimaryContainer
+                            font.pixelSize: Theme.fontSize("title", root.height)
+                            font.letterSpacing: root.height * 0.006
+                            visible: Backend.currentCoverUrl.length === 0
+                        }
                     }
                 }
 

@@ -105,22 +105,46 @@ Rectangle {
 
     Component.onCompleted: reload()
 
+    // Edge-aware grid movement: no row wrap-around (GridView's own
+    // moveCurrentIndex* crosses rows, which feels wrong in a cover wall).
+    // Returns false when the grid cannot move that way, so Home can hand `h`
+    // to the sidebar only from the leftmost column.
+    function moveWithinGrid(action) {
+        if (albums.count === 0)
+            return false;
+        var column = grid.currentIndex % root.columns;
+        var target = grid.currentIndex;
+        if (action === "move_left") {
+            if (column === 0)
+                return false;
+            target -= 1;
+        } else if (action === "move_right") {
+            if (column === root.columns - 1 || grid.currentIndex + 1 >= albums.count)
+                return false;
+            target += 1;
+        } else if (action === "move_up") {
+            if (grid.currentIndex - root.columns < 0)
+                return false;
+            target -= root.columns;
+        } else if (action === "move_down") {
+            if (grid.currentIndex + root.columns >= albums.count)
+                return false;
+            target += root.columns;
+        } else {
+            return false;
+        }
+        grid.currentIndex = target;
+        grid.positionViewAtIndex(target, GridView.Contain);
+        return true;
+    }
+
     // Movement and Enter belong to the cover grid; `Esc` is handled by Home
     // (leaves the entry for Main regardless of where it was opened from).
     function handleAction(action) {
-        if (albums.count === 0)
-            return;
-        if (action === "move_left")
-            grid.moveCurrentIndexLeft();
-        else if (action === "move_right")
-            grid.moveCurrentIndexRight();
-        else if (action === "move_up")
-            grid.moveCurrentIndexUp();
-        else if (action === "move_down")
-            grid.moveCurrentIndexDown();
-        else if (action === "enter")
+        if (action === "enter")
             activateCurrent();
-        grid.positionViewAtIndex(grid.currentIndex, GridView.Contain);
+        else
+            moveWithinGrid(action);
     }
 
     Connections {
@@ -266,70 +290,68 @@ Rectangle {
                 cellHeight: root.cellHeight
                 boundsBehavior: Flickable.StopAtBounds
 
-            delegate: Rectangle {
-                id: cell
-                required property int index
-                required property string albumId
-                required property string title
-                required property string artist
-                required property string year
-                required property string tracks
-                required property string meta
-                required property string cover
+                delegate: Rectangle {
+                    id: cell
+                    required property int index
+                    required property string albumId
+                    required property string title
+                    required property string artist
+                    required property string year
+                    required property string tracks
+                    required property string meta
+                    required property string cover
 
-                readonly property bool current: GridView.isCurrentItem
+                    readonly property bool current: GridView.isCurrentItem
 
-                width: GridView.view.cellWidth
-                height: GridView.view.cellHeight
-                color: "transparent"
+                    width: GridView.view.cellWidth
+                    height: GridView.view.cellHeight
+                    color: "transparent"
 
-                Rectangle {
-                    anchors.fill: parent
-                    anchors.margins: cell.width * 0.03
-                    radius: Theme.radius
-                    color: cell.current
-                        ? Palette.secondaryContainer
-                        : (cellHover.hovered ? Palette.surfaceContainerHigh : "transparent")
+                    Rectangle {
+                        anchors.fill: parent
+                        anchors.margins: cell.width * 0.03
+                        radius: Theme.radius
+                        color: cell.current ? Palette.secondaryContainer : (cellHover.hovered ? Palette.surfaceContainerHigh : "transparent")
 
-                    Behavior on color {
-                        ColorAnimation {
-                            duration: Theme.motion.quick
-                            easing.type: Easing.Bezier
-                            easing.bezierCurve: Theme.ease.standard
+                        Behavior on color {
+                            ColorAnimation {
+                                duration: Theme.motion.quick
+                                easing.type: Easing.Bezier
+                                easing.bezierCurve: Theme.ease.standard
+                            }
                         }
                     }
-                }
 
-                Rectangle {
-                    id: coverBox
-                    width: root.coverSide
-                    height: width
-                    anchors.horizontalCenter: parent.horizontalCenter
-                    anchors.top: parent.top
-                    anchors.topMargin: cell.height * 0.05
-                    radius: Theme.radius
-                    color: Palette.surfaceContainerLowest
-                    border.color: cell.current ? Palette.primary : "transparent"
-                    border.width: Math.max(1, cell.height * Theme.hairlineRatio)
-                    clip: true
+                    Rectangle {
+                        id: coverBox
+                        width: root.coverSide
+                        height: width
+                        anchors.horizontalCenter: parent.horizontalCenter
+                        anchors.top: parent.top
+                        anchors.topMargin: cell.height * 0.05
+                        radius: Theme.radius
+                        color: Palette.surfaceContainerLowest
+                        border.color: cell.current ? Palette.primary : "transparent"
+                        border.width: Math.max(1, cell.height * Theme.hairlineRatio)
+                        clip: true
 
-                    CoverImage {
-                        anchors.fill: parent
-                        source: cell.cover
+                        CoverImage {
+                            anchors.fill: parent
+                            source: cell.cover
+                        }
                     }
-                }
 
-                FadeText {
-                    id: titleText
-                    anchors.top: coverBox.bottom
-                    anchors.topMargin: cell.height * 0.025
-                    anchors.horizontalCenter: parent.horizontalCenter
-                    width: parent.width * 0.86
-                    text: cell.title
-                    color: Palette.onSurface
-                    horizontalAlignment: Text.AlignHCenter
+                    FadeText {
+                        id: titleText
+                        anchors.top: coverBox.bottom
+                        anchors.topMargin: cell.height * 0.025
+                        anchors.horizontalCenter: parent.horizontalCenter
+                        width: parent.width * 0.86
+                        text: cell.title
+                        color: Palette.onSurface
+                        horizontalAlignment: Text.AlignHCenter
                     elide: Text.ElideRight
-                    font.pixelSize: Math.max(12, cell.height * 0.105)
+                    font.pixelSize: Math.max(10, cell.height * 0.0525)
                     animated: false
                 }
 
@@ -342,32 +364,31 @@ Rectangle {
                     color: Palette.onSurfaceVariant
                     horizontalAlignment: Text.AlignHCenter
                     elide: Text.ElideRight
-                    font.pixelSize: Math.max(10, cell.height * 0.08)
-                    animated: false
-                }
+                    font.pixelSize: Math.max(9, cell.height * 0.04)
+                        animated: false
+                    }
 
-                HoverHandler {
-                    id: cellHover
-                    cursorShape: Qt.PointingHandCursor
-                }
+                    HoverHandler {
+                        id: cellHover
+                        cursorShape: Qt.PointingHandCursor
+                    }
 
-                TapHandler {
-                    onTapped: {
-                        grid.currentIndex = cell.index;
-                        root.activateCurrent();
+                    TapHandler {
+                        onTapped: {
+                            grid.currentIndex = cell.index;
+                            root.activateCurrent();
+                        }
                     }
                 }
             }
-        }
 
-        FadeText {
-            anchors.centerIn: parent
-            visible: albums.count === 0
-            text: "No albums indexed yet"
-            color: Palette.onSurfaceVariant
-            font.pixelSize: Theme.fontSize("body", root.height)
+            FadeText {
+                anchors.centerIn: parent
+                visible: albums.count === 0
+                text: "No albums indexed yet"
+                color: Palette.onSurfaceVariant
+                font.pixelSize: Theme.fontSize("body", root.height)
+            }
         }
     }
-}
-
 }

@@ -278,9 +278,101 @@ The product is incomplete without these.
     B favorite/stars, C biography, D cache rule + staleness purge,
     E keybar/mouse polish open.
 
-- [ ] **P-4 · Playlists** — P2 · (M6, roadmap)
-  - **Why:** sidebar segment is a placeholder.
-  - **Details:** index + view + play; create/edit later.
+- [ ] **P-4 · Playlists (index, view, play, create/edit)** — P2 · (M6, roadmap; `api.rs` already wraps all five endpoints)
+  - **Why:** the Playlists sidebar segment is a disabled placeholder, the queue
+    cannot be saved, and CACHE-5's playlist rule plus Q-8's optional MPRIS
+    playlist interface both wait on an index. The whole Subsonic playlist
+    surface is already typed in `api.rs:1211-1277`, so this is wiring + a
+    disposable cache, not new protocol.
+  - **Research — Subsonic 1.16.1 / OpenSubsonic (Navidrome parity):**
+    - `getPlaylists` (1.0.0): playlists the user may play; `username` filter
+      (1.8.0) is **not implemented by Navidrome** — never rely on it; fields
+      id, name, comment?, owner?, public?, songCount, duration, created/
+      changed (ISO-8601), coverArt? (not guaranteed), allowedUser;
+    - `getPlaylist(id)` (1.0.0): the playlist + ordered `entry[]` with full
+      Child metadata per song; the same song may appear more than once and the
+      order is playlist order — store positions, never dedupe by song id;
+    - `createPlaylist` (1.2.0; returns the playlist since 1.14.0): without
+      `playlistId` it creates (name required); with `playlistId` it updates the
+      name and **replaces** the contents with the given `songId` list ("one
+      songId parameter for each song in the playlist") — this is the only
+      replace op, and the basis for reorder;
+    - `updatePlaylist` (1.8.0, owner only): `songIdToAdd` appends (repeatable),
+      `songIndexToRemove` removes by position (repeatable, 0-based), optional
+      name/comment/public; empty response, no move;
+    - `deletePlaylist` (1.2.0): id only;
+    - Navidrome: all five implemented (`username` ignored, public/private +
+      owner enforced); `download` accepts playlist ids (future CACHE-5 rule).
+      OpenSubsonic adds no playlist-specific extension, so keep the core shape.
+      Cover art is not guaranteed: build a local mosaic from the first
+      entries' `coverArt`, reusing `CoverImage`;
+    - edits are owner-only and server-authoritative: optimistic UI, refetch the
+      playlist after every mutation, revert + toast on failure.
+  - **Details:**
+    - new DB7 `playlists.db` like lyrics/colors (`migrations_playlists/`,
+      `src/playlists.rs`, `Dbs.playlists`, `MUSIKA_PLAYLISTS_FILE`); purely a
+      disposable cache — the server stays the source of truth:
+      - `playlist(id PK, name, comment, owner, public, song_count, duration,
+        created, changed, cover_art, fetched_at)`;
+      - `playlist_song(playlist_id, position, song_id, title, artist, album,
+        duration, cover_art, PRIMARY KEY(playlist_id, position))`, FK cascade;
+        entries are denormalized so a playlist renders even when a song left
+        library.db (row marked unavailable, skipped on play with a summary);
+      - `playlists_meta(key, value)` mirrors `library_meta` for the last full
+        refresh;
+    - refresh policy: one `getPlaylists` call on login, after a successful
+      library sync, on `r`/the sync button, and when the segment opens with a
+      stale/empty index; `getPlaylist` contents are lazy — fetched when a
+      playlist opens stale (`changed` newer than the cached row) and after
+      every edit; purge rows for playlists that left the server, never inside
+      the library `replace` transaction (ARC-25 rule);
+    - backend (`qml.rs`): `requestPlaylists`, `requestPlaylist(id)`,
+      `refreshPlaylists`, `createPlaylist(name, songIds)`,
+      `renamePlaylist(id, name)`, `deletePlaylist(id)`,
+      `addSongToPlaylist(id, songId)`, `removeSongFromPlaylist(id, index)`,
+      `playPlaylist(id, start)`; channels `playlists`, `playlist`; edits
+      optimistic + revert-on-error, refetch after apply; playback reuses the
+      `playerLoad` queue path (`playlist_song` positions → `Track`s, missing
+      songs skipped);
+    - QML: `PlaylistList.qml` (segment 3; `Enter` open · `Space` play all ·
+      `a` create · `r` rename · `d d` delete) and `PlaylistEntry.qml`
+      (round? no — square header mosaic + name/owner/public/comment/count/
+      duration, ordered song rows in the SongList row style with position as
+      the track column; `Enter` plays from that position · `Space` plays all ·
+      `d d` removes the cursor entry); a small `Prompt.qml` text overlay for
+      create/rename; `PlaylistPicker.qml` (searchable add-to-playlist chooser)
+      opened from song/album/queue contexts; `SideBar.qml` enables
+      `segments[3]`;
+    - keys (`keybind.rs` + dispatch): `a p` add the current song/selection to
+      a playlist, `a n` new playlist from the current row (both sequences keep
+      the `g g` pending pattern); playlist list keys above; every mutation is
+      also an IPC command (`playlists_refresh`, `playlist_open <id>`,
+      `playlist_play <id>`, `playlist_add <id> <song-id>`,
+      `playlist_remove <id> <index>`, `playlist_create <name>`), so niri/
+      Noctalia scripts and the README grammar stay single-sourced.
+  - **Modules/modifications:** `api.rs` (endpoints exist — add fixture tests;
+    cover-mosaic input), `src/playlists.rs` + `migrations_playlists/` (new),
+    `db.rs` (DB7 pool/path, "seven databases" doc), `index.rs` (refresh +
+    purge hooks, `SyncReport.playlists`), `qml.rs` (slots/channels/queue
+    builder), `PlaylistList/PlaylistEntry/PlaylistPicker/Prompt.qml` (new),
+    `SideBar.qml` (enable), `Home.qml` (routing), `keybind.rs`, `ipc.rs`/
+    README (grammar).
+  - **Incrementals (each shippable):**
+    - **I0 read-only segment** — live `getPlaylists` (no DB yet) into
+      `PlaylistList`, SideBar enabled; verify the segment lists real names.
+    - **I1 DB7 index** — migrations, `playlists.rs` refresh/read helpers,
+      sync/login/segment hooks, purge; verify the list survives offline.
+    - **I2 view + play** — lazy `getPlaylist` contents into `PlaylistEntry`;
+      ordered rows, `Enter` play-from, `Space` play-all; verify duplicate
+      songs keep their positions and missing songs are skipped with a toast.
+    - **I3 create/rename/delete** — `Prompt.qml` + the three round-trips,
+      optimistic + revert; verify from the UI and via IPC.
+    - **I4 entry edits** — `PlaylistPicker` (`a p`) appends via `songIdToAdd`,
+      `d d` removes positionally via `songIndexToRemove`, refetch after apply;
+      verify an external edit appears after `r`.
+    - **I5 polish/integration** — cover mosaic, reorder (remove+append or
+      `createPlaylist` replace), CACHE-5 playlist rule hook, MPRIS playlist
+      interface (Q-8 M5), unit tests (`playlists.rs` SQL + API fixtures).
 
 - [ ] **P-5 · Radio** — P2 · (M6, roadmap)
   - **Why:** sidebar segment is a placeholder; Subsonic radio endpoints exist.
@@ -733,6 +825,31 @@ The product is incomplete without these.
 - [ ] **AUTH-3 · Login error/status roles** — P2
   - **Why:** login surface predates the MY3 roles (no container/error tokens,
     clamped type); align with Theme.
+
+- [x] **PKG-1 · Desktop entry + hicolor app icons (NixOS parity)** — P2 · (DESKTOPICONSTUDY.md)
+  - **Why:** the package ships a bare binary: no `.desktop`, no app icon, so
+    launchers/docks show a generic blank entry and no window grouping metadata.
+    The study covers the Desktop Entry spec, icon-theme lookup, Qt
+    `desktopFileName`/WM_CLASS/app_id and NixOS's XDG wiring.
+  - **Details:**
+    - install `$out/share/applications/musika.desktop` (Type/Name/Exec/Icon/
+      Categories/Keywords/StartupWMClass=musika/SingleMainWindow/StartupNotify),
+      validated with `desktop-file-validate` (or `pkgs.makeDesktopItem`);
+    - install `hicolor/scalable/apps/musika.svg` + 48/128/256 PNGs from a new
+      brand asset (`src/icons/P.svg` can seed it);
+    - `main.rs`: `QApp::application_name("musika")` so WM_CLASS/app_id match
+      the desktop file (qtbridge has no `desktopFileName` yet);
+    - rely on NixOS `xdg.menus/icons/mime` defaults (pathsToLink +
+      `update-desktop-database`/`hicolor-icon-theme`) — nothing extra to wire;
+    - optional upstream: qtbridge `desktop_file_name` + window icon.
+  - **Verify:** `nix build`, store layout, `nix run .`, GNOME/KDE launcher and
+    Wayland/X11 dock grouping.
+  - **Now:** `musika.desktop` (validated in the build by
+    `desktop-file-utils`), `src/icons/P.svg` installed as
+    `hicolor/scalable/apps/musika.svg` + 48/128/256 PNGs rendered with
+    `rsvg-convert`, and `QApp::application_name("musika")` in `main.rs`; all
+    wired in `flake.nix` and verified with `nix build` (store layout). GNOME/KDE
+    launcher + dock grouping still a manual pass on a desktop session.
 
 
 - [ ] **DOC-1 · Keep design docs in sync with the tree** — P2 · (A10)
@@ -1352,10 +1469,10 @@ Kept for rationale; the tree already carries these.
 | Bucket | Open | Solved |
 |--------|------|--------|
 | Must have | 8 | — |
-| Should have | 63 | 3 |
+| Should have | 63 | 4 |
 | Quick wins | 0 | 43 |
 | Solved (reference) | — | 36 |
-| **Total** | **71** | **83** |
+| **Total** | **71** | **84** |
 
 ### Coverage by area
 
@@ -1372,3 +1489,4 @@ Kept for rationale; the tree already carries these.
 | Media cache / offline | 7 | 0 |
 | Auth / startup | 1 | 2 |
 | Docs & process | 1 | 2 |
+| Packaging | 0 | 1 |

@@ -103,17 +103,25 @@ Rectangle {
             Layout.fillWidth: true
         }
 
-        // Server badge (from the ping envelope's `type`): the Navidrome or
-        // generic Subsonic mark. Brand colours are on purpose — identity
-        // logos are the D-6 exception to the white-fill rule.
-        VectorImage {
+        // Server badge from the ping envelope's `type`. The Navidrome mark is
+        // a Shape component so its white segments follow `Palette.background`
+        // (VectorImage cannot tint); Subsonic keeps its brand SVG.
+        Item {
             Layout.preferredWidth: root.height * 0.3
             Layout.preferredHeight: root.height * 0.3
-            source: Backend.serverType === "navidrome"
-                ? "qrc:/app/icons/navidrome.svg"
-                : "qrc:/app/icons/subsonic_94696.svg"
-            preferredRendererType: VectorImage.CurveRenderer
             visible: Backend.serverType.length > 0
+
+            NavidromeBadge {
+                anchors.fill: parent
+                visible: Backend.serverType === "navidrome"
+            }
+
+            VectorImage {
+                anchors.fill: parent
+                visible: Backend.serverType !== "navidrome"
+                source: "qrc:/app/icons/subsonic_94696.svg"
+                preferredRendererType: VectorImage.CurveRenderer
+            }
         }
 
         FadeText {

@@ -1,4 +1,5 @@
 import QtQuick
+import musika
 import "Theme.js" as Theme
 
 // One column of the floating search: a header (title + count) over the result
@@ -32,7 +33,7 @@ Item {
                 anchors.left: parent.left
                 anchors.verticalCenter: parent.verticalCenter
                 text: root.title
-                color: root.active ? Theme.primary : Theme.onSurfaceVariant
+                color: root.active ? Palette.primary : Palette.onSurfaceVariant
                 font.pixelSize: root.headerH * 0.42
                 font.bold: root.active
             }
@@ -41,7 +42,7 @@ Item {
                 anchors.right: parent.right
                 anchors.verticalCenter: parent.verticalCenter
                 text: root.model ? root.model.count : 0
-                color: root.active ? Theme.primary : Theme.onSurfaceVariant
+                color: root.active ? Palette.primary : Palette.onSurfaceVariant
                 font.pixelSize: root.headerH * 0.36
             }
 
@@ -50,7 +51,7 @@ Item {
                 anchors.right: parent.right
                 anchors.bottom: parent.bottom
                 height: Math.max(1, parent.height * Theme.hairlineRatio)
-                color: root.active ? Theme.primary : Theme.outlineVariant
+                color: root.active ? Palette.primary : Palette.outlineVariant
             }
         }
 
@@ -81,7 +82,7 @@ Item {
 
                     width: list.width
                     height: root.height * 0.12
-                    color: index === root.cursor ? Theme.secondaryContainer : "transparent"
+                    color: index === root.cursor ? Palette.secondaryContainer : "transparent"
 
                     Behavior on color {
                         ColorAnimation { duration: Theme.motion.quick; easing.type: Easing.Bezier; easing.bezierCurve: Theme.ease.standard }
@@ -94,7 +95,7 @@ Item {
                         width: row.height * 0.72
                         height: row.height * 0.72
                         radius: root.roundedArt ? width * 0.5 : Theme.radius
-                        color: Theme.surfaceContainerHighest
+                        color: Palette.surfaceContainerHighest
                         clip: true
 
                         Image {
@@ -119,7 +120,7 @@ Item {
                         FadeText {
                             width: parent.width
                             text: row.title
-                            color: index === root.cursor ? Theme.onSecondaryContainer : Theme.onSurface
+                            color: index === root.cursor ? Palette.onSecondaryContainer : Palette.onSurface
                             font.pixelSize: Theme.clamp(row.height * 0.3, 12, 18)
                             elide: Text.ElideRight
                             animated: false
@@ -129,7 +130,7 @@ Item {
                             width: parent.width
                             visible: row.subtitle.length > 0
                             text: row.subtitle
-                            color: index === root.cursor ? Theme.onSecondaryContainer : Theme.onSurfaceVariant
+                            color: index === root.cursor ? Palette.onSecondaryContainer : Palette.onSurfaceVariant
                             font.pixelSize: Theme.clamp(row.height * 0.24, 10, 14)
                             elide: Text.ElideRight
                             animated: false
@@ -142,7 +143,7 @@ Item {
                         anchors.rightMargin: row.height * 0.18
                         anchors.verticalCenter: parent.verticalCenter
                         text: row.meta
-                        color: index === root.cursor ? Theme.onSecondaryContainer : Theme.onSurfaceVariant
+                        color: index === root.cursor ? Palette.onSecondaryContainer : Palette.onSurfaceVariant
                         font.pixelSize: Theme.clamp(row.height * 0.26, 10, 14)
                         animated: false
                     }
@@ -164,7 +165,7 @@ Item {
                 anchors.centerIn: parent
                 visible: root.hasQuery && !root.loading && root.model && root.model.count === 0
                 text: "no matches"
-                color: Theme.onSurfaceVariant
+                color: Palette.onSurfaceVariant
                 font.pixelSize: root.height * 0.055
             }
 
@@ -184,7 +185,7 @@ Item {
                         width: parent.width * (1 - index * 0.12)
                         height: root.height * 0.075
                         radius: Theme.radius
-                        color: Theme.surfaceContainer
+                        color: Palette.surfaceContainer
                         opacity: 0.6
                     }
                 }

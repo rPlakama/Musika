@@ -7,7 +7,7 @@ import "Theme.js" as Theme
 Rectangle {
     id: root
 
-    color: Theme.surfaceContainerLow
+    color: Palette.surfaceContainerLow
 
     // Relative "last sync" label: Now / HH:mm / dd / Nw / Nmo / Ny.
     function lastSyncText() {
@@ -51,7 +51,7 @@ Rectangle {
         anchors.right: parent.right
         anchors.bottom: parent.bottom
         height: Math.max(1, root.height * Theme.hairlineRatio)
-        color: Theme.outlineVariant
+        color: Palette.outlineVariant
     }
 
     RowLayout {
@@ -66,15 +66,15 @@ Rectangle {
             implicitWidth: modeLabel.implicitWidth + root.height * 0.36
             implicitHeight: root.height * 0.5
             radius: Theme.radius
-            color: Theme.surfaceContainerHighest
-            border.color: Theme.primary
+            color: Palette.surfaceContainerHighest
+            border.color: Palette.primary
             border.width: Math.max(1, root.height * Theme.hairlineRatio)
 
             FadeText {
                 id: modeLabel
                 anchors.centerIn: parent
                 text: "NORMAL"
-                color: Theme.primary
+                color: Palette.primary
                 font.pixelSize: Theme.fontSize("label", root.height)
                 font.bold: true
                 font.letterSpacing: root.height * 0.025
@@ -88,7 +88,7 @@ Rectangle {
 
         FadeText {
             text: Backend.librarySyncing ? "Syncing…" : "Up to date"
-            color: Backend.librarySyncing ? Theme.tertiary : Theme.onSurfaceVariant
+            color: Backend.librarySyncing ? Palette.tertiary : Palette.onSurfaceVariant
             font.pixelSize: Theme.fontSize("label", root.height)
         }
 
@@ -97,12 +97,12 @@ Rectangle {
             id: track
             Layout.preferredWidth: root.width * 0.12
             Layout.preferredHeight: Math.max(2, root.height * 0.16)
-            color: Theme.outlineVariant
+            color: Palette.outlineVariant
 
             Rectangle {
                 width: track.width * Math.max(0, Math.min(1, Backend.syncProgress))
                 height: parent.height
-                color: Backend.librarySyncing ? Theme.tertiary : Theme.primary
+                color: Backend.librarySyncing ? Palette.tertiary : Palette.primary
 
                 Behavior on width {
                     NumberAnimation {
@@ -119,14 +119,14 @@ Rectangle {
             Layout.preferredHeight: root.height * 0.6
             radius: Theme.radius
             color: !Backend.librarySyncing && syncHover.hovered
-                ? Theme.primary
-                : Theme.primaryContainer
+                ? Palette.primary
+                : Palette.primaryContainer
 
             FadeText {
                 id: syncLabel
                 anchors.centerIn: parent
                 text: "Sync"
-                color: Backend.librarySyncing ? Theme.stateDisabledContent : Theme.onPrimaryContainer
+                color: Backend.librarySyncing ? Theme.stateDisabledContent : Palette.onPrimaryContainer
                 font.pixelSize: Theme.fontSize("label", root.height)
             }
 
@@ -142,7 +142,7 @@ Rectangle {
 
         FadeText {
             text: "Last: " + root.lastSyncText()
-            color: Theme.onSurfaceVariant
+            color: Palette.onSurfaceVariant
             font.pixelSize: Theme.fontSize("label", root.height)
         }
     }

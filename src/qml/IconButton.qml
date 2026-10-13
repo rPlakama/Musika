@@ -1,4 +1,5 @@
 import QtQuick
+import musika
 import "Theme.js" as Theme
 
 // Square icon button. Icons are Unicode glyphs so no icon font is required.
@@ -17,9 +18,9 @@ Rectangle {
     signal clicked()
 
     radius: Theme.radius
-    color: accent ? Theme.onPrimaryContainer : "transparent"
+    color: accent ? Palette.onPrimaryContainer : "transparent"
     border.width: activeFocus ? Math.max(1, width * Theme.hairlineRatio) : 0
-    border.color: Theme.primary
+    border.color: Palette.primary
 
     Rectangle {
         anchors.fill: parent
@@ -47,7 +48,7 @@ Rectangle {
         font.pixelSize: root.width * root.symbolRatio
         color: !root.enabled
             ? Theme.stateDisabledContent
-            : (root.accent ? Theme.onPrimary : Theme.onSurface)
+            : (root.accent ? Palette.onPrimary : Palette.onSurface)
         animated: false
     }
 

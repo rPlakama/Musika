@@ -223,7 +223,7 @@ Item {
     // Dim backdrop (the one sanctioned scrim); click outside to dismiss.
     Rectangle {
         anchors.fill: parent
-        color: Theme.scrim
+        color: Palette.scrim
         opacity: root.opened ? Theme.scrimOpacity : 0
 
         Behavior on opacity {
@@ -242,9 +242,9 @@ Item {
         // Rise into place (preferred over scale, motion §3.1).
         x: (root.width - width) / 2
         y: (root.height - height) / 2 + (root.opened ? 0 : height * 0.04)
-        color: Theme.surfaceContainerHigh
+        color: Palette.surfaceContainerHigh
         radius: Theme.radius
-        border.color: Theme.primary
+        border.color: Palette.primary
         border.width: Math.max(1, root.height * Theme.hairlineRatio)
         opacity: root.opened ? 1 : 0
 
@@ -266,7 +266,7 @@ Item {
 
                 FadeText {
                     text: "⌕"
-                    color: Theme.onSurfaceVariant
+                    color: Palette.onSurfaceVariant
                     font.pixelSize: panel.height * 0.05
                 }
 
@@ -274,13 +274,13 @@ Item {
                     id: field
                     Layout.fillWidth: true
                     placeholderText: "Search anything"
-                    placeholderTextColor: Theme.onSurfaceVariant
-                    color: Theme.onSurface
+                    placeholderTextColor: Palette.onSurfaceVariant
+                    color: Palette.onSurface
                     font.pixelSize: panel.height * 0.045
                     background: Rectangle {
-                        color: Theme.surfaceContainerHighest
+                        color: Palette.surfaceContainerHighest
                         radius: Theme.radius
-                        border.color: field.activeFocus ? Theme.primary : Theme.outlineVariant
+                        border.color: field.activeFocus ? Palette.primary : Palette.outlineVariant
                         border.width: Math.max(1, root.height * Theme.hairlineRatio)
                     }
 
@@ -316,15 +316,15 @@ Item {
                     implicitWidth: modeChipLabel.implicitWidth + panel.height * 0.05
                     implicitHeight: panel.height * 0.06
                     radius: Theme.radius
-                    color: Theme.surfaceContainerHighest
+                    color: Palette.surfaceContainerHighest
                     border.width: Math.max(1, root.height * Theme.hairlineRatio)
-                    border.color: root.typing ? Theme.tertiary : Theme.primary
+                    border.color: root.typing ? Palette.tertiary : Palette.primary
 
                     FadeText {
                         id: modeChipLabel
                         anchors.centerIn: parent
                         text: root.typing ? "INSERT" : "NORMAL"
-                        color: root.typing ? Theme.tertiary : Theme.primary
+                        color: root.typing ? Palette.tertiary : Palette.primary
                         font.pixelSize: Theme.fontSize("label", panel.height)
                         font.bold: true
                         font.letterSpacing: panel.height * 0.006
@@ -413,7 +413,7 @@ Item {
                 text: root.typing
                     ? "Type to filter   ·   Tab/↑/↓ navigate   ·   Enter open/play   ·   Esc normal mode"
                     : "h/l columns   ·   j/k rows   ·   i type   ·   Enter open/play   ·   Esc close"
-                color: Theme.onSurfaceVariant
+                color: Palette.onSurfaceVariant
                 font.pixelSize: Theme.fontSize("label", panel.height)
                 horizontalAlignment: Text.AlignHCenter
             }

@@ -1,4 +1,5 @@
 import QtQuick
+import musika
 import "Theme.js" as Theme
 
 // Startup screen shown when cached credentials exist: pings the server with a
@@ -13,7 +14,7 @@ Item {
 
     Rectangle {
         anchors.fill: parent
-        color: Theme.background
+        color: Palette.background
     }
 
     Column {
@@ -24,7 +25,7 @@ Item {
         FadeText {
             width: parent.width
             text: "Waiting for Server-ping"
-            color: Theme.onSurface
+            color: Palette.onSurface
             font.pixelSize: root.height * 0.05
             horizontalAlignment: Text.AlignHCenter
         }
@@ -32,7 +33,7 @@ Item {
         FadeText {
             width: parent.width
             text: "(timeout " + root.remaining + "ms)"
-            color: Theme.onSurfaceVariant
+            color: Palette.onSurfaceVariant
             font.pixelSize: root.height * 0.03
             horizontalAlignment: Text.AlignHCenter
         }
@@ -40,12 +41,12 @@ Item {
         Rectangle {
             width: parent.width
             height: Math.max(2, root.height * 0.006)
-            color: Theme.outlineVariant
+            color: Palette.outlineVariant
 
             Rectangle {
                 width: parent.width * (1 - root.remaining / root.timeoutMs)
                 height: parent.height
-                color: Theme.primary
+                color: Palette.primary
             }
         }
     }

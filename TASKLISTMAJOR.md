@@ -337,42 +337,66 @@ work is); solved/partial tasks add **Now** with the current evidence.
 
 ## 7. Dynamic color (`THM`) — roadmap "Dynamic color" design
 
-- [ ] **THM-1 · Engine spike: `material-colors` crate, cover → dark scheme** — P2 · (roadmap T0)
+- [x] **THM-1 · Engine spike: `material-colors` crate, cover → dark scheme** — P2 · (roadmap T0)
   - **Why:** matugen itself is GPL-2.0, but its engine (`material-colors`) is
     MIT/Apache-2.0; embedding it avoids a runtime CLI and keeps the licence
     clean.
   - **Details:** add `material-colors` (+ decode); replicate matugen's pipeline
     (resize 112, QuantizerCelebi @128, CAM16 chroma >= 5, `Score`, TonalSpot,
     dark scheme); fixture-image unit test asserts roles; no DB/QML yet.
-- [ ] **THM-2 · DB6 `colors.db` + hash invalidation + purge-on-sync** — P2 · (roadmap T1)
+  - **Now:** `colors.rs` embeds `material-colors 0.5` (`quantize`) + `image`
+    (png/jpeg/webp/gif); `generate_from_path`/`from_seed` + 35-role map and
+    JSON payload; 5 tests (role map, deterministic cover, grayscale fallback,
+    transparent rejection, seed serialization).
+- [x] **THM-2 · DB6 `colors.db` + hash invalidation + purge-on-sync** — P2 · (roadmap T1)
   - **Why:** generation is CPU work; the cache needs its own pool and must
     re-run when the cover bytes change.
   - **Details:** `migrations_colors` (`cover_color(cover_art PK, cover_hash,
     scheme, seed, dark JSON, generator, generated_at)` + `colors_meta`);
     `Dbs.colors` + `colors_path()`; read compares `covers.hash`; post-sync pass
     purges rows whose cover id vanished from covers.db.
-- [ ] **THM-3 · `requestColors` play-scoped generation + `dataReady("colors")`** — P2 · (roadmap T2)
+  - **Now:** migrations_colors + `Dbs.colors`/`MUSIKA_COLORS_FILE`;
+    `colors::fetch` (covers `cached_path` + `covers::hash` → cache hit or
+    `spawn_blocking` generation), `fetch_into` test seam; purge hooked into
+    `index.rs` after the cover pass; 3 cache tests (hit after source removal,
+    hash-change regeneration, purge).
+- [x] **THM-3 · `requestColors` play-scoped generation + `dataReady("colors")`** — P2 · (roadmap T2)
   - **Why:** only the playing cover should cost decode+quantize; a library-wide
     sweep is request amplification and must never happen.
   - **Details:** `Backend.requestColors()` mirrors `requestLyrics`; triggered on
     `currentCoverArt` change while playing (coalesced; one in-flight job per
     cover; stale-guard on cover art); payload
     `{cover_art, cover_hash, scheme, dark}`; static fallback on failure.
-- [ ] **THM-4 · `Palette` singleton + QML role sweep + colour motion** — P2 · (roadmap T3)
+  - **Now:** `requestColors`/`colorsReady`/`refreshColors` in `qml.rs`; the
+    cover_art/cover_url signals now fire only on change; payload carries
+    `cover_art`, `cover_hash`, `scheme`, `seed`, `dark`; `dark: null` resets
+    the palette (no art / failure); `Main.qml` receives `colors`, re-checks
+    `cover_art === Backend.currentCoverArt` and applies.
+- [x] **THM-4 · `Palette` singleton + QML role sweep + colour motion** — P2 · (roadmap T3)
   - **Why:** `Theme.js` is a static pragma-library, so dynamic roles need a
     notifying singleton; a cover swap should recolor, not repaint.
   - **Details:** `Palette.qml` (pragma Singleton) defaults from Theme.js,
     `apply(payload)` from the `colors` channel; migrate `Theme.<role>` to
     `Palette.<role>`; `micro`/`standard` colour behaviour; error/region/mode
     roles stay semantic, state layers stay fixed overlays.
-- [ ] **THM-5 · Smart variant + contrast/lightness + manual refresh** — P3 · (roadmap T4)
+  - **Now:** `palette.rs` is a Rust-backed qtbridge singleton (same mechanism
+    as `Backend`) with 32 notifying roles, `apply`/`reset`, and MY3 defaults;
+    227 `Theme.<role>` references swept to `Palette.<role>` across 19 QML
+    files (adds `import musika` where missing, unifies the search scrim);
+    shape/motion/type/z/state layers remain in Theme.js.
+- [x] **THM-5 · Smart variant + contrast/lightness + manual refresh** — P3 · (roadmap T4)
   - **Why:** grayscale covers should not get a loud accent; power users want
     contrast control and a way to force regeneration.
   - **Details:** port `smart_scheme` colorfulness mapping (>70 vibrant, 20-70
     tonal spot, 6-20 neutral, <6 monochrome); settings for scheme/contrast;
     `:theme refresh` (or IPC) deletes the current row and re-requests.
+  - **Now:** Hasler-Süsstrunk colorfulness picks the smart variant; knobs via
+    `MUSIKA_COLOR_VARIANT` / `MUSIKA_COLOR_CONTRAST` (reflected in the cache
+    generator tag, so a knob change invalidates); `colors::invalidate` +
+    IPC `colors_refresh` (handled in Main.qml; `:theme refresh` waits on the
+    command line, VI-13).
 
-## 8. Architecture & robustness (`ARC`)
+## 8. Architecture & robustness (`ARC`) — rationale: DBDESIGN.md · wiring: DBWIRING.md
 
 - [ ] **ARC-1 · Cross-DB coherence repair path** — P1 · (A3)
   - **Why:** library/search/covers writes can diverge on interruption.
@@ -456,6 +480,37 @@ work is); solved/partial tasks add **Now** with the current evidence.
   - **Details:** recreate derived DBs on corruption, mark them dirty for
     resync, keep boot alive when only derived stores fail; tmp+rename the
     mirror; reject a second concurrent sync.
+- [ ] **ARC-29 · Content-addressed cover files** — P2 · (DBWIRING J1)
+  - **Why:** blobs are named `md5(cover id)`, so byte-identical art under
+    several ids is copied once per id even though the content hash is known.
+  - **Details:** name files `hash.ext` (keep `hash_algo`), let several
+    `covers` rows point at one file, keep purge = unreferenced files only;
+    migrate existing files by relinking rows to their stored hash.
+- [ ] **ARC-30 · Hash-keyed color schemes** — P2 · (DBWIRING J1, THM-2)
+  - **Why:** `cover_color` keys on `cover_art`, so two ids sharing one image
+    store the same scheme twice; the scheme is a pure function of (bytes,
+    generator).
+  - **Details:** `PRIMARY KEY(cover_hash, generator)`, dedupe/backfill the
+    migration, purge via `cover_hash NOT IN (SELECT hash FROM covers)`,
+    keep `cover_art` only as a pruning hint.
+- [ ] **ARC-31 · Projection-trimmed search** — P2 · (DBWIRING J2/J3)
+  - **Why:** `search.db` copies title/artist/album/duration and every hit is
+    hydrated field-by-field; the library already owns those columns.
+  - **Details:** index-only FTS5 (`content=''`) returning `song_id` + `rank`;
+    hydrate hits from the epoch snapshot; rebuild handles the migration.
+- [ ] **ARC-32 · Cross-DB verify/dedupe job** — P2 · (DBWIRING J3/J4)
+  - **Why:** dangling ids (lyrics/colors/media for songs or covers that left)
+    are only removed by the next purge, and duplicates accumulate silently.
+  - **Details:** ATTACH/batched checks for search ids missing from library,
+    color hashes missing from covers, cover rows with missing files,
+    unreferenced files, duplicate colors; report counts at sync end, full
+    repair on demand (`:db verify`).
+- [ ] **ARC-33 · Provenance + `schema_generation` in every meta** — P2 · (DBWIRING J0, ARC-24)
+  - **Why:** derived DBs do not record what they were built from (only colors
+    store a hash), so staleness and layout drift are undetectable.
+  - **Details:** `schema_generation` + `catalog_epoch` (+ `generator` where
+    relevant) in library/search/covers/lyrics/colors meta; migrations seed
+    them; verify/startup repair compare both values.
 
 ## 9. Media cache / offline (`CACHE`) — roadmap design
 
@@ -513,8 +568,8 @@ work is); solved/partial tasks add **Now** with the current evidence.
 | Lyrics pipeline | 6 | 4 |
 | Search | 2 | 3 |
 | UI microdesigns | 22 | 5 |
-| Dynamic color | 5 | 0 |
-| Architecture | 23 | 5 |
+| Dynamic color | 0 | 5 |
+| Architecture | 28 | 5 |
 | Media cache | 7 | 0 |
 | Auth/startup | 2 | 1 |
 | Docs | 2 | 0 |

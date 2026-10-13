@@ -9,7 +9,7 @@ Rectangle {
 
     signal artistActivated(string artist)
 
-    color: Theme.surface
+    color: Palette.surface
 
     ListModel {
         id: artists
@@ -76,7 +76,7 @@ Rectangle {
                 anchors.left: parent.left
                 anchors.leftMargin: root.width * 0.02
                 text: "Artists"
-                color: Theme.onSurface
+                color: Palette.onSurface
                 font.pixelSize: root.height * 0.035
                 font.bold: true
             }
@@ -85,7 +85,7 @@ Rectangle {
                 anchors.right: parent.right
                 anchors.rightMargin: root.width * 0.02
                 text: artists.count + " indexed"
-                color: Theme.onSurfaceVariant
+                color: Palette.onSurfaceVariant
                 font.pixelSize: root.height * 0.021
             }
         }
@@ -110,8 +110,8 @@ Rectangle {
                 width: viewWidth
                 height: ListView.view ? ListView.view.height * 0.105 : 0
                 color: ListView.isCurrentItem
-                    ? Theme.secondaryContainer
-                    : (index % 2 === 0 ? Theme.surface : Theme.surfaceContainerLowest)
+                    ? Palette.secondaryContainer
+                    : (index % 2 === 0 ? Palette.surface : Palette.surfaceContainerLowest)
 
                 Behavior on color {
                     ColorAnimation {
@@ -129,7 +129,7 @@ Rectangle {
                     width: row.height * 0.78
                     height: row.height * 0.78
                     radius: width * 0.5
-                    color: Theme.surfaceContainerHigh
+                    color: Palette.surfaceContainerHigh
                     clip: true
 
                     Image {
@@ -150,13 +150,13 @@ Rectangle {
 
                     FadeText {
                         text: row.artistName
-                        color: Theme.onSurface
+                        color: Palette.onSurface
                         font.pixelSize: row.height * 0.26
                         animated: false
                     }
                     FadeText {
                         text: row.albumCount + " albums"
-                        color: Theme.onSurfaceVariant
+                        color: Palette.onSurfaceVariant
                         font.pixelSize: row.height * 0.2
                         animated: false
                     }

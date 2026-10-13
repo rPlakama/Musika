@@ -7,7 +7,7 @@ import "Theme.js" as Theme
 Rectangle {
     id: root
 
-    color: Theme.surfaceContainerHigh
+    color: Palette.surfaceContainerHigh
     radius: Theme.radius
     implicitHeight: content.implicitHeight + root.width * 0.12
 
@@ -30,11 +30,11 @@ Rectangle {
     function stateColor() {
         switch (Backend.playbackState) {
         case "playing":
-            return Theme.primary;
+            return Palette.primary;
         case "paused":
-            return Theme.tertiary;
+            return Palette.tertiary;
         default:
-            return Theme.onSurfaceVariant;
+            return Palette.onSurfaceVariant;
         }
     }
 
@@ -53,7 +53,7 @@ Rectangle {
                 Layout.preferredWidth: root.width * 0.28
                 Layout.preferredHeight: root.width * 0.28
                 radius: Theme.radius
-                color: Theme.primaryContainer
+                color: Palette.primaryContainer
                 clip: true
 
                 Image {
@@ -74,7 +74,7 @@ Rectangle {
                 FadeText {
                     Layout.fillWidth: true
                     text: Backend.currentTitle.length > 0 ? Backend.currentTitle : "Nothing playing"
-                    color: Theme.onSurface
+                    color: Palette.onSurface
                     font.pixelSize: root.width * 0.078
                     font.bold: true
                     elide: Text.ElideRight
@@ -82,7 +82,7 @@ Rectangle {
                 FadeText {
                     Layout.fillWidth: true
                     text: Backend.currentAlbum
-                    color: Theme.onSurfaceVariant
+                    color: Palette.onSurfaceVariant
                     font.pixelSize: root.width * 0.062
                     elide: Text.ElideRight
                     visible: text.length > 0
@@ -90,7 +90,7 @@ Rectangle {
                 FadeText {
                     Layout.fillWidth: true
                     text: Backend.currentArtist
-                    color: Theme.onSurfaceVariant
+                    color: Palette.onSurfaceVariant
                     font.pixelSize: root.width * 0.055
                     elide: Text.ElideRight
                     visible: text.length > 0
@@ -102,7 +102,7 @@ Rectangle {
         Rectangle {
             Layout.fillWidth: true
             Layout.preferredHeight: Math.max(2, root.width * 0.016)
-            color: Theme.outlineVariant
+            color: Palette.outlineVariant
 
             Rectangle {
                 width: parent.width * (Backend.duration > 0
@@ -136,7 +136,7 @@ Rectangle {
             }
             FadeText {
                 text: root.formatTime(Backend.position) + " / " + root.formatTime(Backend.duration)
-                color: Theme.onSurfaceVariant
+                color: Palette.onSurfaceVariant
                 font.pixelSize: root.width * 0.058
             }
         }

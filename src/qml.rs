@@ -24,6 +24,7 @@ pub struct Backend {
     last_sync: String,
     keymap: Keymap,
     player: Player,
+    colors_in_flight: Option<String>,
     current_title: String,
     current_artist: String,
     current_album: String,
@@ -859,6 +860,88 @@ impl Backend {
         });
     }
 
+    /// Requests the cover-seeded palette for the current track (THM-3).
+    ///
+    /// One in-flight job per cover: repeated requests for the same art are
+    /// coalesced, and the payload carries `cover_art` so the UI can drop a
+    /// stale result after a skip.
+    #[qslot(qml_name = "requestColors")]
+    fn request_colors(&mut self) {
+        let invoker = self.get_qml_method_invoker();
+        let Some(dbs) = crate::dbs().cloned() else {
+            return;
+        };
+        let cover = self.current_cover_art.clone();
+        if cover.is_empty() {
+            return;
+        }
+        if self.colors_in_flight.as_deref() == Some(cover.as_str()) {
+            return;
+        }
+        self.colors_in_flight = Some(cover.clone());
+
+        crate::runtime().spawn(async move {
+            let cover_hash = crate::covers::hash(&dbs.covers, &cover).await.ok().flatten();
+            let (scheme_name, seed, dark) = match crate::colors::fetch(&dbs, &cover).await {
+                Ok(Some(scheme)) => (
+                    serde_json::Value::String(scheme.scheme),
+                    scheme.seed,
+                    serde_json::to_value(&scheme.roles).unwrap_or(serde_json::Value::Null),
+                ),
+                Ok(None) => {
+                    eprintln!("colors: no cached cover for {cover}; keeping static palette");
+                    (serde_json::Value::Null, 0, serde_json::Value::Null)
+                }
+                Err(err) => {
+                    eprintln!("colors: could not generate for {cover}: {err:#}");
+                    (serde_json::Value::Null, 0, serde_json::Value::Null)
+                }
+            };
+
+            let payload = serde_json::json!({
+                "cover_art": cover,
+                "cover_hash": cover_hash,
+                "scheme": scheme_name,
+                "seed": seed,
+                "dark": dark,
+            })
+            .to_string();
+
+            qtbridge::invoke_method!(invoker, "colorsReady", cover.clone());
+            qtbridge::invoke_method!(invoker, "emitData", "colors".to_string(), payload);
+        });
+    }
+
+    /// Clears the in-flight marker once a color job has been delivered.
+    #[qslot(qml_name = "colorsReady")]
+    fn colors_ready(&mut self, cover_art: String) {
+        if self.colors_in_flight.as_deref() == Some(cover_art.as_str()) {
+            self.colors_in_flight = None;
+        }
+    }
+
+    /// Manual palette refresh: drops the cached scheme and regenerates it
+    /// (`:theme refresh` / IPC `colors_refresh`) (THM-5).
+    #[qslot(qml_name = "refreshColors")]
+    fn refresh_colors(&mut self) {
+        let invoker = self.get_qml_method_invoker();
+        let Some(dbs) = crate::dbs().cloned() else {
+            return;
+        };
+        let cover = self.current_cover_art.clone();
+        if cover.is_empty() {
+            return;
+        }
+        self.colors_in_flight = None;
+
+        crate::runtime().spawn(async move {
+            if let Err(err) = crate::colors::invalidate(&dbs, &cover).await {
+                eprintln!("colors: could not invalidate {cover}: {err:#}");
+            }
+            invoker.invoke_method("requestColors");
+        });
+    }
+
     /// Lets the UI hand keyboard focus back to the global key handler (e.g.
     /// when leaving a text field), so vi bindings resume.
     #[qslot(qml_name = "releaseFocus")]
@@ -908,10 +991,14 @@ impl Backend {
         self.current_artist_changed();
         self.current_album = album;
         self.current_album_changed();
-        self.current_cover_art = cover_art;
-        self.current_cover_art_changed();
-        self.current_cover_url = cover_url;
-        self.current_cover_url_changed();
+        if self.current_cover_art != cover_art {
+            self.current_cover_art = cover_art;
+            self.current_cover_art_changed();
+        }
+        if self.current_cover_url != cover_url {
+            self.current_cover_url = cover_url;
+            self.current_cover_url_changed();
+        }
 
         self.playback_state = self.player.state().name().to_string();
         self.playback_state_changed();

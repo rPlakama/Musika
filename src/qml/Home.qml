@@ -267,14 +267,14 @@ Item {
                 Rectangle {
                     Layout.fillWidth: true
                     Layout.preferredHeight: root.height * 0.045
-                    color: Theme.surface
+                    color: Palette.surface
 
                     FadeText {
                         anchors.left: parent.left
                         anchors.leftMargin: root.width * 0.02
                         anchors.verticalCenter: parent.verticalCenter
                         text: "Shift Space F for Search"
-                        color: Theme.onSurfaceVariant
+                        color: Palette.onSurfaceVariant
                         font.pixelSize: parent.height * 0.42
                     }
                 }
@@ -457,7 +457,7 @@ Item {
     // focus border as the only chrome.
     Rectangle {
         anchors.fill: parent
-        color: Theme.scrim
+        color: Palette.scrim
         opacity: root.visualMode && !root.nowPlayingExpanded ? Theme.scrimOpacity : 0
         z: Theme.zRegion - 1
 
@@ -470,10 +470,10 @@ Item {
     // 0 = sidebar, 1 = main, 2 = status (top), 3 = player (bottom).
     Repeater {
         model: [
-            { color: Theme.primary, title: "LIBRARY", rotated: true },
-            { color: Theme.tertiary, title: "MAIN", rotated: false },
-            { color: Theme.secondary, title: "STATUS", rotated: false },
-            { color: Theme.error, title: "PLAYER", rotated: false }
+            { color: Palette.primary, title: "LIBRARY", rotated: true },
+            { color: Palette.tertiary, title: "MAIN", rotated: false },
+            { color: Palette.secondary, title: "STATUS", rotated: false },
+            { color: Palette.error, title: "PLAYER", rotated: false }
         ]
 
         delegate: Rectangle {

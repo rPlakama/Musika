@@ -7,6 +7,8 @@ edition = "2024"
 anyhow = "1.0.104"
 dotenvy = "0.15"
 hex = "0.4"
+image = { version = "0.25.10", default-features = false, features = ["png", "jpeg", "webp", "gif"] }
+material-colors = { version = "0.5", features = ["quantize"] }
 md-5 = "0.11"
 openssl = "0.10.81"
 qtbridge = "0.3.0"

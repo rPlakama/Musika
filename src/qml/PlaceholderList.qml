@@ -1,5 +1,6 @@
 import QtQuick
 import QtQuick.Layouts
+import musika
 import "Theme.js" as Theme
 
 // Simple empty-state view used by libraries that are not indexed yet
@@ -10,7 +11,7 @@ Rectangle {
     property string title: ""
     property string message: "Nothing here yet."
 
-    color: Theme.surface
+    color: Palette.surface
 
     // The view has no cursor; movement is a no-op.
     function handleAction(action) {
@@ -29,7 +30,7 @@ Rectangle {
                 anchors.left: parent.left
                 anchors.leftMargin: root.width * 0.02
                 text: root.title
-                color: Theme.onSurface
+                color: Palette.onSurface
                 font.pixelSize: root.height * 0.035
                 font.bold: true
             }
@@ -47,7 +48,7 @@ Rectangle {
                 FadeText {
                     width: parent.width
                     text: root.message
-                    color: Theme.onSurfaceVariant
+                    color: Palette.onSurfaceVariant
                     font.pixelSize: root.height * 0.024
                     horizontalAlignment: Text.AlignHCenter
                     wrapMode: Text.WordWrap
@@ -55,7 +56,7 @@ Rectangle {
                 FadeText {
                     width: parent.width
                     text: "Not indexed locally yet."
-                    color: Theme.outline
+                    color: Palette.outline
                     font.pixelSize: root.height * 0.018
                     horizontalAlignment: Text.AlignHCenter
                 }

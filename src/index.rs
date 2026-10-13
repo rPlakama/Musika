@@ -156,6 +156,11 @@ where
         eprintln!("index: lyric cache purge failed: {err:#}");
     }
 
+    // 6. color cache: drop schemes whose cover vanished from covers.db
+    if let Err(err) = crate::colors::purge(dbs).await {
+        eprintln!("index: color cache purge failed: {err:#}");
+    }
+
     progress(SyncProgress {
         message: "Done".to_string(),
         done: 100,

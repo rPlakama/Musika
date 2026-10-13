@@ -8,7 +8,7 @@ Item {
 
     Rectangle {
         anchors.fill: parent
-        color: Theme.background
+        color: Palette.background
     }
 
     Column {
@@ -19,7 +19,7 @@ Item {
         FadeText {
             width: parent.width
             text: "MUSIKA"
-            color: Theme.primary
+            color: Palette.primary
             font.pixelSize: root.height * 0.035
             font.bold: true
             font.letterSpacing: root.height * 0.0084
@@ -31,15 +31,15 @@ Item {
             width: parent.width
             implicitHeight: root.height * 0.049
             placeholderText: qsTr("Server URL")
-            placeholderTextColor: Theme.onSurfaceVariant
-            color: Theme.onSurface
+            placeholderTextColor: Palette.onSurfaceVariant
+            color: Palette.onSurface
             font.pixelSize: root.height * 0.0175
             text: Backend.serverURL
             onEditingFinished: Backend.serverURL = text
             background: Rectangle {
-                color: Theme.surfaceContainerHigh
+                color: Palette.surfaceContainerHigh
                 radius: Theme.radius
-                border.color: serverURLField.activeFocus ? Theme.primary : Theme.outlineVariant
+                border.color: serverURLField.activeFocus ? Palette.primary : Palette.outlineVariant
                 border.width: Math.max(1, root.height * Theme.hairlineRatio)
             }
         }
@@ -48,15 +48,15 @@ Item {
             width: parent.width
             implicitHeight: root.height * 0.049
             placeholderText: qsTr("Username")
-            placeholderTextColor: Theme.onSurfaceVariant
-            color: Theme.onSurface
+            placeholderTextColor: Palette.onSurfaceVariant
+            color: Palette.onSurface
             font.pixelSize: root.height * 0.0175
             text: Backend.username
             onEditingFinished: Backend.username = text
             background: Rectangle {
-                color: Theme.surfaceContainerHigh
+                color: Palette.surfaceContainerHigh
                 radius: Theme.radius
-                border.color: usernameField.activeFocus ? Theme.primary : Theme.outlineVariant
+                border.color: usernameField.activeFocus ? Palette.primary : Palette.outlineVariant
                 border.width: Math.max(1, root.height * Theme.hairlineRatio)
             }
         }
@@ -65,16 +65,16 @@ Item {
             width: parent.width
             implicitHeight: root.height * 0.049
             placeholderText: qsTr("Password")
-            placeholderTextColor: Theme.onSurfaceVariant
-            color: Theme.onSurface
+            placeholderTextColor: Palette.onSurfaceVariant
+            color: Palette.onSurface
             font.pixelSize: root.height * 0.0175
             echoMode: TextInput.Password
             text: Backend.password
             onEditingFinished: Backend.password = text
             background: Rectangle {
-                color: Theme.surfaceContainerHigh
+                color: Palette.surfaceContainerHigh
                 radius: Theme.radius
-                border.color: passwordField.activeFocus ? Theme.primary : Theme.outlineVariant
+                border.color: passwordField.activeFocus ? Palette.primary : Palette.outlineVariant
                 border.width: Math.max(1, root.height * Theme.hairlineRatio)
             }
         }
@@ -89,12 +89,12 @@ Item {
             background: Rectangle {
                 radius: Theme.radius
                 color: !loginButton.enabled
-                    ? Theme.surfaceContainerHigh
-                    : (loginButton.hovered ? Theme.primary : Theme.primaryContainer)
+                    ? Palette.surfaceContainerHigh
+                    : (loginButton.hovered ? Palette.primary : Palette.primaryContainer)
             }
             contentItem: FadeText {
                 text: loginButton.text
-                color: Theme.onPrimaryContainer
+                color: Palette.onPrimaryContainer
                 horizontalAlignment: Text.AlignHCenter
                 verticalAlignment: Text.AlignVCenter
                 font.pixelSize: root.height * 0.0175
@@ -104,7 +104,7 @@ Item {
         FadeText {
             width: parent.width
             wrapMode: Text.WordWrap
-            color: Backend.loggedIn ? Theme.primary : Theme.error
+            color: Backend.loggedIn ? Palette.primary : Palette.error
             text: Backend.statusMessage
             visible: Backend.statusMessage.length > 0
             horizontalAlignment: Text.AlignHCenter

@@ -165,6 +165,15 @@ pub async fn cached_path(pool: &SqlitePool, id: &str) -> Result<Option<std::path
     Ok(path.is_file().then_some(path))
 }
 
+/// The content hash stored for a cached cover (used to revalidate colors).
+pub async fn hash(pool: &SqlitePool, id: &str) -> Result<Option<String>> {
+    let hash: Option<Option<String>> = sqlx::query_scalar("SELECT hash FROM covers WHERE id = ?1")
+        .bind(id)
+        .fetch_optional(pool)
+        .await?;
+    Ok(hash.flatten())
+}
+
 /// Maps every cached cover id to its `file://` URL. Used to resolve art while
 /// loading lists off the UI thread.
 pub async fn url_map(pool: &SqlitePool) -> Result<HashMap<String, String>> {

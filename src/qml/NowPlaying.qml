@@ -11,7 +11,7 @@ import "Theme.js" as Theme
 Rectangle {
     id: root
 
-    color: Theme.background
+    color: Palette.background
 
     // 0 = transport, 1 = lyrics, 2 = queue.
     property int pane: 0
@@ -228,7 +228,7 @@ Rectangle {
             FadeText {
                 Layout.fillWidth: true
                 text: Backend.currentTitle.length > 0 ? Backend.currentTitle : "Nothing playing"
-                color: Theme.onSurface
+                color: Palette.onSurface
                 font.pixelSize: Theme.fontSize("title", root.height)
                 font.bold: true
                 elide: Text.ElideRight
@@ -236,7 +236,7 @@ Rectangle {
 
             FadeText {
                 text: "Esc exit full"
-                color: Theme.onSurfaceVariant
+                color: Palette.onSurfaceVariant
                 font.pixelSize: Theme.fontSize("label", root.height)
             }
         }
@@ -260,7 +260,7 @@ Rectangle {
                     Layout.maximumHeight: width
                     Layout.alignment: Qt.AlignHCenter
                     radius: Theme.radius
-                    color: Theme.primaryContainer
+                    color: Palette.primaryContainer
                     clip: true
 
                     Image {
@@ -275,7 +275,7 @@ Rectangle {
                     FadeText {
                         anchors.centerIn: parent
                         text: "MUSIKA"
-                        color: Theme.onPrimaryContainer
+                        color: Palette.onPrimaryContainer
                         font.pixelSize: Theme.fontSize("title", root.height)
                         font.letterSpacing: root.height * 0.006
                         visible: Backend.currentCoverUrl.length === 0
@@ -285,7 +285,7 @@ Rectangle {
                 FadeText {
                     Layout.fillWidth: true
                     text: Backend.currentArtist
-                    color: Theme.onSurfaceVariant
+                    color: Palette.onSurfaceVariant
                     font.pixelSize: Theme.fontSize("body", root.height)
                     elide: Text.ElideRight
                     visible: text.length > 0
@@ -294,7 +294,7 @@ Rectangle {
                 FadeText {
                     Layout.fillWidth: true
                     text: Backend.currentTitle.length > 0 ? Backend.currentTitle : "No track playing"
-                    color: Theme.onSurface
+                    color: Palette.onSurface
                     font.pixelSize: Theme.fontSize("headline", root.height)
                     font.bold: true
                     elide: Text.ElideRight
@@ -303,7 +303,7 @@ Rectangle {
                 FadeText {
                     Layout.fillWidth: true
                     text: Backend.currentAlbum
-                    color: Theme.onSurfaceVariant
+                    color: Palette.onSurfaceVariant
                     font.pixelSize: Theme.fontSize("body", root.height)
                     elide: Text.ElideRight
                     visible: text.length > 0
@@ -316,7 +316,7 @@ Rectangle {
 
                     FadeText {
                         text: root.formatTime(Backend.position)
-                        color: Theme.onSurfaceVariant
+                        color: Palette.onSurfaceVariant
                         font.pixelSize: Theme.fontSize("mono", root.height)
                         animated: false
                     }
@@ -325,13 +325,13 @@ Rectangle {
                         id: seekTrack
                         Layout.fillWidth: true
                         Layout.preferredHeight: Math.max(2, root.height * 0.006)
-                        color: Theme.outlineVariant
+                        color: Palette.outlineVariant
                         radius: Theme.radius
 
                         Rectangle {
                             width: seekTrack.width * (Backend.duration > 0 ? Math.min(1, Backend.position / Backend.duration) : 0)
                             height: parent.height
-                            color: Theme.primary
+                            color: Palette.primary
                             radius: Theme.radius
 
                             Behavior on width {
@@ -350,7 +350,7 @@ Rectangle {
 
                     FadeText {
                         text: root.formatTime(Backend.duration)
-                        color: Theme.onSurfaceVariant
+                        color: Palette.onSurfaceVariant
                         font.pixelSize: Theme.fontSize("mono", root.height)
                         animated: false
                     }
@@ -363,7 +363,7 @@ Rectangle {
                     color: "transparent"
                     radius: Theme.radius
                     border.width: root.pane === 0 ? Math.max(1, root.width * Theme.hairlineRatio) : 0
-                    border.color: Theme.primary
+                    border.color: Palette.primary
 
                     TapHandler {
                         onTapped: root.pane = 0
@@ -411,10 +411,10 @@ Rectangle {
                     id: lyricsPane
                     Layout.fillWidth: true
                     Layout.fillHeight: true
-                    color: Theme.surfaceContainerLow
+                    color: Palette.surfaceContainerLow
                     radius: Theme.radius
                     border.width: root.pane === 1 ? Math.max(1, root.width * Theme.hairlineRatio) : 0
-                    border.color: Theme.primary
+                    border.color: Palette.primary
 
                     TapHandler {
                         onTapped: root.pane = 1
@@ -430,7 +430,7 @@ Rectangle {
 
                             FadeText {
                                 text: "Lyrics"
-                                color: root.pane === 1 ? Theme.primary : Theme.onSurfaceVariant
+                                color: root.pane === 1 ? Palette.primary : Palette.onSurfaceVariant
                                 font.pixelSize: Theme.fontSize("title", root.height)
                                 font.bold: true
                             }
@@ -439,7 +439,7 @@ Rectangle {
 
                             FadeText {
                                 text: root.lyricsTag()
-                                color: Theme.onSurfaceVariant
+                                color: Palette.onSurfaceVariant
                                 font.pixelSize: Theme.fontSize("label", root.height)
                             }
                         }
@@ -447,7 +447,7 @@ Rectangle {
                         Rectangle {
                             Layout.fillWidth: true
                             Layout.preferredHeight: Math.max(1, root.height * Theme.hairlineRatio)
-                            color: root.pane === 1 ? Theme.primary : Theme.outlineVariant
+                            color: root.pane === 1 ? Palette.primary : Palette.outlineVariant
                         }
 
                         ListView {
@@ -478,7 +478,7 @@ Rectangle {
                                 rightPadding: root.lyricPad
                                 text: lyricLine.line
                                 horizontalAlignment: Text.AlignHCenter
-                                color: lyricLine.active ? Theme.onSurface : Theme.onSurfaceVariant
+                                color: lyricLine.active ? Palette.onSurface : Palette.onSurfaceVariant
                                 font.pixelSize: root.lyricSize
                                 wrapMode: Text.WordWrap
                                 animated: false
@@ -507,7 +507,7 @@ Rectangle {
                             Layout.fillHeight: true
                             visible: !root.lyricsAvailable
                             text: "No lyrics"
-                            color: Theme.onSurfaceVariant
+                            color: Palette.onSurfaceVariant
                             font.pixelSize: Theme.fontSize("label", root.height)
                             horizontalAlignment: Text.AlignHCenter
                             verticalAlignment: Text.AlignVCenter
@@ -519,10 +519,10 @@ Rectangle {
                 Rectangle {
                     Layout.fillWidth: true
                     Layout.fillHeight: true
-                    color: Theme.surfaceContainerLow
+                    color: Palette.surfaceContainerLow
                     radius: Theme.radius
                     border.width: root.pane === 2 ? Math.max(1, root.width * Theme.hairlineRatio) : 0
-                    border.color: Theme.primary
+                    border.color: Palette.primary
                     clip: true
 
                     TapHandler {
@@ -539,7 +539,7 @@ Rectangle {
 
                             FadeText {
                                 text: "Queue"
-                                color: root.pane === 2 ? Theme.primary : Theme.onSurfaceVariant
+                                color: root.pane === 2 ? Palette.primary : Palette.onSurfaceVariant
                                 font.pixelSize: Theme.fontSize("title", root.height)
                                 font.bold: true
                             }
@@ -548,7 +548,7 @@ Rectangle {
 
                             FadeText {
                                 text: Backend.queueLength > 0 ? (Backend.queueIndex + 1) + " / " + Backend.queueLength : ""
-                                color: Theme.onSurfaceVariant
+                                color: Palette.onSurfaceVariant
                                 font.pixelSize: Theme.fontSize("label", root.height)
                             }
                         }
@@ -556,7 +556,7 @@ Rectangle {
                         Rectangle {
                             Layout.fillWidth: true
                             Layout.preferredHeight: Math.max(1, root.height * Theme.hairlineRatio)
-                            color: root.pane === 2 ? Theme.primary : Theme.outlineVariant
+                            color: root.pane === 2 ? Palette.primary : Palette.outlineVariant
                         }
 
                         ListView {
@@ -577,8 +577,8 @@ Rectangle {
                                 width: queueList.width
                                 height: queueList.height * 0.16
                                 color: index === root.queueCursor
-                                    ? Theme.secondaryContainer
-                                    : (index === root.queueIndex ? Theme.surfaceContainer : "transparent")
+                                    ? Palette.secondaryContainer
+                                    : (index === root.queueIndex ? Palette.surfaceContainer : "transparent")
 
                                 FadeText {
                                     anchors.left: parent.left
@@ -587,7 +587,7 @@ Rectangle {
                                     anchors.rightMargin: queueList.width * 0.01
                                     anchors.verticalCenter: parent.verticalCenter
                                     text: row.title
-                                    color: index === root.queueCursor ? Theme.onSecondaryContainer : Theme.onSurface
+                                    color: index === root.queueCursor ? Palette.onSecondaryContainer : Palette.onSurface
                                     font.pixelSize: Theme.fontSize("body", root.height)
                                     elide: Text.ElideRight
                                     animated: false
@@ -598,7 +598,7 @@ Rectangle {
                                     anchors.right: parent.right
                                     anchors.verticalCenter: parent.verticalCenter
                                     text: row.duration
-                                    color: Theme.onSurfaceVariant
+                                    color: Palette.onSurfaceVariant
                                     font.pixelSize: Theme.fontSize("mono", root.height)
                                     animated: false
                                 }
@@ -617,7 +617,7 @@ Rectangle {
                             Layout.fillHeight: true
                             visible: queueItems.count === 0
                             text: "Queue is empty"
-                            color: Theme.onSurfaceVariant
+                            color: Palette.onSurfaceVariant
                             font.pixelSize: Theme.fontSize("label", root.height)
                             horizontalAlignment: Text.AlignHCenter
                             verticalAlignment: Text.AlignVCenter
@@ -631,7 +631,7 @@ Rectangle {
         Rectangle {
             Layout.fillWidth: true
             Layout.preferredHeight: root.height * 0.055
-            color: Theme.surfaceContainer
+            color: Palette.surfaceContainer
             radius: Theme.radius
 
             FadeText {
@@ -641,7 +641,7 @@ Rectangle {
                 anchors.leftMargin: parent.height * 0.4
                 anchors.rightMargin: parent.height * 0.4
                 text: root.keyHints()
-                color: Theme.onSurfaceVariant
+                color: Palette.onSurfaceVariant
                 font.pixelSize: Theme.fontSize("label", root.height)
                 elide: Text.ElideRight
                 animated: false

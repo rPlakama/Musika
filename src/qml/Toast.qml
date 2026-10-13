@@ -1,5 +1,6 @@
 import QtQuick
 import QtQuick.Layouts
+import musika
 import "Theme.js" as Theme
 
 // Transient error/notification banner.
@@ -16,10 +17,10 @@ Rectangle {
 
     signal retry()
 
-    color: syncing ? Theme.tertiaryContainer : Theme.errorContainer
+    color: syncing ? Palette.tertiaryContainer : Palette.errorContainer
     radius: Theme.radius
     border.width: Math.max(1, height * Theme.hairlineRatio)
-    border.color: syncing ? Theme.tertiary : Theme.error
+    border.color: syncing ? Palette.tertiary : Palette.error
     opacity: shown ? 1 : 0
     visible: opacity > 0
 
@@ -52,7 +53,7 @@ Rectangle {
 
         FadeText {
             text: "⚠"
-            color: root.syncing ? Theme.onTertiaryContainer : Theme.onErrorContainer
+            color: root.syncing ? Palette.onTertiaryContainer : Palette.onErrorContainer
             font.pixelSize: Theme.clamp(root.height * 0.36, 12, 18)
             animated: false
         }
@@ -60,7 +61,7 @@ Rectangle {
         FadeText {
             Layout.fillWidth: true
             text: root.message
-            color: root.syncing ? Theme.onTertiaryContainer : Theme.onErrorContainer
+            color: root.syncing ? Palette.onTertiaryContainer : Palette.onErrorContainer
             font.pixelSize: Theme.clamp(root.height * 0.3, 12, 18)
             elide: Text.ElideRight
             animated: false
@@ -71,13 +72,13 @@ Rectangle {
             implicitWidth: retryLabel.implicitWidth + root.height * 0.5
             implicitHeight: root.height * 0.62
             radius: Theme.radius
-            color: retryHover.hovered ? Theme.primary : Theme.primaryContainer
+            color: retryHover.hovered ? Palette.primary : Palette.primaryContainer
 
             FadeText {
                 id: retryLabel
                 anchors.centerIn: parent
                 text: "Retry"
-                color: Theme.onPrimaryContainer
+                color: Palette.onPrimaryContainer
                 font.pixelSize: Theme.clamp(root.height * 0.28, 10, 14)
                 animated: false
             }

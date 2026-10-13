@@ -13,7 +13,7 @@ Rectangle {
     property int selected: 0
     readonly property var segments: ["Albums", "Songs", "Artists", "Playlists", "Radio"]
 
-    color: Theme.surfaceContainerLow
+    color: Palette.surfaceContainerLow
 
     function handleAction(action) {
         if (action === "move_up" || action === "scroll_up")
@@ -37,7 +37,7 @@ Rectangle {
             anchors.left: parent.left
             anchors.leftMargin: root.width * 0.1
             text: "MUSIKA"
-            color: Theme.primary
+            color: Palette.primary
             font.pixelSize: root.height * 0.03
             font.bold: true
             font.letterSpacing: root.height * 0.005
@@ -63,8 +63,8 @@ Rectangle {
                 implicitHeight: root.height * 0.064
                 radius: Theme.radius
                 color: segment.index === root.selected
-                    ? Theme.secondaryContainer
-                    : (segmentHover.hovered ? Theme.surfaceContainerHigh : "transparent")
+                    ? Palette.secondaryContainer
+                    : (segmentHover.hovered ? Palette.surfaceContainerHigh : "transparent")
 
                 Behavior on color {
                     ColorAnimation {
@@ -80,7 +80,7 @@ Rectangle {
                     anchors.top: parent.top
                     anchors.bottom: parent.bottom
                     width: root.width * 0.02
-                    color: Theme.primary
+                    color: Palette.primary
                     visible: segment.index === root.selected
                 }
 
@@ -89,7 +89,7 @@ Rectangle {
                     anchors.left: parent.left
                     anchors.leftMargin: root.width * 0.1
                     text: segment.modelData
-                    color: segment.index === root.selected ? Theme.onSecondaryContainer : Theme.onSurfaceVariant
+                    color: segment.index === root.selected ? Palette.onSecondaryContainer : Palette.onSurfaceVariant
                     font.pixelSize: root.height * 0.022
                     font.bold: segment.index === root.selected
                 }
@@ -119,7 +119,7 @@ Rectangle {
         Rectangle {
             Layout.fillWidth: true
             Layout.preferredHeight: Math.max(1, root.height * Theme.hairlineRatio)
-            color: Theme.outlineVariant
+            color: Palette.outlineVariant
         }
 
         Repeater {
@@ -137,12 +137,12 @@ Rectangle {
                 FadeText {
                     Layout.fillWidth: true
                     text: stat.modelData.label
-                    color: Theme.onSurfaceVariant
+                    color: Palette.onSurfaceVariant
                     font.pixelSize: root.height * 0.02
                 }
                 FadeText {
                     text: stat.modelData.value
-                    color: Theme.onSurface
+                    color: Palette.onSurface
                     font.pixelSize: root.height * 0.02
                     font.bold: true
                 }

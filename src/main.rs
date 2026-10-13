@@ -4,6 +4,7 @@ use std::sync::OnceLock;
 use tokio::runtime::Runtime;
 
 mod api;
+mod colors;
 mod covers;
 mod crypto;
 mod db;
@@ -13,6 +14,7 @@ mod ipc;
 mod keybind;
 mod library;
 mod lyrics;
+mod palette;
 mod player;
 mod qml;
 mod search;
@@ -50,6 +52,7 @@ fn main() {
     qtbridge::include_bytes_qml!("qml", "app");
 
     app.register::<qml::Backend>()
+        .register::<palette::Palette>()
         .load_qml_from_file("qrc:/app/qml/Main.qml")
         .run();
 }

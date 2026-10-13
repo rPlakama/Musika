@@ -12,7 +12,7 @@ Rectangle {
 
     property string artistFilter: ""
 
-    color: Theme.surface
+    color: Palette.surface
 
     ListModel {
         id: albums
@@ -85,7 +85,7 @@ Rectangle {
                 anchors.left: parent.left
                 anchors.leftMargin: root.width * 0.02
                 text: "Albums"
-                color: Theme.onSurface
+                color: Palette.onSurface
                 font.pixelSize: root.height * 0.035
                 font.bold: true
             }
@@ -95,7 +95,7 @@ Rectangle {
                 anchors.right: parent.right
                 anchors.rightMargin: root.width * 0.02
                 text: albums.count + " indexed"
-                color: Theme.onSurfaceVariant
+                color: Palette.onSurfaceVariant
                 font.pixelSize: root.height * 0.021
             }
         }
@@ -123,8 +123,8 @@ Rectangle {
                 width: viewWidth
                 height: ListView.view ? ListView.view.height * 0.105 : 0
                 color: ListView.isCurrentItem
-                    ? Theme.secondaryContainer
-                    : (index % 2 === 0 ? Theme.surface : Theme.surfaceContainerLowest)
+                    ? Palette.secondaryContainer
+                    : (index % 2 === 0 ? Palette.surface : Palette.surfaceContainerLowest)
 
                 Behavior on color {
                     ColorAnimation {
@@ -142,7 +142,7 @@ Rectangle {
                     width: row.height * 0.78
                     height: row.height * 0.78
                     radius: Theme.radius
-                    color: rowHover.hovered ? Theme.primaryContainer : Theme.surfaceContainerHigh
+                    color: rowHover.hovered ? Palette.primaryContainer : Palette.surfaceContainerHigh
                     clip: true
 
                     Image {
@@ -163,13 +163,13 @@ Rectangle {
 
                     FadeText {
                         text: row.title
-                        color: Theme.onSurface
+                        color: Palette.onSurface
                         font.pixelSize: row.height * 0.24
                         animated: false
                     }
                     FadeText {
                         text: row.artist + (row.year.length > 0 ? "  ·  " + row.year : "")
-                        color: Theme.onSurfaceVariant
+                        color: Palette.onSurfaceVariant
                         font.pixelSize: row.height * 0.19
                         animated: false
                     }
@@ -180,7 +180,7 @@ Rectangle {
                     anchors.right: parent.right
                     anchors.rightMargin: row.viewWidth * 0.02
                     text: row.tracks + " tracks"
-                    color: Theme.onSurfaceVariant
+                    color: Palette.onSurfaceVariant
                     font.pixelSize: row.height * 0.19
                     animated: false
                 }

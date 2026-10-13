@@ -21,7 +21,7 @@ Rectangle {
     property string albumMeta: ""
     property string albumNotes: ""
 
-    color: Theme.surface
+    color: Palette.surface
 
     function formatTime(seconds) {
         var total = Math.max(0, Math.floor(seconds || 0));
@@ -118,9 +118,9 @@ Rectangle {
                 implicitHeight: root.height * 0.045
                 radius: Theme.radius
                 color: (root.onToolbar || backHover.hovered)
-                    ? Theme.secondaryContainer
-                    : Theme.surfaceContainerHigh
-                border.color: root.onToolbar ? Theme.primary : Theme.outlineVariant
+                    ? Palette.secondaryContainer
+                    : Palette.surfaceContainerHigh
+                border.color: root.onToolbar ? Palette.primary : Palette.outlineVariant
                 border.width: Math.max(1, root.height * Theme.hairlineRatio)
 
                 Behavior on color {
@@ -135,7 +135,7 @@ Rectangle {
                     id: backLabel
                     anchors.centerIn: parent
                     text: "<- ESC"
-                    color: Theme.onSurface
+                    color: Palette.onSurface
                     font.pixelSize: root.height * 0.022
                 }
 
@@ -163,7 +163,7 @@ Rectangle {
                 width: Math.min(coverBox.width, coverBox.height)
                 height: width
                 radius: Theme.radius
-                color: Theme.primaryContainer
+                color: Palette.primaryContainer
                 clip: true
 
                 Image {
@@ -180,7 +180,7 @@ Rectangle {
                     anchors.centerIn: parent
                     visible: coverImage.status !== Image.Ready
                     text: "COVER"
-                    color: Theme.onPrimaryContainer
+                    color: Palette.onPrimaryContainer
                     font.pixelSize: coverBox.height * 0.12
                     font.letterSpacing: coverBox.height * 0.02
                 }
@@ -195,7 +195,7 @@ Rectangle {
             FadeText {
                 Layout.fillWidth: true
                 text: root.albumTitle
-                color: Theme.onSurface
+                color: Palette.onSurface
                 font.pixelSize: root.height * 0.036
                 font.bold: true
                 elide: Text.ElideRight
@@ -203,14 +203,14 @@ Rectangle {
             FadeText {
                 Layout.fillWidth: true
                 text: root.albumArtist
-                color: Theme.primary
+                color: Palette.primary
                 font.pixelSize: root.height * 0.024
                 elide: Text.ElideRight
             }
             FadeText {
                 Layout.fillWidth: true
                 text: root.albumMeta
-                color: Theme.onSurfaceVariant
+                color: Palette.onSurfaceVariant
                 font.pixelSize: root.height * 0.02
                 elide: Text.ElideRight
             }
@@ -219,7 +219,7 @@ Rectangle {
                 Layout.topMargin: root.height * 0.008
                 visible: root.albumNotes.length > 0
                 text: root.albumNotes
-                color: Theme.onSurfaceVariant
+                color: Palette.onSurfaceVariant
                 font.pixelSize: root.height * 0.02
                 lineHeight: 1.25
                 wrapMode: Text.WordWrap
@@ -231,13 +231,13 @@ Rectangle {
         Rectangle {
             Layout.fillWidth: true
             Layout.preferredHeight: Math.max(1, root.height * Theme.hairlineRatio)
-            color: Theme.outlineVariant
+            color: Palette.outlineVariant
         }
 
         // Songs.
         FadeText {
             text: "Songs"
-            color: Theme.primary
+            color: Palette.primary
             font.pixelSize: root.height * 0.024
             font.bold: true
             font.letterSpacing: root.height * 0.004
@@ -261,8 +261,8 @@ Rectangle {
                 width: songList.width
                 height: root.height * 0.055
                 color: (ListView.isCurrentItem && !root.onToolbar)
-                    ? Theme.secondaryContainer
-                    : (index % 2 === 0 ? Theme.surface : Theme.surfaceContainerLowest)
+                    ? Palette.secondaryContainer
+                    : (index % 2 === 0 ? Palette.surface : Palette.surfaceContainerLowest)
 
                 Behavior on color {
                     ColorAnimation {
@@ -277,7 +277,7 @@ Rectangle {
                     anchors.left: parent.left
                     width: songRow.height * 0.6
                     text: songRow.track
-                    color: Theme.onSurfaceVariant
+                    color: Palette.onSurfaceVariant
                     font.pixelSize: songRow.height * 0.32
                     horizontalAlignment: Text.AlignRight
                     animated: false
@@ -289,7 +289,7 @@ Rectangle {
                     anchors.right: songDuration.left
                     anchors.rightMargin: root.width * 0.02
                     text: songRow.title
-                    color: Theme.onSurface
+                    color: Palette.onSurface
                     font.pixelSize: songRow.height * 0.36
                     elide: Text.ElideRight
                     animated: false
@@ -300,7 +300,7 @@ Rectangle {
                     anchors.right: parent.right
                     anchors.rightMargin: root.width * 0.02
                     text: songRow.duration
-                    color: Theme.onSurfaceVariant
+                    color: Palette.onSurfaceVariant
                     font.pixelSize: songRow.height * 0.32
                     animated: false
                 }

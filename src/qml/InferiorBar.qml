@@ -7,7 +7,7 @@ import "Theme.js" as Theme
 Rectangle {
     id: root
 
-    color: Theme.surfaceContainer
+    color: Palette.surfaceContainer
 
     function formatTime(seconds) {
         var total = Math.max(0, Math.floor(seconds || 0));
@@ -44,14 +44,14 @@ Rectangle {
         anchors.left: parent.left
         anchors.right: parent.right
         height: Math.max(1, root.height * 0.03)
-        color: Theme.outlineVariant
+        color: Palette.outlineVariant
 
         Rectangle {
             width: parent.width * (Backend.duration > 0
                 ? Math.min(1, Backend.position / Backend.duration)
                 : 0)
             height: parent.height
-            color: Theme.primary
+            color: Palette.primary
 
             Behavior on width {
                 NumberAnimation { duration: Theme.motion.quick; easing.type: Easing.Linear }
@@ -96,7 +96,7 @@ Rectangle {
                 Layout.preferredWidth: root.height * 0.62
                 Layout.preferredHeight: root.height * 0.62
                 radius: Theme.radius
-                color: Theme.primaryContainer
+                color: Palette.primaryContainer
                 clip: true
 
                 Image {
@@ -115,13 +115,13 @@ Rectangle {
 
                 FadeText {
                     text: Backend.currentTitle.length > 0 ? Backend.currentTitle : "Nothing playing"
-                    color: Theme.onSurface
+                    color: Palette.onSurface
                     font.pixelSize: root.height * 0.18
                     animated: false
                 }
                 FadeText {
                     text: Backend.currentArtist
-                    color: Theme.onSurfaceVariant
+                    color: Palette.onSurfaceVariant
                     font.pixelSize: root.height * 0.15
                     animated: false
                 }
@@ -179,14 +179,14 @@ Rectangle {
 
             FadeText {
                 text: root.formatTime(Backend.position) + " / " + root.formatTime(Backend.duration)
-                color: Theme.onSurfaceVariant
+                color: Palette.onSurfaceVariant
                 font.pixelSize: root.height * 0.15
                 animated: false
             }
 
             FadeText {
 							text: "VOL: "
-                color: Theme.onSurfaceVariant
+                color: Palette.onSurfaceVariant
                 font.pixelSize: root.height * 0.18
                 animated: false
             }
@@ -194,12 +194,12 @@ Rectangle {
             Rectangle {
                 Layout.preferredWidth: root.width * 0.07
                 Layout.preferredHeight: Math.max(1, root.height * 0.05)
-                color: Theme.outlineVariant
+                color: Palette.outlineVariant
 
                 Rectangle {
                     width: parent.width * 0.6
                     height: parent.height
-                    color: Theme.primary
+                    color: Palette.primary
                 }
             }
         }

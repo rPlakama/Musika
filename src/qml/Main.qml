@@ -10,7 +10,7 @@ ApplicationWindow {
     height: Screen.height * 0.72
     minimumWidth: Screen.width * 0.4
     minimumHeight: Screen.height * 0.4
-    color: Theme.background
+    color: Palette.background
     title: qsTr("Musika")
 
     // Global key handler. It wraps the screen stack so unhandled keys bubble up
@@ -119,9 +119,33 @@ ApplicationWindow {
     Connections {
         target: Backend
         function onCommandIssued(command) {
+            // Manual palette refresh (see THM-5); everything else is a key
+            // action name.
+            if (command === "colors_refresh") {
+                Backend.refreshColors();
+                return;
+            }
             // Pump, don't re-enter: a command may call back into the backend,
             // which is still borrowed while this signal is being emitted.
             Qt.callLater(() => keyHandler.dispatch(command));
+        }
+    }
+
+    // Dynamic palette (THM-3/THM-4): generate once per playing cover, apply
+    // the payload only while it still matches the current art.
+    Connections {
+        target: Backend
+        function onCurrent_cover_art_changed() {
+            if (Backend.currentCoverArt.length > 0)
+                Backend.requestColors();
+            else
+                Palette.reset();
+        }
+        function onDataReady(channel, payload) {
+            if (channel !== "colors")
+                return;
+            if (JSON.parse(payload).cover_art === Backend.currentCoverArt)
+                Palette.apply(payload);
         }
     }
 

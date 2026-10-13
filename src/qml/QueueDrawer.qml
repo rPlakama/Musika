@@ -101,8 +101,8 @@ Item {
         anchors.bottom: parent.bottom
         anchors.right: parent.right
         width: root.width * 0.36
-        color: Theme.surfaceContainerHigh
-        border.color: Theme.outlineVariant
+        color: Palette.surfaceContainerHigh
+        border.color: Palette.outlineVariant
         border.width: Math.max(1, root.width * Theme.hairlineRatio)
         opacity: root.opened ? 1 : 0
 
@@ -118,7 +118,7 @@ Item {
             FadeText {
                 Layout.fillWidth: true
                 text: "Queue"
-                color: Theme.primary
+                color: Palette.primary
                 font.pixelSize: panel.width * 0.07
                 font.bold: true
             }
@@ -142,8 +142,8 @@ Item {
                     width: list.width
                     height: panel.height * 0.06
                     color: index === root.cursor
-                        ? Theme.secondaryContainer
-                        : (index === root.nowPlaying ? Theme.surfaceContainer : "transparent")
+                        ? Palette.secondaryContainer
+                        : (index === root.nowPlaying ? Palette.surfaceContainer : "transparent")
 
                     Rectangle {
                         id: thumb
@@ -152,7 +152,7 @@ Item {
                         width: row.height * 0.72
                         height: row.height * 0.72
                         radius: Theme.radius
-                        color: Theme.surfaceContainerHighest
+                        color: Palette.surfaceContainerHighest
                         clip: true
 
                         Image {
@@ -171,7 +171,7 @@ Item {
                         anchors.rightMargin: row.height * 0.16
                         anchors.verticalCenter: parent.verticalCenter
                         text: index === root.nowPlaying ? "▶ " + row.title : row.title
-                        color: index === root.cursor ? Theme.onSecondaryContainer : Theme.onSurface
+                        color: index === root.cursor ? Palette.onSecondaryContainer : Palette.onSurface
                         font.pixelSize: row.height * 0.34
                         elide: Text.ElideRight
                     }
@@ -182,7 +182,7 @@ Item {
                         anchors.rightMargin: row.height * 0.1
                         anchors.verticalCenter: parent.verticalCenter
                         text: row.duration
-                        color: Theme.onSurfaceVariant
+                        color: Palette.onSurfaceVariant
                         font.pixelSize: row.height * 0.28
                     }
 
@@ -198,7 +198,7 @@ Item {
             FadeText {
                 Layout.fillWidth: true
                 text: "Enter jump · J/K move · dd remove · Esc close"
-                color: Theme.onSurfaceVariant
+                color: Palette.onSurfaceVariant
                 font.pixelSize: panel.width * 0.045
                 horizontalAlignment: Text.AlignHCenter
             }

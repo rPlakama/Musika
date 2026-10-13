@@ -453,22 +453,58 @@ Rectangle {
                             boundsBehavior: Flickable.StopAtBounds
                             visible: root.lyricsAvailable
 
-                            delegate: FadeText {
+                            delegate: Item {
                                 id: lyricLine
                                 required property int index
                                 required property real t
                                 required property string line
 
-                                width: lyricsView.width
-                                text: index === root.activeLyric ? "> " + lyricLine.line + "  <" : lyricLine.line
-                                color: index === root.activeLyric ? Theme.primary : Theme.onSurfaceVariant
-                                font.pixelSize: Theme.fontSize("body", root.height)
-                                font.bold: index === root.activeLyric
-                                wrapMode: Text.WordWrap
-                                animated: false
+                                // Lyrics stage (roadmap "Lyrics presentation"):
+                                // active = scale + full contrast, near = dim,
+                                // far = dimmer; unsynced is one uniform column.
+                                readonly property bool active: index === root.activeLyric
+                                readonly property int distance: root.activeLyric >= 0
+                                    ? Math.abs(index - root.activeLyric) : -1
 
-                                Behavior on color {
-                                    ColorAnimation { duration: Theme.motion.micro; easing.type: Easing.Bezier; easing.bezierCurve: Theme.ease.standard }
+                                width: lyricsView.width
+                                height: textItem.height
+
+                                Rectangle {
+                                    anchors.left: parent.left
+                                    anchors.verticalCenter: parent.verticalCenter
+                                    width: Math.max(1, root.width * Theme.hairlineRatio) * 2
+                                    height: textItem.height * 0.9
+                                    color: Theme.primary
+                                    visible: lyricLine.active
+                                }
+
+                                FadeText {
+                                    id: textItem
+                                    anchors.left: parent.left
+                                    anchors.leftMargin: root.width * 0.014
+                                    anchors.right: parent.right
+                                    text: lyricLine.line
+                                    color: lyricLine.active ? Theme.onSurface : Theme.onSurfaceVariant
+                                    font.pixelSize: Theme.fontSize("body", root.height)
+                                    wrapMode: Text.WordWrap
+                                    animated: false
+                                    transformOrigin: Item.Left
+                                    opacity: lyricLine.distance < 0
+                                        ? Theme.contentDim
+                                        : (lyricLine.active
+                                            ? 1.0
+                                            : (lyricLine.distance === 1 ? Theme.contentDim : Theme.contentDimFar))
+                                    scale: lyricLine.active ? Theme.lyricsEmphasis : 1.0
+
+                                    Behavior on opacity {
+                                        NumberAnimation { duration: Theme.motion.quick; easing.type: Easing.Bezier; easing.bezierCurve: Theme.ease.standard }
+                                    }
+                                    Behavior on scale {
+                                        NumberAnimation { duration: Theme.motion.quick; easing.type: Easing.Bezier; easing.bezierCurve: Theme.ease.standard }
+                                    }
+                                    Behavior on color {
+                                        ColorAnimation { duration: Theme.motion.micro; easing.type: Easing.Bezier; easing.bezierCurve: Theme.ease.standard }
+                                    }
                                 }
                             }
                         }

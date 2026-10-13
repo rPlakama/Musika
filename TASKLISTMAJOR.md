@@ -132,6 +132,17 @@ work is); solved/partial tasks add **Now** with the current evidence.
     Metadata/Position/Can* mapping, rate-limited signals, `playerctl` acceptance
     test across GNOME/KDE/sway/XFCE; milestones M0–M5 in the roadmap. Keep the
     mpv script path (Q-7) as the opt-in fallback.
+- [ ] **Q-9 · Fullscreen queue & transport polish** — P2 · (fullscreen review)
+  - **Why:** queue rows wear debug-ish `Prev`/`Next` tags, the order cannot be
+    changed from the keyboard, and fullscreen transport uses bare `n`/`p`
+    while the rest of the app standardises on `Ctrl-N`/`Ctrl-P`.
+  - **Details:**
+    - drop the `Prev`/`Next` row names and the expression that derives them
+      (`index < queueIndex ? "Prev" : "Next"`, NowPlaying.qml queue delegate);
+      keep only the active-row treatment;
+    - `Alt-j` / `Alt-k` move the selected track down/up in the queue;
+    - fullscreen transport keeps `Ctrl-N` / `Ctrl-P` for next/previous track
+      (not bare `n`/`p`) so the ergonomics stay consistent everywhere.
 
 ## 3. Player & media features (`P`)
 
@@ -208,9 +219,12 @@ work is); solved/partial tasks add **Now** with the current evidence.
   - **Why:** the active line is ASCII-marked at one uniform font size, so the
     pane reads like a text dump (NowPlaying.qml:456-473).
   - **Details:** active/near/far model: active `body` scaled ×1.12, full
-    contrast, optional 2px `primary` hairline; near ±1 opacity 0.8; far ±2+
-    opacity 0.5 and smaller; non-synced = uniform 0.8 column, no focus line;
-    fixed-height delegates so state changes never reflow.
+    contrast; near ±1 opacity 0.8; far ±2+ opacity 0.5 and smaller; non-synced
+    = uniform 0.8 column, no focus line; fixed-height delegates so state
+    changes never reflow.
+  - **Centred style:** lyrics are a centred column — `Text.AlignHCenter` and
+    scale from the text centre (no left-anchored "Left → Right" growth); the
+    optional left hairline is dropped in favour of scale + contrast.
 - [ ] **LYR-8 · Smooth centre-follow + edge fades** — P2 · (roadmap "Lyrics presentation" P1)
   - **Why:** `positionViewAtIndex(Center)` teleports each line and every
     500 ms tick fights manual scrolling (NowPlaying.qml:109-110, 124-127).
@@ -418,7 +432,7 @@ work is); solved/partial tasks add **Now** with the current evidence.
 | Area | Open | Solved |
 |------|------|--------|
 | Vi modal engine | 18 | 2 |
-| Queue & grammar | 7 | 1 |
+| Queue & grammar | 8 | 1 |
 | Player features | 6 | 0 |
 | Lyrics pipeline | 6 | 4 |
 | Search | 2 | 3 |

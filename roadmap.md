@@ -368,10 +368,11 @@ Presentation states:
          far  (±2 or more): smaller, opacity `contentDimFar` 0.5
          near (±1):         `body`, opacity `contentDim` 0.8
          active (0):        `body` scaled x`lyricsEmphasis` (1.12), full
-                            contrast (`onSurface`), optional 2px `primary`
-                            left hairline;
-    -> the active line is never colour-only (R6): scale + contrast (+ hairline)
-       carry the state; the accent stays an accent.
+                            contrast (`onSurface`), centred like every line;
+    -> the column is centred (`Text.AlignHCenter`) and lines scale from their
+       centre -- no left-anchored "Left -> Right" growth, no edge hairline;
+    -> the active line is never colour-only (R6): scale + contrast carry the
+       state; the accent stays an accent.
 
 Geometry & scroll:
     -> fixed-height delegates so state changes never reflow the list;

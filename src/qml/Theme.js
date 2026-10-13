@@ -119,6 +119,15 @@ var stateDisabledContainer = "#1F36343B" // 12% surfaceContainerHighest
 var stateDisabledContent = "#61E6E0E9"   // 38% onSurface
 
 // ---------------------------------------------------------------------------
+// Lyrics stage (see roadmap "Lyrics presentation"): a focus window where the
+// active line is scaled and fully contrasted while neighbours dim with
+// distance. Unsynced lyrics use one uniform `contentDim` column.
+// ---------------------------------------------------------------------------
+var contentDim = 0.8      // near lines / whole unsynced column
+var contentDimFar = 0.5   // far lines in the synced focus window
+var lyricsEmphasis = 1.12 // active-line scale (transform, never font size)
+
+// ---------------------------------------------------------------------------
 // Typography roles (R7): proportional fractions with pixel clamps so labels
 // never get tiny on large displays or dominate small windows.
 // ---------------------------------------------------------------------------

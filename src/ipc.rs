@@ -9,6 +9,8 @@
 //! ```
 //!
 //! Commands are things like `search`, `play_pause`, `next`, `back`, ...
+//! Payload commands append an argument, e.g.
+//! `play_song_in_album <song-id>` (opens the album page and plays from there).
 
 use std::io::{BufRead, BufReader};
 use std::os::unix::net::UnixListener;

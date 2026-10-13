@@ -119,7 +119,9 @@ ApplicationWindow {
     Connections {
         target: Backend
         function onCommandIssued(command) {
-            keyHandler.dispatch(command);
+            // Pump, don't re-enter: a command may call back into the backend,
+            // which is still borrowed while this signal is being emitted.
+            Qt.callLater(() => keyHandler.dispatch(command));
         }
     }
 

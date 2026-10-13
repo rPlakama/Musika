@@ -134,7 +134,7 @@ Rectangle {
                 FadeText {
                     id: backLabel
                     anchors.centerIn: parent
-                    text: "‹  Back"
+                    text: "<- ESC"
                     color: Theme.onSurface
                     font.pixelSize: root.height * 0.022
                 }

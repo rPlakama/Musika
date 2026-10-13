@@ -689,6 +689,32 @@ impl Backend {
         });
     }
 
+    /// Resolves the song's album context and pumps a single `song_album` event
+    /// (queue JSON, start index, album metadata). The UI then calls
+    /// [`player_load`] and opens the album page itself, so no two crossed
+    /// invocations are needed.
+    ///
+    /// Also reachable from the external IPC pump:
+    /// `play_song_in_album <song-id>`.
+    #[qslot(qml_name = "playSongInAlbum")]
+    fn play_song_in_album(&mut self, song_id: String) {
+        let invoker = self.get_qml_method_invoker();
+        let Some(dbs) = crate::dbs().cloned() else {
+            return;
+        };
+        crate::runtime().spawn(async move {
+            match song_album_payload(&dbs, &song_id).await {
+                Ok(payload) => {
+                    qtbridge::invoke_method!(invoker, "emitData", "song_album".to_string(), payload);
+                }
+                Err(err) => {
+                    eprintln!("player: could not queue album: {err:#}");
+                    qtbridge::invoke_method!(invoker, "raiseError", "playback".to_string(), format!("{err:#}"));
+                }
+            }
+        });
+    }
+
     /// Loads a serialized queue into the player (runs on the Qt thread).
     #[qslot(qml_name = "playerLoad")]
     fn player_load(&mut self, tracks_json: String, start: i64) {
@@ -1182,6 +1208,49 @@ async fn song_queue_json(dbs: &crate::db::Dbs, song_id: &str) -> anyhow::Result<
         _ => (vec![song], 0),
     };
     Ok((tracks_json(dbs, songs).await?, start))
+}
+
+/// Single pumped event for "play this song inside its album": the serialized
+/// queue, the start index and the album metadata (or null).
+async fn song_album_payload(dbs: &crate::db::Dbs, song_id: &str) -> anyhow::Result<String> {
+    let Some(song) = crate::library::song(&dbs.library, song_id).await? else {
+        return Err(anyhow::anyhow!("song not found in index"));
+    };
+    let Some(album_id) = song.album_id.as_deref().filter(|id| !id.is_empty()) else {
+        let queue = tracks_json(dbs, vec![song]).await?;
+        return Ok(serde_json::json!({
+            "queue": queue,
+            "start": 0,
+            "album": serde_json::Value::Null,
+        })
+        .to_string());
+    };
+
+    let songs = crate::library::album_songs(&dbs.library, album_id).await?;
+    let start = songs.iter().position(|s| s.id == song.id).unwrap_or(0) as i64;
+    let queue = tracks_json(dbs, songs).await?;
+
+    let album = match crate::library::album(&dbs.library, album_id).await? {
+        Some(album) => {
+            let covers = crate::covers::url_map(&dbs.covers).await?;
+            serde_json::json!({
+                "id": album.id,
+                "title": album.title,
+                "artist": album.artist,
+                "year": album.year,
+                "tracks": album.song_count,
+                "cover": cover_url(album.cover_art.as_deref(), &covers),
+            })
+        }
+        None => serde_json::Value::Null,
+    };
+
+    Ok(serde_json::json!({
+        "queue": queue,
+        "start": start,
+        "album": album,
+    })
+    .to_string())
 }
 
 async fn tracks_json(

@@ -1,6 +1,7 @@
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
+import musika
 import "Theme.js" as Theme
 
 // Library shell: status bar on top, sidebar | main below it, player bar at the
@@ -113,6 +114,13 @@ Item {
     // Actions dispatched from the global key handler, scoped to the active
     // region: movement only ever affects the region the cursor is in.
     function handleAction(action) {
+        // Command pump: the search overlay (and external IPC via `ipc.sock`)
+        // both express this as `play_song_in_album <song-id>`.
+        if (action.indexOf("play_song_in_album ") === 0) {
+            Backend.playSongInAlbum(action.substring("play_song_in_album ".length));
+            return;
+        }
+
         // The floating search is modal: while open, all keys go to it.
         if (searchOverlay.opened) {
             searchOverlay.handleAction(action);
@@ -359,7 +367,9 @@ Item {
         id: searchOverlay
         anchors.fill: parent
 
-        onSongActivated: (id) => Backend.playSong(id)
+        // A search song hit goes through the same command pump as external
+        // IPC, so the flow stays scriptable and single-sourced.
+        onSongActivated: (id) => Backend.handleCommand("play_song_in_album " + id)
         onAlbumActivated: (albumId, title, artist, year, tracks, cover) => {
             var meta = [];
             if (year.length > 0)
@@ -386,6 +396,33 @@ Item {
         target: Backend
         function onErrorRaised(kind, message) {
             toast.show(kind, message);
+        }
+        // Single pumped event from `playSongInAlbum`: the queue + album
+        // context. Deferred so the backend is not re-entered while the signal
+        // is still being emitted.
+        function onDataReady(channel, payload) {
+            if (channel !== "song_album")
+                return;
+            var data = JSON.parse(payload);
+            Qt.callLater(function() {
+                Backend.playerLoad(data.queue, data.start);
+                if (!data.album)
+                    return;
+                nowPlayingExpanded = false;
+                var album = data.album;
+                var meta = [];
+                if (album.year)
+                    meta.push(String(album.year));
+                if (album.tracks)
+                    meta.push(album.tracks + " songs");
+                contentStack.push(albumEntryComponent, {
+                    albumId: album.id,
+                    albumTitle: album.title,
+                    albumArtist: album.artist ? album.artist : "",
+                    albumCover: album.cover ? album.cover : "",
+                    albumMeta: meta.join("   ·   ")
+                });
+            });
         }
     }
 

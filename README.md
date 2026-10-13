@@ -168,9 +168,9 @@ browsing never paints a palette.
 
 | Scope | Keys |
 |---|---|
-| Movement | `h j k l`, `g g` top, `G` bottom, `Ctrl-N`/`Ctrl-P` scroll |
+| Movement | `h j k l`, `g g` top, `G` bottom |
 | Navigate | `Tab` pane cycle, `Ctrl-W` scope overlay, `Enter`, `Esc`/`q`/`Ctrl-[` back |
-| Playback | `Space` play/pause, `n`/`p` next/prev, `m` mute, `-`/`+` volume |
+| Playback | `Space` play/pause, `n`/`p` or `Ctrl-N`/`Ctrl-P` next/prev, `m` mute, `-`/`+` volume |
 | Library | `Shift-H`/`Shift-L` album order (Artist → Name → Year) |
 | Clipboard | `y` yank the playing track, `Shift-P`/`Ctrl-V` paste into search |
 | Queue | `Ctrl-Q` drawer, `Shift-J`/`Shift-K` reorder, `d d` remove, `Enter` jump |

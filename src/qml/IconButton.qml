@@ -187,6 +187,9 @@ Rectangle {
             anchors.centerIn: parent
             visible: glyphA.iconGlyph.toString().length > 0
             source: glyphA.iconGlyph
+            // CurveRenderer has built-in AA; the default GeometryRenderer
+            // flattens curves and looks aliased at icon sizes.
+            preferredRendererType: VectorImage.CurveRenderer
             width: root.width * root.symbolRatio
             height: width
             opacity: root.enabled ? 1 : 0.38
@@ -219,6 +222,7 @@ Rectangle {
             anchors.centerIn: parent
             visible: glyphB.iconGlyph.toString().length > 0
             source: glyphB.iconGlyph
+            preferredRendererType: VectorImage.CurveRenderer
             width: root.width * root.symbolRatio
             height: width
             opacity: root.enabled ? 1 : 0.38

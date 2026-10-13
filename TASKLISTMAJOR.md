@@ -426,7 +426,9 @@ work is); solved/partial tasks add **Now** with the current evidence.
     (play/pause/next plus a mirrored copy of the skip icon for previous,
     embedded via a second `include_bytes_qml!` under `qrc:/app/icons/`;
     shuffle/stop stay glyphs for now), swapping with a `quick` (120 ms)
-    crossfade. Build + qmllint clean; visual check pending.
+    crossfade. Icons render through `VectorImage.CurveRenderer` (built-in
+    AA; the default GeometryRenderer aliases at icon sizes). Build + qmllint
+    clean; visual check pending.
 - [ ] **UI-32 · Unlimited horizontal collapse (responsive plan)** — P2 · (window policy)
   - **Why:** `Main.qml:27` clamps the window at `Screen.width * 0.4`; Qt itself
     permits any width (`minimumWidth` can be 0), so the floor is self-imposed.

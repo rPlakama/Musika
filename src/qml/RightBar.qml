@@ -16,6 +16,7 @@
 
 import QtQuick
 import QtQuick.Layouts
+import QtQuick.VectorImage
 import musika
 import "Theme.js" as Theme
 
@@ -122,33 +123,86 @@ Rectangle {
 
                 Behavior on width {
                     NumberAnimation {
+                        id: progressAnim
                         duration: Theme.motion.quick
                         easing.type: Easing.Linear
+                        // Spin follows the bar: when the fill settles after the
+                        // last progress step, the icon winds down with it.
+                        onRunningChanged: syncButton.updateSpin()
                     }
                 }
             }
         }
 
+        // Sync button (roadmap D-6): the container is invisible but keeps the
+        // hit area/proportions; the reload SVG is the whole control. While a
+        // sync runs the container spins and the icon follows it.
         Rectangle {
             id: syncButton
-            Layout.preferredWidth: syncLabel.implicitWidth + root.height * 0.4
+            Layout.preferredWidth: root.height * 0.6
             Layout.preferredHeight: root.height * 0.6
             radius: Theme.radius
-            color: !Backend.librarySyncing && syncHover.hovered
-                ? Palette.primary
-                : Palette.primaryContainer
+            color: "transparent"
 
-            FadeText {
-                id: syncLabel
-                anchors.centerIn: parent
-                text: "Sync"
-                color: Backend.librarySyncing ? Theme.stateDisabledContent : Palette.onPrimaryContainer
-                font.pixelSize: Theme.fontSize("label", root.height)
+            // Spin while the progress bar is moving (a sync runs / the fill is
+            // still settling) and on hover (slow). The icon and the bar are
+            // coupled: when the bar stops and the mouse is away, the spin
+            // stops too. Restarting resumes from the current angle and
+            // stopping leaves the icon in place, so nothing rewinds/bounces.
+            function spinning() {
+                return Backend.librarySyncing || progressAnim.running || syncHover.hovered;
             }
 
+            function updateSpin() {
+                if (spinning()) {
+                    spin.stop();
+                    spin.from = syncButton.rotation;
+                    spin.to = spin.from + 360;
+                    spin.duration = Backend.librarySyncing ? 1000 : 3000;
+                    spin.start();
+                } else {
+                    spin.stop();
+                    // A multiple of 360 is the same angle: bound the value
+                    // without moving the icon.
+                    syncButton.rotation = syncButton.rotation % 360;
+                }
+            }
+
+            NumberAnimation {
+                id: spin
+                target: syncButton
+                property: "rotation"
+                loops: Animation.Infinite
+                easing.type: Easing.Linear
+            }
+
+            Connections {
+                target: Backend
+                function onLibrary_syncing_changed() {
+                    syncButton.updateSpin();
+                }
+            }
+
+            VectorImage {
+                anchors.centerIn: parent
+                source: "qrc:/app/icons/reload-ui-2-svgrepo-com.svg"
+                preferredRendererType: VectorImage.CurveRenderer
+                width: root.height * 0.29
+                height: width
+                opacity: Backend.librarySyncing ? 0.38 : (syncHover.hovered ? 1.0 : 0.85)
+
+                Behavior on opacity {
+                    NumberAnimation { duration: Theme.motion.micro; easing.type: Easing.Bezier; easing.bezierCurve: Theme.ease.standard }
+                }
+            }
+
+            // Clickable affordance (reuse for every clickable): the hover
+            // handler carries the pointing-hand cursor, the tap handler the
+            // action. Pair them like this wherever something is clickable.
             HoverHandler {
                 id: syncHover
-                enabled: !Backend.librarySyncing
+                cursorShape: Qt.PointingHandCursor
+                onHoveredChanged: syncButton.updateSpin()
             }
             TapHandler {
                 enabled: !Backend.librarySyncing

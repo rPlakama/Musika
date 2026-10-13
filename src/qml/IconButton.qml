@@ -242,8 +242,12 @@ Rectangle {
         }
     }
 
+    // Clickable affordance (reuse for every clickable): the hover handler
+    // carries the pointing-hand cursor, the tap handler the action. Pair them
+    // like this wherever something is clickable.
     HoverHandler {
         id: hover
+        cursorShape: Qt.PointingHandCursor
     }
 
     TapHandler {

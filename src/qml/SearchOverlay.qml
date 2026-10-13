@@ -276,7 +276,7 @@ Item {
                     placeholderText: "Search anything"
                     placeholderTextColor: Palette.onSurfaceVariant
                     color: Palette.onSurface
-                    font.pixelSize: panel.height * 0.045
+                    font.pixelSize: panel.height * 0.035
                     background: Rectangle {
                         color: Palette.surfaceContainerHighest
                         radius: Theme.radius

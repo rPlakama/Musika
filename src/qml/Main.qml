@@ -100,6 +100,33 @@ ApplicationWindow {
                 current.handleAction(action);
         }
 
+        // Native MPRIS transport (Q-8); payload commands carry their value
+        // after a colon. Global, unlike screen- and context-specific actions.
+        function mprisDispatch(command) {
+            if (command === "mpris_play") {
+                if (Backend.playbackState !== "playing")
+                    Backend.playerToggle();
+            } else if (command === "mpris_pause") {
+                if (Backend.playbackState === "playing")
+                    Backend.playerToggle();
+            } else if (command === "mpris_toggle") {
+                Backend.playerToggle();
+            } else if (command === "mpris_stop") {
+                Backend.playerStop();
+            } else if (command === "mpris_next") {
+                Backend.playerNext();
+            } else if (command === "mpris_prev") {
+                Backend.playerPrevious();
+            } else if (command.indexOf("mpris_seek:") === 0) {
+                Backend.playerSeek(Math.max(0,
+                    Backend.position + Number(command.slice(11)) / 1000000));
+            } else if (command.indexOf("mpris_position:") === 0) {
+                Backend.playerSeek(Number(command.slice(15)) / 1000000);
+            } else if (command.indexOf("mpris_volume:") === 0) {
+                Backend.playerSetVolume(Number(command.slice(13)) * 100);
+            }
+        }
+
         // System clipboard bridge (VI-21): the hidden TextEdit is the only
         // QML-side clipboard accessor; yank writes, paste reads.
         TextEdit {
@@ -195,6 +222,12 @@ ApplicationWindow {
             }
             if (command === "lyrics_refresh") {
                 Backend.refreshLyrics();
+                return;
+            }
+            // MPRIS commands (Q-8) use the same pump: they may call back into
+            // the backend, which is still borrowed during this signal.
+            if (command.indexOf("mpris_") === 0) {
+                Qt.callLater(() => keyHandler.mprisDispatch(command));
                 return;
             }
             // Pump, don't re-enter: a command may call back into the backend,

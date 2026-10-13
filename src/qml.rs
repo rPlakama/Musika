@@ -1193,7 +1193,15 @@ impl Backend {
     /// Periodic pump from the UI: updates position and advances on track end.
     #[qslot]
     fn tick(&mut self) {
+        // MPRIS controls travel as commands; run them through the same
+        // dispatcher as keys/IPC, even while stopped (Q-8).
+        for command in crate::mpris::drain() {
+            self.command_issued(command);
+        }
         if self.player.state() == State::Stopped {
+            let mut state = self.mpris_snapshot();
+            state.playback_status = "Stopped".to_string();
+            crate::mpris::publish(state);
             return;
         }
         if self.player.poll_end() {
@@ -1338,6 +1346,34 @@ impl Backend {
         if self.queue_length != queue_length {
             self.queue_length = queue_length;
             self.queue_length_changed();
+        }
+
+        // Q-8: mirror the player into the native MPRIS service.
+        crate::mpris::publish(self.mpris_snapshot());
+    }
+
+    /// Q-8: current player state in MPRIS terms (volume 0.0..=1.0).
+    fn mpris_snapshot(&self) -> crate::mpris::Snapshot {
+        crate::mpris::Snapshot {
+            playback_status: match self.player.state() {
+                State::Playing => "Playing".to_string(),
+                State::Paused => "Paused".to_string(),
+                State::Stopped => "Stopped".to_string(),
+            },
+            title: self.current_title.clone(),
+            artist: self.current_artist.clone(),
+            album: self.current_album.clone(),
+            track_id: self.current_song_id.clone(),
+            duration_us: (self.duration * 1_000_000.0) as i64,
+            position_us: (self.position * 1_000_000.0) as i64,
+            volume: if self.muted {
+                0.0
+            } else {
+                (self.volume / 100.0).clamp(0.0, 1.0)
+            },
+            can_next: self.queue_index >= 0 && self.queue_index + 1 < self.queue_length,
+            can_prev: self.queue_index > 0,
+            art_url: self.current_cover_url.clone(),
         }
     }
 }

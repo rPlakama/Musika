@@ -207,13 +207,29 @@ The product is incomplete without these.
 
 - [ ] **Q-6 · A-B repeat, playback rate, crossfade** — P3 · (M9)
 
-- [ ] **Q-8 · Native MPRIS service (`org.mpris.MediaPlayer2.musika`)** — P2 · (roadmap "MPRIS node" design)
+- [x] **Q-8 · Native MPRIS service (`org.mpris.MediaPlayer2.musika`)** — P2 · (roadmap "MPRIS node" design)
   - **Why:** the mpv-mpris script is an extra install; a stock desktop should
     see the node, and media keys/panels/lock screens must work everywhere.
   - **Details:** `mpris.rs` bridge over zbus, no-op without a session bus,
     Metadata/Position/Can* mapping, rate-limited signals, `playerctl` acceptance
     test across GNOME/KDE/sway/XFCE; milestones M0–M5 in the roadmap. Keep the
     mpv script path (Q-7) as the opt-in fallback.
+  - **Now:** `src/mpris.rs` owns `org.mpris.MediaPlayer2.musika` (zbus 5,
+    tokio runtime; root + player interfaces as separate types). The Qt thread
+    publishes a `Snapshot` from `sync_player`/`tick` (volume 0..1, µs
+    positions) and drains `mpris_*` commands through the normal dispatcher
+    (`Main.qml` maps them globally). Transport Play/Pause/PlayPause/Stop/Next/
+    Previous/Seek/SetPosition + Get/Set Volume, `Seeked`, and change-only
+    PropertiesChanged rate-limited to <4/s (Position excluded). Metadata:
+    `mpris:trackid` `/org/musika/track/<id>` (sanitized; spec NoTrack when
+    idle), `mpris:length` µs only when known, `mpris:artUrl`,
+    `xesam:title/artist/album`. Without `DBUS_SESSION_BUS_ADDRESS` or with
+    `MUSIKA_MPRIS_SCRIPT` set it logs once and no-ops (no double node).
+    Verified under a private `dbus-run-session`: name owned, Identity/
+    PlaybackStatus/Metadata reads, Set Volume 0.42 round-tripped through QML
+    back to the bus, idle metadata = NoTrack. Not runnable in this env:
+    `playerctl` and the per-DE panel matrix; roadmap M5 extras (queue
+    playlist, OpenUri) deliberately out of scope for now.
 
 - [ ] **P-1 · Scrobble back to Navidrome** — P2 · (M5, CRITIQUE Ph3.2)
   - **Why:** play counts / recently played never update server-side.
@@ -614,31 +630,48 @@ The product is incomplete without these.
   - **Verify:** socket integration test (temp `MUSIKA_IPC_SOCKET`) drives
     seek/volume/queue_move and reads replies; README IPC examples updated.
 
-- [ ] **CACHE-1 · DB4 `media.db` + `media/` blobs** — P2 · (roadmap Media cache)
-  - **Why:** audio is never stored; playback dies without network.
-  - **Details:** row per song (`kind`, `rule_id`, validators, `last_used`); tmp +
-    atomic rename; purge only after a successful sync (covers.rs pattern).
+- [ ] **CACHE-1 · DB4 `media.db` + `media/` blobs** — P2 · (roadmap Media cache; MEDIACACHESTUDY.md §3/§5)
+  - **Why:** audio is never stored; playback dies without network. Research
+    picked an independent reqwest fetch (`download` original / `stream` with
+    transcode params) over mpv `--stream-record` (seek/switch breaks the file).
+  - **Details:** schema `media(song_id PK, kind, file, size, quality,
+    fingerprint, rule_id, last_used, created_at)` + `media_rule` + `media_meta`;
+    blobs split permanent/rule (`~/.config/musika/media/`) vs playback/rolling
+    (`~/.cache/musika/media/`); `.part` + atomic rename; `media::cached_path`
+    and a batch resolver for `build_track`; purge only after a successful sync
+    (covers.rs pattern).
 
-- [ ] **CACHE-2 · Playback cache + prefetch next N** — P2
+- [ ] **CACHE-2 · Playback cache + prefetch next N** — P2 · (MEDIACACHESTUDY.md §4)
   - **Why:** stutter-free playback; Symfonium-style rolling buffer.
-  - **Details:** player owns the queue → prefetch next tracks; purgeable freely.
+  - **Details:** reuse `Player::upcoming(n)` (lyrics already prefetches 3);
+    trigger on load/next/prev/queueJump/track-change tick; bounded concurrency
+    2-4 with an in-flight set; current uncached track fetched in parallel while
+    it plays; prefetch never swaps the playing file, only future `loadfile`s.
 
 - [ ] **CACHE-3 · Rolling cache (LRU, max size)** — P2
+  - **Details:** cap configurable (default ~2 GiB), evict LRU by `last_used`;
+    playback tier capped separately (~512 MiB); permanent/rule exempt.
 
 - [ ] **CACHE-4 · Permanent cache + "Move to permanent" pin** — P2
+  - **Details:** pin drops `kind='rule'`/`rule_id` and moves the blob to the
+    config-root `media/` (never auto-removed; uncapped, warn threshold in UI).
 
-- [ ] **CACHE-5 · Auto-download rules** — P2
+- [ ] **CACHE-5 · Auto-download rules** — P2 · (MEDIACACHESTUDY.md §6)
   - **Why:** Symfonium parity: favorites, playlists, genres, and artists flagged
     "in download cache" auto-download existing + future content; rule removal
     prunes unless pinned.
+  - **Details:** favorites from `library.db.starred`; artist rule by `artist_id`;
+    genre rule; playlist when indexed (P-4); re-evaluated after every successful
+    library sync (queue missing, prune uncovered).
 
-- [ ] **CACHE-6 · Quality & network policy** — P2
-  - **Details:** transcode bitrate on download, prefer-server online/Wi-Fi,
-    Wi-Fi-only downloads, max simultaneous downloads.
+- [ ] **CACHE-6 · Quality & network policy** — P2 · (MEDIACACHESTUDY.md §2/§8)
+  - **Details:** transcode via `stream?maxBitRate=&format=` (fingerprint includes
+    quality), `download` for original; prefer-server-online toggle; max parallel
+    fetches; Wi-Fi-only has no desktop meaning until metering detection exists.
 
 - [ ] **CACHE-7 · Cache status UI** — P2
   - **Details:** per-item state (cached/partial/queued) + used-bytes vs cap in
-    the status bar; offline filter.
+    the status bar; offline filter; permanent-tier warning threshold.
 
 
 - [ ] **AUTH-3 · Login error/status roles** — P2
@@ -1263,10 +1296,10 @@ Kept for rationale; the tree already carries these.
 | Bucket | Open | Solved |
 |--------|------|--------|
 | Must have | 8 | — |
-| Should have | 62 | 2 |
+| Should have | 61 | 3 |
 | Quick wins | 0 | 43 |
 | Solved (reference) | — | 36 |
-| **Total** | **70** | **82** |
+| **Total** | **69** | **83** |
 
 ### Coverage by area
 
@@ -1274,7 +1307,7 @@ Kept for rationale; the tree already carries these.
 |------|------|--------|
 | Vi modal engine | 11 | 10 |
 | Queue & playback grammar | 4 | 6 |
-| Player & media features | 5 | 1 |
+| Player & media features | 4 | 2 |
 | Lyrics pipeline | 3 | 7 |
 | Search | 2 | 6 |
 | UI microdesigns | 13 | 28 |

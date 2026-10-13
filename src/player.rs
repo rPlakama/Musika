@@ -479,16 +479,6 @@ fn socket_path() -> PathBuf {
         .unwrap_or_else(|_| PathBuf::from("/tmp/musika-mpv.sock"))
 }
 
-/// Optional `--script=...` to load mpv's MPRIS plugin. Set
-/// `MUSIKA_MPRIS_SCRIPT` to the `mpris.so`/`mpris.lua` path, or drop it into
-/// `~/.config/mpv/scripts` (which mpv loads automatically).
-fn mpris_script_arg() -> String {
-    match std::env::var("MUSIKA_MPRIS_SCRIPT") {
-        Ok(path) if !path.is_empty() => format!(" --script='{path}'"),
-        _ => String::new(),
-    }
-}
-
 fn connect_retry(path: &Path, timeout: Duration) -> Option<UnixStream> {
     let start = Instant::now();
     loop {

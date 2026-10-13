@@ -32,6 +32,7 @@ mod ipc;
 mod keybind;
 mod library;
 mod lyrics;
+mod mpris;
 mod palette;
 mod player;
 mod qml;
@@ -69,6 +70,7 @@ fn main() {
     let mut app = QApp::new();
     qtbridge::include_bytes_qml!("qml", "app");
     qtbridge::include_bytes_qml!("icons", "app");
+    crate::mpris::init();
 
     app.register::<qml::Backend>()
         .register::<palette::Palette>()

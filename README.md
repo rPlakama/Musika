@@ -189,6 +189,23 @@ echo "play_song_in_album 5LEeV6Y9AG6XLqvuYwIL7d" | socat - "$SOCK"
 echo colors_refresh | socat - "$SOCK"
 ```
 
+## MPRIS
+
+The player owns `org.mpris.MediaPlayer2.musika` on the session bus (zbus, tokio
+task; nothing on the Qt thread), so panels, media keys, lock screens and
+`playerctl` work on a stock desktop. Transport, Volume, Metadata
+(`mpris:trackid`, `mpris:length`, `mpris:artUrl`, `xesam:*`) and a rate-limited
+`PropertiesChanged` are exposed; MPRIS controls re-enter through the same
+dispatcher as keys and IPC. Without `DBUS_SESSION_BUS_ADDRESS` the service logs
+once and no-ops; setting `MUSIKA_MPRIS_SCRIPT` disables it in favour of the
+`mpv-mpris` script (single node either way).
+
+```sh
+playerctl -p musika status          # Playing / Paused / Stopped
+playerctl -p musika metadata        # title, artist, length, artUrl
+playerctl -p musika play-pause
+```
+
 ## Running
 
 ```sh
@@ -211,7 +228,7 @@ with a key at `~/.config/musika/key` (AES-256-GCM).
 | `MUSIKA_COVERS_DIR` | cover blob directory |
 | `MUSIKA_IPC_SOCKET` | command socket path |
 | `MUSIKA_KEY_FILE` | credential encryption key |
-| `MUSIKA_MPRIS_SCRIPT` | opt-in `mpv-mpris` script path |
+| `MUSIKA_MPRIS_SCRIPT` | opt-in `mpv-mpris` fallback; disables the native MPRIS service |
 | `MUSIKA_COLOR_{VARIANT,CONTRAST,SOURCE,SPEC}` | palette knobs |
 
 ## Modules cross-talk
@@ -246,6 +263,7 @@ flowchart LR
     UI -->|properties / slots| Backend
     Backend -->|dataReady payloads| UI
     Backend --> Player --> MPV
+    Backend <-->|snapshot / mpris_* commands| Mpris["mpris.rs (zbus)"]
     Backend --> Palette
     Backend -.->|reqwest| Server
     Sync -.->|getIndexes / fetch| Server

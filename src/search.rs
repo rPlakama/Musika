@@ -5,7 +5,6 @@
 //! columns, because SQLite cannot join across databases.
 
 use anyhow::Result;
-use serde::Serialize;
 use sqlx::sqlite::SqlitePool;
 use sqlx::FromRow;
 
@@ -84,43 +83,6 @@ fn fts_query(raw: &str) -> String {
         .join(" ")
 }
 
-// ---------------------------------------------------------------------------
-// Floating palette (FTS5 over `search.db`)
-// ---------------------------------------------------------------------------
-
-/// A palette hit: the song id plus the display label.
-#[derive(Debug, Clone, Serialize)]
-pub struct PaletteHit {
-    pub id: String,
-    pub label: String,
-}
-
-/// Palette search: runs the FTS5 query and formats each hit as
-/// `title - artist - album`, skipping fields the server left empty.
-pub async fn search_palette(pool: &SqlitePool, raw: &str, limit: i64) -> Result<Vec<PaletteHit>> {
-    let hits = search(pool, raw, limit).await?;
-    Ok(hits
-        .into_iter()
-        .map(|hit| {
-            let label = palette_label(&hit);
-            PaletteHit {
-                id: hit.song_id,
-                label,
-            }
-        })
-        .collect())
-}
-
-fn palette_label(hit: &SearchHit) -> String {
-    [Some(hit.title.as_str()), hit.artist.as_deref(), hit.album.as_deref()]
-        .into_iter()
-        .flatten()
-        .map(str::trim)
-        .filter(|part| !part.is_empty())
-        .collect::<Vec<_>>()
-        .join(" - ")
-}
-
 #[cfg(test)]
 mod tests {
     use std::str::FromStr;
@@ -166,40 +128,5 @@ mod tests {
     fn query_quotes_every_token() {
         assert_eq!(fts_query("hello world"), "\"hello\"* \"world\"*");
         assert_eq!(fts_query(""), "");
-    }
-
-    #[tokio::test]
-    async fn palette_matches_prefixes_and_labels_hits() {
-        let pool = memory_pool().await;
-
-        let rows = vec![
-            SongSearchRow {
-                id: "1".to_string(),
-                title: "Weird Fishes".to_string(),
-                artist: Some("Radiohead".to_string()),
-                album: Some("In Rainbows".to_string()),
-                duration: Some(300),
-            },
-            SongSearchRow {
-                id: "2".to_string(),
-                title: "Everything In Its Right Place".to_string(),
-                artist: None,
-                album: None,
-                duration: None,
-            },
-        ];
-        rebuild(&pool, &rows).await.unwrap();
-
-        let hits = search_palette(&pool, "weird fis", 10).await.unwrap();
-        assert_eq!(hits.len(), 1);
-        assert_eq!(hits[0].id, "1");
-        assert_eq!(hits[0].label, "Weird Fishes - Radiohead - In Rainbows");
-
-        let hits = search_palette(&pool, "everything", 10).await.unwrap();
-        assert_eq!(hits.len(), 1);
-        assert_eq!(hits[0].id, "2");
-        assert_eq!(hits[0].label, "Everything In Its Right Place");
-
-        assert!(search_palette(&pool, "   ", 10).await.unwrap().is_empty());
     }
 }

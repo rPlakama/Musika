@@ -158,18 +158,13 @@ pub async fn song_search_rows(pool: &SqlitePool) -> Result<Vec<SongSearchRow>> {
     Ok(rows)
 }
 
-/// Every `coverArt` id referenced by the library, used to drive the cover
-/// cache and to know which cached images became stale.
-///
-/// Only album- and artist-level art is cached: songs inherit their album's
-/// cover, which keeps the cache bounded (per-song ids exploded it).
-/// Global search across artists, albums and songs (in that priority), by
-/// case-insensitive substring match.
-pub async fn search(
+/// Artists and albums matching `query` by case-insensitive substring, for the
+/// floating search (songs come from the FTS index in `search.db`).
+pub async fn search_artists_albums(
     pool: &SqlitePool,
     query: &str,
     limit: i64,
-) -> Result<(Vec<ArtistRow>, Vec<AlbumRow>, Vec<SongRow>)> {
+) -> Result<(Vec<ArtistRow>, Vec<AlbumRow>)> {
     let escaped = query.replace('\\', "\\\\").replace('%', "\\%").replace('_', "\\_");
     let like = format!("%{escaped}%");
 
@@ -197,22 +192,42 @@ pub async fn search(
     .fetch_all(pool)
     .await?;
 
-    let songs = sqlx::query_as::<_, SongRow>(
-        "SELECT s.id, s.title, s.artist, s.album, s.album_id, s.track, s.duration,
-                COALESCE(al.cover_art, s.cover_art) AS cover_art
-         FROM songs s LEFT JOIN albums al ON al.id = s.album_id
-         WHERE s.title LIKE ?1 ESCAPE '\\' OR s.artist LIKE ?1 ESCAPE '\\'
-         ORDER BY s.artist, s.album, s.track
-         LIMIT ?2",
-    )
-    .bind(&like)
-    .bind(limit)
-    .fetch_all(pool)
-    .await?;
-
-    Ok((artists, albums, songs))
+    Ok((artists, albums))
 }
 
+/// Maps song ids to their `coverArt` id (album art when the song has none).
+pub async fn song_cover_ids(
+    pool: &SqlitePool,
+    ids: &[String],
+) -> Result<std::collections::HashMap<String, String>> {
+    if ids.is_empty() {
+        return Ok(std::collections::HashMap::new());
+    }
+
+    let mut builder = sqlx::QueryBuilder::new(
+        "SELECT s.id, COALESCE(al.cover_art, s.cover_art) AS cover_art
+         FROM songs s LEFT JOIN albums al ON al.id = s.album_id
+         WHERE s.id IN (",
+    );
+    let mut separated = builder.separated(", ");
+    for id in ids {
+        separated.push_bind(id.clone());
+    }
+    separated.push_unseparated(")");
+
+    let rows: Vec<(String, Option<String>)> =
+        builder.build_query_as().fetch_all(pool).await?;
+    Ok(rows
+        .into_iter()
+        .filter_map(|(id, cover_art)| cover_art.map(|cover_art| (id, cover_art)))
+        .collect())
+}
+
+/// Every `coverArt` id referenced by the library, used to drive the cover
+/// cache and to know which cached images became stale.
+///
+/// Only album- and artist-level art is cached: songs inherit their album's
+/// cover, which keeps the cache bounded (per-song ids exploded it).
 pub async fn referenced_cover_ids(pool: &SqlitePool) -> Result<std::collections::BTreeSet<String>> {
     let ids: Vec<String> = sqlx::query_scalar(
         "SELECT cover_art FROM artists WHERE cover_art IS NOT NULL
@@ -313,6 +328,30 @@ pub async fn song(pool: &SqlitePool, id: &str) -> Result<Option<SongRow>> {
                 COALESCE(al.cover_art, s.cover_art) AS cover_art
          FROM songs s LEFT JOIN albums al ON al.id = s.album_id
          WHERE s.id = ?1",
+    )
+    .bind(id)
+    .fetch_optional(pool)
+    .await?;
+    Ok(row)
+}
+
+/// A single album by id.
+pub async fn album(pool: &SqlitePool, id: &str) -> Result<Option<AlbumRow>> {
+    let row = sqlx::query_as::<_, AlbumRow>(
+        "SELECT id, name AS title, artist, year, song_count, cover_art
+         FROM albums
+         WHERE id = ?1",
+    )
+    .bind(id)
+    .fetch_optional(pool)
+    .await?;
+    Ok(row)
+}
+
+/// A single artist by id.
+pub async fn artist(pool: &SqlitePool, id: &str) -> Result<Option<ArtistRow>> {
+    let row = sqlx::query_as::<_, ArtistRow>(
+        "SELECT id, name, album_count, cover_art FROM artists WHERE id = ?1",
     )
     .bind(id)
     .fetch_optional(pool)

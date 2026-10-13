@@ -96,9 +96,9 @@ Item {
             return;
         }
 
-        // Search is global scope: open the floating palette from any region.
+        // Search is global scope: open the floating search from any region.
         if (action === "search") {
-            palette.open();
+            searchOverlay.open();
             return;
         }
 
@@ -212,26 +212,20 @@ Item {
                     blur: 0.35
                 }
 
-                SearchBar {
-                    id: searchBar
+                // Search is global scope (Shift Space F); this is just the hint.
+                Rectangle {
                     Layout.fillWidth: true
+                    Layout.preferredHeight: root.height * 0.045
+                    color: Theme.surface
 
-                    onSongActivated: (id) => Backend.playSong(id)
-                    onAlbumActivated: (albumId, title, artist, year, tracks, cover) => {
-                        var meta = [];
-                        if (year.length > 0)
-                            meta.push(year);
-                        if (tracks.length > 0)
-                            meta.push(tracks + " songs");
-                        contentStack.push(albumEntryComponent, {
-                            albumId: albumId,
-                            albumTitle: title,
-                            albumArtist: artist,
-                            albumCover: cover,
-                            albumMeta: meta.join("   ·   ")
-                        });
+                    FadeText {
+                        anchors.left: parent.left
+                        anchors.leftMargin: root.width * 0.02
+                        anchors.verticalCenter: parent.verticalCenter
+                        text: "Shift Space F for Search"
+                        color: Theme.onSurfaceVariant
+                        font.pixelSize: parent.height * 0.42
                     }
-                    onArtistActivated: (artist) => contentStack.replace(albumListComponent, { artistFilter: artist })
                 }
 
                 StackView {
@@ -353,9 +347,26 @@ Item {
         onRetry: Backend.syncLibrary()
     }
 
-    SearchPalette {
-        id: palette
+    SearchOverlay {
+        id: searchOverlay
         anchors.fill: parent
+
+        onSongActivated: (id) => Backend.playSong(id)
+        onAlbumActivated: (albumId, title, artist, year, tracks, cover) => {
+            var meta = [];
+            if (year.length > 0)
+                meta.push(year);
+            if (tracks.length > 0)
+                meta.push(tracks + " songs");
+            contentStack.push(albumEntryComponent, {
+                albumId: albumId,
+                albumTitle: title,
+                albumArtist: artist,
+                albumCover: cover,
+                albumMeta: meta.join("   ·   ")
+            });
+        }
+        onArtistActivated: (artist) => contentStack.replace(albumListComponent, { artistFilter: artist })
     }
 
     Connections {

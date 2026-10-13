@@ -588,25 +588,6 @@ impl Backend {
         });
     }
 
-    /// Floating palette search over the FTS5 index in `search.db`.
-    #[qslot(qml_name = "requestPalette")]
-    fn request_palette(&mut self, query: String) {
-        let invoker = self.get_qml_method_invoker();
-        let Some(dbs) = crate::dbs().cloned() else {
-            return;
-        };
-
-        crate::runtime().spawn(async move {
-            match crate::search::search_palette(&dbs.search, &query, 50).await {
-                Ok(hits) => {
-                    let json = serde_json::to_string(&hits).unwrap_or_else(|_| "[]".to_string());
-                    qtbridge::invoke_method!(invoker, "emitData", "palette".to_string(), json);
-                }
-                Err(err) => eprintln!("palette: search failed: {err:#}"),
-            }
-        });
-    }
-
     // -----------------------------------------------------------------------
     // Playback
     // -----------------------------------------------------------------------
@@ -966,8 +947,13 @@ async fn search_json(dbs: &crate::db::Dbs, query: &str) -> anyhow::Result<String
         return Ok("{\"artists\":[],\"albums\":[],\"songs\":[]}".to_string());
     }
 
-    let (artists, albums, songs) = crate::library::search(&dbs.library, query, 20).await?;
+    let (artists, albums) =
+        crate::library::search_artists_albums(&dbs.library, query, 20).await?;
+    let songs = crate::search::search(&dbs.search, query, 20).await?;
     let covers = crate::covers::url_map(&dbs.covers).await?;
+
+    let song_ids: Vec<String> = songs.iter().map(|song| song.song_id.clone()).collect();
+    let song_covers = crate::library::song_cover_ids(&dbs.library, &song_ids).await?;
 
     let artist_rows: Vec<serde_json::Value> = artists
         .into_iter()
@@ -996,13 +982,18 @@ async fn search_json(dbs: &crate::db::Dbs, query: &str) -> anyhow::Result<String
     let song_rows: Vec<serde_json::Value> = songs
         .iter()
         .map(|song| {
+            let cover = song_covers
+                .get(&song.song_id)
+                .and_then(|cover_art| covers.get(cover_art))
+                .cloned()
+                .unwrap_or_default();
             serde_json::json!({
-                "id": song.id,
+                "id": song.song_id,
                 "title": song.title,
                 "artist": song.artist,
                 "album": song.album,
                 "duration": song.duration,
-                "cover": cover_url(song.cover_art.as_deref(), &covers),
+                "cover": cover,
             })
         })
         .collect();

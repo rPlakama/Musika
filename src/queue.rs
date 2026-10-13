@@ -28,9 +28,10 @@ use crate::http_client::SubsonicClient;
 
 /// Songs-segment lazy queue: load this many tracks up front, then extend by
 /// at most [`LIBRARY_QUEUE_CHUNK`] once [`LIBRARY_QUEUE_AHEAD`] remain (i.e.
-/// playback reaches track 20 of a 30-track window; each later extension
-/// pre-loads no more than 5 songs forward).
-pub const LIBRARY_QUEUE_INITIAL: usize = 30;
+/// playback reaches track 190 of a 200-track window; each later extension
+/// pre-loads no more than 5 songs forward). The window is cheap (ids/rows
+/// from the local index), so it is sized to absorb skip bursts.
+pub const LIBRARY_QUEUE_INITIAL: usize = 200;
 pub const LIBRARY_QUEUE_CHUNK: usize = 5;
 pub const LIBRARY_QUEUE_AHEAD: usize = 10;
 
@@ -69,7 +70,7 @@ pub async fn album_tracks_json(dbs: &crate::db::Dbs, album_id: &str) -> anyhow::
     tracks_json(dbs, songs).await
 }
 
-/// First Songs-segment window (30 tracks from `song_id`) plus the extension
+/// First Songs-segment window (200 tracks from `song_id`) plus the extension
 /// cursor. The ordinal and the page come straight from the indexed rows
 /// (`ROW_NUMBER` / `LIMIT OFFSET`), so no full library is materialized and
 /// nothing is fetched from the server here.

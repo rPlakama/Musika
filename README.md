@@ -178,7 +178,7 @@ browsing never paints a palette.
 
 Fullscreen (`Shift-Enter`) adds a lyrics/queue split with its own pane keybar.
 Playing a row in the Songs segment stays in the list and queues the library
-from that row in 30-track windows; while you listen, each extension pre-loads
+from that row in 200-track windows; while you listen, each extension pre-loads
 up to 5 more tracks once 10 remain. Search hits and album pages open
 fullscreen instead.
 

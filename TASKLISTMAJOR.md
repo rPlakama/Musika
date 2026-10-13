@@ -961,7 +961,7 @@ Small, bounded, high-value changes.
     `nowPlayingExpanded` on it (search songs + `AlbumEntry` rows both go
     through `playerLoad`), while the album-page IPC flow clears it again when
     it pushes the page. Refined: Songs-segment rows play inside a bounded
-    library window (`all_songs` order, start at the row; 30 up front) through
+    library window (`all_songs` order, start at the row; 200 up front) through
     `playerLoadLibrary`, so that tab never opens fullscreen; while playback
     runs, each tick extends once 10 tracks remain, pre-loading at most 5 more
     (`playerAppend`, epoch-guarded against a replaced queue). Windows come from

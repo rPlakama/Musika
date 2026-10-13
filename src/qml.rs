@@ -54,6 +54,7 @@ pub struct Backend {
     muted: bool,
     queue_index: i64,
     queue_length: i64,
+    album_order: String,
 }
 
 #[qobject(Singleton)]
@@ -163,6 +164,11 @@ impl Backend {
         Member = queue_length,
         Notify = queue_length_changed
     );
+    qproperty!(
+        "albumOrder",
+        Member = album_order,
+        Notify = album_order_changed
+    );
 
     fn set_server_url(&mut self, v: String) {
         self.server_url = v;
@@ -240,10 +246,15 @@ impl Backend {
     #[qsignal]
     fn queue_length_changed(&mut self);
     #[qsignal]
+    fn album_order_changed(&mut self);
+    #[qsignal]
     fn library_changed(&mut self);
     /// User skip (transport/keyboard/IPC), so the skip buttons can bloom.
     #[qsignal(qml_name = "trackSkipped")]
     fn track_skipped(&mut self, forward: bool);
+    /// A new queue started playing; the UI opens Fullscreen Playback (Q-10).
+    #[qsignal(qml_name = "playbackStarted")]
+    fn playback_started(&mut self);
     #[qsignal(qml_name = "focusMain")]
     fn focus_main(&mut self);
 
@@ -292,6 +303,10 @@ impl Backend {
 
     #[qslot]
     fn startup(&mut self) {
+        if self.album_order.is_empty() {
+            self.album_order = crate::library::ALBUM_ORDERS[0].to_string();
+            self.album_order_changed();
+        }
         let invoker = self.get_qml_method_invoker();
         let sync_finish = self.get_qml_method_invoker();
         let sync_progress = self.get_qml_method_invoker();
@@ -460,6 +475,12 @@ impl Backend {
     /// Uses the saved credentials.
     #[qslot(qml_name = "syncLibrary")]
     fn sync_library(&mut self) {
+        // Re-entrancy guard (ARC-28) and immediate "Syncing…" state (UI-30):
+        // the manual path used to silently read "Up to date" for its duration.
+        if self.library_syncing {
+            return;
+        }
+        self.library_sync_started();
         let finish_invoker = self.get_qml_method_invoker();
         let progress_invoker = self.get_qml_method_invoker();
         let Some(dbs) = crate::dbs().cloned() else {
@@ -583,14 +604,43 @@ impl Backend {
         let Some(dbs) = crate::dbs().cloned() else {
             return;
         };
+        let order = if self.album_order.is_empty() {
+            crate::library::ALBUM_ORDERS[0].to_string()
+        } else {
+            self.album_order.clone()
+        };
         crate::runtime().spawn(async move {
-            match load_albums_json(&dbs, &artist).await {
+            match load_albums_json(&dbs, &artist, &order).await {
                 Ok(json) => {
                     qtbridge::invoke_method!(invoker, "emitData", "albums".to_string(), json);
                 }
                 Err(err) => eprintln!("library: could not read albums: {err:#}"),
             }
         });
+    }
+
+    /// Cycles the main-scope album order (Shift-L / Shift-H).
+    #[qslot(qml_name = "albumOrderNext")]
+    fn album_order_next(&mut self) {
+        self.cycle_album_order(1);
+    }
+
+    #[qslot(qml_name = "albumOrderPrev")]
+    fn album_order_prev(&mut self) {
+        self.cycle_album_order(-1);
+    }
+
+    fn cycle_album_order(&mut self, delta: i64) {
+        let current = if self.album_order.is_empty() {
+            crate::library::ALBUM_ORDERS[0]
+        } else {
+            self.album_order.as_str()
+        };
+        let next = crate::library::cycle_album_order(current, delta);
+        if self.album_order != next {
+            self.album_order = next.to_string();
+            self.album_order_changed();
+        }
     }
 
     #[qslot(qml_name = "requestSongs")]
@@ -772,6 +822,7 @@ impl Backend {
                 self.player.load(tracks, start.max(0) as usize);
                 self.sync_player();
                 self.emit_queue();
+                self.playback_started();
             }
             Err(err) => {
                 eprintln!("player: bad queue payload: {err}");
@@ -1217,9 +1268,13 @@ fn build_track(
 // Off-thread list loaders (produce JSON with resolved cover URLs)
 // ---------------------------------------------------------------------------
 
-async fn load_albums_json(dbs: &crate::db::Dbs, artist: &str) -> anyhow::Result<String> {
+async fn load_albums_json(
+    dbs: &crate::db::Dbs,
+    artist: &str,
+    order: &str,
+) -> anyhow::Result<String> {
     let filter = (!artist.is_empty()).then_some(artist);
-    let albums = crate::library::albums(&dbs.library, filter).await?;
+    let albums = crate::library::albums(&dbs.library, filter, order).await?;
     let covers = crate::covers::url_map(&dbs.covers).await?;
     let rows: Vec<serde_json::Value> = albums
         .into_iter()

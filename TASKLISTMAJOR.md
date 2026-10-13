@@ -224,8 +224,16 @@ The product is incomplete without these.
 - [ ] **P-5 · Radio** — P2 · (M6, roadmap)
   - **Why:** sidebar segment is a placeholder; Subsonic radio endpoints exist.
 
-- [ ] **P-6 · Resume-on-launch** — P2 · (roadmap P2)
-  - **Why:** power users expect the queue/session to survive restarts.
+- [ ] **P-6 · Resume-on-launch** — P2 · (roadmap DB7 "Session status")
+  - **Why:** power users expect the session to survive restarts; today the
+    player resets and `Home` always opens on the album list.
+  - **Details:** DB7 `statussave.db` (single row: server/username, album_id,
+    song_id, volume, muted, updated_at); dirty-flag writes behind a dedicated
+    500 ms debounce (not the player tick) plus a flush on window close; read
+    in `login_succeeded` and applied (volume/mute to the player, album page
+    reopened, last song queued paused -- no autoplay); unknown ids / account
+    mismatch are ignored silently. Milestones S0-S3 in the roadmap's "Session
+    status" design. DB7 stays separate: credentials is login material only.
 
 - [ ] **LYR-6 · Optional: karaoke v2, lyric FTS, `:lyrics`** — P3 · (roadmap L5)
   - **Why:** word-level timing and lyric search are stretch goals; server
@@ -541,10 +549,13 @@ The product is incomplete without these.
 
 Small, bounded, high-value changes.
 
-- [ ] **VI-6 · `Ctrl-[` alias + pending-sequence cancel** — P1 · (N3 residual)
+- [x] **VI-6 · `Ctrl-[` alias + pending-sequence cancel** — P1 · (N3 residual)
   - **Why:** `Ctrl-[` is muscle memory for Esc; Esc should also clear a half-typed
     sequence/count.
   - **Details:** add `ctrl-[` token; feed Esc through `Keymap.reset()`.
+  - **Now:** `token_from_qt` maps `[` (`0x5B`) so `Ctrl-[` becomes `ctrl-[`;
+    bound to `Action::Back` next to `escape`, and a pending `g` is cleared when
+    escape/`ctrl-[` arrives (unit-tested).
 
 - [ ] **VI-10 · Repurpose `Ctrl-N`/`Ctrl-P` as track skips** — P1 · (N7, Q-9)
   - **Why:** `Ctrl-N`/`Ctrl-P` only duplicated `j/k` scrolling; the better use
@@ -567,19 +578,24 @@ Small, bounded, high-value changes.
   - **Now:** `Enter` triggers sync (RightBar.handleAction); region remains in the
     ring.
 
-- [ ] **VI-18 · Space leaks through the modal search** — P2 · (MD32)
+- [x] **VI-18 · Space leaks through the modal search** — P2 · (MD32)
   - **Why:** the overlay is documented as modal, but `play_pause` is dispatched
     before Home sees the overlay (Main.qml:24-29).
   - **Details:** route `play_pause` through Home/overlay first.
+  - **Now:** `Main.dispatch` no longer handles `play_pause`; `Home` resolves it
+    only after the search/queue modal captures, so Space does not leak while an
+    overlay owns input (typing fields consume it as text).
 
 - [ ] **VI-19 · `i` is dead outside search** — P3 · (MD33)
   - **Why:** `InsertMode` is bound globally but only the overlay consumes it.
   - **Details:** scope the binding or consume it (mode indicator). 
 
-- [ ] **VI-20 · keyTimer comment/mechanism drift** — P3 · (MD34)
+- [x] **VI-20 · keyTimer comment/mechanism drift** — P3 · (MD34)
   - **Why:** the comment claims bare Space is deferred; it resolves immediately —
     only `g g`/`shift-space …` are.
   - **Details:** fix the comment or make deferral per-binding (ties to VI-9).
+  - **Now:** the timer comment now names `g g`/`shift-space f` as the deferred
+    sequences and states that bare Space fires immediately.
 
 - [ ] **Q-9 · Fullscreen queue & transport polish** — P2 · (fullscreen review)
   - **Why:** queue rows wear debug-ish `Prev`/`Next` tags, the order cannot be
@@ -593,7 +609,7 @@ Small, bounded, high-value changes.
     - fullscreen transport keeps `Ctrl-N` / `Ctrl-P` for next/previous track
       (not bare `n`/`p`) so the ergonomics stay consistent everywhere.
 
-- [ ] **Q-10 · Song activation enters Fullscreen Playback** — P2 · (roadmap D-4)
+- [x] **Q-10 · Song activation enters Fullscreen Playback** — P2 · (roadmap D-4)
   - **Why:** activating a song is the deliberate "listen now" verb; the user
     should land in the listening surface (cover + lyrics + queue) instead of
     back in the list they picked it from.
@@ -601,8 +617,10 @@ Small, bounded, high-value changes.
     result or `AlbumEntry` song list — plays it and opens fullscreen; album and
     artist activation keep their navigation semantics; queue `Enter` (jump) is
     unchanged; the search overlay closes first, no wait on stream or palette.
-  - **Now:** not implemented — both paths only call `playSong`/`playAlbum`;
-    fullscreen still opens through `Shift+Enter`/`toggle_fullscreen` alone.
+  - **Now:** landed — `playerLoad` emits `playbackStarted`; `Home` flips
+    `nowPlayingExpanded` on it (search songs + `AlbumEntry` rows both go
+    through `playerLoad`), while the album-page IPC flow clears it again when
+    it pushes the page.
 
 
 - [ ] **P-7 · Fullscreen controls completeness** — P2 · (U6)
@@ -632,16 +650,32 @@ Small, bounded, high-value changes.
     track change (`quick`); suppress `xxx`/`und`; render `synced` as a small
     MY3 chip in `label` type.
 
-- [ ] **S-4 · Align search order and default scope** — P2 · (MD10, roadmap mixed design)
+- [x] **S-4 · Align search order and default scope** — P2 · (MD10, roadmap mixed design)
   - **Decision (roadmap):** columns and priority are Songs > Albums > Artists;
     the cursor starts in the first non-empty scope and falls through in that
     order; counts move into the scope chips (S-6).
-  - **Now:** the implementation is still Artists|Albums|Songs with
-    artist-first priority (`SearchOverlay.qml:208,369-418`).
+  - **Now:** landed — `SearchOverlay` columns are Songs(40)|Albums(32)|
+    Artists(28) with `activeColumn` 0/1/2 and the start scope picked by
+    Songs > Albums > Artists; headers still carry the counts until S-6.
 
-- [ ] **S-5 · Hover steals the search cursor** — P3 · (MD15)
+- [x] **S-5 · Hover steals the search cursor** — P3 · (MD15)
   - **Why:** passing the mouse over a column re-targets `activeColumn`; only
     click should change it.
+  - **Now:** the row `HoverHandler` only sets `PointingHandCursor`; the
+    `hovered` signal and the overlay's `onHovered` handlers are gone, so hover
+    never moves the cursor — click and keys only.
+- [x] **S-7 · MainScope album ordering (`Shift-H`/`Shift-L`)** — P2 · (Subsonic order types)
+  - **Why:** the album list was hardcoded to `ORDER BY artist, name`; the
+    main scope should expose the Subsonic order families (by name, by year)
+    without leaving the keyboard.
+  - **Details:** `Backend.albumOrder` + `albumOrderNext/Prev`;
+    `library::ALBUM_ORDERS = [Artist, Name, Year]` (alphabeticalByArtist /
+    alphabeticalByName / byYear) cycled with wraparound; `library::albums`
+    keeps static SQL per order/filter (no dynamic SQL); `AlbumList` reloads
+    on `album_order_changed`; the hint strip shows `Order by <OrderType>`
+    right of the search keybind, same type size.
+  - **Now:** landed — `shift-l`/`shift-h` bindings + unit tests (65 pass);
+    `AlbumList` re-requests through the backend order.
 
 - [ ] **UI-1 · Region frame colours** — P2 · (MD1)
   - **Why:** PLAYER uses `Theme.error` (red) and four accents read as identity,
@@ -719,7 +753,7 @@ Small, bounded, high-value changes.
   - **Now:** landed in `AlbumEntry.qml`; visual acceptance (bright/dark
     covers, songs-boundary seam) pending.
 
-- [ ] **UI-30 · Manual sync shows `Syncing…`, not `Up to date`** — P2 · (sync-state review)
+- [x] **UI-30 · Manual sync shows `Syncing…`, not `Up to date`** — P2 · (sync-state review)
   - **Why:** `RightBar.qml:90` renders `librarySyncing ? "Syncing…" :
     "Up to date"`, but the button/tap path (`RightBar.qml:45,139` →
     `Backend.syncLibrary`) never sets `library_syncing` — only the
@@ -734,6 +768,9 @@ Small, bounded, high-value changes.
     — ties ARC-28). Acceptance: the status flips to `Syncing…` within one
     frame of the click and returns to `Up to date`/the result message on
     completion or error.
+  - **Now:** landed — `sync_library` returns early while `library_syncing`
+    and calls `library_sync_started()` before spawning, so the bar flips to
+    `Syncing…` immediately; the re-entrancy guard is in (ARC-28 partial).
 
 - [x] **UI-34 · Overlay close fades actually play** — P1 · (POLISHAUDIT §1.1)
   - **Why:** `SearchOverlay.qml:40` and `QueueDrawer.qml:31` use
@@ -758,11 +795,17 @@ Small, bounded, high-value changes.
   - **Why:** `PlaybackNode.qml` is uninstantiated, `covers::cached_path` unused
     until the media cache lands, `index.txt` mirror intentional?
 
-- [ ] **ARC-14 · Deduplicate constants** — P2 · (O12)
+- [x] **ARC-14 · Deduplicate constants** — P2 · (O12)
   - **Why:** volume 70.0, `COVER_SIZE`, `FETCH_CONCURRENCY` exist twice.
+  - **Now:** `src/consts.rs` owns `FETCH_CONCURRENCY` (index, covers, lyrics)
+    and `DEFAULT_VOLUME` (player); `COVER_SIZE` already had a single home in
+    `covers.rs`.
 
-- [ ] **ARC-15 · Stop masking errors as auth failures** — P2 · (O13)
+- [x] **ARC-15 · Stop masking errors as auth failures** — P2 · (O13)
   - **Why:** every envelope error becomes "Wrong username or password".
+  - **Now:** `SubsonicError` reads the code; only 40-44 fall back to the
+    credentials message, everything else surfaces its own text or
+    "Server rejected the request (code N)" (unit-tested).
 
 - [ ] **ARC-16 · mpv supervisor hardening** — P2 · (O16)
   - **Why:** `sh -c` string building for MPRIS/kill; avoid spawning shells.
@@ -1085,23 +1128,23 @@ Kept for rationale; the tree already carries these.
 | Bucket | Open | Solved |
 |--------|------|--------|
 | Must have | 9 | — |
-| Should have | 62 | — |
-| Quick wins | 39 | — |
-| Solved (reference) | — | 39 |
-| **Total** | **110** | **39** |
+| Should have | 60 | 2 |
+| Quick wins | 32 | 11 |
+| Solved (reference) | — | 36 |
+| **Total** | **101** | **49** |
 
 ### Coverage by area
 
 | Area | Open | Solved |
 |------|------|--------|
-| Vi modal engine | 18 | 3 |
-| Queue & playback grammar | 6 | 4 |
+| Vi modal engine | 15 | 6 |
+| Queue & playback grammar | 5 | 5 |
 | Player & media features | 6 | 0 |
 | Lyrics pipeline | 5 | 5 |
-| Search | 4 | 3 |
-| UI microdesigns | 31 | 10 |
+| Search | 2 | 6 |
+| UI microdesigns | 30 | 11 |
 | Dynamic color | 1 | 5 |
-| Architecture & robustness | 29 | 6 |
+| Architecture & robustness | 27 | 8 |
 | Media cache / offline | 7 | 0 |
 | Auth / startup | 2 | 1 |
 | Docs & process | 1 | 2 |

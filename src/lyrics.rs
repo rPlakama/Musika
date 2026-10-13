@@ -44,7 +44,6 @@ const MISS_TTL_SECS: i64 = 7 * 24 * 60 * 60;
 pub const SYNC_BACKFILL_LIMIT: usize = 64;
 
 /// Bounded concurrency for the sync backfill (mirrors the index fetchers).
-const FETCH_CONCURRENCY: usize = 8;
 
 /// How long a cached *plain* document is trusted: Navidrome may gain a `.lrc`
 /// for a track later, so an unsynced hit must be revalidated eventually.
@@ -241,7 +240,7 @@ pub async fn backfill(
     let candidates = candidates(&songs, &rows, now(), limit);
     let mut report = BackfillReport { fetched: 0 };
 
-    for chunk in candidates.chunks(FETCH_CONCURRENCY) {
+    for chunk in candidates.chunks(crate::consts::FETCH_CONCURRENCY) {
         let mut set = tokio::task::JoinSet::new();
         for song_id in chunk {
             let dbs = dbs.clone();

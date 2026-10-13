@@ -116,7 +116,7 @@ impl Player {
             shared: Arc::new(Mutex::new(Shared::default())),
             request_id: 0,
             fallback_duration: 0.0,
-            volume: 70.0,
+            volume: crate::consts::DEFAULT_VOLUME,
             muted: false,
         }
     }

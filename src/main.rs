@@ -21,6 +21,7 @@ use tokio::runtime::Runtime;
 
 mod api;
 mod colors;
+mod consts;
 mod covers;
 mod crypto;
 mod db;

@@ -43,7 +43,6 @@ use crate::http_client::SubsonicClient;
 
 /// Cover size requested from the server (large enough for the mainscreen).
 const COVER_SIZE: u32 = 512;
-const FETCH_CONCURRENCY: usize = 8;
 
 #[derive(Debug, Default, Clone, Copy)]
 pub struct CoverReport {
@@ -84,7 +83,7 @@ pub async fn refresh(
     let ids: Vec<String> = referenced.iter().cloned().collect();
     let mut report = CoverReport::default();
 
-    for chunk in ids.chunks(FETCH_CONCURRENCY) {
+    for chunk in ids.chunks(crate::consts::FETCH_CONCURRENCY) {
         let mut set = JoinSet::new();
         for id in chunk {
             let client = Arc::clone(client);

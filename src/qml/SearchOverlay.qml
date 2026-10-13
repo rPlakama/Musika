@@ -31,7 +31,7 @@ Item {
     property bool opened: false
     property bool loading: false
     property bool typing: true // false = search "normal mode" (hjkl navigates)
-    property int activeColumn: 0 // 0 artists, 1 albums, 2 songs (roadmap priority)
+    property int activeColumn: 0 // 0 songs, 1 albums, 2 artists (priority Songs > Albums > Artists)
 
     signal songActivated(string id)
     signal albumActivated(string albumId, string title, string artist, string year, string tracks, string cover)
@@ -115,10 +115,10 @@ Item {
 
     function columnFor(column) {
         if (column === 0)
-            return artistsColumn;
+            return songsColumn;
         if (column === 1)
             return albumsColumn;
-        return songsColumn;
+        return artistsColumn;
     }
 
     function moveRow(delta) {
@@ -141,7 +141,7 @@ Item {
         var hit = column.model ? column.model.get(column.cursor) : null;
         if (!hit)
             return;
-        if (activeColumn === 2)
+        if (activeColumn === 0)
             root.songActivated(hit.id);
         else if (activeColumn === 1)
             root.albumActivated(hit.id, hit.title, hit.artist, hit.year, hit.tracks, hit.cover);
@@ -206,7 +206,7 @@ Item {
         albumsColumn.cursor = albumResults.count > 0 ? 0 : -1;
         artistsColumn.cursor = artistResults.count > 0 ? 0 : -1;
         // Lookup priority picks the column the cursor starts in.
-        activeColumn = artistResults.count > 0 ? 0 : (albumResults.count > 0 ? 1 : 2);
+        activeColumn = songResults.count > 0 ? 0 : (albumResults.count > 0 ? 1 : 2);
 
         loading = false;
     }
@@ -359,30 +359,25 @@ Item {
                 }
             }
 
-            // Column widths are RowLayout weights (28/32/40), not pixels.
+            // Column widths are RowLayout weights (40/32/28), not pixels.
             RowLayout {
                 Layout.fillWidth: true
                 Layout.fillHeight: true
                 spacing: panel.width * 0.012
 
                 SearchColumn {
-                    id: artistsColumn
+                    id: songsColumn
                     Layout.fillWidth: true
-                    Layout.preferredWidth: 28
+                    Layout.preferredWidth: 40
                     Layout.fillHeight: true
-                    title: "Artists"
-                    roundedArt: true
-                    model: artistResults
+                    title: "Songs"
+                    model: songResults
                     active: root.activeColumn === 0
                     loading: root.loading
                     hasQuery: field.text.length > 0
 
-                    onHovered: (index) => {
-                        root.activeColumn = 0;
-                        artistsColumn.cursor = index;
-                    }
                     onPicked: (index) => {
-                        artistsColumn.cursor = index;
+                        songsColumn.cursor = index;
                         root.activeColumn = 0;
                         root.activate();
                     }
@@ -399,10 +394,6 @@ Item {
                     loading: root.loading
                     hasQuery: field.text.length > 0
 
-                    onHovered: (index) => {
-                        root.activeColumn = 1;
-                        albumsColumn.cursor = index;
-                    }
                     onPicked: (index) => {
                         albumsColumn.cursor = index;
                         root.activeColumn = 1;
@@ -411,22 +402,19 @@ Item {
                 }
 
                 SearchColumn {
-                    id: songsColumn
+                    id: artistsColumn
                     Layout.fillWidth: true
-                    Layout.preferredWidth: 40
+                    Layout.preferredWidth: 28
                     Layout.fillHeight: true
-                    title: "Songs"
-                    model: songResults
+                    title: "Artists"
+                    roundedArt: true
+                    model: artistResults
                     active: root.activeColumn === 2
                     loading: root.loading
                     hasQuery: field.text.length > 0
 
-                    onHovered: (index) => {
-                        root.activeColumn = 2;
-                        songsColumn.cursor = index;
-                    }
                     onPicked: (index) => {
-                        songsColumn.cursor = index;
+                        artistsColumn.cursor = index;
                         root.activeColumn = 2;
                         root.activate();
                     }

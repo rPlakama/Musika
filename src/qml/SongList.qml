@@ -61,11 +61,21 @@ Rectangle {
     }
 
     function handleAction(action) {
+        // Ctrl-N / Ctrl-P skip tracks (VI-10); j/k keeps the list cursor.
+        if (action === "scroll_up") {
+            Backend.playerPrevious();
+            return;
+        }
+        if (action === "scroll_down") {
+            Backend.playerNext();
+            return;
+        }
+
         if (songs.count === 0)
             return;
-        if (action === "move_up" || action === "scroll_up")
+        if (action === "move_up")
             list.currentIndex = Math.max(0, list.currentIndex - 1);
-        else if (action === "move_down" || action === "scroll_down")
+        else if (action === "move_down")
             list.currentIndex = Math.min(songs.count - 1, list.currentIndex + 1);
         else if (action === "enter")
             activateCurrent();

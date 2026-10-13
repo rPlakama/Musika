@@ -31,7 +31,6 @@ Item {
     property bool loading: false
     property bool hasQuery: false
 
-    signal hovered(int index)
     signal picked(int index)
 
     readonly property real headerH: height * 0.10
@@ -161,12 +160,10 @@ Item {
                         animated: false
                     }
 
+                    // Hover only signals clickability (S-5); the cursor moves
+                    // on click or keys, never on hover.
                     HoverHandler {
                         cursorShape: Qt.PointingHandCursor
-                        onHoveredChanged: {
-                            if (hovered)
-                                root.hovered(row.index);
-                        }
                     }
 
                     TapHandler {

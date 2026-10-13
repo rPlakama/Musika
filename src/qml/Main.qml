@@ -38,12 +38,6 @@ ApplicationWindow {
         focus: true
 
         function dispatch(action) {
-            // Space pauses/plays globally, regardless of screen or region.
-            if (action === "play_pause") {
-                Backend.playerToggle();
-                return;
-            }
-
             // Mute and volume steps are global like Space (media-key style).
             if (action === "mute") {
                 Backend.playerToggleMute();
@@ -55,6 +49,16 @@ ApplicationWindow {
             }
             if (action === "volume_down") {
                 Backend.playerAdjustVolume(-5);
+                return;
+            }
+
+            // Main-scope album ordering (Shift-L / Shift-H).
+            if (action === "order_next") {
+                Backend.albumOrderNext();
+                return;
+            }
+            if (action === "order_prev") {
+                Backend.albumOrderPrev();
                 return;
             }
 
@@ -140,7 +144,8 @@ ApplicationWindow {
             }
         }
 
-        // Resolves deferred sequences (e.g. bare Space = play/pause).
+        // Resolves deferred sequences once the inter-key timeout elapses
+        // (e.g. `g g`, `shift-space f`); bare Space fires immediately.
         Timer {
             id: keyTimer
             interval: 800

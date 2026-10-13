@@ -154,6 +154,13 @@ Item {
             queueDrawer.handleAction(action);
             return;
         }
+        // Transport is global once the modals above have had their say:
+        // the search overlay owns its input, so Space cannot leak through
+        // (VI-18).
+        if (action === "play_pause") {
+            Backend.playerToggle();
+            return;
+        }
         // Ctrl-Q toggles the queue drawer from anywhere.
         if (action === "queue_toggle") {
             queueDrawer.toggle();
@@ -296,6 +303,15 @@ Item {
                         anchors.leftMargin: root.width * 0.02
                         anchors.verticalCenter: parent.verticalCenter
                         text: "Shift Space F for Search"
+                        color: Palette.onSurfaceVariant
+                        font.pixelSize: parent.height * 0.42
+                    }
+
+                    FadeText {
+                        anchors.right: parent.right
+                        anchors.rightMargin: root.width * 0.02
+                        anchors.verticalCenter: parent.verticalCenter
+                        text: "Order by " + Backend.albumOrder
                         color: Palette.onSurfaceVariant
                         font.pixelSize: parent.height * 0.42
                     }
@@ -445,6 +461,12 @@ Item {
         target: Backend
         function onErrorRaised(kind, message) {
             toast.show(kind, message);
+        }
+        // Q-10 (roadmap D-4): activating a song opens Fullscreen Playback.
+        // Album/artist activation keeps its navigation; the album-page IPC
+        // flow below clears the flag again when it pushes the album page.
+        function onPlaybackStarted() {
+            nowPlayingExpanded = true;
         }
         // Single pumped event from `playSongInAlbum`: the queue + album
         // context. Deferred so the backend is not re-entered while the signal

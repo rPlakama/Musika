@@ -297,29 +297,60 @@ pub struct ArtistRow {
     pub cover_art: Option<String>,
 }
 
-/// Albums for the central list, optionally filtered by artist name.
-pub async fn albums(pool: &SqlitePool, artist: Option<&str>) -> Result<Vec<AlbumRow>> {
+/// Album orderings offered in the main scope (`Shift-H`/`Shift-L`). The
+/// labels map to the Subsonic `getAlbumList2` types they approximate:
+/// Artist = alphabeticalByArtist, Name = alphabeticalByName, Year = byYear.
+pub const ALBUM_ORDERS: [&str; 3] = ["Artist", "Name", "Year"];
+
+/// Cycles the album order by `delta` and returns the new label.
+pub fn cycle_album_order(current: &str, delta: i64) -> &'static str {
+    let index = ALBUM_ORDERS
+        .iter()
+        .position(|order| *order == current)
+        .unwrap_or(0) as i64;
+    let next = (index + delta).rem_euclid(ALBUM_ORDERS.len() as i64) as usize;
+    ALBUM_ORDERS[next]
+}
+
+/// Albums for the central list, optionally filtered by artist name, ordered
+/// by one of [`ALBUM_ORDERS`]. Kept as static SQL (no interpolation) so the
+/// allowlist is enforced at the type level.
+pub async fn albums(pool: &SqlitePool, artist: Option<&str>, order: &str) -> Result<Vec<AlbumRow>> {
+    let sql: &'static str = match (artist.is_some(), order) {
+        (true, "Name") => {
+            "SELECT id, name AS title, artist, year, song_count, cover_art
+             FROM albums WHERE artist = ?1 ORDER BY name"
+        }
+        (true, "Year") => {
+            "SELECT id, name AS title, artist, year, song_count, cover_art
+             FROM albums WHERE artist = ?1 ORDER BY year DESC, name"
+        }
+        (true, _) => {
+            "SELECT id, name AS title, artist, year, song_count, cover_art
+             FROM albums WHERE artist = ?1 ORDER BY artist, name"
+        }
+        (false, "Name") => {
+            "SELECT id, name AS title, artist, year, song_count, cover_art
+             FROM albums ORDER BY name"
+        }
+        (false, "Year") => {
+            "SELECT id, name AS title, artist, year, song_count, cover_art
+             FROM albums ORDER BY year DESC, name"
+        }
+        (false, _) => {
+            "SELECT id, name AS title, artist, year, song_count, cover_art
+             FROM albums ORDER BY artist, name"
+        }
+    };
+
     let rows = match artist {
         Some(artist) => {
-            sqlx::query_as::<_, AlbumRow>(
-                "SELECT id, name AS title, artist, year, song_count, cover_art
-                 FROM albums
-                 WHERE artist = ?1
-                 ORDER BY name",
-            )
-            .bind(artist)
-            .fetch_all(pool)
-            .await?
+            sqlx::query_as::<_, AlbumRow>(sql)
+                .bind(artist)
+                .fetch_all(pool)
+                .await?
         }
-        None => {
-            sqlx::query_as::<_, AlbumRow>(
-                "SELECT id, name AS title, artist, year, song_count, cover_art
-                 FROM albums
-                 ORDER BY artist, name",
-            )
-            .fetch_all(pool)
-            .await?
-        }
+        None => sqlx::query_as::<_, AlbumRow>(sql).fetch_all(pool).await?,
     };
     Ok(rows)
 }
@@ -513,5 +544,16 @@ mod tests {
                 .unwrap()
                 .is_none()
         );
+    }
+
+    #[test]
+    fn album_order_cycles_both_ways() {
+        assert_eq!(cycle_album_order("Artist", 1), "Name");
+        assert_eq!(cycle_album_order("Name", 1), "Year");
+        assert_eq!(cycle_album_order("Year", 1), "Artist");
+        assert_eq!(cycle_album_order("Artist", -1), "Year");
+        assert_eq!(cycle_album_order("Year", -1), "Name");
+        // Unknown values snap back to the first order.
+        assert_eq!(cycle_album_order("", 1), "Name");
     }
 }

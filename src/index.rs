@@ -36,7 +36,6 @@ use crate::covers::CoverReport;
 use crate::db::Dbs;
 use crate::http_client::SubsonicClient;
 
-const FETCH_CONCURRENCY: usize = 8;
 
 /// Outcome of a [`sync_library`] run.
 #[derive(Debug, Default, Clone, Copy)]
@@ -252,7 +251,7 @@ async fn refresh_covers(dbs: &Dbs, client: &Arc<SubsonicClient>) -> CoverReport 
 
 async fn fetch_artists(client: &Arc<SubsonicClient>, ids: &[String]) -> Vec<ArtistWithAlbumsID3> {
     let mut out = Vec::new();
-    for chunk in ids.chunks(FETCH_CONCURRENCY) {
+    for chunk in ids.chunks(crate::consts::FETCH_CONCURRENCY) {
         let mut set = JoinSet::new();
         for id in chunk {
             let client = Arc::clone(client);
@@ -275,7 +274,7 @@ async fn fetch_artists(client: &Arc<SubsonicClient>, ids: &[String]) -> Vec<Arti
 
 async fn fetch_albums(client: &Arc<SubsonicClient>, ids: &[String]) -> Vec<AlbumWithSongsID3> {
     let mut out = Vec::new();
-    for chunk in ids.chunks(FETCH_CONCURRENCY) {
+    for chunk in ids.chunks(crate::consts::FETCH_CONCURRENCY) {
         let mut set = JoinSet::new();
         for id in chunk {
             let client = Arc::clone(client);

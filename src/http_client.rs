@@ -218,10 +218,22 @@ impl<T> SubsonicResponse<T> {
             return Ok(self.body);
         }
 
-        let message = self
-            .error
-            .and_then(|error| error.message)
-            .unwrap_or_else(|| "Wrong username or password".to_string());
+        // Only genuine auth codes (40-44) fall back to the credentials
+        // message; every other envelope error surfaces its own text (ARC-15).
+        let message = match self.error {
+            Some(error) => {
+                if let Some(message) = error.message.filter(|text| !text.trim().is_empty()) {
+                    message
+                } else if matches!(error.code, Some(40..=44)) {
+                    "Wrong username or password".to_string()
+                } else if let Some(code) = error.code {
+                    format!("Server rejected the request (code {code})")
+                } else {
+                    "Server rejected the request".to_string()
+                }
+            }
+            None => "Server rejected the request".to_string(),
+        };
 
         bail!("{message}")
     }
@@ -229,6 +241,8 @@ impl<T> SubsonicResponse<T> {
 
 #[derive(Debug, Deserialize)]
 struct SubsonicError {
+    #[serde(default)]
+    code: Option<i32>,
     #[serde(default)]
     message: Option<String>,
 }
@@ -304,5 +318,26 @@ mod tests {
 
         let err = envelope.response.into_result().unwrap_err();
         assert!(err.to_string().contains("Wrong username or password"));
+    }
+
+    #[test]
+    fn auth_code_without_message_still_maps_to_credentials_error() {
+        let envelope: Envelope<serde_json::Value> =
+            serde_json::from_str(r#"{"subsonic-response":{"status":"failed","error":{"code":40}}}"#)
+                .unwrap();
+
+        let err = envelope.response.into_result().unwrap_err();
+        assert!(err.to_string().contains("Wrong username or password"));
+    }
+
+    #[test]
+    fn other_errors_are_not_masked_as_auth_failures() {
+        let envelope: Envelope<serde_json::Value> =
+            serde_json::from_str(r#"{"subsonic-response":{"status":"failed","error":{"code":70}}}"#)
+                .unwrap();
+
+        let err = envelope.response.into_result().unwrap_err();
+        assert!(err.to_string().contains("code 70"));
+        assert!(!err.to_string().contains("username"));
     }
 }

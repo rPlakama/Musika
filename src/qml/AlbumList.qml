@@ -85,6 +85,9 @@ Rectangle {
         function onLibrary_changed() {
             root.reload();
         }
+        function onAlbum_order_changed() {
+            root.reload();
+        }
     }
 
     FadeText {

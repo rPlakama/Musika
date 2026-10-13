@@ -45,6 +45,8 @@ pub enum Action {
     Mute,
     VolumeUp,
     VolumeDown,
+    OrderPrev,
+    OrderNext,
     InsertMode,
     NextTrack,
     PrevTrack,
@@ -77,6 +79,8 @@ impl Action {
             Self::Mute => "mute",
             Self::VolumeUp => "volume_up",
             Self::VolumeDown => "volume_down",
+            Self::OrderPrev => "order_prev",
+            Self::OrderNext => "order_next",
             Self::InsertMode => "insert_mode",
             Self::NextTrack => "next_track",
             Self::PrevTrack => "prev_track",
@@ -113,6 +117,8 @@ fn defaults() -> Vec<(&'static str, Action)> {
         ("=", Action::VolumeUp),
         ("shift-=", Action::VolumeUp),
         ("+", Action::VolumeUp),
+        ("shift-h", Action::OrderPrev),
+        ("shift-l", Action::OrderNext),
         ("shift-space f", Action::Search),
         ("shift-space shift-f", Action::Search),
         ("h", Action::MoveLeft),
@@ -132,6 +138,7 @@ fn defaults() -> Vec<(&'static str, Action)> {
         ("shift-p", Action::Paste),
         ("ctrl-v", Action::Paste),
         ("escape", Action::Back),
+        ("ctrl-[", Action::Back),
         ("q", Action::Back),
         ("ctrl-q", Action::QueueToggle),
         ("shift-k", Action::QueueUp),
@@ -270,6 +277,7 @@ pub fn token_from_qt(key: i32, modifiers: i32) -> Option<String> {
         0x2D => "-".to_string(),                               // minus / keypad minus
         0x2B => "+".to_string(),                               // keypad plus
         0x3D => "=".to_string(),                               // '+' on the main row (shifted)
+        0x5B => "[".to_string(),                               // Ctrl-[ == Escape
         _ => return None,
     };
 
@@ -372,6 +380,20 @@ mod tests {
     }
 
     #[test]
+    fn ctrl_bracket_is_back_and_cancels_pending() {
+        assert_eq!(token_from_qt(0x5B, QT_CTRL).as_deref(), Some("ctrl-["));
+
+        let mut keymap = Keymap::new();
+        assert_eq!(keymap.feed("ctrl-["), Outcome::Action(Action::Back));
+
+        // A half-typed sequence is cleared by the escape alias.
+        let mut keymap = Keymap::new();
+        assert_eq!(keymap.feed("g"), Outcome::Pending);
+        assert_eq!(keymap.feed("escape"), Outcome::Action(Action::Back));
+        assert!(!keymap.is_pending());
+    }
+
+    #[test]
     fn queue_bindings() {
         let mut keymap = Keymap::new();
         assert_eq!(keymap.feed("ctrl-q"), Outcome::Action(Action::QueueToggle));
@@ -416,5 +438,12 @@ mod tests {
         assert_eq!(token_from_qt(0x2D, 0).as_deref(), Some("-"));
         assert_eq!(token_from_qt(0x3D, QT_SHIFT).as_deref(), Some("shift-="));
         assert_eq!(token_from_qt(0x2B, 0).as_deref(), Some("+"));
+    }
+
+    #[test]
+    fn album_order_keys() {
+        let mut keymap = Keymap::new();
+        assert_eq!(keymap.feed("shift-l"), Outcome::Action(Action::OrderNext));
+        assert_eq!(keymap.feed("shift-h"), Outcome::Action(Action::OrderPrev));
     }
 }

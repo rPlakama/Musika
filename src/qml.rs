@@ -14,14 +14,21 @@
 // You should have received a copy of the GNU General Public License
 // along with this program; if not, see <https://www.gnu.org/licenses/>.
 
-use std::collections::HashMap;
 use std::sync::Arc;
 
 use qtbridge::{QmlMethodInvoker, QmlObject, qobject};
 
+use crate::browse::{
+    album_notes, load_album_songs_json, load_albums_json, load_artist_json, load_artists_json,
+    load_songs_json, search_json,
+};
 use crate::http_client::SubsonicClient;
 use crate::keybind::{Keymap, Outcome};
 use crate::player::{Player, State};
+use crate::queue::{
+    LIBRARY_QUEUE_AHEAD, LibraryQueue, album_tracks_json, library_chunk_json,
+    library_queue_payload, song_album_payload,
+};
 
 #[derive(Default)]
 pub struct Backend {
@@ -57,6 +64,9 @@ pub struct Backend {
     album_order: String,
     server_type: String,
     search_open: bool,
+    library_queue: Option<LibraryQueue>,
+    /// Invalidates in-flight lazy appends when the queue is replaced.
+    library_queue_epoch: u64,
 }
 
 #[qobject(Singleton)]
@@ -835,7 +845,9 @@ impl Backend {
         });
     }
 
-    /// Queues a single song by id.
+    /// Plays a song inside the Songs segment's queue: a bounded window of the
+    /// whole library in list order (30 tracks), extended lazily while the user
+    /// listens; never opens fullscreen (Q-10 refinement).
     #[qslot(qml_name = "playSong")]
     fn play_song(&mut self, song_id: String) {
         let invoker = self.get_qml_method_invoker();
@@ -843,9 +855,16 @@ impl Backend {
             return;
         };
         crate::runtime().spawn(async move {
-            match song_queue_json(&dbs, &song_id).await {
-                Ok((json, start)) => {
-                    qtbridge::invoke_method!(invoker, "playerLoad", json, start);
+            match library_queue_payload(&dbs, &song_id).await {
+                Ok((json, next, total)) => {
+                    qtbridge::invoke_method!(
+                        invoker,
+                        "playerLoadLibrary",
+                        json,
+                        0i64,
+                        next as i64,
+                        total as i64
+                    );
                 }
                 Err(err) => {
                     eprintln!("player: could not play song: {err:#}");
@@ -896,15 +915,62 @@ impl Backend {
         });
     }
 
-    /// Loads a serialized queue into the player (runs on the Qt thread).
+    /// Loads a serialized queue into the player and opens Fullscreen Playback
+    /// (album pages, search hits).
     #[qslot(qml_name = "playerLoad")]
     fn player_load(&mut self, tracks_json: String, start: i64) {
+        self.library_queue = None;
+        self.library_queue_epoch += 1;
+        self.load_queue(tracks_json, start, true);
+    }
+
+    /// First Songs-segment window: loads without the fullscreen flip and
+    /// stores the extension cursor (`next`/`total` in `all_songs`).
+    #[qslot(qml_name = "playerLoadLibrary")]
+    fn player_load_library(&mut self, tracks_json: String, start: i64, next: i64, total: i64) {
+        self.load_queue(tracks_json, start, false);
+        self.library_queue_epoch += 1;
+        self.library_queue = Some(LibraryQueue {
+            next: next.max(0) as usize,
+            total: total.max(0) as usize,
+            loading: false,
+        });
+    }
+
+    /// Appends one lazy window to the Songs-segment queue. Appends from a
+    /// replaced queue (stale epoch) are dropped.
+    #[qslot(qml_name = "playerAppend")]
+    fn player_append(&mut self, tracks_json: String, next: i64, total: i64, epoch: i64) {
+        if epoch < 0 || epoch as u64 != self.library_queue_epoch {
+            return;
+        }
+        match serde_json::from_str::<Vec<crate::player::Track>>(&tracks_json) {
+            Ok(tracks) => {
+                self.player.append(tracks);
+                self.emit_queue();
+                self.sync_player();
+            }
+            Err(err) => {
+                eprintln!("player: bad queue payload: {err}");
+                self.error_raised("playback".to_string(), format!("Bad queue payload: {err}"));
+            }
+        }
+        if let Some(queue) = self.library_queue.as_mut() {
+            queue.next = next.max(0) as usize;
+            queue.total = total.max(0) as usize;
+            queue.loading = false;
+        }
+    }
+
+    fn load_queue(&mut self, tracks_json: String, start: i64, announce: bool) {
         match serde_json::from_str::<Vec<crate::player::Track>>(&tracks_json) {
             Ok(tracks) => {
                 self.player.load(tracks, start.max(0) as usize);
                 self.sync_player();
                 self.emit_queue();
-                self.playback_started();
+                if announce {
+                    self.playback_started();
+                }
             }
             Err(err) => {
                 eprintln!("player: bad queue payload: {err}");
@@ -1230,6 +1296,57 @@ impl Backend {
             self.player.next();
         }
         self.sync_player();
+        self.maybe_extend_library_queue();
+    }
+
+    /// Keeps the Songs-segment queue ahead of playback: once
+    /// [`LIBRARY_QUEUE_AHEAD`] tracks remain, fetch and append up to
+    /// [`LIBRARY_QUEUE_CHUNK`] more. One failure stops extension for this
+    /// queue (the error toast is already up); a new `playSong` resets it.
+    fn maybe_extend_library_queue(&mut self) {
+        let Some(queue) = self.library_queue.as_ref() else {
+            return;
+        };
+        if queue.loading || queue.next >= queue.total {
+            return;
+        }
+        let offset = queue.next;
+        let loaded = self.player.len();
+        if loaded == 0 || self.player.index() + LIBRARY_QUEUE_AHEAD < loaded {
+            return;
+        }
+        let epoch = self.library_queue_epoch;
+
+        let invoker = self.get_qml_method_invoker();
+        let Some(dbs) = crate::dbs().cloned() else {
+            return;
+        };
+        if let Some(queue) = self.library_queue.as_mut() {
+            queue.loading = true;
+        }
+        crate::runtime().spawn(async move {
+            match library_chunk_json(&dbs, offset).await {
+                Ok((json, next, total)) => {
+                    qtbridge::invoke_method!(
+                        invoker,
+                        "playerAppend",
+                        json,
+                        next as i64,
+                        total as i64,
+                        epoch as i64
+                    );
+                }
+                Err(err) => {
+                    eprintln!("player: could not extend the library queue: {err:#}");
+                    qtbridge::invoke_method!(
+                        invoker,
+                        "raiseError",
+                        "playback".to_string(),
+                        format!("{err:#}")
+                    );
+                }
+            }
+        });
     }
 
     /// Publishes the player state to the QML properties.
@@ -1474,327 +1591,4 @@ fn spawn_index_sync(
             }
         }
     });
-}
-
-/// Builds a playable [`crate::player::Track`] from an indexed song.
-fn build_track(
-    client: &SubsonicClient,
-    song: crate::library::SongRow,
-    covers: &HashMap<String, String>,
-) -> anyhow::Result<crate::player::Track> {
-    let url = client.stream_url(&song.id)?;
-    let cover_art = song.cover_art.unwrap_or_default();
-    let cover_url = covers.get(&cover_art).cloned().unwrap_or_default();
-    Ok(crate::player::Track {
-        id: song.id,
-        title: song.title,
-        artist: song.artist.unwrap_or_default(),
-        album: song.album.unwrap_or_default(),
-        duration: song.duration.unwrap_or(0) as f64,
-        url: url.to_string(),
-        cover_art,
-        cover_url,
-    })
-}
-
-// ---------------------------------------------------------------------------
-// Off-thread list loaders (produce JSON with resolved cover URLs)
-// ---------------------------------------------------------------------------
-
-async fn load_albums_json(
-    dbs: &crate::db::Dbs,
-    artist: &str,
-    order: &str,
-) -> anyhow::Result<String> {
-    let filter = (!artist.is_empty()).then_some(artist);
-    let albums = crate::library::albums(&dbs.library, filter, order).await?;
-    let covers = crate::covers::url_map(&dbs.covers).await?;
-    let rows: Vec<serde_json::Value> = albums
-        .iter()
-        .map(|album| album_json(album, &covers))
-        .collect();
-    Ok(serde_json::to_string(&rows)?)
-}
-
-async fn load_songs_json(dbs: &crate::db::Dbs) -> anyhow::Result<String> {
-    let songs = crate::library::all_songs(&dbs.library).await?;
-    let covers = crate::covers::url_map(&dbs.covers).await?;
-    song_rows_json(&songs, &covers)
-}
-
-async fn load_album_songs_json(dbs: &crate::db::Dbs, album_id: &str) -> anyhow::Result<String> {
-    let songs = crate::library::album_songs(&dbs.library, album_id).await?;
-    let covers = crate::covers::url_map(&dbs.covers).await?;
-    song_rows_json(&songs, &covers)
-}
-
-async fn load_artists_json(dbs: &crate::db::Dbs) -> anyhow::Result<String> {
-    let artists = crate::library::artists(&dbs.library).await?;
-    let covers = crate::covers::url_map(&dbs.covers).await?;
-    let rows: Vec<serde_json::Value> = artists
-        .iter()
-        .map(|artist| artist_json(artist, &covers))
-        .collect();
-    Ok(serde_json::to_string(&rows)?)
-}
-
-/// One artist (library.db) with cover URL and its albums, for ArtistEntry.
-async fn load_artist_json(
-    dbs: &crate::db::Dbs,
-    id: &str,
-    order: &str,
-) -> anyhow::Result<Option<String>> {
-    let Some(artist) = crate::library::artist(&dbs.library, id).await? else {
-        return Ok(None);
-    };
-    let albums = crate::library::artist_albums(&dbs.library, id, order).await?;
-    let covers = crate::covers::url_map(&dbs.covers).await?;
-    let mut value = artist_json(&artist, &covers);
-    value["albums"] = serde_json::Value::Array(
-        albums
-            .iter()
-            .map(|album| album_json(album, &covers))
-            .collect(),
-    );
-    Ok(Some(value.to_string()))
-}
-
-fn artist_json(
-    artist: &crate::library::ArtistRow,
-    covers: &HashMap<String, String>,
-) -> serde_json::Value {
-    let cover = artist
-        .cover_art
-        .as_deref()
-        .and_then(|id| covers.get(id))
-        .cloned()
-        .unwrap_or_default();
-    serde_json::json!({
-        "id": artist.id,
-        "name": artist.name,
-        "album_count": artist.album_count,
-        "cover": cover,
-    })
-}
-
-fn album_json(
-    album: &crate::library::AlbumRow,
-    covers: &HashMap<String, String>,
-) -> serde_json::Value {
-    let cover = album
-        .cover_art
-        .as_deref()
-        .and_then(|id| covers.get(id))
-        .cloned()
-        .unwrap_or_default();
-    serde_json::json!({
-        "id": album.id,
-        "title": album.title,
-        "artist": album.artist,
-        "year": album.year,
-        "song_count": album.song_count,
-        "cover": cover,
-    })
-}
-
-fn song_rows_json(
-    songs: &[crate::library::SongRow],
-    covers: &HashMap<String, String>,
-) -> anyhow::Result<String> {
-    let rows: Vec<serde_json::Value> = songs
-        .iter()
-        .map(|song| {
-            let cover = song
-                .cover_art
-                .as_deref()
-                .and_then(|id| covers.get(id))
-                .cloned()
-                .unwrap_or_default();
-            serde_json::json!({
-                "id": song.id,
-                "title": song.title,
-                "artist": song.artist,
-                "album": song.album,
-                "track": song.track,
-                "duration": song.duration,
-                "cover": cover,
-            })
-        })
-        .collect();
-    Ok(serde_json::to_string(&rows)?)
-}
-
-async fn album_tracks_json(dbs: &crate::db::Dbs, album_id: &str) -> anyhow::Result<String> {
-    let songs = crate::library::album_songs(&dbs.library, album_id).await?;
-    tracks_json(dbs, songs).await
-}
-
-/// Fetches an album's description text from the server (`getAlbumInfo2`).
-async fn album_notes(dbs: &crate::db::Dbs, album_id: &str) -> String {
-    let Ok(Some(credentials)) = crate::sqlite::load_credentials(&dbs.credentials).await else {
-        return String::new();
-    };
-    let client = SubsonicClient::new(
-        &credentials.server_url,
-        &credentials.username,
-        &credentials.password,
-    );
-    match client.get_album_info2(album_id).await {
-        Ok(info) => info.notes.unwrap_or_default(),
-        Err(err) => {
-            eprintln!("album: could not fetch info for {album_id}: {err:#}");
-            String::new()
-        }
-    }
-}
-
-fn cover_url(id: Option<&str>, covers: &HashMap<String, String>) -> String {
-    id.and_then(|id| covers.get(id))
-        .cloned()
-        .unwrap_or_default()
-}
-
-async fn search_json(dbs: &crate::db::Dbs, query: &str) -> anyhow::Result<String> {
-    if query.trim().is_empty() {
-        return Ok("{\"artists\":[],\"albums\":[],\"songs\":[]}".to_string());
-    }
-
-    let (artists, albums) = crate::library::search_artists_albums(&dbs.library, query, 20).await?;
-    let songs = crate::search::search(&dbs.search, query, 20).await?;
-    let covers = crate::covers::url_map(&dbs.covers).await?;
-
-    let song_ids: Vec<String> = songs.iter().map(|song| song.song_id.clone()).collect();
-    let song_covers = crate::library::song_cover_ids(&dbs.library, &song_ids).await?;
-
-    let artist_rows: Vec<serde_json::Value> = artists
-        .into_iter()
-        .map(|artist| {
-            serde_json::json!({
-                "id": artist.id,
-                "name": artist.name,
-                "album_count": artist.album_count,
-                "cover": cover_url(artist.cover_art.as_deref(), &covers),
-            })
-        })
-        .collect();
-    let album_rows: Vec<serde_json::Value> = albums
-        .into_iter()
-        .map(|album| {
-            serde_json::json!({
-                "id": album.id,
-                "title": album.title,
-                "artist": album.artist,
-                "year": album.year,
-                "song_count": album.song_count,
-                "cover": cover_url(album.cover_art.as_deref(), &covers),
-            })
-        })
-        .collect();
-    let song_rows: Vec<serde_json::Value> = songs
-        .iter()
-        .map(|song| {
-            let cover = song_covers
-                .get(&song.song_id)
-                .and_then(|cover_art| covers.get(cover_art))
-                .cloned()
-                .unwrap_or_default();
-            serde_json::json!({
-                "id": song.song_id,
-                "title": song.title,
-                "artist": song.artist,
-                "album": song.album,
-                "duration": song.duration,
-                "cover": cover,
-            })
-        })
-        .collect();
-
-    Ok(serde_json::json!({
-        "artists": artist_rows,
-        "albums": album_rows,
-        "songs": song_rows,
-    })
-    .to_string())
-}
-
-/// Builds the queue for a song: its album (starting at that song) when known,
-/// otherwise just the song itself.
-async fn song_queue_json(dbs: &crate::db::Dbs, song_id: &str) -> anyhow::Result<(String, i64)> {
-    let Some(song) = crate::library::song(&dbs.library, song_id).await? else {
-        return Err(anyhow::anyhow!("song not found in index"));
-    };
-    let (songs, start) = match song.album_id.as_deref() {
-        Some(album_id) if !album_id.is_empty() => {
-            let album = crate::library::album_songs(&dbs.library, album_id).await?;
-            let index = album.iter().position(|s| s.id == song.id).unwrap_or(0) as i64;
-            (album, index)
-        }
-        _ => (vec![song], 0),
-    };
-    Ok((tracks_json(dbs, songs).await?, start))
-}
-
-/// Single pumped event for "play this song inside its album": the serialized
-/// queue, the start index and the album metadata (or null).
-async fn song_album_payload(dbs: &crate::db::Dbs, song_id: &str) -> anyhow::Result<String> {
-    let Some(song) = crate::library::song(&dbs.library, song_id).await? else {
-        return Err(anyhow::anyhow!("song not found in index"));
-    };
-    let Some(album_id) = song.album_id.as_deref().filter(|id| !id.is_empty()) else {
-        let queue = tracks_json(dbs, vec![song]).await?;
-        return Ok(serde_json::json!({
-            "queue": queue,
-            "start": 0,
-            "album": serde_json::Value::Null,
-        })
-        .to_string());
-    };
-
-    let songs = crate::library::album_songs(&dbs.library, album_id).await?;
-    let start = songs.iter().position(|s| s.id == song.id).unwrap_or(0) as i64;
-    let queue = tracks_json(dbs, songs).await?;
-
-    let album = match crate::library::album(&dbs.library, album_id).await? {
-        Some(album) => {
-            let covers = crate::covers::url_map(&dbs.covers).await?;
-            serde_json::json!({
-                "id": album.id,
-                "title": album.title,
-                "artist": album.artist,
-                "year": album.year,
-                "tracks": album.song_count,
-                "cover": cover_url(album.cover_art.as_deref(), &covers),
-            })
-        }
-        None => serde_json::Value::Null,
-    };
-
-    Ok(serde_json::json!({
-        "queue": queue,
-        "start": start,
-        "album": album,
-    })
-    .to_string())
-}
-
-async fn tracks_json(
-    dbs: &crate::db::Dbs,
-    songs: Vec<crate::library::SongRow>,
-) -> anyhow::Result<String> {
-    let credentials = crate::sqlite::load_credentials(&dbs.credentials).await?;
-    let Some(credentials) = credentials else {
-        return Err(anyhow::anyhow!("no saved credentials to stream with"));
-    };
-    let client = SubsonicClient::new(
-        &credentials.server_url,
-        &credentials.username,
-        &credentials.password,
-    );
-    let covers = crate::covers::url_map(&dbs.covers).await?;
-
-    let mut tracks = Vec::with_capacity(songs.len());
-    for song in songs {
-        tracks.push(build_track(&client, song, &covers)?);
-    }
-    Ok(serde_json::to_string(&tracks)?)
 }

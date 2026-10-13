@@ -20,6 +20,7 @@ use std::sync::OnceLock;
 use tokio::runtime::Runtime;
 
 mod api;
+mod browse;
 mod cache;
 mod colors;
 mod consts;
@@ -36,6 +37,7 @@ mod mpris;
 mod palette;
 mod player;
 mod qml;
+mod queue;
 mod search;
 mod sqlite;
 

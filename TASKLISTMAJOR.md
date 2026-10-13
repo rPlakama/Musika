@@ -660,6 +660,13 @@ The product is incomplete without these.
 
 - [ ] **ARC-17 · Slim the `Backend` god-object** — P2 · (O17)
   - **Why:** huge slot surface; `playback_state` is a `String`, should be enum.
+  - **Now (partial):** the Qt bridge's data layer left `qml.rs` — `browse.rs`
+    (list/search JSON loaders + cover-URL resolution) and `queue.rs` (Track
+    queue builders, the lazy Songs-segment windows with `LibraryQueue` cursor
+    and `chunk_range` test); `qml.rs` 1957 → 1594 lines, keeping the QObject,
+    tick/sync glue and invoker-driven orchestration. Open: `playback_state`
+    String → enum, slot-surface reduction. Next module candidate: `api.rs`
+    (1894 lines: protocol types + client methods).
 
 - [ ] **ARC-24 · Shared sync epoch across the five DBs** — P1 · (DB analysis)
   - **Why:** only library.db knows when it last synced; search/covers/lyrics
@@ -953,7 +960,15 @@ Small, bounded, high-value changes.
   - **Now:** landed — `playerLoad` emits `playbackStarted`; `Home` flips
     `nowPlayingExpanded` on it (search songs + `AlbumEntry` rows both go
     through `playerLoad`), while the album-page IPC flow clears it again when
-    it pushes the page.
+    it pushes the page. Refined: Songs-segment rows play inside a bounded
+    library window (`all_songs` order, start at the row; 30 up front) through
+    `playerLoadLibrary`, so that tab never opens fullscreen; while playback
+    runs, each tick extends once 10 tracks remain, pre-loading at most 5 more
+    (`playerAppend`, epoch-guarded against a replaced queue). Windows come from
+    the local index only (`ROW_NUMBER` ordinal + `LIMIT/OFFSET` pages in
+    library.db; covers from covers.db; `stream_url` is offline URL building),
+    so extensions never refetch the library from Navidrome; search and
+    `AlbumEntry` keep the fullscreen path.
 
 
 - [x] **P-7 · Fullscreen controls completeness** — P2 · (U6)

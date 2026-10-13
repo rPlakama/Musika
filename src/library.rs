@@ -406,6 +406,47 @@ pub async fn all_songs(pool: &SqlitePool) -> Result<Vec<SongRow>> {
     Ok(rows)
 }
 
+/// Size of the library, without materializing it.
+pub async fn song_count(pool: &SqlitePool) -> Result<usize> {
+    let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM songs")
+        .fetch_one(pool)
+        .await?;
+    Ok(count.max(0) as usize)
+}
+
+/// 0-based position of a song in [`all_songs`] order, without materializing
+/// the library (same ORDER BY, evaluated by SQLite's ROW_NUMBER).
+pub async fn song_ordinal(pool: &SqlitePool, id: &str) -> Result<Option<usize>> {
+    let ordinal: Option<i64> = sqlx::query_scalar(
+        "SELECT rn - 1 FROM (
+             SELECT id, ROW_NUMBER() OVER (
+                        ORDER BY artist, album, disc_number, track, title) AS rn
+             FROM songs
+         ) WHERE id = ?1",
+    )
+    .bind(id)
+    .fetch_optional(pool)
+    .await?;
+    Ok(ordinal.map(|value| value.max(0) as usize))
+}
+
+/// One page of the [`all_songs`] order (lazy queue chunks), covers resolved
+/// from the album like the full list.
+pub async fn songs_range(pool: &SqlitePool, offset: i64, limit: i64) -> Result<Vec<SongRow>> {
+    let rows = sqlx::query_as::<_, SongRow>(
+        "SELECT s.id, s.title, s.artist, s.album, s.album_id, s.track, s.duration,
+                COALESCE(al.cover_art, s.cover_art) AS cover_art
+         FROM songs s LEFT JOIN albums al ON al.id = s.album_id
+         ORDER BY s.artist, s.album, s.disc_number, s.track, s.title
+         LIMIT ?1 OFFSET ?2",
+    )
+    .bind(limit.max(0))
+    .bind(offset.max(0))
+    .fetch_all(pool)
+    .await?;
+    Ok(rows)
+}
+
 /// A single song by id.
 pub async fn song(pool: &SqlitePool, id: &str) -> Result<Option<SongRow>> {
     let row = sqlx::query_as::<_, SongRow>(
@@ -637,5 +678,51 @@ mod tests {
                 .unwrap()
                 .is_empty()
         );
+    }
+
+    #[tokio::test]
+    async fn song_pages_follow_all_songs_order_without_materializing_it() {
+        let pool = memory_pool().await;
+        for (id, artist, album, disc, track, title) in [
+            (
+                "s1",
+                "Radiohead",
+                "Kid A",
+                1,
+                1,
+                "Everything In Its Right Place",
+            ),
+            ("s2", "Radiohead", "Kid A", 1, 2, "Kid A"),
+            ("s3", "Muse", "Absolution", 1, 1, "Intro"),
+            ("s4", "Muse", "Absolution", 1, 2, "Apocalypse Please"),
+            ("s5", "Aurora", "All My Demons", 1, 1, "Runaway"),
+        ] {
+            sqlx::query(
+                "INSERT INTO songs (id, artist, album, disc_number, track, title)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            )
+            .bind(id)
+            .bind(artist)
+            .bind(album)
+            .bind(disc)
+            .bind(track)
+            .bind(title)
+            .execute(&pool)
+            .await
+            .unwrap();
+        }
+
+        let all = all_songs(&pool).await.unwrap();
+        assert_eq!(song_count(&pool).await.unwrap(), all.len());
+        for (index, song) in all.iter().enumerate() {
+            assert_eq!(song_ordinal(&pool, &song.id).await.unwrap(), Some(index));
+        }
+        assert_eq!(song_ordinal(&pool, "missing").await.unwrap(), None);
+
+        // Pages line up with the same order, whatever the offset.
+        let page = songs_range(&pool, 1, 2).await.unwrap();
+        let ids: Vec<&str> = page.iter().map(|song| song.id.as_str()).collect();
+        assert_eq!(ids, vec![all[1].id.as_str(), all[2].id.as_str()]);
+        assert!(songs_range(&pool, 10, 5).await.unwrap().is_empty());
     }
 }

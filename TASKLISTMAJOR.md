@@ -204,6 +204,31 @@ work is); solved/partial tasks add **Now** with the current evidence.
     support for `enhanced` varies.
   - **Details:** `enhanced=true` `cueLine`/`agents`/translations; index lyric
     text in search.db FTS5; `:lyrics sync` backfill per album/artist.
+- [ ] **LYR-7 · Lyrics stage states (kill the `> <` code-art)** — P2 · (roadmap "Lyrics presentation" P0)
+  - **Why:** the active line is ASCII-marked at one uniform font size, so the
+    pane reads like a text dump (NowPlaying.qml:456-473).
+  - **Details:** active/near/far model: active `body` scaled ×1.12, full
+    contrast, optional 2px `primary` hairline; near ±1 opacity 0.8; far ±2+
+    opacity 0.5 and smaller; non-synced = uniform 0.8 column, no focus line;
+    fixed-height delegates so state changes never reflow.
+- [ ] **LYR-8 · Smooth centre-follow + edge fades** — P2 · (roadmap "Lyrics presentation" P1)
+  - **Why:** `positionViewAtIndex(Center)` teleports each line and every
+    500 ms tick fights manual scrolling (NowPlaying.qml:109-110, 124-127).
+  - **Details:** animate `contentY` to the active delegate's centre
+    (`standard`/`decelerate`, `quick` for tiny moves); pause follow on
+    `onMovementStarted`, resume after ~4 s idle or on track change; top/bottom
+    gradients from `surfaceContainerLow` to transparent.
+- [ ] **LYR-9 · Lyrics state polish** — P3 · (roadmap "Lyrics presentation" P2)
+  - **Why:** "No lyrics" flashes before the first response, track changes swap
+    text abruptly, and the tag leaks `subsonic · synced · xxx`.
+  - **Details:** loading state before first payload; crossfade the list on
+    track change (`quick`); suppress `xxx`/`und`; render `synced` as a small
+    MY3 chip in `label` type.
+- [ ] **LYR-10 · Word-level karaoke (`cueLine`)** — P3 · (roadmap "Lyrics presentation" P3)
+  - **Why:** optional stretch; the OpenSubsonic `enhanced=true` payload offers
+    word/syllable timing.
+  - **Details:** accent fill/underline per word; only when `kind="main"` and
+    every line is timed.
 
 ## 5. Search (`S`)
 
@@ -395,7 +420,7 @@ work is); solved/partial tasks add **Now** with the current evidence.
 | Vi modal engine | 18 | 2 |
 | Queue & grammar | 7 | 1 |
 | Player features | 6 | 0 |
-| Lyrics pipeline | 2 | 4 |
+| Lyrics pipeline | 6 | 4 |
 | Search | 2 | 3 |
 | UI microdesigns | 22 | 5 |
 | Architecture | 18 | 5 |

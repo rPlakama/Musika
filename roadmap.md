@@ -334,6 +334,81 @@ Open questions:
     -> language choice when several `structuredLyrics` exist (first synced main);
     -> whether to expose an offline "lyrics available" filter.
 
+# Lyrics presentation -- design (smooth karaoke stage)
+
+Why the current implementation sucks:
+    -> the active line is marked with ASCII art: `"> " + line + " <"`
+       (NowPlaying.qml:463) -- debug formatting, not a visual state;
+    -> every line has the same font size and weight; only colour changes
+       (NowPlaying.qml:465-466), so the pane reads like a text dump instead of
+       a focus window;
+    -> non-active lines all share one tone: no distance ramp, no dimming, so
+       the eye has no anchor and every verse looks equally loud;
+    -> synced scrolling teleports: `positionViewAtIndex(..., Center)` fires on
+       each line change with no animation (NowPlaying.qml:109-110, 124-127),
+       and the 500 ms tick re-centres, actively fighting a manual j/k scroll;
+    -> no edge treatment: lines clip mid-word at the pane border;
+    -> synced and unsynced look almost identical (only the header tag says
+       "synced"), so the feature's whole point is invisible;
+    -> the header tag leaks debug data: `subsonic · synced · xxx`
+       (`lyricsTag()`, NowPlaying.qml:113-122; "xxx" is OpenSubsonic for
+       "unspecified language");
+    -> "No lyrics" flashes before the first response (`lyricsAvailable`
+       starts false, NowPlaying.qml:23, 476-485);
+    -> the lyrics pane shares the right column with the queue, so the visible
+       stage is short: barely a couple of surrounding lines.
+
+Target (Spotify-like stage, Material discipline):
+
+Presentation states:
+    -> NON-SYNCED: one calm column. All lines `body` with uniform opacity
+       (`contentDim` 0.8) and colour (`onSurfaceVariant`); free scroll, no
+       focus line, no auto-follow.
+    -> SYNCED: a focus window of ~5 lines:
+         far  (±2 or more): smaller, opacity `contentDimFar` 0.5
+         near (±1):         `body`, opacity `contentDim` 0.8
+         active (0):        `body` scaled x`lyricsEmphasis` (1.12), full
+                            contrast (`onSurface`), optional 2px `primary`
+                            left hairline;
+    -> the active line is never colour-only (R6): scale + contrast (+ hairline)
+       carry the state; the accent stays an accent.
+
+Geometry & scroll:
+    -> fixed-height delegates so state changes never reflow the list;
+    -> animated centre-follow: on line change, animate `contentY` to the active
+       delegate's centre with `standard`/`decelerate`; tiny corrections use
+       `quick`;
+    -> manual scroll wins: follow pauses on `onMovementStarted` and resumes
+       after ~4 s idle or on track change; the active line stays highlighted;
+    -> edge fades: top/bottom gradients from `Theme.surfaceContainerLow`
+       (opaque) to transparent, so lines dissolve instead of clipping;
+    -> track change crossfades the list (`quick`) instead of swapping text.
+
+Material tokens (see materialyou3idea.md):
+    -> new Theme constants: `contentDim = 0.8`, `contentDimFar = 0.5`,
+       `lyricsEmphasis = 1.12`; motion reuses `micro` (state), `quick`
+       (crossfade), `standard`+`ease.decelerate` (scroll);
+    -> the active line is a state, not a surface: no card, no shadow; the
+       pane's `surfaceContainerLow` remains the only chrome (R1/R2);
+    -> active scale is a transform, not a font-size animation (no per-frame
+       text reflow); `scale`/`opacity` animate, layout stays put;
+    -> pane focus hairline (pane === 1) is already correct and stays.
+
+Milestones:
+    -> P0 kill the code-art: drop the `> <` markers; add the
+       active/near/far state model (opacity + scale); unsynced uniform column;
+    -> P1 smoothness: animated centre-follow with manual-scroll override,
+       fixed-height delegates, edge fades;
+    -> P2 states: track-change crossfade, loading state (no "No lyrics"
+       flash), tag cleanup (`xxx`/`und` suppressed, `synced` as a small chip);
+    -> P3 optional: word-level karaoke (`cueLine`) as an accent fill; the
+       stage leaves room for it.
+
+Open questions:
+    -> scale vs pixel-size for the active line (scale wins: no reflow);
+    -> resume-follow delay (4 s?) and whether Enter re-centres immediately;
+    -> how far the dim ramp can go before bright covers wash the pane out.
+
 # Review findings (see CRITIQUE.md)
 
 Master task list: TASKLISTMAJOR.md

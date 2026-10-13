@@ -1,6 +1,7 @@
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
+import QtQuick.Effects
 import musika
 import "Theme.js" as Theme
 
@@ -8,9 +9,9 @@ import "Theme.js" as Theme
 // bottom.
 //
 // Focus model (vi-like): `activeRegion` is the cursor and its border stays lit
-// at all times. Ctrl-W enters region mode: a scrim dims the shell and the
-// region titles show inside the selection squares, j/k cycles candidates,
-// Enter accepts.
+// at all times. Ctrl-W enters region mode: a niri-like blur + scrim dims the
+// shell and the region titles show inside the selection squares, j/k cycles
+// candidates, Enter accepts.
 Item {
     id: root
 
@@ -219,8 +220,23 @@ Item {
     }
 
     ColumnLayout {
+        id: shell
         anchors.fill: parent
         spacing: 0
+
+        // Niri-like backdrop blur while a modal surface is up (floating search
+        // or the Ctrl-W scope overlay). Qt approximation of the niri config:
+        // passes/offset -> blur + blurMax, saturation 0.6 == niri's 1.6x,
+        // autoPadding off so the blur stays clipped to the window. MultiEffect
+        // has no grain, so niri's `noise 0.03` is not reproduced.
+        layer.enabled: root.visualMode || searchOverlay.opened
+        layer.effect: MultiEffect {
+            blurEnabled: true
+            blur: 1.0
+            blurMax: 48
+            saturation: 0.6
+            autoPaddingEnabled: false
+        }
 
         RightBar {
             id: topBar
@@ -347,6 +363,17 @@ Item {
         opacity: root.nowPlayingExpanded ? 1 : 0
         visible: opacity > 0
 
+        // Same niri-like backdrop blur as the shell: the fullscreen player is
+        // the backdrop when the search overlay opens from inside it.
+        layer.enabled: root.visualMode || searchOverlay.opened
+        layer.effect: MultiEffect {
+            blurEnabled: true
+            blur: 1.0
+            blurMax: 48
+            saturation: 0.6
+            autoPaddingEnabled: false
+        }
+
         Behavior on opacity {
             NumberAnimation { duration: Theme.motion.emphasized; easing.type: Easing.Bezier; easing.bezierCurve: Theme.ease.standard }
         }
@@ -426,8 +453,8 @@ Item {
         }
     }
 
-    // Visual mode dims, it does not blur (R2): the focus border is the only
-    // feedback, and blur stays reserved for modal scrims.
+    // Visual mode: niri-like backdrop blur (on the shell above) + dim, with the
+    // focus border as the only chrome.
     Rectangle {
         anchors.fill: parent
         color: Theme.scrim

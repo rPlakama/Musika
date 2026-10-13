@@ -25,6 +25,12 @@ Rectangle {
     property string lyricsLang: ""
     property int lyricsOffset: 0
 
+    // Lyrics type is sized from the pane itself (parent rectangle), never the
+    // window, so lines can't outgrow the pane's walls; the padding keeps the
+    // scaled active line off the edges.
+    readonly property real lyricSize: Theme.clamp(lyricsPane.height * 0.055, 10, 18)
+    readonly property real lyricPad: Math.max(6, lyricsPane.height * 0.04)
+
     // Active synced line, matched against the offset-corrected position.
     readonly property int activeLyric: {
         var count = lyricModel.count;
@@ -402,6 +408,7 @@ Rectangle {
 
                 // Lyrics, top half.
                 Rectangle {
+                    id: lyricsPane
                     Layout.fillWidth: true
                     Layout.fillHeight: true
                     color: Theme.surfaceContainerLow
@@ -449,7 +456,7 @@ Rectangle {
                             Layout.fillHeight: true
                             clip: true
                             model: lyricModel
-                            spacing: Theme.fontSize("body", root.height) * 0.9
+                            spacing: root.lyricSize * 0.9
                             boundsBehavior: Flickable.StopAtBounds
                             visible: root.lyricsAvailable
 
@@ -467,10 +474,12 @@ Rectangle {
                                     ? Math.abs(index - root.activeLyric) : -1
 
                                 width: lyricsView.width
+                                leftPadding: root.lyricPad
+                                rightPadding: root.lyricPad
                                 text: lyricLine.line
                                 horizontalAlignment: Text.AlignHCenter
                                 color: lyricLine.active ? Theme.onSurface : Theme.onSurfaceVariant
-                                font.pixelSize: Theme.fontSize("body", root.height)
+                                font.pixelSize: root.lyricSize
                                 wrapMode: Text.WordWrap
                                 animated: false
                                 transformOrigin: Item.Center

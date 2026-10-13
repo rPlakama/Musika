@@ -225,6 +225,9 @@ work is); solved/partial tasks add **Now** with the current evidence.
   - **Centred style:** lyrics are a centred column — `Text.AlignHCenter` and
     scale from the text centre (no left-anchored "Left → Right" growth); the
     optional left hairline is dropped in favour of scale + contrast.
+  - **Pane-sized type:** the font is computed from the lyrics rectangle
+    (`pane.height * 0.055`, clamped 10–18) with proportional left/right padding,
+    so lines never collide with the pane walls at any window size.
 - [ ] **LYR-8 · Smooth centre-follow + edge fades** — P2 · (roadmap "Lyrics presentation" P1)
   - **Why:** `positionViewAtIndex(Center)` teleports each line and every
     500 ms tick fights manual scrolling (NowPlaying.qml:109-110, 124-127).
@@ -323,7 +326,8 @@ work is); solved/partial tasks add **Now** with the current evidence.
   - **Now:** cover/lyrics 50/50; NowPlaying px → fractions/theme radius.
 - [x] **UI-25 · MY3 motion & state system** — P1 · (MY3 steps 1–4, 8; QW1–8, 10–12)
   - **Now:** motion tiers/easings, shape/state/z tokens, scrim, container roles,
-    `EnterView`/`ExitView`, blur retired, IconButton state layers, toast
+    `EnterView`/`ExitView`, niri-like backdrop blur on modal surfaces,
+    IconButton state layers, toast
     quick-in/lazy-out, mode chip, linear progress, search weights documented.
 - [ ] **UI-26 · Centralize `formatTime`** — P3 · (MD30)
   - **Why:** duplicated in six files (InferiorBar, NowPlaying, SongList,

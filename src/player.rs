@@ -9,7 +9,9 @@
 //!
 //! A small reader thread owns the read half of the socket and mirrors mpv's
 //! observed properties into a shared [`Shared`] snapshot that the Qt thread
-//! reads during `tick`.
+//! reads during `tick`. Stale `end-file` events from replaced files are
+//! dropped while a load is pending, so fast skips never depend on network
+//! timing (the queue advances on keypress, not on the stream).
 
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::UnixStream;
@@ -59,6 +61,10 @@ struct Shared {
     paused: bool,
     eof: bool,
     error: bool,
+    /// `true` between issuing a `loadfile` and mpv reporting `start-file`.
+    /// While set, `end-file` events belong to the file we deliberately
+    /// replaced and must not advance the queue (fast skip/previous races).
+    pending_load: bool,
 }
 
 /// Playback queue plus the running `mpv` process and its IPC connection.
@@ -164,6 +170,7 @@ impl Player {
                 paused: false,
                 eof: false,
                 error: false,
+                pending_load: true,
             };
         }
 
@@ -455,40 +462,120 @@ fn spawn_reader(stream: UnixStream, shared: Arc<Mutex<Shared>>) {
             let Ok(value) = serde_json::from_str::<Value>(&line) else {
                 continue;
             };
-
             let mut shared = shared.lock().unwrap();
-            match value.get("event").and_then(Value::as_str) {
-                Some("property-change") => {
-                    let data = value.get("data");
-                    match value.get("name").and_then(Value::as_str) {
-                        Some("time-pos") => {
-                            if let Some(position) = data.and_then(Value::as_f64) {
-                                shared.position = position;
-                            }
-                        }
-                        Some("duration") => {
-                            if let Some(duration) = data.and_then(Value::as_f64) {
-                                if duration > 0.0 {
-                                    shared.duration = duration;
-                                }
-                            }
-                        }
-                        Some("pause") => {
-                            if let Some(paused) = data.and_then(Value::as_bool) {
-                                shared.paused = paused;
-                            }
-                        }
-                        _ => {}
+            apply_event(&mut shared, &value);
+        }
+    });
+}
+
+/// Mirrors one mpv event into [`Shared`].
+///
+/// `start-file` marks the load we requested as actually begun: it clears the
+/// pending guard and drops the stale position/duration of the replaced file.
+/// `end-file` events are ignored while a load is pending, because they belong
+/// to the file that load replaced — this is what keeps fast skips/previous
+/// from bouncing back into a track the user already moved away from.
+fn apply_event(shared: &mut Shared, value: &Value) {
+    match value.get("event").and_then(Value::as_str) {
+        Some("property-change") => {
+            let data = value.get("data");
+            match value.get("name").and_then(Value::as_str) {
+                Some("time-pos") => {
+                    if let Some(position) = data.and_then(Value::as_f64) {
+                        shared.position = position;
                     }
                 }
-                Some("end-file") => {
-                    let reason = value.get("reason").and_then(Value::as_str).unwrap_or("");
-                    shared.eof = true;
-                    shared.error = reason == "error";
-                    shared.paused = true;
+                Some("duration") => {
+                    if let Some(duration) = data.and_then(Value::as_f64) {
+                        if duration > 0.0 {
+                            shared.duration = duration;
+                        }
+                    }
+                }
+                Some("pause") => {
+                    if let Some(paused) = data.and_then(Value::as_bool) {
+                        shared.paused = paused;
+                    }
                 }
                 _ => {}
             }
         }
-    });
+        Some("start-file") => {
+            shared.pending_load = false;
+            shared.eof = false;
+            shared.error = false;
+            shared.position = 0.0;
+            shared.duration = 0.0;
+        }
+        Some("end-file") => {
+            if shared.pending_load {
+                return;
+            }
+            let reason = value.get("reason").and_then(Value::as_str).unwrap_or("");
+            shared.eof = true;
+            shared.error = reason == "error";
+            shared.paused = true;
+        }
+        _ => {}
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn stale_end_file_does_not_advance_while_a_load_is_pending() {
+        let mut shared = Shared {
+            pending_load: true,
+            ..Shared::default()
+        };
+        apply_event(
+            &mut shared,
+            &serde_json::json!({ "event": "end-file", "reason": "stop" }),
+        );
+        assert!(!shared.eof);
+        assert!(!shared.error);
+    }
+
+    #[test]
+    fn end_file_advances_once_the_requested_load_has_started() {
+        let mut shared = Shared::default();
+        apply_event(&mut shared, &serde_json::json!({ "event": "start-file" }));
+        apply_event(
+            &mut shared,
+            &serde_json::json!({ "event": "end-file", "reason": "eof" }),
+        );
+        assert!(shared.eof);
+        assert!(!shared.error);
+    }
+
+    #[test]
+    fn start_file_resets_stale_position_and_duration() {
+        let mut shared = Shared {
+            position: 42.0,
+            duration: 200.0,
+            paused: true,
+            eof: true,
+            error: false,
+            pending_load: true,
+        };
+        apply_event(&mut shared, &serde_json::json!({ "event": "start-file" }));
+        assert_eq!(shared.position, 0.0);
+        assert_eq!(shared.duration, 0.0);
+        assert!(!shared.eof);
+        assert!(!shared.pending_load);
+    }
+
+    #[test]
+    fn error_end_file_stalls_instead_of_advancing() {
+        let mut shared = Shared::default();
+        apply_event(&mut shared, &serde_json::json!({ "event": "start-file" }));
+        apply_event(
+            &mut shared,
+            &serde_json::json!({ "event": "end-file", "reason": "error" }),
+        );
+        assert!(shared.eof);
+        assert!(shared.error);
+    }
 }

@@ -95,6 +95,7 @@ pub struct Player {
     request_id: i64,
     fallback_duration: f64,
     volume: f64,
+    muted: bool,
 }
 
 impl Default for Player {
@@ -116,6 +117,7 @@ impl Player {
             request_id: 0,
             fallback_duration: 0.0,
             volume: 70.0,
+            muted: false,
         }
     }
 
@@ -131,9 +133,12 @@ impl Player {
     pub fn current(&self) -> Option<&Track> {
         self.queue.get(self.index)
     }
-    #[allow(dead_code)]
     pub fn volume(&self) -> f64 {
         self.volume
+    }
+
+    pub fn muted(&self) -> bool {
+        self.muted
     }
 
     pub fn duration(&self) -> f64 {
@@ -329,6 +334,20 @@ impl Player {
         ]);
     }
 
+    /// Mutes or unmutes without touching the volume value.
+    pub fn set_muted(&mut self, muted: bool) {
+        self.muted = muted;
+        self.command(vec![
+            json!("set_property"),
+            json!("mute"),
+            json!(self.muted),
+        ]);
+    }
+
+    pub fn toggle_mute(&mut self) {
+        self.set_muted(!self.muted);
+    }
+
     /// Advances end-of-track detection. Returns `true` when a track ended
     /// naturally and the caller should move on.
     pub fn poll_end(&mut self) -> bool {
@@ -395,11 +414,12 @@ impl Player {
         self.ipc = Some(stream);
         self.socket = Some(socket);
 
-        // Observe the properties the UI needs, then apply the volume.
+        // Observe the properties the UI needs, then apply volume and mute.
         self.command(vec![json!("observe_property"), json!(1), json!("time-pos")]);
         self.command(vec![json!("observe_property"), json!(2), json!("duration")]);
         self.command(vec![json!("observe_property"), json!(3), json!("pause")]);
         self.set_volume(self.volume);
+        self.set_muted(self.muted);
         true
     }
 

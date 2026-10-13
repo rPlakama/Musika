@@ -32,6 +32,17 @@ Rectangle {
         return minutes + ":" + (rest < 10 ? "0" : "") + rest;
     }
 
+    // Speaker icon by volume tier: muted / silent / low (≤33) / high.
+    function volumeIcon() {
+        if (Backend.muted)
+            return "qrc:/app/icons/vol-mute-svgrepo-com.svg";
+        if (Backend.volume <= 0)
+            return "qrc:/app/icons/vol-zero-svgrepo-com.svg";
+        if (Backend.volume <= 33)
+            return "qrc:/app/icons/vol-low-svgrepo-com.svg";
+        return "qrc:/app/icons/vol-high-svgrepo-com.svg";
+    }
+
     // Scoped controls while the player bar is the active region.
     function handleAction(action) {
         if (action === "move_left")
@@ -216,22 +227,35 @@ Rectangle {
                 animated: false
             }
 
-            FadeText {
-							text: "VOL: "
-                color: Palette.onSurfaceVariant
-                font.pixelSize: root.height * 0.18
-                animated: false
+            IconButton {
+                Layout.preferredWidth: root.height * 0.34
+                Layout.preferredHeight: root.height * 0.34
+                iconSource: root.volumeIcon()
+                symbolRatio: 0.95
+                onClicked: Backend.playerToggleMute()
             }
 
             Rectangle {
+                id: volumeTrack
                 Layout.preferredWidth: root.width * 0.07
-                Layout.preferredHeight: Math.max(1, root.height * 0.05)
+                Layout.preferredHeight: Math.max(2, root.height * 0.05)
                 color: Palette.outlineVariant
+                radius: Theme.radius
 
                 Rectangle {
-                    width: parent.width * 0.6
+                    width: parent.width * Math.max(0, Math.min(1, Backend.volume / 100))
                     height: parent.height
-                    color: Palette.primary
+                    radius: Theme.radius
+                    color: Backend.muted ? Palette.outline : Palette.primary
+                }
+
+                MouseArea {
+                    anchors.fill: parent
+                    onPressed: (mouse) => Backend.playerSetVolume(Math.max(0, Math.min(1, mouse.x / width)) * 100)
+                    onPositionChanged: (mouse) => {
+                        if (pressed)
+                            Backend.playerSetVolume(Math.max(0, Math.min(1, mouse.x / width)) * 100);
+                    }
                 }
             }
         }

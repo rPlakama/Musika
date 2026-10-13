@@ -50,6 +50,8 @@ pub struct Backend {
     playback_state: String,
     position: f64,
     duration: f64,
+    volume: f64,
+    muted: bool,
     queue_index: i64,
     queue_length: i64,
 }
@@ -149,6 +151,8 @@ impl Backend {
     );
     qproperty!("position", Member = position, Notify = position_changed);
     qproperty!("duration", Member = duration, Notify = duration_changed);
+    qproperty!("volume", Member = volume, Notify = volume_changed);
+    qproperty!("muted", Member = muted, Notify = muted_changed);
     qproperty!(
         "queueIndex",
         Member = queue_index,
@@ -227,6 +231,10 @@ impl Backend {
     fn position_changed(&mut self);
     #[qsignal]
     fn duration_changed(&mut self);
+    #[qsignal]
+    fn volume_changed(&mut self);
+    #[qsignal]
+    fn muted_changed(&mut self);
     #[qsignal]
     fn queue_index_changed(&mut self);
     #[qsignal]
@@ -862,6 +870,34 @@ impl Backend {
         self.sync_player();
     }
 
+    /// Sets the volume (0-100). Adjusting up unmutes.
+    #[qslot(qml_name = "playerSetVolume")]
+    fn player_set_volume(&mut self, volume: f64) {
+        if volume > self.player.volume() && self.player.muted() {
+            self.player.set_muted(false);
+        }
+        self.player.set_volume(volume);
+        self.sync_player();
+    }
+
+    /// Steps the volume by `delta`; stepping up unmutes.
+    #[qslot(qml_name = "playerAdjustVolume")]
+    fn player_adjust_volume(&mut self, delta: f64) {
+        let volume = self.player.volume() + delta;
+        if delta > 0.0 && self.player.muted() {
+            self.player.set_muted(false);
+        }
+        self.player.set_volume(volume);
+        self.sync_player();
+    }
+
+    /// Mutes or unmutes (M).
+    #[qslot(qml_name = "playerToggleMute")]
+    fn player_toggle_mute(&mut self) {
+        self.player.toggle_mute();
+        self.sync_player();
+    }
+
     /// Requests lyrics for the current track (override → cache → server).
     #[qslot(qml_name = "requestLyrics")]
     fn request_lyrics(&mut self) {
@@ -1065,6 +1101,14 @@ impl Backend {
         self.duration_changed();
         self.position = self.player.position();
         self.position_changed();
+        if self.volume != self.player.volume() {
+            self.volume = self.player.volume();
+            self.volume_changed();
+        }
+        if self.muted != self.player.muted() {
+            self.muted = self.player.muted();
+            self.muted_changed();
+        }
         self.queue_index = self.player.index() as i64;
         self.queue_index_changed();
         self.queue_length = self.player.len() as i64;

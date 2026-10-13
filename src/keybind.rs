@@ -42,6 +42,9 @@ pub enum Action {
     Back,
     ToggleFullscreen,
     PlayPause,
+    Mute,
+    VolumeUp,
+    VolumeDown,
     InsertMode,
     NextTrack,
     PrevTrack,
@@ -71,6 +74,9 @@ impl Action {
             Self::Back => "back",
             Self::ToggleFullscreen => "toggle_fullscreen",
             Self::PlayPause => "play_pause",
+            Self::Mute => "mute",
+            Self::VolumeUp => "volume_up",
+            Self::VolumeDown => "volume_down",
             Self::InsertMode => "insert_mode",
             Self::NextTrack => "next_track",
             Self::PrevTrack => "prev_track",
@@ -102,6 +108,11 @@ fn defaults() -> Vec<(&'static str, Action)> {
         ("ctrl-n", Action::ScrollDown),
         ("ctrl-p", Action::ScrollUp),
         ("space", Action::PlayPause),
+        ("m", Action::Mute),
+        ("-", Action::VolumeDown),
+        ("=", Action::VolumeUp),
+        ("shift-=", Action::VolumeUp),
+        ("+", Action::VolumeUp),
         ("shift-space f", Action::Search),
         ("shift-space shift-f", Action::Search),
         ("h", Action::MoveLeft),
@@ -256,6 +267,9 @@ pub fn token_from_qt(key: i32, modifiers: i32) -> Option<String> {
         0x41..=0x5A => ((key as u8 + 32) as char).to_string(), // A-Z
         0x61..=0x7A => (key as u8 as char).to_string(),        // a-z
         0x30..=0x39 => (key as u8 as char).to_string(),        // 0-9
+        0x2D => "-".to_string(),                               // minus / keypad minus
+        0x2B => "+".to_string(),                               // keypad plus
+        0x3D => "=".to_string(),                               // '+' on the main row (shifted)
         _ => return None,
     };
 
@@ -388,5 +402,19 @@ mod tests {
             Some("ctrl-v"),
             "system paste (Ctrl-V) must map to the clipboard action"
         );
+    }
+
+    #[test]
+    fn volume_keys() {
+        let mut keymap = Keymap::new();
+        assert_eq!(keymap.feed("m"), Outcome::Action(Action::Mute));
+        assert_eq!(keymap.feed("-"), Outcome::Action(Action::VolumeDown));
+        assert_eq!(keymap.feed("="), Outcome::Action(Action::VolumeUp));
+        assert_eq!(keymap.feed("shift-="), Outcome::Action(Action::VolumeUp));
+        assert_eq!(keymap.feed("+"), Outcome::Action(Action::VolumeUp));
+
+        assert_eq!(token_from_qt(0x2D, 0).as_deref(), Some("-"));
+        assert_eq!(token_from_qt(0x3D, QT_SHIFT).as_deref(), Some("shift-="));
+        assert_eq!(token_from_qt(0x2B, 0).as_deref(), Some("+"));
     }
 }

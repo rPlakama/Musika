@@ -162,9 +162,15 @@ Rectangle {
         applyGlyph(glyphA);
     }
 
-    Item {
+    // Invisible positional frames: each layer is a fixed square that never
+    // resizes, and the glyph is centred inside it, so swapping icons (volume
+    // tiers, ▶/⏸) only changes the drawing — never the icon's position.
+    Rectangle {
         id: glyphA
         anchors.centerIn: parent
+        width: Math.min(root.width, root.height)
+        height: width
+        color: "transparent"
         property string textGlyph: ""
         property url iconGlyph: ""
         opacity: 1
@@ -191,9 +197,12 @@ Rectangle {
         }
     }
 
-    Item {
+    Rectangle {
         id: glyphB
         anchors.centerIn: parent
+        width: Math.min(root.width, root.height)
+        height: width
+        color: "transparent"
         property string textGlyph: ""
         property url iconGlyph: ""
         opacity: 0

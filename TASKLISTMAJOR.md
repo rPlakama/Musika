@@ -134,10 +134,18 @@ work is); solved/partial tasks add **Now** with the current evidence.
 - [ ] **Q-3 · Shuffle / repeat** — P2 · (M3)
   - **Why:** the `⤨` button exists but is inert; repeat-one/all is expected.
   - **Details:** wire the button + keys, show active state via state layer.
-- [ ] **Q-4 · Volume + mute in UI and keys** — P2 · (M4, CRITIQUE Ph3.1)
+- [x] **Q-4 · Volume + mute in UI and keys** — P2 · (M4, CRITIQUE Ph3.1)
   - **Why:** mpv has volume, the backend keeps it, but the bar is a static bar.
   - **Details:** draggable slider + percentage, `m` mute, `+/-`/`]v [v` steps,
     focus state layers; expose slot in `qml.rs`.
+  - **Now:** `Backend.volume`/`Backend.muted` properties + `playerSetVolume`/
+    `playerAdjustVolume`/`playerToggleMute` slots; `player.rs` gained
+    `muted`/`set_muted`/`toggle_mute` (mpv `mute` property); keys `m` mute,
+    `-`/`+` (and `=`/shift-=`, keypad) step 5%; `InferiorBar` speaker icon by
+    tier (mute/zero/low ≤33/high, white SVGs) + clickable/draggable bar and
+    click-to-mute; stepping up unmutes. Icons sit in fixed invisible frames
+    (`IconButton` layers) and the volume SVGs are translated to a shared
+    speaker baseline, so tiers swap without moving. `]v`/`[v` left to VI-8.
 - [ ] **Q-5 · Gapless + stream-error retry/auto-advance** — P1 · (M8)
   - **Why:** end-of-track errors currently stop the session silently.
 - [ ] **Q-6 · A-B repeat, playback rate, crossfade** — P3 · (M9)
@@ -329,6 +337,8 @@ work is); solved/partial tasks add **Now** with the current evidence.
   - **Why:** a control that does nothing breaks trust; the volume bar is a
     static 60% fill and the speaker ignores the player volume.
   - **Details:** wire (Q-3/Q-4) or remove until implemented.
+  - **Now:** volume is wired (Q-4, live bar + tiered icons + mute); shuffle/
+    stop are still inert (Q-3).
 - [ ] **UI-18 · Icon language consistency** — P2 · (MD26/MD35)
   - **Why:** emoji speaker breaks the monochrome look; glyphs vary in weight.
 - [ ] **UI-19 · Type-role sweep + clamps everywhere** — P2 · (U10, MY3 step 7)
@@ -759,7 +769,7 @@ work is); solved/partial tasks add **Now** with the current evidence.
 | Area | Open | Solved |
 |------|------|--------|
 | Vi modal engine | 19 | 2 |
-| Queue & grammar | 6 | 3 |
+| Queue & grammar | 5 | 4 |
 | Player features | 6 | 0 |
 | Lyrics pipeline | 5 | 5 |
 | Search | 2 | 3 |

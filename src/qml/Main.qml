@@ -44,6 +44,20 @@ ApplicationWindow {
                 return;
             }
 
+            // Mute and volume steps are global like Space (media-key style).
+            if (action === "mute") {
+                Backend.playerToggleMute();
+                return;
+            }
+            if (action === "volume_up") {
+                Backend.playerAdjustVolume(5);
+                return;
+            }
+            if (action === "volume_down") {
+                Backend.playerAdjustVolume(-5);
+                return;
+            }
+
             // Clipboard verbs (VI-21): `y` yanks the playing track to the
             // system clipboard, `P` pastes a track reference back into
             // playback.

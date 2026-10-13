@@ -46,8 +46,14 @@ var motion = {
     quick: 120,        // toasts in, row cursor, column switch
     standard: 160,     // view push/pop/replace, overlay in/out
     emphasized: 240,   // fullscreen player, first paint of a context
-    lazy: 320          // toast out, nothing keyboard-critical
+    lazy: 320,         // toast out, nothing keyboard-critical
+    spin: 1000,        // one revolution while a sync runs
+    spinSlow: 3000     // one revolution on hover
 }
+
+// Global opt-out for decorative motion (FadeText, blooms). Flipped by a user
+// setting later; functional motion (progress, seek) never honours it.
+var reduceMotion = false
 
 var ease = {
     standard: [0.2, 0, 0, 1],

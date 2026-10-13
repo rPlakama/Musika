@@ -37,7 +37,8 @@ Item {
     signal albumActivated(string albumId, string title, string artist, string year, string tracks, string cover)
     signal artistActivated(string name)
 
-    visible: opened
+    // Keep rendering while the close fade runs (the panel owns the opacity).
+    visible: opened || panel.opacity > 0
     z: Theme.zOverlay
 
     function open() {
@@ -255,6 +256,7 @@ Item {
         }
 
         TapHandler {
+            enabled: root.opened
             onTapped: root.close()
         }
     }

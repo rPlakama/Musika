@@ -100,6 +100,9 @@ Item {
             width: parent.width
             implicitHeight: root.height * 0.049
             enabled: !Backend.busy
+            HoverHandler {
+                cursorShape: Qt.PointingHandCursor
+            }
             text: Backend.busy ? qsTr("Logging in…") : qsTr("Log in")
             onClicked: Backend.login()
             background: Rectangle {

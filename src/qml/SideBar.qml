@@ -84,9 +84,9 @@ Rectangle {
 
                 Behavior on color {
                     ColorAnimation {
-                        duration: Theme.duration
+                        duration: Theme.motion.quick
                         easing.type: Easing.Bezier
-                        easing.bezierCurve: Theme.easeOut
+                        easing.bezierCurve: Theme.ease.standard
                     }
                 }
 
@@ -112,6 +112,7 @@ Rectangle {
 
                 HoverHandler {
                     id: segmentHover
+                    cursorShape: Qt.PointingHandCursor
                 }
 
                 TapHandler {

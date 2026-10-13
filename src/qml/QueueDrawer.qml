@@ -28,7 +28,8 @@ Item {
     property int cursor: 0
     property int nowPlaying: -1
 
-    visible: opened
+    // Keep rendering while the close fade runs (the panel owns the opacity).
+    visible: opened || panel.opacity > 0
     z: 25
 
     function formatTime(seconds) {
@@ -123,7 +124,7 @@ Item {
         opacity: root.opened ? 1 : 0
 
         Behavior on opacity {
-            NumberAnimation { duration: Theme.duration; easing.type: Easing.Bezier; easing.bezierCurve: Theme.easeOut }
+            NumberAnimation { duration: Theme.motion.quick; easing.type: Easing.Bezier; easing.bezierCurve: Theme.ease.standard }
         }
 
         ColumnLayout {
@@ -171,12 +172,9 @@ Item {
                         color: Palette.surfaceContainerHighest
                         clip: true
 
-                        Image {
+                        CoverImage {
                             anchors.fill: parent
                             source: row.cover
-                            fillMode: Image.PreserveAspectCrop
-                            asynchronous: true
-                            visible: status === Image.Ready
                         }
                     }
 
@@ -200,6 +198,10 @@ Item {
                         text: row.duration
                         color: Palette.onSurfaceVariant
                         font.pixelSize: row.height * 0.28
+                    }
+
+                    HoverHandler {
+                        cursorShape: Qt.PointingHandCursor
                     }
 
                     TapHandler {

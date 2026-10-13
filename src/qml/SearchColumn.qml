@@ -114,12 +114,9 @@ Item {
                         color: Palette.surfaceContainerHighest
                         clip: true
 
-                        Image {
+                        CoverImage {
                             anchors.fill: parent
                             source: row.cover
-                            fillMode: Image.PreserveAspectCrop
-                            asynchronous: true
-                            visible: status === Image.Ready
                         }
                     }
 
@@ -165,6 +162,7 @@ Item {
                     }
 
                     HoverHandler {
+                        cursorShape: Qt.PointingHandCursor
                         onHoveredChanged: {
                             if (hovered)
                                 root.hovered(row.index);

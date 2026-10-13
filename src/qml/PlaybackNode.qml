@@ -72,13 +72,9 @@ Rectangle {
                 color: Palette.primaryContainer
                 clip: true
 
-                Image {
+                CoverImage {
                     anchors.fill: parent
                     source: Backend.currentCoverUrl
-                    fillMode: Image.PreserveAspectCrop
-                    asynchronous: true
-                    cache: false
-                    visible: status === Image.Ready
                 }
             }
 
@@ -129,9 +125,9 @@ Rectangle {
 
                 Behavior on width {
                     NumberAnimation {
-                        duration: Theme.duration
+                        duration: Theme.motion.quick
                         easing.type: Easing.Bezier
-                        easing.bezierCurve: Theme.easeOut
+                        easing.bezierCurve: Theme.ease.standard
                     }
                 }
             }

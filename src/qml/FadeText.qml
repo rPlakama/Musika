@@ -26,7 +26,7 @@ Text {
     property bool animated: true
 
     NumberAnimation on opacity {
-        running: root.animated
+        running: root.animated && !Theme.reduceMotion
         from: 0
         to: 1
         duration: Theme.motion.quick

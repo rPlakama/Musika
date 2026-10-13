@@ -1,28 +1,148 @@
 # Musika — TaskListMajor
 
 Master task list merging `CRITIQUE.md`, `TASKS.md`, `MICRODESIGNS.md`,
-`roadmap.md` and `materialyou3idea.md`, deduplicated and re-audited against the
-current working tree (commit `434896e`, clean).
+`roadmap.md` and `materialyou3idea.md`, re-audited against the current working
+tree (commit `434896e`, clean) and organised by delivery bucket.
 
 Legend: `[x]` solved · `[ ]` open. Priorities: **P0** correctness/robustness ·
 **P1** vi fidelity · **P2** player/UX features · **P3** nice-to-have.
-Each task states **Why** (rationale, source doc) and **Details** (what the
-work is); solved/partial tasks add **Now** with the current evidence.
+Each task keeps its area id (`VI`, `Q`, `P`, `LYR`, `S`, `UI`, `THM`, `ARC`,
+`CACHE`, `AUTH`, `DOC`), its **Why** and **Details**; solved and partial tasks
+add **Now** with the current evidence. Solved entries live in the reference
+section at the bottom.
 
----
+### Buckets
 
-## 1. Vi modal engine (`VI`)
+- **Must have** — the app is broken, unsafe or misleading without it: data
+  loss, panics, silent failures, wrong library data, stream errors, and
+  explicitly prioritised work.
+- **Should have** — the product is incomplete without it: vi fidelity, player
+  features, search/UX completeness, cache and integration work.
+- **Quick wins** — small, bounded, low-risk changes with outsized value
+  (polish, cleanup, constants, docs, validation).
 
-- [x] **VI-1 · Mode indicator in the status bar** — P1 · (N4 partly, MY3 QW10)
-  - **Why:** Vi users must always know the mode; silent mode changes break trust.
-  - **Details:** colored `NORMAL`/`INSERT`/`VISUAL`/`COMMAND` chip in the bar.
-  - **Now:** `NORMAL` chip replaced the "LIBRARY" title (RightBar.qml); the
-    search overlay shows an `INSERT`/`NORMAL` chip too.
+### Start here (ranked)
+
+Order = trust/correctness > unblocking > user value > effort.
+
+1. **ARC-25** — partial-fetch guard before the destructive purge (data loss).
+2. **ARC-5** — errors to toasts instead of `eprintln!`.
+3. **VI-11** — `gg`/`G` in every list (high priority: already-bound motions that
+   dead-end).
+4. **UI-17 + Q-3** — shuffle is the last inert control; wire it + repeat.
+5. **UI-22** — empty/error states (P0, half-landed).
+6. **VI-2** — mode machine; unblocks VI-3/4/7/12/13/14/15.
+7. **S-4 + Q-10** — search scope order/priority (Songs first) and song
+   activation opening fullscreen.
+8. **LYR-8** — smooth centre-follow + edge fades.
+9. **ARC-24 + ARC-33** — `catalog_epoch` + `schema_generation` in every meta.
+10. **ARC-29 + ARC-30** — content-addressed covers + hash-keyed colors.
+11. **VI-4** — visual selection (rows + count badge).
+
+## Must have
+
+The app is unsafe or misleading without these.
+
+- [ ] **VI-11 · `gg`/`G` (Top/Bottom) in every list** — P1 · **high priority** · (N8a, MY3 §4.2)
+  - **Why:** `g g` and `G` are already bound (`keybind.rs:122-123` →
+    `top`/`bottom`) but no QML handler consumes them, so the motions dead-end
+    silently — the most common vi jump is missing while `j/k` alone cannot
+    cross a long list.
+  - **Details:**
+    - consume `top`/`bottom` in every cursor list: `AlbumList`, `SongList`,
+      `ArtistList`, `AlbumEntry` songs, `QueueDrawer`, and the three
+      `SearchColumn`s (active column only, D-1);
+    - semantics: move the cursor to the first/last row and keep it visible
+      (`positionViewAtIndex(…, Contain)`); empty list = no-op; already at the
+      target = no-op; cursor movement stays `instant` (R5) and does not bloom;
+    - `AlbumEntry` special case: `gg` lands on the first song, `G` on the last
+      (the toolbar stays a `k`-from-row-0 affordance);
+    - pending-`g` feedback stays the keymap timeout until showcmd lands
+      (VI-12); a dead-end `g <other>` already resets and retries the token.
+  - **Plan:**
+    1. per-list `handleAction` cases for `top`/`bottom` (the six surfaces
+       above);
+    2. one shared two-liner (`currentIndex` = `0` / `count - 1` plus
+       `positionViewAtIndex`) instead of six copies;
+    3. verification: keyboard pass in each surface, including empty lists
+       (Playlists/Radio placeholders, empty queue) and the search overlay's
+       active column;
+    4. counts (`5G`) and `gg` in visual mode stay with VI-7/VI-4.
+  - **Now:** the keymap fires `Action::Top`/`Action::Bottom` for `g g` /
+    `shift-g` (unit-tested), but a tree-wide search for `"top"`/`"bottom"`
+    finds no QML handler — every list currently ignores them.
+
+- [ ] **Q-5 · Gapless + stream-error retry/auto-advance** — P1 · (M8)
+  - **Why:** end-of-track errors currently stop the session silently.
+
+- [ ] **UI-22 · Empty/error states polish** — P0 · (U8)
+  - **Why:** album-with-no-songs, failed sync, failed playback need real states.
+  - **Now:** error toasts landed; loading screen landed for startup ping;
+    empty states still mostly PlaceholderList.
+
+- [ ] **ARC-3 · Cancellable sync + HTTP retry/backoff/timeouts** — P1 · (A5, O5)
+  - **Why:** a hung request blocks the sync pipeline; `reqwest` has no timeout.
+
+- [ ] **ARC-4 · ID-namespace correctness** — P1 · (A6, O4)
+  - **Why:** `getIndexes` returns file-structure IDs passed to ID3 endpoints;
+    handle `getMusicDirectory`/`indexes.child`.
+
+- [ ] **ARC-5 · Surface errors instead of `eprintln!`** — P0 · (A8)
+  - **Why:** users never see console output.
+  - **Now:** toast channel exists for sync/playback; many call sites still log.
+
+- [ ] **ARC-12 · Poison-safe player lock** — P1 · (O10)
+  - **Why:** `lock().unwrap()` on the reader thread can panic the UI tick.
+
+- [ ] **ARC-25 · Refuse destructive replace/purge on partial fetches** — P1 · (DB analysis)
+  - **Why:** a failed artist/album fetch is logged and skipped, then
+    `library::replace` wipes the tables and covers/lyrics purges evict the
+    missing ids — one HTTP hiccup deletes cached content.
+  - **Details:** fail the sync or carry failed ids forward before `replace`;
+    audit `getIndexes(ifModifiedSince)` partial-index semantics; run cover/
+    lyric purges only when the fetch was complete.
+
+- [ ] **ARC-34 · `.unwrap()` audit — 8 production sites; recover or surface, never abort** — P1 · (ARC-12, ARC-5)
+  - **Why:** a poisoned player `Mutex` or a failed runtime/DB init panics the
+    whole app; production unwraps hide failure context instead of collecting
+    it. The 82 test unwraps are fixtures and should stay.
+  - **Inventory (90 lines / 94 occurrences, `rg '\\.unwrap\\(\\)' src`):**
+    - production, 8: `player.rs:124,133,166,216,303,322` and the reader thread
+      `player.rs:465` (all `shared.lock().unwrap()`); `main.rs:37`
+      `Runtime::new().unwrap()`; `main.rs:45` is an `expect` on `db::init()`;
+    - tests, 82 lines: `colors.rs` 35, `lyrics.rs` 20, `api.rs` 8,
+      `http_client.rs` 8, `search.rs` 7, `crypto.rs` 4 (leave as-is, excluded
+      from the lint).
+  - **Details:**
+    - `player.rs`: one `fn shared(&self) -> MutexGuard<Shared>` helper (and a
+      local wrapper for the reader's `Arc<Mutex<_>>`) using
+      `unwrap_or_else(PoisonError::into_inner)` — `Shared` is a plain snapshot,
+      poisoning carries no invariant, so recover instead of aborting; closes
+      ARC-12 and guarantees a reader panic can't kill the UI tick.
+    - `main.rs`: initialize the runtime and DBs in `main` with `anyhow`
+      context and exit(1) after printing the error chain (`main() -> Result`
+      or explicit match); remove `Runtime::new().unwrap()` from `runtime()`
+      (the `OnceLock` is filled once in main).
+    - error collection: background paths use the existing report pattern
+      (`SyncReport`/`CoverReport`) or `errorRaised` toasts; no
+      `eprintln!`-only paths (ties ARC-5).
+    - enforcement: `#![cfg_attr(not(test), deny(clippy::unwrap_used,
+      clippy::expect_used))]` in `main.rs` plus a `cargo clippy` gate; a
+      justified site needs an inline `#[allow]` with a reason, so new raw
+      unwraps are deliberate.
+    - policy: tests keep their unwraps; prefer `expect("<what>")` when a
+      failure message would save debugging time.
+
+## Should have
+
+The product is incomplete without these.
+
 - [ ] **VI-2 · Global mode state machine** — P1 · (N4, CRITIQUE Ph1.1, MY3 §4.1)
   - **Why:** modes exist only locally in the search overlay; the rest of the app
     has no explicit fallback state, so future features would guess.
   - **Details:** `Mode` enum (Normal/Visual/Command/Search/Insert) in Rust,
     reflected in QML; Esc invariant targets Normal; mode colors per MY3 §3.3.
+
 - [ ] **VI-3 · `Ctrl-W h/j/k/l` pane navigation** — P1 · (N1, CRITIQUE §3.1, MY3 §4.4)
   - **Why:** vi window motions are instant and directional; the current Ctrl-W
     modal lock with Enter-commit is not vi and blocks input.
@@ -30,136 +150,57 @@ work is); solved/partial tasks add **Now** with the current evidence.
     status bar from the ring; keep the region border as the only feedback.
   - **Now:** blur overlay retired (scrim + border, Home.qml); Ctrl-W still
     toggles the region overlay instead of jumping.
+
 - [ ] **VI-4 · `v`/`V` content selection** — P1 · (CRITIQUE Ph1.2/§2.5, N1)
   - **Why:** visual mode must mean "select rows", not "pick a pane"; batch
     queueing/deleting depends on it.
   - **Details:** row selection with `secondaryContainer` + count badge; operators
     (VI-8) act on the selection.
-- [x] **VI-5 · Single `Esc` dismisses overlays** — P1 · (N3, CRITIQUE Ph1.3)
-  - **Why:** Esc is the invariant cancel key; unbound Esc feels broken.
-  - **Details:** close fullscreen → pop album page → close search, in order.
-  - **Now:** `escape` maps to `Action::Back` (keybind.rs); Home closes fullscreen
-    first (Home.qml); search overlay Esc steps typing → normal → close.
-- [ ] **VI-6 · `Ctrl-[` alias + pending-sequence cancel** — P1 · (N3 residual)
-  - **Why:** `Ctrl-[` is muscle memory for Esc; Esc should also clear a half-typed
-    sequence/count.
-  - **Details:** add `ctrl-[` token; feed Esc through `Keymap.reset()`.
+
 - [ ] **VI-7 · Count register (`3j`, `10l`, `5G`)** — P1 · (N2a, CRITIQUE Ph2.2, MY3 §4.2)
   - **Why:** counts turn motions into a grammar; today digits are dropped.
   - **Details:** numeric prefixes in `keybind.rs`; consume in lists (rows) and in
     the player (seek seconds); count chip appears `micro`, clears instantly.
+
 - [ ] **VI-8 · Operator grammar (`d`, `y`, `p`, `P`, `.`)** — P2 · (N2b, CRITIQUE Ph2)
   - **Why:** queue editing is the musical equivalent of buffer editing.
   - **Details:** `dd` dequeues, `yy` yanks a track/album, `p`/`P` append/play-next,
     `.` repeats; requires the queue view (Q-1).
+
 - [ ] **VI-9 · Space latency / leader decision** — P1 · (N6, CRITIQUE §3.1, MY3 QW9)
   - **Why:** whether Space is play/pause or leader, it must not be ambiguous or
     delayed; the 800 ms deferred resolver is a smell.
   - **Details:** pick one convention (zero-latency play/pause recommended),
     per-binding deferral, drop the global timeout where possible.
-- [ ] **VI-10 · Repurpose `Ctrl-N`/`Ctrl-P` as track skips** — P1 · (N7, Q-9)
-  - **Why:** `Ctrl-N`/`Ctrl-P` only duplicated `j/k` scrolling; the better use
-    is the one vi media users expect — next / previous track while browsing.
-  - **Details:** `j/k` keeps the list cursor (and scrolling); `Ctrl-N`/`Ctrl-P`
-    skip tracks wherever a list owns focus; fullscreen keeps the same keys
-    (Q-9's transport rule) so the ergonomics match everywhere.
-  - **Now:** `AlbumEntry.qml` maps `scroll_down`/`scroll_up` to
-    `playerNext`/`playerPrevious` (with the skip bloom); `SongList` and the
-    search columns still treat them as scroll aliases.
-- [ ] **VI-11 · Wire `gg`/`G`** — P1 · (N8a)
-  - **Why:** bound in the keymap but no handler, so they dead-end silently.
-  - **Details:** Top/Bottom in every list + queue.
+
 - [ ] **VI-12 · which-key / showcmd** — P1 · (N8b, CRITIQUE Ph1.4, MY3 §4.3)
   - **Why:** pending sequences are invisible; undocumented binds require reading
     the source.
   - **Details:** showcmd in the status bar, which-key card above the player bar
     (`micro` in / `instant` out, MY3 §3.1).
+
 - [ ] **VI-13 · `:` command line** — P1 · (N5a, CRITIQUE §2.7, MY3 step 9)
   - **Why:** the power-hatch for commands without UI: `:sync`, `:q`, `:set volume`,
     `:sort`, `:help`.
   - **Details:** bottom prompt, `zCommand` layer, `quick` rise; command registry.
+
 - [ ] **VI-14 · In-list `/` and `?` with `n`/`N`** — P1 · (N5b, CRITIQUE §2.6)
   - **Why:** vi search is an in-buffer motion, not only a global palette.
   - **Details:** `/` filters/highlights the active list; `n`/`N` cycle matches.
+
 - [ ] **VI-15 · `?` / `:help` cheatsheet** — P2 · (N8c, MY3 step 10)
   - **Why:** discoverability of the whole grammar.
   - **Details:** square card in the which-key style, grouped by mode.
-- [ ] **VI-16 · Key overload disambiguation (`Enter`, `q`)** — P2 · (N9)
-  - **Why:** `Enter` means play/open/confirm depending on context; `q` and Esc
-    both Back; document or split.
-- [ ] **VI-17 · Status bar focus behaviour** — P2 · (CRITIQUE ghost focus)
-  - **Why:** focusing a non-interactive pane used to make keys inert.
-  - **Details:** either strip region 2 from the focus ring or keep it and give it
-    real actions.
-  - **Now:** `Enter` triggers sync (RightBar.handleAction); region remains in the
-    ring.
-- [ ] **VI-18 · Space leaks through the modal search** — P2 · (MD32)
-  - **Why:** the overlay is documented as modal, but `play_pause` is dispatched
-    before Home sees the overlay (Main.qml:24-29).
-  - **Details:** route `play_pause` through Home/overlay first.
-- [ ] **VI-19 · `i` is dead outside search** — P3 · (MD33)
-  - **Why:** `InsertMode` is bound globally but only the overlay consumes it.
-  - **Details:** scope the binding or consume it (mode indicator). 
-- [ ] **VI-20 · keyTimer comment/mechanism drift** — P3 · (MD34)
-  - **Why:** the comment claims bare Space is deferred; it resolves immediately —
-    only `g g`/`shift-space …` are.
-  - **Details:** fix the comment or make deferral per-binding (ties to VI-9).
-- [x] **VI-21 · Global yank/paste (`y`/`P`) to the system clipboard** — P1 · **high priority** · (CRITIQUE Ph2 operators)
-  - **Why:** copying a track out of the app and pasting a track reference back
-    in are the two most basic Neovim-style verbs; today the system clipboard is
-    unreachable from the keyboard.
-  - **Details:** global (any region) `y` yanks the playing track as
-    `Artist - Title` to the system clipboard; `P`/`Ctrl-V` paste the clipboard
-    into the floating search field (`SearchOverlay.openWith`), so the text is
-    visible and correctable before Enter plays the selection — raw clipboard
-    text is never rejected in the background.
-    `p` stays track-previous for now — the transport rebind and the full
-    operator grammar (`yy`, `p`/`P` queue append/play-next) land with VI-8;
-    yanking a cursor row / visual selection follows VI-4.
-  - **Now:** v1 landed — `keybind.rs` `yank`/`paste` actions (`y`, `shift-p`,
-    and system `ctrl-v` so clipboard managers like Noctalia can paste);
-    `Main.qml` hidden `TextEdit` clipboard bridge + global dispatch (focused
-    text fields still consume Ctrl-V themselves); `Home.pasteSearch` opens
-    the search overlay with the text in the field via
-    `SearchOverlay.openWith`; unit tests for the binding.
 
-## 2. Queue & playback grammar (`Q`)
-
-- [x] **Q-1 · Queue view (drawer) with reorder/remove** — P2 · (M1, CRITIQUE Ph2.1)
-  - **Why:** the queue is the primary working document; today it is invisible.
-  - **Details:** collapsible pane (`Ctrl-W q`/`:queue`), `j/k` navigation,
-    `K/J` reorder, `dd` remove, canonical cursor token, `quick` collapse.
-  - **Now (working tree):** `QueueDrawer.qml` (right drawer, toggled by `Ctrl-Q`
-    / IPC `queue_toggle`); `j/k` + `Ctrl-N/P` move, `Enter` jumps, `Shift-J/K`
-    reorder, `dd` removes; `player.rs` exposes queue/jump/remove/move_item and
-    `emit_queue` publishes over the `queue` dataReady channel. (`Ctrl-W q`/`:queue`
-    not used yet; `quick` easing pending.)
-- [x] **Q-2 · Playback context builds a real queue** — P0 · (M2)
-  - **Now:** `playAlbum`/`playSong` load album/list context instead of a single
-    track (qml.rs playerLoad/playAlbum).
 - [ ] **Q-3 · Shuffle / repeat** — P2 · (M3)
   - **Why:** the shuffle button exists but is inert; repeat-one/all is expected.
   - **Details:** wire the shuffle icon + repeat mode, show the active state via
     a state layer (stop is already wired; see UI-17).
   - **Now:** the transport uses `random-svgrepo-com.svg` with no `onClicked`;
     `player.rs` has no shuffle/repeat state.
-- [x] **Q-4 · Volume + mute in UI and keys** — P2 · (M4, CRITIQUE Ph3.1)
-  - **Why:** mpv has volume, the backend keeps it, but the bar is a static bar.
-  - **Details:** draggable slider + percentage, `m` mute, `+/-`/`]v [v` steps,
-    focus state layers; expose slot in `qml.rs`.
-  - **Now:** `Backend.volume`/`Backend.muted` properties + `playerSetVolume`/
-    `playerAdjustVolume`/`playerToggleMute` slots; `player.rs` gained
-    `muted`/`set_muted`/`toggle_mute` (mpv `mute` property); keys `m` mute,
-    `-`/`+` (and `=`/shift-=`, keypad) step 5%; `InferiorBar` speaker icon by
-    tier (mute/zero/low ≤33/high, white SVGs) + clickable/draggable bar and
-    click-to-mute; stepping up unmutes. Icons sit in fixed invisible frames
-    (`IconButton` layers) and the volume SVGs are translated to a shared
-    speaker baseline, so tiers swap without moving. `]v`/`[v` left to VI-8.
-- [ ] **Q-5 · Gapless + stream-error retry/auto-advance** — P1 · (M8)
-  - **Why:** end-of-track errors currently stop the session silently.
+
 - [ ] **Q-6 · A-B repeat, playback rate, crossfade** — P3 · (M9)
-- [x] **Q-7 · MPRIS/D-Bus metadata** — P2 · (M7)
-  - **Now:** mpv MPRIS script + metadata via IPC (`mpris:artUrl`).
+
 - [ ] **Q-8 · Native MPRIS service (`org.mpris.MediaPlayer2.musika`)** — P2 · (roadmap "MPRIS node" design)
   - **Why:** the mpv-mpris script is an extra install; a stock desktop should
     see the node, and media keys/panels/lock screens must work everywhere.
@@ -167,120 +208,31 @@ work is); solved/partial tasks add **Now** with the current evidence.
     Metadata/Position/Can* mapping, rate-limited signals, `playerctl` acceptance
     test across GNOME/KDE/sway/XFCE; milestones M0–M5 in the roadmap. Keep the
     mpv script path (Q-7) as the opt-in fallback.
-- [ ] **Q-9 · Fullscreen queue & transport polish** — P2 · (fullscreen review)
-  - **Why:** queue rows wear debug-ish `Prev`/`Next` tags, the order cannot be
-    changed from the keyboard, and fullscreen transport uses bare `n`/`p`
-    while the rest of the app standardises on `Ctrl-N`/`Ctrl-P`.
-  - **Details:**
-    - drop the `Prev`/`Next` row names and the expression that derives them
-      (`index < queueIndex ? "Prev" : "Next"`, NowPlaying.qml queue delegate);
-      keep only the active-row treatment;
-    - `Alt-j` / `Alt-k` move the selected track down/up in the queue;
-    - fullscreen transport keeps `Ctrl-N` / `Ctrl-P` for next/previous track
-      (not bare `n`/`p`) so the ergonomics stay consistent everywhere.
-- [ ] **Q-10 · Song activation enters Fullscreen Playback** — P2 · (roadmap D-4)
-  - **Why:** activating a song is the deliberate "listen now" verb; the user
-    should land in the listening surface (cover + lyrics + queue) instead of
-    back in the list they picked it from.
-  - **Details:** Enter (and the equivalent click) on a song — floating search
-    result or `AlbumEntry` song list — plays it and opens fullscreen; album and
-    artist activation keep their navigation semantics; queue `Enter` (jump) is
-    unchanged; the search overlay closes first, no wait on stream or palette.
-  - **Now:** not implemented — both paths only call `playSong`/`playAlbum`;
-    fullscreen still opens through `Shift+Enter`/`toggle_fullscreen` alone.
-
-## 3. Player & media features (`P`)
 
 - [ ] **P-1 · Scrobble back to Navidrome** — P2 · (M5, CRITIQUE Ph3.2)
   - **Why:** play counts / recently played never update server-side.
   - **Details:** `scrobble` at 50%/4 min and on completion; `api.rs:1318` ready.
+
 - [ ] **P-2 · Starred/favorites view + toggle** — P2 · (CRITIQUE Ph3.2)
   - **Why:** no way to value tracks; `getStarred`/`star` endpoints unused.
   - **Details:** `s`/`*` toggle, favorites filter.
+
 - [ ] **P-4 · Playlists** — P2 · (M6, roadmap)
   - **Why:** sidebar segment is a placeholder.
   - **Details:** index + view + play; create/edit later.
+
 - [ ] **P-5 · Radio** — P2 · (M6, roadmap)
   - **Why:** sidebar segment is a placeholder; Subsonic radio endpoints exist.
+
 - [ ] **P-6 · Resume-on-launch** — P2 · (roadmap P2)
   - **Why:** power users expect the queue/session to survive restarts.
-- [ ] **P-7 · Fullscreen controls completeness** — P2 · (U6)
-  - **Why:** transport + seek landed, but volume/mute are absent in fullscreen.
-  - **Details:** reuse IconButton/state layers; keep play/pause centered.
-  - **Now:** global `m`/`-`/`+` volume keys work and are listed in the
-    fullscreen keybar; an on-screen slider/mute control is still absent.
 
-## 4. Lyrics pipeline (`LYR`) — roadmap "Lyrics" design
-
-- [x] **LYR-1 · API: `getLyricsBySongId` + OpenSubsonic probe** — P2 · (roadmap L0)
-  - **Why:** only the OpenSubsonic `songLyrics` endpoint returns per-song and
-    synced lyrics; legacy `getLyrics` (artist/title, plain) is a fuzzy fallback.
-  - **Details:** types for `lyricsList.structuredLyrics` (`lang`, `offset`,
-    `synced`, `line[{start, value}]`); call `getOpenSubsonicExtensions`, cache the
-    capability (`songLyrics` v1; ignore `enhanced` v2 for now).
-  - **Now:** `api.rs` has `StructuredLyrics`/`LyricLine`/`LyricsList`/
-    `OpenSubsonicExtension`, `get_lyrics_by_song_id`, `get_open_subsonic_extensions`.
-- [x] **LYR-2 · DB5 cache (`lyrics.db`) + purge-on-sync** — P2 · (roadmap L1)
-  - **Why:** multiDB style: re-fetchable content gets its own pool, keeps
-    library.db lean and the purge domain independent, exactly like covers.
-  - **Details:** `migrations_lyrics`, new pool in `Dbs`, schema
-    `lyrics(song_id, source, synced, lang, offset_ms, text, fetched_at)` +
-    `lyric_line(song_id, idx, start_ms, value)`; delete rows whose song id is
-    missing from library.db after a successful sync; no blob directory.
-  - **Now:** `migrations_lyrics/20261013000001_lyrics.sql` (`lyrics`,
-    `lyric_line` FK-cascade, `lyrics_meta`); `Dbs.lyrics` + `lyrics_path()`;
-    `lyrics.rs::purge_with` called from `index.rs` after a successful sync.
-- [x] **LYR-3 · `requestLyrics` + plain rendering in NowPlaying** — P2 · (roadmap L2)
-  - **Why:** the redesigned fullscreen pane still shows the hardcoded
-    `lyricLines` placeholder (`TODO(M6)` in NowPlaying.qml).
-  - **Details:** `Backend.requestLyrics(songId)` -> tokio ->
-    `dataReady("lyrics")` JSON; render plain text; "No lyrics" empty state;
-    fallback chain override -> bySongId -> legacy `getLyrics`.
-  - **Now:** `Backend.currentSongId` + `requestLyrics()`; `lyrics.rs::fetch`
-    (override → cache → FTS5-era server chain); NowPlaying renders lines or a
-    centered "No lyrics"; source/lang tag in the header.
-- [x] **LYR-4 · Synced rendering: highlight + auto-scroll + offset** — P2 · (roadmap L3)
-  - **Why:** synced lyrics are the point of the feature; the pane currently
-    fakes the active line (`currentLyric` stub).
-  - **Details:** compare `Backend.position` (minus OpenSubsonic `offset`) against
-    `start`; active line `primary`/bold (`micro`), scroll-to-center (`quick`);
-    no animation for unsynced text.
-  - **Now:** `activeLyric` binding applies `offset_ms`; `> … <` marker plus
-    `micro` color; `positionViewAtIndex(…, Center)` on line change; plain
-    lyrics stay static.
-- [ ] **LYR-5 · Prefetch, miss TTL, local `.lrc` override** — P2 · (roadmap L4)
-  - **Why:** avoids per-open latency and request storms, and lets users supply
-    their own synced lyrics.
-  - **Details:** prefetch lyrics for the next N queue tracks (reuse
-    `FETCH_CONCURRENCY=8`); cache misses as `source='none'` with TTL (~7 days)
-    plus manual refresh; `~/.config/musika/lyrics/<song_id>.lrc` wins over the
-    DB and is never purged.
-  - **Now:** `.lrc`/`.txt` override and the 7-day miss TTL landed with LYR-3;
-    plain hits revalidate after 24 h (a `.lrc` added to Navidrome later is
-    picked up), legacy `getLyrics` LRC text is parsed, and line timing is
-    trusted over the server `synced` flag; sync now tops up missing/expired
-    lyrics (bounded, ARC-35); prefetch-next-N and manual refresh are still open.
 - [ ] **LYR-6 · Optional: karaoke v2, lyric FTS, `:lyrics`** — P3 · (roadmap L5)
   - **Why:** word-level timing and lyric search are stretch goals; server
     support for `enhanced` varies.
   - **Details:** `enhanced=true` `cueLine`/`agents`/translations; index lyric
     text in search.db FTS5; `:lyrics sync` backfill per album/artist.
-- [x] **LYR-7 · Lyrics stage states (kill the `> <` code-art)** — P2 · (roadmap "Lyrics presentation" P0)
-  - **Why:** the active line is ASCII-marked at one uniform font size, so the
-    pane reads like a text dump (NowPlaying.qml:456-473).
-  - **Details:** active/near/far model: active `body` scaled ×1.12, full
-    contrast; near ±1 opacity 0.8; far ±2+ opacity 0.5 and smaller; non-synced
-    = uniform 0.8 column, no focus line; fixed-height delegates so state
-    changes never reflow.
-  - **Centred style:** lyrics are a centred column — `Text.AlignHCenter` and
-    scale from the text centre (no left-anchored "Left → Right" growth); the
-    optional left hairline is dropped in favour of scale + contrast.
-  - **Pane-sized type:** the font is computed from the lyrics rectangle
-    (`pane.height * 0.055`, clamped 10–18) with proportional left/right padding,
-    so lines never collide with the pane walls at any window size.
-  - **Now:** `NowPlaying.qml:463-502` — no `> <` marker; active/near/far
-    opacity + scale about the text centre; uniform dim column when unsynced;
-    pane-sized `lyricSize`/`lyricPad`.
+
 - [ ] **LYR-8 · Smooth centre-follow + edge fades** — P2 · (roadmap "Lyrics presentation" P1)
   - **Why:** `positionViewAtIndex(Center)` teleports each line and every
     500 ms tick fights manual scrolling (NowPlaying.qml:109-110, 124-127).
@@ -288,37 +240,14 @@ work is); solved/partial tasks add **Now** with the current evidence.
     (`standard`/`decelerate`, `quick` for tiny moves); pause follow on
     `onMovementStarted`, resume after ~4 s idle or on track change; top/bottom
     gradients from `surfaceContainerLow` to transparent.
-- [ ] **LYR-9 · Lyrics state polish** — P3 · (roadmap "Lyrics presentation" P2)
-  - **Why:** "No lyrics" flashes before the first response, track changes swap
-    text abruptly, and the tag leaks `subsonic · synced · xxx`.
-  - **Details:** loading state before first payload; crossfade the list on
-    track change (`quick`); suppress `xxx`/`und`; render `synced` as a small
-    MY3 chip in `label` type.
+
 - [ ] **LYR-10 · Word-level karaoke (`cueLine`)** — P3 · (roadmap "Lyrics presentation" P3)
   - **Why:** optional stretch; the OpenSubsonic `enhanced=true` payload offers
     word/syllable timing.
   - **Details:** accent fill/underline per word; only when `kind="main"` and
     every line is timed.
 
-## 5. Search (`S`)
 
-- [x] **S-1 · Floating search (three columns, keyboard, states)** — P1 · (roadmap design)
-  - **Now:** `SearchOverlay.qml` + `SearchColumn.qml`: Artists|Albums|Songs,
-    debounce, skeleton, no-matches, Enter open/play, Esc modes, hover.
-- [x] **S-2 · Search appearance pass** — P2 · (MD13/MD14/MD9/MD12)
-  - **Now:** two-line title/subtitle cells, mode chip, mode-aware footer,
-    "N albums" wording, clamped type, `quick` easing.
-- [x] **S-3 · Query `search.db` (FTS5), retire `fd`/tmpfs** — P0 · (O1, CRITIQUE §3.4)
-  - **Now:** palette and overlay query FTS5 through `Backend.requestSearch`.
-- [ ] **S-4 · Align search order and default scope** — P2 · (MD10, roadmap mixed design)
-  - **Decision (roadmap):** columns and priority are Songs > Albums > Artists;
-    the cursor starts in the first non-empty scope and falls through in that
-    order; counts move into the scope chips (S-6).
-  - **Now:** the implementation is still Artists|Albums|Songs with
-    artist-first priority (`SearchOverlay.qml:208,369-418`).
-- [ ] **S-5 · Hover steals the search cursor** — P3 · (MD15)
-  - **Why:** passing the mouse over a column re-targets `activeColumn`; only
-    click should change it.
 - [ ] **S-6 · Noctalia-style search chrome (scope chips + sizing)** — P2 · (roadmap mixed design)
   - **Why:** identity and counts live in the column headers, and the panel uses
     a raw 70% × 65%; the mixed design gives one chip row and a measured range.
@@ -326,6 +255,7 @@ work is); solved/partial tasks add **Now** with the current evidence.
     chip `primaryContainer`, others muted, only one accented — D-1), panel
     `clamp(win*0.70, 560, 1100)` × `clamp(win*0.65, 420, 760)`, context
     keybar; column headers drop the counts.
+
 - [ ] **S-7 · Empty-query search surface + usage boost** — P2 · (roadmap mixed design)
   - **Why:** an empty query leaves three empty columns; Noctalia leads with
     pinned/recent instead.
@@ -333,139 +263,28 @@ work is); solved/partial tasks add **Now** with the current evidence.
     (`songs.play_count` desc, then title); while typing, boost FTS hits by
     `play_count`; keep the selected row across scope/order changes.
 
-## 6. UI microdesigns (`UI`)
 
-- [ ] **UI-1 · Region frame colours** — P2 · (MD1)
-  - **Why:** PLAYER uses `Theme.error` (red) and four accents read as identity,
-    not state; unify or only show in visual mode (Home.qml).
-- [ ] **UI-2 · Remove always-on search hint strip** — P2 · (MD2)
-  - **Why:** it owns a full row forever and is noise after the first day.
-- [x] **UI-3 · De-duplicate sync state** — P2 · (MD3)
-  - **Now:** the button no longer relabels to "Syncing…" and uses the disabled
-    content token; residual: the progress track is always visible when idle.
-- [ ] **UI-4 · Counts live in three places** — P2 · (MD4)
-  - **Why:** sidebar stats + per-list "N indexed" + content counts duplicate.
-- [x] **UI-5 · Two stacked titles removed** — P2 · (MD5)
-  - **Now:** "LIBRARY" title replaced by the mode chip.
-- [ ] **UI-6 · Placeholder segments look active** — P3 · (MD6)
-  - **Why:** Playlists/Radio look selectable but only open an empty state.
-- [ ] **UI-7 · Rotated "LIBRARY" visual-mode label** — P3 · (MD7/U5)
-  - **Why:** rotated text is unreadable at a glance.
 - [ ] **UI-8 · Rows sized as viewport fractions** — P1 · (MD16)
   - **Why:** row height grows with the window; use a fixed unit per view.
+
 - [ ] **UI-9 · Extract a shared `ListRow`** — P2 · (MD17)
   - **Why:** three near-identical delegates drift (zebra/cursor/cover/text).
-- [ ] **UI-10 · Hover parity + initial cursor** — P2 · (MD18)
-  - **Why:** AlbumList tints the cover on hover, others do nothing; no row is
-    highlighted until the first key.
-- [x] **UI-11 · `FadeText` opt-out** — P2 · (MD19)
-  - **Now:** `animated: false` on list/search/album/toast delegates.
-- [ ] **UI-12 · Metadata line position consistency** — P3 · (MD20)
-  - **Why:** "N tracks" is right-aligned; "N albums" sits under the name.
+
 - [ ] **UI-13 · Scroll position hint** — P3 · (MD21)
   - **Why:** long lists have no scrollbar/position feedback for mouse users.
-- [ ] **UI-14 · Expandable album notes** — P2 · (MD22)
-  - **Why:** notes clamp to 3 lines with no way to read the rest.
-- [ ] **UI-15 · Album "‹ Back" chrome** — P3 · (MD23)
-  - **Why:** duplicates `q`/Esc; keep only if the toolbar gains more.
-- [ ] **UI-16 · "COVER" fallback text** — P3 · (MD24)
-  - **Why:** placeholder word in the art slot; use a glyph/blank surface.
-- [ ] **UI-17 · Inert controls (shuffle only now)** — P2 · (MD25)
-  - **Why:** a control that does nothing breaks trust.
-  - **Details:** wire (Q-3) or remove the shuffle button; volume and stop are
-    done.
-  - **Now:** volume (Q-4) and stop (`■` → `playerStop`) are wired; shuffle
-    (`random-svgrepo-com.svg`) still has no `onClicked`.
-- [ ] **UI-18 · Icon language consistency** — P2 · (MD26/MD35)
-  - **Why:** emoji speaker breaks the monochrome look; glyphs vary in weight.
+
 - [ ] **UI-19 · Type-role sweep + clamps everywhere** — P2 · (U10, MY3 step 7)
   - **Why:** inline `font.pixelSize` fractions drift per view.
   - **Now:** clamps/roles applied in RightBar, NowPlaying, Toast; lists, sidebar
     and album pages still inline.
+
 - [ ] **UI-20 · Focus states on every control** — P1 · (U2)
   - **Why:** keyboard focus must be visible; only IconButton has a focus
     hairline; sync button/segments/rows don't.
+
 - [ ] **UI-21 · Mouse/keyboard parity gaps** — P2 · (U11)
   - **Why:** some affordances are mouse-only and vice versa.
-- [ ] **UI-22 · Empty/error states polish** — P0 · (U8)
-  - **Why:** album-with-no-songs, failed sync, failed playback need real states.
-  - **Now:** error toasts landed; loading screen landed for startup ping;
-    empty states still mostly PlaceholderList.
-- [ ] **UI-23 · Toast retry covers playback errors too** — P2 · (MD38)
-  - **Why:** the Retry button only renders for `kind === "sync"`.
-- [x] **UI-24 · Fullscreen 50/50 split + px sweep** — P2 · (MD27/MD29)
-  - **Now:** cover/lyrics 50/50; NowPlaying px → fractions/theme radius.
-- [x] **UI-25 · MY3 motion & state system** — P1 · (MY3 steps 1–4, 8; QW1–8, 10–12)
-  - **Now:** motion tiers/easings, shape/state/z tokens, scrim, container roles,
-    `EnterView`/`ExitView`, niri-like backdrop blur on modal surfaces,
-    IconButton state layers, toast
-    quick-in/lazy-out, mode chip, linear progress, search weights documented.
-- [ ] **UI-26 · Centralize `formatTime`** — P3 · (MD30)
-  - **Why:** duplicated in six files (InferiorBar, NowPlaying, SongList,
-    AlbumEntry, PlaybackNode, SearchOverlay).
-- [ ] **UI-27 · Separators / font ratios** — P3 · (MD36/MD37)
-  - **Why:** "  ·  ", "   " and "·" coexist; title fractions 0.24/0.26/0.26.
-- [ ] **UI-28 · Album page hero cover header** — P2 · (roadmap "Album page cover" D-3)
-  - **Why:** the centered `0.32 × height` cover reads small on wide panes
-    (≈ 16% of pane width) and leaves the description stacked under wide dead
-    margins (`AlbumEntry.qml:156-188`).
-  - **Details:** header row (square cover left, description right);
-    `headerH = min(mainH*0.44, 512 + 2m)`, `cover = clamp(mainH*0.42, 160,
-    512)`; no upscaling past the 512 px cache; the same grid drops to one
-    column below ~900 px (cover centered over the description); songs keep
-    ≥ 40% height; MY3 radius/hairline/hierarchy per D-3.
-  - **Now:** `AlbumEntry.qml` header is a `GridLayout` — cover
-    `clamp(0.42h, 160, 512)` left of the description (one column under
-    900 px), fixed `headerHeight` when side by side; build + qmllint clean.
-    Visual acceptance at 1366/1920/2560 still pending.
-- [ ] **UI-29 · Album page ambience backdrop** — P2 · (roadmap "Album page cover" D-5)
-  - **Why:** the album page reads flat next to its own art; a blurred copy
-    ties the hero to the theme without inventing a new color.
-  - **Details:** full-pane blurred `albumCover` copy (`MultiEffect` blur
-    1.0/64, saturation 0.6) behind the header, `Palette.surface` gradient
-    α 0.82 → 0.30 → 1.0, `standard` fade-in, hidden without art; the one
-    sanctioned non-modal blur (R2 amended).
-  - **Now:** landed in `AlbumEntry.qml`; visual acceptance (bright/dark
-    covers, songs-boundary seam) pending.
-- [ ] **UI-30 · Manual sync shows `Syncing…`, not `Up to date`** — P2 · (sync-state review)
-  - **Why:** `RightBar.qml:90` renders `librarySyncing ? "Syncing…" :
-    "Up to date"`, but the button/tap path (`RightBar.qml:45,139` →
-    `Backend.syncLibrary`) never sets `library_syncing` — only the
-    auto/login path (`qml.rs:1074`, invoking `librarySyncStarted`) does. A
-    manual sync therefore reads "Up to date" for its whole duration, with the
-    progress track parked at 0.
-  - **Details:** enter the syncing state at the start of the manual
-    `syncLibrary` slot (`qml.rs:434`), reusing `library_sync_started` (set
-    `library_syncing`/`sync_progress`/`sync_message` before spawning);
-    `librarySyncFinished` already clears it, including the failure path. Add
-    the re-entrancy guard there too (a second click while syncing is ignored
-    — ties ARC-28). Acceptance: the status flips to `Syncing…` within one
-    frame of the click and returns to `Up to date`/the result message on
-    completion or error.
-- [x] **UI-31 · Play/pause loses its filled background (icon-only, all contexts)** — P2 · (icon-language review)
-  - **Why:** play/pause is the only `IconButton` drawn with the `accent`
-    container (`IconButton.qml:21,36,51`; used at `InferiorBar.qml:155` and
-    `NowPlaying.qml:388`). The filled square competes with the transport's
-    focus ring, breaks the monochrome glyph language (UI-18) and reads as a
-    FAB rather than a transport control (R1/R3: hierarchy is tonal, not extra
-    chrome).
-  - **Details:** drop `accent: true` at both call sites; once no caller uses
-    it, remove the `accent` property and its `onPrimaryContainer`/`onPrimary`
-    and `stateFocus`-on-hover branches so the glyph uses the standard state
-    layers (R6), keeping the focus hairline. Sizes, centring and
-    `symbolRatio` stay. Decision: play/pause is always white
-    (`Theme.iconStrong`), the one glyph that never follows the seeded palette
-    or the theme roles.
-  - **Now:** `IconButton` has no `accent` (transparent root, standard state
-    layers + hairline) and draws either a text glyph or an SVG (`iconSource`,
-    rendered with `VectorImage` so no QtSvg plugin is needed);
-    `InferiorBar`/`NowPlaying` use the white transport SVGs from `src/icons/`
-    (play/pause/next plus a mirrored copy of the skip icon for previous,
-    embedded via a second `include_bytes_qml!` under `qrc:/app/icons/`;
-    shuffle/stop stay glyphs for now), swapping with a `quick` (120 ms)
-    crossfade. Icons render through `VectorImage.CurveRenderer` (built-in
-    AA; the default GeometryRenderer aliases at icon sizes). Build + qmllint
-    clean; visual check pending.
+
 - [ ] **UI-32 · Unlimited horizontal collapse (responsive plan)** — P2 · (window policy)
   - **Why:** `Main.qml:27` clamps the window at `Screen.width * 0.4`; Qt itself
     permits any width (`minimumWidth` can be 0), so the floor is self-imposed.
@@ -505,76 +324,69 @@ work is); solved/partial tasks add **Now** with the current evidence.
   - **Acceptance:** continuous resize down to ~160 px with no layout errors
     or warnings and every primary action still keyboard-reachable; no
     component overflows its pane.
-- [x] **UI-33 · Skip bloom feedback** — P2 · (transport polish)
-  - **Why:** keyboard and mouse skips were easy to miss while browsing; the
-    transport button should acknowledge the change.
-  - **Details:** a small blurred bloom in the generated primary
-    (`Palette.primary`), expanding 0.8→1.7 while fading 0.5→0
-    (`standard`/`decelerate`); play/pause untouched.
-  - **Now:** `IconButton.bloom()` + `Backend.trackSkipped(forward)` (emitted
-    from `playerNext`/`playerPrevious`); `InferiorBar` and `NowPlaying` bloom
-    the matching direction for keys, clicks and IPC alike.
 
-## 7. Dynamic color (`THM`) — roadmap "Dynamic color" design
+- [ ] **UI-35 · Queue drawer modal parity: slide + scrim + blur** — P2 · (POLISHAUDIT §1.2, D-2)
+  - **Why:** the drawer is modal for keys but has no scrim and the shell blur
+    ignores it (`Home.qml:254`), so cursors behind it stay visible — D-2 says
+    an open overlay owns the only visible selection.
+  - **Details:** translate the panel in/out (`standard`), add the scrim at
+    `Theme.scrimOpacity`, include `queueDrawer.opened` in the shell layer
+    condition.
 
-- [x] **THM-1 · Engine spike: `material-colors` crate, cover → dark scheme** — P2 · (roadmap T0)
-  - **Why:** matugen itself is GPL-2.0, but its engine (`material-colors`) is
-    MIT/Apache-2.0; embedding it avoids a runtime CLI and keeps the licence
-    clean.
-  - **Details:** add `material-colors` (+ decode); replicate matugen's pipeline
-    (resize 112, QuantizerCelebi @128, CAM16 chroma >= 5, `Score`, TonalSpot,
-    dark scheme); fixture-image unit test asserts roles; no DB/QML yet.
-  - **Now:** `colors.rs` embeds `material-colors 0.5` (`quantize`) + `image`
-    (png/jpeg/webp/gif); `generate_from_path`/`from_seed` + 35-role map and
-    JSON payload; 5 tests (role map, deterministic cover, grayscale fallback,
-    transparent rejection, seed serialization).
-- [x] **THM-2 · DB6 `colors.db` + hash invalidation + purge-on-sync** — P2 · (roadmap T1)
-  - **Why:** generation is CPU work; the cache needs its own pool and must
-    re-run when the cover bytes change.
-  - **Details:** `migrations_colors` (`cover_color(cover_art PK, cover_hash,
-    scheme, seed, dark JSON, generator, generated_at)` + `colors_meta`);
-    `Dbs.colors` + `colors_path()`; read compares `covers.hash`; post-sync pass
-    purges rows whose cover id vanished from covers.db.
-  - **Now:** migrations_colors + `Dbs.colors`/`MUSIKA_COLORS_FILE`;
-    `colors::fetch` (covers `cached_path` + `covers::hash` → cache hit or
-    `spawn_blocking` generation), `fetch_into` test seam; purge hooked into
-    `index.rs` after the cover pass; 3 cache tests (hit after source removal,
-    hash-change regeneration, purge).
-- [x] **THM-3 · `requestColors` play-scoped generation + `dataReady("colors")`** — P2 · (roadmap T2)
-  - **Why:** only the playing cover should cost decode+quantize; a library-wide
-    sweep is request amplification and must never happen.
-  - **Details:** `Backend.requestColors()` mirrors `requestLyrics`; triggered on
-    `currentCoverArt` change while playing (coalesced; one in-flight job per
-    cover; stale-guard on cover art); payload
-    `{cover_art, cover_hash, scheme, dark}`; static fallback on failure.
-  - **Now:** `requestColors`/`colorsReady`/`refreshColors` in `qml.rs`; the
-    cover_art/cover_url signals now fire only on change; payload carries
-    `cover_art`, `cover_hash`, `scheme`, `seed`, `dark`; `dark: null` resets
-    the palette (no art / failure); `Main.qml` receives `colors`, re-checks
-    `cover_art === Backend.currentCoverArt` and applies.
-- [x] **THM-4 · `Palette` singleton + QML role sweep + colour motion** — P2 · (roadmap T3)
-  - **Why:** `Theme.js` is a static pragma-library, so dynamic roles need a
-    notifying singleton; a cover swap should recolor, not repaint.
-  - **Details:** `Palette.qml` (pragma Singleton) defaults from Theme.js,
-    `apply(payload)` from the `colors` channel; migrate `Theme.<role>` to
-    `Palette.<role>`; `micro`/`standard` colour behaviour; error/region/mode
-    roles stay semantic, state layers stay fixed overlays.
-  - **Now:** `palette.rs` is a Rust-backed qtbridge singleton (same mechanism
-    as `Backend`) with 32 notifying roles, `apply`/`reset`, and MY3 defaults;
-    227 `Theme.<role>` references swept to `Palette.<role>` across 19 QML
-    files (adds `import musika` where missing, unifies the search scrim);
-    shape/motion/type/z/state layers remain in Theme.js.
-- [x] **THM-5 · Smart variant + contrast/lightness + manual refresh** — P3 · (roadmap T4)
-  - **Why:** grayscale covers should not get a loud accent; power users want
-    contrast control and a way to force regeneration.
-  - **Details:** port `smart_scheme` colorfulness mapping (>70 vibrant, 20-70
-    tonal spot, 6-20 neutral, <6 monochrome); settings for scheme/contrast;
-    `:theme refresh` (or IPC) deletes the current row and re-requests.
-  - **Now:** Hasler-Süsstrunk colorfulness picks the smart variant; knobs via
-    `MUSIKA_COLOR_VARIANT` / `MUSIKA_COLOR_CONTRAST` (reflected in the cache
-    generator tag, so a knob change invalidates); `colors::invalidate` +
-    IPC `colors_refresh` (handled in Main.qml; `:theme refresh` waits on the
-    command line, VI-13).
+- [ ] **UI-36 · Click affordances everywhere: cursor + hover/press/focus** — P1 · (POLISHAUDIT §2, UI-10/20/21)
+  - **Why:** `Qt.PointingHandCursor` is set in only two places; most rows,
+    segments, buttons and mouse areas never signal clickability, and rows
+    have no hover/press state at all.
+  - **Details:** apply the documented pattern (`HoverHandler.cursorShape` +
+    tap) to AlbumList/SongList/ArtistList/AlbumEntry/QueueDrawer/SearchColumn
+    rows, SideBar segments, Toast Retry, Login, and the seek/volume/backdrop
+    `MouseArea`s; add hover tint + press layer + focus hairline where marked.
+  - **Now (partial):** the cursor pass landed — every row, segment, button
+    and mouse area now sets `Qt.PointingHandCursor` via its `HoverHandler`
+    (or the `MouseArea`); hover tint/press/focus parity still open.
+
+- [x] **UI-37 · Shared fading `CoverImage`** — P2 · (POLISHAUDIT §3)
+  - **Why:** every cover pops in (`visible: status === Ready`) and
+    `cache: false` re-decodes on scroll; `status === Error` shows a blank
+    colour.
+  - **Details:** one `CoverImage.qml` (async, fade `quick` on Ready,
+    `sourceSize` per context, error glyph) replacing the seven inline
+    `Image`s; revisit the 512 px cache ceiling for hero sizes.
+  - **Now:** `CoverImage.qml` (async + `quick` fade on Ready) replaced the
+    inline blocks in AlbumList/SongList/ArtistList/SearchColumn/QueueDrawer/
+    AlbumEntry/NowPlaying/PlaybackNode; `sourceSize` and the error glyph are
+    still open.
+
+- [ ] **UI-38 · Loading/empty states for the three main lists** — P2 · (POLISHAUDIT §5, UI-22)
+  - **Why:** Album/Song/Artist lists render nothing until the first payload
+    and have no empty state.
+  - **Details:** reuse the SearchColumn skeleton pattern and add centred
+    empty messages ("Nothing indexed yet — run a sync").
+  - **Now (partial):** the empty state landed on Album/Song/Artist lists;
+    loading skeletons are still open.
+
+- [x] **UI-39 · Motion token sweep + reduced motion** — P2 · (POLISHAUDIT §6, UI-19)
+  - **Why:** legacy `Theme.duration`/`Theme.easeOut` (100 ms) still drive
+    eight files, spin/bloom speeds are inline, and nothing can opt out.
+  - **Details:** replace legacy uses with `Theme.motion.*`/`Theme.ease.*`;
+    add `Theme.motion.spin`/`spinSlow`; add a `Theme.reduceMotion` gate for
+    `FadeText`/bloom.
+  - **Now:** `Theme.motion.spin`/`spinSlow` tokens (used by the sync spin);
+    `Theme.reduceMotion` gates `FadeText` and the skip bloom; the seven
+    legacy `Theme.duration`/`Theme.easeOut` files now use motion tiers.
+
+- [ ] **UI-40 · Palette transition wrapper (finish THM-4)** — P2 · (POLISHAUDIT §1.3)
+  - **Why:** `Palette.apply` snaps every colour in one frame; THM-4 promised
+    an animated swap.
+  - **Details:** a QML `Palette` wrapper (or per-role Behaviors) animating
+    role changes `micro`/`standard`, no animation on first apply/reset.
+
+- [ ] **UI-41 · List scroll easing + payload crossfades** — P3 · (POLISHAUDIT §4)
+  - **Why:** keyboard moves teleport and model swaps flash.
+  - **Details:** animate small `contentY` corrections for search/queue,
+    crossfade lists on payload swap (`quick`), keep lyric follow in LYR-8.
+
+
 - [ ] **THM-6 · Rewrite the color engine on DMS's pipeline** — P2 · (MATUGENSTUDY.md; roadmap T5+)
   - **Why:** DMS cleanly separates seed extraction, palette specs, caching,
     change detection and coalescing; Musika's single-shot engine re-quantizes
@@ -603,55 +415,25 @@ work is); solved/partial tasks add **Now** with the current evidence.
   - **Study:** `MATUGENSTUDY.md` (DMS pipeline, comparison table, take/leave,
     milestones R0–R4, risks).
 
-## 8. Architecture & robustness (`ARC`) — rationale: DBDESIGN.md · wiring: DBWIRING.md
 
 - [ ] **ARC-1 · Cross-DB coherence repair path** — P1 · (A3)
   - **Why:** library/search/covers writes can diverge on interruption.
+
 - [ ] **ARC-2 · Cover revalidation cheaper/cancellable** — P1 · (A4, O6)
   - **Why:** an unchanged sync still revalidates and `UPDATE`s every cover.
-- [ ] **ARC-3 · Cancellable sync + HTTP retry/backoff/timeouts** — P1 · (A5, O5)
-  - **Why:** a hung request blocks the sync pipeline; `reqwest` has no timeout.
-- [ ] **ARC-4 · ID-namespace correctness** — P1 · (A6, O4)
-  - **Why:** `getIndexes` returns file-structure IDs passed to ID3 endpoints;
-    handle `getMusicDirectory`/`indexes.child`.
-- [ ] **ARC-5 · Surface errors instead of `eprintln!`** — P0 · (A8)
-  - **Why:** users never see console output.
-  - **Now:** toast channel exists for sync/playback; many call sites still log.
-- [ ] **ARC-6 · Docs drift** — P2 · (A10)
-  - **Why:** roadmap still says "Space+F", "right bar", stale durations.
+
 - [ ] **ARC-7 · Trim `api.rs` to used endpoints** — P0 · (O2)
   - **Why:** ~1,600 lines behind `#![allow(dead_code)]`.
+
 - [ ] **ARC-8 · Merge duplicate sync/login pipelines** — P1 · (O3)
   - **Why:** `qml.rs::sync_library` vs `spawn_index_sync`; login/startup copies.
-- [ ] **ARC-9 · Cache `SecretKey`, honor `XDG_CONFIG_HOME`** — P1 · (O7)
-  - **Why:** re-reads the key file per call; path bypasses `config_dir`.
-- [ ] **ARC-10 · `sync_player` signal thrift** — P1 · (O8)
-  - **Why:** ~13 signals + string clones every 500 ms tick.
+
 - [ ] **ARC-11 · Collapse structural duplication** — P1 · (O9)
   - **Why:** fetch helpers, JSON loaders and song projections repeat.
-- [ ] **ARC-12 · Poison-safe player lock** — P1 · (O10)
-  - **Why:** `lock().unwrap()` on the reader thread can panic the UI tick.
-- [ ] **ARC-13 · Dead code cleanup** — P2 · (O11, MD31)
-  - **Why:** `PlaybackNode.qml` is uninstantiated, `covers::cached_path` unused
-    until the media cache lands, `index.txt` mirror intentional?
-- [ ] **ARC-14 · Deduplicate constants** — P2 · (O12)
-  - **Why:** volume 70.0, `COVER_SIZE`, `FETCH_CONCURRENCY` exist twice.
-- [ ] **ARC-15 · Stop masking errors as auth failures** — P2 · (O13)
-  - **Why:** every envelope error becomes "Wrong username or password".
-- [ ] **ARC-16 · mpv supervisor hardening** — P2 · (O16)
-  - **Why:** `sh -c` string building for MPRIS/kill; avoid spawning shells.
+
 - [ ] **ARC-17 · Slim the `Backend` god-object** — P2 · (O17)
   - **Why:** huge slot surface; `playback_state` is a `String`, should be enum.
-- [ ] **ARC-18 · Remove empty no-op migrations** — P3 · (O18)
-- [x] **ARC-19 · Async off the UI thread** — P0 · (A1)
-  - **Now:** lists/covers load via Tokio + `dataReady`, no `block_on`.
-- [x] **ARC-20 · Cover cache scoped to album/artist art** — P0 · (A2)
-- [x] **ARC-21 · mpv cleanup on abnormal exit** — P0 · (A7)
-  - **Now:** supervisor shell watches the parent PID.
-- [x] **ARC-22 · Auth token not exposed in process argv/mirror** — P2 · (A9)
-  - **Now:** mpv receives the stream URL over the IPC socket, not argv.
-- [x] **ARC-23 · Palette race + corpus churn** — P2 · (O14/O15)
-  - **Now:** FTS5 path replaced the tmpfs corpus entirely.
+
 - [ ] **ARC-24 · Shared sync epoch across the five DBs** — P1 · (DB analysis)
   - **Why:** only library.db knows when it last synced; search/covers/lyrics
     can silently lag after a failed step and nothing can detect it.
@@ -659,13 +441,7 @@ work is); solved/partial tasks add **Now** with the current evidence.
     to match library/lyrics); publish `catalog_epoch` last in the sync
     pipeline; on a failed step publish no epoch and skip destructive purges;
     the UI can flag stale derived data.
-- [ ] **ARC-25 · Refuse destructive replace/purge on partial fetches** — P1 · (DB analysis)
-  - **Why:** a failed artist/album fetch is logged and skipped, then
-    `library::replace` wipes the tables and covers/lyrics purges evict the
-    missing ids — one HTTP hiccup deletes cached content.
-  - **Details:** fail the sync or carry failed ids forward before `replace`;
-    audit `getIndexes(ifModifiedSince)` partial-index semantics; run cover/
-    lyric purges only when the fetch was complete.
+
 - [ ] **ARC-26 · ATTACH-based purges/joins** — P2 · (DB analysis)
   - **Why:** `lyrics::purge_with` and `covers::refresh` materialize every id
     in Rust and cross-DB lookups are duplicated (`song_cover_ids`,
@@ -673,6 +449,7 @@ work is); solved/partial tasks add **Now** with the current evidence.
   - **Details:** dedicated maintenance connection that ATTACHes the DBs;
     anti-join purge (`NOT IN (SELECT id FROM lib.songs)`) and cross-DB
     resolution in SQL; keep the per-DB pools for normal I/O.
+
 - [ ] **ARC-27 · Snapshot credentials + cover URL map** — P2 · (DB analysis)
   - **Why:** `load_credentials` decrypts on every call and `covers::url_map`
     scans covers.db on seven request paths (list load, album open, play,
@@ -680,6 +457,7 @@ work is); solved/partial tasks add **Now** with the current evidence.
   - **Details:** rebuild an in-memory `{credentials, cover_urls}` snapshot
     when the catalog epoch changes; check `is_file()` before publishing file
     URLs; share the stream client instead of re-decrypting.
+
 - [ ] **ARC-28 · Disposable-DB repair policy** — P2 · (DB analysis)
   - **Why:** `db::init` failure panics even though four of five DBs are
     re-fetchable; `index.txt` is written non-atomically; `syncLibrary` has no
@@ -687,12 +465,14 @@ work is); solved/partial tasks add **Now** with the current evidence.
   - **Details:** recreate derived DBs on corruption, mark them dirty for
     resync, keep boot alive when only derived stores fail; tmp+rename the
     mirror; reject a second concurrent sync.
+
 - [ ] **ARC-29 · Content-addressed cover files** — P2 · (DBWIRING J1)
   - **Why:** blobs are named `md5(cover id)`, so byte-identical art under
     several ids is copied once per id even though the content hash is known.
   - **Details:** name files `hash.ext` (keep `hash_algo`), let several
     `covers` rows point at one file, keep purge = unreferenced files only;
     migrate existing files by relinking rows to their stored hash.
+
 - [ ] **ARC-30 · Hash-keyed color schemes** — P2 · (DBWIRING J1, THM-2)
   - **Why:** `cover_color` keys on `cover_art`, so two ids sharing one image
     store the same scheme twice; the scheme is a pure function of (bytes,
@@ -700,11 +480,13 @@ work is); solved/partial tasks add **Now** with the current evidence.
   - **Details:** `PRIMARY KEY(cover_hash, generator)`, dedupe/backfill the
     migration, purge via `cover_hash NOT IN (SELECT hash FROM covers)`,
     keep `cover_art` only as a pruning hint.
+
 - [ ] **ARC-31 · Projection-trimmed search** — P2 · (DBWIRING J2/J3)
   - **Why:** `search.db` copies title/artist/album/duration and every hit is
     hydrated field-by-field; the library already owns those columns.
   - **Details:** index-only FTS5 (`content=''`) returning `song_id` + `rank`;
     hydrate hits from the epoch snapshot; rebuild handles the migration.
+
 - [ ] **ARC-32 · Cross-DB verify/dedupe job** — P2 · (DBWIRING J3/J4)
   - **Why:** dangling ids (lyrics/colors/media for songs or covers that left)
     are only removed by the next purge, and duplicates accumulate silently.
@@ -712,42 +494,551 @@ work is); solved/partial tasks add **Now** with the current evidence.
     color hashes missing from covers, cover rows with missing files,
     unreferenced files, duplicate colors; report counts at sync end, full
     repair on demand (`:db verify`).
+
 - [ ] **ARC-33 · Provenance + `schema_generation` in every meta** — P2 · (DBWIRING J0, ARC-24)
   - **Why:** derived DBs do not record what they were built from (only colors
     store a hash), so staleness and layout drift are undetectable.
   - **Details:** `schema_generation` + `catalog_epoch` (+ `generator` where
     relevant) in library/search/covers/lyrics/colors meta; migrations seed
     them; verify/startup repair compare both values.
-- [ ] **ARC-34 · `.unwrap()` audit — 8 production sites; recover or surface, never abort** — P1 · (ARC-12, ARC-5)
-  - **Why:** a poisoned player `Mutex` or a failed runtime/DB init panics the
-    whole app; production unwraps hide failure context instead of collecting
-    it. The 82 test unwraps are fixtures and should stay.
-  - **Inventory (90 lines / 94 occurrences, `rg '\\.unwrap\\(\\)' src`):**
-    - production, 8: `player.rs:124,133,166,216,303,322` and the reader thread
-      `player.rs:465` (all `shared.lock().unwrap()`); `main.rs:37`
-      `Runtime::new().unwrap()`; `main.rs:45` is an `expect` on `db::init()`;
-    - tests, 82 lines: `colors.rs` 35, `lyrics.rs` 20, `api.rs` 8,
-      `http_client.rs` 8, `search.rs` 7, `crypto.rs` 4 (leave as-is, excluded
-      from the lint).
+
+- [ ] **CACHE-1 · DB4 `media.db` + `media/` blobs** — P2 · (roadmap Media cache)
+  - **Why:** audio is never stored; playback dies without network.
+  - **Details:** row per song (`kind`, `rule_id`, validators, `last_used`); tmp +
+    atomic rename; purge only after a successful sync (covers.rs pattern).
+
+- [ ] **CACHE-2 · Playback cache + prefetch next N** — P2
+  - **Why:** stutter-free playback; Symfonium-style rolling buffer.
+  - **Details:** player owns the queue → prefetch next tracks; purgeable freely.
+
+- [ ] **CACHE-3 · Rolling cache (LRU, max size)** — P2
+
+- [ ] **CACHE-4 · Permanent cache + "Move to permanent" pin** — P2
+
+- [ ] **CACHE-5 · Auto-download rules** — P2
+  - **Why:** Symfonium parity: favorites, playlists, genres, and artists flagged
+    "in download cache" auto-download existing + future content; rule removal
+    prunes unless pinned.
+
+- [ ] **CACHE-6 · Quality & network policy** — P2
+  - **Details:** transcode bitrate on download, prefer-server online/Wi-Fi,
+    Wi-Fi-only downloads, max simultaneous downloads.
+
+- [ ] **CACHE-7 · Cache status UI** — P2
+  - **Details:** per-item state (cached/partial/queued) + used-bytes vs cap in
+    the status bar; offline filter.
+
+
+- [ ] **AUTH-3 · Login error/status roles** — P2
+  - **Why:** login surface predates the MY3 roles (no container/error tokens,
+    clamped type); align with Theme.
+
+
+- [ ] **DOC-1 · Keep design docs in sync with the tree** — P2 · (A10)
+  - **Why:** CRITIQUE/roadmap/materialyou3 describe pre-implementation states.
+
+## Quick wins
+
+Small, bounded, high-value changes.
+
+- [ ] **VI-6 · `Ctrl-[` alias + pending-sequence cancel** — P1 · (N3 residual)
+  - **Why:** `Ctrl-[` is muscle memory for Esc; Esc should also clear a half-typed
+    sequence/count.
+  - **Details:** add `ctrl-[` token; feed Esc through `Keymap.reset()`.
+
+- [ ] **VI-10 · Repurpose `Ctrl-N`/`Ctrl-P` as track skips** — P1 · (N7, Q-9)
+  - **Why:** `Ctrl-N`/`Ctrl-P` only duplicated `j/k` scrolling; the better use
+    is the one vi media users expect — next / previous track while browsing.
+  - **Details:** `j/k` keeps the list cursor (and scrolling); `Ctrl-N`/`Ctrl-P`
+    skip tracks wherever a list owns focus; fullscreen keeps the same keys
+    (Q-9's transport rule) so the ergonomics match everywhere.
+  - **Now:** `AlbumEntry.qml` maps `scroll_down`/`scroll_up` to
+    `playerNext`/`playerPrevious` (with the skip bloom); `SongList` and the
+    search columns still treat them as scroll aliases.
+
+- [ ] **VI-16 · Key overload disambiguation (`Enter`, `q`)** — P2 · (N9)
+  - **Why:** `Enter` means play/open/confirm depending on context; `q` and Esc
+    both Back; document or split.
+
+- [ ] **VI-17 · Status bar focus behaviour** — P2 · (CRITIQUE ghost focus)
+  - **Why:** focusing a non-interactive pane used to make keys inert.
+  - **Details:** either strip region 2 from the focus ring or keep it and give it
+    real actions.
+  - **Now:** `Enter` triggers sync (RightBar.handleAction); region remains in the
+    ring.
+
+- [ ] **VI-18 · Space leaks through the modal search** — P2 · (MD32)
+  - **Why:** the overlay is documented as modal, but `play_pause` is dispatched
+    before Home sees the overlay (Main.qml:24-29).
+  - **Details:** route `play_pause` through Home/overlay first.
+
+- [ ] **VI-19 · `i` is dead outside search** — P3 · (MD33)
+  - **Why:** `InsertMode` is bound globally but only the overlay consumes it.
+  - **Details:** scope the binding or consume it (mode indicator). 
+
+- [ ] **VI-20 · keyTimer comment/mechanism drift** — P3 · (MD34)
+  - **Why:** the comment claims bare Space is deferred; it resolves immediately —
+    only `g g`/`shift-space …` are.
+  - **Details:** fix the comment or make deferral per-binding (ties to VI-9).
+
+- [ ] **Q-9 · Fullscreen queue & transport polish** — P2 · (fullscreen review)
+  - **Why:** queue rows wear debug-ish `Prev`/`Next` tags, the order cannot be
+    changed from the keyboard, and fullscreen transport uses bare `n`/`p`
+    while the rest of the app standardises on `Ctrl-N`/`Ctrl-P`.
   - **Details:**
-    - `player.rs`: one `fn shared(&self) -> MutexGuard<Shared>` helper (and a
-      local wrapper for the reader's `Arc<Mutex<_>>`) using
-      `unwrap_or_else(PoisonError::into_inner)` — `Shared` is a plain snapshot,
-      poisoning carries no invariant, so recover instead of aborting; closes
-      ARC-12 and guarantees a reader panic can't kill the UI tick.
-    - `main.rs`: initialize the runtime and DBs in `main` with `anyhow`
-      context and exit(1) after printing the error chain (`main() -> Result`
-      or explicit match); remove `Runtime::new().unwrap()` from `runtime()`
-      (the `OnceLock` is filled once in main).
-    - error collection: background paths use the existing report pattern
-      (`SyncReport`/`CoverReport`) or `errorRaised` toasts; no
-      `eprintln!`-only paths (ties ARC-5).
-    - enforcement: `#![cfg_attr(not(test), deny(clippy::unwrap_used,
-      clippy::expect_used))]` in `main.rs` plus a `cargo clippy` gate; a
-      justified site needs an inline `#[allow]` with a reason, so new raw
-      unwraps are deliberate.
-    - policy: tests keep their unwraps; prefer `expect("<what>")` when a
-      failure message would save debugging time.
+    - drop the `Prev`/`Next` row names and the expression that derives them
+      (`index < queueIndex ? "Prev" : "Next"`, NowPlaying.qml queue delegate);
+      keep only the active-row treatment;
+    - `Alt-j` / `Alt-k` move the selected track down/up in the queue;
+    - fullscreen transport keeps `Ctrl-N` / `Ctrl-P` for next/previous track
+      (not bare `n`/`p`) so the ergonomics stay consistent everywhere.
+
+- [ ] **Q-10 · Song activation enters Fullscreen Playback** — P2 · (roadmap D-4)
+  - **Why:** activating a song is the deliberate "listen now" verb; the user
+    should land in the listening surface (cover + lyrics + queue) instead of
+    back in the list they picked it from.
+  - **Details:** Enter (and the equivalent click) on a song — floating search
+    result or `AlbumEntry` song list — plays it and opens fullscreen; album and
+    artist activation keep their navigation semantics; queue `Enter` (jump) is
+    unchanged; the search overlay closes first, no wait on stream or palette.
+  - **Now:** not implemented — both paths only call `playSong`/`playAlbum`;
+    fullscreen still opens through `Shift+Enter`/`toggle_fullscreen` alone.
+
+
+- [ ] **P-7 · Fullscreen controls completeness** — P2 · (U6)
+  - **Why:** transport + seek landed, but volume/mute are absent in fullscreen.
+  - **Details:** reuse IconButton/state layers; keep play/pause centered.
+  - **Now:** global `m`/`-`/`+` volume keys work and are listed in the
+    fullscreen keybar; an on-screen slider/mute control is still absent.
+
+
+- [ ] **LYR-5 · Prefetch, miss TTL, local `.lrc` override** — P2 · (roadmap L4)
+  - **Why:** avoids per-open latency and request storms, and lets users supply
+    their own synced lyrics.
+  - **Details:** prefetch lyrics for the next N queue tracks (reuse
+    `FETCH_CONCURRENCY=8`); cache misses as `source='none'` with TTL (~7 days)
+    plus manual refresh; `~/.config/musika/lyrics/<song_id>.lrc` wins over the
+    DB and is never purged.
+  - **Now:** `.lrc`/`.txt` override and the 7-day miss TTL landed with LYR-3;
+    plain hits revalidate after 24 h (a `.lrc` added to Navidrome later is
+    picked up), legacy `getLyrics` LRC text is parsed, and line timing is
+    trusted over the server `synced` flag; sync now tops up missing/expired
+    lyrics (bounded, ARC-35); prefetch-next-N and manual refresh are still open.
+
+- [ ] **LYR-9 · Lyrics state polish** — P3 · (roadmap "Lyrics presentation" P2)
+  - **Why:** "No lyrics" flashes before the first response, track changes swap
+    text abruptly, and the tag leaks `subsonic · synced · xxx`.
+  - **Details:** loading state before first payload; crossfade the list on
+    track change (`quick`); suppress `xxx`/`und`; render `synced` as a small
+    MY3 chip in `label` type.
+
+- [ ] **S-4 · Align search order and default scope** — P2 · (MD10, roadmap mixed design)
+  - **Decision (roadmap):** columns and priority are Songs > Albums > Artists;
+    the cursor starts in the first non-empty scope and falls through in that
+    order; counts move into the scope chips (S-6).
+  - **Now:** the implementation is still Artists|Albums|Songs with
+    artist-first priority (`SearchOverlay.qml:208,369-418`).
+
+- [ ] **S-5 · Hover steals the search cursor** — P3 · (MD15)
+  - **Why:** passing the mouse over a column re-targets `activeColumn`; only
+    click should change it.
+
+- [ ] **UI-1 · Region frame colours** — P2 · (MD1)
+  - **Why:** PLAYER uses `Theme.error` (red) and four accents read as identity,
+    not state; unify or only show in visual mode (Home.qml).
+
+- [ ] **UI-2 · Remove always-on search hint strip** — P2 · (MD2)
+  - **Why:** it owns a full row forever and is noise after the first day.
+
+- [ ] **UI-4 · Counts live in three places** — P2 · (MD4)
+  - **Why:** sidebar stats + per-list "N indexed" + content counts duplicate.
+
+- [ ] **UI-6 · Placeholder segments look active** — P3 · (MD6)
+  - **Why:** Playlists/Radio look selectable but only open an empty state.
+
+- [ ] **UI-7 · Rotated "LIBRARY" visual-mode label** — P3 · (MD7/U5)
+  - **Why:** rotated text is unreadable at a glance.
+
+- [ ] **UI-10 · Hover parity + initial cursor** — P2 · (MD18)
+  - **Why:** AlbumList tints the cover on hover, others do nothing; no row is
+    highlighted until the first key.
+
+- [ ] **UI-12 · Metadata line position consistency** — P3 · (MD20)
+  - **Why:** "N tracks" is right-aligned; "N albums" sits under the name.
+
+- [ ] **UI-14 · Expandable album notes** — P2 · (MD22)
+  - **Why:** notes clamp to 3 lines with no way to read the rest.
+
+- [ ] **UI-15 · Album "‹ Back" chrome** — P3 · (MD23)
+  - **Why:** duplicates `q`/Esc; keep only if the toolbar gains more.
+
+- [ ] **UI-16 · "COVER" fallback text** — P3 · (MD24)
+  - **Why:** placeholder word in the art slot; use a glyph/blank surface.
+
+- [ ] **UI-17 · Inert controls (shuffle only now)** — P2 · (MD25)
+  - **Why:** a control that does nothing breaks trust.
+  - **Details:** wire (Q-3) or remove the shuffle button; volume and stop are
+    done.
+  - **Now:** volume (Q-4) and stop (`■` → `playerStop`) are wired; shuffle
+    (`random-svgrepo-com.svg`) still has no `onClicked`.
+
+- [ ] **UI-18 · Icon language consistency** — P2 · (MD26/MD35)
+  - **Why:** emoji speaker breaks the monochrome look; glyphs vary in weight.
+
+- [ ] **UI-23 · Toast retry covers playback errors too** — P2 · (MD38)
+  - **Why:** the Retry button only renders for `kind === "sync"`.
+
+- [ ] **UI-26 · Centralize `formatTime`** — P3 · (MD30)
+  - **Why:** duplicated in six files (InferiorBar, NowPlaying, SongList,
+    AlbumEntry, PlaybackNode, SearchOverlay).
+
+- [ ] **UI-27 · Separators / font ratios** — P3 · (MD36/MD37)
+  - **Why:** "  ·  ", "   " and "·" coexist; title fractions 0.24/0.26/0.26.
+
+- [ ] **UI-28 · Album page hero cover header** — P2 · (roadmap "Album page cover" D-3)
+  - **Why:** the centered `0.32 × height` cover reads small on wide panes
+    (≈ 16% of pane width) and leaves the description stacked under wide dead
+    margins (`AlbumEntry.qml:156-188`).
+  - **Details:** header row (square cover left, description right);
+    `headerH = min(mainH*0.44, 512 + 2m)`, `cover = clamp(mainH*0.42, 160,
+    512)`; no upscaling past the 512 px cache; the same grid drops to one
+    column below ~900 px (cover centered over the description); songs keep
+    ≥ 40% height; MY3 radius/hairline/hierarchy per D-3.
+  - **Now:** `AlbumEntry.qml` header is a `GridLayout` — cover
+    `clamp(0.42h, 160, 512)` left of the description (one column under
+    900 px), fixed `headerHeight` when side by side; build + qmllint clean.
+    Visual acceptance at 1366/1920/2560 still pending.
+
+- [ ] **UI-29 · Album page ambience backdrop** — P2 · (roadmap "Album page cover" D-5)
+  - **Why:** the album page reads flat next to its own art; a blurred copy
+    ties the hero to the theme without inventing a new color.
+  - **Details:** full-pane blurred `albumCover` copy (`MultiEffect` blur
+    1.0/64, saturation 0.6) behind the header, `Palette.surface` gradient
+    α 0.82 → 0.30 → 1.0, `standard` fade-in, hidden without art; the one
+    sanctioned non-modal blur (R2 amended).
+  - **Now:** landed in `AlbumEntry.qml`; visual acceptance (bright/dark
+    covers, songs-boundary seam) pending.
+
+- [ ] **UI-30 · Manual sync shows `Syncing…`, not `Up to date`** — P2 · (sync-state review)
+  - **Why:** `RightBar.qml:90` renders `librarySyncing ? "Syncing…" :
+    "Up to date"`, but the button/tap path (`RightBar.qml:45,139` →
+    `Backend.syncLibrary`) never sets `library_syncing` — only the
+    auto/login path (`qml.rs:1074`, invoking `librarySyncStarted`) does. A
+    manual sync therefore reads "Up to date" for its whole duration, with the
+    progress track parked at 0.
+  - **Details:** enter the syncing state at the start of the manual
+    `syncLibrary` slot (`qml.rs:434`), reusing `library_sync_started` (set
+    `library_syncing`/`sync_progress`/`sync_message` before spawning);
+    `librarySyncFinished` already clears it, including the failure path. Add
+    the re-entrancy guard there too (a second click while syncing is ignored
+    — ties ARC-28). Acceptance: the status flips to `Syncing…` within one
+    frame of the click and returns to `Up to date`/the result message on
+    completion or error.
+
+- [x] **UI-34 · Overlay close fades actually play** — P1 · (POLISHAUDIT §1.1)
+  - **Why:** `SearchOverlay.qml:40` and `QueueDrawer.qml:31` use
+    `visible: opened`, so the opacity Behaviors are cut off the moment the
+    overlay closes — the advertised fade-out never renders.
+  - **Details:** follow the Toast/NowPlaying pattern
+    (`visible: opened || panel.opacity > 0`) and gate the backdrop handlers
+    with `enabled: root.opened`.
+  - **Now:** both overlays stay rendered until the panel fade finishes; the
+    search backdrop only dismisses while `opened`.
+
+- [ ] **ARC-6 · Docs drift** — P2 · (A10)
+  - **Why:** roadmap still says "Space+F", "right bar", stale durations.
+
+- [ ] **ARC-9 · Cache `SecretKey`, honor `XDG_CONFIG_HOME`** — P1 · (O7)
+  - **Why:** re-reads the key file per call; path bypasses `config_dir`.
+
+- [ ] **ARC-10 · `sync_player` signal thrift** — P1 · (O8)
+  - **Why:** ~13 signals + string clones every 500 ms tick.
+
+- [ ] **ARC-13 · Dead code cleanup** — P2 · (O11, MD31)
+  - **Why:** `PlaybackNode.qml` is uninstantiated, `covers::cached_path` unused
+    until the media cache lands, `index.txt` mirror intentional?
+
+- [ ] **ARC-14 · Deduplicate constants** — P2 · (O12)
+  - **Why:** volume 70.0, `COVER_SIZE`, `FETCH_CONCURRENCY` exist twice.
+
+- [ ] **ARC-15 · Stop masking errors as auth failures** — P2 · (O13)
+  - **Why:** every envelope error becomes "Wrong username or password".
+
+- [ ] **ARC-16 · mpv supervisor hardening** — P2 · (O16)
+  - **Why:** `sh -c` string building for MPRIS/kill; avoid spawning shells.
+
+- [ ] **ARC-18 · Remove empty no-op migrations** — P3 · (O18)
+
+- [ ] **AUTH-2 · Loading screen polish** — P3
+  - **Why:** countdown prints raw ms ("timeout 4800ms"), progress steps every
+    100 ms without easing; no cancel.
+  - **Details:** seconds or spinner, `linear` smoothing, Esc/click to login.
+
+## Solved (reference)
+
+Kept for rationale; the tree already carries these.
+
+- [x] **VI-1 · Mode indicator in the status bar** — P1 · (N4 partly, MY3 QW10)
+  - **Why:** Vi users must always know the mode; silent mode changes break trust.
+  - **Details:** colored `NORMAL`/`INSERT`/`VISUAL`/`COMMAND` chip in the bar.
+  - **Now:** `NORMAL` chip replaced the "LIBRARY" title (RightBar.qml); the
+    search overlay shows an `INSERT`/`NORMAL` chip too.
+
+- [x] **VI-5 · Single `Esc` dismisses overlays** — P1 · (N3, CRITIQUE Ph1.3)
+  - **Why:** Esc is the invariant cancel key; unbound Esc feels broken.
+  - **Details:** close fullscreen → pop album page → close search, in order.
+  - **Now:** `escape` maps to `Action::Back` (keybind.rs); Home closes fullscreen
+    first (Home.qml); search overlay Esc steps typing → normal → close.
+
+- [x] **VI-21 · Global yank/paste (`y`/`P`) to the system clipboard** — P1 · **high priority** · (CRITIQUE Ph2 operators)
+  - **Why:** copying a track out of the app and pasting a track reference back
+    in are the two most basic Neovim-style verbs; today the system clipboard is
+    unreachable from the keyboard.
+  - **Details:** global (any region) `y` yanks the playing track as
+    `Artist - Title` to the system clipboard; `P`/`Ctrl-V` paste the clipboard
+    into the floating search field (`SearchOverlay.openWith`), so the text is
+    visible and correctable before Enter plays the selection — raw clipboard
+    text is never rejected in the background.
+    `p` stays track-previous for now — the transport rebind and the full
+    operator grammar (`yy`, `p`/`P` queue append/play-next) land with VI-8;
+    yanking a cursor row / visual selection follows VI-4.
+  - **Now:** v1 landed — `keybind.rs` `yank`/`paste` actions (`y`, `shift-p`,
+    and system `ctrl-v` so clipboard managers like Noctalia can paste);
+    `Main.qml` hidden `TextEdit` clipboard bridge + global dispatch (focused
+    text fields still consume Ctrl-V themselves); `Home.pasteSearch` opens
+    the search overlay with the text in the field via
+    `SearchOverlay.openWith`; unit tests for the binding.
+
+
+- [x] **Q-1 · Queue view (drawer) with reorder/remove** — P2 · (M1, CRITIQUE Ph2.1)
+  - **Why:** the queue is the primary working document; today it is invisible.
+  - **Details:** collapsible pane (`Ctrl-W q`/`:queue`), `j/k` navigation,
+    `K/J` reorder, `dd` remove, canonical cursor token, `quick` collapse.
+  - **Now (working tree):** `QueueDrawer.qml` (right drawer, toggled by `Ctrl-Q`
+    / IPC `queue_toggle`); `j/k` + `Ctrl-N/P` move, `Enter` jumps, `Shift-J/K`
+    reorder, `dd` removes; `player.rs` exposes queue/jump/remove/move_item and
+    `emit_queue` publishes over the `queue` dataReady channel. (`Ctrl-W q`/`:queue`
+    not used yet; `quick` easing pending.)
+
+- [x] **Q-2 · Playback context builds a real queue** — P0 · (M2)
+  - **Now:** `playAlbum`/`playSong` load album/list context instead of a single
+    track (qml.rs playerLoad/playAlbum).
+
+- [x] **Q-4 · Volume + mute in UI and keys** — P2 · (M4, CRITIQUE Ph3.1)
+  - **Why:** mpv has volume, the backend keeps it, but the bar is a static bar.
+  - **Details:** draggable slider + percentage, `m` mute, `+/-`/`]v [v` steps,
+    focus state layers; expose slot in `qml.rs`.
+  - **Now:** `Backend.volume`/`Backend.muted` properties + `playerSetVolume`/
+    `playerAdjustVolume`/`playerToggleMute` slots; `player.rs` gained
+    `muted`/`set_muted`/`toggle_mute` (mpv `mute` property); keys `m` mute,
+    `-`/`+` (and `=`/shift-=`, keypad) step 5%; `InferiorBar` speaker icon by
+    tier (mute/zero/low ≤33/high, white SVGs) + clickable/draggable bar and
+    click-to-mute; stepping up unmutes. Icons sit in fixed invisible frames
+    (`IconButton` layers) and the volume SVGs are translated to a shared
+    speaker baseline, so tiers swap without moving. `]v`/`[v` left to VI-8.
+
+- [x] **Q-7 · MPRIS/D-Bus metadata** — P2 · (M7)
+  - **Now:** mpv MPRIS script + metadata via IPC (`mpris:artUrl`).
+
+- [x] **LYR-1 · API: `getLyricsBySongId` + OpenSubsonic probe** — P2 · (roadmap L0)
+  - **Why:** only the OpenSubsonic `songLyrics` endpoint returns per-song and
+    synced lyrics; legacy `getLyrics` (artist/title, plain) is a fuzzy fallback.
+  - **Details:** types for `lyricsList.structuredLyrics` (`lang`, `offset`,
+    `synced`, `line[{start, value}]`); call `getOpenSubsonicExtensions`, cache the
+    capability (`songLyrics` v1; ignore `enhanced` v2 for now).
+  - **Now:** `api.rs` has `StructuredLyrics`/`LyricLine`/`LyricsList`/
+    `OpenSubsonicExtension`, `get_lyrics_by_song_id`, `get_open_subsonic_extensions`.
+
+- [x] **LYR-2 · DB5 cache (`lyrics.db`) + purge-on-sync** — P2 · (roadmap L1)
+  - **Why:** multiDB style: re-fetchable content gets its own pool, keeps
+    library.db lean and the purge domain independent, exactly like covers.
+  - **Details:** `migrations_lyrics`, new pool in `Dbs`, schema
+    `lyrics(song_id, source, synced, lang, offset_ms, text, fetched_at)` +
+    `lyric_line(song_id, idx, start_ms, value)`; delete rows whose song id is
+    missing from library.db after a successful sync; no blob directory.
+  - **Now:** `migrations_lyrics/20261013000001_lyrics.sql` (`lyrics`,
+    `lyric_line` FK-cascade, `lyrics_meta`); `Dbs.lyrics` + `lyrics_path()`;
+    `lyrics.rs::purge_with` called from `index.rs` after a successful sync.
+
+- [x] **LYR-3 · `requestLyrics` + plain rendering in NowPlaying** — P2 · (roadmap L2)
+  - **Why:** the redesigned fullscreen pane still shows the hardcoded
+    `lyricLines` placeholder (`TODO(M6)` in NowPlaying.qml).
+  - **Details:** `Backend.requestLyrics(songId)` -> tokio ->
+    `dataReady("lyrics")` JSON; render plain text; "No lyrics" empty state;
+    fallback chain override -> bySongId -> legacy `getLyrics`.
+  - **Now:** `Backend.currentSongId` + `requestLyrics()`; `lyrics.rs::fetch`
+    (override → cache → FTS5-era server chain); NowPlaying renders lines or a
+    centered "No lyrics"; source/lang tag in the header.
+
+- [x] **LYR-4 · Synced rendering: highlight + auto-scroll + offset** — P2 · (roadmap L3)
+  - **Why:** synced lyrics are the point of the feature; the pane currently
+    fakes the active line (`currentLyric` stub).
+  - **Details:** compare `Backend.position` (minus OpenSubsonic `offset`) against
+    `start`; active line `primary`/bold (`micro`), scroll-to-center (`quick`);
+    no animation for unsynced text.
+  - **Now:** `activeLyric` binding applies `offset_ms`; `> … <` marker plus
+    `micro` color; `positionViewAtIndex(…, Center)` on line change; plain
+    lyrics stay static.
+
+- [x] **LYR-7 · Lyrics stage states (kill the `> <` code-art)** — P2 · (roadmap "Lyrics presentation" P0)
+  - **Why:** the active line is ASCII-marked at one uniform font size, so the
+    pane reads like a text dump (NowPlaying.qml:456-473).
+  - **Details:** active/near/far model: active `body` scaled ×1.12, full
+    contrast; near ±1 opacity 0.8; far ±2+ opacity 0.5 and smaller; non-synced
+    = uniform 0.8 column, no focus line; fixed-height delegates so state
+    changes never reflow.
+  - **Centred style:** lyrics are a centred column — `Text.AlignHCenter` and
+    scale from the text centre (no left-anchored "Left → Right" growth); the
+    optional left hairline is dropped in favour of scale + contrast.
+  - **Pane-sized type:** the font is computed from the lyrics rectangle
+    (`pane.height * 0.055`, clamped 10–18) with proportional left/right padding,
+    so lines never collide with the pane walls at any window size.
+  - **Now:** `NowPlaying.qml:463-502` — no `> <` marker; active/near/far
+    opacity + scale about the text centre; uniform dim column when unsynced;
+    pane-sized `lyricSize`/`lyricPad`.
+
+- [x] **S-1 · Floating search (three columns, keyboard, states)** — P1 · (roadmap design)
+  - **Now:** `SearchOverlay.qml` + `SearchColumn.qml`: Artists|Albums|Songs,
+    debounce, skeleton, no-matches, Enter open/play, Esc modes, hover.
+
+- [x] **S-2 · Search appearance pass** — P2 · (MD13/MD14/MD9/MD12)
+  - **Now:** two-line title/subtitle cells, mode chip, mode-aware footer,
+    "N albums" wording, clamped type, `quick` easing.
+
+- [x] **S-3 · Query `search.db` (FTS5), retire `fd`/tmpfs** — P0 · (O1, CRITIQUE §3.4)
+  - **Now:** palette and overlay query FTS5 through `Backend.requestSearch`.
+
+- [x] **UI-3 · De-duplicate sync state** — P2 · (MD3)
+  - **Now:** the button no longer relabels to "Syncing…" and uses the disabled
+    content token; residual: the progress track is always visible when idle.
+
+- [x] **UI-5 · Two stacked titles removed** — P2 · (MD5)
+  - **Now:** "LIBRARY" title replaced by the mode chip.
+
+- [x] **UI-11 · `FadeText` opt-out** — P2 · (MD19)
+  - **Now:** `animated: false` on list/search/album/toast delegates.
+
+- [x] **UI-24 · Fullscreen 50/50 split + px sweep** — P2 · (MD27/MD29)
+  - **Now:** cover/lyrics 50/50; NowPlaying px → fractions/theme radius.
+
+- [x] **UI-25 · MY3 motion & state system** — P1 · (MY3 steps 1–4, 8; QW1–8, 10–12)
+  - **Now:** motion tiers/easings, shape/state/z tokens, scrim, container roles,
+    `EnterView`/`ExitView`, niri-like backdrop blur on modal surfaces,
+    IconButton state layers, toast
+    quick-in/lazy-out, mode chip, linear progress, search weights documented.
+
+- [x] **UI-31 · Play/pause loses its filled background (icon-only, all contexts)** — P2 · (icon-language review)
+  - **Why:** play/pause is the only `IconButton` drawn with the `accent`
+    container (`IconButton.qml:21,36,51`; used at `InferiorBar.qml:155` and
+    `NowPlaying.qml:388`). The filled square competes with the transport's
+    focus ring, breaks the monochrome glyph language (UI-18) and reads as a
+    FAB rather than a transport control (R1/R3: hierarchy is tonal, not extra
+    chrome).
+  - **Details:** drop `accent: true` at both call sites; once no caller uses
+    it, remove the `accent` property and its `onPrimaryContainer`/`onPrimary`
+    and `stateFocus`-on-hover branches so the glyph uses the standard state
+    layers (R6), keeping the focus hairline. Sizes, centring and
+    `symbolRatio` stay. Decision: play/pause is always white
+    (`Theme.iconStrong`), the one glyph that never follows the seeded palette
+    or the theme roles.
+  - **Now:** `IconButton` has no `accent` (transparent root, standard state
+    layers + hairline) and draws either a text glyph or an SVG (`iconSource`,
+    rendered with `VectorImage` so no QtSvg plugin is needed);
+    `InferiorBar`/`NowPlaying` use the white transport SVGs from `src/icons/`
+    (play/pause/next plus a mirrored copy of the skip icon for previous,
+    embedded via a second `include_bytes_qml!` under `qrc:/app/icons/`;
+    shuffle/stop stay glyphs for now), swapping with a `quick` (120 ms)
+    crossfade. Icons render through `VectorImage.CurveRenderer` (built-in
+    AA; the default GeometryRenderer aliases at icon sizes). Build + qmllint
+    clean; visual check pending.
+
+- [x] **UI-33 · Skip bloom feedback** — P2 · (transport polish)
+  - **Why:** keyboard and mouse skips were easy to miss while browsing; the
+    transport button should acknowledge the change.
+  - **Details:** a small blurred bloom in the generated primary
+    (`Palette.primary`), expanding 0.8→1.7 while fading 0.5→0
+    (`standard`/`decelerate`); play/pause untouched.
+  - **Now:** `IconButton.bloom()` + `Backend.trackSkipped(forward)` (emitted
+    from `playerNext`/`playerPrevious`); `InferiorBar` and `NowPlaying` bloom
+    the matching direction for keys, clicks and IPC alike.
+
+- [x] **THM-1 · Engine spike: `material-colors` crate, cover → dark scheme** — P2 · (roadmap T0)
+  - **Why:** matugen itself is GPL-2.0, but its engine (`material-colors`) is
+    MIT/Apache-2.0; embedding it avoids a runtime CLI and keeps the licence
+    clean.
+  - **Details:** add `material-colors` (+ decode); replicate matugen's pipeline
+    (resize 112, QuantizerCelebi @128, CAM16 chroma >= 5, `Score`, TonalSpot,
+    dark scheme); fixture-image unit test asserts roles; no DB/QML yet.
+  - **Now:** `colors.rs` embeds `material-colors 0.5` (`quantize`) + `image`
+    (png/jpeg/webp/gif); `generate_from_path`/`from_seed` + 35-role map and
+    JSON payload; 5 tests (role map, deterministic cover, grayscale fallback,
+    transparent rejection, seed serialization).
+
+- [x] **THM-2 · DB6 `colors.db` + hash invalidation + purge-on-sync** — P2 · (roadmap T1)
+  - **Why:** generation is CPU work; the cache needs its own pool and must
+    re-run when the cover bytes change.
+  - **Details:** `migrations_colors` (`cover_color(cover_art PK, cover_hash,
+    scheme, seed, dark JSON, generator, generated_at)` + `colors_meta`);
+    `Dbs.colors` + `colors_path()`; read compares `covers.hash`; post-sync pass
+    purges rows whose cover id vanished from covers.db.
+  - **Now:** migrations_colors + `Dbs.colors`/`MUSIKA_COLORS_FILE`;
+    `colors::fetch` (covers `cached_path` + `covers::hash` → cache hit or
+    `spawn_blocking` generation), `fetch_into` test seam; purge hooked into
+    `index.rs` after the cover pass; 3 cache tests (hit after source removal,
+    hash-change regeneration, purge).
+
+- [x] **THM-3 · `requestColors` play-scoped generation + `dataReady("colors")`** — P2 · (roadmap T2)
+  - **Why:** only the playing cover should cost decode+quantize; a library-wide
+    sweep is request amplification and must never happen.
+  - **Details:** `Backend.requestColors()` mirrors `requestLyrics`; triggered on
+    `currentCoverArt` change while playing (coalesced; one in-flight job per
+    cover; stale-guard on cover art); payload
+    `{cover_art, cover_hash, scheme, dark}`; static fallback on failure.
+  - **Now:** `requestColors`/`colorsReady`/`refreshColors` in `qml.rs`; the
+    cover_art/cover_url signals now fire only on change; payload carries
+    `cover_art`, `cover_hash`, `scheme`, `seed`, `dark`; `dark: null` resets
+    the palette (no art / failure); `Main.qml` receives `colors`, re-checks
+    `cover_art === Backend.currentCoverArt` and applies.
+
+- [x] **THM-4 · `Palette` singleton + QML role sweep + colour motion** — P2 · (roadmap T3)
+  - **Why:** `Theme.js` is a static pragma-library, so dynamic roles need a
+    notifying singleton; a cover swap should recolor, not repaint.
+  - **Details:** `Palette.qml` (pragma Singleton) defaults from Theme.js,
+    `apply(payload)` from the `colors` channel; migrate `Theme.<role>` to
+    `Palette.<role>`; `micro`/`standard` colour behaviour; error/region/mode
+    roles stay semantic, state layers stay fixed overlays.
+  - **Now:** `palette.rs` is a Rust-backed qtbridge singleton (same mechanism
+    as `Backend`) with 32 notifying roles, `apply`/`reset`, and MY3 defaults;
+    227 `Theme.<role>` references swept to `Palette.<role>` across 19 QML
+    files (adds `import musika` where missing, unifies the search scrim);
+    shape/motion/type/z/state layers remain in Theme.js.
+
+- [x] **THM-5 · Smart variant + contrast/lightness + manual refresh** — P3 · (roadmap T4)
+  - **Why:** grayscale covers should not get a loud accent; power users want
+    contrast control and a way to force regeneration.
+  - **Details:** port `smart_scheme` colorfulness mapping (>70 vibrant, 20-70
+    tonal spot, 6-20 neutral, <6 monochrome); settings for scheme/contrast;
+    `:theme refresh` (or IPC) deletes the current row and re-requests.
+  - **Now:** Hasler-Süsstrunk colorfulness picks the smart variant; knobs via
+    `MUSIKA_COLOR_VARIANT` / `MUSIKA_COLOR_CONTRAST` (reflected in the cache
+    generator tag, so a knob change invalidates); `colors::invalidate` +
+    IPC `colors_refresh` (handled in Main.qml; `:theme refresh` waits on the
+    command line, VI-13).
+
+- [x] **ARC-19 · Async off the UI thread** — P0 · (A1)
+  - **Now:** lists/covers load via Tokio + `dataReady`, no `block_on`.
+
+- [x] **ARC-20 · Cover cache scoped to album/artist art** — P0 · (A2)
+
+- [x] **ARC-21 · mpv cleanup on abnormal exit** — P0 · (A7)
+  - **Now:** supervisor shell watches the parent PID.
+
+- [x] **ARC-22 · Auth token not exposed in process argv/mirror** — P2 · (A9)
+  - **Now:** mpv receives the stream URL over the IPC socket, not argv.
+
+- [x] **ARC-23 · Palette race + corpus churn** — P2 · (O14/O15)
+  - **Now:** FTS5 path replaced the tmpfs corpus entirely.
+
 - [x] **ARC-35 · Sync button runs the complete fetch pass (index, covers, lyrics)** — P1 · **high priority**
   - **Why:** the Sync button is the user's "make everything current" verb, but
     lyrics were only ever fetched on demand, so a fully synced library could
@@ -767,49 +1058,16 @@ work is); solved/partial tasks add **Now** with the current evidence.
     startup sync fetched **53 lyrics**. Open: ARC-8 pipeline merge, ARC-3
     cancellation/timeouts, per-item progress for the backfill.
 
-## 9. Media cache / offline (`CACHE`) — roadmap design
-
-- [ ] **CACHE-1 · DB4 `media.db` + `media/` blobs** — P2 · (roadmap Media cache)
-  - **Why:** audio is never stored; playback dies without network.
-  - **Details:** row per song (`kind`, `rule_id`, validators, `last_used`); tmp +
-    atomic rename; purge only after a successful sync (covers.rs pattern).
-- [ ] **CACHE-2 · Playback cache + prefetch next N** — P2
-  - **Why:** stutter-free playback; Symfonium-style rolling buffer.
-  - **Details:** player owns the queue → prefetch next tracks; purgeable freely.
-- [ ] **CACHE-3 · Rolling cache (LRU, max size)** — P2
-- [ ] **CACHE-4 · Permanent cache + "Move to permanent" pin** — P2
-- [ ] **CACHE-5 · Auto-download rules** — P2
-  - **Why:** Symfonium parity: favorites, playlists, genres, and artists flagged
-    "in download cache" auto-download existing + future content; rule removal
-    prunes unless pinned.
-- [ ] **CACHE-6 · Quality & network policy** — P2
-  - **Details:** transcode bitrate on download, prefer-server online/Wi-Fi,
-    Wi-Fi-only downloads, max simultaneous downloads.
-- [ ] **CACHE-7 · Cache status UI** — P2
-  - **Details:** per-item state (cached/partial/queued) + used-bytes vs cap in
-    the status bar; offline filter.
-
-## 10. Auth / startup (`AUTH`) — current WIP
 
 - [x] **AUTH-1 · Startup loading screen for cached login** — P2
   - **Now (working tree):** `loginPending`/`loginRequired` signals; 5 s ping
     timeout; `LoadingScreen.qml` countdown + progress.
-- [ ] **AUTH-2 · Loading screen polish** — P3
-  - **Why:** countdown prints raw ms ("timeout 4800ms"), progress steps every
-    100 ms without easing; no cancel.
-  - **Details:** seconds or spinner, `linear` smoothing, Esc/click to login.
-- [ ] **AUTH-3 · Login error/status roles** — P2
-  - **Why:** login surface predates the MY3 roles (no container/error tokens,
-    clamped type); align with Theme.
 
-## 11. Docs & process (`DOC`)
-
-- [ ] **DOC-1 · Keep design docs in sync with the tree** — P2 · (A10)
-  - **Why:** CRITIQUE/roadmap/materialyou3 describe pre-implementation states.
 - [x] **DOC-2 · Retire merged lists** — P3
   - **Why:** `TASKS.md` and `MICRODESIGNS.md` duplicated this file.
   - **Now:** both deleted; `CRITIQUE.md`, `roadmap.md` and `materialyou3idea.md`
     are kept as rationale/design docs.
+
 - [x] **DOC-3 · GPLv2 licensing** — P2
   - **Why:** the project shipped without a license; contributions and
     redistribution needed explicit terms.
@@ -821,35 +1079,29 @@ work is); solved/partial tasks add **Now** with the current evidence.
 
 ---
 
-## Snapshot
+
+## Coverage
+
+| Bucket | Open | Solved |
+|--------|------|--------|
+| Must have | 9 | — |
+| Should have | 62 | — |
+| Quick wins | 42 | — |
+| Solved (reference) | — | 36 |
+| **Total** | **113** | **36** |
+
+### Coverage by area
 
 | Area | Open | Solved |
 |------|------|--------|
 | Vi modal engine | 18 | 3 |
-| Queue & grammar | 6 | 4 |
-| Player features | 6 | 0 |
+| Queue & playback grammar | 6 | 4 |
+| Player & media features | 6 | 0 |
 | Lyrics pipeline | 5 | 5 |
 | Search | 4 | 3 |
-| UI microdesigns | 26 | 7 |
+| UI microdesigns | 34 | 7 |
 | Dynamic color | 1 | 5 |
-| Architecture | 29 | 6 |
-| Media cache | 7 | 0 |
-| Auth/startup | 2 | 1 |
-| Docs | 1 | 2 |
-
-### Next up (ranked)
-
-Order = trust/correctness > unblocking > user value > effort; full tiered
-backlog in `REMAINING.md` (local note).
-
-1. **ARC-25** — partial-fetch guard before the destructive purge (data loss).
-2. **ARC-5** — errors to toasts instead of `eprintln!`.
-3. **UI-17 + Q-3** — shuffle is the last inert control; wire it + repeat.
-4. **UI-22** — empty/error states (P0, half-landed).
-5. **VI-2** — mode machine; unblocks VI-3/4/7/12/13/14/15.
-6. **S-4 + Q-10** — search scope order/priority (Songs first) and song
-   activation opening fullscreen.
-7. **LYR-8** — smooth centre-follow + edge fades.
-8. **ARC-24 + ARC-33** — `catalog_epoch` + `schema_generation` in every meta.
-9. **ARC-29 + ARC-30** — content-addressed covers + hash-keyed colors.
-10. **VI-4** — visual selection (rows + count badge).
+| Architecture & robustness | 29 | 6 |
+| Media cache / offline | 7 | 0 |
+| Auth / startup | 2 | 1 |
+| Docs & process | 1 | 2 |

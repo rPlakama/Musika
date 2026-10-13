@@ -158,7 +158,7 @@ Rectangle {
                     spin.stop();
                     spin.from = syncButton.rotation;
                     spin.to = spin.from + 360;
-                    spin.duration = Backend.librarySyncing ? 1000 : 3000;
+                    spin.duration = Backend.librarySyncing ? Theme.motion.spin : Theme.motion.spinSlow;
                     spin.start();
                 } else {
                     spin.stop();

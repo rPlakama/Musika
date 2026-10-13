@@ -85,6 +85,14 @@ Rectangle {
         }
     }
 
+    FadeText {
+        anchors.centerIn: parent
+        visible: songs.count === 0
+        text: "Nothing indexed yet — run a sync"
+        color: Palette.onSurfaceVariant
+        font.pixelSize: Theme.fontSize("body", root.height)
+    }
+
     ColumnLayout {
         anchors.fill: parent
         spacing: 0
@@ -140,9 +148,9 @@ Rectangle {
 
                 Behavior on color {
                     ColorAnimation {
-                        duration: Theme.duration
+                        duration: Theme.motion.quick
                         easing.type: Easing.Bezier
-                        easing.bezierCurve: Theme.easeOut
+                        easing.bezierCurve: Theme.ease.standard
                     }
                 }
 
@@ -157,13 +165,9 @@ Rectangle {
                     color: Palette.surfaceContainerHigh
                     clip: true
 
-                    Image {
+                    CoverImage {
                         anchors.fill: parent
                         source: row.cover
-                        fillMode: Image.PreserveAspectCrop
-                        asynchronous: true
-                        cache: false
-                        visible: status === Image.Ready
                     }
                 }
 
@@ -195,6 +199,10 @@ Rectangle {
                     color: Palette.onSurfaceVariant
                     font.pixelSize: row.height * 0.2
                     animated: false
+                }
+
+                HoverHandler {
+                    cursorShape: Qt.PointingHandCursor
                 }
 
                 TapHandler {

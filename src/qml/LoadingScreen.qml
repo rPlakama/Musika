@@ -63,6 +63,10 @@ Item {
                 width: parent.width * (1 - root.remaining / root.timeoutMs)
                 height: parent.height
                 color: Palette.primary
+
+                Behavior on width {
+                    NumberAnimation { duration: Theme.motion.quick; easing.type: Easing.Linear }
+                }
             }
         }
     }

@@ -206,9 +206,9 @@ Rectangle {
 
                 Behavior on color {
                     ColorAnimation {
-                        duration: Theme.duration
+                        duration: Theme.motion.quick
                         easing.type: Easing.Bezier
-                        easing.bezierCurve: Theme.easeOut
+                        easing.bezierCurve: Theme.ease.standard
                     }
                 }
 
@@ -222,6 +222,7 @@ Rectangle {
 
                 HoverHandler {
                     id: backHover
+                    cursorShape: Qt.PointingHandCursor
                 }
                 TapHandler {
                     onTapped: root.back()
@@ -255,14 +256,10 @@ Rectangle {
                 color: Palette.primaryContainer
                 clip: true
 
-                Image {
+                CoverImage {
                     id: coverImage
                     anchors.fill: parent
                     source: root.albumCover
-                    fillMode: Image.PreserveAspectCrop
-                    asynchronous: true
-                    cache: false
-                    visible: status === Image.Ready
                 }
 
                 FadeText {
@@ -356,9 +353,9 @@ Rectangle {
 
                 Behavior on color {
                     ColorAnimation {
-                        duration: Theme.duration
+                        duration: Theme.motion.quick
                         easing.type: Easing.Bezier
-                        easing.bezierCurve: Theme.easeOut
+                        easing.bezierCurve: Theme.ease.standard
                     }
                 }
 
@@ -393,6 +390,10 @@ Rectangle {
                     color: Palette.onSurfaceVariant
                     font.pixelSize: songRow.height * 0.32
                     animated: false
+                }
+
+                HoverHandler {
+                    cursorShape: Qt.PointingHandCursor
                 }
 
                 TapHandler {

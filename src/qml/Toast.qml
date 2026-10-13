@@ -101,6 +101,7 @@ Rectangle {
 
             HoverHandler {
                 id: retryHover
+                cursorShape: Qt.PointingHandCursor
             }
             TapHandler {
                 onTapped: {

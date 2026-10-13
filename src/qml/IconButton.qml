@@ -51,6 +51,8 @@ Rectangle {
     /// Fires a small glow in the generated primary; the transport skip buttons
     /// call this so a skip is noticeable on both keyboard and mouse.
     function bloom() {
+        if (Theme.reduceMotion)
+            return;
         bloomAnim.restart();
     }
 

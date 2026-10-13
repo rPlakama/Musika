@@ -285,13 +285,9 @@ Rectangle {
                     color: Palette.primaryContainer
                     clip: true
 
-                    Image {
+                    CoverImage {
                         anchors.fill: parent
                         source: Backend.currentCoverUrl
-                        fillMode: Image.PreserveAspectCrop
-                        asynchronous: true
-                        cache: false
-                        visible: status === Image.Ready
                     }
 
                     FadeText {
@@ -363,6 +359,7 @@ Rectangle {
 
                         MouseArea {
                             anchors.fill: parent
+                            cursorShape: Qt.PointingHandCursor
                             onPressed: (mouse) => {
                                 if (Backend.duration > 0)
                                     Backend.playerSeek(Math.max(0, Math.min(1, mouse.x / width)) * Backend.duration);

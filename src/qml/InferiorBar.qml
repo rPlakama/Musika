@@ -93,6 +93,7 @@ Rectangle {
         anchors.right: parent.right
         height: Math.max(root.height * 0.14, 8)
         enabled: Backend.duration > 0
+        cursorShape: Qt.PointingHandCursor
 
         function seekTo(x) {
             if (Backend.duration <= 0)
@@ -247,10 +248,15 @@ Rectangle {
                     height: parent.height
                     radius: Theme.radius
                     color: Backend.muted ? Palette.outline : Palette.primary
+
+                    Behavior on width {
+                        NumberAnimation { duration: Theme.motion.quick; easing.type: Easing.Linear }
+                    }
                 }
 
                 MouseArea {
                     anchors.fill: parent
+                    cursorShape: Qt.PointingHandCursor
                     onPressed: (mouse) => Backend.playerSetVolume(Math.max(0, Math.min(1, mouse.x / width)) * 100)
                     onPositionChanged: (mouse) => {
                         if (pressed)

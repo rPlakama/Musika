@@ -1,5 +1,5 @@
 {
-  description = "A Nix-flake devenv for rust";
+  description = "Musika — keyboard-driven Subsonic/Navidrome player (Rust + Qt6/QML)";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
@@ -43,8 +43,81 @@
         fi
         exec ${qt}/bin/qmake "$@"
       '';
+
+      musika = pkgs.rustPlatform.buildRustPackage {
+        pname = "musika";
+        version = (pkgs.lib.importTOML ./Cargo.toml).package.version;
+
+        # Keep build artefacts and local state out of the store copy.
+        src = pkgs.lib.cleanSourceWith {
+          src = ./.;
+          filter =
+            path: _type:
+            let
+              base = baseNameOf (toString path);
+            in
+            !(builtins.elem base [
+              ".git"
+              ".direnv"
+              "target"
+              "result"
+              "app.db"
+              "app.db-shm"
+              "app.db-wal"
+              ".qmlls.ini"
+            ]);
+        };
+
+        cargoLock.lockFile = ./Cargo.lock;
+
+        nativeBuildInputs = [
+          pkgs.pkg-config
+          pkgs.makeWrapper
+        ];
+
+        buildInputs = [
+          pkgs.openssl
+          pkgs.sqlite
+          pkgs.libglvnd
+          qt
+        ];
+
+        QMAKE = "${qmakeFixed}/bin/qmake";
+        QT_VERSION_MAJOR = "6";
+
+        # The sandbox has no /etc/ssl; reqwest builds a client even in tests.
+        SSL_CERT_FILE = "${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt";
+
+        # Wrap by hand: the merged `qt` env is what qtbridge resolves against,
+        # and adding individual Qt modules breaks that discovery. The wrapper
+        # mirrors the dev-shell environment (plugins, QML imports) and puts the
+        # runtime playback engine (mpv) on PATH.
+        postInstall = ''
+          wrapProgram $out/bin/musika \
+            --prefix PATH : ${pkgs.lib.makeBinPath [ pkgs.mpv ]} \
+            --prefix QT_PLUGIN_PATH : ${qt}/lib/qt-6/plugins \
+            --prefix QML_IMPORT_PATH : ${qt}/lib/qt-6/qml \
+            --prefix QML2_IMPORT_PATH : ${qt}/lib/qt-6/qml \
+            --set-default SSL_CERT_FILE ${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt
+        '';
+
+        meta = {
+          description = "Keyboard-driven Subsonic/Navidrome player";
+          mainProgram = "musika";
+        };
+      };
     in
     {
+      packages.${system} = {
+        default = musika;
+        musika = musika;
+      };
+
+      apps.${system}.default = {
+        type = "app";
+        program = "${musika}/bin/musika";
+      };
+
       devShells.${system}.default = pkgs.mkShell {
         nativeBuildInputs = with pkgs; [
           pkg-config
@@ -57,6 +130,7 @@
           rustc
           cargo
           ffmpeg_4
+          mpv
           rust-analyzer
           sqlite
           sqlite-analyzer

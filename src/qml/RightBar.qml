@@ -26,6 +26,13 @@ Rectangle {
 
     color: Palette.surfaceContainerLow
 
+    // Human name for the ping envelope's `type` (`navidrome` → "Navidrome").
+    function serverName() {
+        if (Backend.serverType.length === 0)
+            return "";
+        return Backend.serverType.charAt(0).toUpperCase() + Backend.serverType.slice(1);
+    }
+
     // Relative "last sync" label: Now / HH:mm / dd / Nw / Nmo / Ny.
     function lastSyncText() {
         var seconds = Number(Backend.lastSync);
@@ -103,39 +110,33 @@ Rectangle {
             Layout.fillWidth: true
         }
 
-        // Server badge from the ping envelope's `type`. The Navidrome mark is
-        // a Shape component so its white segments follow `Palette.background`
-        // (VectorImage cannot tint); Subsonic keeps its brand SVG.
-        Item {
-            Layout.preferredWidth: root.height * 0.3
-            Layout.preferredHeight: root.height * 0.3
-            visible: Backend.serverType.length > 0
-
-            NavidromeBadge {
-                anchors.fill: parent
-                visible: Backend.serverType === "navidrome"
-            }
-
-            VectorImage {
-                anchors.fill: parent
-                visible: Backend.serverType !== "navidrome"
-                source: "qrc:/app/icons/subsonic_94696.svg"
-                preferredRendererType: VectorImage.CurveRenderer
-            }
+        // Order (left → right): Last, API status, progress, sync icon.
+        FadeText {
+            text: "Last: " + root.lastSyncText()
+            color: Palette.onSurfaceVariant
+            font.pixelSize: Theme.fontSize("label", root.height)
         }
 
+        // Server identity as text, from the ping envelope's `type`:
+        // "Up to date with Navidrome" / "… with Subsonic".
         FadeText {
-            text: Backend.librarySyncing ? "Syncing…" : "Up to date"
+            text: Backend.librarySyncing
+                ? "Syncing…"
+                : (root.serverName().length > 0
+                    ? "Up to date with " + root.serverName()
+                    : "Up to date")
             color: Backend.librarySyncing ? Palette.tertiary : Palette.onSurfaceVariant
             font.pixelSize: Theme.fontSize("label", root.height)
         }
 
-        // Determinate progress across the last reported stage.
+        // Determinate progress across the last reported stage. Invisible when
+        // idle or full.
         Rectangle {
             id: track
             Layout.preferredWidth: root.width * 0.12
             Layout.preferredHeight: Math.max(2, root.height * 0.16)
             color: Palette.outlineVariant
+            visible: Backend.librarySyncing && Backend.syncProgress < 1
 
             Rectangle {
                 width: track.width * Math.max(0, Math.min(1, Backend.syncProgress))
@@ -229,12 +230,6 @@ Rectangle {
                 enabled: !Backend.librarySyncing
                 onTapped: Backend.syncLibrary()
             }
-        }
-
-        FadeText {
-            text: "Last: " + root.lastSyncText()
-            color: Palette.onSurfaceVariant
-            font.pixelSize: Theme.fontSize("label", root.height)
         }
     }
 }

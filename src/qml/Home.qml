@@ -18,6 +18,7 @@ import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
 import QtQuick.Effects
+import QtQuick.VectorImage
 import musika
 import "Theme.js" as Theme
 
@@ -294,6 +295,7 @@ Item {
 
                 // Search is global scope (Shift Space F); this is just the hint.
                 Rectangle {
+                    id: hintBar
                     Layout.fillWidth: true
                     Layout.preferredHeight: root.height * 0.045
                     color: Palette.surface
@@ -304,16 +306,47 @@ Item {
                         anchors.verticalCenter: parent.verticalCenter
                         text: "Shift Space F for Search"
                         color: Palette.onSurfaceVariant
-                        font.pixelSize: parent.height * 0.42
+                        font.pixelSize: hintBar.height * 0.42
                     }
 
-                    FadeText {
+                    // Order hint: keys -- arrow -- current order type. Follows
+                    // D-6/RightBar: fixed transparent frame, sizes from the bar
+                    // (never from the SVG's intrinsic size), VectorImage with
+                    // CurveRenderer, white-baked asset.
+                    RowLayout {
                         anchors.right: parent.right
                         anchors.rightMargin: root.width * 0.02
                         anchors.verticalCenter: parent.verticalCenter
-                        text: "Shift-H / Shift-L  --  Order by " + Backend.albumOrder
-                        color: Palette.onSurfaceVariant
-                        font.pixelSize: parent.height * 0.42
+                        spacing: hintBar.height * 0.18
+
+                        FadeText {
+                            Layout.alignment: Qt.AlignVCenter
+                            text: "Shift-H / Shift-L"
+                            color: Palette.onSurfaceVariant
+                            font.pixelSize: hintBar.height * 0.42
+                        }
+
+                        Item {
+                            Layout.alignment: Qt.AlignVCenter
+                            width: hintBar.height * 0.44
+                            height: width
+
+                            VectorImage {
+                                anchors.centerIn: parent
+                                source: "qrc:/app/icons/arrow-right-svgrepo-com.svg"
+                                preferredRendererType: VectorImage.CurveRenderer
+                                width: parent.width * 0.72
+                                height: width
+                                opacity: 0.72
+                            }
+                        }
+
+                        FadeText {
+                            Layout.alignment: Qt.AlignVCenter
+                            text: Backend.albumOrder
+                            color: Palette.onSurfaceVariant
+                            font.pixelSize: hintBar.height * 0.42
+                        }
                     }
                 }
 

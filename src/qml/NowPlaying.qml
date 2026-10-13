@@ -249,7 +249,7 @@ Rectangle {
 
             FadeText {
                 Layout.fillWidth: true
-                text: Backend.currentTitle.length > 0 ? Backend.currentTitle : "Nothing playing"
+                text: "MUSIKA"
                 color: Palette.onSurface
                 font.pixelSize: Theme.fontSize("title", root.height)
                 font.bold: true

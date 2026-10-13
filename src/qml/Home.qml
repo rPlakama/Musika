@@ -86,6 +86,12 @@ Item {
     // Actions dispatched from the global key handler, scoped to the active
     // region: movement only ever affects the region the cursor is in.
     function handleAction(action) {
+        // The floating search is modal: while open, all keys go to it.
+        if (searchOverlay.opened) {
+            searchOverlay.handleAction(action);
+            return;
+        }
+
         if (action === "visual_mode") {
             if (nowPlayingExpanded) {
                 nowPlayingExpanded = false;
@@ -101,7 +107,6 @@ Item {
             searchOverlay.open();
             return;
         }
-
         // In visual mode, navigation selects a candidate region; Enter commits.
         if (visualMode) {
             if (action === "move_left")

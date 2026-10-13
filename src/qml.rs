@@ -182,6 +182,8 @@ impl Backend {
     fn data_ready(&mut self, channel: String, payload: String);
     #[qsignal(qml_name = "errorRaised")]
     fn error_raised(&mut self, kind: String, message: String);
+    #[qsignal(qml_name = "commandIssued")]
+    fn command_issued(&mut self, command: String);
     #[qsignal]
     fn playback_state_changed(&mut self);
     #[qsignal]
@@ -489,6 +491,22 @@ impl Backend {
     #[qslot(qml_name = "raiseError")]
     fn raise_error(&mut self, kind: String, message: String) {
         self.error_raised(kind, message);
+    }
+
+    /// Runs a command received from the IPC socket. Forwarded to the UI as the
+    /// same `commandIssued` stream the keybinds produce.
+    #[qslot(qml_name = "handleCommand")]
+    fn handle_command(&mut self, command: String) {
+        self.command_issued(command);
+    }
+
+    /// Starts the external command socket (`<config>/ipc.sock`).
+    #[qslot(qml_name = "startIpc")]
+    fn start_ipc(&mut self) {
+        let invoker = self.get_qml_method_invoker();
+        crate::ipc::serve(crate::ipc::socket_path(), move |command| {
+            qtbridge::invoke_method!(invoker, "handleCommand", command);
+        });
     }
 
     #[qslot(qml_name = "requestAlbums")]

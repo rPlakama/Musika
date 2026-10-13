@@ -26,6 +26,7 @@ pub enum Action {
     Back,
     ToggleFullscreen,
     PlayPause,
+    InsertMode,
 }
 
 impl Action {
@@ -45,6 +46,7 @@ impl Action {
             Self::Back => "back",
             Self::ToggleFullscreen => "toggle_fullscreen",
             Self::PlayPause => "play_pause",
+            Self::InsertMode => "insert_mode",
         }
     }
 }
@@ -67,6 +69,7 @@ fn defaults() -> Vec<(&'static str, Action)> {
         ("ctrl-p", Action::ScrollUp),
         ("space", Action::PlayPause),
         ("shift-space f", Action::Search),
+        ("shift-space shift-f", Action::Search),
         ("h", Action::MoveLeft),
         ("j", Action::MoveDown),
         ("k", Action::MoveUp),
@@ -76,6 +79,8 @@ fn defaults() -> Vec<(&'static str, Action)> {
         ("ctrl-w", Action::VisualMode),
         ("enter", Action::Enter),
         ("shift-enter", Action::ToggleFullscreen),
+        ("i", Action::InsertMode),
+        ("escape", Action::Back),
         ("q", Action::Back),
     ]
 }
@@ -294,5 +299,17 @@ mod tests {
         let mut keymap = Keymap::new();
         assert_eq!(keymap.feed("shift-space"), Outcome::Pending);
         assert_eq!(keymap.feed("f"), Outcome::Action(Action::Search));
+
+        // Shift held through to F is the natural way to type Shift+Space+F.
+        let mut keymap = Keymap::new();
+        assert_eq!(keymap.feed("shift-space"), Outcome::Pending);
+        assert_eq!(keymap.feed("shift-f"), Outcome::Action(Action::Search));
+    }
+
+    #[test]
+    fn escape_and_insert_mode() {
+        let mut keymap = Keymap::new();
+        assert_eq!(keymap.feed("escape"), Outcome::Action(Action::Back));
+        assert_eq!(keymap.feed("i"), Outcome::Action(Action::InsertMode));
     }
 }

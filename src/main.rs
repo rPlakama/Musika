@@ -9,6 +9,7 @@ mod crypto;
 mod db;
 mod http_client;
 mod index;
+mod ipc;
 mod keybind;
 mod library;
 mod player;

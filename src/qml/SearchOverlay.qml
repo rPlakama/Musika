@@ -13,6 +13,7 @@ Item {
 
     property bool opened: false
     property bool loading: false
+    property bool typing: true // false = search "normal mode" (hjkl navigates)
     property int activeColumn: 0 // 0 artists, 1 albums, 2 songs (roadmap priority)
 
     signal songActivated(string id)
@@ -28,12 +29,49 @@ Item {
         clearResults();
         activeColumn = 0;
         loading = false;
+        typing = true;
         field.forceActiveFocus();
     }
 
     function close() {
         opened = false;
+        typing = false;
         Backend.releaseFocus();
+    }
+
+    // ESC in typing -> normal mode; ESC in normal -> leave to Main.
+    function pressEscape() {
+        if (typing) {
+            typing = false;
+            field.focus = false;
+            Backend.releaseFocus();
+        } else {
+            close();
+        }
+    }
+
+    function enterTyping() {
+        typing = true;
+        field.forceActiveFocus();
+        field.selectAll();
+    }
+
+    // Search normal mode: hjkl navigates, Enter opens/plays, i types again.
+    function handleAction(action) {
+        if (action === "back")
+            close();
+        else if (action === "insert_mode")
+            enterTyping();
+        else if (action === "move_left")
+            moveColumn(-1);
+        else if (action === "move_right")
+            moveColumn(1);
+        else if (action === "move_up")
+            moveRow(-1);
+        else if (action === "move_down")
+            moveRow(1);
+        else if (action === "enter")
+            activate();
     }
 
     function clearResults() {
@@ -255,7 +293,10 @@ Item {
                     Keys.onUpPressed: root.moveRow(-1)
                     Keys.onReturnPressed: root.activate()
                     Keys.onEnterPressed: root.activate()
-                    Keys.onEscapePressed: root.close()
+                    Keys.onEscapePressed: (event) => {
+                        root.pressEscape();
+                        event.accepted = true;
+                    }
                 }
 
                 FadeText {

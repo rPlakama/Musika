@@ -65,7 +65,7 @@ ApplicationWindow {
         // Resolves deferred sequences (e.g. bare Space = play/pause).
         Timer {
             id: keyTimer
-            interval: 350
+            interval: 800
             onTriggered: {
                 var action = Backend.keyTimeout();
                 if (action.length > 0)
@@ -92,5 +92,16 @@ ApplicationWindow {
         }
     }
 
-    Component.onCompleted: Backend.startup()
+    // Commands from the external IPC socket run through the same dispatcher.
+    Connections {
+        target: Backend
+        function onCommandIssued(command) {
+            keyHandler.dispatch(command);
+        }
+    }
+
+    Component.onCompleted: {
+        Backend.startup();
+        Backend.startIpc();
+    }
 }

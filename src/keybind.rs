@@ -107,10 +107,19 @@ pub enum Outcome {
 }
 
 /// The default binding table.
+/// The default binding table (VI-10/VI-16 semantics):
+///
+/// - `j`/`k` keep the list cursor (and scrolling); `n`/`p` and `Ctrl-N`/
+///   `Ctrl-P` skip tracks wherever a list owns focus (VI-10).
+/// - `Enter` is context-confirm: open/play a row, jump in the queue, go back
+///   on the album toolbar, sync in the status bar, commit in visual mode.
+/// - `Esc`, `q` and `Ctrl-[` are the same Back action; Esc additionally steps
+///   out of typing/insert before leaving (the invariant cancel key).
+/// - `Space` is play/pause globally; `Shift-Enter` toggles fullscreen.
 fn defaults() -> Vec<(&'static str, Action)> {
     vec![
-        ("ctrl-n", Action::ScrollDown),
-        ("ctrl-p", Action::ScrollUp),
+        ("ctrl-n", Action::NextTrack),
+        ("ctrl-p", Action::PrevTrack),
         ("space", Action::PlayPause),
         ("m", Action::Mute),
         ("-", Action::VolumeDown),
@@ -300,7 +309,7 @@ mod tests {
     #[test]
     fn single_token_binding() {
         let mut keymap = Keymap::new();
-        assert_eq!(keymap.feed("ctrl-n"), Outcome::Action(Action::ScrollDown));
+        assert_eq!(keymap.feed("ctrl-n"), Outcome::Action(Action::NextTrack));
         assert_eq!(keymap.feed("j"), Outcome::Action(Action::MoveDown));
     }
 

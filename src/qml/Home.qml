@@ -203,6 +203,17 @@ Item {
             return;
         }
 
+        // Transport skips are global (VI-10/Q-9): j/k keeps the list cursor,
+        // Ctrl-N/Ctrl-P (and n/p) skip tracks wherever a list owns focus.
+        if (action === "next_track") {
+            Backend.playerNext();
+            return;
+        }
+        if (action === "prev_track") {
+            Backend.playerPrevious();
+            return;
+        }
+
         if (action === "back") {
             // Fullscreen is the topmost context: back leaves it first.
             if (nowPlayingExpanded) {
@@ -228,6 +239,14 @@ Item {
             return;
         }
         if (action === "move_right" && activeRegion === 0) {
+            activeRegion = 1;
+            return;
+        }
+
+        // The status bar is a real surface (VI-17): Enter syncs
+        // (`RightBar.handleAction`), down/left/right return to the main list.
+        if (activeRegion === 2
+                && (action === "move_down" || action === "move_left" || action === "move_right")) {
             activeRegion = 1;
             return;
         }
@@ -272,6 +291,7 @@ Item {
             id: topBar
             Layout.fillWidth: true
             Layout.preferredHeight: root.barH
+            active: root.activeRegion === 2
         }
 
         RowLayout {
@@ -328,12 +348,12 @@ Item {
 
                         Item {
                             Layout.alignment: Qt.AlignVCenter
-                            width: hintBar.height * 0.48
-                            height: width
+                            Layout.preferredWidth: hintBar.height * 0.48
+                            Layout.preferredHeight: hintBar.height * 0.48
 
                             VectorImage {
                                 anchors.centerIn: parent
-                                source: "qrc:/app/icons/arrow-right-svgrepo-com.svg"
+                                source: "qrc:/app/icons/arrow-left-svgrepo-com.svg"
                                 preferredRendererType: VectorImage.CurveRenderer
                                 width: parent.width * 0.85
                                 height: width

@@ -24,6 +24,9 @@ import "Theme.js" as Theme
 Rectangle {
     id: root
 
+    // True while the status region owns the cursor (VI-17).
+    property bool active: false
+
     color: Palette.surfaceContainerLow
 
     // Human name for the ping envelope's `type` (`navidrome` → "Navidrome").
@@ -227,6 +230,14 @@ Rectangle {
                 enabled: !Backend.librarySyncing
                 onTapped: Backend.syncLibrary()
             }
+        }
+
+        // Focus hint while the status region owns the cursor (VI-17).
+        FadeText {
+            visible: root.active
+            text: "Enter: sync"
+            color: Palette.onSurfaceVariant
+            font.pixelSize: Theme.fontSize("label", root.height)
         }
     }
 }

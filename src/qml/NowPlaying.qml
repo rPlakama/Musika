@@ -73,10 +73,10 @@ Rectangle {
 
     function keyHints() {
         if (pane === 0)
-            return "Space play/pause   ·   h/l seek   ·   n/p track   ·   m mute   ·   -/+ volume   ·   Tab lyrics   ·   Esc exit";
+            return "Space play/pause   ·   h/l seek   ·   Ctrl-N/P track   ·   m mute   ·   -/+ volume   ·   Tab lyrics   ·   Esc exit";
         if (pane === 1)
-            return "j/k scroll   ·   n/p track   ·   Tab queue   ·   Esc exit";
-        return "j/k select   ·   Enter jump   ·   n/p track   ·   Tab transport   ·   Esc exit";
+            return "j/k scroll   ·   Ctrl-N/P track   ·   Tab queue   ·   Esc exit";
+        return "j/k select   ·   Enter jump   ·   Ctrl-N/P track   ·   Tab transport   ·   Esc exit";
     }
 
     function scrollLyrics(delta) {

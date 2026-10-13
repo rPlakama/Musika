@@ -557,26 +557,33 @@ Small, bounded, high-value changes.
     bound to `Action::Back` next to `escape`, and a pending `g` is cleared when
     escape/`ctrl-[` arrives (unit-tested).
 
-- [ ] **VI-10 · Repurpose `Ctrl-N`/`Ctrl-P` as track skips** — P1 · (N7, Q-9)
+- [x] **VI-10 · Repurpose `Ctrl-N`/`Ctrl-P` as track skips** — P1 · (N7, Q-9)
   - **Why:** `Ctrl-N`/`Ctrl-P` only duplicated `j/k` scrolling; the better use
     is the one vi media users expect — next / previous track while browsing.
   - **Details:** `j/k` keeps the list cursor (and scrolling); `Ctrl-N`/`Ctrl-P`
     skip tracks wherever a list owns focus; fullscreen keeps the same keys
     (Q-9's transport rule) so the ergonomics match everywhere.
-  - **Now:** `AlbumEntry.qml` maps `scroll_down`/`scroll_up` to
-    `playerNext`/`playerPrevious` (with the skip bloom); `SongList` and the
-    search columns still treat them as scroll aliases.
+  - **Now:** `ctrl-n`/`ctrl-p` map to `NextTrack`/`PrevTrack`; `Home` handles
+    both actions globally (after the modals and visual mode, before region
+    routing), so main lists, sidebar and fullscreen all skip; `NowPlaying`
+    hints say `Ctrl-N/P`; AlbumEntry's old `scroll_*` aliases are now inert.
 
-- [ ] **VI-16 · Key overload disambiguation (`Enter`, `q`)** — P2 · (N9)
+- [x] **VI-16 · Key overload disambiguation (`Enter`, `q`)** — P2 · (N9)
   - **Why:** `Enter` means play/open/confirm depending on context; `q` and Esc
     both Back; document or split.
+  - **Now:** documented in `keybind.rs` above `defaults()`: Enter is
+    context-confirm (row open/play, queue jump, album back, status sync,
+    visual commit); `Esc`/`q`/`Ctrl-[` are the same Back, Esc stepping out of
+    typing/insert first; `Space` play/pause and `Shift-Enter` fullscreen.
 
-- [ ] **VI-17 · Status bar focus behaviour** — P2 · (CRITIQUE ghost focus)
+- [x] **VI-17 · Status bar focus behaviour** — P2 · (CRITIQUE ghost focus)
   - **Why:** focusing a non-interactive pane used to make keys inert.
   - **Details:** either strip region 2 from the focus ring or keep it and give it
     real actions.
-  - **Now:** `Enter` triggers sync (RightBar.handleAction); region remains in the
-    ring.
+  - **Now:** kept with real actions: Enter syncs (`RightBar.handleAction`),
+    `move_down`/`move_left`/`move_right` leave to the main list, and
+    `RightBar.active` (from `Home.activeRegion === 2`) shows an "Enter: sync"
+    hint while focused.
 
 - [x] **VI-18 · Space leaks through the modal search** — P2 · (MD32)
   - **Why:** the overlay is documented as modal, but `play_pause` is dispatched
@@ -1129,15 +1136,15 @@ Kept for rationale; the tree already carries these.
 |--------|------|--------|
 | Must have | 9 | — |
 | Should have | 60 | 2 |
-| Quick wins | 32 | 11 |
+| Quick wins | 29 | 14 |
 | Solved (reference) | — | 36 |
-| **Total** | **101** | **49** |
+| **Total** | **98** | **52** |
 
 ### Coverage by area
 
 | Area | Open | Solved |
 |------|------|--------|
-| Vi modal engine | 15 | 6 |
+| Vi modal engine | 12 | 9 |
 | Queue & playback grammar | 5 | 5 |
 | Player & media features | 6 | 0 |
 | Lyrics pipeline | 5 | 5 |

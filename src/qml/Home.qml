@@ -101,6 +101,15 @@ Item {
             visualSelection = target;
     }
 
+    // Global fullscreen toggle (dispatched by the app-level handler before
+    // screen/region routing, so it works from any region and overlay state).
+    function toggleFullscreen() {
+        // Fullscreen is the topmost overlay: region selection ends with it.
+        if (!nowPlayingExpanded)
+            visualMode = false;
+        nowPlayingExpanded = !nowPlayingExpanded;
+    }
+
     // Actions dispatched from the global key handler, scoped to the active
     // region: movement only ever affects the region the cursor is in.
     function handleAction(action) {
@@ -163,15 +172,6 @@ Item {
             }
             if (contentStack.depth > 1) {
                 contentStack.pop();
-            }
-            return;
-        }
-
-        // Shift+Enter toggles the fullscreen player (from the player bar, or
-        // to leave fullscreen from anywhere).
-        if (action === "toggle_fullscreen") {
-            if (activeRegion === 3 || nowPlayingExpanded) {
-                nowPlayingExpanded = !nowPlayingExpanded;
             }
             return;
         }
@@ -386,7 +386,7 @@ Item {
     Rectangle {
         anchors.fill: parent
         color: Theme.scrim
-        opacity: root.visualMode ? Theme.scrimOpacity : 0
+        opacity: root.visualMode && !root.nowPlayingExpanded ? Theme.scrimOpacity : 0
         z: Theme.zRegion - 1
 
         Behavior on opacity {
@@ -420,8 +420,9 @@ Item {
             z: Theme.zRegion
             color: "transparent"
             // Visual mode highlights only the candidate; otherwise only the
-            // active (cursor) region is outlined.
-            visible: root.visualMode ? candidate : active
+            // active (cursor) region is outlined. Fullscreen is an overlay, so
+            // no region highlight may show above it.
+            visible: !root.nowPlayingExpanded && (root.visualMode ? candidate : active)
             border.width: (candidate ? 3 : 2) * unit
             border.color: modelData.color
 

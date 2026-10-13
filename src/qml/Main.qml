@@ -28,6 +28,15 @@ ApplicationWindow {
                 return;
             }
 
+            // Shift+Enter toggles the fullscreen player globally; the screen
+            // that owns the state implements `toggleFullscreen`.
+            if (action === "toggle_fullscreen") {
+                var screen = stack.currentItem;
+                if (screen && screen.toggleFullscreen)
+                    screen.toggleFullscreen();
+                return;
+            }
+
             var current = stack.currentItem;
             if (current && current.handleAction)
                 current.handleAction(action);

@@ -36,7 +36,6 @@ use crate::covers::CoverReport;
 use crate::db::Dbs;
 use crate::http_client::SubsonicClient;
 
-
 /// Outcome of a [`sync_library`] run.
 #[derive(Debug, Default, Clone, Copy)]
 #[allow(dead_code)]

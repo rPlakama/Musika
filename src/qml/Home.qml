@@ -311,7 +311,7 @@ Item {
                         anchors.right: parent.right
                         anchors.rightMargin: root.width * 0.02
                         anchors.verticalCenter: parent.verticalCenter
-                        text: "Order by " + Backend.albumOrder
+                        text: "Shift-H / Shift-L  --  Order by " + Backend.albumOrder
                         color: Palette.onSurfaceVariant
                         font.pixelSize: parent.height * 0.42
                     }

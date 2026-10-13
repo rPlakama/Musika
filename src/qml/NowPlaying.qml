@@ -100,7 +100,7 @@ Rectangle {
         for (var i = 0; i < data.lines.length; i++) {
             lyricModel.append({
                 t: data.lines[i].t === null || data.lines[i].t === undefined ? -1 : data.lines[i].t,
-                text: data.lines[i].text
+                line: data.lines[i].text
             });
         }
         lyricsAvailable = lyricModel.count > 0 && data.source !== "none";
@@ -157,9 +157,9 @@ Rectangle {
 
         if (pane === 1) {
             if (action === "move_up")
-                scrollLyrics(-lyricsFlick.height * 0.3);
+                scrollLyrics(-lyricsView.height * 0.3);
             else if (action === "move_down")
-                scrollLyrics(lyricsFlick.height * 0.3);
+                scrollLyrics(lyricsView.height * 0.3);
             else if (action === "move_left")
                 pane = 0;
             else if (action === "move_right")
@@ -457,10 +457,10 @@ Rectangle {
                                 id: lyricLine
                                 required property int index
                                 required property real t
-                                required property string text
+                                required property string line
 
                                 width: lyricsView.width
-                                text: index === root.activeLyric ? "> " + lyricLine.text + "  <" : lyricLine.text
+                                text: index === root.activeLyric ? "> " + lyricLine.line + "  <" : lyricLine.line
                                 color: index === root.activeLyric ? Theme.primary : Theme.onSurfaceVariant
                                 font.pixelSize: Theme.fontSize("body", root.height)
                                 font.bold: index === root.activeLyric

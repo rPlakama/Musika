@@ -141,13 +141,6 @@ work is); solved/partial tasks add **Now** with the current evidence.
 - [ ] **P-2 · Starred/favorites view + toggle** — P2 · (CRITIQUE Ph3.2)
   - **Why:** no way to value tracks; `getStarred`/`star` endpoints unused.
   - **Details:** `s`/`*` toggle, favorites filter.
-- [ ] **P-3 · Real lyrics + synced animation** — P2 · (M6, MD29, CRITIQUE Ph3.3, roadmap "Lyrics" design)
-  - **Why:** NowPlaying still shows hardcoded placeholder lyrics (NowPlaying.qml).
-  - **Details:** DB5 `lyrics.db` cache; `getLyricsBySongId` (OpenSubsonic
-    `songLyrics`) first, legacy `getLyrics` fallback, local `.lrc` override;
-    on-demand + prefetch next N, miss TTL, purge on sync; NowPlaying renders
-    active-line highlight + auto-scroll in the 50/50 pane; empty state when
-    none. Milestones L0–L5 in the roadmap.
 - [ ] **P-4 · Playlists** — P2 · (M6, roadmap)
   - **Why:** sidebar segment is a placeholder.
   - **Details:** index + view + play; create/edit later.
@@ -159,7 +152,47 @@ work is); solved/partial tasks add **Now** with the current evidence.
   - **Why:** transport + seek landed, but volume/mute are absent in fullscreen.
   - **Details:** reuse IconButton/state layers; keep play/pause centered.
 
-## 4. Search (`S`)
+## 4. Lyrics pipeline (`LYR`) — roadmap "Lyrics" design
+
+- [ ] **LYR-1 · API: `getLyricsBySongId` + OpenSubsonic probe** — P2 · (roadmap L0)
+  - **Why:** only the OpenSubsonic `songLyrics` endpoint returns per-song and
+    synced lyrics; legacy `getLyrics` (artist/title, plain) is a fuzzy fallback.
+  - **Details:** types for `lyricsList.structuredLyrics` (`lang`, `offset`,
+    `synced`, `line[{start, value}]`); call `getOpenSubsonicExtensions`, cache the
+    capability (`songLyrics` v1; ignore `enhanced` v2 for now).
+- [ ] **LYR-2 · DB5 cache (`lyrics.db`) + purge-on-sync** — P2 · (roadmap L1)
+  - **Why:** multiDB style: re-fetchable content gets its own pool, keeps
+    library.db lean and the purge domain independent, exactly like covers.
+  - **Details:** `migrations_lyrics`, new pool in `Dbs`, schema
+    `lyrics(song_id, source, synced, lang, offset_ms, text, fetched_at)` +
+    `lyric_line(song_id, idx, start_ms, value)`; delete rows whose song id is
+    missing from library.db after a successful sync; no blob directory.
+- [ ] **LYR-3 · `requestLyrics` + plain rendering in NowPlaying** — P2 · (roadmap L2)
+  - **Why:** the redesigned fullscreen pane still shows the hardcoded
+    `lyricLines` placeholder (`TODO(M6)` in NowPlaying.qml).
+  - **Details:** `Backend.requestLyrics(songId)` -> tokio ->
+    `dataReady("lyrics")` JSON; render plain text; "No lyrics" empty state;
+    fallback chain override -> bySongId -> legacy `getLyrics`.
+- [ ] **LYR-4 · Synced rendering: highlight + auto-scroll + offset** — P2 · (roadmap L3)
+  - **Why:** synced lyrics are the point of the feature; the pane currently
+    fakes the active line (`currentLyric` stub).
+  - **Details:** compare `Backend.position` (minus OpenSubsonic `offset`) against
+    `start`; active line `primary`/bold (`micro`), scroll-to-center (`quick`);
+    no animation for unsynced text.
+- [ ] **LYR-5 · Prefetch, miss TTL, local `.lrc` override** — P2 · (roadmap L4)
+  - **Why:** avoids per-open latency and request storms, and lets users supply
+    their own synced lyrics.
+  - **Details:** prefetch lyrics for the next N queue tracks (reuse
+    `FETCH_CONCURRENCY=8`); cache misses as `source='none'` with TTL (~7 days)
+    plus manual refresh; `~/.config/musika/lyrics/<song_id>.lrc` wins over the
+    DB and is never purged.
+- [ ] **LYR-6 · Optional: karaoke v2, lyric FTS, `:lyrics`** — P3 · (roadmap L5)
+  - **Why:** word-level timing and lyric search are stretch goals; server
+    support for `enhanced` varies.
+  - **Details:** `enhanced=true` `cueLine`/`agents`/translations; index lyric
+    text in search.db FTS5; `:lyrics sync` backfill per album/artist.
+
+## 5. Search (`S`)
 
 - [x] **S-1 · Floating search (three columns, keyboard, states)** — P1 · (roadmap design)
   - **Now:** `SearchOverlay.qml` + `SearchColumn.qml`: Artists|Albums|Songs,
@@ -176,7 +209,7 @@ work is); solved/partial tasks add **Now** with the current evidence.
   - **Why:** passing the mouse over a column re-targets `activeColumn`; only
     click should change it.
 
-## 5. UI microdesigns (`UI`)
+## 6. UI microdesigns (`UI`)
 
 - [ ] **UI-1 · Region frame colours** — P2 · (MD1)
   - **Why:** PLAYER uses `Theme.error` (red) and four accents read as identity,
@@ -246,7 +279,7 @@ work is); solved/partial tasks add **Now** with the current evidence.
 - [ ] **UI-27 · Separators / font ratios** — P3 · (MD36/MD37)
   - **Why:** "  ·  ", "   " and "·" coexist; title fractions 0.24/0.26/0.26.
 
-## 6. Architecture & robustness (`ARC`)
+## 7. Architecture & robustness (`ARC`)
 
 - [ ] **ARC-1 · Cross-DB coherence repair path** — P1 · (A3)
   - **Why:** library/search/covers writes can diverge on interruption.
@@ -296,7 +329,7 @@ work is); solved/partial tasks add **Now** with the current evidence.
 - [x] **ARC-23 · Palette race + corpus churn** — P2 · (O14/O15)
   - **Now:** FTS5 path replaced the tmpfs corpus entirely.
 
-## 7. Media cache / offline (`CACHE`) — roadmap design
+## 8. Media cache / offline (`CACHE`) — roadmap design
 
 - [ ] **CACHE-1 · DB4 `media.db` + `media/` blobs** — P2 · (roadmap Media cache)
   - **Why:** audio is never stored; playback dies without network.
@@ -318,7 +351,7 @@ work is); solved/partial tasks add **Now** with the current evidence.
   - **Details:** per-item state (cached/partial/queued) + used-bytes vs cap in
     the status bar; offline filter.
 
-## 8. Auth / startup (`AUTH`) — current WIP
+## 9. Auth / startup (`AUTH`) — current WIP
 
 - [x] **AUTH-1 · Startup loading screen for cached login** — P2
   - **Now (working tree):** `loginPending`/`loginRequired` signals; 5 s ping
@@ -331,7 +364,7 @@ work is); solved/partial tasks add **Now** with the current evidence.
   - **Why:** login surface predates the MY3 roles (no container/error tokens,
     clamped type); align with Theme.
 
-## 9. Docs & process (`DOC`)
+## 10. Docs & process (`DOC`)
 
 - [ ] **DOC-1 · Keep design docs in sync with the tree** — P2 · (A10)
   - **Why:** CRITIQUE/roadmap/materialyou3 describe pre-implementation states.
@@ -348,7 +381,8 @@ work is); solved/partial tasks add **Now** with the current evidence.
 |------|------|--------|
 | Vi modal engine | 18 | 2 |
 | Queue & grammar | 7 | 1 |
-| Player features | 7 | 0 |
+| Player features | 6 | 0 |
+| Lyrics pipeline | 6 | 0 |
 | Search | 2 | 3 |
 | UI microdesigns | 22 | 5 |
 | Architecture | 18 | 5 |

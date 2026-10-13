@@ -50,6 +50,8 @@ Item {
     /// place before choosing a result.
     function openWith(text) {
         opened = true;
+        // Scope-switching keys (Ctrl-W) are unavailable while search is open.
+        Backend.setSearchOpen(true);
         clearResults();
         activeColumn = 0;
         field.text = text;
@@ -62,6 +64,7 @@ Item {
     function close() {
         opened = false;
         typing = false;
+        Backend.setSearchOpen(false);
         Backend.releaseFocus();
     }
 
@@ -80,6 +83,22 @@ Item {
         typing = true;
         field.forceActiveFocus();
         field.selectAll();
+    }
+
+    // Readline/vi-insert behaviour: Ctrl-W removes the word before the caret
+    // (trailing spaces first, then the word itself).
+    function deleteWordBack() {
+        var text = field.text;
+        var cursor = field.cursorPosition;
+        var start = cursor;
+        while (start > 0 && /\s/.test(text.charAt(start - 1)))
+            start--;
+        while (start > 0 && !/\s/.test(text.charAt(start - 1)))
+            start--;
+        if (start === cursor)
+            return;
+        field.text = text.slice(0, start) + text.slice(cursor);
+        field.cursorPosition = start;
     }
 
     // Search normal mode: hjkl navigates, Enter opens/plays, i types again.
@@ -318,6 +337,9 @@ Item {
                             event.accepted = true;
                         } else if (event.key === Qt.Key_Backtab) {
                             root.moveColumn(-1);
+                            event.accepted = true;
+                        } else if (event.key === Qt.Key_W && (event.modifiers & Qt.ControlModifier)) {
+                            root.deleteWordBack();
                             event.accepted = true;
                         } else if (event.key === Qt.Key_N && (event.modifiers & Qt.ControlModifier)) {
                             root.moveRow(1);

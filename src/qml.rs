@@ -56,6 +56,7 @@ pub struct Backend {
     queue_length: i64,
     album_order: String,
     server_type: String,
+    search_open: bool,
 }
 
 #[qobject(Singleton)]
@@ -438,11 +439,27 @@ impl Backend {
             return String::new();
         };
 
+        // While the search overlay is open the scope switch (`Ctrl-W`) is
+        // simply unavailable: the overlay owns the keyboard context, and the
+        // field handles Ctrl-W itself as word-delete while typing.
+        if self.search_open && token == "ctrl-w" {
+            self.keymap.reset();
+            return String::new();
+        }
+
         match self.keymap.feed(&token) {
             Outcome::Action(action) => action.name().to_string(),
             Outcome::Pending => "PENDING".to_string(),
             Outcome::None => String::new(),
         }
+    }
+
+    /// Marks the floating search as open/closed (see `key_event`).
+    #[qslot(qml_name = "setSearchOpen")]
+    fn set_search_open(&mut self, open: bool) {
+        self.search_open = open;
+        // Leaving the previous context may have left a half-typed sequence.
+        self.keymap.reset();
     }
 
     /// Resolves a deferred key sequence after the inter-key timeout.

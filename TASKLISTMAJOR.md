@@ -125,6 +125,13 @@ work is); solved/partial tasks add **Now** with the current evidence.
 - [ ] **Q-6 · A-B repeat, playback rate, crossfade** — P3 · (M9)
 - [ ] **Q-7 · MPRIS/D-Bus metadata** — P2 · (M7) — solved
   - **Now:** mpv MPRIS script + metadata via IPC (`mpris:artUrl`).
+- [ ] **Q-8 · Native MPRIS service (`org.mpris.MediaPlayer2.musika`)** — P2 · (roadmap "MPRIS node" design)
+  - **Why:** the mpv-mpris script is an extra install; a stock desktop should
+    see the node, and media keys/panels/lock screens must work everywhere.
+  - **Details:** `mpris.rs` bridge over zbus, no-op without a session bus,
+    Metadata/Position/Can* mapping, rate-limited signals, `playerctl` acceptance
+    test across GNOME/KDE/sway/XFCE; milestones M0–M5 in the roadmap. Keep the
+    mpv script path (Q-7) as the opt-in fallback.
 
 ## 3. Player & media features (`P`)
 
@@ -337,7 +344,7 @@ work is); solved/partial tasks add **Now** with the current evidence.
 | Area | Open | Solved |
 |------|------|--------|
 | Vi modal engine | 18 | 2 |
-| Queue & grammar | 5 | 2 |
+| Queue & grammar | 7 | 1 |
 | Player features | 7 | 0 |
 | Search | 2 | 3 |
 | UI microdesigns | 22 | 5 |

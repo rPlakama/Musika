@@ -185,7 +185,7 @@ Rectangle {
             }
 
             FadeText {
-                text: "🔊"
+							text: "VOL: "
                 color: Theme.onSurfaceVariant
                 font.pixelSize: root.height * 0.18
                 animated: false

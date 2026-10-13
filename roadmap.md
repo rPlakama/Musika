@@ -184,6 +184,84 @@ Sync integration:
 Start: playback cache only (no UI). Then permanent/rolling + rules (favorite
 artist auto-download first), then offline filter + storage UI.
 
+# MPRIS node -- design (control that survives any environment)
+
+Goal: the player node owns `org.mpris.MediaPlayer2.musika` on the session bus
+itself, so panels, media keys, `playerctl`, Bluetooth stacks and lock screens
+work on a stock install -- no mpv-mpris script, no per-DE keybind fiddling.
+
+Today: metadata only reaches MPRIS when the user installs mpv's mpris.lua/so
+and sets `MUSIKA_MPRIS_SCRIPT` (or drops it in `~/.config/mpv/scripts`);
+otherwise the node is invisible to the desktop.
+
+Design:
+    -> new `mpris.rs`: a bridge task owns the service; `player.rs` stays the
+       source of truth (`Shared` snapshot + queue) and is published from there;
+    -> async D-Bus (zbus) on the tokio runtime; zero work on the Qt thread;
+    -> start only if a session bus exists (`DBUS_SESSION_BUS_ADDRESS`); else
+       log once and no-op (SSH, TTY, bare WSL, containers);
+    -> own `org.mpris.MediaPlayer2.musika` with allow-replacement; when the
+       mpv-mpris script is detected, do not double-publish (it owns ...mpv);
+    -> cover art is published as a `file://` URL straight from the cover cache.
+
+Interface surface (MPRIS 2.2):
+    root:   Identity, CanRaise, CanQuit, Desktops, Raise, Quit
+    player: PlaybackStatus, LoopStatus, Rate, Shuffle, Metadata, Volume,
+            Position, MinimumRate, MaximumRate, CanControl, CanGoNext,
+            CanGoPrevious, CanPlay, CanPause, CanSeek, CanStop
+    methods: Play, Pause, PlayPause, Stop, Next, Previous, Seek, SetPosition,
+             OpenUri (optional)
+    signals: Seeked, PropertiesChanged
+
+Mapping:
+    PlaybackStatus <- State (playing/paused/stopped)
+    mpris:trackid  <- /org/musika/track/<song id>
+    mpris:length   <- duration * 1_000_000 (µs)
+    mpris:artUrl   <- cover_url (file://...)
+    xesam:title/artist/album <- Track fields
+    Position       <- polled snapshot (µs); Seeked only on real seeks
+    CanGoNext/Prev <- queue index bounds
+
+Environment matrix:
+    GNOME/Cinnamon/MATE/Budgie: media keys + panel via MPRIS, nothing else;
+    KDE Plasma: plasma media controller, works out of the box;
+    XFCE: MPRIS-aware; keys may need one xfconf binding and we document it;
+    sway/Hyprland/i3: no daemon; acceptance = `playerctl` works + documented
+        bindings for the sample config;
+    no session bus (SSH/TTY/WSL/container): detected, no-op, playback intact;
+    Flatpak (future): needs `--talk-name=org.mpris.MediaPlayer2.*`;
+    multiple players: unique bus name, `Identity` disambiguates in panels;
+    mpv-mpris present: fallback path disabled to avoid two MPRIS nodes.
+
+Fallbacks:
+    -> keep `MUSIKA_MPRIS_SCRIPT` as an opt-in fallback for older builds;
+    -> internal XF86Audio keys only where Qt delivers them (X11); Wayland
+       always relies on the DE/portal.
+
+Robustness:
+    -> bridge failures log + backoff, never block or panic the UI;
+    -> rate-limit Position/PropertiesChanged (>=250 ms, plus transitions);
+    -> art URLs pinned while a track is current (cache purge must not break it).
+
+Milestones:
+    -> M0 spike: add zbus, own the name, static Identity, `playerctl -l` lists us;
+    -> M1 transport: Play/Pause/PlayPause/Stop/Next/Previous + PlaybackStatus;
+    -> M2 metadata: trackid/length/artUrl/xesam; panel shows title + art;
+    -> M3 extras: LoopStatus, Shuffle, Volume, Position/Seeked, Can* flags;
+    -> M4 hardening: no-bus path, mpv fallback toggle, env matrix, docs;
+    -> M5 optional: playlist interface for the queue, OpenUri.
+
+Testing:
+    playerctl -l / -p musika status / metadata
+    busctl --user introspect org.mpris.MediaPlayer2.musika /org/mpris/MediaPlayer2
+    dbus-monitor "interface='org.mpris.MediaPlayer2.Player'"
+    one pass per environment row, plus `DBUS_SESSION_BUS_ADDRESS= playerctl -l`.
+
+Open questions:
+    -> zbus vs a ready-made `mpris-server` crate (weight vs control);
+    -> Rate fixed at 1.0 for v1 (fine unless speed/pitch lands);
+    -> whether to expose the queue as the MPRIS playlist or keep it internal.
+
 # Review findings (see CRITIQUE.md)
 
 Master task list: TASKLISTMAJOR.md
@@ -210,6 +288,7 @@ Master task list: TASKLISTMAJOR.md
 [] -- Playlists, radio, lyrics, download caching;
 [] -- Scrobble back to Navidrome; resume-on-launch;
 [] -- Fullscreen controls + a proper now-playing node;
+[] -- Native MPRIS service (see "MPRIS node" design); playerctl acceptance test;
 
 
 

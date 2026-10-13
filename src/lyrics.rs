@@ -217,8 +217,6 @@ pub async fn fetch(dbs: &Dbs, client: Option<&SubsonicClient>, song_id: &str) ->
 /// Outcome of one bounded sync backfill pass.
 #[derive(Debug, Default, Clone, Copy)]
 pub struct BackfillReport {
-    /// Songs selected for fetching (capped by `limit`).
-    pub candidates: usize,
     /// Candidates that ended up with real lyrics.
     pub fetched: usize,
 }
@@ -241,10 +239,7 @@ pub async fn backfill(
 
     let rows = cached_rows(&dbs.lyrics).await?;
     let candidates = candidates(&songs, &rows, now(), limit);
-    let mut report = BackfillReport {
-        candidates: candidates.len(),
-        fetched: 0,
-    };
+    let mut report = BackfillReport { fetched: 0 };
 
     for chunk in candidates.chunks(FETCH_CONCURRENCY) {
         let mut set = tokio::task::JoinSet::new();

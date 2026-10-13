@@ -91,12 +91,20 @@ Rectangle {
     Component.onCompleted: reload()
 
     function handleAction(action) {
-        var up = action === "move_up" || action === "scroll_up";
-        var down = action === "move_down" || action === "scroll_down";
+        // Ctrl-N / Ctrl-P are transport skips on the album page; the list
+        // cursor stays on j/k, so browsing never scrolls the wrong thing.
+        if (action === "scroll_down") {
+            Backend.playerNext();
+            return;
+        }
+        if (action === "scroll_up") {
+            Backend.playerPrevious();
+            return;
+        }
 
         if (root.onToolbar) {
             // Cursor is on the toolbar (Back). Down returns to the songs.
-            if (down && songs.count > 0) {
+            if (action === "move_down" && songs.count > 0) {
                 root.onToolbar = false;
                 songList.currentIndex = 0;
                 songList.positionViewAtIndex(0, ListView.Contain);
@@ -106,12 +114,12 @@ Rectangle {
             return;
         }
 
-        if (up) {
+        if (action === "move_up") {
             if (songList.currentIndex > 0)
                 songList.currentIndex -= 1;
             else
                 root.onToolbar = true;
-        } else if (down) {
+        } else if (action === "move_down") {
             if (songs.count > 0)
                 songList.currentIndex = Math.min(songs.count - 1, songList.currentIndex + 1);
         } else if (action === "enter") {

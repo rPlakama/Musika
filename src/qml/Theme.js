@@ -52,14 +52,16 @@ var motion = {
     spinSlow: 3000     // one revolution on hover
 }
 
-// Global opt-out for decorative motion (FadeText, blooms). Flipped by a user
-// setting later; functional motion (progress, seek) never honours it.
+// Global opt-out for decorative motion (FadeText, button presses). Flipped by
+// a user setting later; functional motion (progress, seek) never honours it.
 var reduceMotion = false
 
 var ease = {
     standard: [0.2, 0, 0, 1],
     decelerate: [0.05, 0.7, 0.1, 1],
-    accelerate: [0.3, 0, 0.8, 0.15]
+    accelerate: [0.3, 0, 0.8, 0.15],
+    // Overshooting release for press feedback (button scale-down bounce).
+    bounce: [0.34, 1.56, 0.64, 1]
 }
 
 // Legacy aliases; new code uses motion.* / ease.*.

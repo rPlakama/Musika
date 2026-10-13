@@ -16,6 +16,7 @@
 
 import QtQuick
 import QtQuick.Layouts
+import QtQuick.Effects
 import musika
 import "Theme.js" as Theme
 
@@ -82,6 +83,11 @@ Rectangle {
     function scrollLyrics(delta) {
         var limit = Math.max(0, lyricsView.contentHeight - lyricsView.height);
         lyricsView.contentY = Math.max(0, Math.min(limit, lyricsView.contentY + delta));
+    }
+
+    // A color with a replaced alpha, for the ambience gradient stops.
+    function withAlpha(color, alpha) {
+        return Qt.rgba(color.r, color.g, color.b, alpha);
     }
 
     function moveQueueCursor(delta) {
@@ -249,9 +255,9 @@ Rectangle {
         }
         function onTrackSkipped(forward) {
             if (forward)
-                nextButton.bloom();
+                nextButton.press();
             else
-                previousButton.bloom();
+                previousButton.press();
         }
     }
 
@@ -261,6 +267,57 @@ Rectangle {
 
     ListModel {
         id: lyricModel
+    }
+
+    // D-5 ambience: the playing cover, blurred and washed into the theme
+    // background (same rule as AlbumEntry), so the square floats on its own
+    // colours without competing with the lyrics/queue panes. Hidden without
+    // art; the panes stay opaque on top.
+    Image {
+        id: coverBackdrop
+        anchors.fill: parent
+        source: Backend.currentCoverUrl
+        fillMode: Image.PreserveAspectCrop
+        asynchronous: true
+        cache: false
+        opacity: (status === Image.Ready && Backend.currentCoverUrl.length > 0) ? 1 : 0
+        visible: opacity > 0
+
+        layer.enabled: visible
+        layer.effect: MultiEffect {
+            blurEnabled: true
+            blur: 1.0
+            blurMax: 64
+            saturation: 0.6
+            autoPaddingEnabled: false
+        }
+
+        Behavior on opacity {
+            NumberAnimation {
+                duration: Theme.motion.standard
+                easing.type: Easing.Bezier
+                easing.bezierCurve: Theme.ease.standard
+            }
+        }
+    }
+
+    Rectangle {
+        anchors.fill: parent
+        visible: coverBackdrop.visible
+        gradient: Gradient {
+            GradientStop {
+                position: 0.0
+                color: root.withAlpha(Palette.background, 0.84)
+            }
+            GradientStop {
+                position: 0.38
+                color: root.withAlpha(Palette.background, 0.38)
+            }
+            GradientStop {
+                position: 1.0
+                color: root.withAlpha(Palette.background, 0.96)
+            }
+        }
     }
 
     ColumnLayout {

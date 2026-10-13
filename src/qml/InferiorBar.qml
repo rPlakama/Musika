@@ -190,9 +190,9 @@ Rectangle {
             target: Backend
             function onTrackSkipped(forward) {
                 if (forward)
-                    nextButton.bloom();
+                    nextButton.press();
                 else
-                    previousButton.bloom();
+                    previousButton.press();
             }
         }
 

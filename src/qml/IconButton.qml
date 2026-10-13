@@ -15,7 +15,6 @@
 // along with this program; if not, see <https://www.gnu.org/licenses/>.
 
 import QtQuick
-import QtQuick.Effects
 import musika
 import "Theme.js" as Theme
 
@@ -47,12 +46,13 @@ Rectangle {
 
     signal clicked()
 
-    /// Fires a small glow in the generated primary; the transport skip buttons
-    /// call this so a skip is noticeable on both keyboard and mouse.
-    function bloom() {
+    /// Fires the "press" feel: a quick scale-down, then back with an
+    /// overshooting bezier (click-click). The transport skip buttons call
+    /// this so a skip is noticeable on both keyboard and mouse.
+    function press() {
         if (Theme.reduceMotion)
             return;
-        bloomAnim.restart();
+        pressAnim.restart();
     }
 
     radius: Theme.radius
@@ -60,46 +60,25 @@ Rectangle {
     border.width: activeFocus ? Math.max(1, width * Theme.hairlineRatio) : 0
     border.color: Palette.primary
 
-    // Bloom: a blurred, expanding copy of the button in `Palette.primary`
-    // (works for any seeded scheme). Hidden at rest, so the MultiEffect only
-    // renders during the animation.
-    Rectangle {
-        id: bloom
-        anchors.centerIn: parent
-        width: root.width
-        height: root.height
-        radius: root.radius
-        color: Palette.primary
-        opacity: 0
-        scale: 0.8
-        visible: opacity > 0
-        layer.enabled: visible
-        layer.effect: MultiEffect {
-            blurEnabled: true
-            blur: 1.0
-            blurMax: 16
-        }
-    }
-
-    ParallelAnimation {
-        id: bloomAnim
+    // Press: the button itself (glyph + state layer) dips and bounces back.
+    // A transform only — layout siblings never move.
+    SequentialAnimation {
+        id: pressAnim
         NumberAnimation {
-            target: bloom
-            property: "opacity"
-            from: 0.5
-            to: 0
-            duration: Theme.motion.standard
-            easing.type: Easing.Bezier
-            easing.bezierCurve: Theme.ease.decelerate
-        }
-        NumberAnimation {
-            target: bloom
+            target: root
             property: "scale"
-            from: 0.8
-            to: 1.7
-            duration: Theme.motion.standard
+            to: 0.86
+            duration: Theme.motion.micro
             easing.type: Easing.Bezier
-            easing.bezierCurve: Theme.ease.decelerate
+            easing.bezierCurve: Theme.ease.accelerate
+        }
+        NumberAnimation {
+            target: root
+            property: "scale"
+            to: 1.0
+            duration: Theme.motion.quick
+            easing.type: Easing.Bezier
+            easing.bezierCurve: Theme.ease.bounce
         }
     }
 

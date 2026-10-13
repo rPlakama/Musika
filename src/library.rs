@@ -297,23 +297,25 @@ pub struct ArtistRow {
     pub cover_art: Option<String>,
 }
 
-/// Album orderings offered in the main scope (`Shift-H`/`Shift-L`). The
-/// labels map to the Subsonic `getAlbumList2` types they approximate:
-/// Artist = alphabeticalByArtist, Name = alphabeticalByName, Year = byYear.
-pub const ALBUM_ORDERS: [&str; 3] = ["Artist", "Name", "Year"];
+/// Orderings offered by the album list and the song list (`Shift-H`/
+/// `Shift-L`). The labels map to the Subsonic `getAlbumList2` types they
+/// approximate: Artist = alphabeticalByArtist, Name = alphabeticalByName,
+/// Year = byYear.
+pub const ORDERS: [&str; 3] = ["Artist", "Name", "Year"];
 
-/// Cycles the album order by `delta` and returns the new label.
-pub fn cycle_album_order(current: &str, delta: i64) -> &'static str {
-    let index = ALBUM_ORDERS
+/// Cycles an order label by `delta`; shared by albums and songs so the two
+/// lists can never drift apart.
+pub fn cycle_order(current: &str, delta: i64) -> &'static str {
+    let index = ORDERS
         .iter()
         .position(|order| *order == current)
         .unwrap_or(0) as i64;
-    let next = (index + delta).rem_euclid(ALBUM_ORDERS.len() as i64) as usize;
-    ALBUM_ORDERS[next]
+    let next = (index + delta).rem_euclid(ORDERS.len() as i64) as usize;
+    ORDERS[next]
 }
 
 /// Albums for the central list, optionally filtered by artist name, ordered
-/// by one of [`ALBUM_ORDERS`]. Kept as static SQL (no interpolation) so the
+/// by one of [`ORDERS`]. Kept as static SQL (no interpolation) so the
 /// allowlist is enforced at the type level.
 pub async fn albums(pool: &SqlitePool, artist: Option<&str>, order: &str) -> Result<Vec<AlbumRow>> {
     let sql: &'static str = match (artist.is_some(), order) {
@@ -356,7 +358,7 @@ pub async fn albums(pool: &SqlitePool, artist: Option<&str>, order: &str) -> Res
 }
 
 /// Albums of one artist by id (ArtistEntry grid), ordered by one of
-/// [`ALBUM_ORDERS`]. Static SQL, like [`albums`].
+/// [`ORDERS`]. Static SQL, like [`albums`].
 pub async fn artist_albums(
     pool: &SqlitePool,
     artist_id: &str,
@@ -393,16 +395,29 @@ pub async fn artists(pool: &SqlitePool) -> Result<Vec<ArtistRow>> {
     Ok(rows)
 }
 
-/// Every song, ordered by artist/album/track. Covers come from the album.
-pub async fn all_songs(pool: &SqlitePool) -> Result<Vec<SongRow>> {
-    let rows = sqlx::query_as::<_, SongRow>(
-        "SELECT s.id, s.title, s.artist, s.album, s.album_id, s.track, s.duration,
-                COALESCE(al.cover_art, s.cover_art) AS cover_art
-         FROM songs s LEFT JOIN albums al ON al.id = s.album_id
-         ORDER BY s.artist, s.album, s.disc_number, s.track, s.title",
-    )
-    .fetch_all(pool)
-    .await?;
+/// Every song, ordered by one of [`ORDERS`]. Covers come from the album.
+pub async fn all_songs(pool: &SqlitePool, order: &str) -> Result<Vec<SongRow>> {
+    let sql: &'static str = match order {
+        "Name" => {
+            "SELECT s.id, s.title, s.artist, s.album, s.album_id, s.track, s.duration,
+                    COALESCE(al.cover_art, s.cover_art) AS cover_art
+             FROM songs s LEFT JOIN albums al ON al.id = s.album_id
+             ORDER BY s.title, s.artist, s.album"
+        }
+        "Year" => {
+            "SELECT s.id, s.title, s.artist, s.album, s.album_id, s.track, s.duration,
+                    COALESCE(al.cover_art, s.cover_art) AS cover_art
+             FROM songs s LEFT JOIN albums al ON al.id = s.album_id
+             ORDER BY s.year DESC, s.title, s.artist"
+        }
+        _ => {
+            "SELECT s.id, s.title, s.artist, s.album, s.album_id, s.track, s.duration,
+                    COALESCE(al.cover_art, s.cover_art) AS cover_art
+             FROM songs s LEFT JOIN albums al ON al.id = s.album_id
+             ORDER BY s.artist, s.album, s.disc_number, s.track, s.title"
+        }
+    };
+    let rows = sqlx::query_as::<_, SongRow>(sql).fetch_all(pool).await?;
     Ok(rows)
 }
 
@@ -416,34 +431,71 @@ pub async fn song_count(pool: &SqlitePool) -> Result<usize> {
 
 /// 0-based position of a song in [`all_songs`] order, without materializing
 /// the library (same ORDER BY, evaluated by SQLite's ROW_NUMBER).
-pub async fn song_ordinal(pool: &SqlitePool, id: &str) -> Result<Option<usize>> {
-    let ordinal: Option<i64> = sqlx::query_scalar(
-        "SELECT rn - 1 FROM (
-             SELECT id, ROW_NUMBER() OVER (
-                        ORDER BY artist, album, disc_number, track, title) AS rn
-             FROM songs
-         ) WHERE id = ?1",
-    )
-    .bind(id)
-    .fetch_optional(pool)
-    .await?;
+pub async fn song_ordinal(pool: &SqlitePool, id: &str, order: &str) -> Result<Option<usize>> {
+    let sql: &'static str = match order {
+        "Name" => {
+            "SELECT rn - 1 FROM (
+                 SELECT id, ROW_NUMBER() OVER (ORDER BY title, artist, album) AS rn
+                 FROM songs
+             ) WHERE id = ?1"
+        }
+        "Year" => {
+            "SELECT rn - 1 FROM (
+                 SELECT id, ROW_NUMBER() OVER (ORDER BY year DESC, title, artist) AS rn
+                 FROM songs
+             ) WHERE id = ?1"
+        }
+        _ => {
+            "SELECT rn - 1 FROM (
+                 SELECT id, ROW_NUMBER() OVER (
+                            ORDER BY artist, album, disc_number, track, title) AS rn
+                 FROM songs
+             ) WHERE id = ?1"
+        }
+    };
+    let ordinal: Option<i64> = sqlx::query_scalar(sql)
+        .bind(id)
+        .fetch_optional(pool)
+        .await?;
     Ok(ordinal.map(|value| value.max(0) as usize))
 }
 
 /// One page of the [`all_songs`] order (lazy queue chunks), covers resolved
 /// from the album like the full list.
-pub async fn songs_range(pool: &SqlitePool, offset: i64, limit: i64) -> Result<Vec<SongRow>> {
-    let rows = sqlx::query_as::<_, SongRow>(
-        "SELECT s.id, s.title, s.artist, s.album, s.album_id, s.track, s.duration,
-                COALESCE(al.cover_art, s.cover_art) AS cover_art
-         FROM songs s LEFT JOIN albums al ON al.id = s.album_id
-         ORDER BY s.artist, s.album, s.disc_number, s.track, s.title
-         LIMIT ?1 OFFSET ?2",
-    )
-    .bind(limit.max(0))
-    .bind(offset.max(0))
-    .fetch_all(pool)
-    .await?;
+pub async fn songs_range(
+    pool: &SqlitePool,
+    offset: i64,
+    limit: i64,
+    order: &str,
+) -> Result<Vec<SongRow>> {
+    let sql: &'static str = match order {
+        "Name" => {
+            "SELECT s.id, s.title, s.artist, s.album, s.album_id, s.track, s.duration,
+                    COALESCE(al.cover_art, s.cover_art) AS cover_art
+             FROM songs s LEFT JOIN albums al ON al.id = s.album_id
+             ORDER BY s.title, s.artist, s.album
+             LIMIT ?1 OFFSET ?2"
+        }
+        "Year" => {
+            "SELECT s.id, s.title, s.artist, s.album, s.album_id, s.track, s.duration,
+                    COALESCE(al.cover_art, s.cover_art) AS cover_art
+             FROM songs s LEFT JOIN albums al ON al.id = s.album_id
+             ORDER BY s.year DESC, s.title, s.artist
+             LIMIT ?1 OFFSET ?2"
+        }
+        _ => {
+            "SELECT s.id, s.title, s.artist, s.album, s.album_id, s.track, s.duration,
+                    COALESCE(al.cover_art, s.cover_art) AS cover_art
+             FROM songs s LEFT JOIN albums al ON al.id = s.album_id
+             ORDER BY s.artist, s.album, s.disc_number, s.track, s.title
+             LIMIT ?1 OFFSET ?2"
+        }
+    };
+    let rows = sqlx::query_as::<_, SongRow>(sql)
+        .bind(limit.max(0))
+        .bind(offset.max(0))
+        .fetch_all(pool)
+        .await?;
     Ok(rows)
 }
 
@@ -616,14 +668,14 @@ mod tests {
     }
 
     #[test]
-    fn album_order_cycles_both_ways() {
-        assert_eq!(cycle_album_order("Artist", 1), "Name");
-        assert_eq!(cycle_album_order("Name", 1), "Year");
-        assert_eq!(cycle_album_order("Year", 1), "Artist");
-        assert_eq!(cycle_album_order("Artist", -1), "Year");
-        assert_eq!(cycle_album_order("Year", -1), "Name");
+    fn order_cycles_both_ways() {
+        assert_eq!(cycle_order("Artist", 1), "Name");
+        assert_eq!(cycle_order("Name", 1), "Year");
+        assert_eq!(cycle_order("Year", 1), "Artist");
+        assert_eq!(cycle_order("Artist", -1), "Year");
+        assert_eq!(cycle_order("Year", -1), "Name");
         // Unknown values snap back to the first order.
-        assert_eq!(cycle_album_order("", 1), "Name");
+        assert_eq!(cycle_order("", 1), "Name");
     }
 
     #[tokio::test]
@@ -712,17 +764,34 @@ mod tests {
             .unwrap();
         }
 
-        let all = all_songs(&pool).await.unwrap();
+        let all = all_songs(&pool, "Artist").await.unwrap();
         assert_eq!(song_count(&pool).await.unwrap(), all.len());
         for (index, song) in all.iter().enumerate() {
-            assert_eq!(song_ordinal(&pool, &song.id).await.unwrap(), Some(index));
+            assert_eq!(
+                song_ordinal(&pool, &song.id, "Artist").await.unwrap(),
+                Some(index)
+            );
         }
-        assert_eq!(song_ordinal(&pool, "missing").await.unwrap(), None);
+        assert_eq!(
+            song_ordinal(&pool, "missing", "Artist").await.unwrap(),
+            None
+        );
 
         // Pages line up with the same order, whatever the offset.
-        let page = songs_range(&pool, 1, 2).await.unwrap();
+        let page = songs_range(&pool, 1, 2, "Artist").await.unwrap();
         let ids: Vec<&str> = page.iter().map(|song| song.id.as_str()).collect();
         assert_eq!(ids, vec![all[1].id.as_str(), all[2].id.as_str()]);
-        assert!(songs_range(&pool, 10, 5).await.unwrap().is_empty());
+        assert!(
+            songs_range(&pool, 10, 5, "Artist")
+                .await
+                .unwrap()
+                .is_empty()
+        );
+
+        // A different label is the same machinery over another ORDER BY.
+        let by_name = songs_range(&pool, 0, 2, "Name").await.unwrap();
+        let ids: Vec<&str> = by_name.iter().map(|song| song.id.as_str()).collect();
+        assert_eq!(ids, vec!["s4", "s1"]);
+        assert_eq!(song_ordinal(&pool, "s4", "Name").await.unwrap(), Some(0));
     }
 }

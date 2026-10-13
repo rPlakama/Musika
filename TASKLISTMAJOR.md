@@ -1067,7 +1067,14 @@ Small, bounded, high-value changes.
     on `album_order_changed`; the hint strip shows `Order by <OrderType>`
     right of the search keybind, same type size.
   - **Now:** landed — `shift-l`/`shift-h` bindings + unit tests (65 pass);
-    `AlbumList` re-requests through the backend order.
+    `AlbumList` re-requests through the backend order. Extended: the cycle is
+    now shared (`library::ORDERS` + `cycle_order`, `stepped_order` in the
+    backend) and drives the Songs segment too — `Backend.songOrder` +
+    `songOrderNext/Prev`, `all_songs`/`songs_range`/`song_ordinal` take the
+    same static-SQL order arms, `SongList` reloads on `song_order_changed`
+    and shows `Order: …`; `Home` routes the keys by segment (Songs → song
+    order), including the lazy library queue, which keeps the order it was
+    built with.
 
 - [x] **UI-1 · Region frame colours** — P2 · (MD1)
   - **Why:** PLAYER uses `Theme.error` (red) and four accents read as identity,

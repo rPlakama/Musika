@@ -52,16 +52,6 @@ ApplicationWindow {
                 return;
             }
 
-            // Main-scope album ordering (Shift-L / Shift-H).
-            if (action === "order_next") {
-                Backend.albumOrderNext();
-                return;
-            }
-            if (action === "order_prev") {
-                Backend.albumOrderPrev();
-                return;
-            }
-
             // Clipboard verbs (VI-21): `y` yanks the playing track to the
             // system clipboard, `P` pastes a track reference back into
             // playback.

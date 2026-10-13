@@ -62,6 +62,7 @@ pub struct Backend {
     queue_index: i64,
     queue_length: i64,
     album_order: String,
+    song_order: String,
     server_type: String,
     search_open: bool,
     library_queue: Option<LibraryQueue>,
@@ -182,6 +183,11 @@ impl Backend {
         Notify = album_order_changed
     );
     qproperty!(
+        "songOrder",
+        Member = song_order,
+        Notify = song_order_changed
+    );
+    qproperty!(
         "serverType",
         Member = server_type,
         Notify = server_type_changed
@@ -265,6 +271,8 @@ impl Backend {
     #[qsignal]
     fn album_order_changed(&mut self);
     #[qsignal]
+    fn song_order_changed(&mut self);
+    #[qsignal]
     fn server_type_changed(&mut self);
     #[qsignal]
     fn library_changed(&mut self);
@@ -329,8 +337,12 @@ impl Backend {
     #[qslot]
     fn startup(&mut self) {
         if self.album_order.is_empty() {
-            self.album_order = crate::library::ALBUM_ORDERS[0].to_string();
+            self.album_order = crate::library::ORDERS[0].to_string();
             self.album_order_changed();
+        }
+        if self.song_order.is_empty() {
+            self.song_order = crate::library::ORDERS[0].to_string();
+            self.song_order_changed();
         }
         let invoker = self.get_qml_method_invoker();
         let sync_finish = self.get_qml_method_invoker();
@@ -675,7 +687,7 @@ impl Backend {
             return;
         };
         let order = if self.album_order.is_empty() {
-            crate::library::ALBUM_ORDERS[0].to_string()
+            crate::library::ORDERS[0].to_string()
         } else {
             self.album_order.clone()
         };
@@ -692,24 +704,38 @@ impl Backend {
     /// Cycles the main-scope album order (Shift-L / Shift-H).
     #[qslot(qml_name = "albumOrderNext")]
     fn album_order_next(&mut self) {
-        self.cycle_album_order(1);
+        self.step_album_order(1);
     }
 
     #[qslot(qml_name = "albumOrderPrev")]
     fn album_order_prev(&mut self) {
-        self.cycle_album_order(-1);
+        self.step_album_order(-1);
     }
 
-    fn cycle_album_order(&mut self, delta: i64) {
-        let current = if self.album_order.is_empty() {
-            crate::library::ALBUM_ORDERS[0]
-        } else {
-            self.album_order.as_str()
-        };
-        let next = crate::library::cycle_album_order(current, delta);
+    /// Cycles the Songs-segment order (Shift-L / Shift-H there).
+    #[qslot(qml_name = "songOrderNext")]
+    fn song_order_next(&mut self) {
+        self.step_song_order(1);
+    }
+
+    #[qslot(qml_name = "songOrderPrev")]
+    fn song_order_prev(&mut self) {
+        self.step_song_order(-1);
+    }
+
+    fn step_album_order(&mut self, delta: i64) {
+        let next = stepped_order(&self.album_order, delta);
         if self.album_order != next {
-            self.album_order = next.to_string();
+            self.album_order = next;
             self.album_order_changed();
+        }
+    }
+
+    fn step_song_order(&mut self, delta: i64) {
+        let next = stepped_order(&self.song_order, delta);
+        if self.song_order != next {
+            self.song_order = next;
+            self.song_order_changed();
         }
     }
 
@@ -719,8 +745,13 @@ impl Backend {
         let Some(dbs) = crate::dbs().cloned() else {
             return;
         };
+        let order = if self.song_order.is_empty() {
+            crate::library::ORDERS[0].to_string()
+        } else {
+            self.song_order.clone()
+        };
         crate::runtime().spawn(async move {
-            match load_songs_json(&dbs).await {
+            match load_songs_json(&dbs, &order).await {
                 Ok(json) => {
                     qtbridge::invoke_method!(invoker, "emitData", "songs".to_string(), json);
                 }
@@ -752,7 +783,7 @@ impl Backend {
             return;
         };
         let order = if self.album_order.is_empty() {
-            crate::library::ALBUM_ORDERS[0].to_string()
+            crate::library::ORDERS[0].to_string()
         } else {
             self.album_order.clone()
         };
@@ -854,8 +885,13 @@ impl Backend {
         let Some(dbs) = crate::dbs().cloned() else {
             return;
         };
+        let order = if self.song_order.is_empty() {
+            crate::library::ORDERS[0].to_string()
+        } else {
+            self.song_order.clone()
+        };
         crate::runtime().spawn(async move {
-            match library_queue_payload(&dbs, &song_id).await {
+            match library_queue_payload(&dbs, &song_id, &order).await {
                 Ok((json, next, total)) => {
                     qtbridge::invoke_method!(
                         invoker,
@@ -863,7 +899,8 @@ impl Backend {
                         json,
                         0i64,
                         next as i64,
-                        total as i64
+                        total as i64,
+                        order
                     );
                 }
                 Err(err) => {
@@ -927,12 +964,20 @@ impl Backend {
     /// First Songs-segment window: loads without the fullscreen flip and
     /// stores the extension cursor (`next`/`total` in `all_songs`).
     #[qslot(qml_name = "playerLoadLibrary")]
-    fn player_load_library(&mut self, tracks_json: String, start: i64, next: i64, total: i64) {
+    fn player_load_library(
+        &mut self,
+        tracks_json: String,
+        start: i64,
+        next: i64,
+        total: i64,
+        order: String,
+    ) {
         self.load_queue(tracks_json, start, false);
         self.library_queue_epoch += 1;
         self.library_queue = Some(LibraryQueue {
             next: next.max(0) as usize,
             total: total.max(0) as usize,
+            order,
             loading: false,
         });
     }
@@ -1311,6 +1356,7 @@ impl Backend {
             return;
         }
         let offset = queue.next;
+        let order = queue.order.clone();
         let loaded = self.player.len();
         if loaded == 0 || self.player.index() + LIBRARY_QUEUE_AHEAD < loaded {
             return;
@@ -1325,7 +1371,7 @@ impl Backend {
             queue.loading = true;
         }
         crate::runtime().spawn(async move {
-            match library_chunk_json(&dbs, offset).await {
+            match library_chunk_json(&dbs, offset, &order).await {
                 Ok((json, next, total)) => {
                     qtbridge::invoke_method!(
                         invoker,
@@ -1515,6 +1561,17 @@ impl Backend {
             art_url: self.current_cover_url.clone(),
         }
     }
+}
+
+/// Next label for the shared [`crate::library::ORDERS`] cycle; empty means
+/// the first entry. One helper keeps album and song ordering in lockstep.
+fn stepped_order(current: &str, delta: i64) -> String {
+    let current = if current.is_empty() {
+        crate::library::ORDERS[0]
+    } else {
+        current
+    };
+    crate::library::cycle_order(current, delta).to_string()
 }
 
 /// Status-bar summary of a finished sync; lyrics only when any were fetched.

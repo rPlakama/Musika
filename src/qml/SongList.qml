@@ -81,6 +81,9 @@ Rectangle {
         function onLibrary_changed() {
             root.reload();
         }
+        function onSong_order_changed() {
+            root.reload();
+        }
     }
 
     FadeText {
@@ -107,6 +110,16 @@ Rectangle {
                 color: Palette.onSurface
                 font.pixelSize: root.height * 0.035
                 font.bold: true
+            }
+
+            // Same order affordance as the album list (Shift-L / Shift-H).
+            FadeText {
+                anchors.verticalCenter: parent.verticalCenter
+                anchors.right: parent.right
+                anchors.rightMargin: root.width * 0.02
+                text: "Order: " + Backend.songOrder
+                color: Palette.onSurfaceVariant
+                font.pixelSize: root.height * 0.021
             }
         }
 

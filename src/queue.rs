@@ -40,6 +40,8 @@ pub struct LibraryQueue {
     /// Absolute offset in `library::all_songs` of the next chunk.
     pub next: usize,
     pub total: usize,
+    /// Order label the queue was built with; extensions must keep it.
+    pub order: String,
     /// A chunk fetch is in flight; don't stack a second one.
     pub loading: bool,
 }
@@ -77,14 +79,19 @@ pub async fn album_tracks_json(dbs: &crate::db::Dbs, album_id: &str) -> anyhow::
 pub async fn library_queue_payload(
     dbs: &crate::db::Dbs,
     song_id: &str,
+    order: &str,
 ) -> anyhow::Result<(String, usize, usize)> {
-    let Some(start) = crate::library::song_ordinal(&dbs.library, song_id).await? else {
+    let Some(start) = crate::library::song_ordinal(&dbs.library, song_id, order).await? else {
         return Err(anyhow::anyhow!("song not found in index"));
     };
     let total = crate::library::song_count(&dbs.library).await?;
-    let songs =
-        crate::library::songs_range(&dbs.library, start as i64, LIBRARY_QUEUE_INITIAL as i64)
-            .await?;
+    let songs = crate::library::songs_range(
+        &dbs.library,
+        start as i64,
+        LIBRARY_QUEUE_INITIAL as i64,
+        order,
+    )
+    .await?;
     let next = start + songs.len();
     Ok((tracks_json(dbs, songs).await?, next, total))
 }
@@ -94,11 +101,16 @@ pub async fn library_queue_payload(
 pub async fn library_chunk_json(
     dbs: &crate::db::Dbs,
     offset: usize,
+    order: &str,
 ) -> anyhow::Result<(String, usize, usize)> {
     let total = crate::library::song_count(&dbs.library).await?;
-    let songs =
-        crate::library::songs_range(&dbs.library, offset as i64, LIBRARY_QUEUE_CHUNK as i64)
-            .await?;
+    let songs = crate::library::songs_range(
+        &dbs.library,
+        offset as i64,
+        LIBRARY_QUEUE_CHUNK as i64,
+        order,
+    )
+    .await?;
     let next = offset + songs.len();
     Ok((tracks_json(dbs, songs).await?, next, total))
 }

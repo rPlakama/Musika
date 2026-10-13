@@ -38,8 +38,8 @@ pub async fn load_albums_json(
     Ok(serde_json::to_string(&rows)?)
 }
 
-pub async fn load_songs_json(dbs: &crate::db::Dbs) -> anyhow::Result<String> {
-    let songs = crate::library::all_songs(&dbs.library).await?;
+pub async fn load_songs_json(dbs: &crate::db::Dbs, order: &str) -> anyhow::Result<String> {
+    let songs = crate::library::all_songs(&dbs.library, order).await?;
     let covers = crate::covers::url_map(&dbs.covers).await?;
     song_rows_json(&songs, &covers)
 }

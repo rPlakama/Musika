@@ -185,6 +185,24 @@ Item {
             Backend.playerToggle();
             return;
         }
+        // List ordering (Shift-L / Shift-H) is scoped to the visible list:
+        // the Songs segment cycles the song order, everything else albums
+        // (one shared cycle, `library::ORDERS`).
+        if (action === "order_next" || action === "order_prev") {
+            var forward = action === "order_next";
+            if (currentSegment === 1) {
+                if (forward)
+                    Backend.songOrderNext();
+                else
+                    Backend.songOrderPrev();
+            } else {
+                if (forward)
+                    Backend.albumOrderNext();
+                else
+                    Backend.albumOrderPrev();
+            }
+            return;
+        }
         // Ctrl-Q toggles the queue drawer from anywhere.
         if (action === "queue_toggle") {
             queueDrawer.toggle();

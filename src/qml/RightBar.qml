@@ -125,7 +125,7 @@ Rectangle {
             FadeText {
                 id: syncLabel
                 anchors.centerIn: parent
-                text: "Sync library"
+                text: "Sync"
                 color: Backend.librarySyncing ? Theme.stateDisabledContent : Theme.onPrimaryContainer
                 font.pixelSize: Theme.fontSize("label", root.height)
             }
@@ -141,7 +141,7 @@ Rectangle {
         }
 
         FadeText {
-            text: "Last sync: " + root.lastSyncText()
+            text: "Last: " + root.lastSyncText()
             color: Theme.onSurfaceVariant
             font.pixelSize: Theme.fontSize("label", root.height)
         }

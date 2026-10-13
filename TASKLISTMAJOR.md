@@ -1,9 +1,8 @@
 # Musika — TaskListMajor
 
 Master task list merging `CRITIQUE.md`, `TASKS.md`, `MICRODESIGNS.md`,
-`roadmap.md` and `materialyou3idea.md`, deduplicated and audited against the
-current working tree (commit `43e0f72` + uncommitted MY3/search/login-loading
-work).
+`roadmap.md` and `materialyou3idea.md`, deduplicated and re-audited against the
+current working tree (commit `434896e`, clean).
 
 Legend: `[x]` solved · `[ ]` open. Priorities: **P0** correctness/robustness ·
 **P1** vi fidelity · **P2** player/UX features · **P3** nice-to-have.
@@ -58,8 +57,15 @@ work is); solved/partial tasks add **Now** with the current evidence.
     delayed; the 800 ms deferred resolver is a smell.
   - **Details:** pick one convention (zero-latency play/pause recommended),
     per-binding deferral, drop the global timeout where possible.
-- [ ] **VI-10 · Drop `Ctrl-N`/`Ctrl-P` duplication** — P1 · (N7)
-  - **Why:** `j/k` already scroll; duplicate bindings muddy the keymap.
+- [ ] **VI-10 · Repurpose `Ctrl-N`/`Ctrl-P` as track skips** — P1 · (N7, Q-9)
+  - **Why:** `Ctrl-N`/`Ctrl-P` only duplicated `j/k` scrolling; the better use
+    is the one vi media users expect — next / previous track while browsing.
+  - **Details:** `j/k` keeps the list cursor (and scrolling); `Ctrl-N`/`Ctrl-P`
+    skip tracks wherever a list owns focus; fullscreen keeps the same keys
+    (Q-9's transport rule) so the ergonomics match everywhere.
+  - **Now:** `AlbumEntry.qml` maps `scroll_down`/`scroll_up` to
+    `playerNext`/`playerPrevious` (with the skip bloom); `SongList` and the
+    search columns still treat them as scroll aliases.
 - [ ] **VI-11 · Wire `gg`/`G`** — P1 · (N8a)
   - **Why:** bound in the keymap but no handler, so they dead-end silently.
   - **Details:** Top/Bottom in every list + queue.
@@ -98,7 +104,7 @@ work is); solved/partial tasks add **Now** with the current evidence.
   - **Why:** the comment claims bare Space is deferred; it resolves immediately —
     only `g g`/`shift-space …` are.
   - **Details:** fix the comment or make deferral per-binding (ties to VI-9).
-- [ ] **VI-21 · Global yank/paste (`y`/`P`) to the system clipboard** — P1 · **high priority** · (CRITIQUE Ph2 operators)
+- [x] **VI-21 · Global yank/paste (`y`/`P`) to the system clipboard** — P1 · **high priority** · (CRITIQUE Ph2 operators)
   - **Why:** copying a track out of the app and pasting a track reference back
     in are the two most basic Neovim-style verbs; today the system clipboard is
     unreachable from the keyboard.
@@ -132,8 +138,11 @@ work is); solved/partial tasks add **Now** with the current evidence.
   - **Now:** `playAlbum`/`playSong` load album/list context instead of a single
     track (qml.rs playerLoad/playAlbum).
 - [ ] **Q-3 · Shuffle / repeat** — P2 · (M3)
-  - **Why:** the `⤨` button exists but is inert; repeat-one/all is expected.
-  - **Details:** wire the button + keys, show active state via state layer.
+  - **Why:** the shuffle button exists but is inert; repeat-one/all is expected.
+  - **Details:** wire the shuffle icon + repeat mode, show the active state via
+    a state layer (stop is already wired; see UI-17).
+  - **Now:** the transport uses `random-svgrepo-com.svg` with no `onClicked`;
+    `player.rs` has no shuffle/repeat state.
 - [x] **Q-4 · Volume + mute in UI and keys** — P2 · (M4, CRITIQUE Ph3.1)
   - **Why:** mpv has volume, the backend keeps it, but the bar is a static bar.
   - **Details:** draggable slider + percentage, `m` mute, `+/-`/`]v [v` steps,
@@ -169,6 +178,16 @@ work is); solved/partial tasks add **Now** with the current evidence.
     - `Alt-j` / `Alt-k` move the selected track down/up in the queue;
     - fullscreen transport keeps `Ctrl-N` / `Ctrl-P` for next/previous track
       (not bare `n`/`p`) so the ergonomics stay consistent everywhere.
+- [ ] **Q-10 · Song activation enters Fullscreen Playback** — P2 · (roadmap D-4)
+  - **Why:** activating a song is the deliberate "listen now" verb; the user
+    should land in the listening surface (cover + lyrics + queue) instead of
+    back in the list they picked it from.
+  - **Details:** Enter (and the equivalent click) on a song — floating search
+    result or `AlbumEntry` song list — plays it and opens fullscreen; album and
+    artist activation keep their navigation semantics; queue `Enter` (jump) is
+    unchanged; the search overlay closes first, no wait on stream or palette.
+  - **Now:** not implemented — both paths only call `playSong`/`playAlbum`;
+    fullscreen still opens through `Shift+Enter`/`toggle_fullscreen` alone.
 
 ## 3. Player & media features (`P`)
 
@@ -188,6 +207,8 @@ work is); solved/partial tasks add **Now** with the current evidence.
 - [ ] **P-7 · Fullscreen controls completeness** — P2 · (U6)
   - **Why:** transport + seek landed, but volume/mute are absent in fullscreen.
   - **Details:** reuse IconButton/state layers; keep play/pause centered.
+  - **Now:** global `m`/`-`/`+` volume keys work and are listed in the
+    fullscreen keybar; an on-screen slider/mute control is still absent.
 
 ## 4. Lyrics pipeline (`LYR`) — roadmap "Lyrics" design
 
@@ -289,12 +310,28 @@ work is); solved/partial tasks add **Now** with the current evidence.
     "N albums" wording, clamped type, `quick` easing.
 - [x] **S-3 · Query `search.db` (FTS5), retire `fd`/tmpfs** — P0 · (O1, CRITIQUE §3.4)
   - **Now:** palette and overlay query FTS5 through `Backend.requestSearch`.
-- [ ] **S-4 · Decide/align search column order** — P3 · (MD10, roadmap §Floating search)
-  - **Why:** roadmap says Songs|Albums|Artists; impl/docstring use
-    Artists|Albums|Songs. Pick one and sync the docs.
+- [ ] **S-4 · Align search order and default scope** — P2 · (MD10, roadmap mixed design)
+  - **Decision (roadmap):** columns and priority are Songs > Albums > Artists;
+    the cursor starts in the first non-empty scope and falls through in that
+    order; counts move into the scope chips (S-6).
+  - **Now:** the implementation is still Artists|Albums|Songs with
+    artist-first priority (`SearchOverlay.qml:208,369-418`).
 - [ ] **S-5 · Hover steals the search cursor** — P3 · (MD15)
   - **Why:** passing the mouse over a column re-targets `activeColumn`; only
     click should change it.
+- [ ] **S-6 · Noctalia-style search chrome (scope chips + sizing)** — P2 · (roadmap mixed design)
+  - **Why:** identity and counts live in the column headers, and the panel uses
+    a raw 70% × 65%; the mixed design gives one chip row and a measured range.
+  - **Details:** toolbar + `Songs 12 · Albums 4 · Artists 3` chip row (active
+    chip `primaryContainer`, others muted, only one accented — D-1), panel
+    `clamp(win*0.70, 560, 1100)` × `clamp(win*0.65, 420, 760)`, context
+    keybar; column headers drop the counts.
+- [ ] **S-7 · Empty-query search surface + usage boost** — P2 · (roadmap mixed design)
+  - **Why:** an empty query leaves three empty columns; Noctalia leads with
+    pinned/recent instead.
+  - **Details:** one "Most played" list when the query is empty
+    (`songs.play_count` desc, then title); while typing, boost FTS hits by
+    `play_count`; keep the selected row across scope/order changes.
 
 ## 6. UI microdesigns (`UI`)
 
@@ -333,12 +370,12 @@ work is); solved/partial tasks add **Now** with the current evidence.
   - **Why:** duplicates `q`/Esc; keep only if the toolbar gains more.
 - [ ] **UI-16 · "COVER" fallback text** — P3 · (MD24)
   - **Why:** placeholder word in the art slot; use a glyph/blank surface.
-- [ ] **UI-17 · Inert controls: shuffle/stop/volume** — P1 · (MD25)
-  - **Why:** a control that does nothing breaks trust; the volume bar is a
-    static 60% fill and the speaker ignores the player volume.
-  - **Details:** wire (Q-3/Q-4) or remove until implemented.
-  - **Now:** volume is wired (Q-4, live bar + tiered icons + mute); shuffle/
-    stop are still inert (Q-3).
+- [ ] **UI-17 · Inert controls (shuffle only now)** — P2 · (MD25)
+  - **Why:** a control that does nothing breaks trust.
+  - **Details:** wire (Q-3) or remove the shuffle button; volume and stop are
+    done.
+  - **Now:** volume (Q-4) and stop (`■` → `playerStop`) are wired; shuffle
+    (`random-svgrepo-com.svg`) still has no `onClicked`.
 - [ ] **UI-18 · Icon language consistency** — P2 · (MD26/MD35)
   - **Why:** emoji speaker breaks the monochrome look; glyphs vary in weight.
 - [ ] **UI-19 · Type-role sweep + clamps everywhere** — P2 · (U10, MY3 step 7)
@@ -468,6 +505,15 @@ work is); solved/partial tasks add **Now** with the current evidence.
   - **Acceptance:** continuous resize down to ~160 px with no layout errors
     or warnings and every primary action still keyboard-reachable; no
     component overflows its pane.
+- [x] **UI-33 · Skip bloom feedback** — P2 · (transport polish)
+  - **Why:** keyboard and mouse skips were easy to miss while browsing; the
+    transport button should acknowledge the change.
+  - **Details:** a small blurred bloom in the generated primary
+    (`Palette.primary`), expanding 0.8→1.7 while fading 0.5→0
+    (`standard`/`decelerate`); play/pause untouched.
+  - **Now:** `IconButton.bloom()` + `Backend.trackSkipped(forward)` (emitted
+    from `playerNext`/`playerPrevious`); `InferiorBar` and `NowPlaying` bloom
+    the matching direction for keys, clicks and IPC alike.
 
 ## 7. Dynamic color (`THM`) — roadmap "Dynamic color" design
 
@@ -702,7 +748,7 @@ work is); solved/partial tasks add **Now** with the current evidence.
       unwraps are deliberate.
     - policy: tests keep their unwraps; prefer `expect("<what>")` when a
       failure message would save debugging time.
-- [ ] **ARC-35 · Sync button runs the complete fetch pass (index, covers, lyrics)** — P1 · **high priority**
+- [x] **ARC-35 · Sync button runs the complete fetch pass (index, covers, lyrics)** — P1 · **high priority**
   - **Why:** the Sync button is the user's "make everything current" verb, but
     lyrics were only ever fetched on demand, so a fully synced library could
     still have no lyrics; an up-to-date index also short-circuited most of the
@@ -717,8 +763,9 @@ work is); solved/partial tasks add **Now** with the current evidence.
   - **Now:** landed — `lyrics::backfill` (cap `SYNC_BACKFILL_LIMIT = 64`,
     concurrency 8, misses re-checked after the 7-day TTL) runs from both
     branches via `index::refresh_lyrics`; `SyncReport.lyrics` shows the count
-    in the finish message and the startup log. Open: ARC-8 pipeline merge,
-    ARC-3 cancellation/timeouts, per-item progress for the backfill.
+    in the finish message and the startup log. Verified live: an up-to-date
+    startup sync fetched **53 lyrics**. Open: ARC-8 pipeline merge, ARC-3
+    cancellation/timeouts, per-item progress for the backfill.
 
 ## 9. Media cache / offline (`CACHE`) — roadmap design
 
@@ -763,6 +810,14 @@ work is); solved/partial tasks add **Now** with the current evidence.
   - **Why:** `TASKS.md` and `MICRODESIGNS.md` duplicated this file.
   - **Now:** both deleted; `CRITIQUE.md`, `roadmap.md` and `materialyou3idea.md`
     are kept as rationale/design docs.
+- [x] **DOC-3 · GPLv2 licensing** — P2
+  - **Why:** the project shipped without a license; contributions and
+    redistribution needed explicit terms.
+  - **Details:** canonical GNU GPL v2 text in `LICENSE`; SPDX
+    `GPL-2.0-or-later` in `Cargo.toml`; FSF per-file notice (copyright +
+    warranty) in every source file.
+  - **Now:** landed — 339-line canonical `LICENSE`, manifest licence, and the
+    notice in all 41 Rust/QML sources.
 
 ---
 
@@ -770,17 +825,17 @@ work is); solved/partial tasks add **Now** with the current evidence.
 
 | Area | Open | Solved |
 |------|------|--------|
-| Vi modal engine | 19 | 2 |
-| Queue & grammar | 5 | 4 |
+| Vi modal engine | 18 | 3 |
+| Queue & grammar | 6 | 4 |
 | Player features | 6 | 0 |
 | Lyrics pipeline | 5 | 5 |
-| Search | 2 | 3 |
-| UI microdesigns | 26 | 6 |
+| Search | 4 | 3 |
+| UI microdesigns | 26 | 7 |
 | Dynamic color | 1 | 5 |
-| Architecture | 30 | 5 |
+| Architecture | 29 | 6 |
 | Media cache | 7 | 0 |
 | Auth/startup | 2 | 1 |
-| Docs | 1 | 1 |
+| Docs | 1 | 2 |
 
 ### Next up (ranked)
 
@@ -788,11 +843,12 @@ Order = trust/correctness > unblocking > user value > effort; full tiered
 backlog in `REMAINING.md` (local note).
 
 1. **ARC-25** — partial-fetch guard before the destructive purge (data loss).
-2. **UI-17 + Q-4** — wire the inert shuffle/stop/volume (`player.rs:306`).
-3. **ARC-5** — errors to toasts instead of `eprintln!`.
+2. **ARC-5** — errors to toasts instead of `eprintln!`.
+3. **UI-17 + Q-3** — shuffle is the last inert control; wire it + repeat.
 4. **UI-22** — empty/error states (P0, half-landed).
 5. **VI-2** — mode machine; unblocks VI-3/4/7/12/13/14/15.
-6. **VI-3** — `Ctrl-W h/j/k/l` panes, retire the blur overlay.
+6. **S-4 + Q-10** — search scope order/priority (Songs first) and song
+   activation opening fullscreen.
 7. **LYR-8** — smooth centre-follow + edge fades.
 8. **ARC-24 + ARC-33** — `catalog_epoch` + `schema_generation` in every meta.
 9. **ARC-29 + ARC-30** — content-addressed covers + hash-keyed colors.

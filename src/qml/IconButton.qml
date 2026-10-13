@@ -20,9 +20,17 @@ import QtQuick.VectorImage
 import musika
 import "Theme.js" as Theme
 
-// Square icon button. Draws a text glyph, or an SVG when `iconSource` is set
-// (VectorImage, so no QtSvg plugin is required). Size comes from the layout
-// (or the parent); the glyph is a fraction of it.
+// Square icon button. Draws a text glyph, or an SVG when `iconSource` is set.
+// Size comes from the layout (or the parent); the glyph is a fraction of it.
+//
+// SVG style (roadmap D-6), for future icons:
+//   - always `VectorImage` + `preferredRendererType: CurveRenderer`; the
+//     default GeometryRenderer flattens curves and aliases at icon sizes;
+//   - assets live in `src/icons/` (embedded as `qrc:/app/icons/*.svg` by the
+//     second `include_bytes_qml!` in `main.rs`) with white fills baked in —
+//     VectorImage cannot tint;
+//   - each layer draws inside a fixed transparent square, and multi-variant
+//     sets share a baseline, so swapping icons never moves anything.
 //
 // State layers (R6): hover 8%, focus 10% primary + hairline, press 10%,
 // disabled 12%/38%. Never colour alone.
@@ -222,6 +230,7 @@ Rectangle {
             anchors.centerIn: parent
             visible: glyphB.iconGlyph.toString().length > 0
             source: glyphB.iconGlyph
+            // CurveRenderer has built-in AA (roadmap D-6).
             preferredRendererType: VectorImage.CurveRenderer
             width: root.width * root.symbolRatio
             height: width

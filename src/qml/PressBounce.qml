@@ -25,6 +25,8 @@ import "Theme.js" as Theme
 //     fx.press()
 //
 // A transform only, so layout siblings never move. Honors reduceMotion.
+// `QtObject` has no default property, so the animation lives in an object
+// property instead of being a child.
 QtObject {
     id: root
 
@@ -35,12 +37,10 @@ QtObject {
     function press() {
         if (!target || Theme.reduceMotion)
             return;
-        bounce.restart();
+        root.bounce.restart();
     }
 
-    SequentialAnimation {
-        id: bounce
-
+    property SequentialAnimation bounce: SequentialAnimation {
         NumberAnimation {
             target: root.target
             property: "scale"

@@ -377,49 +377,47 @@ The product is incomplete without these.
 - [ ] **P-5 · Radio** — P2 · (M6, roadmap)
   - **Why:** sidebar segment is a placeholder; Subsonic radio endpoints exist.
 
-- [ ] **P-6 · Resume-on-launch** — P2 · (roadmap DB7 "Session status")
+- [x] **P-6 · Resume-on-launch** — P2 · (roadmap DB7 "Session status")
   - **Why:** power users expect the session to survive restarts; today the
     player resets and `Home` always opens on the album list.
   - **Details:** DB7 `statussave.db` (single row: server/username, album_id,
-    song_id, volume, muted, updated_at); dirty-flag writes behind a dedicated
-    500 ms debounce (not the player tick) plus a flush on window close; read
-    in `login_succeeded` and applied (volume/mute to the player, album page
-    reopened, last song queued paused -- no autoplay); unknown ids / account
-    mismatch are ignored silently. Milestones S0-S3 in the roadmap's "Session
-    status" design. DB7 stays separate: credentials is login material only.
-  - **Now (partial):** S0–S2 landed — DB7 `statussave.db`
-    (`migrations_status/`, `src/status.rs`: single-row upsert + load with
-    tests, `MUSIKA_STATUS_FILE`; `Dbs.status`). Writes are account-scoped and
-    coalesced by a generation debounce (500 ms task, deliberately not the
-    player tick, so stopped-state changes persist); volume/mute restore in
-    `login_succeeded` through `applyStatus`, with auto-login now calling
-    `rememberAccount` (it never touched the Login fields, so the row could
-    not be matched before). Verified live: MPRIS set 0.42 → stored row →
-    restored 0.42 on relaunch. S2: `rememberAlbum` on every album-page push
-    (grid/list/search/song-album flows) and `rememberSong` on
-    `current_song_id` changes feed the same row; restore validates both ids
-    against library.db (`resume_payload`, unknown ids dropped like a first
-    launch) and emits `statusRestored` → `Home` reopens the album page and
-    loads the song's album queue **paused** (`Player::load_paused`, no
-    autoplay/fullscreen; a missing-credentials queue degrades to just the
-    album page instead of failing the login). Unit tests cover id validation
-    and the start-index helper (80 pass). E2E restart test was deferred: a
-    live instance shares `~/.config/musika` and writes the same row.
-    Open: S3 queue snapshot + saved position.
+    song_id, queue + queue_index + position, volume, muted, updated_at);
+    dirty-flag writes behind a dedicated 500 ms debounce (not the player
+    tick) plus a flush on window close; read in `login_succeeded` and applied
+    (volume/mute to the player, album page reopened, queue restored paused at
+    the saved position -- no autoplay); unknown ids / account mismatch are
+    ignored silently. Milestones S0-S3 in the roadmap's "Session status"
+    design. DB7 stays separate: credentials is login material only.
+  - **Now:** S0–S3 landed — DB7 `statussave.db` (`migrations_status/`,
+    `src/status.rs`: single-row upsert + load with tests, `MUSIKA_STATUS_FILE`;
+    `Dbs.status`). Writes are account-scoped and coalesced by a generation
+    debounce (500 ms task, deliberately not the player tick, so stopped-state
+    changes persist); volume/mute restore in `login_succeeded` through
+    `applyStatus`, with auto-login now calling `rememberAccount` (it never
+    touched the Login fields, so the row could not be matched before).
+    Verified live: MPRIS set 0.42 → stored row → restored 0.42 on relaunch.
+    S2: `rememberAlbum` on every album-page push (grid/list/search/song-album
+    flows) and `rememberSong` on `current_song_id` changes feed the same row;
+    restore validates the ids against library.db (`resume_payload`, unknown
+    ids dropped like a first launch) and emits `statusRestored` → `Home`
+    reopens the album page and loads the queue **paused**
+    (`Player::load_paused`, no autoplay/fullscreen; a missing-credentials
+    queue degrades to just the album page instead of failing the login).
+    S3: the row also carries the full queue snapshot (`queue` JSON ids +
+    `queue_index`) and the playhead (`position`); `resume_payload` prefers the
+    snapshot (stale ids dropped, index follows the surviving current song;
+    pre-S3 rows fall back to the S2 album rebuild), and `playerLoadPaused`
+    applies the saved position once. Position rides the tick every 10 s while
+    playing; `flushStatus` on window close cancels the pending debounce and
+    does one synchronous upsert. Tests: storage round trip + id validation +
+    snapshot index (81 pass). E2E restart test still deferred: a live instance
+    shares `~/.config/musika` and writes the same row.
 
 - [ ] **LYR-6 · Optional: karaoke v2, lyric FTS, `:lyrics`** — P3 · (roadmap L5)
   - **Why:** word-level timing and lyric search are stretch goals; server
     support for `enhanced` varies.
   - **Details:** `enhanced=true` `cueLine`/`agents`/translations; index lyric
     text in search.db FTS5; `:lyrics sync` backfill per album/artist.
-
-- [ ] **LYR-8 · Smooth centre-follow + edge fades** — P2 · (roadmap "Lyrics presentation" P1)
-  - **Why:** `positionViewAtIndex(Center)` teleports each line and every
-    500 ms tick fights manual scrolling (NowPlaying.qml:109-110, 124-127).
-  - **Details:** animate `contentY` to the active delegate's centre
-    (`standard`/`decelerate`, `quick` for tiny moves); pause follow on
-    `onMovementStarted`, resume after ~4 s idle or on track change; top/bottom
-    gradients from `surfaceContainerLow` to transparent.
 
 - [ ] **LYR-10 · Word-level karaoke (`cueLine`)** — P3 · (roadmap "Lyrics presentation" P3)
   - **Why:** optional stretch; the OpenSubsonic `enhanced=true` payload offers
@@ -435,13 +433,6 @@ The product is incomplete without these.
     chip `primaryContainer`, others muted, only one accented — D-1), panel
     `clamp(win*0.70, 560, 1100)` × `clamp(win*0.65, 420, 760)`, context
     keybar; column headers drop the counts.
-
-- [ ] **S-7 · Empty-query search surface + usage boost** — P2 · (roadmap mixed design)
-  - **Why:** an empty query leaves three empty columns; Noctalia leads with
-    pinned/recent instead.
-  - **Details:** one "Most played" list when the query is empty
-    (`songs.play_count` desc, then title); while typing, boost FTS hits by
-    `play_count`; keep the selected row across scope/order changes.
 
 - [ ] **S-8 · Songs column follows a single album match (track order)** — P1 · **top priority** · (search follow-up)
   - **Why:** when a query resolves to exactly one album, the Songs column still
@@ -463,9 +454,6 @@ The product is incomplete without these.
 
 - [ ] **UI-9 · Extract a shared `ListRow`** — P2 · (MD17)
   - **Why:** three near-identical delegates drift (zebra/cursor/cover/text).
-
-- [ ] **UI-13 · Scroll position hint** — P3 · (MD21)
-  - **Why:** long lists have no scrollbar/position feedback for mouse users.
 
 - [ ] **UI-19 · Type-role sweep + clamps everywhere** — P2 · (U10, MY3 step 7)
   - **Why:** inline `font.pixelSize` fractions drift per view.
@@ -569,17 +557,6 @@ The product is incomplete without these.
     `Theme.reduceMotion` gates `FadeText` and the skip bloom; the seven
     legacy `Theme.duration`/`Theme.easeOut` files now use motion tiers.
 
-- [ ] **UI-40 · Palette transition wrapper (finish THM-4)** — P2 · (POLISHAUDIT §1.3)
-  - **Why:** `Palette.apply` snaps every colour in one frame; THM-4 promised
-    an animated swap.
-  - **Details:** a QML `Palette` wrapper (or per-role Behaviors) animating
-    role changes `micro`/`standard`, no animation on first apply/reset.
-
-- [ ] **UI-41 · List scroll easing + payload crossfades** — P3 · (POLISHAUDIT §4)
-  - **Why:** keyboard moves teleport and model swaps flash.
-  - **Details:** animate small `contentY` corrections for search/queue,
-    crossfade lists on payload swap (`quick`), keep lyric follow in LYR-8.
-
 - [ ] **UI-42 · SuperiorBar: API-backed server + user identity** — P2 · (RightBar audit)
   - **Why:** the top bar (today `RightBar.qml`) only shows a capitalized
     `Backend.serverType`; it never says who is connected. The Subsonic/
@@ -618,6 +595,25 @@ The product is incomplete without these.
   - **Verify:** resize a window down to the minimum in every view (albums,
     songs, artists, ArtistEntry, album page, search, queue, fullscreen) with
     absurdly long metadata; no overlaps/clipped labels; `qmllint` clean.
+
+- [ ] **UI-44 · Keybind ↔ insight parity ("if there's a keybind, there's an insight")** — P1 · (U1, VI-12/VI-15, order-cue case)
+  - **Why:** a binding nobody can discover is dead weight, and insights must
+    not drift from the engine: the order cue (`Shift-H`/`Shift-L`) was deleted
+    with its hint strip in `3385091` and had to be restored in the AlbumList
+    header, proving the rule has to be explicit and enforced.
+  - **Details:**
+    - every binding has at least one visible insight: a cue at its point of
+      use (e.g. the order cue), the showcmd/which-key card while a sequence is
+      pending (VI-12), or a `?`/`:help` row (VI-15);
+    - one source of truth: `keybind.rs` gains a short description per binding
+      (`("shift-h", OrderPrev, "previous album order")`), consumed by the
+      cheatsheet and the README keybind table so hints cannot drift;
+    - audit gate: a test/script diffs the binding table against the insight
+      registry and fails on a binding without an insight (and vice versa);
+    - keys with a local surface document themselves where they act (search
+      footer, fullscreen keybar), not in the global registry.
+  - **Now:** principle stated; the order cue is the current example; no
+    registry or audit exists yet.
 
 
 - [ ] **THM-6 · Rewrite the color engine on DMS's pipeline** — P2 · (MATUGENSTUDY.md; roadmap T5+)
@@ -887,10 +883,6 @@ The product is incomplete without these.
     the status bar; offline filter; permanent-tier warning threshold.
 
 
-- [ ] **AUTH-3 · Login error/status roles** — P2
-  - **Why:** login surface predates the MY3 roles (no container/error tokens,
-    clamped type); align with Theme.
-
 - [x] **PKG-1 · Desktop entry + hicolor app icons (NixOS parity)** — P2 · (DESKTOPICONSTUDY.md)
   - **Why:** the package ships a bare binary: no `.desktop`, no app icon, so
     launchers/docks show a generic blank entry and no window grouping metadata.
@@ -916,10 +908,6 @@ The product is incomplete without these.
     wired in `flake.nix` and verified with `nix build` (store layout). GNOME/KDE
     launcher + dock grouping still a manual pass on a desktop session.
 
-
-- [ ] **DOC-1 · Keep design docs in sync with the tree** — P2 · (A10)
-  - **Why:** CRITIQUE/roadmap/materialyou3 describe pre-implementation states.
-
 ## Quick wins
 
 > **All quick wins are done** (2026-10-13): UI-2, UI-4, UI-6, UI-7, UI-10,
@@ -932,6 +920,45 @@ The product is incomplete without these.
 > `set_ignore_missing` for already-migrated databases.
 
 Small, bounded, high-value changes.
+
+> **0.0.8 batch** — moved from Should have on 2026-10-13 (small, bounded,
+> low-risk): UI-13, UI-40, UI-41, LYR-8, S-9, AUTH-3, DOC-1.
+
+- [ ] **UI-13 · Scroll position hint** — P3 · (MD21)
+  - **Why:** long lists have no scrollbar/position feedback for mouse users.
+
+- [ ] **UI-40 · Palette transition wrapper (finish THM-4)** — P2 · (POLISHAUDIT §1.3)
+  - **Why:** `Palette.apply` snaps every colour in one frame; THM-4 promised
+    an animated swap.
+  - **Details:** a QML `Palette` wrapper (or per-role Behaviors) animating
+    role changes `micro`/`standard`, no animation on first apply/reset.
+
+- [ ] **UI-41 · List scroll easing + payload crossfades** — P3 · (POLISHAUDIT §4)
+  - **Why:** keyboard moves teleport and model swaps flash.
+  - **Details:** animate small `contentY` corrections for search/queue,
+    crossfade lists on payload swap (`quick`), keep lyric follow in LYR-8.
+
+- [ ] **LYR-8 · Smooth centre-follow + edge fades** — P2 · (roadmap "Lyrics presentation" P1)
+  - **Why:** `positionViewAtIndex(Center)` teleports each line and every
+    500 ms tick fights manual scrolling (NowPlaying.qml:109-110, 124-127).
+  - **Details:** animate `contentY` to the active delegate's centre
+    (`standard`/`decelerate`, `quick` for tiny moves); pause follow on
+    `onMovementStarted`, resume after ~4 s idle or on track change; top/bottom
+    gradients from `surfaceContainerLow` to transparent.
+
+- [ ] **S-9 · Empty-query search surface + usage boost** — P2 · (roadmap mixed design)
+  - **Why:** an empty query leaves three empty columns; Noctalia leads with
+    pinned/recent instead.
+  - **Details:** one "Most played" list when the query is empty
+    (`songs.play_count` desc, then title); while typing, boost FTS hits by
+    `play_count`; keep the selected row across scope/order changes.
+
+- [ ] **AUTH-3 · Login error/status roles** — P2
+  - **Why:** login surface predates the MY3 roles (no container/error tokens,
+    clamped type); align with Theme.
+
+- [ ] **DOC-1 · Keep design docs in sync with the tree** — P2 · (A10)
+  - **Why:** CRITIQUE/roadmap/materialyou3 describe pre-implementation states.
 
 - [x] **VI-6 · `Ctrl-[` alias + pending-sequence cancel** — P1 · (N3 residual)
   - **Why:** `Ctrl-[` is muscle memory for Esc; Esc should also clear a half-typed
@@ -1548,25 +1575,25 @@ Kept for rationale; the tree already carries these.
 
 | Bucket | Open | Solved |
 |--------|------|--------|
-| Must have | 8 | — |
-| Should have | 65 | 4 |
-| Quick wins | 0 | 43 |
+| Must have | 8 | 1 |
+| Should have | 58 | 5 |
+| Quick wins | 7 | 43 |
 | Solved (reference) | — | 36 |
-| **Total** | **73** | **84** |
+| **Total** | **73** | **85** |
 
 ### Coverage by area
 
 | Area | Open | Solved |
 |------|------|--------|
 | Vi modal engine | 11 | 10 |
-| Queue & playback grammar | 4 | 6 |
+| Queue & playback grammar | 3 | 7 |
 | Player & media features | 5 | 2 |
-| Lyrics pipeline | 3 | 7 |
-| Search | 3 | 6 |
-| UI microdesigns | 15 | 28 |
+| Lyrics pipeline | 2 | 7 |
+| Search | 2 | 6 |
+| UI microdesigns | 13 | 28 |
 | Dynamic color | 1 | 5 |
 | Architecture & robustness | 22 | 15 |
 | Media cache / offline | 7 | 0 |
-| Auth / startup | 1 | 2 |
-| Docs & process | 1 | 2 |
+| Auth / startup | 0 | 2 |
+| Docs & process | 0 | 2 |
 | Packaging | 0 | 1 |

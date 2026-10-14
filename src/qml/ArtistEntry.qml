@@ -171,56 +171,10 @@ Rectangle {
             Layout.fillWidth: true
             spacing: root.width * 0.02
 
-            Rectangle {
-                implicitWidth: backContent.implicitWidth + root.width * 0.04
-                implicitHeight: root.height * 0.045
-                radius: Theme.radius
-                color: backHover.hovered ? Palette.secondaryContainer : Palette.surfaceContainerHigh
-                border.color: Palette.outlineVariant
-                border.width: Math.max(1, root.height * Theme.hairlineRatio)
-
-                Behavior on color {
-                    ColorAnimation {
-                        duration: Theme.motion.quick
-                        easing.type: Easing.Bezier
-                        easing.bezierCurve: Theme.ease.standard
-                    }
-                }
-
-                Row {
-                    id: backContent
-                    anchors.centerIn: parent
-                    spacing: root.height * 0.01
-
-                    Item {
-                        anchors.verticalCenter: parent.verticalCenter
-                        width: root.height * 0.026
-                        height: width
-
-                        SymbolIcon {
-                            anchors.centerIn: parent
-                            source: "qrc:/app/icons/exit-2-svgrepo-com.svg"
-                            symbolColor: Theme.iconStrong
-                            width: parent.width * 0.85
-                            height: width
-                        }
-                    }
-
-                    FadeText {
-                        anchors.verticalCenter: parent.verticalCenter
-                        text: "ESC"
-                        color: Palette.onSurface
-                        font.pixelSize: root.height * 0.022
-                    }
-                }
-
-                HoverHandler {
-                    id: backHover
-                    cursorShape: Qt.PointingHandCursor
-                }
-                TapHandler {
-                    onTapped: root.back()
-                }
+            ExitChip {
+                host: root
+                label: "ESC/Q"
+                onClicked: root.back()
             }
 
             Item {

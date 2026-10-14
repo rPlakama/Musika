@@ -317,59 +317,12 @@ Rectangle {
                 elide: Text.ElideRight
             }
 
-            // Exit chip, same style as the AlbumEntry back button: exit icon +
-            // "ESC" inside the tonal rectangle (D-6 SymbolIcon, strong glyph).
-            Rectangle {
-                id: exitButton
-                implicitWidth: exitContent.implicitWidth + root.width * 0.02
-                implicitHeight: root.height * 0.045
-                radius: Theme.radius
-                color: exitHover.hovered ? Palette.secondaryContainer : Palette.surfaceContainerHigh
-                border.color: Palette.outlineVariant
-                border.width: Math.max(1, root.height * Theme.hairlineRatio)
-
-                Behavior on color {
-                    ColorAnimation {
-                        duration: Theme.motion.quick
-                        easing.type: Easing.Bezier
-                        easing.bezierCurve: Theme.ease.standard
-                    }
-                }
-
-                Row {
-                    id: exitContent
-                    anchors.centerIn: parent
-                    spacing: root.height * 0.01
-
-                    Item {
-                        anchors.verticalCenter: parent.verticalCenter
-                        width: root.height * 0.026
-                        height: width
-
-                        SymbolIcon {
-                            anchors.centerIn: parent
-                            source: "qrc:/app/icons/exit-2-svgrepo-com.svg"
-                            symbolColor: Theme.iconStrong
-                            width: parent.width * 0.85
-                            height: width
-                        }
-                    }
-
-                    FadeText {
-                        anchors.verticalCenter: parent.verticalCenter
-                        text: "ESC/Q"
-                        color: Palette.onSurface
-                        font.pixelSize: root.height * 0.022
-                    }
-                }
-
-                HoverHandler {
-                    id: exitHover
-                    cursorShape: Qt.PointingHandCursor
-                }
-                TapHandler {
-                    onTapped: root.exitRequested()
-                }
+            // Exit chip: same shared control as the album/artist headers.
+            ExitChip {
+                host: root
+                label: "ESC/Q"
+                padRatio: 0.02
+                onClicked: root.exitRequested()
             }
         }
 

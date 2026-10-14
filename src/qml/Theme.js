@@ -80,8 +80,8 @@ var zTooltip = 60
 
 // Top-level layout ratios (fraction of the window).
 var sidebarRatio = 0.15
-var topBarRatio = 0.09
-var playerRatio = 0.115
+var topBarRatio = 0.072
+var playerRatio = 0.092
 
 // 1px-ish hairlines, but proportional so they survive scaling.
 var hairlineRatio = 0.0018

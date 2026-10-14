@@ -155,7 +155,6 @@
       devShells.${system}.default = pkgs.mkShell {
         nativeBuildInputs = with pkgs; [
           pkg-config
-          rustPlatform.bindgenHook # drop if no crate needs libclang -- which is prob the case;;
         ];
 
         # Should be a proper way to organize this, perhaps when in build time to actually adjust
@@ -163,7 +162,6 @@
         buildInputs = with pkgs; [
           rustc
           cargo
-          ffmpeg_4
           mpv
           rust-analyzer
           sqlite

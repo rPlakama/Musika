@@ -31,6 +31,7 @@
 
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::UnixStream;
+use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex};
@@ -389,24 +390,15 @@ impl Player {
         let socket = socket_path();
         let _ = std::fs::remove_file(&socket);
 
-        // Run mpv under a tiny supervisor shell that watches our PID and
-        // terminates mpv if we die (even on SIGKILL, where Drop never runs).
-        // Args are passed positionally -- no shell string interpolation
-        // (ARC-16): $0 is the label, $1 the parent PID, the rest goes to mpv.
-        let parent = std::process::id().to_string();
+        // mpv is our direct child and the kernel TERMs it if we die (even on
+        // SIGKILL, where Drop never runs): PR_SET_PDEATHSIG in `pre_exec`, no
+        // supervisor shell. PDEATHSIG follows the spawning thread, and
+        // `ensure_ready` runs on the Qt thread, which lives for the process.
+        let parent = std::process::id();
         let socket_arg = format!("--input-ipc-server={}", socket.display());
 
-        let mut command = Command::new("sh");
+        let mut command = Command::new("mpv");
         command
-            .arg("-c")
-            .arg(
-                "parent=$1; shift; mpv \"$@\" & MPV=$!; \
-                 trap 'kill -TERM $MPV 2>/dev/null; exit 0' TERM INT; \
-                 while kill -0 \"$parent\" 2>/dev/null; do sleep 0.5; done; \
-                 kill -TERM $MPV 2>/dev/null",
-            )
-            .arg("musika-supervisor")
-            .arg(&parent)
             .arg("--no-video")
             .arg("--idle=yes")
             .arg("--no-terminal")
@@ -416,6 +408,19 @@ impl Player {
             if !script.is_empty() {
                 command.arg(format!("--script={script}"));
             }
+        }
+        unsafe {
+            command.pre_exec(move || {
+                if libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGTERM) == -1 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                // The parent may have died between fork and prctl; PDEATHSIG
+                // would not fire then, so bail out instead of leaking.
+                if libc::getppid() as u32 != parent {
+                    return Err(std::io::Error::other("parent died before spawn"));
+                }
+                Ok(())
+            });
         }
 
         let spawn = command
@@ -469,9 +474,8 @@ impl Drop for Player {
     fn drop(&mut self) {
         self.ipc = None;
         if let Some(mut child) = self.child.take() {
-            // The supervisor traps TERM and shuts mpv down; SIGKILL would skip
-            // that, so signal it explicitly instead of `child.kill()`.
-            signal(child.id(), "TERM");
+            // mpv shuts down cleanly on TERM; `child.kill()` would SIGKILL it.
+            signal(child.id(), libc::SIGTERM);
             let _ = child.wait();
         }
         if let Some(socket) = &self.socket {
@@ -499,15 +503,11 @@ fn connect_retry(path: &Path, timeout: Duration) -> Option<UnixStream> {
     }
 }
 
-fn signal(pid: u32, signal: &str) {
-    // Direct `kill` binary, never `sh -c` (ARC-16).
-    let _ = Command::new("kill")
-        .arg(format!("-{signal}"))
-        .arg(pid.to_string())
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status();
+fn signal(pid: u32, signal: libc::c_int) {
+    // Native kill(2), no `kill` binary spawn (ARC-16).
+    unsafe {
+        libc::kill(pid as libc::pid_t, signal);
+    }
 }
 
 fn spawn_reader(stream: UnixStream, shared: Arc<Mutex<Shared>>) {

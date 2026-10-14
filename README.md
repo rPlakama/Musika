@@ -25,7 +25,7 @@ music library the way they browse a buffer.
 src/
 ├── main.rs         QApp bootstrap; embeds QML + SVG resources (include_bytes_qml!)
 ├── qml.rs          Backend singleton — every QML property/slot lives here
-├── player.rs       mpv supervisor, queue, IPC reader, volume/mute
+├── player.rs       mpv subprocess, queue, IPC reader, volume/mute
 ├── api.rs          Subsonic/OpenSubsonic endpoints and response types
 ├── http_client.rs  one blocking client behind the async runtime
 ├── index.rs        sync orchestration: library → search → covers → lyrics

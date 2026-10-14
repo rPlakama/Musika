@@ -1489,7 +1489,14 @@ impl Backend {
                 Ok(json) => json,
                 Err(err) => {
                     eprintln!("search: {err:#}");
-                    "{\"artists\":[],\"albums\":[],\"songs\":[]}".to_string()
+                    serde_json::json!({
+                        "query": query,
+                        "most_played": query.trim().is_empty(),
+                        "artists": [],
+                        "albums": [],
+                        "songs": []
+                    })
+                    .to_string()
                 }
             };
             qtbridge::invoke_method!(invoker, "emitData", "search".to_string(), json);

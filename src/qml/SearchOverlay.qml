@@ -47,7 +47,7 @@ Item {
     visible: opened || panel.opacity > 0
     z: Theme.zOverlay
 
-    // UI-49: one reusable denied-input cue (shake + bounce); the red glyph
+    // UI-49: one reusable denied-input cue (shake + bounce); the red mode-chip
     // flash below rides the same call.
     ShakeFx {
         id: denyFx
@@ -55,15 +55,15 @@ Item {
     }
 
     SequentialAnimation {
-        id: glyphFlash
+        id: modeFlash
         NumberAnimation {
-            target: glyphFlashIcon
+            target: modeFlashLabel
             property: "opacity"
             to: 1
             duration: Theme.motion.flash
         }
         NumberAnimation {
-            target: glyphFlashIcon
+            target: modeFlashLabel
             property: "opacity"
             to: 0
             duration: Theme.motion.quick
@@ -74,7 +74,7 @@ Item {
         if (Theme.reduceMotion || field.text.length === 0 || denyFx.swing.running)
             return;
         denyFx.shake();
-        glyphFlash.restart();
+        modeFlash.restart();
     }
 
     function open() {
@@ -91,7 +91,11 @@ Item {
         clearResults();
         activeColumn = 0;
         field.text = text;
-        loading = text.length > 0;
+        loading = true;
+        // S-9: an empty field opens on the Most-played surface; a typed field
+        // goes through the debounce.
+        if (text.length === 0)
+            Backend.requestSearch("");
         typing = true;
         field.forceActiveFocus();
         field.cursorPosition = field.text.length;
@@ -183,7 +187,16 @@ Item {
         column.cursor = next;
     }
 
+    // S-9: the "Most played" right-hand meta.
+    function playCountLabel(count) {
+        var n = Number(count) || 0;
+        return n + (n === 1 ? " play" : " plays");
+    }
+
     function moveColumn(delta) {
+        // S-9: the empty-query surface has a single column.
+        if (field.text.length === 0)
+            return;
         activeColumn = (activeColumn + delta + 3) % 3;
         var column = columnFor(activeColumn);
         if (column.cursor < 0 && column.model && column.model.count > 0)
@@ -218,7 +231,12 @@ Item {
     }
 
     function apply(payload) {
-        if (!root.opened || field.text.length === 0)
+        if (!root.opened)
+            return;
+
+        var data = JSON.parse(payload);
+        // A response for a query the field no longer holds is stale.
+        if (data.query !== undefined && data.query !== field.text)
             return;
 
         // UI-41: results crossfade in on payload swaps instead of flashing.
@@ -227,7 +245,6 @@ Item {
         albumResults.clear();
         artistResults.clear();
 
-        var data = JSON.parse(payload);
         var i;
         for (i = 0; i < data.songs.length; i++) {
             var song = data.songs[i];
@@ -235,7 +252,11 @@ Item {
                 id: song.id,
                 title: song.title,
                 subtitle: (song.artist ? song.artist : "") + (song.album ? " · " + song.album : ""),
-                meta: Theme.formatTime(song.duration),
+                // S-9: the empty-query surface (Most played) shows the play
+                // count where a search hit shows the duration.
+                meta: data.most_played
+                    ? root.playCountLabel(song.play_count)
+                    : Theme.formatTime(song.duration),
                 cover: song.cover
             });
         }
@@ -268,8 +289,11 @@ Item {
         songsColumn.cursor = songResults.count > 0 ? 0 : -1;
         albumsColumn.cursor = albumResults.count > 0 ? 0 : -1;
         artistsColumn.cursor = artistResults.count > 0 ? 0 : -1;
-        // Lookup priority picks the column the cursor starts in.
-        activeColumn = songResults.count > 0 ? 0 : (albumResults.count > 0 ? 1 : 2);
+        // Lookup priority picks the column the cursor starts in; the
+        // empty-query surface only has the Most-played column.
+        activeColumn = data.most_played
+            ? 0
+            : (songResults.count > 0 ? 0 : (albumResults.count > 0 ? 1 : 2));
 
         loading = false;
         Qt.callLater(function () {
@@ -277,9 +301,10 @@ Item {
         });
 
         // UI-49: the response landing on zero hits is denied input — once per
-        // distinct query, never again while the same zero query is held.
+        // distinct query, never again while the same zero query is held. An
+        // empty library is not denied input.
         var total = songResults.count + albumResults.count + artistResults.count;
-        if (total === 0) {
+        if (!data.most_played && total === 0) {
             if (field.text !== root._zeroQuery)
                 root.denied();
             root._zeroQuery = field.text;
@@ -304,13 +329,15 @@ Item {
         id: debounce
         interval: 120
         onTriggered: {
-            if (field.text.length > 0) {
-                root.loading = true;
-                Backend.requestSearch(field.text);
-            } else {
+            root.loading = true;
+            if (field.text.length === 0) {
+                // S-9: clearing the field returns to the Most-played surface
+                // (drop the typed hits first so only the surface swaps).
                 root.clearResults();
-                root.loading = false;
+                Backend.requestSearch("");
+                return;
             }
+            Backend.requestSearch(field.text);
         }
     }
 
@@ -386,7 +413,10 @@ Item {
                 TextField {
                     id: field
                     Layout.fillWidth: true
-                    leftPadding: panel.height * 0.092
+                    // The mode chip sits in the field's left padding (it
+                    // replaced the search glyph), so the text starts after it.
+                    implicitHeight: panel.height * 0.06
+                    leftPadding: panel.height * 0.03 + modeChip.width + panel.height * 0.03
                     placeholderText: "Search anything"
                     placeholderTextColor: Palette.onSurfaceVariant
                     color: Palette.onSurface
@@ -402,29 +432,42 @@ Item {
                         border.color: field.activeFocus ? Palette.primary : Palette.outlineVariant
                         border.width: Math.max(1, root.height * Theme.hairlineRatio)
 
-                        // The glyph lives inside the field's own left padding,
-                        // inset from the border with a gap before the text, so
-                        // the input edge still lines up with the columns below.
-                        // Fixed white like the other SVG glyphs (Theme.iconStrong).
-                        SymbolIcon {
-                            id: searchGlyph
+                        // Mode chip: INSERT while typing, NORMAL while
+                        // navigating. Moved from the row's right edge into the
+                        // field's left padding, where it replaces the search
+                        // glyph; the denied red flash rides its label.
+                        Rectangle {
+                            id: modeChip
                             anchors.left: parent.left
                             anchors.leftMargin: panel.height * 0.03
                             anchors.verticalCenter: parent.verticalCenter
-                            width: panel.height * 0.03
-                            height: width
-                            source: "qrc:/app/icons/search-right-1505-svgrepo-com.svg"
-                            symbolColor: Theme.iconStrong
-                        }
+                            height: parent.height * 0.7
+                            width: modeChipLabel.implicitWidth + height * 0.9
+                            radius: Theme.radius
+                            color: Palette.surfaceContainerHighest
+                            border.width: Math.max(1, root.height * Theme.hairlineRatio)
+                            border.color: Palette.primary
 
-                        // UI-49: the glyph asset is fixed white, so the denied
-                        // flash is a red-tinted copy fading over it.
-                        SymbolIcon {
-                            id: glyphFlashIcon
-                            anchors.fill: searchGlyph
-                            source: searchGlyph.source
-                            symbolColor: Palette.error
-                            opacity: 0
+                            FadeText {
+                                id: modeChipLabel
+                                anchors.centerIn: parent
+                                text: root.typing ? "I" : "N"
+                                color: Palette.primary
+                                font.pixelSize: Theme.fontSize("label", panel.height)
+                                animated: false
+                            }
+
+                            // UI-49: the denied cue's red copy of the label,
+                            // fading in over the normal one.
+                            FadeText {
+                                id: modeFlashLabel
+                                anchors.centerIn: parent
+                                text: modeChipLabel.text
+                                color: Palette.error
+                                font.pixelSize: Theme.fontSize("label", panel.height)
+                                opacity: 0
+                                animated: false
+                            }
                         }
                     }
 
@@ -457,26 +500,6 @@ Item {
                         event.accepted = true;
                     }
                 }
-
-                // Mode chip: INSERT while typing, NORMAL while navigating.
-                // Same geometry and accent as the superior-bar NORMAL chip.
-                Rectangle {
-                    implicitWidth: modeChipLabel.implicitWidth + panel.height * 0.05
-                    implicitHeight: panel.height * 0.06
-                    radius: Theme.radius
-                    color: Palette.surfaceContainerHighest
-                    border.width: Math.max(1, root.height * Theme.hairlineRatio)
-                    border.color: Palette.primary
-
-                    FadeText {
-                        id: modeChipLabel
-                        anchors.centerIn: parent
-                        text: root.typing ? "I" : "N"
-                        color: Palette.primary
-                        font.pixelSize: Theme.fontSize("label", panel.height)
-                        animated: false
-                    }
-                }
             }
 
             // Column widths are RowLayout weights (38/40/22), not pixels:
@@ -501,7 +524,8 @@ Item {
                     Layout.fillWidth: true
                     Layout.preferredWidth: 38
                     Layout.fillHeight: true
-                    title: "Songs"
+                    // S-9: the empty-query surface uses this column alone.
+                    title: field.text.length > 0 ? "Songs" : "Most played"
                     model: songResults
                     active: root.activeColumn === 0
                     loading: root.loading
@@ -522,6 +546,7 @@ Item {
                     Layout.preferredWidth: Math.max(1, panel.height * Theme.hairlineRatio)
                     color: Palette.outlineVariant
                     z: 1
+                    visible: field.text.length > 0
                 }
 
                 SearchColumn {
@@ -534,6 +559,7 @@ Item {
                     active: root.activeColumn === 1
                     loading: root.loading
                     hasQuery: field.text.length > 0
+                    visible: field.text.length > 0
 
                     onPicked: index => {
                         albumsColumn.cursor = index;
@@ -547,6 +573,7 @@ Item {
                     Layout.preferredWidth: Math.max(1, panel.height * Theme.hairlineRatio)
                     color: Palette.outlineVariant
                     z: 1
+                    visible: field.text.length > 0
                 }
 
                 SearchColumn {
@@ -560,6 +587,7 @@ Item {
                     active: root.activeColumn === 2
                     loading: root.loading
                     hasQuery: field.text.length > 0
+                    visible: field.text.length > 0
 
                     onPicked: index => {
                         artistsColumn.cursor = index;

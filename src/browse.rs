@@ -157,12 +157,21 @@ fn cover_url(id: Option<&str>, covers: &HashMap<String, String>) -> String {
 }
 
 pub async fn search_json(dbs: &crate::db::Dbs, query: &str) -> anyhow::Result<String> {
-    if query.trim().is_empty() {
-        return Ok("{\"artists\":[],\"albums\":[],\"songs\":[]}".to_string());
-    }
-
-    let (artists, albums) = crate::library::search_artists_albums(&dbs.library, query, 20).await?;
-    let songs = crate::search::search(&dbs.search, query, 20).await?;
+    // S-9: an empty query is the "Most played" surface, not three dead
+    // columns.
+    let most_played = query.trim().is_empty();
+    let (artists, albums, songs) = if most_played {
+        (
+            Vec::new(),
+            Vec::new(),
+            crate::search::most_played(&dbs.search, 20).await?,
+        )
+    } else {
+        let (artists, albums) =
+            crate::library::search_artists_albums(&dbs.library, query, 20).await?;
+        let songs = crate::search::search(&dbs.search, query, 20).await?;
+        (artists, albums, songs)
+    };
     let covers = crate::covers::url_map(&dbs.covers).await?;
 
     let song_ids: Vec<String> = songs.iter().map(|song| song.song_id.clone()).collect();
@@ -206,12 +215,15 @@ pub async fn search_json(dbs: &crate::db::Dbs, query: &str) -> anyhow::Result<St
                 "artist": song.artist,
                 "album": song.album,
                 "duration": song.duration,
+                "play_count": song.play_count,
                 "cover": cover,
             })
         })
         .collect();
 
     Ok(serde_json::json!({
+        "query": query,
+        "most_played": most_played,
         "artists": artist_rows,
         "albums": album_rows,
         "songs": song_rows,

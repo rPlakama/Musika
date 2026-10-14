@@ -37,7 +37,7 @@ Item {
             text: "MUSIKA"
             color: Palette.primary
             font.family: Theme.fonts.wordmark
-            font.pixelSize: root.height * 0.035
+            font.pixelSize: Theme.fontSize("title", root.height)
             font.bold: true
             font.letterSpacing: root.height * 0.0084
             horizontalAlignment: Text.AlignHCenter
@@ -51,7 +51,7 @@ Item {
             placeholderTextColor: Palette.onSurfaceVariant
             color: Palette.onSurface
             font.family: Theme.fonts.body
-            font.pixelSize: root.height * 0.0175
+            font.pixelSize: Theme.fontSize("body", root.height)
             text: Backend.serverURL
             onEditingFinished: Backend.serverURL = text
             background: Rectangle {
@@ -69,7 +69,7 @@ Item {
             placeholderTextColor: Palette.onSurfaceVariant
             color: Palette.onSurface
             font.family: Theme.fonts.body
-            font.pixelSize: root.height * 0.0175
+            font.pixelSize: Theme.fontSize("body", root.height)
             text: Backend.username
             onEditingFinished: Backend.username = text
             background: Rectangle {
@@ -87,7 +87,7 @@ Item {
             placeholderTextColor: Palette.onSurfaceVariant
             color: Palette.onSurface
             font.family: Theme.fonts.body
-            font.pixelSize: root.height * 0.0175
+            font.pixelSize: Theme.fontSize("body", root.height)
             echoMode: TextInput.Password
             text: Backend.password
             onEditingFinished: Backend.password = text
@@ -120,18 +120,40 @@ Item {
                 color: Palette.onPrimaryContainer
                 horizontalAlignment: Text.AlignHCenter
                 verticalAlignment: Text.AlignVCenter
-                font.pixelSize: root.height * 0.0175
+                font.pixelSize: Theme.fontSize("body", root.height)
             }
         }
 
-        FadeText {
+        // AUTH-3: the status is a role container, not bare body copy —
+        // errorContainer while logged out, primaryContainer on success. The
+        // box reserves its height even when empty so the form never jumps.
+        Rectangle {
+            id: statusBox
             width: parent.width
-            wrapMode: Text.WordWrap
-            color: Backend.loggedIn ? Palette.primary : Palette.error
-            text: Backend.statusMessage
-            visible: Backend.statusMessage.length > 0
-            horizontalAlignment: Text.AlignHCenter
-            font.pixelSize: root.height * 0.014
+            implicitHeight: Math.max(root.height * 0.05,
+                statusLabel.implicitHeight + root.height * 0.02)
+            color: Backend.statusMessage.length > 0
+                ? (Backend.loggedIn ? Palette.primaryContainer : Palette.errorContainer)
+                : "transparent"
+            border.width: Backend.statusMessage.length > 0
+                ? Math.max(1, root.height * Theme.hairlineRatio)
+                : 0
+            border.color: Backend.loggedIn ? Palette.primary : Palette.error
+            radius: Theme.radius
+
+            FadeText {
+                id: statusLabel
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.verticalCenter: parent.verticalCenter
+                anchors.leftMargin: root.height * 0.01
+                anchors.rightMargin: root.height * 0.01
+                text: Backend.statusMessage
+                color: Backend.loggedIn ? Palette.onPrimaryContainer : Palette.onErrorContainer
+                wrapMode: Text.WordWrap
+                horizontalAlignment: Text.AlignHCenter
+                font.pixelSize: Theme.fontSize("label", root.height)
+            }
         }
     }
 }

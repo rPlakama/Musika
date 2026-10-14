@@ -35,7 +35,12 @@ pub struct SearchHit {
     pub album: Option<String>,
     #[allow(dead_code)]
     pub duration: Option<i32>,
+    pub play_count: i64,
 }
+
+/// How much one play (from the server's play count) nudges an FTS rank.
+/// Rank leads: a strong text match still beats a heavily played weak one.
+const PLAY_BOOST: f64 = 0.1;
 
 /// Rebuilds the whole FTS index from library rows.
 ///
@@ -51,14 +56,15 @@ pub async fn rebuild(pool: &SqlitePool, rows: &[SongSearchRow]) -> Result<()> {
 
     for row in rows {
         sqlx::query(
-            "INSERT INTO song_search (title, artist, album, duration, song_id)
-             VALUES (?1, ?2, ?3, ?4, ?5)",
+            "INSERT INTO song_search (title, artist, album, duration, song_id, play_count)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
         )
         .bind(&row.title)
         .bind(row.artist.as_deref().unwrap_or(""))
         .bind(row.album.as_deref().unwrap_or(""))
         .bind(row.duration.map(|value| value.to_string()))
         .bind(&row.id)
+        .bind(row.play_count.unwrap_or(0))
         .execute(&mut *tx)
         .await?;
     }
@@ -71,7 +77,8 @@ pub async fn rebuild(pool: &SqlitePool, rows: &[SongSearchRow]) -> Result<()> {
 ///
 /// Input is tokenised on whitespace; each token is quoted and treated as a
 /// prefix, so punctuation and FTS5 operators typed by the user are literal and
-/// `radio` matches `Radiohead` while the palette is being typed.
+/// `radio` matches `Radiohead` while the palette is being typed. The rank is
+/// nudged by the play count (S-9's usage boost) but the text rank still leads.
 pub async fn search(pool: &SqlitePool, raw: &str, limit: i64) -> Result<Vec<SearchHit>> {
     let query = fts_query(raw);
     if query.is_empty() {
@@ -80,18 +87,47 @@ pub async fn search(pool: &SqlitePool, raw: &str, limit: i64) -> Result<Vec<Sear
 
     let hits = sqlx::query_as::<_, SearchHit>(
         "SELECT song_id, title, artist, album,
-                CAST(NULLIF(duration, '') AS INTEGER) AS duration
+                CAST(NULLIF(duration, '') AS INTEGER) AS duration,
+                COALESCE(play_count, 0) AS play_count
          FROM song_search
          WHERE song_search MATCH ?1
-         ORDER BY rank
+         ORDER BY rank - COALESCE(play_count, 0) * ?3, rank
          LIMIT ?2",
     )
     .bind(query)
+    .bind(limit)
+    .bind(PLAY_BOOST)
+    .fetch_all(pool)
+    .await?;
+
+    Ok(hits)
+}
+
+/// The empty-query surface (S-9): the most played songs, tie-broken by title.
+/// A library with no play counts still returns its songs in title order.
+pub async fn most_played(pool: &SqlitePool, limit: i64) -> Result<Vec<SearchHit>> {
+    let hits = sqlx::query_as::<_, SearchHit>(
+        "SELECT song_id, title, artist, album,
+                CAST(NULLIF(duration, '') AS INTEGER) AS duration,
+                COALESCE(play_count, 0) AS play_count
+         FROM song_search
+         ORDER BY COALESCE(play_count, 0) DESC, title
+         LIMIT ?1",
+    )
     .bind(limit)
     .fetch_all(pool)
     .await?;
 
     Ok(hits)
+}
+
+/// The number of indexed rows; zero after the S-9 migration recreated the
+/// table, which the sync's up-to-date branch uses to self-heal.
+pub async fn count(pool: &SqlitePool) -> Result<i64> {
+    let count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM song_search")
+        .fetch_one(pool)
+        .await?;
+    Ok(count.0)
 }
 
 fn fts_query(raw: &str) -> String {
@@ -132,6 +168,7 @@ mod tests {
             artist: Some("The Testers".to_string()),
             album: Some("First".to_string()),
             duration: Some(200),
+            play_count: Some(7),
         }];
         rebuild(&pool, &rows).await.unwrap();
 
@@ -140,9 +177,85 @@ mod tests {
         assert_eq!(hits[0].song_id, "1");
         assert_eq!(hits[0].artist.as_deref(), Some("The Testers"));
         assert_eq!(hits[0].duration, Some(200));
+        assert_eq!(hits[0].play_count, 7);
 
         assert!(search(&pool, "missing", 10).await.unwrap().is_empty());
         assert!(search(&pool, "   ", 10).await.unwrap().is_empty());
+    }
+
+    fn row(id: &str, title: &str, plays: i64) -> SongSearchRow {
+        SongSearchRow {
+            id: id.to_string(),
+            title: title.to_string(),
+            artist: None,
+            album: None,
+            duration: Some(180),
+            play_count: Some(plays),
+        }
+    }
+
+    #[tokio::test]
+    async fn most_played_orders_by_count_then_title() {
+        let pool = memory_pool().await;
+        rebuild(
+            &pool,
+            &[
+                row("1", "Zebra", 0),
+                row("2", "Alpha", 9),
+                row("3", "Beta", 4),
+                row("4", "Another", 9),
+            ],
+        )
+        .await
+        .unwrap();
+
+        let hits = most_played(&pool, 10).await.unwrap();
+        let ids: Vec<&str> = hits.iter().map(|hit| hit.song_id.as_str()).collect();
+        // Two 9-play ties break by title, then the 4, then the 0.
+        assert_eq!(ids, ["2", "4", "3", "1"]);
+    }
+
+    #[tokio::test]
+    async fn play_count_boosts_equal_ranks() {
+        let pool = memory_pool().await;
+        // Same matched text => equal rank; the play count decides (S-9).
+        rebuild(&pool, &[row("quiet", "Hello", 0), row("loud", "Hello", 40)])
+            .await
+            .unwrap();
+
+        let hits = search(&pool, "hello", 10).await.unwrap();
+        let ids: Vec<&str> = hits.iter().map(|hit| hit.song_id.as_str()).collect();
+        assert_eq!(ids, ["loud", "quiet"]);
+    }
+
+    #[tokio::test]
+    async fn text_rank_leads_until_plays_are_large() {
+        let pool = memory_pool().await;
+        // bm25 magnitudes collapse to ~1e-6 in a two-row corpus, so use a
+        // realistic size where the rank gap means something.
+        let mut rows = vec![
+            row("strong", "Hello Hello Hello Hello Hello", 0),
+            row("weak", "Hello There", 3),
+        ];
+        for i in 0..20 {
+            let id = format!("filler{i}");
+            let title = format!("Filler {i}");
+            rows.push(row(&id, &title, 0));
+        }
+        rebuild(&pool, &rows).await.unwrap();
+
+        let hits = search(&pool, "hello", 10).await.unwrap();
+        assert_eq!(
+            hits[0].song_id, "strong",
+            "a strong match survives a small usage boost"
+        );
+
+        // Enough plays still overtake a better text match (the boost's job).
+        rows[0].play_count = Some(0);
+        rows[1].play_count = Some(60);
+        rebuild(&pool, &rows).await.unwrap();
+        let hits = search(&pool, "hello", 10).await.unwrap();
+        assert_eq!(hits[0].song_id, "weak");
     }
 
     #[test]

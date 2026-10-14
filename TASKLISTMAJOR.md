@@ -1392,7 +1392,7 @@ Small, bounded, high-value changes.
     fades (dropped after the first review pass) and a desktop pass for the
     timer feel.
 
-- [ ] **S-9 · Empty-query search surface + usage boost** — P2 · (roadmap mixed design, "Empty state" + "Selection, scope and ordering")
+- [x] **S-9 · Empty-query search surface + usage boost** — P2 · (roadmap mixed design, "Empty state" + "Selection, scope and ordering")
   - **Why:** an empty query leaves three empty columns; Noctalia leads with
     pinned/recent instead.
   - **Details:**
@@ -1411,8 +1411,24 @@ Small, bounded, high-value changes.
   - **Verify:** an empty field shows one Most-played list and no dead
     columns; typing restores the three columns with frequently played
     matches leading; clearing the field returns to Most played.
+  - **Now:** landed — the `song_search` FTS table carries `play_count`
+    (new migration recreates it; the up-to-date sync branch self-heals an
+    empty index from the unchanged library, so an existing install never
+    loses search), `SongSearchRow`/`rebuild` copy it, `search()` orders
+    `rank - COALESCE(play_count,0) * 0.1, rank` and `most_played()` orders
+    count desc then title. `search_json` returns `{query, most_played, …}`
+    for the empty query (with per-song `play_count`); the overlay opens,
+    clears and re-fills on that surface: the Songs column becomes "Most
+    played" (play-count meta) with the album/artist columns and dividers
+    hidden, `moveColumn` is a no-op there, zero-hit denial is skipped, and
+    stale responses are dropped by the echoed query. Unit tests cover the
+    boost (a strong match survives a small count, enough plays overtake),
+    most_played ordering and the rows' play count. A new `build.rs` watches
+    every `migrations_*` directory so cargo rebuilds when a migration is
+    added/edited (sqlx's `migrate!` does not track them, which silently kept
+    the old schema in a running binary).
 
-- [ ] **AUTH-3 · Login error/status roles** — P2
+- [x] **AUTH-3 · Login error/status roles** — P2
   - **Why:** `Login.qml` predates the MY3 roles: hand-written type fractions
     (`root.height * 0.0175`) and status as bare `Palette.error` text
     (Login.qml:127-135), so errors read as plain body copy.
@@ -1424,8 +1440,15 @@ Small, bounded, high-value changes.
   - **Verify:** a failed login shows a wrapping container message with AA
     contrast; success shows the primary container; no layout shift between
     states; no raw type fractions left in the file.
+  - **Now:** landed — the wordmark, fields, button and status use the MY3
+    type roles (`Theme.fontSize`, no raw type fractions left); the status is
+    a role container (`errorContainer`/`onErrorContainer` logged out,
+    `primaryContainer`/`onPrimaryContainer` on success, hairline border,
+    `Theme.radius`, wrapped) whose height is reserved even when empty, so the
+    form never jumps. Live login round-trip for the AA-contrast check is
+    deferred to a desktop session.
 
-- [ ] **DOC-1 · Keep design docs in sync with the tree** — P2 · (A10)
+- [x] **DOC-1 · Keep design docs in sync with the tree** — P2 · (A10)
   - **Why:** CRITIQUE/roadmap/materialyou3 describe pre-implementation states.
   - **Details:** a bounded pass, not a rewrite: add a one-line status header
     to `CRITIQUE.md`, `roadmap.md` and `materialyou3idea.md` ("study/
@@ -1442,6 +1465,15 @@ Small, bounded, high-value changes.
   - **Verify:** the three docs no longer assert anything the tree
     contradicts; dated diagnostics/history stay as written, only status
     claims change.
+  - **Now:** the bounded pass landed — status headers on `CRITIQUE.md`,
+    `roadmap.md` and `materialyou3idea.md`; the `TASKS.md` reference became
+    `TASKLISTMAJOR.md`; the duration/ratios/palette rows and the
+    missing-roles paragraph now match `Theme.js`/`palette.rs` (motion tiers,
+    breakpoints, 32 roles); CRITIQUE's key-dispatch claim now names
+    `keybind.rs` (counts/operators still open); POLISHAUDIT §1.1 close fades,
+    §1.3 palette snap, §1.4 loading bar and §4 list easing are ticked as
+    consumed. Note: these docs are `.gitignore`d (`*.md` except
+    `TASKLISTMAJOR.md`), so this pass is local-only by design.
 
 - [x] **UI-47 · Microdesign: search column rule draws behind the next column's covers** — P3 · (design microtask)
   - **Why:** the structural rule (`|`) between search columns is a RowLayout
@@ -2332,9 +2364,9 @@ Kept for rationale; the tree already carries these.
 |--------|------|--------|
 | Must have | 7 | 2 |
 | Should have | 61 | 12 |
-| Quick wins | 4 | 54 |
+| Quick wins | 1 | 57 |
 | Solved (reference) | — | 36 |
-| **Total** | **72** | **104** |
+| **Total** | **69** | **107** |
 
 ### Coverage by area
 

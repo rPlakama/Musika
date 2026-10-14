@@ -35,6 +35,7 @@ pub struct SongSearchRow {
     pub artist: Option<String>,
     pub album: Option<String>,
     pub duration: Option<i32>,
+    pub play_count: Option<i64>,
 }
 
 /// Replaces all library tables in a single transaction and stores the sync
@@ -175,10 +176,11 @@ pub async fn song_ids(pool: &SqlitePool) -> Result<Vec<String>> {
 
 /// Returns the columns needed to rebuild the FTS index.
 pub async fn song_search_rows(pool: &SqlitePool) -> Result<Vec<SongSearchRow>> {
-    let rows =
-        sqlx::query_as::<_, SongSearchRow>("SELECT id, title, artist, album, duration FROM songs")
-            .fetch_all(pool)
-            .await?;
+    let rows = sqlx::query_as::<_, SongSearchRow>(
+        "SELECT id, title, artist, album, duration, play_count FROM songs",
+    )
+    .fetch_all(pool)
+    .await?;
     Ok(rows)
 }
 

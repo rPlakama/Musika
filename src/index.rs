@@ -89,6 +89,14 @@ where
             done: 100,
             total: 100,
         });
+        // S-9: the search schema migration recreates the FTS table, so an
+        // unchanged library can still have an empty index. Rebuild it here
+        // rather than waiting for the next library change.
+        if crate::search::count(&dbs.search).await.unwrap_or(0) == 0 {
+            if let Err(err) = rebuild_search(dbs).await {
+                eprintln!("search: could not rebuild the index: {err:#}");
+            }
+        }
         // The library is unchanged, but the derived caches may still need
         // topping up (first run interrupted, or entries that previously
         // failed): covers, then a bounded lyric backfill.
@@ -162,8 +170,7 @@ where
     .await?;
 
     // 2. search index
-    let rows = crate::library::song_search_rows(&dbs.library).await?;
-    crate::search::rebuild(&dbs.search, &rows).await?;
+    rebuild_search(dbs).await?;
 
     // 3. plain-text mirror for external tools (best effort)
     if let Err(err) = crate::library::write_mirror(&dbs.library).await {
@@ -234,6 +241,13 @@ where
         covers,
         lyrics,
     })
+}
+
+/// Rebuilds the FTS index from the current library rows (S-9: shared by the
+/// changed branch and the up-to-date self-heal).
+async fn rebuild_search(dbs: &Dbs) -> Result<()> {
+    let rows = crate::library::song_search_rows(&dbs.library).await?;
+    crate::search::rebuild(&dbs.search, &rows).await
 }
 
 /// Sync-time lyric pass: fetches songs without lyrics or past their miss TTL,

@@ -123,6 +123,15 @@ pub async fn queued_ids(pool: &SqlitePool, limit: i64) -> Result<Vec<String>> {
     Ok(ids)
 }
 
+/// Every song whose download finished (CACHE-9) — the only catalog the app
+/// offers while the server is unreachable.
+pub async fn done_ids(pool: &SqlitePool) -> Result<Vec<String>> {
+    let ids = sqlx::query_scalar("SELECT song_id FROM download WHERE state = 'done'")
+        .fetch_all(pool)
+        .await?;
+    Ok(ids)
+}
+
 /// Per-state counts for the status UI (`CACHE-7`): queued / active / done /
 /// error / total.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize)]
@@ -233,6 +242,19 @@ mod tests {
         set_state(&pool, "s3", ACTIVE, None).await.unwrap();
         assert_eq!(queued_ids(&pool, 10).await.unwrap().len(), 2);
         assert_eq!(queued_ids(&pool, 1).await.unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn done_ids_lists_only_finished_songs() {
+        let pool = memory_pool().await;
+        mark_queued(&pool, "s1", None).await.unwrap();
+        set_state(&pool, "s2", DONE, None).await.unwrap();
+        set_state(&pool, "s3", ERROR, Some("x")).await.unwrap();
+        set_state(&pool, "s1", DONE, None).await.unwrap();
+
+        let mut ids = done_ids(&pool).await.unwrap();
+        ids.sort();
+        assert_eq!(ids, ["s1", "s2"]);
     }
 
     #[tokio::test]

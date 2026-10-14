@@ -282,8 +282,11 @@ Rectangle {
         anchors.verticalCenter: parent.verticalCenter
         width: Math.min(implicitWidth, root.width * 0.45)
         horizontalAlignment: Text.AlignLeft
-        text: Backend.username.length > 0 ? "Welcome, " + Backend.username : ""
-        color: Palette.onSurfaceVariant
+        // CACHE-9: offline mode greets as "Offline, <user>".
+        text: Backend.username.length > 0
+            ? (Backend.offline ? "Offline, " : "Welcome, ") + Backend.username
+            : (Backend.offline ? "Offline" : "")
+        color: Backend.offline ? Palette.tertiary : Palette.onSurfaceVariant
         font.pixelSize: Theme.fontSize("title", root.height) * 1.5
         elide: Text.ElideRight
         animated: false

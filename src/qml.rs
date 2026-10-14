@@ -128,6 +128,18 @@ async fn download_one(dbs: &crate::db::Dbs, song_id: &str) -> anyhow::Result<&'s
     }
 }
 
+/// CACHE-9: does the download ledger hold at least one finished song? Only
+/// then can the app enter offline mode instead of failing the login.
+async fn downloaded_music_available() -> bool {
+    match crate::dbs() {
+        Some(dbs) => crate::download::counts(&dbs.download)
+            .await
+            .map(|counts| counts.done > 0)
+            .unwrap_or(false),
+        None => false,
+    }
+}
+
 #[derive(Default)]
 pub struct Backend {
     server_url: String,
@@ -136,6 +148,9 @@ pub struct Backend {
     status_message: String,
     busy: bool,
     logged_in: bool,
+    /// CACHE-9: true while the app runs without the server, serving only the
+    /// downloaded catalog.
+    offline: bool,
     library_syncing: bool,
     artist_count: i64,
     album_count: i64,
@@ -201,6 +216,7 @@ impl Backend {
     );
     qproperty!("busy", Member = busy, Notify = busy_changed);
     qproperty!("loggedIn", Member = logged_in, Notify = logged_in_changed);
+    qproperty!("offline", Member = offline, Notify = offline_changed);
     qproperty!(
         "librarySyncing",
         Member = library_syncing,
@@ -328,6 +344,8 @@ impl Backend {
     #[qsignal]
     fn logged_in_changed(&mut self);
     #[qsignal]
+    fn offline_changed(&mut self);
+    #[qsignal]
     fn library_syncing_changed(&mut self);
     #[qsignal]
     fn artist_count_changed(&mut self);
@@ -361,8 +379,6 @@ impl Backend {
     fn command_issued(&mut self, command: String);
     #[qsignal(qml_name = "loginRequired")]
     fn login_required(&mut self);
-    #[qsignal(qml_name = "loginPending")]
-    fn login_pending(&mut self);
     #[qsignal]
     fn playback_state_changed(&mut self);
     #[qsignal]
@@ -441,11 +457,23 @@ impl Backend {
                         }
                     }
                     qtbridge::invoke_method!(invoker, "noteServerType", info.kind.clone());
+                    invoker.invoke_method("noteOnline");
                     invoker.invoke_method("login_succeeded");
                     spawn_index_sync(sync_finish, sync_progress, server_url, username, password);
                 }
                 Err(err) => {
-                    qtbridge::invoke_method!(invoker, "login_failed", format!("{err:#}"));
+                    // CACHE-9: with downloaded music, a dead server enters
+                    // offline mode instead of bouncing back to the Login.
+                    if downloaded_music_available().await {
+                        qtbridge::invoke_method!(
+                            invoker,
+                            "offlineLogin",
+                            server_url.clone(),
+                            username.clone()
+                        );
+                    } else {
+                        qtbridge::invoke_method!(invoker, "login_failed", format!("{err:#}"));
+                    }
                 }
             }
         });
@@ -472,46 +500,52 @@ impl Backend {
             return;
         };
 
+        // Offline-first auto-login: with downloaded music the app opens right
+        // away as `offline` (filtered to the downloaded catalog) while the
+        // auth finishes in the background — on success the flag clears and
+        // the full streaming library loads. Without downloads the Login
+        // screen is the entry point and a failed login can still fall back
+        // into offline mode.
         crate::runtime().spawn(async move {
             match crate::sqlite::load_credentials(&pool).await {
                 Ok(Some(credentials)) => {
-                    // Cached login: show a loading screen while we ping.
-                    invoker.invoke_method("login_pending");
+                    // The stored discriminator keeps "Last Sync: …, <server>"
+                    // populated before the first fresh ping (offline too).
+                    qtbridge::invoke_method!(
+                        invoker,
+                        "noteServerType",
+                        credentials.server_type.clone()
+                    );
+                    if !downloaded_music_available().await {
+                        qtbridge::invoke_method!(
+                            invoker,
+                            "prefillCredentials",
+                            credentials.server_url,
+                            credentials.username,
+                            credentials.password
+                        );
+                        invoker.invoke_method("login_required");
+                        return;
+                    }
 
-                    let ping = tokio::time::timeout(
-                        std::time::Duration::from_millis(5000),
-                        crate::http_client::authenticate(
-                            &credentials.server_url,
-                            &credentials.username,
-                            &credentials.password,
-                        ),
+                    qtbridge::invoke_method!(
+                        invoker,
+                        "offlineLogin",
+                        credentials.server_url.clone(),
+                        credentials.username.clone()
+                    );
+
+                    // Finish the login inside the app.
+                    match crate::http_client::authenticate(
+                        &credentials.server_url,
+                        &credentials.username,
+                        &credentials.password,
                     )
-                    .await;
-
-                    match ping {
-                        Ok(Ok(info)) => {
-                            qtbridge::invoke_method!(invoker, "noteServerType", info.kind.clone());
-                            if credentials.server_type != info.kind {
-                                if let Err(err) = crate::sqlite::set_server_type(
-                                    &pool,
-                                    &credentials.username,
-                                    &credentials.server_url,
-                                    &info.kind,
-                                )
-                                .await
-                                {
-                                    eprintln!("Failed to refresh server type: {err:#}");
-                                }
-                            }
-                            // Auto-login never goes through the Login fields;
-                            // the status row is account-scoped (P-6).
-                            qtbridge::invoke_method!(
-                                invoker,
-                                "rememberAccount",
-                                credentials.server_url.clone(),
-                                credentials.username.clone()
-                            );
-                            invoker.invoke_method("login_succeeded");
+                    .await
+                    {
+                        Ok(info) => {
+                            qtbridge::invoke_method!(invoker, "noteServerType", info.kind);
+                            invoker.invoke_method("noteOnline");
                             spawn_index_sync(
                                 sync_finish,
                                 sync_progress,
@@ -520,15 +554,10 @@ impl Backend {
                                 credentials.password,
                             );
                         }
-                        Ok(Err(err)) => {
-                            qtbridge::invoke_method!(invoker, "login_failed", format!("{err:#}"));
-                        }
-                        Err(_) => {
-                            qtbridge::invoke_method!(
-                                invoker,
-                                "login_failed",
-                                "Timed out waiting for server".to_string()
-                            );
+                        Err(err) => {
+                            // Stay offline; the auth is retried on the next
+                            // sync/login.
+                            eprintln!("login: background auth failed, staying offline: {err:#}");
                         }
                     }
                 }
@@ -543,8 +572,18 @@ impl Backend {
         });
     }
 
-    /// Records the account the session belongs to; auto-login never goes
-    /// through the Login fields, and the status row is account-scoped (P-6).
+    /// Login-only fallback: fills the form from the stored account.
+    #[qslot(qml_name = "prefillCredentials")]
+    fn prefill_credentials(&mut self, server_url: String, username: String, password: String) {
+        self.remember_account(server_url, username);
+        if self.password != password {
+            self.password = password;
+            self.password_changed();
+        }
+    }
+
+    /// Records the account the session belongs to (the status row is
+    /// account-scoped, P-6).
     #[qslot(qml_name = "rememberAccount")]
     fn remember_account(&mut self, server_url: String, username: String) {
         if self.server_url != server_url {
@@ -554,6 +593,31 @@ impl Backend {
         if self.username != username {
             self.username = username;
             self.username_changed();
+        }
+    }
+
+    /// CACHE-9: enters the app without the server when downloaded music
+    /// exists; every list loader then serves only the downloaded catalog.
+    #[qslot(qml_name = "offlineLogin")]
+    fn offline_login(&mut self, server_url: String, username: String) {
+        self.remember_account(server_url, username);
+        self.offline = true;
+        self.offline_changed();
+        eprintln!("login: offline mode — showing downloaded music only");
+        self.login_succeeded();
+        self.status_message = "Offline — showing downloaded music only.".to_string();
+        self.status_message_changed();
+    }
+
+    /// CACHE-9: the server answered again; the full streaming library returns
+    /// at once (the catalog was always local) and the background sync
+    /// refreshes it right after.
+    #[qslot(qml_name = "noteOnline")]
+    fn note_online(&mut self) {
+        if self.offline {
+            self.offline = false;
+            self.offline_changed();
+            self.library_changed();
         }
     }
 
@@ -576,6 +640,7 @@ impl Backend {
         };
         let server_url = self.server_url.trim().to_string();
         let username = self.username.trim().to_string();
+        let offline = self.offline;
         let invoker = self.get_qml_method_invoker();
         crate::runtime().spawn(async move {
             match crate::status::load(&dbs.status).await {
@@ -588,7 +653,7 @@ impl Backend {
                     qtbridge::invoke_method!(invoker, "applyStatus", payload);
                     // S2: navigation + paused queue, validated against the
                     // local index (unknown ids are dropped in the payload).
-                    match crate::queue::resume_payload(&dbs, &status).await {
+                    match crate::queue::resume_payload(&dbs, &status, offline).await {
                         Ok(resume) => {
                             qtbridge::invoke_method!(invoker, "statusRestored", resume);
                         }
@@ -1012,8 +1077,9 @@ impl Backend {
         } else {
             self.album_order.clone()
         };
+        let offline = self.offline;
         crate::runtime().spawn(async move {
-            match load_albums_json(&dbs, &artist, &order).await {
+            match load_albums_json(&dbs, &artist, &order, offline).await {
                 Ok(json) => {
                     qtbridge::invoke_method!(invoker, "emitData", "albums".to_string(), json);
                 }
@@ -1090,8 +1156,9 @@ impl Backend {
         } else {
             self.song_order.clone()
         };
+        let offline = self.offline;
         crate::runtime().spawn(async move {
-            match load_songs_json(&dbs, &order).await {
+            match load_songs_json(&dbs, &order, offline).await {
                 Ok(json) => {
                     qtbridge::invoke_method!(invoker, "emitData", "songs".to_string(), json);
                 }
@@ -1111,8 +1178,9 @@ impl Backend {
         } else {
             self.artist_order.clone()
         };
+        let offline = self.offline;
         crate::runtime().spawn(async move {
-            match load_artists_json(&dbs, &order).await {
+            match load_artists_json(&dbs, &order, offline).await {
                 Ok(json) => {
                     qtbridge::invoke_method!(invoker, "emitData", "artists".to_string(), json);
                 }
@@ -1132,8 +1200,9 @@ impl Backend {
         } else {
             self.album_order.clone()
         };
+        let offline = self.offline;
         crate::runtime().spawn(async move {
-            match load_artist_json(&dbs, &artist_id, &order).await {
+            match load_artist_json(&dbs, &artist_id, &order, offline).await {
                 Ok(Some(json)) => {
                     qtbridge::invoke_method!(invoker, "emitData", "artist".to_string(), json);
                 }
@@ -1453,8 +1522,9 @@ impl Backend {
         let Some(dbs) = crate::dbs().cloned() else {
             return;
         };
+        let offline = self.offline;
         crate::runtime().spawn(async move {
-            match load_album_songs_json(&dbs, &album_id).await {
+            match load_album_songs_json(&dbs, &album_id, offline).await {
                 Ok(json) => {
                     qtbridge::invoke_method!(invoker, "emitData", "album_songs".to_string(), json);
                 }
@@ -1484,8 +1554,9 @@ impl Backend {
         let Some(dbs) = crate::dbs().cloned() else {
             return;
         };
+        let offline = self.offline;
         crate::runtime().spawn(async move {
-            let json = match search_json(&dbs, &query).await {
+            let json = match search_json(&dbs, &query, offline).await {
                 Ok(json) => json,
                 Err(err) => {
                     eprintln!("search: {err:#}");
@@ -1514,8 +1585,9 @@ impl Backend {
         let Some(dbs) = crate::dbs().cloned() else {
             return;
         };
+        let offline = self.offline;
         crate::runtime().spawn(async move {
-            match album_tracks_json(&dbs, &album_id).await {
+            match album_tracks_json(&dbs, &album_id, offline).await {
                 Ok(json) => {
                     qtbridge::invoke_method!(invoker, "playerLoad", json, start);
                 }
@@ -1546,8 +1618,9 @@ impl Backend {
         } else {
             self.song_order.clone()
         };
+        let offline = self.offline;
         crate::runtime().spawn(async move {
-            match library_queue_payload(&dbs, &song_id, &order).await {
+            match library_queue_payload(&dbs, &song_id, &order, offline).await {
                 Ok((json, start)) => {
                     qtbridge::invoke_method!(invoker, "playerLoadLibrary", json, start as i64);
                 }
@@ -1577,8 +1650,9 @@ impl Backend {
         let Some(dbs) = crate::dbs().cloned() else {
             return;
         };
+        let offline = self.offline;
         crate::runtime().spawn(async move {
-            match song_album_payload(&dbs, &song_id).await {
+            match song_album_payload(&dbs, &song_id, offline).await {
                 Ok(payload) => {
                     qtbridge::invoke_method!(
                         invoker,
@@ -2220,6 +2294,8 @@ fn spawn_index_sync(
                     report.lyrics,
                     report.covers.downloaded
                 );
+                // CACHE-9: a successful sync means the server is back.
+                qtbridge::invoke_method!(finish_invoker, "noteOnline");
                 qtbridge::invoke_method!(
                     finish_invoker,
                     "librarySyncFinished",

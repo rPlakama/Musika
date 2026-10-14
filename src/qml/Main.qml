@@ -206,7 +206,7 @@ ApplicationWindow {
         StackView {
             id: stack
             anchors.fill: parent
-            initialItem: loadingScreen
+            initialItem: loginScreen
 
             Connections {
                 target: Backend
@@ -218,9 +218,6 @@ ApplicationWindow {
                 }
                 function onLoginRequired() {
                     stack.replace(loginScreen);
-                }
-                function onLoginPending() {
-                    stack.replace(loadingScreen);
                 }
             }
         }
@@ -246,14 +243,6 @@ ApplicationWindow {
     Component {
         id: homeScreen
         Home {}
-    }
-
-    Component {
-        id: loadingScreen
-        LoadingScreen {
-            onTimedOut: if (!Backend.loggedIn)
-                stack.replace(loginScreen)
-        }
     }
 
     // Regain keyboard focus (e.g. after leaving the search field).

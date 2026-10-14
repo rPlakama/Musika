@@ -21,6 +21,8 @@
 
 #![allow(dead_code)] // Browse queries are prepared before the library UI lands.
 
+use std::collections::{HashMap, HashSet};
+
 use anyhow::{Context, Result};
 use sqlx::FromRow;
 use sqlx::sqlite::SqlitePool;
@@ -182,6 +184,52 @@ pub async fn song_search_rows(pool: &SqlitePool) -> Result<Vec<SongSearchRow>> {
     .fetch_all(pool)
     .await?;
     Ok(rows)
+}
+
+/// CACHE-9: from the downloaded song ids, the album id -> downloaded-track
+/// count and artist id -> downloaded-album count. The offline mode lists (and
+/// counts) only what is actually available. Chunked so a large download set
+/// stays under SQLite's bind limit.
+pub async fn downloaded_owners(
+    pool: &SqlitePool,
+    song_ids: &[String],
+) -> Result<(HashMap<String, i64>, HashMap<String, i64>)> {
+    use sqlx::QueryBuilder;
+
+    let mut album_counts: HashMap<String, i64> = HashMap::new();
+    let mut artist_albums: HashMap<String, HashSet<String>> = HashMap::new();
+
+    for chunk in song_ids.chunks(500) {
+        let mut query =
+            QueryBuilder::new("SELECT album_id, artist_id, COUNT(*) FROM songs WHERE id IN (");
+        let mut separated = query.separated(", ");
+        for id in chunk {
+            separated.push_bind(id);
+        }
+        separated.push_unseparated(") GROUP BY album_id, artist_id");
+        let rows: Vec<(Option<String>, Option<String>, i64)> =
+            query.build_query_as().fetch_all(pool).await?;
+
+        for (album_id, artist_id, count) in rows {
+            if let Some(album_id) = album_id {
+                *album_counts.entry(album_id.clone()).or_insert(0) += count;
+                if let Some(artist_id) = artist_id {
+                    artist_albums.entry(artist_id).or_default().insert(album_id);
+                }
+            } else if let Some(artist_id) = artist_id {
+                // A downloaded song without an album still keeps its artist
+                // listable (zero albums, one song).
+                artist_albums.entry(artist_id).or_default();
+            }
+        }
+    }
+
+    let artist_counts = artist_albums
+        .into_iter()
+        .map(|(artist, albums)| (artist, albums.len() as i64))
+        .collect();
+
+    Ok((album_counts, artist_counts))
 }
 
 /// Artists and albums matching `query` by case-insensitive substring, for the
@@ -1045,5 +1093,40 @@ mod tests {
             Some((None, None, None))
         );
         assert!(song_file_info(&pool, "missing").await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn downloaded_owners_count_only_the_selected_ids() {
+        let pool = memory_pool().await;
+        for (id, album, artist) in [
+            ("s1", "al1", "ar1"),
+            ("s2", "al1", "ar1"),
+            ("s3", "al2", "ar1"),
+            ("s4", "al3", "ar2"),
+        ] {
+            sqlx::query(
+                "INSERT INTO songs (id, title, album_id, artist_id) VALUES (?1, ?1, ?2, ?3)",
+            )
+            .bind(id)
+            .bind(album)
+            .bind(artist)
+            .execute(&pool)
+            .await
+            .unwrap();
+        }
+
+        let ids = vec!["s1".to_string(), "s3".to_string()];
+        let (albums, artists) = downloaded_owners(&pool, &ids).await.unwrap();
+        assert_eq!(albums.get("al1"), Some(&1));
+        assert_eq!(albums.get("al2"), Some(&1));
+        assert_eq!(albums.get("al3"), None);
+        // ar1 owns two downloaded albums; ar2 owns none.
+        assert_eq!(artists.get("ar1"), Some(&2));
+        assert_eq!(artists.get("ar2"), None);
+
+        // An empty selection is an empty catalog, not an error.
+        let (albums, artists) = downloaded_owners(&pool, &[]).await.unwrap();
+        assert!(albums.is_empty());
+        assert!(artists.is_empty());
     }
 }

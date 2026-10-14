@@ -243,10 +243,6 @@ The product is incomplete without these.
     `playerctl` and the per-DE panel matrix; roadmap M5 extras (queue
     playlist, OpenUri) deliberately out of scope for now.
 
-- [ ] **P-1 · Scrobble back to Navidrome** — P2 · (M5, CRITIQUE Ph3.2)
-  - **Why:** play counts / recently played never update server-side.
-  - **Details:** `scrobble` at 50%/4 min and on completion; `api.rs:1318` ready.
-
 - [ ] **P-2 · Starred/favorites view + toggle** — P2 · (CRITIQUE Ph3.2)
   - **Why:** no way to value tracks; `getStarred`/`star` endpoints unused.
   - **Details:** `s`/`*` toggle, favorites filter.
@@ -438,14 +434,6 @@ The product is incomplete without these.
     every line is timed.
 
 
-- [ ] **S-6 · Noctalia-style search chrome (scope chips + sizing)** — P2 · (roadmap mixed design)
-  - **Why:** identity and counts live in the column headers, and the panel uses
-    a raw 70% × 65%; the mixed design gives one chip row and a measured range.
-  - **Details:** toolbar + `Songs 12 · Albums 4 · Artists 3` chip row (active
-    chip `primaryContainer`, others muted, only one accented — D-1), panel
-    `clamp(win*0.70, 560, 1100)` × `clamp(win*0.65, 420, 760)`, context
-    keybar; column headers drop the counts.
-
 - [ ] **S-8 · Songs column follows a single album match (track order)** — P1 · **top priority** · (search follow-up)
   - **Why:** when a query resolves to exactly one album, the Songs column still
     ranks hits by FTS score, scattering the album's tracks; it should read (and
@@ -528,14 +516,6 @@ The product is incomplete without these.
     hides the stats; cursor/focus contract unchanged. Open: R3 bars, R4
     content, R5 text audit, R6 resize pass.
 
-- [ ] **UI-35 · Queue drawer modal parity: slide + scrim + blur** — P2 · (POLISHAUDIT §1.2, D-2)
-  - **Why:** the drawer is modal for keys but has no scrim and the shell blur
-    ignores it (`Home.qml:254`), so cursors behind it stay visible — D-2 says
-    an open overlay owns the only visible selection.
-  - **Details:** translate the panel in/out (`standard`), add the scrim at
-    `Theme.scrimOpacity`, include `queueDrawer.opened` in the shell layer
-    condition.
-
 - [ ] **UI-36 · Click affordances everywhere: cursor + hover/press/focus** — P1 · (POLISHAUDIT §2, UI-10/20/21)
   - **Why:** `Qt.PointingHandCursor` is set in only two places; most rows,
     segments, buttons and mouse areas never signal clickability, and rows
@@ -579,31 +559,6 @@ The product is incomplete without these.
   - **Now:** `Theme.motion.spin`/`spinSlow` tokens (used by the sync spin);
     `Theme.reduceMotion` gates `FadeText` and the skip bloom; the seven
     legacy `Theme.duration`/`Theme.easeOut` files now use motion tiers.
-
-- [ ] **UI-42 · SuperiorBar: API-backed server + user identity** — P2 · (RightBar audit)
-  - **Why:** the top bar (today `RightBar.qml`) only shows a capitalized
-    `Backend.serverType`; it never says who is connected. The Subsonic/
-    Navidrome API already answers that, so the bar should own the identity.
-  - **Details:**
-    - rename/extract `RightBar.qml` → `SuperiorBar.qml` with explicit zones:
-      brand/mode | spacer | identity | sync cluster;
-    - identity from the API: `username` (login/stored) + server type and
-      `serverVersion`/`openSubsonic` from the ping envelope, rendered as
-      `user@server` (or a `getUser` avatar via `getAvatar_url` once available);
-    - plumb the missing fields: `ping()` currently exposes only `type` —
-      capture `serverVersion`/`openSubsonic` in the backend and notify, plus
-      `Backend.username` display;
-    - keep the "Last Sync" text, progress tick and spinning sync button;
-      the mode chip stays out of the bar (the search overlay owns
-      INSERT/NORMAL); identity is a FadeText with `elide`, no dead space;
-    - offline/logged-out states: show "offline"/user only when known.
-  - **Verify:** `getUser`/ping fields surfaced on login + reconnect; bar reads
-    `user@Navidrome`; no overlap at minimum window width (pairs with UI-43).
-  - **Now (partial):** renamed to `SuperiorBar.qml`; identity landed as
-    "Welcome, <username>" on the left (body font, welcome scale, body 45%
-    elide cap) and "Last Sync" scaled to match; the old NORMAL chip is gone
-    and the sync glyph trimmed 10%. Open: `serverVersion`/`openSubsonic` from
-    ping, `user@server`/avatar wording, offline state.
 
 - [ ] **UI-43 · Text bounds sweep: a rectangle around every label** — P2 · (QML audit)
   - **Why:** several FadeText/Text items rely on implicit widths in Row/Column
@@ -1195,14 +1150,6 @@ The product is incomplete without these.
     carries `{id, state}`. Open: prefetch next N on queue events, the shared
     in-flight set, playback-tier kind.
 
-- [ ] **CACHE-3 · Rolling cache (LRU, max size)** — P2
-  - **Details:** cap configurable (default ~2 GiB), evict LRU by `last_used`;
-    playback tier capped separately (~512 MiB); permanent/rule exempt.
-
-- [ ] **CACHE-4 · Permanent cache + "Move to permanent" pin** — P2
-  - **Details:** pin drops `kind='rule'`/`rule_id` and moves the blob to the
-    config-root `media/` (never auto-removed; uncapped, warn threshold in UI).
-
 - [ ] **CACHE-5 · Auto-download rules** — P2 · (MEDIACACHESTUDY.md §6)
   - **Why:** Symfonium parity: favorites, playlists, genres, and artists flagged
     "in download cache" auto-download existing + future content; rule removal
@@ -1266,6 +1213,40 @@ The product is incomplete without these.
   - **Details:** per-item state (cached/partial/queued) + used-bytes vs cap in
     the status bar; offline filter; permanent-tier warning threshold.
 
+- [x] **CACHE-9 · Offline mode: downloaded-only library** — P2 · (request)
+  - **Why:** with music in `download.db` the app should still open when the
+    server is unreachable, and everything it shows must be playable — i.e.
+    only what the download ledger marks done.
+  - **Details:** offline-first auto-login — with a stored account and at
+    least one `done` row in `download.db`, the app opens immediately as
+    `Backend.offline` (every content surface filtered through the downloaded
+    set: the Albums/Songs/Artists lists, albums and artists surviving only
+    through downloaded songs with shrunken counts, album pages, ArtistEntry,
+    search, the playback queues and the restored session queue/page), while
+    the auth finishes **inside** the app; on success `noteOnline` flips the
+    greeting to `Welcome, <user>`, clears the filter and reloads the full
+    streaming library (the background sync then refreshes it). Without
+    downloads the Login screen is the entry point and a failed manual login
+    still falls back into offline mode when downloads exist.
+  - **Verify:** with downloads and a dead server the app opens straight into
+    `Offline, <user>`, lists show only downloaded songs/albums/artists and
+    Enter plays from the local blobs; when the server is reachable the
+    greeting becomes `Welcome, <user>` and the full library appears without a
+    relaunch; without downloads the Login screen shows (prefilled); no
+    loading screen or ping timeout exists.
+  - **Now:** landed — `download::done_ids` + `library::downloaded_owners`
+    (chunked), a shared `OfflineFilter` in `browse.rs` for all six loaders,
+    `queue.rs` filtering (album, library, song-in-album, resume) and the
+    `offlineLogin`/`noteOnline` slots wired into the offline-first startup
+    (with downloads), the manual-login failure and the sync finish; on the
+    online transition `noteOnline` reloads the library so the streaming
+    catalog is available without a relaunch. Unit tests cover the ledger
+    ids, the owner counts and
+    the queue filter (111 pass). Caveat: availability follows `download.db`
+    (a `done` row whose blob was purged elsewhere would fail playback —
+    CACHE-3/4 keep the ledger and blobs consistent); covers/lyrics come from
+    their caches when present.
+
 
 - [x] **PKG-1 · Desktop entry + hicolor app icons (NixOS parity)** — P2 · (DESKTOPICONSTUDY.md)
   - **Why:** the package ships a bare binary: no `.desktop`, no app icon, so
@@ -1307,6 +1288,9 @@ Small, bounded, high-value changes.
 
 > **0.0.8 batch** — moved from Should have on 2026-10-13 (small, bounded,
 > low-risk): UI-13, UI-40, UI-41, LYR-8, S-9, AUTH-3, DOC-1.
+
+> **Easiest batch** — moved from Should have on 2026-10-14 (the smallest
+> remaining work): UI-35, S-6, UI-42, CACHE-3, CACHE-4, P-1.
 
 - [x] **UI-13 · Scroll position hint** — P3 · **removed 2026-10-14**
   - **Why:** long lists have no scrollbar/position feedback for mouse users.
@@ -2040,6 +2024,62 @@ Small, bounded, high-value changes.
   - **Why:** countdown prints raw ms ("timeout 4800ms"), progress steps every
     100 ms without easing; no cancel.
   - **Details:** seconds or spinner, `linear` smoothing, Esc/click to login.
+  - **Removed:** the loading-screen path was deleted (CACHE-9: offline-first
+    auto-login — no countdown, no ping timeout); the Login screen remains the
+    entry point for accounts without downloads.
+
+- [ ] **UI-35 · Queue drawer modal parity: slide + scrim + blur** — P2 · (POLISHAUDIT §1.2, D-2)
+  - **Why:** the drawer is modal for keys but has no scrim and the shell blur
+    ignores it (`Home.qml:254`), so cursors behind it stay visible — D-2 says
+    an open overlay owns the only visible selection.
+  - **Details:** translate the panel in/out (`standard`), add the scrim at
+    `Theme.scrimOpacity`, include `queueDrawer.opened` in the shell layer
+    condition.
+
+- [ ] **S-6 · Noctalia-style search chrome (scope chips + sizing)** — P2 · (roadmap mixed design)
+  - **Why:** identity and counts live in the column headers, and the panel uses
+    a raw 70% × 65%; the mixed design gives one chip row and a measured range.
+  - **Details:** toolbar + `Songs 12 · Albums 4 · Artists 3` chip row (active
+    chip `primaryContainer`, others muted, only one accented — D-1), panel
+    `clamp(win*0.70, 560, 1100)` × `clamp(win*0.65, 420, 760)`, context
+    keybar; column headers drop the counts.
+
+- [ ] **UI-42 · SuperiorBar: API-backed server + user identity** — P2 · (RightBar audit)
+  - **Why:** the top bar (today `RightBar.qml`) only shows a capitalized
+    `Backend.serverType`; it never says who is connected. The Subsonic/
+    Navidrome API already answers that, so the bar should own the identity.
+  - **Details:**
+    - rename/extract `RightBar.qml` → `SuperiorBar.qml` with explicit zones:
+      brand/mode | spacer | identity | sync cluster;
+    - identity from the API: `username` (login/stored) + server type and
+      `serverVersion`/`openSubsonic` from the ping envelope, rendered as
+      `user@server` (or a `getUser` avatar via `getAvatar_url` once available);
+    - plumb the missing fields: `ping()` currently exposes only `type` —
+      capture `serverVersion`/`openSubsonic` in the backend and notify, plus
+      `Backend.username` display;
+    - keep the "Last Sync" text, progress tick and spinning sync button;
+      the mode chip stays out of the bar (the search overlay owns
+      INSERT/NORMAL); identity is a FadeText with `elide`, no dead space;
+    - offline/logged-out states: show "offline"/user only when known.
+  - **Verify:** `getUser`/ping fields surfaced on login + reconnect; bar reads
+    `user@Navidrome`; no overlap at minimum window width (pairs with UI-43).
+  - **Now (partial):** renamed to `SuperiorBar.qml`; identity landed as
+    "Welcome, <username>" on the left (body font, welcome scale, body 45%
+    elide cap) and "Last Sync" scaled to match; the old NORMAL chip is gone
+    and the sync glyph trimmed 10%. Open: `serverVersion`/`openSubsonic` from
+    ping, `user@server`/avatar wording, offline state.
+
+- [ ] **CACHE-3 · Rolling cache (LRU, max size)** — P2
+  - **Details:** cap configurable (default ~2 GiB), evict LRU by `last_used`;
+    playback tier capped separately (~512 MiB); permanent/rule exempt.
+
+- [ ] **CACHE-4 · Permanent cache + "Move to permanent" pin** — P2
+  - **Details:** pin drops `kind='rule'`/`rule_id` and moves the blob to the
+    config-root `media/` (never auto-removed; uncapped, warn threshold in UI).
+
+- [ ] **P-1 · Scrobble back to Navidrome** — P2 · (M5, CRITIQUE Ph3.2)
+  - **Why:** play counts / recently played never update server-side.
+  - **Details:** `scrobble` at 50%/4 min and on completion; `api.rs:1318` ready.
 
 ## Solved (reference)
 
@@ -2336,8 +2376,11 @@ Kept for rationale; the tree already carries these.
 
 
 - [x] **AUTH-1 · Startup loading screen for cached login** — P2
-  - **Now (working tree):** `loginPending`/`loginRequired` signals; 5 s ping
-    timeout; `LoadingScreen.qml` countdown + progress.
+  - **Now (superseded):** `LoadingScreen.qml`, the `loginPending` signal and
+    the 5 s ping timeout are gone. The offline-first auto-login (CACHE-9)
+    replaces the screen: with downloads the app opens immediately as
+    `Offline, <user>` while the auth finishes in the background; without
+    downloads the Login screen is shown, prefilled from the stored account.
 
 - [x] **DOC-2 · Retire merged lists** — P3
   - **Why:** `TASKS.md` and `MICRODESIGNS.md` duplicated this file.
@@ -2361,10 +2404,10 @@ Kept for rationale; the tree already carries these.
 | Bucket | Open | Solved |
 |--------|------|--------|
 | Must have | 7 | 2 |
-| Should have | 61 | 12 |
-| Quick wins | 1 | 57 |
+| Should have | 55 | 13 |
+| Quick wins | 7 | 57 |
 | Solved (reference) | — | 36 |
-| **Total** | **69** | **107** |
+| **Total** | **69** | **108** |
 
 ### Coverage by area
 

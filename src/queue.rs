@@ -57,8 +57,31 @@ fn build_track(
     })
 }
 
-pub async fn album_tracks_json(dbs: &crate::db::Dbs, album_id: &str) -> anyhow::Result<String> {
-    let songs = crate::library::album_songs(&dbs.library, album_id).await?;
+/// CACHE-9: while offline, only downloaded songs are playable — drop the
+/// rest from a queue that is about to be built.
+async fn filter_offline(
+    dbs: &crate::db::Dbs,
+    offline: bool,
+    songs: &mut Vec<crate::library::SongRow>,
+) -> anyhow::Result<()> {
+    if !offline {
+        return Ok(());
+    }
+    let done: std::collections::HashSet<String> = crate::download::done_ids(&dbs.download)
+        .await?
+        .into_iter()
+        .collect();
+    songs.retain(|song| done.contains(&song.id));
+    Ok(())
+}
+
+pub async fn album_tracks_json(
+    dbs: &crate::db::Dbs,
+    album_id: &str,
+    offline: bool,
+) -> anyhow::Result<String> {
+    let mut songs = crate::library::album_songs(&dbs.library, album_id).await?;
+    filter_offline(dbs, offline, &mut songs).await?;
     tracks_json(dbs, songs).await
 }
 
@@ -79,8 +102,10 @@ pub async fn library_queue_payload(
     dbs: &crate::db::Dbs,
     song_id: &str,
     order: &str,
+    offline: bool,
 ) -> anyhow::Result<(String, usize)> {
-    let songs = crate::library::all_songs(&dbs.library, order).await?;
+    let mut songs = crate::library::all_songs(&dbs.library, order).await?;
+    filter_offline(dbs, offline, &mut songs).await?;
     let start = library_start(&songs, song_id)?;
     Ok((tracks_json(dbs, songs).await?, start))
 }
@@ -128,12 +153,21 @@ fn queue_album_json(
 
 /// Single pumped event for "play this song inside its album": the serialized
 /// queue, the start index and the album metadata (or null).
-pub async fn song_album_payload(dbs: &crate::db::Dbs, song_id: &str) -> anyhow::Result<String> {
+pub async fn song_album_payload(
+    dbs: &crate::db::Dbs,
+    song_id: &str,
+    offline: bool,
+) -> anyhow::Result<String> {
     let Some(song) = crate::library::song(&dbs.library, song_id).await? else {
         return Err(anyhow::anyhow!("song not found in index"));
     };
     let Some(album_id) = song.album_id.as_deref().filter(|id| !id.is_empty()) else {
-        let queue = tracks_json(dbs, vec![song]).await?;
+        let mut songs = vec![song];
+        filter_offline(dbs, offline, &mut songs).await?;
+        if songs.is_empty() {
+            return Err(anyhow::anyhow!("song is not downloaded"));
+        }
+        let queue = tracks_json(dbs, songs).await?;
         return Ok(serde_json::json!({
             "queue": queue,
             "start": 0,
@@ -142,7 +176,8 @@ pub async fn song_album_payload(dbs: &crate::db::Dbs, song_id: &str) -> anyhow::
         .to_string());
     };
 
-    let songs = crate::library::album_songs(&dbs.library, album_id).await?;
+    let mut songs = crate::library::album_songs(&dbs.library, album_id).await?;
+    filter_offline(dbs, offline, &mut songs).await?;
     let start = queue_start(&songs, &song.id);
     let queue = tracks_json(dbs, songs).await?;
 
@@ -171,14 +206,34 @@ pub async fn song_album_payload(dbs: &crate::db::Dbs, song_id: &str) -> anyhow::
 pub async fn resume_payload(
     dbs: &crate::db::Dbs,
     status: &crate::status::SessionStatus,
+    offline: bool,
 ) -> anyhow::Result<String> {
     let covers = crate::covers::url_map(&dbs.covers).await?;
 
+    // CACHE-9: offline, only downloaded content comes back; the album page
+    // reopens only when it owns downloads.
+    let offline_albums = if offline {
+        let ids = crate::download::done_ids(&dbs.download).await?;
+        Some(
+            crate::library::downloaded_owners(&dbs.library, &ids)
+                .await?
+                .0,
+        )
+    } else {
+        None
+    };
+
     let album = match status.album_id.as_deref().filter(|id| !id.is_empty()) {
-        Some(album_id) => crate::library::album(&dbs.library, album_id)
-            .await?
-            .map(|album| queue_album_json(&album, &covers)),
-        None => None,
+        Some(album_id)
+            if offline_albums
+                .as_ref()
+                .map_or(true, |albums| albums.contains_key(album_id)) =>
+        {
+            crate::library::album(&dbs.library, album_id)
+                .await?
+                .map(|album| queue_album_json(&album, &covers))
+        }
+        _ => None,
     };
 
     let mut queue = String::new();
@@ -188,7 +243,8 @@ pub async fn resume_payload(
     // follows the remembered current song.
     let snapshot: Vec<String> = serde_json::from_str(&status.queue).unwrap_or_default();
     if !snapshot.is_empty() {
-        let songs = crate::library::songs_by_ids(&dbs.library, &snapshot).await?;
+        let mut songs = crate::library::songs_by_ids(&dbs.library, &snapshot).await?;
+        filter_offline(dbs, offline, &mut songs).await?;
         if !songs.is_empty() {
             let index = snapshot_start(&snapshot, &songs, status.queue_index);
             // No credentials yet (or a stream URL failure) degrades to just
@@ -206,14 +262,13 @@ pub async fn resume_payload(
     } else if let Some(song_id) = status.song_id.as_deref().filter(|id| !id.is_empty()) {
         // S2 fallback for rows without a snapshot (pre-S3 writers).
         if let Some(song) = crate::library::song(&dbs.library, song_id).await? {
-            let (songs, index) = match song.album_id.as_deref().filter(|id| !id.is_empty()) {
-                Some(album_id) => {
-                    let songs = crate::library::album_songs(&dbs.library, album_id).await?;
-                    let index = queue_start(&songs, &song.id);
-                    (songs, index)
-                }
-                None => (vec![song], 0),
+            let song_id = song.id.clone();
+            let mut songs = match song.album_id.as_deref().filter(|id| !id.is_empty()) {
+                Some(album_id) => crate::library::album_songs(&dbs.library, album_id).await?,
+                None => vec![song],
             };
+            filter_offline(dbs, offline, &mut songs).await?;
+            let index = queue_start(&songs, &song_id);
             match tracks_json(dbs, songs).await {
                 Ok(json) => {
                     queue = json;
@@ -333,6 +388,11 @@ mod tests {
             .run(&covers)
             .await
             .unwrap();
+        let download = memory_pool().await;
+        sqlx::migrate!("./migrations_download")
+            .run(&download)
+            .await
+            .unwrap();
         crate::db::Dbs {
             credentials,
             library,
@@ -343,8 +403,29 @@ mod tests {
             colors: memory_pool().await,
             status: memory_pool().await,
             artist_user: memory_pool().await,
-            download: memory_pool().await,
+            download,
         }
+    }
+
+    #[tokio::test]
+    async fn offline_filter_keeps_only_downloaded_songs() {
+        let dbs = test_dbs().await;
+        crate::download::set_state(&dbs.download, "s1", crate::download::DONE, None)
+            .await
+            .unwrap();
+        crate::download::set_state(&dbs.download, "s2", crate::download::ERROR, Some("x"))
+            .await
+            .unwrap();
+
+        let mut songs = vec![song_row("s1"), song_row("s2"), song_row("s3")];
+        filter_offline(&dbs, true, &mut songs).await.unwrap();
+        assert_eq!(songs.len(), 1);
+        assert_eq!(songs[0].id, "s1");
+
+        // Online keeps everything.
+        let mut songs = vec![song_row("s1"), song_row("s2")];
+        filter_offline(&dbs, false, &mut songs).await.unwrap();
+        assert_eq!(songs.len(), 2);
     }
 
     #[tokio::test]
@@ -392,7 +473,7 @@ mod tests {
             position: 12.5,
             ..crate::status::SessionStatus::default()
         };
-        let payload = resume_payload(&dbs, &status).await.unwrap();
+        let payload = resume_payload(&dbs, &status, false).await.unwrap();
         let value: serde_json::Value = serde_json::from_str(&payload).unwrap();
         assert_eq!(value["album"]["id"], "al1");
         assert_eq!(value["album"]["tracks"], 2);
@@ -406,7 +487,7 @@ mod tests {
             song_id: Some("gone".to_string()),
             ..crate::status::SessionStatus::default()
         };
-        let payload = resume_payload(&dbs, &status).await.unwrap();
+        let payload = resume_payload(&dbs, &status, false).await.unwrap();
         let value: serde_json::Value = serde_json::from_str(&payload).unwrap();
         assert!(value["album"].is_null());
         assert_eq!(value["queue"], "");

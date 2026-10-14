@@ -59,23 +59,6 @@ pub async fn save_credentials(
     Ok(())
 }
 
-/// Updates the stored server implementation after a fresh ping (cached
-/// logins refresh the discriminator without re-encrypting the password).
-pub async fn set_server_type(
-    pool: &SqlitePool,
-    username: &str,
-    server_url: &str,
-    server_type: &str,
-) -> Result<()> {
-    sqlx::query("UPDATE users SET server_type = ?1 WHERE username = ?2 AND serverURL = ?3")
-        .bind(server_type)
-        .bind(username)
-        .bind(server_url)
-        .execute(pool)
-        .await?;
-    Ok(())
-}
-
 pub async fn load_credentials(pool: &SqlitePool) -> Result<Option<Credentials>> {
     let row: Option<(String, String, String, String)> = sqlx::query_as(
         "SELECT username, password, serverURL, server_type

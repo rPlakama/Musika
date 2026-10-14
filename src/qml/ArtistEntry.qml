@@ -393,11 +393,11 @@ Rectangle {
                 color: "transparent"
                 visible: !Theme.isNarrow(root.width)
 
-                // 9 px metrics: the capacity reference for the size ramp.
+                // 11 px metrics: the capacity reference for the size ramp.
                 FontMetrics {
                     id: bioMetrics
                     font.family: Theme.fonts.body
-                    font.pixelSize: 9
+                    font.pixelSize: 11
                 }
 
                 FadeText {
@@ -405,14 +405,14 @@ Rectangle {
                     anchors.fill: parent
                     anchors.leftMargin: root.width * 0.015
 
-                    // UI-52/UI-53: font size ramps 9..14 by how much of this
+                    // UI-52/UI-53: font size ramps 11..14 by how much of this
                     // rectangle the text fills — `capacity` is how many
-                    // characters fit at the 9 px floor (font metrics × the
+                    // characters fit at the 11 px floor (font metrics × the
                     // lines that fit at that floor); a short biography grows
-                    // toward 14, one that exactly fills the box sits at 9,
-                    // overflow stays 9 and elides.
+                    // toward 14, one that exactly fills the box sits at 11,
+                    // overflow stays 11 and elides.
                     readonly property int lines: Math.max(1,
-                        Math.floor(height / (9 * 1.3)))
+                        Math.floor(height / (11 * 1.3)))
                     readonly property real charsPerLine: Math.max(1,
                         Math.floor(width / bioMetrics.averageCharacterWidth))
                     readonly property real capacity: charsPerLine * lines
@@ -420,7 +420,7 @@ Rectangle {
                     text: root.descriptionText
                     color: Palette.onSurfaceVariant
                     font.pixelSize: Theme.clamp(
-                        9 + (1 - text.length / capacity) * 5, 9, 14)
+                        11 + (1 - text.length / capacity) * 3, 11, 14)
                     wrapMode: Text.WordWrap
                     maximumLineCount: lines
                     elide: Text.ElideRight

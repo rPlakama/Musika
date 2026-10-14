@@ -259,6 +259,9 @@ Rectangle {
             else
                 previousButton.press();
         }
+        function onPlayToggled() {
+            playButton.press();
+        }
     }
 
     ListModel {
@@ -545,6 +548,7 @@ Rectangle {
                             onClicked: Backend.playerPrevious()
                         }
                         IconButton {
+                            id: playButton
                             Layout.preferredWidth: root.height * 0.058
                             Layout.preferredHeight: root.height * 0.058
                             symbolRatio: 0.6

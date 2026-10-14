@@ -46,13 +46,17 @@ Rectangle {
 
     signal clicked()
 
-    /// Fires the "press" feel: a quick scale-down, then back with an
-    /// overshooting bezier (click-click). The transport skip buttons call
-    /// this so a skip is noticeable on both keyboard and mouse.
+    /// Fires the "press" feel through the shared `PressBounce` animation: a
+    /// quick scale-down, then back with an overshooting bezier. Transport
+    /// buttons call this so a toggle/skip is noticeable on keyboard, mouse,
+    /// IPC and backend-driven events alike.
     function press() {
-        if (Theme.reduceMotion)
-            return;
-        pressAnim.restart();
+        pressFx.press();
+    }
+
+    PressBounce {
+        id: pressFx
+        target: root
     }
 
     radius: Theme.radius
@@ -60,27 +64,8 @@ Rectangle {
     border.width: activeFocus ? Math.max(1, width * Theme.hairlineRatio) : 0
     border.color: Palette.primary
 
-    // Press: the button itself (glyph + state layer) dips and bounces back.
-    // A transform only — layout siblings never move.
-    SequentialAnimation {
-        id: pressAnim
-        NumberAnimation {
-            target: root
-            property: "scale"
-            to: 0.86
-            duration: Theme.motion.micro
-            easing.type: Easing.Bezier
-            easing.bezierCurve: Theme.ease.accelerate
-        }
-        NumberAnimation {
-            target: root
-            property: "scale"
-            to: 1.0
-            duration: Theme.motion.quick
-            easing.type: Easing.Bezier
-            easing.bezierCurve: Theme.ease.bounce
-        }
-    }
+    // Press state is animation-driven only; the scale transform lives in
+    // `PressBounce` so every button shares one implementation.
 
     Rectangle {
         anchors.fill: parent

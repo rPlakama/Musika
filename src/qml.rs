@@ -290,6 +290,9 @@ impl Backend {
     /// User skip (transport/keyboard/IPC), so the skip buttons can bloom.
     #[qsignal(qml_name = "trackSkipped")]
     fn track_skipped(&mut self, forward: bool);
+    /// Play/pause toggled, from any source (keys, mouse, IPC, backend).
+    #[qsignal(qml_name = "playToggled")]
+    fn play_toggled(&mut self);
     /// A new queue started playing; the UI opens Fullscreen Playback (Q-10).
     #[qsignal(qml_name = "playbackStarted")]
     fn playback_started(&mut self);
@@ -1190,6 +1193,7 @@ impl Backend {
     #[qslot(qml_name = "playerToggle")]
     fn player_toggle(&mut self) {
         self.player.toggle();
+        self.play_toggled();
         self.sync_player();
     }
 

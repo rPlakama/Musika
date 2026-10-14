@@ -187,6 +187,7 @@ Rectangle {
                     onClicked: Backend.playerPrevious()
                 }
                 IconButton {
+                    id: playButton
                     Layout.preferredWidth: root.height * 0.56
                     Layout.preferredHeight: root.height * 0.56
                     symbolRatio: 0.6
@@ -264,8 +265,7 @@ Rectangle {
             }
         }
 
-        // Skip feedback: fires for keyboard, mouse and IPC skips alike, in the
-        // generated primary.
+        // Skip/play feedback: fires for keyboard, mouse and IPC alike.
         Connections {
             target: Backend
             function onTrackSkipped(forward) {
@@ -273,6 +273,9 @@ Rectangle {
                     nextButton.press();
                 else
                     previousButton.press();
+            }
+            function onPlayToggled() {
+                playButton.press();
             }
         }
     }

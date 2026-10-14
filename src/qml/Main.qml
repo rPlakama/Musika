@@ -29,6 +29,10 @@ ApplicationWindow {
     color: Palette.background
     title: qsTr("Musika")
 
+    // P-6: the session debounce cannot be awaited during teardown, so the
+    // backend does one synchronous last-chance write (own DB, single row).
+    onClosing: Backend.flushStatus()
+
     // Global key handler. It wraps the screen stack so unhandled keys bubble up
     // to it from whatever holds focus; focused controls (text fields) accept
     // their keys first, which keeps insert-mode typing working.

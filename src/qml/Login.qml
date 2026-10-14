@@ -36,6 +36,7 @@ Item {
             width: parent.width
             text: "MUSIKA"
             color: Palette.primary
+            font.family: Theme.fonts.wordmark
             font.pixelSize: root.height * 0.035
             font.bold: true
             font.letterSpacing: root.height * 0.0084
@@ -49,6 +50,7 @@ Item {
             placeholderText: qsTr("Server URL")
             placeholderTextColor: Palette.onSurfaceVariant
             color: Palette.onSurface
+            font.family: Theme.fonts.body
             font.pixelSize: root.height * 0.0175
             text: Backend.serverURL
             onEditingFinished: Backend.serverURL = text
@@ -66,6 +68,7 @@ Item {
             placeholderText: qsTr("Username")
             placeholderTextColor: Palette.onSurfaceVariant
             color: Palette.onSurface
+            font.family: Theme.fonts.body
             font.pixelSize: root.height * 0.0175
             text: Backend.username
             onEditingFinished: Backend.username = text
@@ -83,6 +86,7 @@ Item {
             placeholderText: qsTr("Password")
             placeholderTextColor: Palette.onSurfaceVariant
             color: Palette.onSurface
+            font.family: Theme.fonts.body
             font.pixelSize: root.height * 0.0175
             echoMode: TextInput.Password
             text: Backend.password

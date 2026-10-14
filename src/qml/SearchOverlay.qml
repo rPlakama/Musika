@@ -115,6 +115,8 @@ Item {
             moveRow(-1);
         else if (action === "move_down")
             moveRow(1);
+        else if (action === "top" || action === "bottom")
+            moveEdge(action === "bottom");
         else if (action === "enter")
             activate();
     }
@@ -149,6 +151,15 @@ Item {
         var column = columnFor(activeColumn);
         if (column.cursor < 0 && column.model && column.model.count > 0)
             column.cursor = 0;
+    }
+
+    // VI-11: `gg`/`G` on the active column only. The column list follows its
+    // cursor through the `currentIndex` binding, so only the cursor moves.
+    function moveEdge(last) {
+        var column = columnFor(activeColumn);
+        if (!column.model || column.model.count === 0)
+            return;
+        column.cursor = last ? column.model.count - 1 : 0;
     }
 
     function activate() {
@@ -309,6 +320,7 @@ Item {
                     placeholderText: "Search anything"
                     placeholderTextColor: Palette.onSurfaceVariant
                     color: Palette.onSurface
+                    font.family: Theme.fonts.body
                     font.pixelSize: panel.height * 0.035
                     background: Rectangle {
                         color: Palette.surfaceContainerHighest

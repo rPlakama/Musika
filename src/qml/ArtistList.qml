@@ -65,6 +65,8 @@ Rectangle {
             list.currentIndex = Math.max(0, list.currentIndex - 1);
         else if (action === "move_down")
             list.currentIndex = Math.min(artists.count - 1, list.currentIndex + 1);
+        else if (action === "top" || action === "bottom")
+            Theme.cursorEdge(list, action === "bottom", ListView.Contain);
         else if (action === "enter")
             activateCurrent();
         list.positionViewAtIndex(list.currentIndex, ListView.Contain);

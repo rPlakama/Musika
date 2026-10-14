@@ -57,6 +57,9 @@ Rectangle {
             segmentActivated(selected);
     }
 
+    // Brand: the logo's original row, kept centered by its parent rectangle
+    // at any width. The square side preserves aspect (never squashed); the
+    // width cap keeps it clear of the pane walls.
     Rectangle {
         id: brand
         anchors.top: parent.top
@@ -65,15 +68,13 @@ Rectangle {
         height: root.height * 0.09
         color: "transparent"
 
-        FadeText {
-            anchors.verticalCenter: parent.verticalCenter
-            anchors.left: parent.left
-            anchors.leftMargin: root.width * 0.1
-            text: "MUSIKA"
-            color: Palette.primary
-            font.pixelSize: root.height * 0.03
-            font.bold: true
-            font.letterSpacing: root.height * 0.005
+        SymbolIcon {
+            anchors.centerIn: parent
+            readonly property real side: Math.min(parent.height * 0.6, root.width * 0.5)
+            width: side
+            height: side
+            source: "qrc:/app/icons/musika-glyph.svg"
+            symbolColor: Theme.iconStrong
         }
     }
 

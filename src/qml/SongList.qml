@@ -15,60 +15,41 @@
 // along with this program; if not, see <https://www.gnu.org/licenses/>.
 
 import QtQuick
-import QtQuick.Layouts
 import musika
 import "Theme.js" as Theme
 
-// All indexed songs. Enter (or click) plays the selected song.
-Rectangle {
+// Songs segment: all indexed songs. The list UI and cursor behaviour live in
+// the shared `MediaList` (see AlbumList); this wrapper owns the `songs`
+// channel and maps payload rows. Enter (or click) plays the selected song.
+MediaList {
     id: root
 
-    color: Palette.surface
-
-    ListModel {
-        id: songs
-    }
+    title: "Songs"
+    orderText: Backend.songOrder
 
     function reload() {
         Backend.requestSongs();
     }
 
     function apply(payload) {
-        songs.clear();
-        var rows = JSON.parse(payload);
-        for (var i = 0; i < rows.length; i++) {
-            var song = rows[i];
-            songs.append({
-                songId: song.id,
+        var parsed = JSON.parse(payload);
+        var rows = [];
+        for (var i = 0; i < parsed.length; i++) {
+            var song = parsed[i];
+            var artist = song.artist ? song.artist : "";
+            var album = song.album ? song.album : "";
+            rows.push({
                 title: song.title,
-                artist: song.artist ? song.artist : "",
-                album: song.album ? song.album : "",
-                duration: Theme.formatTime(song.duration),
-                cover: song.cover ? song.cover : ""
+                subtitle: artist + (album.length > 0 ? " · " + album : ""),
+                meta: Theme.formatTime(song.duration),
+                cover: song.cover ? song.cover : "",
+                songId: song.id
             });
         }
-        // UI-10: a cursor row exists from the first paint.
-        if (songs.count > 0 && (list.currentIndex < 0 || list.currentIndex >= songs.count))
-            list.currentIndex = 0;
+        root.setRows(rows);
     }
 
-    function activateCurrent() {
-        var song = songs.get(list.currentIndex);
-        if (song)
-            Backend.playSong(song.songId);
-    }
-
-    function handleAction(action) {
-        if (songs.count === 0)
-            return;
-        if (action === "move_up")
-            list.currentIndex = Math.max(0, list.currentIndex - 1);
-        else if (action === "move_down")
-            list.currentIndex = Math.min(songs.count - 1, list.currentIndex + 1);
-        else if (action === "enter")
-            activateCurrent();
-        list.positionViewAtIndex(list.currentIndex, ListView.Contain);
-    }
+    onActivated: (item) => Backend.playSong(item.songId)
 
     Component.onCompleted: reload()
 
@@ -83,141 +64,6 @@ Rectangle {
         }
         function onSong_order_changed() {
             root.reload();
-        }
-    }
-
-    FadeText {
-        anchors.centerIn: parent
-        visible: songs.count === 0
-        text: "Nothing indexed yet — run a sync"
-        color: Palette.onSurfaceVariant
-        font.pixelSize: Theme.fontSize("body", root.height)
-    }
-
-    ColumnLayout {
-        anchors.fill: parent
-        spacing: 0
-
-        Item {
-            Layout.fillWidth: true
-            implicitHeight: root.height * 0.1
-
-            FadeText {
-                anchors.verticalCenter: parent.verticalCenter
-                anchors.left: parent.left
-                anchors.leftMargin: root.width * 0.02
-                text: "Songs"
-                color: Palette.onSurface
-                font.pixelSize: root.height * 0.035
-                font.bold: true
-            }
-
-            // Same order affordance as the album list (Shift-L / Shift-H).
-            FadeText {
-                anchors.verticalCenter: parent.verticalCenter
-                anchors.right: parent.right
-                anchors.rightMargin: root.width * 0.02
-                text: "Order: " + Backend.songOrder
-                color: Palette.onSurfaceVariant
-                font.pixelSize: root.height * 0.021
-            }
-        }
-
-        ListView {
-            id: list
-            Layout.fillWidth: true
-            Layout.fillHeight: true
-            clip: true
-            model: songs
-            boundsBehavior: Flickable.StopAtBounds
-
-            delegate: Rectangle {
-                id: row
-                required property int index
-                required property string songId
-                required property string title
-                required property string artist
-                required property string album
-                required property string duration
-                required property string cover
-
-                readonly property real viewWidth: ListView.view ? ListView.view.width : 0
-
-                width: viewWidth
-                height: ListView.view ? ListView.view.height * 0.09 : 0
-                color: ListView.isCurrentItem
-                    ? Palette.secondaryContainer
-                    : (rowHover.hovered
-                        ? Palette.surfaceContainerHigh
-                        : (index % 2 === 0 ? Palette.surface : Palette.surfaceContainerLowest))
-
-                Behavior on color {
-                    ColorAnimation {
-                        duration: Theme.motion.quick
-                        easing.type: Easing.Bezier
-                        easing.bezierCurve: Theme.ease.standard
-                    }
-                }
-
-                Rectangle {
-                    id: cover
-                    anchors.left: parent.left
-                    anchors.verticalCenter: parent.verticalCenter
-                    anchors.leftMargin: row.viewWidth * 0.02
-                    width: row.height * 0.72
-                    height: row.height * 0.72
-                    radius: Theme.radius
-                    color: Palette.surfaceContainerHigh
-                    clip: true
-
-                    CoverImage {
-                        anchors.fill: parent
-                        source: row.cover
-                    }
-                }
-
-                Column {
-                    anchors.verticalCenter: parent.verticalCenter
-                    anchors.left: parent.left
-                    anchors.leftMargin: row.viewWidth * 0.02 + row.height * 0.72 + row.viewWidth * 0.02
-                    spacing: row.height * 0.05
-
-                    FadeText {
-                        text: row.title
-                        color: Palette.onSurface
-                        font.pixelSize: row.height * 0.26
-                        animated: false
-                    }
-                    FadeText {
-                        text: row.artist + (row.album.length > 0 ? " · " + row.album : "")
-                        color: Palette.onSurfaceVariant
-                        font.pixelSize: row.height * 0.2
-                        animated: false
-                    }
-                }
-
-                FadeText {
-                    anchors.verticalCenter: parent.verticalCenter
-                    anchors.right: parent.right
-                    anchors.rightMargin: row.viewWidth * 0.02
-                    text: row.duration
-                    color: Palette.onSurfaceVariant
-                    font.pixelSize: row.height * 0.2
-                    animated: false
-                }
-
-                HoverHandler {
-                    id: rowHover
-                    cursorShape: Qt.PointingHandCursor
-                }
-
-                TapHandler {
-                    onTapped: {
-                        list.currentIndex = row.index;
-                        Backend.playSong(row.songId);
-                    }
-                }
-            }
         }
     }
 }

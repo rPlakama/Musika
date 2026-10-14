@@ -177,10 +177,10 @@ browsing never paints a palette.
 | Search | `Shift Space F` floating search, or `i` to start typing (Songs | Albums | Artists) |
 
 Fullscreen (`Shift-Enter`) adds a lyrics/queue split with its own pane keybar.
-Playing a row in the Songs segment stays in the list and queues the library
-from that row in 200-track windows; while you listen, each extension pre-loads
-up to 5 more tracks once 10 remain. Search hits and album pages open
-fullscreen instead.
+Playing a row in the Songs segment stays in the list and queues the whole
+library in list order, starting on that row, so the tracks before it stay
+reachable too (no windowing — the queue is the local index). Search hits and
+album pages open fullscreen instead.
 
 ## IPC
 

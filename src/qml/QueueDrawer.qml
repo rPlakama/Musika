@@ -78,7 +78,10 @@ Item {
             cursor = Math.max(0, cursor - 1);
         else if (action === "move_down")
             cursor = Math.min(items.count - 1, cursor + 1);
-        else if (action === "enter")
+        else if ((action === "top" || action === "bottom") && items.count > 0) {
+            Theme.cursorEdge(list, action === "bottom", ListView.Contain);
+            cursor = list.currentIndex;
+        } else if (action === "enter")
             Backend.queueJump(cursor);
         else if (action === "queue_up" && cursor > 0) {
             Backend.queueMove(cursor, cursor - 1);

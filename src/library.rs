@@ -460,8 +460,8 @@ pub async fn song_ordinal(pool: &SqlitePool, id: &str, order: &str) -> Result<Op
     Ok(ordinal.map(|value| value.max(0) as usize))
 }
 
-/// One page of the [`all_songs`] order (lazy queue chunks), covers resolved
-/// from the album like the full list.
+/// One page of the [`all_songs`] order, covers resolved from the album like
+/// the full list.
 pub async fn songs_range(
     pool: &SqlitePool,
     offset: i64,
@@ -555,6 +555,32 @@ pub async fn artist(pool: &SqlitePool, id: &str) -> Result<Option<ArtistRow>> {
     .fetch_optional(pool)
     .await?;
     Ok(row)
+}
+
+/// Songs for an explicit id list, returned in exactly that order and with
+/// unknown ids dropped — the P-6 S3 queue snapshot restore path. Unknown ids
+/// are stale rows from a resynced server, not an error.
+pub async fn songs_by_ids(pool: &SqlitePool, ids: &[String]) -> Result<Vec<SongRow>> {
+    if ids.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let mut builder = sqlx::QueryBuilder::new(
+        "SELECT s.id, s.title, s.artist, s.album, s.album_id, s.track, s.duration,
+                COALESCE(al.cover_art, s.cover_art) AS cover_art
+         FROM songs s LEFT JOIN albums al ON al.id = s.album_id
+         WHERE s.id IN (",
+    );
+    let mut separated = builder.separated(", ");
+    for id in ids {
+        separated.push_bind(id.clone());
+    }
+    separated.push_unseparated(")");
+
+    let rows: Vec<SongRow> = builder.build_query_as().fetch_all(pool).await?;
+    let mut by_id: std::collections::HashMap<String, SongRow> =
+        rows.into_iter().map(|row| (row.id.clone(), row)).collect();
+    Ok(ids.iter().filter_map(|id| by_id.remove(id)).collect())
 }
 
 /// Songs of one album, in disc/track order. Covers come from the album.

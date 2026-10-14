@@ -26,26 +26,6 @@ use std::collections::HashMap;
 
 use crate::http_client::SubsonicClient;
 
-/// Songs-segment lazy queue: load this many tracks up front, then extend by
-/// at most [`LIBRARY_QUEUE_CHUNK`] once [`LIBRARY_QUEUE_AHEAD`] remain (i.e.
-/// playback reaches track 190 of a 200-track window; each later extension
-/// pre-loads no more than 5 songs forward). The window is cheap (ids/rows
-/// from the local index), so it is sized to absorb skip bursts.
-pub const LIBRARY_QUEUE_INITIAL: usize = 200;
-pub const LIBRARY_QUEUE_CHUNK: usize = 5;
-pub const LIBRARY_QUEUE_AHEAD: usize = 10;
-
-/// Lazy-extension cursor for the Songs-segment queue (owned by `Backend`).
-pub struct LibraryQueue {
-    /// Absolute offset in `library::all_songs` of the next chunk.
-    pub next: usize,
-    pub total: usize,
-    /// Order label the queue was built with; extensions must keep it.
-    pub order: String,
-    /// A chunk fetch is in flight; don't stack a second one.
-    pub loading: bool,
-}
-
 /// Builds a playable [`crate::player::Track`] from an indexed song.
 fn build_track(
     client: &SubsonicClient,
@@ -72,47 +52,27 @@ pub async fn album_tracks_json(dbs: &crate::db::Dbs, album_id: &str) -> anyhow::
     tracks_json(dbs, songs).await
 }
 
-/// First Songs-segment window (200 tracks from `song_id`) plus the extension
-/// cursor. The ordinal and the page come straight from the indexed rows
-/// (`ROW_NUMBER` / `LIMIT OFFSET`), so no full library is materialized and
-/// nothing is fetched from the server here.
+/// 0-based start row for the Songs-segment queue: the clicked song must exist
+/// in the index (a stale id is an error, not a silent head fallback).
+fn library_start(songs: &[crate::library::SongRow], song_id: &str) -> anyhow::Result<usize> {
+    songs
+        .iter()
+        .position(|song| song.id == song_id)
+        .ok_or_else(|| anyhow::anyhow!("song not found in index"))
+}
+
+/// Complete Songs-segment queue: every indexed song in `order`, with `song_id`
+/// as the starting row. The whole index (not a forward window) is queued so
+/// the tracks before the clicked one stay reachable; the rows are local, so
+/// there is nothing to extend lazily.
 pub async fn library_queue_payload(
     dbs: &crate::db::Dbs,
     song_id: &str,
     order: &str,
-) -> anyhow::Result<(String, usize, usize)> {
-    let Some(start) = crate::library::song_ordinal(&dbs.library, song_id, order).await? else {
-        return Err(anyhow::anyhow!("song not found in index"));
-    };
-    let total = crate::library::song_count(&dbs.library).await?;
-    let songs = crate::library::songs_range(
-        &dbs.library,
-        start as i64,
-        LIBRARY_QUEUE_INITIAL as i64,
-        order,
-    )
-    .await?;
-    let next = start + songs.len();
-    Ok((tracks_json(dbs, songs).await?, next, total))
-}
-
-/// Next lazy window from `offset` in the `all_songs` order (local index,
-/// `LIMIT`/`OFFSET` — same rows and order the DB already holds).
-pub async fn library_chunk_json(
-    dbs: &crate::db::Dbs,
-    offset: usize,
-    order: &str,
-) -> anyhow::Result<(String, usize, usize)> {
-    let total = crate::library::song_count(&dbs.library).await?;
-    let songs = crate::library::songs_range(
-        &dbs.library,
-        offset as i64,
-        LIBRARY_QUEUE_CHUNK as i64,
-        order,
-    )
-    .await?;
-    let next = offset + songs.len();
-    Ok((tracks_json(dbs, songs).await?, next, total))
+) -> anyhow::Result<(String, usize)> {
+    let songs = crate::library::all_songs(&dbs.library, order).await?;
+    let start = library_start(&songs, song_id)?;
+    Ok((tracks_json(dbs, songs).await?, start))
 }
 
 /// Index of `song_id` in its album's track order (0 when it vanished from a
@@ -122,6 +82,17 @@ fn queue_start(songs: &[crate::library::SongRow], song_id: &str) -> i64 {
         .iter()
         .position(|song| song.id == song_id)
         .unwrap_or(0) as i64
+}
+
+/// P-6 S3: after stale ids are dropped from a queue snapshot, resume on the
+/// remembered track when it survived, else on the first track (the S2
+/// "unknown id" rule).
+fn snapshot_start(ids: &[String], songs: &[crate::library::SongRow], index: i64) -> i64 {
+    let current = ids
+        .get(index.max(0) as usize)
+        .map(String::as_str)
+        .unwrap_or_default();
+    queue_start(songs, current)
 }
 
 /// Album metadata for UI pages (AlbumEntry header), cover resolved.
@@ -181,10 +152,12 @@ pub async fn song_album_payload(dbs: &crate::db::Dbs, song_id: &str) -> anyhow::
     .to_string())
 }
 
-/// S2 resume payload (P-6): validates the remembered ids against the local
-/// index and returns `{album, queue, start}` — the album page to reopen (or
-/// null) and the song's album queue (or ""), already pointing at the song.
-/// Unknown ids are dropped silently, exactly like a first launch.
+/// S2/S3 resume payload (P-6): validates the remembered ids against the
+/// local index and returns `{album, queue, start, position}` — the album
+/// page to reopen (or null) and the restored queue (or ""), already pointing
+/// at the remembered track, plus the saved playhead. The S3 queue snapshot
+/// wins; pre-S3 rows fall back to the song's album queue. Unknown ids are
+/// dropped silently, exactly like a first launch.
 pub async fn resume_payload(
     dbs: &crate::db::Dbs,
     status: &crate::status::SessionStatus,
@@ -200,7 +173,28 @@ pub async fn resume_payload(
 
     let mut queue = String::new();
     let mut start = 0i64;
-    if let Some(song_id) = status.song_id.as_deref().filter(|id| !id.is_empty()) {
+    // S3: the queue snapshot (exact order, manual edits included) wins over
+    // the S2 song -> album rebuild. Stale ids are dropped and the index
+    // follows the remembered current song.
+    let snapshot: Vec<String> = serde_json::from_str(&status.queue).unwrap_or_default();
+    if !snapshot.is_empty() {
+        let songs = crate::library::songs_by_ids(&dbs.library, &snapshot).await?;
+        if !songs.is_empty() {
+            let index = snapshot_start(&snapshot, &songs, status.queue_index);
+            // No credentials yet (or a stream URL failure) degrades to just
+            // the album page: resume must never fail the login.
+            match tracks_json(dbs, songs).await {
+                Ok(json) => {
+                    queue = json;
+                    start = index;
+                }
+                Err(err) => {
+                    eprintln!("status: could not rebuild the resumed queue: {err:#}");
+                }
+            }
+        }
+    } else if let Some(song_id) = status.song_id.as_deref().filter(|id| !id.is_empty()) {
+        // S2 fallback for rows without a snapshot (pre-S3 writers).
         if let Some(song) = crate::library::song(&dbs.library, song_id).await? {
             let (songs, index) = match song.album_id.as_deref().filter(|id| !id.is_empty()) {
                 Some(album_id) => {
@@ -210,8 +204,6 @@ pub async fn resume_payload(
                 }
                 None => (vec![song], 0),
             };
-            // No credentials yet (or a stream URL failure) degrades to just
-            // the album page: resume must never fail the login.
             match tracks_json(dbs, songs).await {
                 Ok(json) => {
                     queue = json;
@@ -228,6 +220,7 @@ pub async fn resume_payload(
         "album": album.unwrap_or(serde_json::Value::Null),
         "queue": queue,
         "start": start,
+        "position": status.position,
     })
     .to_string())
 }
@@ -281,6 +274,26 @@ mod tests {
         assert_eq!(queue_start(&rows, "s2"), 1);
         // A stale id must still produce a playable queue.
         assert_eq!(queue_start(&rows, "gone"), 0);
+    }
+
+    #[test]
+    fn library_start_requires_the_clicked_row() {
+        let rows = vec![song_row("s1"), song_row("s2"), song_row("s3")];
+        assert_eq!(library_start(&rows, "s3").unwrap(), 2);
+        // The Songs segment never silently retargets a stale id.
+        assert!(library_start(&rows, "gone").is_err());
+    }
+
+    #[test]
+    fn snapshot_start_survives_dropped_ids() {
+        let ids = ["s1".to_string(), "gone".to_string(), "s2".to_string()];
+        let rows = vec![song_row("s1"), song_row("s2")];
+        // The remembered track survived: resume on it.
+        assert_eq!(snapshot_start(&ids, &rows, 2), 1);
+        // The remembered track itself is gone: fall back to the head.
+        assert_eq!(snapshot_start(&ids, &rows, 1), 0);
+        // A truncated snapshot lands on the head too.
+        assert_eq!(snapshot_start(&ids, &rows, 9), 0);
     }
 
     async fn memory_pool() -> SqlitePool {
@@ -362,6 +375,7 @@ mod tests {
         let status = crate::status::SessionStatus {
             album_id: Some("al1".to_string()),
             song_id: Some("s2".to_string()),
+            position: 12.5,
             ..crate::status::SessionStatus::default()
         };
         let payload = resume_payload(&dbs, &status).await.unwrap();
@@ -370,6 +384,7 @@ mod tests {
         assert_eq!(value["album"]["tracks"], 2);
         assert_eq!(value["queue"], "");
         assert_eq!(value["start"], 0);
+        assert_eq!(value["position"], 12.5);
 
         // Unknown ids behave exactly like a first launch.
         let status = crate::status::SessionStatus {
@@ -382,5 +397,6 @@ mod tests {
         assert!(value["album"].is_null());
         assert_eq!(value["queue"], "");
         assert_eq!(value["start"], 0);
+        assert_eq!(value["position"], 0.0);
     }
 }

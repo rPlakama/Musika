@@ -88,6 +88,16 @@ Rectangle {
     Component.onCompleted: reload()
 
     function handleAction(action) {
+        // VI-11: `gg`/`G` leave the toolbar for the first/last song; the
+        // toolbar stays a `k`-from-row-0 affordance only.
+        if (action === "top" || action === "bottom") {
+            if (songs.count === 0)
+                return;
+            root.onToolbar = false;
+            Theme.cursorEdge(songList, action === "bottom", ListView.Contain);
+            return;
+        }
+
         if (root.onToolbar) {
             // Cursor is on the toolbar (Back). Down returns to the songs.
             if (action === "move_down" && songs.count > 0) {
@@ -127,36 +137,15 @@ Rectangle {
         }
     }
 
-    // Ambience (D-5): the album art itself, blurred and scaled by the GPU
-    // layer, then washed into the theme surface by the gradient below. This is
-    // the one non-modal blur: content-derived ambience, never elevation
-    // (R2 amended). Hidden when the album has no art.
-    Image {
+    // Ambience (D-5): the album art itself through the shared
+    // `CoverImage.ambient` mode — the GPU layer blurs and desaturates it, then
+    // the gradient below washes it into the theme surface. This is the one
+    // non-modal blur: content-derived ambience, never elevation (R2 amended).
+    CoverImage {
         id: coverBackdrop
         anchors.fill: parent
         source: root.albumCover
-        fillMode: Image.PreserveAspectCrop
-        asynchronous: true
-        cache: false
-        opacity: (status === Image.Ready && root.albumCover.length > 0) ? 1 : 0
-        visible: opacity > 0
-
-        layer.enabled: visible
-        layer.effect: MultiEffect {
-            blurEnabled: true
-            blur: 1.0
-            blurMax: 64
-            saturation: 0.6
-            autoPaddingEnabled: false
-        }
-
-        Behavior on opacity {
-            NumberAnimation {
-                duration: Theme.motion.standard
-                easing.type: Easing.Bezier
-                easing.bezierCurve: Theme.ease.standard
-            }
-        }
+        ambient: true
     }
 
     Rectangle {

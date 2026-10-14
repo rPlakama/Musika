@@ -50,8 +50,9 @@ Rectangle {
     property int lyricsOffset: 0
 
     // Lyrics type is sized from the pane itself (parent rectangle), never the
-    // window, so lines can't outgrow the pane's walls; the padding keeps the
-    // scaled active line off the edges.
+    // window, so lines can't outgrow the pane's walls; the stage caps the
+    // active emphasis to the padded room, so the grown line never reaches the
+    // margin (see the delegate's `emphasis`).
     readonly property real lyricSize: Theme.clamp(lyricsPane.height * 0.055, 10, 18)
     readonly property real lyricPad: Math.max(6, lyricsPane.height * 0.04)
 
@@ -272,36 +273,15 @@ Rectangle {
         id: lyricModel
     }
 
-    // D-5 ambience: the playing cover, blurred and washed into the theme
-    // background (same rule as AlbumEntry), so the square floats on its own
-    // colours without competing with the lyrics/queue panes. Hidden without
-    // art; the panes stay opaque on top.
-    Image {
+    // D-5 ambience: the playing cover through the shared `CoverImage.ambient`
+    // mode (blurred and washed into the theme background, same rule as
+    // AlbumEntry), so the square floats on its own colours without competing
+    // with the lyrics/queue panes. Hidden without art; the panes stay opaque.
+    CoverImage {
         id: coverBackdrop
         anchors.fill: parent
         source: Backend.currentCoverUrl
-        fillMode: Image.PreserveAspectCrop
-        asynchronous: true
-        cache: false
-        opacity: (status === Image.Ready && Backend.currentCoverUrl.length > 0) ? 1 : 0
-        visible: opacity > 0
-
-        layer.enabled: visible
-        layer.effect: MultiEffect {
-            blurEnabled: true
-            blur: 1.0
-            blurMax: 64
-            saturation: 0.6
-            autoPaddingEnabled: false
-        }
-
-        Behavior on opacity {
-            NumberAnimation {
-                duration: Theme.motion.standard
-                easing.type: Easing.Bezier
-                easing.bezierCurve: Theme.ease.standard
-            }
-        }
+        ambient: true
     }
 
     Rectangle {
@@ -336,6 +316,7 @@ Rectangle {
                 Layout.fillWidth: true
                 text: "MUSIKA"
                 color: Palette.onSurface
+                font.family: Theme.fonts.wordmark
                 font.pixelSize: Theme.fontSize("title", root.height)
                 font.bold: true
                 elide: Text.ElideRight
@@ -440,6 +421,7 @@ Rectangle {
                             anchors.centerIn: parent
                             text: "MUSIKA"
                             color: Palette.onPrimaryContainer
+                            font.family: Theme.fonts.wordmark
                             font.pixelSize: Theme.fontSize("title", root.height)
                             font.letterSpacing: root.height * 0.006
                             visible: Backend.currentCoverUrl.length === 0
@@ -686,58 +668,92 @@ Rectangle {
                             color: root.pane === 1 ? Palette.primary : Palette.outlineVariant
                         }
 
-                        ListView {
-                            id: lyricsView
+                        // The stage: an inner rectangle inside the pane that
+                        // contains every lyric line, the scaled active one
+                        // included. Delegates pre-calculate their emphasis so
+                        // the grown line never reaches these walls; `clip` is
+                        // the last-resort containment.
+                        Rectangle {
+                            id: lyricsStage
                             Layout.fillWidth: true
                             Layout.fillHeight: true
+                            color: "transparent"
                             clip: true
-                            model: lyricModel
-                            spacing: root.lyricSize * 0.9
-                            boundsBehavior: Flickable.StopAtBounds
-                            visible: root.lyricsAvailable
 
-                            Behavior on opacity {
-                                NumberAnimation { duration: Theme.motion.quick; easing.type: Easing.Bezier; easing.bezierCurve: Theme.ease.standard }
-                            }
-
-                            delegate: FadeText {
-                                id: lyricLine
-                                required property int index
-                                required property real t
-                                required property string line
-
-                                // Lyrics stage (roadmap "Lyrics presentation"):
-                                // active = scale + full contrast, near = dim,
-                                // far = dimmer; unsynced is one uniform column.
-                                readonly property bool active: index === root.activeLyric
-                                readonly property int distance: root.activeLyric >= 0
-                                    ? Math.abs(index - root.activeLyric) : -1
-
-                                width: lyricsView.width
-                                leftPadding: root.lyricPad
-                                rightPadding: root.lyricPad
-                                text: lyricLine.line
-                                horizontalAlignment: Text.AlignHCenter
-                                color: lyricLine.active ? Palette.onSurface : Palette.onSurfaceVariant
-                                font.pixelSize: root.lyricSize
-                                wrapMode: Text.WordWrap
-                                animated: false
-                                transformOrigin: Item.Center
-                                opacity: lyricLine.distance < 0
-                                    ? Theme.contentDim
-                                    : (lyricLine.active
-                                        ? 1.0
-                                        : (lyricLine.distance === 1 ? Theme.contentDim : Theme.contentDimFar))
-                                scale: lyricLine.active ? Theme.lyricsEmphasis : 1.0
+                            ListView {
+                                id: lyricsView
+                                anchors.fill: parent
+                                model: lyricModel
+                                spacing: root.lyricSize * 0.9
+                                boundsBehavior: Flickable.StopAtBounds
+                                visible: root.lyricsAvailable
 
                                 Behavior on opacity {
                                     NumberAnimation { duration: Theme.motion.quick; easing.type: Easing.Bezier; easing.bezierCurve: Theme.ease.standard }
                                 }
-                                Behavior on scale {
-                                    NumberAnimation { duration: Theme.motion.quick; easing.type: Easing.Bezier; easing.bezierCurve: Theme.ease.standard }
-                                }
-                                Behavior on color {
-                                    ColorAnimation { duration: Theme.motion.micro; easing.type: Easing.Bezier; easing.bezierCurve: Theme.ease.standard }
+
+                                delegate: FadeText {
+                                    id: lyricLine
+                                    required property int index
+                                    required property real t
+                                    required property string line
+
+                                    // Lyrics stage (roadmap "Lyrics presentation"):
+                                    // active = scale + full contrast, near = dim,
+                                    // far = dimmer; unsynced is one uniform column.
+                                    readonly property bool active: index === root.activeLyric
+                                    readonly property int distance: root.activeLyric >= 0
+                                        ? Math.abs(index - root.activeLyric) : -1
+
+                                    // Pre-calculated emphasis: the full 1.12
+                                    // while the wrapped line stays clear of the
+                                    // margin, otherwise exactly the scale that
+                                    // fits between the paddings (never touching
+                                    // the stage walls). Long unbreakable words
+                                    // can shrink below 1 instead of being cut.
+                                    readonly property real emphasis: {
+                                        if (!lyricLine.active)
+                                            return 1.0;
+                                        var room = lyricLine.width - lyricLine.leftPadding - lyricLine.rightPadding;
+                                        if (room <= 0 || lyricLine.paintedWidth <= 0)
+                                            return Theme.lyricsEmphasis;
+                                        return Math.min(Theme.lyricsEmphasis, room / lyricLine.paintedWidth);
+                                    }
+                                    // Grow the slot symmetrically so the big
+                                    // line stays centred and its neighbours
+                                    // make room instead of getting overlapped.
+                                    readonly property real emphasisPad: Math.max(0,
+                                        lyricLine.paintedHeight * (lyricLine.emphasis - 1) / 2)
+
+                                    width: lyricsView.width
+                                    leftPadding: root.lyricPad
+                                    rightPadding: root.lyricPad
+                                    topPadding: lyricLine.emphasisPad
+                                    bottomPadding: lyricLine.emphasisPad
+                                    text: lyricLine.line
+                                    horizontalAlignment: Text.AlignHCenter
+                                    color: lyricLine.active ? Palette.onSurface : Palette.onSurfaceVariant
+                                    font.family: Theme.fonts.lyrics
+                                    font.pixelSize: root.lyricSize
+                                    wrapMode: Text.WordWrap
+                                    animated: false
+                                    transformOrigin: Item.Center
+                                    opacity: lyricLine.distance < 0
+                                        ? Theme.contentDim
+                                        : (lyricLine.active
+                                            ? 1.0
+                                            : (lyricLine.distance === 1 ? Theme.contentDim : Theme.contentDimFar))
+                                    scale: lyricLine.emphasis
+
+                                    Behavior on opacity {
+                                        NumberAnimation { duration: Theme.motion.quick; easing.type: Easing.Bezier; easing.bezierCurve: Theme.ease.standard }
+                                    }
+                                    Behavior on scale {
+                                        NumberAnimation { duration: Theme.motion.quick; easing.type: Easing.Bezier; easing.bezierCurve: Theme.ease.standard }
+                                    }
+                                    Behavior on color {
+                                        ColorAnimation { duration: Theme.motion.micro; easing.type: Easing.Bezier; easing.bezierCurve: Theme.ease.standard }
+                                    }
                                 }
                             }
                         }
@@ -748,6 +764,7 @@ Rectangle {
                             visible: root.lyricsLoading
                             text: "Loading lyrics…"
                             color: Palette.onSurfaceVariant
+                            font.family: Theme.fonts.lyrics
                             font.pixelSize: Theme.fontSize("label", root.height)
                             horizontalAlignment: Text.AlignHCenter
                             verticalAlignment: Text.AlignVCenter
@@ -759,6 +776,7 @@ Rectangle {
                             visible: !root.lyricsAvailable && !root.lyricsLoading
                             text: "No lyrics"
                             color: Palette.onSurfaceVariant
+                            font.family: Theme.fonts.lyrics
                             font.pixelSize: Theme.fontSize("label", root.height)
                             horizontalAlignment: Text.AlignHCenter
                             verticalAlignment: Text.AlignVCenter

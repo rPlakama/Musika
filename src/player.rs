@@ -178,12 +178,6 @@ impl Player {
         self.pause();
     }
 
-    /// Appends tracks to the queue; the playing track and cursor are
-    /// untouched. Used by the library queue's lazy extension.
-    pub fn append(&mut self, tracks: Vec<Track>) {
-        self.queue.extend(tracks);
-    }
-
     /// (Re)starts the current track from the beginning.
     pub fn play_current(&mut self) {
         if self.queue.is_empty() {

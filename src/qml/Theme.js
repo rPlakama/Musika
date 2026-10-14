@@ -157,6 +157,18 @@ var contentDimFar = 0.5   // far lines in the synced focus window
 var lyricsEmphasis = 1.12 // active-line scale (transform, never font size)
 
 // ---------------------------------------------------------------------------
+// Font families. App-scoped typefaces from the flake (`XDG_DATA_DIRS` in the
+// wrapper and dev shell), never installed system-wide. Instrument Serif and
+// Newsreader are not packaged, so the wordmark and body use the closest
+// nixpkgs replacements; lyrics keep Merriweather.
+// ---------------------------------------------------------------------------
+var fonts = {
+    body: "Literata",        // everything that is not the wordmark/lyrics
+    lyrics: "Merriweather",  // lyric lines and the lyrics pane states
+    wordmark: "Cormorant"    // the MUSIKA name
+}
+
+// ---------------------------------------------------------------------------
 // Typography roles (R7): proportional fractions with pixel clamps so labels
 // never get tiny on large displays or dominate small windows.
 // ---------------------------------------------------------------------------
@@ -190,6 +202,20 @@ function volumeIcon(volume, muted) {
     if (volume <= 33)
         return "qrc:/app/icons/vol-low-svgrepo-com.svg"
     return "qrc:/app/icons/vol-high-svgrepo-com.svg"
+}
+
+// VI-11: `gg`/`G` land a list cursor on the first/last row and keep it
+// visible. `last` picks the edge; `mode` is the ListView position mode
+// (callers pass ListView.Contain — a `.pragma library` has no QtQuick globals).
+// Empty lists and already-at-the-edge are no-ops.
+function cursorEdge(list, last, mode) {
+    if (!list || list.count === 0)
+        return;
+    var target = last ? list.count - 1 : 0;
+    if (target === list.currentIndex)
+        return;
+    list.currentIndex = target;
+    list.positionViewAtIndex(target, mode);
 }
 
 // Shared "m:ss" (h:mm:ss past the hour), used by every time label (UI-26).

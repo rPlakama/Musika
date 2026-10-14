@@ -17,20 +17,26 @@
 //! DB7 `statussave.db`: the tiny session row P-6 resumes from (roadmap
 //! "Session status" design).
 //!
-//! This is the S0 storage layer only: one row, last write wins, account
-//! scoped. The backend (S1+) owns the dirty/debounce policy and applies the
+//! This is the storage layer only: one row, last write wins, account
+//! scoped. The backend owns the dirty/debounce policy and applies the
 //! values after `login_succeeded()`; nothing here touches the player.
 
 use anyhow::Result;
 use sqlx::sqlite::SqlitePool;
 
 /// One session snapshot; `None` ids simply mean "nothing to restore".
+/// `queue` is a JSON array of song ids (empty string = none), `queue_index`
+/// points at `song_id` inside it and `position` is the saved playhead in
+/// seconds.
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize, sqlx::FromRow)]
 pub struct SessionStatus {
     pub server_url: String,
     pub username: String,
     pub album_id: Option<String>,
     pub song_id: Option<String>,
+    pub queue: String,
+    pub queue_index: i64,
+    pub position: f64,
     pub volume: f64,
     pub muted: bool,
     pub updated_at: i64,
@@ -40,21 +46,28 @@ pub struct SessionStatus {
 pub async fn save(pool: &SqlitePool, status: &SessionStatus) -> Result<()> {
     sqlx::query(
         "INSERT INTO session_status
-             (id, server_url, username, album_id, song_id, volume, muted, updated_at)
-         VALUES (1, ?1, ?2, ?3, ?4, ?5, ?6, ?7)
+             (id, server_url, username, album_id, song_id, queue, queue_index,
+              position, volume, muted, updated_at)
+         VALUES (1, ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
          ON CONFLICT(id) DO UPDATE SET
-             server_url = excluded.server_url,
-             username   = excluded.username,
-             album_id   = excluded.album_id,
-             song_id    = excluded.song_id,
-             volume     = excluded.volume,
-             muted      = excluded.muted,
-             updated_at = excluded.updated_at",
+             server_url  = excluded.server_url,
+             username    = excluded.username,
+             album_id    = excluded.album_id,
+             song_id     = excluded.song_id,
+             queue       = excluded.queue,
+             queue_index = excluded.queue_index,
+             position    = excluded.position,
+             volume      = excluded.volume,
+             muted       = excluded.muted,
+             updated_at  = excluded.updated_at",
     )
     .bind(&status.server_url)
     .bind(&status.username)
     .bind(&status.album_id)
     .bind(&status.song_id)
+    .bind(&status.queue)
+    .bind(status.queue_index)
+    .bind(status.position)
     .bind(status.volume)
     .bind(status.muted as i64)
     .bind(status.updated_at)
@@ -66,7 +79,8 @@ pub async fn save(pool: &SqlitePool, status: &SessionStatus) -> Result<()> {
 /// Loads the row; `None` when nothing was ever saved (first launch).
 pub async fn load(pool: &SqlitePool) -> Result<Option<SessionStatus>> {
     let row = sqlx::query_as::<_, SessionStatus>(
-        "SELECT server_url, username, album_id, song_id, volume, muted, updated_at
+        "SELECT server_url, username, album_id, song_id, queue, queue_index,
+                position, volume, muted, updated_at
          FROM session_status WHERE id = 1",
     )
     .fetch_optional(pool)
@@ -104,6 +118,9 @@ mod tests {
             username: "demo".to_string(),
             album_id: Some("al1".to_string()),
             song_id: Some("s1".to_string()),
+            queue: r#"["s1","s2","s3"]"#.to_string(),
+            queue_index: 1,
+            position: 61.5,
             volume: 42.0,
             muted: true,
             updated_at: 100,
@@ -115,6 +132,9 @@ mod tests {
         let second = SessionStatus {
             album_id: None,
             song_id: None,
+            queue: String::new(),
+            queue_index: 0,
+            position: 0.0,
             volume: 70.0,
             muted: false,
             updated_at: 200,
@@ -124,6 +144,8 @@ mod tests {
         let loaded = load(&pool).await.unwrap().unwrap();
         assert_eq!(loaded, second);
         assert_eq!(loaded.album_id, None);
+        assert_eq!(loaded.queue, "");
+        assert_eq!(loaded.position, 0.0);
         assert_eq!(loaded.updated_at, 200);
     }
 }

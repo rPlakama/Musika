@@ -629,6 +629,7 @@ Item {
                 anchors.centerIn: parent
                 text: regionBox.modelData.title
                 color: Palette.primary
+                font.family: Theme.fonts.body
                 font.pixelSize: root.height * 0.03
                 font.bold: true
                 font.letterSpacing: root.height * 0.008

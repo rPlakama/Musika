@@ -45,7 +45,7 @@ Order = trust/correctness > unblocking > user value > effort.
 
 The app is unsafe or misleading without these.
 
-- [ ] **VI-11 · `gg`/`G` (Top/Bottom) in every list** — P1 · **high priority** · (N8a, MY3 §4.2)
+- [x] **VI-11 · `gg`/`G` (Top/Bottom) in every list** — P1 · **high priority** · (N8a, MY3 §4.2)
   - **Why:** `g g` and `G` are already bound (`keybind.rs:122-123` →
     `top`/`bottom`) but no QML handler consumes them, so the motions dead-end
     silently — the most common vi jump is missing while `j/k` alone cannot
@@ -70,9 +70,14 @@ The app is unsafe or misleading without these.
        (Playlists/Radio placeholders, empty queue) and the search overlay's
        active column;
     4. counts (`5G`) and `gg` in visual mode stay with VI-7/VI-4.
-  - **Now:** the keymap fires `Action::Top`/`Action::Bottom` for `g g` /
-    `shift-g` (unit-tested), but a tree-wide search for `"top"`/`"bottom"`
-    finds no QML handler — every list currently ignores them.
+  - **Now:** one shared `Theme.cursorEdge` (first/last row plus
+    `positionViewAtIndex(…, Contain)`; empty and already-at-the-edge are
+    no-ops) replaces the per-list copies; consumed by the shared `MediaList`
+    (Albums and Songs now share one list component, wrappers map the payload),
+    `ArtistList`, `AlbumEntry` (leaving the toolbar for the songs),
+    `QueueDrawer`, and the active `SearchColumn` (`SearchOverlay.moveEdge`);
+    the helper is runtime-tested against a real `ListView` (QtQuickTest) and
+    the tree is qmllint clean.
 
 - [ ] **Q-5 · Gapless + stream-error retry/auto-advance** — P1 · (M8)
   - **Why:** end-of-track errors currently stop the session silently.
@@ -716,8 +721,7 @@ The product is incomplete without these.
   - **Why:** huge slot surface; `playback_state` is a `String`, should be enum.
   - **Now (partial):** the Qt bridge's data layer left `qml.rs` — `browse.rs`
     (list/search JSON loaders + cover-URL resolution) and `queue.rs` (Track
-    queue builders, the lazy Songs-segment windows with `LibraryQueue` cursor
-    and `chunk_range` test); `qml.rs` 1957 → 1594 lines, keeping the QObject,
+    queue builders); `qml.rs` 1957 → 1793 lines, keeping the QObject,
     tick/sync glue and invoker-driven orchestration. Open: `playback_state`
     String → enum, slot-surface reduction. Next module candidate: `api.rs`
     (1894 lines: protocol types + client methods).
@@ -1042,18 +1046,15 @@ Small, bounded, high-value changes.
     result or `AlbumEntry` song list — plays it and opens fullscreen; album and
     artist activation keep their navigation semantics; queue `Enter` (jump) is
     unchanged; the search overlay closes first, no wait on stream or palette.
-  - **Now:** landed — `playerLoad` emits `playbackStarted`; `Home` flips
+   - **Now:** landed — `playerLoad` emits `playbackStarted`; `Home` flips
     `nowPlayingExpanded` on it (search songs + `AlbumEntry` rows both go
     through `playerLoad`), while the album-page IPC flow clears it again when
-    it pushes the page. Refined: Songs-segment rows play inside a bounded
-    library window (`all_songs` order, start at the row; 200 up front) through
-    `playerLoadLibrary`, so that tab never opens fullscreen; while playback
-    runs, each tick extends once 10 tracks remain, pre-loading at most 5 more
-    (`playerAppend`, epoch-guarded against a replaced queue). Windows come from
-    the local index only (`ROW_NUMBER` ordinal + `LIMIT/OFFSET` pages in
-    library.db; covers from covers.db; `stream_url` is offline URL building),
-    so extensions never refetch the library from Navidrome; search and
-    `AlbumEntry` keep the fullscreen path.
+    it pushes the page. Refined: Songs-segment rows play through
+    `playerLoadLibrary`, which queues the whole index in `all_songs` order
+    starting on the clicked row (tracks before it included; no window and no
+    lazy extension), so that tab never opens fullscreen. Queues come from the
+    local index only (library.db rows, covers from covers.db; `stream_url` is
+    offline URL building); search and `AlbumEntry` keep the fullscreen path.
 
 
 - [x] **P-7 · Fullscreen controls completeness** — P2 · (U6)
@@ -1119,8 +1120,8 @@ Small, bounded, high-value changes.
     `songOrderNext/Prev`, `all_songs`/`songs_range`/`song_ordinal` take the
     same static-SQL order arms, `SongList` reloads on `song_order_changed`
     and shows `Order: …`; `Home` routes the keys by segment (Songs → song
-    order), including the lazy library queue, which keeps the order it was
-    built with.
+    order), and the library queue is built in the order that was active when
+    the row was played.
 
 - [x] **UI-1 · Region frame colours** — P2 · (MD1)
   - **Why:** PLAYER uses `Theme.error` (red) and four accents read as identity,
@@ -1384,9 +1385,12 @@ Kept for rationale; the tree already carries these.
   - **Pane-sized type:** the font is computed from the lyrics rectangle
     (`pane.height * 0.055`, clamped 10–18) with proportional left/right padding,
     so lines never collide with the pane walls at any window size.
-  - **Now:** `NowPlaying.qml:463-502` — no `> <` marker; active/near/far
-    opacity + scale about the text centre; uniform dim column when unsynced;
-    pane-sized `lyricSize`/`lyricPad`.
+  - **Now:** `NowPlaying.qml` — no `> <` marker; active/near/far opacity +
+    scale about the text centre; the active emphasis is pre-calculated per
+    line against the inset `lyricsStage` margin (long wrapped lines cap at the
+    fit scale instead of being cut; unbreakable words can shrink below 1) and
+    the grown slot adds symmetric padding so neighbours make room; uniform dim
+    column when unsynced; pane-sized `lyricSize`/`lyricPad`.
 
 - [x] **S-1 · Floating search (three columns, keyboard, states)** — P1 · (roadmap design)
   - **Now:** `SearchOverlay.qml` + `SearchColumn.qml`: Artists|Albums|Songs,

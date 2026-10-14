@@ -152,6 +152,7 @@ Rectangle {
             anchors.centerIn: parent
             visible: glyphA.iconGlyph.toString().length === 0 && glyphA.textGlyph.length > 0
             text: glyphA.textGlyph
+            font.family: Theme.fonts.body
             font.pixelSize: root.width * root.symbolRatio
             color: !root.enabled ? Theme.stateDisabledContent : root.symbolColor
         }
@@ -184,6 +185,7 @@ Rectangle {
             anchors.centerIn: parent
             visible: glyphB.iconGlyph.toString().length === 0 && glyphB.textGlyph.length > 0
             text: glyphB.textGlyph
+            font.family: Theme.fonts.body
             font.pixelSize: root.width * root.symbolRatio
             color: !root.enabled ? Theme.stateDisabledContent : root.symbolColor
         }

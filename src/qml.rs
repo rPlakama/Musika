@@ -26,10 +26,7 @@ use crate::browse::{
 use crate::http_client::SubsonicClient;
 use crate::keybind::{Keymap, Outcome};
 use crate::player::{Player, State};
-use crate::queue::{
-    LIBRARY_QUEUE_AHEAD, LibraryQueue, album_tracks_json, library_chunk_json,
-    library_queue_payload, song_album_payload,
-};
+use crate::queue::{album_tracks_json, library_queue_payload, song_album_payload};
 
 /// Bumped by every status change; the debounced writer only persists when its
 /// captured generation is still the latest (P-6 / roadmap "Session status").
@@ -70,12 +67,14 @@ pub struct Backend {
     song_order: String,
     server_type: String,
     search_open: bool,
-    library_queue: Option<LibraryQueue>,
-    /// Invalidates in-flight lazy appends when the queue is replaced.
-    library_queue_epoch: u64,
     /// Last album page / song the session should return to (P-6).
     status_album: Option<String>,
     status_song: Option<String>,
+    /// S3: playhead to apply once `Home` loads the restored queue; consumed
+    /// by `playerLoadPaused` so a later manual load never seeks.
+    status_restore_position: Option<f64>,
+    /// S3: throttle for the periodic position write (10 s) while playing.
+    last_position_save: Option<std::time::Instant>,
 }
 
 #[qobject(Singleton)]
@@ -507,6 +506,9 @@ impl Backend {
         self.player.set_muted(status.muted);
         self.status_album = status.album_id;
         self.status_song = status.song_id;
+        // S3: armed here, consumed by `playerLoadPaused` when Home loads the
+        // restored queue; a queue-less restore leaves it harmlessly set.
+        self.status_restore_position = (status.position > 0.0).then_some(status.position);
         self.sync_player();
     }
 
@@ -543,6 +545,9 @@ impl Backend {
         let username = self.username.trim().to_string();
         let album_id = self.status_album.clone();
         let song_id = self.status_song.clone();
+        let queue = self.queue_ids_json();
+        let queue_index = self.player.index() as i64;
+        let position = self.player.position();
         let volume = self.player.volume();
         let muted = self.player.muted();
         crate::runtime().spawn(async move {
@@ -562,6 +567,9 @@ impl Backend {
             status.username = username;
             status.album_id = album_id;
             status.song_id = song_id;
+            status.queue = queue;
+            status.queue_index = queue_index;
+            status.position = position;
             status.volume = volume;
             status.muted = muted;
             status.updated_at = crate::consts::now_secs();
@@ -569,6 +577,64 @@ impl Backend {
                 eprintln!("status: could not save the session: {err:#}");
             }
         });
+    }
+
+    /// The player queue as a JSON id array (P-6 S3 snapshot).
+    fn queue_ids_json(&self) -> String {
+        let ids: Vec<&str> = self
+            .player
+            .queue()
+            .iter()
+            .map(|track| track.id.as_str())
+            .collect();
+        serde_json::to_string(&ids).unwrap_or_default()
+    }
+
+    /// Last-chance write on window close (P-6): the debounce task cannot be
+    /// awaited during teardown, so this single local upsert blocks the Qt
+    /// thread for the few ms it takes.
+    #[qslot(qml_name = "flushStatus")]
+    fn flush_status(&mut self) {
+        if !self.logged_in || self.server_url.trim().is_empty() || self.username.trim().is_empty() {
+            return;
+        }
+        let Some(dbs) = crate::dbs().cloned() else {
+            return;
+        };
+        // Cancel a pending debounce so it cannot race (or overwrite) this.
+        STATUS_WRITE_GEN.fetch_add(1, Ordering::Relaxed);
+        let status = crate::status::SessionStatus {
+            server_url: self.server_url.trim().to_string(),
+            username: self.username.trim().to_string(),
+            album_id: self.status_album.clone(),
+            song_id: self.status_song.clone(),
+            queue: self.queue_ids_json(),
+            queue_index: self.player.index() as i64,
+            position: self.player.position(),
+            volume: self.player.volume(),
+            muted: self.player.muted(),
+            updated_at: crate::consts::now_secs(),
+        };
+        if let Err(err) = crate::runtime().block_on(crate::status::save(&dbs.status, &status)) {
+            eprintln!("status: could not flush the session: {err:#}");
+        }
+    }
+
+    /// P-6 S3: while playing, feed the playhead into the debounced writer
+    /// every 10 s. Position only matters mid-playback, so it can ride the UI
+    /// tick; all other status changes go through `queue_status_save` directly
+    /// (the tick returns early while stopped).
+    fn maybe_save_position(&mut self) {
+        if self.player.state() != State::Playing || self.player.position() <= 0.0 {
+            return;
+        }
+        let due = self.last_position_save.map_or(true, |at| {
+            at.elapsed() >= std::time::Duration::from_secs(10)
+        });
+        if due {
+            self.last_position_save = Some(std::time::Instant::now());
+            self.queue_status_save();
+        }
     }
 
     #[qslot]
@@ -1023,9 +1089,9 @@ impl Backend {
         });
     }
 
-    /// Plays a song inside the Songs segment's queue: a bounded window of the
-    /// whole library in list order (30 tracks), extended lazily while the user
-    /// listens; never opens fullscreen (Q-10 refinement).
+    /// Plays a song inside the Songs segment's queue: the whole library in
+    /// list order, starting on the clicked row (tracks before it included);
+    /// never opens fullscreen (Q-10 refinement).
     #[qslot(qml_name = "playSong")]
     fn play_song(&mut self, song_id: String) {
         let invoker = self.get_qml_method_invoker();
@@ -1039,16 +1105,8 @@ impl Backend {
         };
         crate::runtime().spawn(async move {
             match library_queue_payload(&dbs, &song_id, &order).await {
-                Ok((json, next, total)) => {
-                    qtbridge::invoke_method!(
-                        invoker,
-                        "playerLoadLibrary",
-                        json,
-                        0i64,
-                        next as i64,
-                        total as i64,
-                        order
-                    );
+                Ok((json, start)) => {
+                    qtbridge::invoke_method!(invoker, "playerLoadLibrary", json, start as i64);
                 }
                 Err(err) => {
                     eprintln!("player: could not play song: {err:#}");
@@ -1103,8 +1161,6 @@ impl Backend {
     /// (album pages, search hits).
     #[qslot(qml_name = "playerLoad")]
     fn player_load(&mut self, tracks_json: String, start: i64) {
-        self.library_queue = None;
-        self.library_queue_epoch += 1;
         self.load_queue(tracks_json, start, true);
     }
 
@@ -1114,9 +1170,11 @@ impl Backend {
     fn player_load_paused(&mut self, tracks_json: String, start: i64) {
         match serde_json::from_str::<Vec<crate::player::Track>>(&tracks_json) {
             Ok(tracks) => {
-                self.library_queue = None;
-                self.library_queue_epoch += 1;
                 self.player.load_paused(tracks, start.max(0) as usize);
+                // S3: the saved playhead, applied once to the restored queue.
+                if let Some(position) = self.status_restore_position.take() {
+                    self.player.seek(position);
+                }
                 self.sync_player();
                 self.emit_queue();
             }
@@ -1127,50 +1185,11 @@ impl Backend {
         }
     }
 
-    /// First Songs-segment window: loads without the fullscreen flip and
-    /// stores the extension cursor (`next`/`total` in `all_songs`).
+    /// Loads the Songs-segment queue (the whole index from the clicked row)
+    /// without the fullscreen flip (Q-10 refinement).
     #[qslot(qml_name = "playerLoadLibrary")]
-    fn player_load_library(
-        &mut self,
-        tracks_json: String,
-        start: i64,
-        next: i64,
-        total: i64,
-        order: String,
-    ) {
+    fn player_load_library(&mut self, tracks_json: String, start: i64) {
         self.load_queue(tracks_json, start, false);
-        self.library_queue_epoch += 1;
-        self.library_queue = Some(LibraryQueue {
-            next: next.max(0) as usize,
-            total: total.max(0) as usize,
-            order,
-            loading: false,
-        });
-    }
-
-    /// Appends one lazy window to the Songs-segment queue. Appends from a
-    /// replaced queue (stale epoch) are dropped.
-    #[qslot(qml_name = "playerAppend")]
-    fn player_append(&mut self, tracks_json: String, next: i64, total: i64, epoch: i64) {
-        if epoch < 0 || epoch as u64 != self.library_queue_epoch {
-            return;
-        }
-        match serde_json::from_str::<Vec<crate::player::Track>>(&tracks_json) {
-            Ok(tracks) => {
-                self.player.append(tracks);
-                self.emit_queue();
-                self.sync_player();
-            }
-            Err(err) => {
-                eprintln!("player: bad queue payload: {err}");
-                self.error_raised("playback".to_string(), format!("Bad queue payload: {err}"));
-            }
-        }
-        if let Some(queue) = self.library_queue.as_mut() {
-            queue.next = next.max(0) as usize;
-            queue.total = total.max(0) as usize;
-            queue.loading = false;
-        }
     }
 
     fn load_queue(&mut self, tracks_json: String, start: i64, announce: bool) {
@@ -1511,58 +1530,7 @@ impl Backend {
             self.player.next();
         }
         self.sync_player();
-        self.maybe_extend_library_queue();
-    }
-
-    /// Keeps the Songs-segment queue ahead of playback: once
-    /// [`LIBRARY_QUEUE_AHEAD`] tracks remain, fetch and append up to
-    /// [`LIBRARY_QUEUE_CHUNK`] more. One failure stops extension for this
-    /// queue (the error toast is already up); a new `playSong` resets it.
-    fn maybe_extend_library_queue(&mut self) {
-        let Some(queue) = self.library_queue.as_ref() else {
-            return;
-        };
-        if queue.loading || queue.next >= queue.total {
-            return;
-        }
-        let offset = queue.next;
-        let order = queue.order.clone();
-        let loaded = self.player.len();
-        if loaded == 0 || self.player.index() + LIBRARY_QUEUE_AHEAD < loaded {
-            return;
-        }
-        let epoch = self.library_queue_epoch;
-
-        let invoker = self.get_qml_method_invoker();
-        let Some(dbs) = crate::dbs().cloned() else {
-            return;
-        };
-        if let Some(queue) = self.library_queue.as_mut() {
-            queue.loading = true;
-        }
-        crate::runtime().spawn(async move {
-            match library_chunk_json(&dbs, offset, &order).await {
-                Ok((json, next, total)) => {
-                    qtbridge::invoke_method!(
-                        invoker,
-                        "playerAppend",
-                        json,
-                        next as i64,
-                        total as i64,
-                        epoch as i64
-                    );
-                }
-                Err(err) => {
-                    eprintln!("player: could not extend the library queue: {err:#}");
-                    qtbridge::invoke_method!(
-                        invoker,
-                        "raiseError",
-                        "playback".to_string(),
-                        format!("{err:#}")
-                    );
-                }
-            }
-        });
+        self.maybe_save_position();
     }
 
     /// Publishes the player state to the QML properties.

@@ -25,6 +25,8 @@ Text {
 
     property bool animated: true
 
+    font.family: Theme.fonts.body
+
     NumberAnimation on opacity {
         running: root.animated && !Theme.reduceMotion
         from: 0

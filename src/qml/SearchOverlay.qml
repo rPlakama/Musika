@@ -53,8 +53,18 @@ Item {
 
     SequentialAnimation {
         id: glyphFlash
-        NumberAnimation { target: glyphFlashIcon; property: "opacity"; to: 1; duration: Theme.motion.flash }
-        NumberAnimation { target: glyphFlashIcon; property: "opacity"; to: 0; duration: Theme.motion.quick }
+        NumberAnimation {
+            target: glyphFlashIcon
+            property: "opacity"
+            to: 1
+            duration: Theme.motion.flash
+        }
+        NumberAnimation {
+            target: glyphFlashIcon
+            property: "opacity"
+            to: 0
+            duration: Theme.motion.quick
+        }
     }
 
     function denied() {
@@ -259,7 +269,9 @@ Item {
         activeColumn = songResults.count > 0 ? 0 : (albumResults.count > 0 ? 1 : 2);
 
         loading = false;
-        Qt.callLater(function() { columnsRow.opacity = 1; });
+        Qt.callLater(function () {
+            columnsRow.opacity = 1;
+        });
 
         // UI-49: the response landing on zero hits is denied input — once per
         // distinct query, never again while the same zero query is held.
@@ -314,7 +326,11 @@ Item {
         opacity: root.opened ? Theme.scrimOpacity : 0
 
         Behavior on opacity {
-            NumberAnimation { duration: Theme.motion.standard; easing.type: Easing.Bezier; easing.bezierCurve: Theme.ease.standard }
+            NumberAnimation {
+                duration: Theme.motion.standard
+                easing.type: Easing.Bezier
+                easing.bezierCurve: Theme.ease.standard
+            }
         }
 
         TapHandler {
@@ -339,10 +355,18 @@ Item {
         opacity: root.opened ? 1 : 0
 
         Behavior on opacity {
-            NumberAnimation { duration: Theme.motion.standard; easing.type: Easing.Bezier; easing.bezierCurve: Theme.ease.decelerate }
+            NumberAnimation {
+                duration: Theme.motion.standard
+                easing.type: Easing.Bezier
+                easing.bezierCurve: Theme.ease.decelerate
+            }
         }
         Behavior on y {
-            NumberAnimation { duration: Theme.motion.standard; easing.type: Easing.Bezier; easing.bezierCurve: Theme.ease.decelerate }
+            NumberAnimation {
+                duration: Theme.motion.standard
+                easing.type: Easing.Bezier
+                easing.bezierCurve: Theme.ease.decelerate
+            }
         }
 
         ColumnLayout {
@@ -364,7 +388,9 @@ Item {
                     font.family: Theme.fonts.body
                     font.pixelSize: panel.height * 0.035
                     // UI-49: the denied shake is a transform, never a layout move.
-                    transform: Translate { x: denyFx.offset }
+                    transform: Translate {
+                        x: denyFx.offset
+                    }
                     background: Rectangle {
                         color: Palette.surfaceContainerHighest
                         radius: Theme.radius
@@ -399,7 +425,7 @@ Item {
 
                     onTextChanged: debounce.restart()
 
-                    Keys.onPressed: (event) => {
+                    Keys.onPressed: event => {
                         if (event.key === Qt.Key_Tab) {
                             root.moveColumn(1);
                             event.accepted = true;
@@ -421,7 +447,7 @@ Item {
                     Keys.onUpPressed: root.moveRow(-1)
                     Keys.onReturnPressed: root.activate()
                     Keys.onEnterPressed: root.activate()
-                    Keys.onEscapePressed: (event) => {
+                    Keys.onEscapePressed: event => {
                         root.pressEscape();
                         event.accepted = true;
                     }
@@ -440,7 +466,7 @@ Item {
                     FadeText {
                         id: modeChipLabel
                         anchors.centerIn: parent
-                        text: root.typing ? "INSERT" : "NORMAL"
+                        text: root.typing ? "I" : "N"
                         color: Palette.primary
                         font.pixelSize: Theme.fontSize("label", panel.height)
                         animated: false
@@ -458,7 +484,11 @@ Item {
                 spacing: panel.width * 0.012
 
                 Behavior on opacity {
-                    NumberAnimation { duration: Theme.motion.quick; easing.type: Easing.Bezier; easing.bezierCurve: Theme.ease.standard }
+                    NumberAnimation {
+                        duration: Theme.motion.quick
+                        easing.type: Easing.Bezier
+                        easing.bezierCurve: Theme.ease.standard
+                    }
                 }
 
                 SearchColumn {
@@ -472,7 +502,7 @@ Item {
                     loading: root.loading
                     hasQuery: field.text.length > 0
 
-                    onPicked: (index) => {
+                    onPicked: index => {
                         songsColumn.cursor = index;
                         root.activeColumn = 0;
                         root.activate();
@@ -498,7 +528,7 @@ Item {
                     loading: root.loading
                     hasQuery: field.text.length > 0
 
-                    onPicked: (index) => {
+                    onPicked: index => {
                         albumsColumn.cursor = index;
                         root.activeColumn = 1;
                         root.activate();
@@ -523,7 +553,7 @@ Item {
                     loading: root.loading
                     hasQuery: field.text.length > 0
 
-                    onPicked: (index) => {
+                    onPicked: index => {
                         artistsColumn.cursor = index;
                         root.activeColumn = 2;
                         root.activate();
@@ -541,9 +571,7 @@ Item {
             // One cheat sheet, per mode (no duplicate Esc hint).
             FadeText {
                 Layout.fillWidth: true
-                text: root.typing
-                    ? "Type to filter  ·  Tab/↑/↓ navigate  ·  Enter open/play  ·  Esc normal mode"
-                    : "h/l columns  ·  j/k rows  ·  i type  ·  Enter open/play  ·  Esc close"
+                text: root.typing ? "Type to filter  ·  Tab/↑/↓ navigate  ·  Enter open/play  ·  Esc normal mode" : "h/l columns  ·  j/k rows  ·  i type  ·  Enter open/play  ·  Esc close"
                 color: Palette.onSurfaceVariant
                 font.pixelSize: Theme.fontSize("label", panel.height)
                 horizontalAlignment: Text.AlignHCenter

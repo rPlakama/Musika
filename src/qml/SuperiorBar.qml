@@ -240,4 +240,21 @@ Rectangle {
             font.pixelSize: Theme.fontSize("label", root.height)
         }
     }
+
+    // Welcome, <user>: centred on the bar, independent of the left/right
+    // clusters so a long name never shifts the sync zone; elided before it
+    // can collide with either cluster. Overused Grotesk stands in for the
+    // unpackaged Bricolage Grotesque (see flake.nix `fonts`).
+    FadeText {
+        anchors.horizontalCenter: parent.horizontalCenter
+        anchors.verticalCenter: parent.verticalCenter
+        width: Math.min(implicitWidth, root.width * 0.3)
+        horizontalAlignment: Text.AlignHCenter
+        text: Backend.username.length > 0 ? "Welcome, " + Backend.username : ""
+        color: Palette.onSurfaceVariant
+        font.family: "Overused Grotesk Roman"
+        font.pixelSize: Theme.fontSize("title", root.height)
+        elide: Text.ElideRight
+        animated: false
+    }
 }

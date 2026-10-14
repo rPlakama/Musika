@@ -301,7 +301,7 @@ Item {
         }
 
         // The status bar is a real surface (VI-17): Enter syncs
-        // (`RightBar.handleAction`), down/left/right return to the main list.
+        // (`SuperiorBar.handleAction`), down/left/right return to the main list.
         if (activeRegion === 2
                 && (action === "move_down" || action === "move_left" || action === "move_right")) {
             activeRegion = 1;
@@ -344,7 +344,7 @@ Item {
             autoPaddingEnabled: false
         }
 
-        RightBar {
+        SuperiorBar {
             id: topBar
             Layout.fillWidth: true
             Layout.preferredHeight: root.barH

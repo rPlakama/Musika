@@ -19,6 +19,19 @@
         ]
       );
 
+      # App-scoped typefaces: exposed to fontconfig through XDG_DATA_DIRS (by
+      # the wrapper below and the dev shell), never installed system-wide.
+      # Cormorant/Literata stand in for Instrument Serif/Newsreader (unpackaged);
+      # Overused Grotesk stands in for Bricolage Grotesque (unpackaged) and is
+      # the superior-bar welcome face.
+      fonts = with pkgs; [
+        cormorant
+        literata
+        merriweather
+        overused-grotesk
+      ];
+      fontDataDirs = pkgs.lib.makeSearchPath "share" fonts;
+
       # pkgs.qt6.env merges every Qt module into one prefix and drops a qt.conf
       # next to qmake, so qmake reports the merged prefix. qtpaths, however, is
       # left as a symlink to qtbase's binary; Qt resolves that symlink, finds no
@@ -97,6 +110,7 @@
         postInstall = ''
           wrapProgram $out/bin/musika \
             --prefix PATH : ${pkgs.lib.makeBinPath [ pkgs.mpv ]} \
+            --prefix XDG_DATA_DIRS : ${fontDataDirs} \
             --prefix QT_PLUGIN_PATH : ${qt}/lib/qt-6/plugins \
             --prefix QML_IMPORT_PATH : ${qt}/lib/qt-6/qml \
             --prefix QML2_IMPORT_PATH : ${qt}/lib/qt-6/qml \
@@ -167,6 +181,7 @@
           	export QML_IMPORT_PATH="${qt}/lib/qt-6/qml''${QML_IMPORT_PATH:+:$QML_IMPORT_PATH}"
           	export QML2_IMPORT_PATH="${qt}/lib/qt-6/qml''${QML2_IMPORT_PATH:+:$QML2_IMPORT_PATH}"
           	export QT_PLUGIN_PATH="${qt}/lib/qt-6/plugins''${QT_PLUGIN_PATH:+:$QT_PLUGIN_PATH}"
+          	export XDG_DATA_DIRS="${fontDataDirs}''${XDG_DATA_DIRS:+:$XDG_DATA_DIRS}"
           		cat > .qmlls.ini <<EOF
           [General]
           no-cmake-calls=true

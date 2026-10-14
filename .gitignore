@@ -7,6 +7,7 @@ noctalia/
 *.md
 !TASKLISTMAJOR.md
 !README.md
+!CHANGELOG.md
 DankMaterialShell/
 
 # Runtime databases (never tracked; the app creates them under ~/.config/musika)

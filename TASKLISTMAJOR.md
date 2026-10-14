@@ -620,6 +620,32 @@ The product is incomplete without these.
   - **Now:** principle stated; the order cue is the current example; no
     registry or audit exists yet.
 
+- [ ] **UI-45 · Selection stage: the cursor row expands like the lyrics stage** — P2 · (design task; LYR-7 reference)
+  - **Why:** list rows are uniform and the cursor is only a colour fill (the
+    `MediaList` delegate tints `ListView.isCurrentItem`/hover), so a list reads
+    flat. The lyrics stage already proved the small/BIG/small rhythm — the
+    current value should visually lead its neighbours the same way, making the
+    selection readable at a glance.
+  - **Details:**
+    - current selection only: the cursor row's primary text grows (scale
+      ~1.08-1.12, or `title`/`headline` role) and takes full contrast; every
+      other row keeps the normal `body` size — no per-row size ramps;
+    - hover behaves like the cursor: `rowHover.hovered` gets the same expanded
+      state (mouse/keyboard parity), so browse-by-mouse feels identical;
+    - **increase the lateral width margin** of the list box (both sides, e.g.
+      `viewWidth * 0.04` vs today's 0.02) and keep titles elided inside that
+      gutter, so the expanded row never touches the pane walls or clips;
+    - transform-based (`scale`, transform origin left/centre) so neighbours
+      never reflow or jump; `quick`/`micro` with `Theme.ease` curves, flat
+      under `reduceMotion`; consider a shared `Theme.selectionEmphasis` beside
+      `lyricsEmphasis`;
+    - scope: `MediaList` rows (Albums/Songs/Artists), `SearchColumn` rows and
+      the queue rows (drawer + fullscreen pane); the lyrics stage stays the
+      reference implementation.
+  - **Verify:** minimum window width with long titles: no clipping/overlap,
+    elide still works, adjacent rows don't move, mouse hover and keyboard
+    cursor expand identically, `reduceMotion` renders the plain list.
+
 
 - [ ] **THM-6 · Rewrite the color engine on DMS's pipeline** — P2 · (MATUGENSTUDY.md; roadmap T5+)
   - **Why:** DMS cleanly separates seed extraction, palette specs, caching,
@@ -1580,10 +1606,10 @@ Kept for rationale; the tree already carries these.
 | Bucket | Open | Solved |
 |--------|------|--------|
 | Must have | 8 | 1 |
-| Should have | 58 | 5 |
+| Should have | 59 | 5 |
 | Quick wins | 7 | 43 |
 | Solved (reference) | — | 36 |
-| **Total** | **73** | **85** |
+| **Total** | **74** | **85** |
 
 ### Coverage by area
 
@@ -1594,7 +1620,7 @@ Kept for rationale; the tree already carries these.
 | Player & media features | 5 | 2 |
 | Lyrics pipeline | 2 | 7 |
 | Search | 2 | 6 |
-| UI microdesigns | 13 | 28 |
+| UI microdesigns | 14 | 28 |
 | Dynamic color | 1 | 5 |
 | Architecture & robustness | 22 | 15 |
 | Media cache / offline | 7 | 0 |

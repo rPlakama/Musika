@@ -388,7 +388,7 @@ impl Backend {
     #[qsignal]
     fn library_changed(&mut self);
     /// P-6 S2: restored session payload `{album, queue, start}` for `Home`.
-    #[qsignal]
+    #[qsignal(qml_name = "statusRestored")]
     fn status_restored(&mut self, payload: String);
     /// User skip (transport/keyboard/IPC), so the skip buttons can bloom.
     #[qsignal(qml_name = "trackSkipped")]

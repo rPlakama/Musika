@@ -349,28 +349,35 @@ Rectangle {
     // mode (blurred and washed into the theme background, same rule as
     // AlbumEntry), so the square floats on its own colours without competing
     // with the lyrics/queue panes. Hidden without art; the panes stay opaque.
-    CoverImage {
-        id: coverBackdrop
+    // UI-55: one item for cover + wash, so the panes' acrylic samples exactly
+    // what is painted behind them.
+    Item {
+        id: ambience
         anchors.fill: parent
-        source: Backend.currentCoverUrl
-        ambient: true
-    }
 
-    Rectangle {
-        anchors.fill: parent
-        visible: coverBackdrop.visible
-        gradient: Gradient {
-            GradientStop {
-                position: 0.0
-                color: root.withAlpha(Palette.background, 0.84)
-            }
-            GradientStop {
-                position: 0.38
-                color: root.withAlpha(Palette.background, 0.38)
-            }
-            GradientStop {
-                position: 1.0
-                color: root.withAlpha(Palette.background, 0.96)
+        CoverImage {
+            id: coverBackdrop
+            anchors.fill: parent
+            source: Backend.currentCoverUrl
+            ambient: true
+        }
+
+        Rectangle {
+            anchors.fill: parent
+            visible: coverBackdrop.visible
+            gradient: Gradient {
+                GradientStop {
+                    position: 0.0
+                    color: root.withAlpha(Palette.background, 0.84)
+                }
+                GradientStop {
+                    position: 0.38
+                    color: root.withAlpha(Palette.background, 0.38)
+                }
+                GradientStop {
+                    position: 1.0
+                    color: root.withAlpha(Palette.background, 0.96)
+                }
             }
         }
     }
@@ -628,12 +635,14 @@ Rectangle {
                 Layout.preferredWidth: root.width * 0.48
                 spacing: root.height * 0.012
 
-                // Lyrics, top half.
-                Rectangle {
+                // Lyrics, top half. UI-55: the solid pane over the ambient
+                // blur becomes acrylic (blurred backdrop + tint + grain).
+                AcrylicPanel {
                     id: lyricsPane
                     Layout.fillWidth: true
                     Layout.fillHeight: true
-                    color: Palette.surfaceContainerLow
+                    tint: Palette.surfaceContainerLow
+                    backdrop: coverBackdrop.visible ? ambience : null
                     radius: Theme.radius
                     border.width: root.pane === 1 ? Math.max(1, root.width * Theme.hairlineRatio) : 0
                     border.color: Palette.primary
@@ -828,11 +837,12 @@ Rectangle {
                     }
                 }
 
-                // Queue, bottom half.
-                Rectangle {
+                // Queue, bottom half. UI-55: acrylic like the lyrics pane.
+                AcrylicPanel {
                     Layout.fillWidth: true
                     Layout.fillHeight: true
-                    color: Palette.surfaceContainerLow
+                    tint: Palette.surfaceContainerLow
+                    backdrop: coverBackdrop.visible ? ambience : null
                     radius: Theme.radius
                     border.width: root.pane === 2 ? Math.max(1, root.width * Theme.hairlineRatio) : 0
                     border.color: Palette.primary

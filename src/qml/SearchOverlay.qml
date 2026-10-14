@@ -32,6 +32,9 @@ Item {
     property bool loading: false
     property bool typing: true // false = search "normal mode" (hjkl navigates)
     property int activeColumn: 0 // 0 songs, 1 albums, 2 artists (priority Songs > Albums > Artists)
+    // UI-55: the item behind the floating panel whose pixels feed the acrylic
+    // blur (the shell, or the fullscreen player when it is up).
+    property Item backdrop: null
     // UI-49: last query that already got the denied cue, so one response (or
     // one Enter) lights it once and holding a zero query never strobes.
     property string _zeroQuery: ""
@@ -339,16 +342,18 @@ Item {
         }
     }
 
-    Rectangle {
+    AcrylicPanel {
         id: panel
         width: root.width * 0.84
         height: root.height * 0.78
         // Rise into place (preferred over scale, motion §3.1).
         x: (root.width - width) / 2
         y: (root.height - height) / 2 + (root.opened ? 0 : height * 0.04)
-        // Same darkest tone as the main pane (Palette.surface); the field and
-        // chips keep the higher container tones for contrast.
-        color: Palette.surface
+        // UI-55: the panel is the acrylic surface (Palette.surface tint over
+        // the blurred backdrop); the field and chips keep the higher
+        // container tones for contrast.
+        tint: Palette.surface
+        backdrop: root.backdrop
         radius: Theme.radius
         border.color: Palette.primary
         border.width: Math.max(1, root.height * Theme.hairlineRatio)

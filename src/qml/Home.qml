@@ -353,12 +353,12 @@ Item {
         anchors.fill: parent
         spacing: 0
 
-        // Niri-like backdrop blur while a modal surface is up (floating search
-        // or the Ctrl-W scope overlay). Qt approximation of the niri config:
-        // passes/offset -> blur + blurMax, saturation 0.6 == niri's 1.6x,
-        // autoPadding off so the blur stays clipped to the window. MultiEffect
-        // has no grain, so niri's `noise 0.03` is not reproduced.
-        layer.enabled: root.visualMode || searchOverlay.opened
+        // Niri-like backdrop blur while the Ctrl-W scope overlay is up. Qt
+        // approximation of the niri config: passes/offset -> blur + blurMax,
+        // saturation 0.6 == niri's 1.6x, autoPadding off so the blur stays
+        // clipped to the window. The floating search rides the acrylic panel's
+        // own pass instead (UI-55: never stack acrylic layers).
+        layer.enabled: root.visualMode
         layer.effect: MultiEffect {
             blurEnabled: true
             blur: 0.5
@@ -482,9 +482,11 @@ Item {
 
         onExitRequested: root.nowPlayingExpanded = false
 
-        // Same niri-like backdrop blur as the shell: the fullscreen player is
-        // the backdrop when the search overlay opens from inside it.
-        layer.enabled: root.visualMode || searchOverlay.opened
+        // Niri-like backdrop blur for the Ctrl-W scope overlay, same recipe as
+        // the shell. The search overlay's acrylic panel samples this item as
+        // its backdrop when fullscreen is up (UI-55), so no second blur
+        // stacks here.
+        layer.enabled: root.visualMode
         layer.effect: MultiEffect {
             blurEnabled: true
             blur: 0.5
@@ -514,6 +516,8 @@ Item {
         width: root.width * 0.42
         height: root.height * 0.06
         z: Theme.zToast
+        // UI-55: blur whatever the toast actually floats over.
+        backdrop: root.nowPlayingExpanded ? nowPlaying : shell
         onRetry: {
             if (toast.kind === "sync")
                 Backend.syncLibrary();
@@ -525,6 +529,8 @@ Item {
     SearchOverlay {
         id: searchOverlay
         anchors.fill: parent
+        // UI-55: blur the shell, or the fullscreen player when it is up.
+        backdrop: root.nowPlayingExpanded ? nowPlaying : shell
 
         // A search song hit goes through the same command pump as external
         // IPC, so the flow stays scriptable and single-sourced.

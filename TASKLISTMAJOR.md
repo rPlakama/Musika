@@ -773,16 +773,20 @@ The product is incomplete without these.
     bar/sidebar/drawer junctions, 14 px text keeps its ratio over artwork),
     fallback flips every panel back to solid, `QSG_RENDER_TIMING=1` frame
     cost while scrolling under a panel, qmllint clean.
-  - **Now (partial):** the base slice landed — `Theme.acrylic`
-    (`enabled`/`tintAlpha`/`blur`/`blurMax`/`saturation`/`downscale`; the
-    solid role fill is the disabled/no-backdrop path) and the shared
+  - **Now (partial):** the surfaces landed — `Theme.acrylic`
+    (`enabled`/`tintAlpha`/`blur`/`blurMax`/`saturation`/`downscale`/`noise`;
+    the solid role fill is the disabled/no-backdrop path) and the shared
     `AcrylicPanel.qml` (a `ShaderEffectSource` of `backdrop` mapped to the
     panel rect and downscaled, run through the existing MultiEffect recipe;
-    translucent tint above; border/radius/anchors passthrough). First
-    consumer: the `QueueDrawer` panel (`backdrop: shell` from Home). Noise/
-    grain (MultiEffect has no; TODO in the component), SearchOverlay/Toast
-    and the bar panels, and the desktop contrast pass are the next
-    increments.
+    translucent tint, tiled-PNG grain at ~0.03 — Qt 6 `ShaderEffect` takes
+    `.qsb` URLs, so the inline hash shader became `noise.png` — and a border
+    redraw above the material). Consumers: the `QueueDrawer` panel, the
+    `SearchOverlay` panel, the `Toast` (`backdrop` switches between `shell`
+    and `nowPlaying`) and the fullscreen lyrics/queue panes over their
+    `ambience` item (cover + wash as one backdrop); `Home` no longer stacks
+    its niri-like shell/fullscreen blur with the overlay acrylic. Open: the
+    `SuperiorBar`/`InferiorBar` in-app panels and the desktop
+    contrast/fallback pass.
 
 - [ ] **THM-6 · Rewrite the color engine on DMS's pipeline** — P2 · (MATUGENSTUDY.md; roadmap T5+)
   - **Why:** DMS cleanly separates seed extraction, palette specs, caching,

@@ -77,6 +77,27 @@ Rectangle {
         color: Qt.rgba(root.tint.r, root.tint.g, root.tint.b, root.tintAlpha)
     }
 
-    // TODO(UI-55): tiled noise (~0.03). MultiEffect has no grain; a small
-    // PNG or a fragment hash layer is still open.
+    // MS grain: a tiled noise sheet at `Theme.acrylic.noise` (~0.03) over the
+    // tint, so the material never reads as flat glass. Qt 6 no longer takes
+    // inline GLSL in ShaderEffect (`fragmentShader` is a .qsb URL), so the
+    // grain is a texture instead.
+    Image {
+        anchors.fill: parent
+        visible: root.acrylic
+        source: "qrc:/app/qml/noise.png"
+        fillMode: Image.Tile
+        opacity: Theme.acrylic.noise
+        smooth: false
+    }
+
+    // The tint/grain are children, so they paint over the root border (an
+    // item's border is background); redraw it on top to keep callers' borders.
+    Rectangle {
+        anchors.fill: parent
+        visible: root.border.width > 0
+        color: "transparent"
+        radius: root.radius
+        border.width: root.border.width
+        border.color: root.border.color
+    }
 }

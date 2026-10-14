@@ -19,8 +19,8 @@ import QtQuick.Layouts
 import musika
 import "Theme.js" as Theme
 
-// Transient error/notification banner.
-Rectangle {
+// Transient error/notification banner (UI-55: an acrylic surface).
+AcrylicPanel {
     id: root
 
     property string message: ""
@@ -35,7 +35,7 @@ Rectangle {
 
     signal retry()
 
-    color: syncing ? Palette.tertiaryContainer : Palette.errorContainer
+    tint: syncing ? Palette.tertiaryContainer : Palette.errorContainer
     radius: Theme.radius
     border.width: Math.max(1, height * Theme.hairlineRatio)
     border.color: syncing ? Palette.tertiary : Palette.error

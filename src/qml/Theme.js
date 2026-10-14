@@ -159,7 +159,8 @@ var acrylic = {
     blur: 0.8,        // MultiEffect blur amount
     blurMax: 64,      // blur kernel ceiling
     saturation: 0.6,  // niri-like desaturation (1.6x)
-    downscale: 0.5    // backdrop texture fraction (the blur hides it)
+    downscale: 0.5,   // backdrop texture fraction (the blur hides it)
+    noise: 0.03       // MS grain over the tint
 }
 
 // Fixed glyphs: play/pause stays white on every surface and every seeded

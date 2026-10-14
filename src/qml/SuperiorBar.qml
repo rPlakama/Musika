@@ -72,6 +72,13 @@ Rectangle {
             Backend.syncLibrary();
     }
 
+    // UI-49 bounce-back: on unhover without a tap, the same shake as the
+    // denied-input cue in search, without the red glyph flash.
+    ShakeFx {
+        id: syncFx
+        target: syncIcon
+    }
+
     // Bottom divider.
     Rectangle {
         anchors.left: parent.left
@@ -151,11 +158,15 @@ Rectangle {
             radius: Theme.radius
             color: "transparent"
 
+            // Set on tap so an unhover after asking for a sync never bounces
+            // back over the sync spin.
+            property bool tapped: false
+
             // Spin while the progress bar is moving (a sync runs / the fill is
             // still settling) and on hover (slow). The icon and the bar are
-            // coupled: when the bar stops and the mouse is away, the spin
-            // stops too. Restarting resumes from the current angle and
-            // stopping leaves the icon in place, so nothing rewinds/bounces.
+            // coupled: when the bar stops, the spin stops too. Restarting
+            // resumes from the current angle and stopping leaves the icon in
+            // place; `settle()` puts it back when a hover ends untapped.
             function spinning() {
                 return Backend.librarySyncing || progressAnim.running || syncHover.hovered;
             }
@@ -163,6 +174,7 @@ Rectangle {
             function updateSpin() {
                 if (spinning()) {
                     spin.stop();
+                    settleSpin.stop();
                     spin.from = syncButton.rotation;
                     spin.to = spin.from + 360;
                     spin.duration = Backend.librarySyncing ? Theme.motion.spin : Theme.motion.spinSlow;
@@ -175,12 +187,31 @@ Rectangle {
                 }
             }
 
+            // Hover left without a tap: shake and bounce the glyph back to
+            // its original angle instead of parking it mid-spin.
+            function settle() {
+                settleSpin.stop();
+                settleSpin.from = syncButton.rotation;
+                settleSpin.to = Math.round(syncButton.rotation / 360) * 360;
+                settleSpin.start();
+                syncFx.shake();
+            }
+
             NumberAnimation {
                 id: spin
                 target: syncButton
                 property: "rotation"
                 loops: Animation.Infinite
                 easing.type: Easing.Linear
+            }
+
+            NumberAnimation {
+                id: settleSpin
+                target: syncButton
+                property: "rotation"
+                duration: Theme.motion.standard
+                easing.type: Easing.Bezier
+                easing.bezierCurve: Theme.ease.bounce
             }
 
             Connections {
@@ -191,12 +222,16 @@ Rectangle {
             }
 
             SymbolIcon {
+                id: syncIcon
                 anchors.centerIn: parent
                 source: "qrc:/app/icons/reload-ui-2-svgrepo-com.svg"
                 symbolColor: Palette.onSurfaceVariant
                 width: root.height * 0.26
                 height: width
                 opacity: Backend.librarySyncing ? 0.38 : (syncHover.hovered ? 1.0 : 0.85)
+                // UI-49: untapped unhover bounce, a transform so nothing
+                // shifts layout.
+                transform: Translate { x: syncFx.offset }
 
                 Behavior on opacity {
                     NumberAnimation { duration: Theme.motion.micro; easing.type: Easing.Bezier; easing.bezierCurve: Theme.ease.standard }
@@ -209,11 +244,23 @@ Rectangle {
             HoverHandler {
                 id: syncHover
                 cursorShape: Qt.PointingHandCursor
-                onHoveredChanged: syncButton.updateSpin()
+                onHoveredChanged: {
+                    if (hovered) {
+                        syncButton.tapped = false;
+                        syncButton.updateSpin();
+                    } else {
+                        syncButton.updateSpin();
+                        if (!syncButton.tapped && !syncButton.spinning() && !Theme.reduceMotion)
+                            syncButton.settle();
+                    }
+                }
             }
             TapHandler {
                 enabled: !Backend.librarySyncing
-                onTapped: Backend.syncLibrary()
+                onTapped: {
+                    syncButton.tapped = true;
+                    Backend.syncLibrary();
+                }
             }
         }
 

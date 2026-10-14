@@ -43,10 +43,10 @@ QtObject {
 
     property ParallelAnimation swing: ParallelAnimation {
         SequentialAnimation {
-            NumberAnimation { target: root; property: "offset"; to: 6; duration: Theme.motion.flash; easing.type: Easing.Bezier; easing.bezierCurve: Theme.ease.standard }
-            NumberAnimation { target: root; property: "offset"; to: -5; duration: Theme.motion.flash; easing.type: Easing.Bezier; easing.bezierCurve: Theme.ease.standard }
-            NumberAnimation { target: root; property: "offset"; to: 4; duration: Theme.motion.flash; easing.type: Easing.Bezier; easing.bezierCurve: Theme.ease.standard }
-            NumberAnimation { target: root; property: "offset"; to: -2; duration: Theme.motion.flash; easing.type: Easing.Bezier; easing.bezierCurve: Theme.ease.standard }
+            NumberAnimation { target: root; property: "offset"; to: 4.2; duration: Theme.motion.flash; easing.type: Easing.Bezier; easing.bezierCurve: Theme.ease.standard }
+            NumberAnimation { target: root; property: "offset"; to: -3.5; duration: Theme.motion.flash; easing.type: Easing.Bezier; easing.bezierCurve: Theme.ease.standard }
+            NumberAnimation { target: root; property: "offset"; to: 2.8; duration: Theme.motion.flash; easing.type: Easing.Bezier; easing.bezierCurve: Theme.ease.standard }
+            NumberAnimation { target: root; property: "offset"; to: -1.4; duration: Theme.motion.flash; easing.type: Easing.Bezier; easing.bezierCurve: Theme.ease.standard }
             NumberAnimation { target: root; property: "offset"; to: 0; duration: Theme.motion.flash; easing.type: Easing.Bezier; easing.bezierCurve: Theme.ease.standard }
         }
         SequentialAnimation {

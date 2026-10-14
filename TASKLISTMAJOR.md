@@ -1146,7 +1146,11 @@ The product is incomplete without these.
     `FETCH_CONCURRENCY` chunks through `downloadOne`; OFF deletes the rule, its
     marks and its rule-owned blobs (`media::remove_rule_media`; explicit
     permanent downloads have no rule id and survive). `requestArtistCache` +
-    the `artist_cache` channel drive ArtistEntry's In-cache chip. The sync's
+    the `artist_cache` channel drive ArtistEntry's In-cache chip, whose three
+    glyph states landed: empty `outline-download.svg` (unselected), the
+    spinning `loading-loop.svg` (fetch pass in flight, `active` payload) and
+    the filled `baseline-download.svg` in the MY3 accent (`Palette.tertiary`)
+    once selected and finished. The sync's
     purge phase also runs `media::prune_uncovered`: a rule-owned blob whose
     song no longer falls inside a live artist/album rule is removed (scope
     changed / stale ref), while explicit downloads and kinds without a scope

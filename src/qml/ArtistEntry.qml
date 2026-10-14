@@ -559,13 +559,18 @@ Rectangle {
                         // marks and fetches every song of the artist, OFF
                         // drops the rule, its marks and its rule-owned blobs;
                         // the `artist_cache` payload reconciles (including
-                        // `active`, which swaps the glyph for the shared
-                        // loading loop and spins it). The filled
-                        // `baseline-download.svg` / counts label arrive with
-                        // CACHE-7.
+                        // `active`). Glyph states: outline = not selected,
+                        // loading loop (spinning) = fetch pass in flight,
+                        // filled `baseline-download.svg` in the MY3 accent =
+                        // selected and finished. Counts label is CACHE-7.
                         icon: root.artistDownloading
                             ? "qrc:/app/icons/loading-loop.svg"
-                            : "qrc:/app/icons/outline-download.svg"
+                            : (root.artistCacheOn
+                                ? "qrc:/app/icons/baseline-download.svg"
+                                : "qrc:/app/icons/outline-download.svg")
+                        iconColor: root.artistCacheOn && !root.artistDownloading
+                            ? Palette.tertiary
+                            : Palette.onSurfaceVariant
                         spinning: root.artistDownloading
                         onClicked: {
                             root.artistCacheOn = !root.artistCacheOn;

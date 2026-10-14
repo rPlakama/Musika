@@ -22,6 +22,10 @@
 //! the timestamps. CACHE-2's fetcher is the writer, CACHE-7's UI the reader;
 //! rows are pruned with the other caches after a successful sync.
 
+// The prefetch/status consumers land with CACHE-2/7; until then some of this
+// surface is exercised by tests only (same stance as `covers.rs`).
+#![allow(dead_code)]
+
 use anyhow::Result;
 use sqlx::sqlite::SqlitePool;
 
@@ -159,10 +163,11 @@ pub async fn unmark(pool: &SqlitePool, song_id: &str) -> Result<()> {
     Ok(())
 }
 
-/// Drops the rows a rule requested (rule removal, CACHE-5). `done` rows stay:
-/// the artifacts exist and their fate belongs to the media prune/pin rules.
+/// Drops every row a rule requested (rule removal, CACHE-5). Removing the
+/// rule also removes its blobs, so pending *and* done marks go together;
+/// explicit downloads carry no rule id and are never touched.
 pub async fn unmark_rule(pool: &SqlitePool, rule_id: &str) -> Result<usize> {
-    let result = sqlx::query("DELETE FROM download WHERE rule_id = ?1 AND state != 'done'")
+    let result = sqlx::query("DELETE FROM download WHERE rule_id = ?1")
         .bind(rule_id)
         .execute(pool)
         .await?;
@@ -250,11 +255,12 @@ mod tests {
             }
         );
 
-        // Rule removal drops pending work, keeps finished rows.
-        assert_eq!(unmark_rule(&pool, "r1").await.unwrap(), 1);
-        assert_eq!(counts(&pool).await.unwrap().total, 2);
-
-        unmark(&pool, "s2").await.unwrap();
+        // Rule removal drops its pending *and* finished rows (the blobs go
+        // with the rule); explicit downloads have no rule id and survive.
+        assert_eq!(unmark_rule(&pool, "r1").await.unwrap(), 2);
         assert_eq!(counts(&pool).await.unwrap().total, 1);
+
+        unmark(&pool, "s3").await.unwrap();
+        assert_eq!(counts(&pool).await.unwrap().total, 0);
     }
 }

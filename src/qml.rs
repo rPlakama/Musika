@@ -45,6 +45,88 @@ async fn client(dbs: &crate::db::Dbs) -> anyhow::Result<SubsonicClient> {
     ))
 }
 
+/// The download-ledger state payload for the UI (`download` channel, CACHE-8).
+fn download_payload(song_id: &str, state: &str) -> String {
+    serde_json::json!({ "id": song_id, "state": state }).to_string()
+}
+
+/// The artist-container toggle payload (`artist_cache` channel, CACHE-5).
+fn artist_cache_payload(artist_id: &str, on: bool) -> String {
+    serde_json::json!({ "id": artist_id, "on": on }).to_string()
+}
+
+/// Fetches one song into the media cache unless it is already available or a
+/// fetch is in flight (CACHE-1/8). Returns the resulting ledger state.
+///
+/// The conditional the UI cares about lives here: a cached blob wins (the
+/// ledger flips to `done`); an `active` row is a no-op; anything else is
+/// marked, fetched, stored and closed out (`done` / `error` with the reason).
+async fn download_one(dbs: &crate::db::Dbs, song_id: &str) -> anyhow::Result<&'static str> {
+    if crate::media::cached_path(&dbs.media, song_id)
+        .await?
+        .is_some()
+    {
+        crate::download::set_state(&dbs.download, song_id, crate::download::DONE, None).await?;
+        return Ok(crate::download::DONE);
+    }
+    if let Some(row) = crate::download::get(&dbs.download, song_id).await? {
+        if row.state == crate::download::ACTIVE {
+            return Ok(crate::download::ACTIVE);
+        }
+    }
+
+    crate::download::mark_queued(&dbs.download, song_id, None).await?;
+    crate::download::set_state(&dbs.download, song_id, crate::download::ACTIVE, None).await?;
+
+    let fetched = async {
+        let client = client(dbs).await?;
+        let bytes = client.download_media(song_id).await?;
+        let (size, suffix, bit_rate) = crate::library::song_file_info(&dbs.library, song_id)
+            .await?
+            .unwrap_or((None, None, None));
+        let quality = "original";
+        let fingerprint =
+            crate::media::fingerprint(size, suffix.as_deref(), bit_rate, client.base(), quality);
+        let extension = suffix
+            .as_deref()
+            .filter(|suffix| !suffix.is_empty())
+            .unwrap_or("bin");
+        // An explicit download is `permanent`: it persists until the user
+        // removes it (pins/rolling tiers are CACHE-3/4).
+        crate::media::store(
+            &dbs.media,
+            song_id,
+            &bytes,
+            crate::media::KIND_PERMANENT,
+            quality,
+            &fingerprint,
+            extension,
+            None,
+        )
+        .await?;
+        Ok::<(), anyhow::Error>(())
+    }
+    .await;
+
+    match fetched {
+        Ok(()) => {
+            crate::download::set_state(&dbs.download, song_id, crate::download::DONE, None).await?;
+            Ok(crate::download::DONE)
+        }
+        Err(err) => {
+            let message = format!("{err:#}");
+            let _ = crate::download::set_state(
+                &dbs.download,
+                song_id,
+                crate::download::ERROR,
+                Some(&message),
+            )
+            .await;
+            Err(err)
+        }
+    }
+}
+
 #[derive(Default)]
 pub struct Backend {
     server_url: String,
@@ -1231,6 +1313,133 @@ impl Backend {
             })
             .to_string();
             qtbridge::invoke_method!(invoker, "emitData", "artist_info".to_string(), json);
+        });
+    }
+    /// CACHE-1/8: an explicit user download. Idempotent — a cached blob or an
+    /// in-flight fetch short-circuits; otherwise marks the ledger, fetches the
+    /// original file, stores it and flips the ledger to `done` (or `error`
+    /// with the reason). Emits the `download` state and an error toast.
+    #[qslot(qml_name = "downloadSong")]
+    fn download_song(&mut self, song_id: String) {
+        let invoker = self.get_qml_method_invoker();
+        let error_invoker = self.get_qml_method_invoker();
+        let Some(dbs) = crate::dbs().cloned() else {
+            return;
+        };
+        crate::runtime().spawn(async move {
+            match download_one(&dbs, &song_id).await {
+                Ok(state) => {
+                    let json = download_payload(&song_id, state);
+                    qtbridge::invoke_method!(invoker, "emitData", "download".to_string(), json);
+                }
+                Err(err) => {
+                    let json = download_payload(&song_id, crate::download::ERROR);
+                    qtbridge::invoke_method!(invoker, "emitData", "download".to_string(), json);
+                    qtbridge::invoke_method!(
+                        error_invoker,
+                        "errorRaised",
+                        "error".to_string(),
+                        format!("Download failed: {err:#}")
+                    );
+                }
+            }
+        });
+    }
+
+    /// The stored artist-container selection (`artist_cache` channel).
+    #[qslot(qml_name = "requestArtistCache")]
+    fn request_artist_cache(&mut self, artist_id: String) {
+        let invoker = self.get_qml_method_invoker();
+        let Some(dbs) = crate::dbs().cloned() else {
+            return;
+        };
+        crate::runtime().spawn(async move {
+            let on = matches!(
+                crate::media::rule_for(&dbs.media, "artist", &artist_id).await,
+                Ok(Some(_))
+            );
+            let json = artist_cache_payload(&artist_id, on);
+            qtbridge::invoke_method!(invoker, "emitData", "artist_cache".to_string(), json);
+        });
+    }
+
+    /// CACHE-5 first slice: select or clear an artist container for download.
+    /// ON inserts the rule, marks every song of the artist in the ledger and
+    /// fetches the missing ones (bounded concurrency, ledger per song); OFF
+    /// removes the rule, its marks and its rule-owned blobs. Emits
+    /// `artist_cache` for the ArtistEntry toggle.
+    #[qslot(qml_name = "downloadArtist")]
+    fn download_artist(&mut self, artist_id: String, on: bool) {
+        let invoker = self.get_qml_method_invoker();
+        let error_invoker = self.get_qml_method_invoker();
+        let Some(dbs) = crate::dbs().cloned() else {
+            return;
+        };
+        crate::runtime().spawn(async move {
+            if on {
+                let rule_id = match crate::media::set_rule(&dbs.media, "artist", &artist_id).await {
+                    Ok(rule_id) => rule_id,
+                    Err(err) => {
+                        qtbridge::invoke_method!(
+                            error_invoker,
+                            "errorRaised",
+                            "error".to_string(),
+                            format!("Could not select the artist for download: {err:#}")
+                        );
+                        return;
+                    }
+                };
+                let songs = match crate::library::artist_song_ids(&dbs.library, &artist_id).await {
+                    Ok(songs) => songs,
+                    Err(err) => {
+                        eprintln!("media: could not list the artist's songs: {err:#}");
+                        return;
+                    }
+                };
+                for song in &songs {
+                    if let Err(err) =
+                        crate::download::mark_queued(&dbs.download, song, Some(&rule_id)).await
+                    {
+                        eprintln!("media: could not mark {song}: {err:#}");
+                    }
+                }
+                for chunk in songs.chunks(crate::consts::FETCH_CONCURRENCY) {
+                    let mut set = tokio::task::JoinSet::new();
+                    for song in chunk {
+                        let dbs = dbs.clone();
+                        let song = song.clone();
+                        set.spawn(async move { download_one(&dbs, &song).await });
+                    }
+                    while let Some(joined) = set.join_next().await {
+                        if let Ok(Err(err)) = joined {
+                            eprintln!("media: artist download failed: {err:#}");
+                        }
+                    }
+                }
+                let json = artist_cache_payload(&artist_id, true);
+                qtbridge::invoke_method!(invoker, "emitData", "artist_cache".to_string(), json);
+            } else {
+                let rule = match crate::media::rule_for(&dbs.media, "artist", &artist_id).await {
+                    Ok(rule) => rule,
+                    Err(err) => {
+                        eprintln!("media: could not read the artist rule: {err:#}");
+                        return;
+                    }
+                };
+                if let Some(rule) = rule {
+                    if let Err(err) = crate::media::delete_rule(&dbs.media, &rule.id).await {
+                        eprintln!("media: could not drop the artist rule: {err:#}");
+                    }
+                    if let Err(err) = crate::download::unmark_rule(&dbs.download, &rule.id).await {
+                        eprintln!("media: could not clear the artist marks: {err:#}");
+                    }
+                    if let Err(err) = crate::media::remove_rule_media(&dbs.media, &rule.id).await {
+                        eprintln!("media: could not remove the artist blobs: {err:#}");
+                    }
+                }
+                let json = artist_cache_payload(&artist_id, false);
+                qtbridge::invoke_method!(invoker, "emitData", "artist_cache".to_string(), json);
+            }
         });
     }
 

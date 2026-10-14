@@ -46,6 +46,9 @@ Rectangle {
     property int artistRating: 0
     // UI-52/ARC-42: favourite state from `artist_user.db`.
     property bool artistStarred: false
+    // CACHE-5/8: the artist container is selected for download (rule in
+    // media.db + marks in download.db); the In-cache chip toggles it.
+    property bool artistCacheOn: false
     // UI-52: star under the cursor in the rating row, -1 = none. The row
     // previews the level incrementally up to this index.
     property int hoveredStar: -1
@@ -151,6 +154,15 @@ Rectangle {
         // the request refreshes from the server when reachable).
         Backend.requestArtistUser(root.artistId);
         Backend.requestArtistInfo(root.artistId);
+        Backend.requestArtistCache(root.artistId);
+    }
+
+    // CACHE-5/8: the stored container selection (`artist_cache` channel).
+    function applyCache(payload) {
+        var cache = JSON.parse(payload);
+        if (cache.id !== root.artistId)
+            return;
+        root.artistCacheOn = cache.on === true;
     }
 
     // ARC-42: local favourite/rating state for this artist.
@@ -260,6 +272,8 @@ Rectangle {
                 root.applyUser(payload);
             else if (channel === "artist_info")
                 root.applyInfo(payload);
+            else if (channel === "artist_cache")
+                root.applyCache(payload);
         }
         function onLibrary_changed() {
             root.reload();
@@ -521,13 +535,17 @@ Rectangle {
                     spacing: root.height * 0.010
 
                     ActionChip {
-                        // ARC-42 placeholder: not downloaded uses the empty
-                        // `outline-download.svg`; when the artist cache rule
-                        // reports cached, swap to the filled
-                        // `baseline-download.svg` tinted green with the
-                        // Material You accent (`Palette.tertiary`) and show
-                        // the `Cached · <bytes>` label.
+                        // CACHE-5/8: artist container download toggle. ON
+                        // marks and fetches every song of the artist, OFF
+                        // drops the rule, its marks and its rule-owned blobs;
+                        // the `artist_cache` payload reconciles. The filled
+                        // `baseline-download.svg` / counts label arrive with
+                        // CACHE-7.
                         icon: "qrc:/app/icons/outline-download.svg"
+                        onClicked: {
+                            root.artistCacheOn = !root.artistCacheOn;
+                            Backend.downloadArtist(root.artistId, root.artistCacheOn);
+                        }
                     }
 
                     ActionChip {

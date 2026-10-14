@@ -45,6 +45,11 @@ impl SubsonicClient {
         }
     }
 
+    /// The normalized server base, for cache fingerprints (CACHE-1).
+    pub fn base(&self) -> &str {
+        &self.base
+    }
+
     /// Builds the full URL for any endpoint (`method` is the name without the
     /// `.view` suffix, e.g. `"getArtists"`), including the authentication
     /// parameters and any extra `params`.
@@ -110,6 +115,25 @@ impl SubsonicClient {
             .context("Server did not return a valid Subsonic response")?;
 
         envelope.response.into_result()
+    }
+
+    /// Fetches the original media file (`download`) as raw bytes (CACHE-1/8).
+    pub async fn download_media(&self, id: &str) -> Result<Vec<u8>> {
+        let url = self.endpoint_url("download", &[("id", id.to_string())])?;
+        let response = self
+            .http
+            .get(url)
+            .send()
+            .await
+            .context("Could not reach the server")?;
+        if !response.status().is_success() {
+            bail!("Server returned HTTP {} for media", response.status());
+        }
+        let bytes = response
+            .bytes()
+            .await
+            .context("Could not read the media body")?;
+        Ok(bytes.to_vec())
     }
 
     /// Fetches cover art, optionally conditionally.

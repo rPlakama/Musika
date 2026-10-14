@@ -1112,6 +1112,14 @@ The product is incomplete without these.
     trigger on load/next/prev/queueJump/track-change tick; bounded concurrency
     2-4 with an in-flight set; current uncached track fetched in parallel while
     it plays; prefetch never swaps the playing file, only future `loadfile`s.
+  - **Now (partial):** the single-track path landed with CACHE-8: `downloadOne`
+    in `qml.rs` checks the artifact first (cached blob → ledger `done`), skips
+    an `active` fetch, otherwise marks → fetches the original (`download`
+    endpoint) → `media::store` (explicit downloads are `permanent`) → ledger
+    `done` / `error` with the reason (plus the error toast). Slots:
+    `downloadSong` + the `download_song <id>` IPC route; `download` channel
+    carries `{id, state}`. Open: prefetch next N on queue events, the shared
+    in-flight set, playback-tier kind.
 
 - [ ] **CACHE-3 · Rolling cache (LRU, max size)** — P2
   - **Details:** cap configurable (default ~2 GiB), evict LRU by `last_used`;
@@ -1131,6 +1139,17 @@ The product is incomplete without these.
     from `library.db.starred`; every rule downloads existing content and
     catches new content on each sync; re-evaluated after every successful
     library sync (queue missing, prune uncovered unless pinned).
+  - **Now (partial):** the artist container landed as the first slice:
+    `media::set_rule/rule_for/delete_rule` (deterministic rule ids, selecting
+    twice never duplicates), `downloadArtist(id, on)` marks every artist song
+    (`library::artist_song_ids`) in the ledger and fetches the missing ones in
+    `FETCH_CONCURRENCY` chunks through `downloadOne`; OFF deletes the rule, its
+    marks and its rule-owned blobs (`media::remove_rule_media`; explicit
+    permanent downloads have no rule id and survive). `requestArtistCache` +
+    the `artist_cache` channel drive ArtistEntry's In-cache chip. Open: album /
+    playlist / genre / favourites kinds, sync-time re-materialization of new
+    content, and proper overlap pruning (currently a
+    `remove_rule_media` shortcut refetches on re-selection).
 
 - [ ] **CACHE-6 · Quality & network policy** — P2 · (MEDIACACHESTUDY.md §2/§8)
   - **Details:** transcode via `stream?maxBitRate=&format=` (fingerprint includes

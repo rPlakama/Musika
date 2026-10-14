@@ -22,6 +22,10 @@
 //! Pruning happens only after a fully successful sync (the covers.rs policy):
 //! vanished songs first, then rule-orphans; tier caps are CACHE-3.
 
+// The fetcher/prefetch/status consumers land with CACHE-2/3/7; until then some
+// of this surface is exercised by tests only (same stance as `covers.rs`).
+#![allow(dead_code)]
+
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
@@ -220,6 +224,79 @@ pub async fn touch(pool: &SqlitePool, song_id: &str) -> Result<()> {
     Ok(())
 }
 
+/// One auto-download container rule (CACHE-5).
+#[derive(Debug, Clone, PartialEq, Eq, sqlx::FromRow, serde::Serialize)]
+pub struct MediaRule {
+    pub id: String,
+    pub kind: String,
+    pub ref_id: Option<String>,
+    pub created_at: i64,
+}
+
+/// The rule selecting a container, if any.
+pub async fn rule_for(pool: &SqlitePool, kind: &str, ref_id: &str) -> Result<Option<MediaRule>> {
+    let row = sqlx::query_as::<_, MediaRule>(
+        "SELECT id, kind, ref_id, created_at FROM media_rule
+         WHERE kind = ?1 AND ref_id = ?2",
+    )
+    .bind(kind)
+    .bind(ref_id)
+    .fetch_optional(pool)
+    .await?;
+    Ok(row)
+}
+
+/// Idempotently selects a container for download; returns the rule id
+/// (deterministic, so re-selecting never duplicates).
+pub async fn set_rule(pool: &SqlitePool, kind: &str, ref_id: &str) -> Result<String> {
+    if let Some(rule) = rule_for(pool, kind, ref_id).await? {
+        return Ok(rule.id);
+    }
+    let id = format!("{kind}-{}", md5_hex(ref_id.as_bytes()));
+    sqlx::query(
+        "INSERT INTO media_rule (id, kind, ref_id, created_at)
+         VALUES (?1, ?2, ?3, ?4)
+         ON CONFLICT(id) DO NOTHING",
+    )
+    .bind(&id)
+    .bind(kind)
+    .bind(ref_id)
+    .bind(crate::consts::now_secs().to_string())
+    .execute(pool)
+    .await?;
+    Ok(id)
+}
+
+/// Drops one rule (its blobs/marks are the caller's next step).
+pub async fn delete_rule(pool: &SqlitePool, rule_id: &str) -> Result<()> {
+    sqlx::query("DELETE FROM media_rule WHERE id = ?1")
+        .bind(rule_id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+/// Removes every blob owned by a rule (rule removal, CACHE-5). Explicit
+/// downloads are `permanent` with no rule id, so they are never touched.
+///
+/// shortcut: a song covered by two rules loses its blob with the first
+/// removed rule; re-selecting the other container refetches it.
+pub async fn remove_rule_media(pool: &SqlitePool, rule_id: &str) -> Result<usize> {
+    let rows: Vec<Stored> =
+        sqlx::query_as("SELECT song_id, kind, file FROM media WHERE rule_id = ?1")
+            .bind(rule_id)
+            .fetch_all(pool)
+            .await?;
+    for row in &rows {
+        remove_blob(row);
+        sqlx::query("DELETE FROM media WHERE song_id = ?1")
+            .bind(&row.song_id)
+            .execute(pool)
+            .await?;
+    }
+    Ok(rows.len())
+}
+
 /// Used bytes per tier: `(config, cache)` (CACHE-7's accounting).
 pub async fn used_bytes(pool: &SqlitePool) -> Result<(i64, i64)> {
     let rows: Vec<(String, i64)> =
@@ -298,7 +375,37 @@ fn md5_hex(bytes: &[u8]) -> String {
 
 #[cfg(test)]
 mod tests {
+    use std::str::FromStr;
+
     use super::*;
+
+    async fn pool_with(migration: &str) -> SqlitePool {
+        let options = sqlx::sqlite::SqliteConnectOptions::from_str("sqlite::memory:").unwrap();
+        let pool = sqlx::sqlite::SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect_with(options)
+            .await
+            .unwrap();
+        match migration {
+            "media" => sqlx::migrate!("./migrations_media")
+                .run(&pool)
+                .await
+                .unwrap(),
+            _ => sqlx::migrate!("./migrations_library")
+                .run(&pool)
+                .await
+                .unwrap(),
+        }
+        pool
+    }
+
+    async fn media_pool() -> SqlitePool {
+        pool_with("media").await
+    }
+
+    async fn library_pool() -> SqlitePool {
+        pool_with("library").await
+    }
 
     #[test]
     fn fingerprint_covers_every_input() {
@@ -343,36 +450,8 @@ mod tests {
 
     #[tokio::test]
     async fn purge_drops_vanished_songs_and_rule_orphans() {
-        use std::str::FromStr;
-
-        let media = async {
-            let options = sqlx::sqlite::SqliteConnectOptions::from_str("sqlite::memory:").unwrap();
-            let pool = sqlx::sqlite::SqlitePoolOptions::new()
-                .max_connections(1)
-                .connect_with(options)
-                .await
-                .unwrap();
-            sqlx::migrate!("./migrations_media")
-                .run(&pool)
-                .await
-                .unwrap();
-            pool
-        }
-        .await;
-        let library = async {
-            let options = sqlx::sqlite::SqliteConnectOptions::from_str("sqlite::memory:").unwrap();
-            let pool = sqlx::sqlite::SqlitePoolOptions::new()
-                .max_connections(1)
-                .connect_with(options)
-                .await
-                .unwrap();
-            sqlx::migrate!("./migrations_library")
-                .run(&pool)
-                .await
-                .unwrap();
-            pool
-        }
-        .await;
+        let media = media_pool().await;
+        let library = library_pool().await;
 
         sqlx::query("INSERT INTO songs (id, title) VALUES ('kept', 'A')")
             .execute(&library)
@@ -422,5 +501,58 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(left, vec!["kept"]);
+    }
+
+    #[tokio::test]
+    async fn rules_are_idempotent_and_remove_only_their_media() {
+        let pool = media_pool().await;
+        assert!(rule_for(&pool, "artist", "a1").await.unwrap().is_none());
+
+        let id = set_rule(&pool, "artist", "a1").await.unwrap();
+        assert_eq!(
+            set_rule(&pool, "artist", "a1").await.unwrap(),
+            id,
+            "re-selecting never duplicates"
+        );
+        assert_eq!(
+            rule_for(&pool, "artist", "a1").await.unwrap().unwrap().kind,
+            "artist"
+        );
+
+        // One rule-owned blob, one explicit (permanent, no rule) blob.
+        record(
+            &pool,
+            "s1",
+            KIND_RULE,
+            "s1.mp3",
+            1,
+            "original",
+            "fp",
+            Some(&id),
+        )
+        .await
+        .unwrap();
+        record(
+            &pool,
+            "s2",
+            KIND_PERMANENT,
+            "s2.mp3",
+            1,
+            "original",
+            "fp",
+            None,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(remove_rule_media(&pool, &id).await.unwrap(), 1);
+        let left: Vec<String> = sqlx::query_scalar("SELECT song_id FROM media")
+            .fetch_all(&pool)
+            .await
+            .unwrap();
+        assert_eq!(left, vec!["s2"], "explicit downloads survive rule removal");
+
+        delete_rule(&pool, &id).await.unwrap();
+        assert!(rule_for(&pool, "artist", "a1").await.unwrap().is_none());
     }
 }

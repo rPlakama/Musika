@@ -169,6 +169,13 @@ Item {
             return;
         }
 
+        // Command pump: `download_song <song-id>` marks and fetches one track
+        // (CACHE-8). Any future UI trigger goes through the same slot.
+        if (action.indexOf("download_song ") === 0) {
+            Backend.downloadSong(action.substring("download_song ".length));
+            return;
+        }
+
         // The floating search is modal: while open, all keys go to it.
         if (searchOverlay.opened) {
             searchOverlay.handleAction(action);

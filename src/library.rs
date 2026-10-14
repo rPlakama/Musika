@@ -614,6 +614,27 @@ pub async fn album_songs(pool: &SqlitePool, album_id: &str) -> Result<Vec<SongRo
     Ok(rows)
 }
 
+/// `(size, suffix, bit_rate)` for the media fingerprint (CACHE-1/8).
+pub async fn song_file_info(
+    pool: &SqlitePool,
+    id: &str,
+) -> Result<Option<(Option<i64>, Option<String>, Option<i64>)>> {
+    let row = sqlx::query_as("SELECT size, suffix, bit_rate FROM songs WHERE id = ?1")
+        .bind(id)
+        .fetch_optional(pool)
+        .await?;
+    Ok(row)
+}
+
+/// Every song id of one artist (CACHE-5 rule materialization).
+pub async fn artist_song_ids(pool: &SqlitePool, artist_id: &str) -> Result<Vec<String>> {
+    let ids = sqlx::query_scalar("SELECT id FROM songs WHERE artist_id = ?1")
+        .bind(artist_id)
+        .fetch_all(pool)
+        .await?;
+    Ok(ids)
+}
+
 /// Cached artist biography + external URL (ARC-42, `artist_info` table).
 #[derive(Debug, Clone, Default, PartialEq, Eq, sqlx::FromRow, serde::Serialize)]
 pub struct ArtistInfoRow {
@@ -964,5 +985,39 @@ mod tests {
             .unwrap();
         assert_eq!(purge_stale_artist_info(&pool).await.unwrap(), 1);
         assert!(artist_info(&pool, "a1").await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn artist_song_ids_and_file_info_feed_the_downloader() {
+        let pool = memory_pool().await;
+        sqlx::query(
+            "INSERT INTO songs (id, title, artist_id, size, suffix, bit_rate)
+             VALUES ('s1', 'A', 'a1', 123, 'mp3', 320)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query("INSERT INTO songs (id, title, artist_id) VALUES ('s2', 'B', 'a1')")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO songs (id, title, artist_id) VALUES ('s3', 'C', 'a2')")
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        let mut ids = artist_song_ids(&pool, "a1").await.unwrap();
+        ids.sort();
+        assert_eq!(ids, vec!["s1", "s2"]);
+
+        assert_eq!(
+            song_file_info(&pool, "s1").await.unwrap(),
+            Some((Some(123), Some("mp3".to_string()), Some(320)))
+        );
+        assert_eq!(
+            song_file_info(&pool, "s2").await.unwrap(),
+            Some((None, None, None))
+        );
+        assert!(song_file_info(&pool, "missing").await.unwrap().is_none());
     }
 }

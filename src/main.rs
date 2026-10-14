@@ -20,6 +20,7 @@ use std::sync::OnceLock;
 use tokio::runtime::Runtime;
 
 mod api;
+mod artist_user;
 mod browse;
 mod cache;
 mod colors;

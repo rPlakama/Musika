@@ -286,7 +286,9 @@ The product is incomplete without these.
     + `artist` channel returns the artist plus its albums by `albums.artist_id`
     (static SQL; id-based, so same-named artists never mix — unit-tested).
     B favorite/stars, C biography, D cache rule + staleness purge,
-    E keybar/mouse polish open.
+    E keybar/mouse polish open. The header's identity strip (biography slot +
+    Favorite/Stars/In-cache/Shuffle chips) is carved out as UI-52 with ARC-42
+    as its backend; B–D stay behavioural and land on top of both.
 
 - [ ] **P-4 · Playlists (index, view, play, create/edit)** — P2 · (M6, roadmap; `api.rs` already wraps all five endpoints)
   - **Why:** the Playlists sidebar segment is a disabled placeholder, the queue
@@ -1016,6 +1018,70 @@ The product is incomplete without these.
     sees only referenced/brand assets; prune or brand-list them if committed.
     The runtime fallback is ARC-38's `Icon.fallbackText`.
 
+- [ ] **ARC-42 · Artist curation + biography + cache-state backend** — P2 · (ARTISTENTRYSTUDY.md §3/§5; UI-52, P-8 B–D, P-2, Q-3, CACHE-1/5)
+  - **Why:** UI-52's header strip (biography slot + Favorite/Stars/In-cache/
+    Shuffle) ships as placeholders because no channel provides artist star
+    state, rating capability, biography, cache-rule status or an
+    artist-scoped shuffle. P-8's milestones B–D would otherwise grow ad-hoc
+    calls; this task is the single backend surface they (and UI-52) consume.
+  - **Backend gaps to close (ARTISTENTRYSTUDY.md §5):**
+    - `qml.rs` slots: `requestArtistInfo(id)` (`getArtistInfo2` →
+      `getArtistInfo` fallback, `api.rs`), `starArtist(id, on)`
+      (`star`/`unstar` with artist ids), `rateArtist(id, stars)`
+      (`set_rating`, capability-guarded), `setArtistCache(id, on)` +
+      `requestArtistCache(id)`, and `shuffleArtist(id)` (Q-3's engine; until
+      then a shuffled artist queue built backend-side);
+    - channels: `artist_info` (biography + external url + `fetched_at`),
+      `artist_curation` (starred, rating, `canRate`), `artist_cache`
+      (Off / queued `n of N` / `Cached · bytes`);
+    - `library.db`: `artist_info(artist_id PK, biography, url, fetched_at)`
+      migration + upsert/read/purge (disposable; purge when the artist left);
+      `artists.starred` update on toggle;
+    - cache state aggregates DB4 `media_rule(kind='artist', ref_id=<id>)` plus
+      `SUM(songs.size)` from `library.db` (CACHE-1/CACHE-5);
+    - optimistic toggle + revert + toast on failure; state fetch on open and
+      refresh (`r`); offline serves the cached biography with its `fetched_at`.
+  - **Capability rule:** a server without artist ratings (`ping` extensions)
+    reports `canRate: false`; the Stars chip stays hidden — never dead stars.
+  - **Consumers:** UI-52 (the strip), then P-8 B–D lay the flows on top
+    (keybar `s`/`1..5`/`c`/`r`, optimistic UI, staleness purge on sync).
+  - **Verify:** unit tests for `artist_info` upsert/purge and the cache
+    aggregation; star toggle persists across restart; rating hidden on a
+    capability-less server; shuffle builds an artist-only queue; offline
+    biography + `fetched_at`; no round-trips while the entry is closed.
+  - **Now (writing paths):** DB8 `artist_user.db` landed (`artist_user.rs`:
+    `starred`/`rating` with CHECK 0..5, index on `starred`, cross-field-
+    preserving upserts, `starred_ids`, QML payload; wired into `db.rs` as the
+    eighth pool, `MUSIKA_ARTIST_USER_FILE` override). `library.db` gained
+    `artist_info` (migration + `upsert_artist_info`/`artist_info`/
+    `purge_stale_artist_info`, the last hooked into the sync's purge phase).
+    `qml.rs` slots: `requestArtistUser`, `starArtist` (star/unstar → persist →
+    `artist_user` emit; error toast), `rateArtist` (0..=5 validated →
+    `setRating` → persist → emit), `requestArtistInfo`
+    (`getArtistInfo2`→`getArtistInfo` → cache in library.db → `artist_info`
+    emit; offline serves the cached row). Tests: 4 in `artist_user` (round
+    trip/cross-field/index/bounds/payload) + 1 library round-trip/purge.
+    Open: capability gate for ratings (needs UI-42's ping fields), QML wiring
+    (UI-52), artist-scoped shuffle (Q-3), In-cache aggregation (CACHE-1/5).
+
+- [ ] **ARC-43 · Alt-hold quick actions — radial quadrant overlay (experimental)** — P3 · (roadmap Alt-hold quick actions; UI-52, ARC-42)
+  - **Why:** per-item actions are keyboard-only today (queue moves,
+    activation, navigation) and there is no context menu; a mouse user hovers
+    a row and has to leave it to act. The overlay is mouse parity for the same
+    verbs.
+  - **Details:** hold Alt over a track/album → four equal boxes N/S/E/W around
+    a center anchor: N Add to Queue, S Favorite, one horizontal slot
+    contextual Go to Album (track) / Go to Artist (album), the opposite slot
+    open in v1 ("—"); release over a box fires, center dead zone / leaving the
+    item / Esc cancels; TUI styling (monospace, box-drawing borders, single
+    accent, `Palette` tokens, center crosshair); one component taking item +
+    `{quadrant -> action, label}` config; flag off by default; suppress while
+    the keymap has a pending token so `alt-j`/`alt-k` never arm it.
+  - **Verify:** track row + album card repro; context swap correct in both
+    directions; center dead zone never fires; overlay absent with Alt up and
+    never steals hover/click; flag off = zero items/animations; the acceptance
+    list in the roadmap design section passes.
+
 - [ ] **CACHE-1 · DB4 `media.db` + `media/` blobs** — P2 · (roadmap Media cache; MEDIACACHESTUDY.md §3/§5)
   - **Why:** audio is never stored; playback dies without network. Research
     picked an independent reqwest fetch (`download` original / `stream` with
@@ -1335,6 +1401,63 @@ Small, bounded, high-value changes.
     fullscreen from anywhere; Tab in fullscreen cycles lyrics/queue only;
     Space/`n/p`/`m`/`±`/seek work in every scope; mouse transport unchanged;
     tick/auto-advance intact.
+
+- [ ] **UI-52 · ArtistEntry identity strip: biography slot + action chips (placeholders)** — P3 · (design microtask; ARTISTENTRYSTUDY.md §2, P-8, ARC-42)
+  - **Why:** the artist header row is avatar + name + album count, and the
+    whole right half of that parent rectangle sits empty while the album grid
+    below owns the width. Navidrome fills exactly that space with the
+    biography and the action cluster; landing the layout + visual shell now
+    lets ARC-42 wire properties without moving a single rectangle, and keeps
+    P-8's milestones B–D purely behavioural.
+  - **Details:**
+    - header becomes three zones: `[avatar] [name + album count] [identity
+      strip]`; the strip is a `ColumnLayout` (`Layout.fillWidth: true`,
+      `Layout.alignment: Qt.AlignVCenter`, spacing like the name column) so
+      the two text zones share the free width and both elide;
+    - strip top = **artist description** (~80 visible chars, two wrapped
+      lines max, `Text.ElideRight`): a root `artistDescription` string renders
+      when set (ARC-42's `artist_info` payload), otherwise the placeholder
+      copy stands in ("Artist biography will appear here once the server
+      metadata is wired."); no tap affordance yet (P-8 C owns expand), no
+      rich text;
+    - strip bottom = a `Row` of **icon-only placeholder actions**: one inline
+      `ActionChip` component (square while it has no label; a label adds text
+      + padding, kept for ARC-42's `Cached · <bytes>`) plus a five-glyph
+      **Stars** cluster — `star.svg` filled / `star-outline.svg` empty
+      (baked white, `SymbolIcon`), the first `artistRating` (0..5, Subsonic
+      domain) filled at `Palette.primary`, the rest `onSurfaceVariant`, the
+      cluster vertically centred against the chip row; chips use the
+      `ExitChip` visual family (`surfaceContainerHigh` fill, `outlineVariant`
+      hairline, `Theme.radius`), hover `secondaryContainer` with the shared
+      `quick` colour behaviour; click and hover are inert (`cursorShape`
+      only) with a `// ARC-42` comment — the controls are deliberately not in
+      the region model until the backend defines focus behaviour; row order is
+      stars · In-cache · Shuffle · Favorite; hovering a star previews the
+      level incrementally up to the cursor (`hoveredStar`, -1 = none) and the
+      hovered glyph fires the shared `PressBounce`; each star sits in a 0.05 h
+      slot (the hitbox) around the 0.032 h glyph; glyphs:
+      Favorite = filled `star.svg` gray while unfavorited (ARC-42 comment:
+      yellow when favorited, Material palette), Shuffle =
+      `outline-shuffle.svg`, In-cache = empty `outline-download.svg` (ARC-42
+      comment: filled `baseline-download.svg`, green MY3 accent
+      `Palette.tertiary`, when the rule reports cached);
+    - the chips read the ARC-42 vocabulary already in their labels: Favorite
+      (star toggle), Stars (rating, hidden when `canRate` is false), In-cache
+      (rule state label Off / n of N / bytes), Shuffle (artist-scoped queue);
+      placeholder text shows the "before" wording (`Favorite`, `Stars`,
+      `In-cache`, `Shuffle`) so wiring only swaps text/colour/state;
+    - UI-32 cross-ref: below `narrow` the strip hides (`Theme.isNarrow`) and
+      the header falls back to today's two-zone layout; no new component file
+      unless a second surface adopts the chip (then extract);
+    - header backdrop: the artist art gets the same D-5 ambience as
+      `AlbumEntry`/`NowPlaying` (`CoverImage.ambient` + the surface gradient
+      wash behind the content), so the entry floats on the artist's colours.
+  - **Verify:** at ≥narrow the header shows the biography placeholder over
+    four chips on the right with no overlap with the avatar/name at compact
+    widths; hovering a chip tints it and the cursor is a pointing hand;
+    clicking does nothing (no backend, no toast, no focus grab); below narrow
+    the strip is gone and the header reads exactly as today; biography text
+    wraps to two lines and elides; `reduceMotion` still fades nothing.
 
 - [x] **VI-6 · `Ctrl-[` alias + pending-sequence cancel** — P1 · (N3 residual)
   - **Why:** `Ctrl-[` is muscle memory for Esc; Esc should also clear a half-typed
@@ -1958,10 +2081,10 @@ Kept for rationale; the tree already carries these.
 | Bucket | Open | Solved |
 |--------|------|--------|
 | Must have | 8 | 1 |
-| Should have | 60 | 9 |
-| Quick wins | 9 | 46 |
+| Should have | 62 | 9 |
+| Quick wins | 10 | 46 |
 | Solved (reference) | — | 36 |
-| **Total** | **76** | **92** |
+| **Total** | **79** | **92** |
 
 ### Coverage by area
 
@@ -1974,7 +2097,7 @@ Kept for rationale; the tree already carries these.
 | Search | 2 | 6 |
 | UI microdesigns | 18 | 30 |
 | Dynamic color | 1 | 5 |
-| Architecture & robustness | 22 | 19 |
+| Architecture & robustness | 23 | 19 |
 | Media cache / offline | 7 | 0 |
 | Auth / startup | 0 | 2 |
 | Docs & process | 0 | 2 |

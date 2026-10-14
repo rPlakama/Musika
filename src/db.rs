@@ -16,7 +16,7 @@
 
 //! Database layout for Musika.
 //!
-//! Seven independent SQLite databases live under `~/.config/musika` (each
+//! Eight independent SQLite databases live under `~/.config/musika` (each
 //! with its own connection pool, so separate worker threads can write without
 //! contending on a single writer lock):
 //!
@@ -27,6 +27,7 @@
 //! - `lyrics.db`      — lyric cache (DB5)
 //! - `colors.db`      — cover-seeded dynamic color cache (DB6)
 //! - `statussave.db`  — last session status, restored on login (DB7)
+//! - `artist_user.db` — per-artist favourite/rating user state (DB8)
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -34,7 +35,7 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 use sqlx::sqlite::{SqliteJournalMode, SqlitePool, SqlitePoolOptions};
 
-/// The seven databases, opened and migrated at start-up.
+/// The eight databases, opened and migrated at start-up.
 #[derive(Clone)]
 pub struct Dbs {
     pub credentials: SqlitePool,
@@ -44,6 +45,7 @@ pub struct Dbs {
     pub lyrics: SqlitePool,
     pub colors: SqlitePool,
     pub status: SqlitePool,
+    pub artist_user: SqlitePool,
 }
 
 /// Opens every database and applies its migrations.
@@ -75,6 +77,11 @@ pub async fn init() -> Result<Dbs> {
     let status = open_file(&status_path()?, 1).await?;
     sqlx::migrate!("./migrations_status").run(&status).await?;
 
+    let artist_user = open_file(&artist_user_path()?, 3).await?;
+    sqlx::migrate!("./migrations_artist_user")
+        .run(&artist_user)
+        .await?;
+
     Ok(Dbs {
         credentials,
         library,
@@ -83,6 +90,7 @@ pub async fn init() -> Result<Dbs> {
         lyrics,
         colors,
         status,
+        artist_user,
     })
 }
 
@@ -137,6 +145,10 @@ pub fn colors_path() -> Result<PathBuf> {
 
 pub fn status_path() -> Result<PathBuf> {
     db_path("statussave.db", "MUSIKA_STATUS_FILE")
+}
+
+pub fn artist_user_path() -> Result<PathBuf> {
+    db_path("artist_user.db", "MUSIKA_ARTIST_USER_FILE")
 }
 
 /// Plain-text mirror of the library, for external tools such as `rg`.

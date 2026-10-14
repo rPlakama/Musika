@@ -614,6 +614,64 @@ pub async fn album_songs(pool: &SqlitePool, album_id: &str) -> Result<Vec<SongRo
     Ok(rows)
 }
 
+/// Cached artist biography + external URL (ARC-42, `artist_info` table).
+#[derive(Debug, Clone, Default, PartialEq, Eq, sqlx::FromRow, serde::Serialize)]
+pub struct ArtistInfoRow {
+    pub artist_id: String,
+    pub biography: String,
+    pub url: String,
+    pub fetched_at: String,
+}
+
+/// Upserts the cached biography for one artist. library.db owns this (the
+/// description is library metadata, unlike the user state in `artist_user.db`).
+pub async fn upsert_artist_info(
+    pool: &SqlitePool,
+    artist_id: &str,
+    biography: &str,
+    url: &str,
+) -> Result<()> {
+    sqlx::query(
+        "INSERT INTO artist_info (artist_id, biography, url, fetched_at)
+         VALUES (?1, ?2, ?3, ?4)
+         ON CONFLICT(artist_id) DO UPDATE SET
+             biography  = excluded.biography,
+             url        = excluded.url,
+             fetched_at = excluded.fetched_at",
+    )
+    .bind(artist_id)
+    .bind(biography)
+    .bind(url)
+    .bind(crate::consts::now_secs().to_string())
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+/// The cached biography for one artist; `None` when never fetched.
+pub async fn artist_info(pool: &SqlitePool, artist_id: &str) -> Result<Option<ArtistInfoRow>> {
+    let row = sqlx::query_as::<_, ArtistInfoRow>(
+        "SELECT artist_id, biography, url, fetched_at
+         FROM artist_info WHERE artist_id = ?1",
+    )
+    .bind(artist_id)
+    .fetch_optional(pool)
+    .await?;
+    Ok(row)
+}
+
+/// Drops cached biographies for artists that left the library. Only called
+/// after a fully successful sync (the covers/lyrics/colors rule).
+pub async fn purge_stale_artist_info(pool: &SqlitePool) -> Result<u64> {
+    let result = sqlx::query(
+        "DELETE FROM artist_info
+         WHERE artist_id NOT IN (SELECT id FROM artists)",
+    )
+    .execute(pool)
+    .await?;
+    Ok(result.rows_affected())
+}
+
 /// Writes the tab-separated `index.txt` mirror, one line per song.
 pub async fn write_mirror(pool: &SqlitePool) -> Result<()> {
     let rows: Vec<(String, String, String, String)> = sqlx::query_as(
@@ -871,5 +929,40 @@ mod tests {
         let ids: Vec<&str> = by_name.iter().map(|song| song.id.as_str()).collect();
         assert_eq!(ids, vec!["s4", "s1"]);
         assert_eq!(song_ordinal(&pool, "s4", "Name").await.unwrap(), Some(0));
+    }
+
+    #[tokio::test]
+    async fn artist_info_round_trips_and_purges_with_the_artist() {
+        let pool = memory_pool().await;
+        sqlx::query("INSERT INTO artists (id, name) VALUES ('a1', 'Pixies')")
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        assert!(artist_info(&pool, "a1").await.unwrap().is_none());
+
+        upsert_artist_info(&pool, "a1", "Boston band.", "https://last.fm/pixies")
+            .await
+            .unwrap();
+        let row = artist_info(&pool, "a1").await.unwrap().unwrap();
+        assert_eq!(row.biography, "Boston band.");
+        assert_eq!(row.url, "https://last.fm/pixies");
+        assert!(!row.fetched_at.is_empty());
+
+        // A refetch replaces the row, never duplicates it.
+        upsert_artist_info(&pool, "a1", "Updated bio.", "")
+            .await
+            .unwrap();
+        let row = artist_info(&pool, "a1").await.unwrap().unwrap();
+        assert_eq!(row.biography, "Updated bio.");
+        assert_eq!(row.url, "");
+
+        // The artist left the library: the cached biography goes with it.
+        sqlx::query("DELETE FROM artists WHERE id = 'a1'")
+            .execute(&pool)
+            .await
+            .unwrap();
+        assert_eq!(purge_stale_artist_info(&pool).await.unwrap(), 1);
+        assert!(artist_info(&pool, "a1").await.unwrap().is_none());
     }
 }

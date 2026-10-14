@@ -32,6 +32,19 @@ use crate::queue::{album_tracks_json, library_queue_payload, song_album_payload}
 /// captured generation is still the latest (P-6 / roadmap "Session status").
 static STATUS_WRITE_GEN: AtomicU64 = AtomicU64::new(0);
 
+/// Builds a client from the saved credentials for the ad-hoc slots (ARC-42
+/// and friends); the sync path keeps its own explicit copy.
+async fn client(dbs: &crate::db::Dbs) -> anyhow::Result<SubsonicClient> {
+    let credentials = crate::sqlite::load_credentials(&dbs.credentials)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("no saved credentials"))?;
+    Ok(SubsonicClient::new(
+        &credentials.server_url,
+        &credentials.username,
+        &credentials.password,
+    ))
+}
+
 #[derive(Default)]
 pub struct Backend {
     server_url: String,
@@ -1044,6 +1057,174 @@ impl Backend {
                 Ok(None) => eprintln!("library: artist {artist_id} is not indexed"),
                 Err(err) => eprintln!("library: could not read artist: {err:#}"),
             }
+        });
+    }
+
+    // -----------------------------------------------------------------------
+    // Artist user state + biography (ARC-42)
+    // -----------------------------------------------------------------------
+
+    /// Serves the locally indexed artist user state (favourite + rating).
+    #[qslot(qml_name = "requestArtistUser")]
+    fn request_artist_user(&mut self, artist_id: String) {
+        let invoker = self.get_qml_method_invoker();
+        let Some(dbs) = crate::dbs().cloned() else {
+            return;
+        };
+        crate::runtime().spawn(async move {
+            let json = crate::artist_user::payload(&dbs.artist_user, &artist_id).await;
+            qtbridge::invoke_method!(invoker, "emitData", "artist_user".to_string(), json);
+        });
+    }
+
+    /// Toggles the artist favourite on the server, then indexes it locally in
+    /// `artist_user.db`. The UI toggles optimistically and reverts on the
+    /// error toast.
+    #[qslot(qml_name = "starArtist")]
+    fn star_artist(&mut self, artist_id: String, on: bool) {
+        let invoker = self.get_qml_method_invoker();
+        let error_invoker = self.get_qml_method_invoker();
+        let Some(dbs) = crate::dbs().cloned() else {
+            return;
+        };
+        crate::runtime().spawn(async move {
+            let client = match client(&dbs).await {
+                Ok(client) => client,
+                Err(err) => {
+                    qtbridge::invoke_method!(
+                        error_invoker,
+                        "errorRaised",
+                        "error".to_string(),
+                        format!("Could not toggle favourite: {err:#}")
+                    );
+                    return;
+                }
+            };
+            let result = if on {
+                client.star(&[], &[], &[artist_id.as_str()]).await
+            } else {
+                client.unstar(&[], &[], &[artist_id.as_str()]).await
+            };
+            match result {
+                Ok(()) => {
+                    if let Err(err) =
+                        crate::artist_user::set_starred(&dbs.artist_user, &artist_id, on).await
+                    {
+                        eprintln!("artist_user: could not store favourite: {err:#}");
+                    }
+                    let json = crate::artist_user::payload(&dbs.artist_user, &artist_id).await;
+                    qtbridge::invoke_method!(invoker, "emitData", "artist_user".to_string(), json);
+                }
+                Err(err) => {
+                    qtbridge::invoke_method!(
+                        error_invoker,
+                        "errorRaised",
+                        "error".to_string(),
+                        format!("Could not toggle favourite: {err:#}")
+                    );
+                }
+            }
+        });
+    }
+
+    /// Sets the artist rating (0..=5) on the server, then indexes it locally
+    /// in `artist_user.db`. The UI toggles optimistically and reverts on the
+    /// error toast.
+    #[qslot(qml_name = "rateArtist")]
+    fn rate_artist(&mut self, artist_id: String, rating: i32) {
+        let rating = match u8::try_from(rating) {
+            Ok(rating) if rating <= 5 => rating,
+            _ => {
+                eprintln!("artist: rating {rating} is outside the 0..=5 domain");
+                return;
+            }
+        };
+        let invoker = self.get_qml_method_invoker();
+        let error_invoker = self.get_qml_method_invoker();
+        let Some(dbs) = crate::dbs().cloned() else {
+            return;
+        };
+        crate::runtime().spawn(async move {
+            let client = match client(&dbs).await {
+                Ok(client) => client,
+                Err(err) => {
+                    qtbridge::invoke_method!(
+                        error_invoker,
+                        "errorRaised",
+                        "error".to_string(),
+                        format!("Could not rate artist: {err:#}")
+                    );
+                    return;
+                }
+            };
+            match client.set_rating(&artist_id, rating).await {
+                Ok(()) => {
+                    if let Err(err) =
+                        crate::artist_user::set_rating(&dbs.artist_user, &artist_id, rating).await
+                    {
+                        eprintln!("artist_user: could not store rating: {err:#}");
+                    }
+                    let json = crate::artist_user::payload(&dbs.artist_user, &artist_id).await;
+                    qtbridge::invoke_method!(invoker, "emitData", "artist_user".to_string(), json);
+                }
+                Err(err) => {
+                    qtbridge::invoke_method!(
+                        error_invoker,
+                        "errorRaised",
+                        "error".to_string(),
+                        format!("Could not rate artist: {err:#}")
+                    );
+                }
+            }
+        });
+    }
+
+    /// Fetches the artist biography (`getArtistInfo2` → `getArtistInfo`
+    /// fallback), caches it in `library.db` (`artist_info`) and emits
+    /// `artist_info`; offline serves the cached row.
+    #[qslot(qml_name = "requestArtistInfo")]
+    fn request_artist_info(&mut self, artist_id: String) {
+        let invoker = self.get_qml_method_invoker();
+        let Some(dbs) = crate::dbs().cloned() else {
+            return;
+        };
+        crate::runtime().spawn(async move {
+            let fetched = async {
+                let client = client(&dbs).await?;
+                let (biography, url) =
+                    match client.get_artist_info2(&artist_id, Some(10), None).await {
+                        Ok(info) => (info.info.biography, info.info.last_fm_url),
+                        Err(err) => {
+                            eprintln!("artist: getArtistInfo2 failed for {artist_id}: {err:#}");
+                            let info = client.get_artist_info(&artist_id, Some(10), None).await?;
+                            (info.info.biography, info.info.last_fm_url)
+                        }
+                    };
+                let biography = biography.unwrap_or_default();
+                let url = url.unwrap_or_default();
+                crate::library::upsert_artist_info(&dbs.library, &artist_id, &biography, &url)
+                    .await?;
+                Ok::<_, anyhow::Error>((biography, url))
+            }
+            .await;
+
+            let (biography, url) = match fetched {
+                Ok(pair) => pair,
+                Err(err) => {
+                    eprintln!("artist: info fetch failed for {artist_id}: {err:#}");
+                    match crate::library::artist_info(&dbs.library, &artist_id).await {
+                        Ok(Some(row)) => (row.biography, row.url),
+                        _ => (String::new(), String::new()),
+                    }
+                }
+            };
+            let json = serde_json::json!({
+                "id": artist_id,
+                "biography": biography,
+                "url": url,
+            })
+            .to_string();
+            qtbridge::invoke_method!(invoker, "emitData", "artist_info".to_string(), json);
         });
     }
 

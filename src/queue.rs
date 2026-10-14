@@ -330,6 +330,7 @@ mod tests {
             lyrics: memory_pool().await,
             colors: memory_pool().await,
             status: memory_pool().await,
+            artist_user: memory_pool().await,
         }
     }
 

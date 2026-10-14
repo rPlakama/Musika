@@ -183,6 +183,11 @@ where
         eprintln!("index: lyric cache purge failed: {err:#}");
     }
 
+    // 5b. artist biography cache: drop artists that left the library
+    if let Err(err) = crate::library::purge_stale_artist_info(&dbs.library).await {
+        eprintln!("index: artist info purge failed: {err:#}");
+    }
+
     // 6. bounded lyric backfill (the sync button's lyric pass)
     let lyrics = refresh_lyrics(dbs, &client, &mut progress).await;
 

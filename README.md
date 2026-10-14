@@ -15,7 +15,7 @@ music library the way they browse a buffer.
 | **Shell** | Qt 6.11 / QML — one `ApplicationWindow`, vi focus regions |
 | **Playback** | `mpv` subprocess + JSON IPC (position, duration, pause, volume, mute) |
 | **Source** | Subsonic API 1.16.1 + OpenSubsonic extensions (`songLyrics`) |
-| **Storage** | Eight SQLite databases under `~/.config/musika/`, WAL, one writer domain each |
+| **Storage** | Ten SQLite databases under `~/.config/musika/`, WAL, one writer domain each |
 | **Theme** | Cover-seeded Material You (matugen-style, `material-colors` crate) |
 | **Distribution** | Nix flake (wrapped binary: Qt env + `mpv` on `PATH`) |
 
@@ -52,11 +52,12 @@ DB1  credentials.db   encrypted account — the only data worth backing up
 DB2a library.db       artists / albums / songs, rebuilt from the server
 DB2b search.db        FTS5 index, rebuilt from library.db
 DB3  covers.db        cover-art index; blobs in covers/
-DB4  media.db         offline audio cache (planned, CACHE-1)
+DB4  media.db         offline audio cache: index + `media/` blobs
 DB5  lyrics.db        lyrics + line timings, TTL + purge-on-sync
 DB6  colors.db        cover-seeded schemes, revalidated by cover hash
 DB7  statussave.db    last session row, restored on login
 DB8  artist_user.db   per-artist favourite + rating user state
+DB9  download.db      per-song download intent/progress ledger
 ```
 
 Every cache is independent: separate pool, separate WAL, separate purge domain.

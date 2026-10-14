@@ -16,7 +16,7 @@
 
 //! Database layout for Musika.
 //!
-//! Eight independent SQLite databases live under `~/.config/musika` (each
+//! Ten independent SQLite databases live under `~/.config/musika` (each
 //! with its own connection pool, so separate worker threads can write without
 //! contending on a single writer lock):
 //!
@@ -24,10 +24,12 @@
 //! - `library.db`     — artists / albums / songs metadata (DB2a)
 //! - `search.db`      — FTS5 index over song metadata (DB2b)
 //! - `covers.db`      — cover-art cache index; blobs sit in `covers/` (DB3)
+//! - `media.db`       — offline audio cache index; blobs in `media/` (DB4)
 //! - `lyrics.db`      — lyric cache (DB5)
 //! - `colors.db`      — cover-seeded dynamic color cache (DB6)
 //! - `statussave.db`  — last session status, restored on login (DB7)
 //! - `artist_user.db` — per-artist favourite/rating user state (DB8)
+//! - `download.db`    — per-song download intent/progress ledger (DB9)
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -35,17 +37,19 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 use sqlx::sqlite::{SqliteJournalMode, SqlitePool, SqlitePoolOptions};
 
-/// The eight databases, opened and migrated at start-up.
+/// The ten databases, opened and migrated at start-up.
 #[derive(Clone)]
 pub struct Dbs {
     pub credentials: SqlitePool,
     pub library: SqlitePool,
     pub search: SqlitePool,
     pub covers: SqlitePool,
+    pub media: SqlitePool,
     pub lyrics: SqlitePool,
     pub colors: SqlitePool,
     pub status: SqlitePool,
     pub artist_user: SqlitePool,
+    pub download: SqlitePool,
 }
 
 /// Opens every database and applies its migrations.
@@ -67,6 +71,9 @@ pub async fn init() -> Result<Dbs> {
     let covers = open_file(&covers_path()?, 5).await?;
     sqlx::migrate!("./migrations_covers").run(&covers).await?;
 
+    let media = open_file(&media_path()?, 3).await?;
+    sqlx::migrate!("./migrations_media").run(&media).await?;
+
     let lyrics = open_file(&lyrics_path()?, 3).await?;
     sqlx::migrate!("./migrations_lyrics").run(&lyrics).await?;
 
@@ -82,15 +89,22 @@ pub async fn init() -> Result<Dbs> {
         .run(&artist_user)
         .await?;
 
+    let download = open_file(&download_path()?, 3).await?;
+    sqlx::migrate!("./migrations_download")
+        .run(&download)
+        .await?;
+
     Ok(Dbs {
         credentials,
         library,
         search,
         covers,
+        media,
         lyrics,
         colors,
         status,
         artist_user,
+        download,
     })
 }
 
@@ -135,6 +149,10 @@ pub fn covers_path() -> Result<PathBuf> {
     db_path("covers.db", "MUSIKA_COVERS_FILE")
 }
 
+pub fn media_path() -> Result<PathBuf> {
+    db_path("media.db", "MUSIKA_MEDIA_FILE")
+}
+
 pub fn lyrics_path() -> Result<PathBuf> {
     db_path("lyrics.db", "MUSIKA_LYRICS_FILE")
 }
@@ -151,6 +169,10 @@ pub fn artist_user_path() -> Result<PathBuf> {
     db_path("artist_user.db", "MUSIKA_ARTIST_USER_FILE")
 }
 
+pub fn download_path() -> Result<PathBuf> {
+    db_path("download.db", "MUSIKA_DOWNLOAD_FILE")
+}
+
 /// Plain-text mirror of the library, for external tools such as `rg`.
 pub fn mirror_path() -> Result<PathBuf> {
     db_path("index.txt", "MUSIKA_INDEX_MIRROR")
@@ -162,6 +184,32 @@ pub fn covers_dir() -> Result<PathBuf> {
         return Ok(PathBuf::from(dir));
     }
     Ok(config_dir()?.join("covers"))
+}
+
+/// Directory holding permanent/rule media blobs (CACHE-1): config root, never
+/// auto-removed below the permanent/rule tiers.
+pub fn media_dir() -> Result<PathBuf> {
+    if let Some(dir) = non_empty_env("MUSIKA_MEDIA_DIR") {
+        return Ok(PathBuf::from(dir));
+    }
+    Ok(config_dir()?.join("media"))
+}
+
+/// Directory holding playback/rolling media blobs (CACHE-1): XDG cache,
+/// purgeable without losing user data.
+pub fn playback_dir() -> Result<PathBuf> {
+    if let Some(dir) = non_empty_env("MUSIKA_MEDIA_CACHE_DIR") {
+        return Ok(PathBuf::from(dir));
+    }
+    Ok(cache_dir()?.join("musika").join("media"))
+}
+
+fn cache_dir() -> Result<PathBuf> {
+    if let Some(dir) = non_empty_env("XDG_CACHE_HOME") {
+        return Ok(PathBuf::from(dir));
+    }
+    let home = std::env::var("HOME").context("HOME is not set")?;
+    Ok(PathBuf::from(home).join(".cache"))
 }
 
 fn db_path(name: &str, override_env: &str) -> Result<PathBuf> {

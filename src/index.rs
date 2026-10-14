@@ -188,6 +188,24 @@ where
         eprintln!("index: artist info purge failed: {err:#}");
     }
 
+    // 5c. media cache: drop blobs for vanished songs and dead rules
+    if let Err(err) = crate::media::purge(dbs).await {
+        eprintln!("index: media cache purge failed: {err:#}");
+    }
+
+    // 5d. download ledger: drop rows for songs that left the library
+    match crate::library::song_ids(&dbs.library).await {
+        Ok(ids) => {
+            let owners: std::collections::HashSet<String> = ids.into_iter().collect();
+            if let Err(err) =
+                crate::cache::purge_missing(&dbs.download, "download", "song_id", &owners).await
+            {
+                eprintln!("index: download ledger purge failed: {err:#}");
+            }
+        }
+        Err(err) => eprintln!("index: could not list songs for the download purge: {err:#}"),
+    }
+
     // 6. bounded lyric backfill (the sync button's lyric pass)
     let lyrics = refresh_lyrics(dbs, &client, &mut progress).await;
 

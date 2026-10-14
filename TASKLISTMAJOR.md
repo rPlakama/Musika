@@ -1082,7 +1082,7 @@ The product is incomplete without these.
     never steals hover/click; flag off = zero items/animations; the acceptance
     list in the roadmap design section passes.
 
-- [ ] **CACHE-1 · DB4 `media.db` + `media/` blobs** — P2 · (roadmap Media cache; MEDIACACHESTUDY.md §3/§5)
+- [x] **CACHE-1 · DB4 `media.db` + `media/` blobs** — P2 · (roadmap Media cache; MEDIACACHESTUDY.md §3/§5)
   - **Why:** audio is never stored; playback dies without network. Research
     picked an independent reqwest fetch (`download` original / `stream` with
     transcode params) over mpv `--stream-record` (seek/switch breaks the file).
@@ -1092,6 +1092,19 @@ The product is incomplete without these.
     (`~/.cache/musika/media/`); `.part` + atomic rename; `media::cached_path`
     and a batch resolver for `build_track`; purge only after a successful sync
     (covers.rs pattern).
+  - **Now:** M0 landed — `migrations_media` (media / media_rule / media_meta
+    with kind CHECKs and last_used/rule_id indexes), `Dbs.media`
+    (`MUSIKA_MEDIA_FILE`); `src/media.rs`: tier split (`~/.config/musika/media`
+    vs XDG `~/.cache/musika/media`, `MUSIKA_MEDIA_DIR` /
+    `MUSIKA_MEDIA_CACHE_DIR` overrides), `record`/`store` (`.part` → atomic
+    rename, replacing the previous blob), `cached_path`, `path_map` batch
+    resolver, `touch`, `used_bytes`, the `fingerprint(size|suffix|bit_rate|
+    server|quality)` helper, and `purge` (vanished songs + rule-orphans,
+    hooked after the sync's destructive phase next to lyrics/colors). `queue.rs`
+    `build_track` is local-first: a cached blob becomes a `file://` URL, else
+    the stream URL (prefer-server-online is CACHE-6). 3 unit tests (fingerprint,
+    tier split, purge). Open: the fetch/prefetch path (CACHE-2), caps
+    (CACHE-3/4), rules (CACHE-5), status UI (CACHE-7).
 
 - [ ] **CACHE-2 · Playback cache + prefetch next N** — P2 · (MEDIACACHESTUDY.md §4)
   - **Why:** stutter-free playback; Symfonium-style rolling buffer.
@@ -1123,6 +1136,30 @@ The product is incomplete without these.
   - **Details:** transcode via `stream?maxBitRate=&format=` (fingerprint includes
     quality), `download` for original; prefer-server-online toggle; max parallel
     fetches; Wi-Fi-only has no desktop meaning until metering detection exists.
+
+- [x] **CACHE-8 · `download.db`: download intent/state ledger** — P2 · (CACHE-1/2/5/7; MEDIACACHESTUDY.md §5/§6)
+  - **Why:** `media.db` answers two of the three questions — `media` is what
+    exists on disk, `media_rule` is which containers were selected — but
+    per-song intent and progress (queued / in flight / failed-with-reason /
+    done, plus the selecting rule and timestamps) had nowhere to live;
+    CACHE-2's fetcher needs a work list, CACHE-5's materializer marks,
+    CACHE-7's UI counts.
+  - **Details:** DB9 `download.db`:
+    `download(song_id PK, state CHECK queued|active|done|error, error,
+    rule_id, requested_at, updated_at)` + indexes on `state`/`rule_id`; API
+    `mark_queued` (done rows are never downgraded; re-selection clears a
+    failure), `set_state`, `get`, `queued_ids(limit)` (oldest first),
+    `counts` (queued/active/done/error/total), `unmark`, `unmark_rule`
+    (removal drops pending rows, keeps done artifacts); no blob logic —
+    artifacts stay media.db's; vanished songs pruned with the other caches
+    via ARC-36's `cache::purge_missing`.
+  - **Verify:** queued → active → done | error round trip; done never
+    downgraded; counts drive "n of N"; rule removal drops only pending rows;
+    vanished songs purged after a sync.
+  - **Now:** landed — migration + `src/download.rs` (states, transitions,
+    counts, 3 tests), tenth pool (`MUSIKA_DOWNLOAD_FILE`), sync-phase purge
+    via `cache::purge_missing`. Open: CACHE-2's fetch loop writes it,
+    CACHE-5 materializes rules into it, CACHE-7 renders the counts.
 
 - [ ] **CACHE-7 · Cache status UI** — P2
   - **Details:** per-item state (cached/partial/queued) + used-bytes vs cap in
@@ -2131,10 +2168,10 @@ Kept for rationale; the tree already carries these.
 | Bucket | Open | Solved |
 |--------|------|--------|
 | Must have | 8 | 1 |
-| Should have | 62 | 9 |
+| Should have | 61 | 11 |
 | Quick wins | 9 | 48 |
 | Solved (reference) | — | 36 |
-| **Total** | **78** | **94** |
+| **Total** | **77** | **96** |
 
 ### Coverage by area
 
@@ -2148,7 +2185,7 @@ Kept for rationale; the tree already carries these.
 | UI microdesigns | 18 | 30 |
 | Dynamic color | 1 | 5 |
 | Architecture & robustness | 23 | 19 |
-| Media cache / offline | 7 | 0 |
+| Media cache / offline | 5 | 2 |
 | Auth / startup | 0 | 2 |
 | Docs & process | 0 | 2 |
 | Packaging | 0 | 1 |

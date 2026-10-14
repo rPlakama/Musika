@@ -23,16 +23,26 @@
 //! is pure URL construction. The network is only touched later by mpv.
 
 use std::collections::HashMap;
+use std::path::PathBuf;
 
 use crate::http_client::SubsonicClient;
 
 /// Builds a playable [`crate::player::Track`] from an indexed song.
+///
+/// CACHE-1 local-first: a cached blob is handed to mpv as a `file://` URL,
+/// otherwise the stream URL is used. The network is still only touched by
+/// mpv; "prefer server online" is CACHE-6.
 fn build_track(
     client: &SubsonicClient,
     song: crate::library::SongRow,
     covers: &HashMap<String, String>,
+    media: &HashMap<String, PathBuf>,
 ) -> anyhow::Result<crate::player::Track> {
-    let url = client.stream_url(&song.id)?;
+    let url = match media.get(&song.id) {
+        Some(path) => reqwest::Url::from_file_path(path)
+            .map_err(|_| anyhow::anyhow!("cached media path is not a valid file URL"))?,
+        None => client.stream_url(&song.id)?,
+    };
     let cover_art = song.cover_art.unwrap_or_default();
     let cover_url = covers.get(&cover_art).cloned().unwrap_or_default();
     Ok(crate::player::Track {
@@ -239,10 +249,11 @@ async fn tracks_json(
         &credentials.password,
     );
     let covers = crate::covers::url_map(&dbs.covers).await?;
+    let media = crate::media::path_map(&dbs.media).await.unwrap_or_default();
 
     let mut tracks = Vec::with_capacity(songs.len());
     for song in songs {
-        tracks.push(build_track(&client, song, &covers)?);
+        tracks.push(build_track(&client, song, &covers, &media)?);
     }
     Ok(serde_json::to_string(&tracks)?)
 }
@@ -327,10 +338,12 @@ mod tests {
             library,
             search: memory_pool().await,
             covers,
+            media: memory_pool().await,
             lyrics: memory_pool().await,
             colors: memory_pool().await,
             status: memory_pool().await,
             artist_user: memory_pool().await,
+            download: memory_pool().await,
         }
     }
 

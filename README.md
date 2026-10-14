@@ -169,14 +169,15 @@ browsing never paints a palette.
 | Scope | Keys |
 |---|---|
 | Movement | `h j k l`, `g g` top, `G` bottom |
-| Navigate | `Tab` pane cycle, `Ctrl-W` scope overlay, `Enter`, `Esc`/`q`/`Ctrl-[` back |
-| Playback | `Space` play/pause, `n`/`p` or `Ctrl-N`/`Ctrl-P` next/prev, `m` mute, `-`/`+` volume |
+| Navigate | `Ctrl-W` scope overlay, `Enter`, `Esc`/`q`/`Ctrl-[` back |
+| Playback | `Space` play/pause, `n`/`p` or `Ctrl-N`/`Ctrl-P` next/prev, `,`/`.` seek ±5 s, `m` mute, `-`/`+` volume |
 | Library | `Shift-H`/`Shift-L` list order (Artist → Name → Year): albums, or songs in the Songs segment |
 | Clipboard | `y` yank the playing track, `Shift-P`/`Ctrl-V` paste into search |
 | Queue | `Ctrl-Q` drawer, `Shift-J`/`Shift-K` or `Alt-J`/`Alt-K` reorder, `d d` remove, `Enter` jump |
 | Search | `Shift Space F` floating search, or `i` to start typing (Songs | Albums | Artists) |
 
-Fullscreen (`Shift-Enter`) adds a lyrics/queue split with its own pane keybar.
+Fullscreen (`Shift-Enter`) adds a lyrics/queue split; `Tab` cycles the two
+panes, which carry their own keybar (the transport bar stays mouse-only).
 Playing a row in the Songs segment stays in the list and queues the whole
 library in list order, starting on that row, so the tracks before it stay
 reachable too (no windowing — the queue is the local index). Search hits and

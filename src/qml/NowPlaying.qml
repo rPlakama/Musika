@@ -21,9 +21,11 @@ import musika
 import "Theme.js" as Theme
 
 // Fullscreen player ("mainscreen"), a 50/50 split:
-//   left   — cover, identity, seek and transport (everything about this track);
+//   left   — cover, identity, seek and transport (decoration: the transport
+//            owns no keyboard pane, Space/n/p/,/. are global);
 //   right  — Lyrics (top half) over Queue (bottom half), both always visible;
-//   bottom — context-aware keybar for the focused pane (Tab cycles panes).
+//   bottom — context-aware keybar for the focused pane (Tab cycles
+//            lyrics/queue).
 // Esc (or q) leaves fullscreen; Space stays the global play/pause.
 Rectangle {
     id: root
@@ -31,10 +33,10 @@ Rectangle {
     color: Palette.background
 
     /// Click/tap on the exit button (the header chip); Home leaves fullscreen.
-    signal exitRequested()
+    signal exitRequested
 
-    // 0 = transport, 1 = lyrics, 2 = queue.
-    property int pane: 0
+    // Keyboard pane: 1 = lyrics, 2 = queue. Transport is never a pane.
+    property int pane: 1
     property int queueCursor: 0
     property int queueIndex: -1
     // One queue payload after a reorder keeps the moved cursor instead of
@@ -79,11 +81,9 @@ Rectangle {
     }
 
     function keyHints() {
-        if (pane === 0)
-            return "Space play/pause   ·   h/l seek   ·   Ctrl-N/P track   ·   m mute   ·   -/+ volume   ·   Tab lyrics   ·   Esc exit";
         if (pane === 1)
-            return "j/k scroll   ·   Ctrl-N/P track   ·   Tab queue   ·   Esc exit";
-        return "j/k select   ·   Alt-J/K move   ·   Enter jump   ·   Ctrl-N/P track   ·   Tab transport   ·   Esc exit";
+            return "j/k scroll   ·   ,/. seek   ·   Ctrl-N/P track   ·   Tab queue   ·   Esc exit";
+        return "j/k select   ·   Alt-J/K move   ·   Enter jump   ·   ,/. seek   ·   Ctrl-N/P track   ·   Tab lyrics   ·   Esc exit";
     }
 
     function scrollLyrics(delta) {
@@ -126,7 +126,9 @@ Rectangle {
         }
         queueList.currentIndex = queueCursor;
         queueList.positionViewAtIndex(queueCursor, ListView.Contain);
-        Qt.callLater(function() { queueList.opacity = 1; });
+        Qt.callLater(function () {
+            queueList.opacity = 1;
+        });
     }
 
     function applyLyrics(payload) {
@@ -152,7 +154,9 @@ Rectangle {
         lyricsAvailable = lyricModel.count > 0 && data.source !== "none";
 
         lyricsView.contentY = 0;
-        Qt.callLater(function() { lyricsView.opacity = 1; });
+        Qt.callLater(function () {
+            lyricsView.opacity = 1;
+        });
         if (lyricsSynced && activeLyric >= 0)
             lyricsView.positionViewAtIndex(activeLyric, ListView.Center);
     }
@@ -175,7 +179,7 @@ Rectangle {
     // Fullscreen keys, scoped to the focused pane. Esc/back stays with Home.
     function handleAction(action) {
         if (action === "pane_cycle") {
-            pane = (pane + 1) % 3;
+            pane = pane === 1 ? 2 : 1;
             return;
         }
         if (action === "next_track") {
@@ -187,28 +191,12 @@ Rectangle {
             return;
         }
 
-        if (pane === 0) {
-            if (action === "move_left")
-                Backend.playerSeek(Math.max(0, Backend.position - 5));
-            else if (action === "move_right")
-                Backend.playerSeek(Backend.position + 5);
-            else if (action === "move_up")
-                Backend.playerPrevious();
-            else if (action === "move_down")
-                Backend.playerNext();
-            else if (action === "enter")
-                Backend.playerToggle();
-            return;
-        }
-
         if (pane === 1) {
             if (action === "move_up")
                 scrollLyrics(-lyricsView.height * 0.3);
             else if (action === "move_down")
                 scrollLyrics(lyricsView.height * 0.3);
-            else if (action === "move_left")
-                pane = 0;
-            else if (action === "move_right")
+            else if (action === "move_left" || action === "move_right")
                 pane = 2;
             return;
         }
@@ -234,15 +222,13 @@ Rectangle {
         } else if (action === "enter") {
             if (queueCursor >= 0)
                 Backend.queueJump(queueCursor);
-        } else if (action === "move_left")
-            pane = 0;
-        else if (action === "move_right")
+        } else if (action === "move_left" || action === "move_right")
             pane = 1;
     }
 
     onVisibleChanged: {
         if (visible) {
-            pane = 0;
+            pane = 1;
             lyricsLoading = true;
             Backend.requestQueue();
             Backend.requestLyrics();
@@ -371,7 +357,7 @@ Rectangle {
 
                     FadeText {
                         anchors.verticalCenter: parent.verticalCenter
-                        text: "ESC"
+                        text: "ESC/Q"
                         color: Palette.onSurface
                         font.pixelSize: root.height * 0.022
                     }
@@ -411,9 +397,7 @@ Rectangle {
 
                     Rectangle {
                         id: coverBox
-                        readonly property real side: Math.max(
-                            96,
-                            Math.min(root.height * 0.42, 512, parent.width, parent.height))
+                        readonly property real side: Math.max(96, Math.min(root.height * 0.42, 512, parent.width, parent.height))
                         anchors.centerIn: parent
                         width: side
                         height: side
@@ -491,14 +475,17 @@ Rectangle {
                             radius: Theme.radius
 
                             Behavior on width {
-                                NumberAnimation { duration: Theme.motion.quick; easing.type: Easing.Linear }
+                                NumberAnimation {
+                                    duration: Theme.motion.quick
+                                    easing.type: Easing.Linear
+                                }
                             }
                         }
 
                         MouseArea {
                             anchors.fill: parent
                             cursorShape: Qt.PointingHandCursor
-                            onPressed: (mouse) => {
+                            onPressed: mouse => {
                                 if (Backend.duration > 0)
                                     Backend.playerSeek(Math.max(0, Math.min(1, mouse.x / width)) * Backend.duration);
                             }
@@ -513,18 +500,14 @@ Rectangle {
                     }
                 }
 
-                // Transport row; a hairline marks keyboard focus on this pane.
+                // Transport row: mouse-only decoration (UI-51). It owns no
+                // keyboard pane, so it carries no focus hairline and no
+                // click-to-focus; Space/n/p/,/. are global.
                 Rectangle {
                     Layout.fillWidth: true
                     Layout.preferredHeight: root.height * 0.07
                     color: "transparent"
                     radius: Theme.radius
-                    border.width: root.pane === 0 ? Math.max(1, root.width * Theme.hairlineRatio) : 0
-                    border.color: Palette.primary
-
-                    TapHandler {
-                        onTapped: root.pane = 0
-                    }
 
                     RowLayout {
                         anchors.centerIn: parent
@@ -543,9 +526,7 @@ Rectangle {
                             Layout.preferredWidth: root.height * 0.058
                             Layout.preferredHeight: root.height * 0.058
                             symbolRatio: 0.6
-                            iconSource: Backend.playbackState === "playing"
-                                ? "qrc:/app/icons/pause-svgrepo-com.svg"
-                                : "qrc:/app/icons/play-1001-svgrepo-com.svg"
+                            iconSource: Backend.playbackState === "playing" ? "qrc:/app/icons/pause-svgrepo-com.svg" : "qrc:/app/icons/play-1001-svgrepo-com.svg"
                             symbolColor: Theme.iconStrong
                             onClicked: Backend.playerToggle()
                         }
@@ -589,15 +570,18 @@ Rectangle {
                                 color: Backend.muted ? Palette.outline : Palette.primary
 
                                 Behavior on width {
-                                    NumberAnimation { duration: Theme.motion.quick; easing.type: Easing.Linear }
+                                    NumberAnimation {
+                                        duration: Theme.motion.quick
+                                        easing.type: Easing.Linear
+                                    }
                                 }
                             }
 
                             MouseArea {
                                 anchors.fill: parent
                                 cursorShape: Qt.PointingHandCursor
-                                onPressed: (mouse) => Backend.playerSetVolume(Math.max(0, Math.min(1, mouse.x / width)) * 100)
-                                onPositionChanged: (mouse) => {
+                                onPressed: mouse => Backend.playerSetVolume(Math.max(0, Math.min(1, mouse.x / width)) * 100)
+                                onPositionChanged: mouse => {
                                     if (pressed)
                                         Backend.playerSetVolume(Math.max(0, Math.min(1, mouse.x / width)) * 100);
                                 }
@@ -643,7 +627,9 @@ Rectangle {
                                 font.bold: true
                             }
 
-                            Item { Layout.fillWidth: true }
+                            Item {
+                                Layout.fillWidth: true
+                            }
 
                             FadeText {
                                 text: root.lyricsTag()
@@ -698,7 +684,11 @@ Rectangle {
                                 visible: root.lyricsAvailable
 
                                 Behavior on opacity {
-                                    NumberAnimation { duration: Theme.motion.quick; easing.type: Easing.Bezier; easing.bezierCurve: Theme.ease.standard }
+                                    NumberAnimation {
+                                        duration: Theme.motion.quick
+                                        easing.type: Easing.Bezier
+                                        easing.bezierCurve: Theme.ease.standard
+                                    }
                                 }
 
                                 delegate: FadeText {
@@ -711,8 +701,7 @@ Rectangle {
                                     // active = scale + full contrast, near = dim,
                                     // far = dimmer; unsynced is one uniform column.
                                     readonly property bool active: index === root.activeLyric
-                                    readonly property int distance: root.activeLyric >= 0
-                                        ? Math.abs(index - root.activeLyric) : -1
+                                    readonly property int distance: root.activeLyric >= 0 ? Math.abs(index - root.activeLyric) : -1
 
                                     // Pre-calculated emphasis: the full 1.12
                                     // while the wrapped line stays clear of the
@@ -731,8 +720,7 @@ Rectangle {
                                     // Grow the slot symmetrically so the big
                                     // line stays centred and its neighbours
                                     // make room instead of getting overlapped.
-                                    readonly property real emphasisPad: Math.max(0,
-                                        lyricLine.paintedHeight * (lyricLine.emphasis - 1) / 2)
+                                    readonly property real emphasisPad: Math.max(0, lyricLine.paintedHeight * (lyricLine.emphasis - 1) / 2)
 
                                     width: lyricsView.width
                                     leftPadding: root.lyricPad
@@ -747,21 +735,29 @@ Rectangle {
                                     wrapMode: Text.WordWrap
                                     animated: false
                                     transformOrigin: Item.Center
-                                    opacity: lyricLine.distance < 0
-                                        ? Theme.contentDim
-                                        : (lyricLine.active
-                                            ? 1.0
-                                            : (lyricLine.distance === 1 ? Theme.contentDim : Theme.contentDimFar))
+                                    opacity: lyricLine.distance < 0 ? Theme.contentDim : (lyricLine.active ? 1.0 : (lyricLine.distance === 1 ? Theme.contentDim : Theme.contentDimFar))
                                     scale: lyricLine.emphasis
 
                                     Behavior on opacity {
-                                        NumberAnimation { duration: Theme.motion.quick; easing.type: Easing.Bezier; easing.bezierCurve: Theme.ease.standard }
+                                        NumberAnimation {
+                                            duration: Theme.motion.quick
+                                            easing.type: Easing.Bezier
+                                            easing.bezierCurve: Theme.ease.standard
+                                        }
                                     }
                                     Behavior on scale {
-                                        NumberAnimation { duration: Theme.motion.quick; easing.type: Easing.Bezier; easing.bezierCurve: Theme.ease.standard }
+                                        NumberAnimation {
+                                            duration: Theme.motion.quick
+                                            easing.type: Easing.Bezier
+                                            easing.bezierCurve: Theme.ease.standard
+                                        }
                                     }
                                     Behavior on color {
-                                        ColorAnimation { duration: Theme.motion.micro; easing.type: Easing.Bezier; easing.bezierCurve: Theme.ease.standard }
+                                        ColorAnimation {
+                                            duration: Theme.motion.micro
+                                            easing.type: Easing.Bezier
+                                            easing.bezierCurve: Theme.ease.standard
+                                        }
                                     }
                                 }
                             }
@@ -822,7 +818,9 @@ Rectangle {
                                 font.bold: true
                             }
 
-                            Item { Layout.fillWidth: true }
+                            Item {
+                                Layout.fillWidth: true
+                            }
 
                             FadeText {
                                 text: Backend.queueLength > 0 ? (Backend.queueIndex + 1) + " / " + Backend.queueLength : ""
@@ -847,7 +845,11 @@ Rectangle {
                             visible: queueItems.count > 0
 
                             Behavior on opacity {
-                                NumberAnimation { duration: Theme.motion.quick; easing.type: Easing.Bezier; easing.bezierCurve: Theme.ease.standard }
+                                NumberAnimation {
+                                    duration: Theme.motion.quick
+                                    easing.type: Easing.Bezier
+                                    easing.bezierCurve: Theme.ease.standard
+                                }
                             }
 
                             delegate: Rectangle {
@@ -860,9 +862,7 @@ Rectangle {
 
                                 width: queueList.width
                                 height: queueList.height * 0.16
-                                color: index === root.queueCursor
-                                    ? Palette.secondaryContainer
-                                    : (index === root.queueIndex ? Palette.surfaceContainer : "transparent")
+                                color: index === root.queueCursor ? Palette.secondaryContainer : (index === root.queueIndex ? Palette.surfaceContainer : "transparent")
 
                                 FadeText {
                                     id: titleText
@@ -878,12 +878,14 @@ Rectangle {
                                     animated: false
                                     transformOrigin: Item.Left
                                     // UI-45: the cursor/hover row leads, capped to its box.
-                                    scale: (row.emphasized && !Theme.reduceMotion)
-                                        ? Theme.fitScale(titleText.width, titleText.paintedWidth, Theme.selectionEmphasis)
-                                        : 1.0
+                                    scale: (row.emphasized && !Theme.reduceMotion) ? Theme.fitScale(titleText.width, titleText.paintedWidth, Theme.selectionEmphasis) : 1.0
 
                                     Behavior on scale {
-                                        NumberAnimation { duration: Theme.motion.quick; easing.type: Easing.Bezier; easing.bezierCurve: Theme.ease.standard }
+                                        NumberAnimation {
+                                            duration: Theme.motion.quick
+                                            easing.type: Easing.Bezier
+                                            easing.bezierCurve: Theme.ease.standard
+                                        }
                                     }
                                 }
 

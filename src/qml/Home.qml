@@ -253,14 +253,23 @@ Item {
             return;
         }
 
-        // Transport skips are global (VI-10/Q-9): j/k keeps the list cursor,
-        // Ctrl-N/Ctrl-P (and n/p) skip tracks wherever a list owns focus.
+        // Transport is global (VI-10/Q-9/UI-51): j/k keeps the list cursor,
+        // Ctrl-N/Ctrl-P (and n/p) skip tracks and ,/. seek ±5 s wherever a
+        // list owns focus. The player bar is decoration and owns no keys.
         if (action === "next_track") {
             Backend.playerNext();
             return;
         }
         if (action === "prev_track") {
             Backend.playerPrevious();
+            return;
+        }
+        if (action === "seek_back") {
+            Backend.playerSeek(Math.max(0, Backend.position - 5));
+            return;
+        }
+        if (action === "seek_forward") {
+            Backend.playerSeek(Backend.position + 5);
             return;
         }
 
@@ -278,8 +287,8 @@ Item {
             return;
         }
 
-        // Fullscreen is modal for navigation: transport and pane keys belong
-        // to the player view while it is open (Esc and Space stay global).
+        // Fullscreen is modal for navigation: pane and queue keys belong to
+        // the player view while it is open (Esc, Space and ,/. stay global).
         if (nowPlayingExpanded) {
             nowPlaying.handleAction(action);
             return;

@@ -48,6 +48,8 @@ pub enum Action {
     InsertMode,
     NextTrack,
     PrevTrack,
+    SeekBack,
+    SeekForward,
     PaneCycle,
     Yank,
     Paste,
@@ -80,6 +82,8 @@ impl Action {
             Self::InsertMode => "insert_mode",
             Self::NextTrack => "next_track",
             Self::PrevTrack => "prev_track",
+            Self::SeekBack => "seek_back",
+            Self::SeekForward => "seek_forward",
             Self::PaneCycle => "pane_cycle",
             Self::Yank => "yank",
             Self::Paste => "paste",
@@ -115,12 +119,16 @@ pub enum Outcome {
 /// - `Esc`, `q` and `Ctrl-[` are the same Back action; Esc additionally steps
 ///   out of typing/insert before leaving (the invariant cancel key).
 /// - `Space` is play/pause globally; `Shift-Enter` toggles fullscreen.
+/// - `,`/`.` seek back/forward 5 s globally (the transport is decoration:
+///   it never owns a focus region, so seek cannot live inside it).
 fn defaults() -> Vec<(&'static str, Action)> {
     vec![
         ("ctrl-n", Action::NextTrack),
         ("ctrl-p", Action::PrevTrack),
         ("space", Action::PlayPause),
         ("m", Action::Mute),
+        (",", Action::SeekBack),
+        (".", Action::SeekForward),
         ("-", Action::VolumeDown),
         ("=", Action::VolumeUp),
         ("shift-=", Action::VolumeUp),
@@ -284,7 +292,9 @@ pub fn token_from_qt(key: i32, modifiers: i32) -> Option<String> {
         0x41..=0x5A => ((key as u8 + 32) as char).to_string(), // A-Z
         0x61..=0x7A => (key as u8 as char).to_string(),        // a-z
         0x30..=0x39 => (key as u8 as char).to_string(),        // 0-9
+        0x2C => ",".to_string(),                               // comma
         0x2D => "-".to_string(),                               // minus / keypad minus
+        0x2E => ".".to_string(),                               // period
         0x2B => "+".to_string(),                               // keypad plus
         0x3D => "=".to_string(),                               // '+' on the main row (shifted)
         0x5B => "[".to_string(),                               // Ctrl-[ == Escape
@@ -421,6 +431,15 @@ mod tests {
         assert_eq!(keymap.feed("n"), Outcome::Action(Action::NextTrack));
         assert_eq!(keymap.feed("p"), Outcome::Action(Action::PrevTrack));
         assert_eq!(keymap.feed("tab"), Outcome::Action(Action::PaneCycle));
+    }
+
+    #[test]
+    fn seek_keys_are_global_bindings() {
+        let mut keymap = Keymap::new();
+        assert_eq!(keymap.feed(","), Outcome::Action(Action::SeekBack));
+        assert_eq!(keymap.feed("."), Outcome::Action(Action::SeekForward));
+        assert_eq!(token_from_qt(0x2C, 0).as_deref(), Some(","));
+        assert_eq!(token_from_qt(0x2E, 0).as_deref(), Some("."));
     }
 
     #[test]

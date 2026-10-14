@@ -217,7 +217,7 @@ Rectangle {
 
                     FadeText {
                         anchors.verticalCenter: parent.verticalCenter
-                        text: "ESC"
+                        text: "ESC/Q"
                         color: Palette.onSurface
                         font.pixelSize: root.height * 0.022
                     }

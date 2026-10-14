@@ -406,17 +406,57 @@ Item {
             anchors.margins: panel.height * 0.035
             spacing: panel.height * 0.025
 
-            RowLayout {
+            // Mode chip + search bar in one parent rectangle, so the spacing
+            // is explicit: 10% of the row is the chip (beside the bar, never
+            // inside it), the rest is the field, with a margin between them
+            // and the chip inset vertically.
+            Rectangle {
+                id: searchRow
                 Layout.fillWidth: true
-                spacing: panel.width * 0.01
+                implicitHeight: panel.height * 0.06
+                color: "transparent"
+
+                Rectangle {
+                    id: modeChip
+                    anchors.left: parent.left
+                    anchors.verticalCenter: parent.verticalCenter
+                    width: parent.width * 0.10
+                    height: parent.height * 0.82
+                    radius: Theme.radius
+                    color: Palette.surfaceContainerHighest
+                    border.width: Math.max(1, root.height * Theme.hairlineRatio)
+                    border.color: Palette.primary
+
+                    // INSERT while typing, NORMAL while navigating.
+                    FadeText {
+                        id: modeChipLabel
+                        anchors.centerIn: parent
+                        text: root.typing ? "I" : "N"
+                        color: Palette.primary
+                        font.pixelSize: Theme.fontSize("label", panel.height)
+                        animated: false
+                    }
+
+                    // UI-49: the denied cue's red copy of the label, fading in
+                    // over the normal one.
+                    FadeText {
+                        id: modeFlashLabel
+                        anchors.centerIn: parent
+                        text: modeChipLabel.text
+                        color: Palette.error
+                        font.pixelSize: Theme.fontSize("label", panel.height)
+                        opacity: 0
+                        animated: false
+                    }
+                }
 
                 TextField {
                     id: field
-                    Layout.fillWidth: true
-                    // The mode chip sits in the field's left padding (it
-                    // replaced the search glyph), so the text starts after it.
-                    implicitHeight: panel.height * 0.06
-                    leftPadding: panel.height * 0.03 + modeChip.width + panel.height * 0.03
+                    anchors.left: modeChip.right
+                    anchors.leftMargin: parent.width * 0.012
+                    anchors.right: parent.right
+                    anchors.top: parent.top
+                    anchors.bottom: parent.bottom
                     placeholderText: "Search anything"
                     placeholderTextColor: Palette.onSurfaceVariant
                     color: Palette.onSurface
@@ -431,44 +471,6 @@ Item {
                         radius: Theme.radius
                         border.color: field.activeFocus ? Palette.primary : Palette.outlineVariant
                         border.width: Math.max(1, root.height * Theme.hairlineRatio)
-
-                        // Mode chip: INSERT while typing, NORMAL while
-                        // navigating. Moved from the row's right edge into the
-                        // field's left padding, where it replaces the search
-                        // glyph; the denied red flash rides its label.
-                        Rectangle {
-                            id: modeChip
-                            anchors.left: parent.left
-                            anchors.leftMargin: panel.height * 0.03
-                            anchors.verticalCenter: parent.verticalCenter
-                            height: parent.height * 0.7
-                            width: modeChipLabel.implicitWidth + height * 0.9
-                            radius: Theme.radius
-                            color: Palette.surfaceContainerHighest
-                            border.width: Math.max(1, root.height * Theme.hairlineRatio)
-                            border.color: Palette.primary
-
-                            FadeText {
-                                id: modeChipLabel
-                                anchors.centerIn: parent
-                                text: root.typing ? "I" : "N"
-                                color: Palette.primary
-                                font.pixelSize: Theme.fontSize("label", panel.height)
-                                animated: false
-                            }
-
-                            // UI-49: the denied cue's red copy of the label,
-                            // fading in over the normal one.
-                            FadeText {
-                                id: modeFlashLabel
-                                anchors.centerIn: parent
-                                text: modeChipLabel.text
-                                color: Palette.error
-                                font.pixelSize: Theme.fontSize("label", panel.height)
-                                opacity: 0
-                                animated: false
-                            }
-                        }
                     }
 
                     onTextChanged: debounce.restart()

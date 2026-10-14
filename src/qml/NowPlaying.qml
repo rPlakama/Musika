@@ -803,11 +803,6 @@ Rectangle {
                                         }
                                     }
                                 }
-
-                                // UI-13: proportional scroll hint.
-                                ScrollHint {
-                                    view: lyricsView
-                                }
                             }
                         }
 
@@ -985,11 +980,6 @@ Rectangle {
                                                 Backend.queueJump(row.index);
                                             }
                                         }
-                                    }
-
-                                    // UI-13: proportional scroll hint.
-                                    ScrollHint {
-                                        view: queueList
                                     }
                                 }
                             }

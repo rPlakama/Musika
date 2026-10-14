@@ -266,11 +266,6 @@ Item {
                         }
                     }
                 }
-
-                // UI-13: proportional scroll hint on the list's left edge.
-                ScrollHint {
-                    view: list
-                }
             }
 
             FadeText {

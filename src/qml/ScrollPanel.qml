@@ -24,8 +24,8 @@ import "Theme.js" as Theme
 //   A 20%  — the title band, anchored top, horizontal centre: `title` plus any
 //            writings declared as children (order cues, counts, chips).
 //   B rest — the scroll body, anchored bottom, horizontal centre: the ListView
-//            with the eased follow (UI-41), scroll memory (UI-54), hint
-//            (UI-13), loading/empty states and the keyboard cursor.
+//            with the eased follow (UI-41), scroll memory (UI-54),
+//            loading/empty states and the keyboard cursor.
 //
 // Callers keep their model, row delegate and payload mapping; the panel owns
 // the list and is the single owner of its `contentY`, so no external
@@ -51,7 +51,6 @@ Rectangle {
     // --- Body (B) ------------------------------------------------------------
     property Component rowDelegate
     property var model: null
-    property bool showHint: true
     property bool loading: false
     property string emptyText: ""
 
@@ -176,12 +175,6 @@ Rectangle {
                 model: root.model
                 boundsBehavior: Flickable.StopAtBounds
                 delegate: root.rowDelegate
-
-                // UI-13: proportional scroll hint on the list's left edge.
-                ScrollHint {
-                    view: list
-                    visible: root.showHint && opacity > 0.01
-                }
             }
         }
 

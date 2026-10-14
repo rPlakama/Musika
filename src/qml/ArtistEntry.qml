@@ -744,11 +744,6 @@ Rectangle {
                         }
                     }
                 }
-
-                // UI-13: proportional scroll hint on the grid's left edge.
-                ScrollHint {
-                    view: grid
-                }
             }
 
             FadeText {

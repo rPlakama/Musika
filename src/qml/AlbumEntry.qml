@@ -375,11 +375,6 @@ Rectangle {
                     }
                 }
             }
-
-            // UI-13: proportional scroll hint on the list's left edge.
-            ScrollHint {
-                view: songList
-            }
         }
 
         // UI-22: the songs area has a wait state and a real empty-album state.

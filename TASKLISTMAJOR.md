@@ -1308,7 +1308,7 @@ Small, bounded, high-value changes.
 > **0.0.8 batch** — moved from Should have on 2026-10-13 (small, bounded,
 > low-risk): UI-13, UI-40, UI-41, LYR-8, S-9, AUTH-3, DOC-1.
 
-- [x] **UI-13 · Scroll position hint** — P3
+- [x] **UI-13 · Scroll position hint** — P3 · **removed 2026-10-14**
   - **Why:** long lists have no scrollbar/position feedback for mouse users.
   - **Details:** one reusable `ScrollHint.qml` (opacity/transform only, never
     part of layout) attached to each long list: a slim bar pinned to the
@@ -1323,13 +1323,11 @@ Small, bounded, high-value changes.
   - **Verify:** long lists show a proportional thumb that tracks wheel,
     trackpad and keyboard moves; short lists show nothing; no cursor/hover/
     click behaviour changes; `reduceMotion` shows/hides it without fading.
-  - **Now:** `ScrollHint.qml` is instantiated as a direct child of every
-    scrollable list/grid; the root carries the state (`scrollable`,
-    `emphasized`) and the thumb is a `visibleArea`-driven Rectangle
-    (`max(h²/content, h*0.02)`, half-hairline width, `quick` fade, instant
-    under `reduceMotion`), hidden while the content fits. Pinned to the left
-    edge so it never covers the right-aligned row meta. Real-pointer
-    hover/tracking acceptance is deferred to a desktop session.
+  - **Now:** retired on request (2026-10-14). The white thumb was the last
+    iteration; `ScrollHint.qml` and every instantiation were deleted
+    (ScrollPanel's `showHint` went with it), so lists are clean at the edge.
+    Rationale: the hint read as chrome noise beside the keyboard-first
+    cursor, and the vi motions make position feedback less necessary.
 
 - [x] **UI-40 · Palette transition wrapper (finish THM-4)** — P2 · (POLISHAUDIT §1.3)
   - **Why:** `Palette.apply` snaps every colour in one frame; THM-4 promised

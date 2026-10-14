@@ -308,15 +308,10 @@ Item {
                 Layout.fillWidth: true
                 spacing: panel.width * 0.01
 
-                FadeText {
-                    text: "⌕"
-                    color: Palette.onSurfaceVariant
-                    font.pixelSize: panel.height * 0.05
-                }
-
                 TextField {
                     id: field
                     Layout.fillWidth: true
+                    leftPadding: panel.height * 0.092
                     placeholderText: "Search anything"
                     placeholderTextColor: Palette.onSurfaceVariant
                     color: Palette.onSurface
@@ -327,6 +322,20 @@ Item {
                         radius: Theme.radius
                         border.color: field.activeFocus ? Palette.primary : Palette.outlineVariant
                         border.width: Math.max(1, root.height * Theme.hairlineRatio)
+
+                        // The glyph lives inside the field's own left padding,
+                        // inset from the border with a gap before the text, so
+                        // the input edge still lines up with the columns below.
+                        // Fixed white like the other SVG glyphs (Theme.iconStrong).
+                        SymbolIcon {
+                            anchors.left: parent.left
+                            anchors.leftMargin: panel.height * 0.03
+                            anchors.verticalCenter: parent.verticalCenter
+                            width: panel.height * 0.04
+                            height: width
+                            source: "qrc:/app/icons/search-right-1505-svgrepo-com.svg"
+                            symbolColor: Theme.iconStrong
+                        }
                     }
 
                     onTextChanged: debounce.restart()

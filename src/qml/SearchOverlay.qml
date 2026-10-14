@@ -341,8 +341,8 @@ Item {
 
     Rectangle {
         id: panel
-        width: root.width * 0.70
-        height: root.height * 0.65
+        width: root.width * 0.84
+        height: root.height * 0.78
         // Rise into place (preferred over scale, motion §3.1).
         x: (root.width - width) / 2
         y: (root.height - height) / 2 + (root.opened ? 0 : height * 0.04)

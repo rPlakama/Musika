@@ -8,3 +8,10 @@ noctalia/
 !TASKLISTMAJOR.md
 !README.md
 DankMaterialShell/
+
+# Runtime databases (never tracked; the app creates them under ~/.config/musika)
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3

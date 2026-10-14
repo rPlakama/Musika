@@ -84,8 +84,13 @@ The app is unsafe or misleading without these.
 
 - [ ] **UI-22 · Empty/error states polish** — P0 · (U8)
   - **Why:** album-with-no-songs, failed sync, failed playback need real states.
-  - **Now:** error toasts landed; loading screen landed for startup ping;
-    empty states still mostly PlaceholderList.
+  - **Now:** error toasts landed; loading screen landed for startup ping.
+    Loading skeletons landed as the shared `SkeletonList` (extracted from the
+    search columns) and wired into `SearchColumn`, `MediaList` (Albums/Songs/
+    Artists via a `loading` flag the wrappers toggle) and the album page's
+    songs; the album page also gets a real "No songs in this album" state.
+    Open: failed sync state (status/toast wording), failed playback state,
+    login Enter-submit + busy fields, playlist/radio placeholders.
 
 - [ ] **ARC-3 · Cancellable sync + HTTP retry/backoff/timeouts** — P1 · (A5, O5)
   - **Why:** a hung request blocks the sync pipeline; `reqwest` has no timeout.
@@ -511,6 +516,15 @@ The product is incomplete without these.
   - **Acceptance:** continuous resize down to ~160 px with no layout errors
     or warnings and every primary action still keyboard-reachable; no
     component overflows its pane.
+  - **Now (partial):** R0 + R1 + R2 landed. `Main.qml` drops the width clamp
+    (`minimumWidth: 0`, `minimumHeight` kept); `Theme.breakpoints = { mini:
+    420, narrow: 640, compact: 900 }` + `Theme.isNarrow(width)`; `AlbumEntry`
+    uses `compact`. `Home.narrow` drives the shell: `sideW` becomes an ~8%
+    strip (min 40 px) and `SideBar.narrow` swaps each segment label for an
+    icon (svgrepo set `album-2` / `music-1005` / `artist` /
+    `playlist-minimalistic-2` / `radio`, re-baked white like every glyph) and
+    hides the stats; cursor/focus contract unchanged. Open: R3 bars, R4
+    content, R5 text audit, R6 resize pass.
 
 - [ ] **UI-35 · Queue drawer modal parity: slide + scrim + blur** — P2 · (POLISHAUDIT §1.2, D-2)
   - **Why:** the drawer is modal for keys but has no scrim and the shell blur
@@ -549,8 +563,10 @@ The product is incomplete without these.
     and have no empty state.
   - **Details:** reuse the SearchColumn skeleton pattern and add centred
     empty messages ("Nothing indexed yet — run a sync").
-  - **Now (partial):** the empty state landed on Album/Song/Artist lists;
-    loading skeletons are still open.
+  - **Now (partial):** the empty state landed on Album/Song/Artist lists, and
+    the loading skeletons landed with the shared `SkeletonList` (UI-22): the
+    wrappers raise `MediaList.loading` while a payload is in flight and the
+    skeleton covers the list area below the header.
 
 - [x] **UI-39 · Motion token sweep + reduced motion** — P2 · (POLISHAUDIT §6, UI-19)
   - **Why:** legacy `Theme.duration`/`Theme.easeOut` (100 ms) still drive
@@ -914,6 +930,91 @@ The product is incomplete without these.
     `search <query>` and `:command` reuse (VI-13).
   - **Verify:** socket integration test (temp `MUSIKA_IPC_SOCKET`) drives
     seek/volume/queue_move and reads replies; README IPC examples updated.
+
+- [x] **ARC-38 · `Icon.qml` facade: source + role + badge + fallback** — P2 · (SVGSTUDY.md; CACHE-7)
+  - **Why:** icon URLs and palette roles repeat at every call site (`SideBar`,
+    `InferiorBar`, `NowPlaying`, `ExitChip`, `SearchOverlay`, `SuperiorBar`,
+    `Theme.volumeIcon`), and there is no way to tag status on an icon
+    (cache/offline) or recover from a vector parse error.
+  - **Details:** one `Item` wrapping `SymbolIcon` plus a corner badge layer
+    (`glyph`, colors, `Loader`-gated so it costs nothing when absent) and a
+    text fallback when the vector status is Error; properties `name`/`source`
+    and `role`/`symbolColor` with a `Palette` default; fixed frame and
+    `iconRatio` semantics unchanged. Badges stay QML-side, never encoded in
+    asset or desktop-entry names (DMS's `svg+corner:` pitfall). First consumer:
+    cache/offline badge for CACHE-7.
+  - **Verify:** qmllint clean; no pixel diff on existing surfaces; badge absent
+    adds no items; a broken source paints the fallback.
+  - **Now:** `Icon.qml` landed — `name` (short qrc name or URL) /
+    `source`, `symbolColor` (palette role, `Palette.onSurface` default),
+    `iconRatio` passthrough, `Loader`-gated corner badge (`badge`,
+    `badgeGlyphColor`, `badgeBackground`) and a `fallbackText` shown when the
+    vector cannot be parsed. `SymbolIcon` gained `ready`
+    (`implicitWidth > 0`; a broken vector reports 0). Call sites move over as
+    they are touched; the first planned consumer is CACHE-7's cache/offline
+    badge.
+
+- [x] **ARC-39 · Remote SVG artwork ingest policy** — P2 · (SVGSTUDY.md; DMS `svgsource.go`, ARC-29)
+  - **Why:** `covers.rs::extension` maps jpeg/png/webp only (fallback `.img`),
+    so `image/svg+xml` art is stored undecodable; `colors/seed.rs::sample`
+    then fails palette extraction and `CoverImage` (no QtSvg) stays blank.
+    DMS's lesson applies: rasterize before every non-SVG consumer.
+  - **Details:** detect by content type and/or `<svg` sniff; rasterize at
+    ingest with `resvg` to a bounded PNG (max edge, e.g. 1024, plus byte cap);
+    store as a normal hash-addressed cover (ARC-29); reject malformed/oversize
+    input to the placeholder path and never store an undecodable blob; palette
+    decodes the stored PNG only; no shelling out (ARC-16), no QtSvg runtime
+    dependency.
+  - **Verify:** unit tests (small SVG blob → dimensions + sampled pixel;
+    oversize/malformed rejected); cover fetch + seed extraction end to end; no
+    new processes spawned.
+  - **Now:** `resvg` dependency added; `covers.rs` detects SVG by
+    content type or `<svg`/XML sniff, rasterizes at ingest to a bounded PNG
+    (`rasterize_svg`: ≤1024 px longest edge, input/output byte caps) and
+    either stores it as a normal cover (`store_art`, content type
+    `image/png`, hash of the stored bytes) or drops it with a log line so the
+    placeholder path owns it; the palette sampler only ever sees raster bytes.
+    Unit tests cover sniffing, bounded raster with a sampled pixel, small-SVG
+    passthrough size, malformed/oversize rejection and raster passthrough; the
+    live fetch rides the existing cover sync path.
+
+- [x] **ARC-40 · Bound cover/art decode size** — P2 · (SVGSTUDY.md; DMS `backer.sourceSize`, D-5)
+  - **Why:** `CoverImage.qml` loads full server-resolution art (`cache: false`)
+    in every delegate; a large library decodes far more pixels than any
+    surface paints, spiking memory and scroll cost.
+  - **Details:** DPR-aware `sourceSize` per surface (grid cell ×2, entry cover
+    ×1, D-5 ambient backdrop = blur texture size); keep `cache: false` (disk
+    blobs); no visible softening at the painted size.
+  - **Verify:** memory profile with a 4000² cover before/after; screenshot diff
+    per surface plus a ListScrollStudy scroll pass.
+  - **Now:** `CoverImage` decodes through `sourceSize`: `sizeFactor` (list/grid
+    thumbs ×2 for the hover scale, hero covers ×1), ambient mode decodes for
+    the blur texture (×0.25), all in device pixels (×`Screen.devicePixelRatio`)
+    rounded up to a 32 px grid so resizes do not reload per pixel; aspect ratio
+    is preserved by `sourceSize`. The memory profile + per-surface screenshot
+    pass is deferred to a desktop session.
+
+- [x] **ARC-41 · Icon pipeline verification (bake + references + fallback)** — P3 · (SVGSTUDY.md; D-6, UI-31)
+  - **Why:** `bake-icons-white.sh` is unchecked `sed` (misses `<style>` rules,
+    `#fff`, `currentColor`, gradient stops), dangling `qrc:/app/icons/*.svg`
+    references ship silently, and a vector parse error paints a blank frame.
+  - **Details:** extend the bake to the missed forms; add
+    `scripts/check-icons.sh` (every svgrepo asset contains a white fill/stroke,
+    every referenced qrc icon exists, every asset is referenced or
+    brand-listed) wired into the Nix build beside `qmllint`; the runtime
+    fallback comes from ARC-38.
+  - **Verify:** the check fails on a deliberately unbaked asset and on a
+    dangling reference; `nix build` stays green; manual blank-icon recovery.
+  - **Now:** the bake covers attribute and CSS fills/strokes, `stop-color`
+    gradients and `currentColor`, and leaks the root `fill="none"` case into
+    white. `scripts/check-icons.sh` enforces the three rules (white ink,
+    resolving `qrc:/app/icons/*` references — QML and JS — and
+    referenced-or-brand) with brand-listed multicolor assets; unreferenced
+    spares warn by default and fail under `--strict`; wired into `flake.nix`
+    `preBuild`. Both failure modes probed (unbaked asset, dangling reference).
+    Untracked spare assets are outside the git source, so the package build
+    sees only referenced/brand assets; prune or brand-list them if committed.
+    The runtime fallback is ARC-38's `Icon.fallbackText`.
 
 - [ ] **CACHE-1 · DB4 `media.db` + `media/` blobs** — P2 · (roadmap Media cache; MEDIACACHESTUDY.md §3/§5)
   - **Why:** audio is never stored; playback dies without network. Research
@@ -1857,10 +1958,10 @@ Kept for rationale; the tree already carries these.
 | Bucket | Open | Solved |
 |--------|------|--------|
 | Must have | 8 | 1 |
-| Should have | 60 | 5 |
+| Should have | 60 | 9 |
 | Quick wins | 9 | 46 |
 | Solved (reference) | — | 36 |
-| **Total** | **76** | **88** |
+| **Total** | **76** | **92** |
 
 ### Coverage by area
 
@@ -1873,7 +1974,7 @@ Kept for rationale; the tree already carries these.
 | Search | 2 | 6 |
 | UI microdesigns | 18 | 30 |
 | Dynamic color | 1 | 5 |
-| Architecture & robustness | 22 | 15 |
+| Architecture & robustness | 22 | 19 |
 | Media cache / offline | 7 | 0 |
 | Auth / startup | 0 | 2 |
 | Docs & process | 0 | 2 |

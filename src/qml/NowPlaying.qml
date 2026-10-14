@@ -788,79 +788,107 @@ Rectangle {
                             color: root.pane === 2 ? Palette.primary : Palette.outlineVariant
                         }
 
-                        ListView {
-                            id: queueList
+                        Item {
                             Layout.fillWidth: true
                             Layout.fillHeight: true
-                            clip: true
-                            model: queueItems
-                            boundsBehavior: Flickable.StopAtBounds
-                            visible: queueItems.count > 0
 
-                            Behavior on opacity {
-                                NumberAnimation {
-                                    duration: Theme.motion.quick
-                                    easing.type: Easing.Bezier
-                                    easing.bezierCurve: Theme.ease.standard
-                                }
-                            }
+                            // UI-48: the overflow stage is wider than the list
+                            // and carries the clip, so the highlight block can
+                            // truly bleed past the row; rows still clip
+                            // vertically at the list bounds.
+                            Item {
+                                id: queueOverflow
+                                property real bleed: (parent ? parent.width : 0) * 0.012
 
-                            delegate: Rectangle {
-                                id: row
-                                required property int index
-                                required property string title
-                                required property string duration
+                                x: -bleed
+                                width: parent.width + 2 * bleed
+                                height: parent.height
+                                clip: true
 
-                                readonly property bool emphasized: index === root.queueCursor || rowHover.hovered
+                                ListView {
+                                    id: queueList
+                                    anchors.fill: parent
+                                    anchors.leftMargin: queueOverflow.bleed
+                                    anchors.rightMargin: queueOverflow.bleed
+                                    clip: false
+                                    model: queueItems
+                                    boundsBehavior: Flickable.StopAtBounds
+                                    visible: queueItems.count > 0
 
-                                width: queueList.width
-                                height: queueList.height * 0.16
-                                color: index === root.queueCursor ? Palette.secondaryContainer : (index === root.queueIndex ? Palette.surfaceContainer : "transparent")
-
-                                FadeText {
-                                    id: titleText
-                                    anchors.left: parent.left
-                                    anchors.leftMargin: queueList.width * 0.01
-                                    anchors.right: durationLabel.left
-                                    anchors.rightMargin: queueList.width * 0.01
-                                    anchors.verticalCenter: parent.verticalCenter
-                                    text: row.title
-                                    color: index === root.queueCursor ? Palette.onSecondaryContainer : Palette.onSurface
-                                    font.pixelSize: Theme.fontSize("body", root.height)
-                                    elide: Text.ElideRight
-                                    animated: false
-                                    transformOrigin: Item.Left
-                                    // UI-45: the cursor/hover row leads, capped to its box.
-                                    scale: (row.emphasized && !Theme.reduceMotion) ? Theme.fitScale(titleText.width, titleText.paintedWidth, Theme.selectionEmphasis) : 1.0
-
-                                    Behavior on scale {
+                                    Behavior on opacity {
                                         NumberAnimation {
                                             duration: Theme.motion.quick
                                             easing.type: Easing.Bezier
                                             easing.bezierCurve: Theme.ease.standard
                                         }
                                     }
-                                }
 
-                                FadeText {
-                                    id: durationLabel
-                                    anchors.right: parent.right
-                                    anchors.verticalCenter: parent.verticalCenter
-                                    text: row.duration
-                                    color: Palette.onSurfaceVariant
-                                    font.pixelSize: Theme.fontSize("mono", root.height)
-                                    animated: false
-                                }
+                                    delegate: Rectangle {
+                                        id: row
+                                        required property int index
+                                        required property string title
+                                        required property string duration
 
-                                HoverHandler {
-                                    id: rowHover
-                                    cursorShape: Qt.PointingHandCursor
-                                }
+                                        readonly property bool emphasized: index === root.queueCursor || rowHover.hovered
 
-                                TapHandler {
-                                    onTapped: {
-                                        root.queueCursor = row.index;
-                                        Backend.queueJump(row.index);
+                                        width: queueList.width
+                                        height: queueList.height * 0.16
+                                        // Playing-track tint stays on the row; the
+                                        // cursor/hover block is the shared UI-48 layer.
+                                        color: index === root.queueIndex ? Palette.surfaceContainer : "transparent"
+
+                                        RowHighlight {
+                                            current: index === root.queueCursor
+                                            hovered: rowHover.hovered
+                                            overflow: queueOverflow.bleed
+                                        }
+
+                                        FadeText {
+                                            id: titleText
+                                            anchors.left: parent.left
+                                            anchors.leftMargin: queueList.width * 0.01
+                                            anchors.right: durationLabel.left
+                                            anchors.rightMargin: queueList.width * 0.01
+                                            anchors.verticalCenter: parent.verticalCenter
+                                            text: row.title
+                                            color: index === root.queueCursor ? Palette.onSecondaryContainer : Palette.onSurface
+                                            font.pixelSize: Theme.fontSize("body", root.height)
+                                            elide: Text.ElideRight
+                                            animated: false
+                                            transformOrigin: Item.Left
+                                            // UI-45: the cursor/hover row leads, capped to its box.
+                                            scale: (row.emphasized && !Theme.reduceMotion) ? Theme.fitScale(titleText.width, titleText.paintedWidth, Theme.selectionEmphasis) : 1.0
+
+                                            Behavior on scale {
+                                                NumberAnimation {
+                                                    duration: Theme.motion.quick
+                                                    easing.type: Easing.Bezier
+                                                    easing.bezierCurve: Theme.ease.standard
+                                                }
+                                            }
+                                        }
+
+                                        FadeText {
+                                            id: durationLabel
+                                            anchors.right: parent.right
+                                            anchors.verticalCenter: parent.verticalCenter
+                                            text: row.duration
+                                            color: Palette.onSurfaceVariant
+                                            font.pixelSize: Theme.fontSize("mono", root.height)
+                                            animated: false
+                                        }
+
+                                        HoverHandler {
+                                            id: rowHover
+                                            cursorShape: Qt.PointingHandCursor
+                                        }
+
+                                        TapHandler {
+                                            onTapped: {
+                                                root.queueCursor = row.index;
+                                                Backend.queueJump(row.index);
+                                            }
+                                        }
                                     }
                                 }
                             }

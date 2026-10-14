@@ -31,6 +31,7 @@ MediaList {
     orderText: Backend.artistOrder
 
     function reload() {
+        root.loading = true;
         Backend.requestArtists();
     }
 
@@ -51,6 +52,7 @@ MediaList {
             });
         }
         root.setRows(rows);
+        root.loading = false;
     }
 
     onActivated: (item) => root.artistActivated(item.artistId, item.artistName, item.artistCover)

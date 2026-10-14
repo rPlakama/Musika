@@ -171,7 +171,7 @@ browsing never paints a palette.
 | Movement | `h j k l`, `g g` top, `G` bottom |
 | Navigate | `Ctrl-W` scope overlay, `Enter`, `Esc`/`q`/`Ctrl-[` back |
 | Playback | `Space` play/pause, `n`/`p` or `Ctrl-N`/`Ctrl-P` next/prev, `,`/`.` seek ±5 s, `m` mute, `-`/`+` volume |
-| Library | `Shift-H`/`Shift-L` list order (Artist → Name → Year): albums, or songs in the Songs segment |
+| Library | `r` sync now, `Shift-H`/`Shift-L` list order (Artist → Name → Year): albums, or songs in the Songs segment |
 | Clipboard | `y` yank the playing track, `Shift-P`/`Ctrl-V` paste into search |
 | Queue | `Ctrl-Q` drawer, `Shift-J`/`Shift-K` or `Alt-J`/`Alt-K` reorder, `d d` remove, `Enter` jump |
 | Search | `Shift Space F` floating search, or `i` to start typing (Songs | Albums | Artists) |

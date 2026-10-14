@@ -28,6 +28,7 @@ MediaList {
     orderText: Backend.songOrder
 
     function reload() {
+        root.loading = true;
         Backend.requestSongs();
     }
 
@@ -47,6 +48,7 @@ MediaList {
             });
         }
         root.setRows(rows);
+        root.loading = false;
     }
 
     onActivated: (item) => Backend.playSong(item.songId)

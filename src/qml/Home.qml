@@ -41,7 +41,11 @@ Item {
 
     readonly property real barH: height * Theme.topBarRatio
     readonly property real playH: height * Theme.playerRatio
-    readonly property real sideW: width * Theme.sidebarRatio
+    // UI-32 R2: below `narrow` the sidebar is an icon strip.
+    readonly property bool narrow: Theme.isNarrow(width)
+    readonly property real sideW: narrow
+        ? Math.max(40, width * 0.08)
+        : width * Theme.sidebarRatio
     readonly property real bodyH: height - barH - playH
 
     // View transitions (motion §3.1): fade in with decelerate, fade out with
@@ -272,6 +276,12 @@ Item {
             Backend.playerSeek(Backend.position + 5);
             return;
         }
+        // Library sync is global too (`r`): the sync button stays clickable,
+        // but the keyboard never has to reach the status bar to refresh.
+        if (action === "refresh") {
+            Backend.syncLibrary();
+            return;
+        }
 
         if (action === "back") {
             // Fullscreen is the topmost context: back leaves it first.
@@ -366,6 +376,7 @@ Item {
                 id: sideBar
                 Layout.preferredWidth: root.sideW
                 Layout.fillHeight: true
+                narrow: root.narrow
 
                 onSegmentActivated: (index) => root.showSegment(index)
             }

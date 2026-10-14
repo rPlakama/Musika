@@ -24,7 +24,7 @@ ApplicationWindow {
     visible: true
     width: Screen.width * 0.68
     height: Screen.height * 0.72
-    minimumWidth: Screen.width * 0.4
+    minimumWidth: 0
     minimumHeight: Screen.height * 0.4
     color: Palette.background
     title: qsTr("Musika")

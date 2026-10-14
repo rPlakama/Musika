@@ -86,6 +86,14 @@ var playerRatio = 0.0828
 // 1px-ish hairlines, but proportional so they survive scaling.
 var hairlineRatio = 0.0018
 
+// Responsive breakpoints (logical px, UI-32): one shared vocabulary instead of
+// ad-hoc width checks. Clamps here are sanctioned like `fontSize`.
+var breakpoints = { mini: 420, narrow: 640, compact: 900 }
+
+function isNarrow(width) {
+    return width < breakpoints.narrow
+}
+
 // ---------------------------------------------------------------------------
 // Surfaces (R1): hierarchy is tonal, never shadows.
 // ---------------------------------------------------------------------------

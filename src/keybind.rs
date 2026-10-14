@@ -50,6 +50,7 @@ pub enum Action {
     PrevTrack,
     SeekBack,
     SeekForward,
+    Refresh,
     PaneCycle,
     Yank,
     Paste,
@@ -84,6 +85,7 @@ impl Action {
             Self::PrevTrack => "prev_track",
             Self::SeekBack => "seek_back",
             Self::SeekForward => "seek_forward",
+            Self::Refresh => "refresh",
             Self::PaneCycle => "pane_cycle",
             Self::Yank => "yank",
             Self::Paste => "paste",
@@ -121,6 +123,7 @@ pub enum Outcome {
 /// - `Space` is play/pause globally; `Shift-Enter` toggles fullscreen.
 /// - `,`/`.` seek back/forward 5 s globally (the transport is decoration:
 ///   it never owns a focus region, so seek cannot live inside it).
+/// - `r` refreshes the library (the same action as the sync button).
 fn defaults() -> Vec<(&'static str, Action)> {
     vec![
         ("ctrl-n", Action::NextTrack),
@@ -129,6 +132,7 @@ fn defaults() -> Vec<(&'static str, Action)> {
         ("m", Action::Mute),
         (",", Action::SeekBack),
         (".", Action::SeekForward),
+        ("r", Action::Refresh),
         ("-", Action::VolumeDown),
         ("=", Action::VolumeUp),
         ("shift-=", Action::VolumeUp),
@@ -440,6 +444,13 @@ mod tests {
         assert_eq!(keymap.feed("."), Outcome::Action(Action::SeekForward));
         assert_eq!(token_from_qt(0x2C, 0).as_deref(), Some(","));
         assert_eq!(token_from_qt(0x2E, 0).as_deref(), Some("."));
+    }
+
+    #[test]
+    fn refresh_key_syncs_the_library() {
+        let mut keymap = Keymap::new();
+        assert_eq!(keymap.feed("r"), Outcome::Action(Action::Refresh));
+        assert_eq!(token_from_qt(0x52, 0).as_deref(), Some("r"));
     }
 
     #[test]

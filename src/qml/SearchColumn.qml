@@ -34,8 +34,9 @@ Item {
     signal picked(int index)
 
     // UI-48: the highlight block overflows the row bounds by this much on both
-    // sides, filling the column gutters. The list clips it at the column edge,
-    // so it reads as a full-bleed block and never crosses the UI-47 divider.
+    // sides, filling the column gutters. The overflow stage below clips it at
+    // the gutter edge, so it reads as a full-bleed block and never crosses the
+    // UI-47 divider.
     readonly property real overflow: width * 0.012
 
     // UI-41: ease the view to the cursor instead of teleporting.
@@ -102,150 +103,145 @@ Item {
             width: parent.width
             height: root.listH
 
-            ListView {
-                id: list
-                anchors.fill: parent
+            // UI-48: the highlight clips at the gutter edge, not the list
+            // edge. This overflow stage is wider than the column and carries
+            // the clip, so the block truly bleeds past the row while
+            // scrolling rows still clip vertically at the list bounds.
+            Item {
+                x: -root.overflow
+                width: parent.width + 2 * root.overflow
+                height: parent.height
                 clip: true
-                model: root.model
-                currentIndex: root.cursor
-                boundsBehavior: Flickable.StopAtBounds
 
-                onCurrentIndexChanged: {
-                    if (currentIndex >= 0)
-                        scroll.ensureVisible(list, currentIndex);
-                }
+                ListView {
+                    id: list
+                    anchors.fill: parent
+                    anchors.leftMargin: root.overflow
+                    anchors.rightMargin: root.overflow
+                    clip: false
+                    model: root.model
+                    currentIndex: root.cursor
+                    boundsBehavior: Flickable.StopAtBounds
 
-                delegate: Rectangle {
-                    id: row
-                    required property int index
-                    required property string title
-                    required property string subtitle
-                    required property string meta
-                    required property string cover
+                    onCurrentIndexChanged: {
+                        if (currentIndex >= 0)
+                            scroll.ensureVisible(list, currentIndex);
+                    }
 
-                    readonly property bool current: index === root.cursor
-                    // UI-45: the focused cursor or any hovered row leads.
-                    readonly property bool emphasized: (row.current && root.active) || rowHover.hovered
+                    delegate: Rectangle {
+                        id: row
+                        required property int index
+                        required property string title
+                        required property string subtitle
+                        required property string meta
+                        required property string cover
 
-                    width: list.width
-                    height: root.rowH
-                    // The row is a layout container only (UI-48): the block
-                    // highlight lives in its own layer below, so it can
-                    // overflow the row without touching the content geometry.
-                    color: "transparent"
+                        readonly property bool current: index === root.cursor
+                        // UI-45: the focused cursor or any hovered row leads.
+                        readonly property bool emphasized: (row.current && root.active) || rowHover.hovered
 
-                    // Dedicated highlight layer over the row block, matching
-                    // the main lists: cursor fill + hover fill, full width.
-                    Rectangle {
-                        id: highlight
-                        anchors.left: parent.left
-                        anchors.right: parent.right
-                        anchors.top: parent.top
-                        anchors.bottom: parent.bottom
-                        anchors.leftMargin: -root.overflow
-                        anchors.rightMargin: -root.overflow
-                        color: row.current && root.active
-                            ? Palette.secondaryContainer
-                            : (rowHover.hovered ? Palette.surfaceContainerHigh : "transparent")
+                        width: list.width
+                        height: root.rowH
+                        // The row is a layout container only (UI-48): the block
+                        // highlight lives in its own layer below, so it can
+                        // overflow the row without touching the content geometry.
+                        color: "transparent"
 
-                        Behavior on color {
-                            ColorAnimation { duration: Theme.motion.quick; easing.type: Easing.Bezier; easing.bezierCurve: Theme.ease.standard }
+                        // Dedicated highlight layer over the row block, matching
+                        // the main lists and the fullscreen queue (shared
+                        // RowHighlight): cursor fill + hover fill, full width.
+                        RowHighlight {
+                            current: row.current
+                            active: root.active
+                            hovered: rowHover.hovered
+                            overflow: root.overflow
                         }
 
-                        // Inactive-column cue: a dim accent tick on the block.
                         Rectangle {
-                            visible: row.current && !root.active
+                            id: thumb
                             anchors.left: parent.left
-                            anchors.top: parent.top
-                            anchors.bottom: parent.bottom
-                            width: Math.max(2, row.height * 0.025)
-                            color: Palette.primary
-                            opacity: 0.35
-                        }
-                    }
-
-                    Rectangle {
-                        id: thumb
-                        anchors.left: parent.left
-                        anchors.verticalCenter: parent.verticalCenter
-                        width: row.height * 0.72
-                        height: row.height * 0.72
-                        radius: root.roundedArt ? width * 0.5 : Theme.radius
-                        color: Palette.surfaceContainerHighest
-                        clip: true
-                        // UI-45: the art grows with the emphasized row (same
-                        // animation as the title, transform only).
-                        scale: (row.emphasized && !Theme.reduceMotion) ? Theme.selectionEmphasis : 1.0
-
-                        Behavior on scale {
-                            NumberAnimation { duration: Theme.motion.quick; easing.type: Easing.Bezier; easing.bezierCurve: Theme.ease.standard }
-                        }
-
-                        CoverImage {
-                            anchors.fill: parent
-                            source: row.cover
-                        }
-                    }
-
-                    // Two-line cell: title over a muted subtitle, never one
-                    // string in one colour.
-                    Column {
-                        anchors.left: thumb.right
-                        anchors.leftMargin: row.height * 0.18
-                        anchors.right: metaLabel.left
-                        anchors.rightMargin: row.height * 0.18
-                        anchors.verticalCenter: parent.verticalCenter
-                        spacing: row.height * 0.04
-
-                        FadeText {
-                            id: titleText
-                            width: parent.width
-                            text: row.title
-                            color: row.current && root.active ? Palette.onSecondaryContainer : Palette.onSurface
-                            font.pixelSize: Theme.clamp(row.height * 0.3, 12, 18)
-                            elide: Text.ElideRight
-                            animated: false
-                            transformOrigin: Item.Left
-                            scale: (row.emphasized && !Theme.reduceMotion)
-                                ? Theme.fitScale(titleText.width, titleText.paintedWidth, Theme.selectionEmphasis)
-                                : 1.0
+                            anchors.verticalCenter: parent.verticalCenter
+                            width: row.height * 0.72
+                            height: row.height * 0.72
+                            radius: root.roundedArt ? width * 0.5 : Theme.radius
+                            color: Palette.surfaceContainerHighest
+                            clip: true
+                            // UI-45: the art grows with the emphasized row (same
+                            // animation as the title, transform only).
+                            scale: (row.emphasized && !Theme.reduceMotion) ? Theme.selectionEmphasis : 1.0
 
                             Behavior on scale {
                                 NumberAnimation { duration: Theme.motion.quick; easing.type: Easing.Bezier; easing.bezierCurve: Theme.ease.standard }
                             }
+
+                            CoverImage {
+                                anchors.fill: parent
+                                source: row.cover
+                                // ARC-40: ×2 headroom for the UI-45 hover scale.
+                                sizeFactor: 2
+                            }
+                        }
+
+                        // Two-line cell: title over a muted subtitle, never one
+                        // string in one colour.
+                        Column {
+                            anchors.left: thumb.right
+                            anchors.leftMargin: row.height * 0.18
+                            anchors.right: metaLabel.left
+                            anchors.rightMargin: row.height * 0.18
+                            anchors.verticalCenter: parent.verticalCenter
+                            spacing: row.height * 0.04
+
+                            FadeText {
+                                id: titleText
+                                width: parent.width
+                                text: row.title
+                                color: row.current && root.active ? Palette.onSecondaryContainer : Palette.onSurface
+                                font.pixelSize: Theme.clamp(row.height * 0.3, 12, 18)
+                                elide: Text.ElideRight
+                                animated: false
+                                transformOrigin: Item.Left
+                                scale: (row.emphasized && !Theme.reduceMotion)
+                                    ? Theme.fitScale(titleText.width, titleText.paintedWidth, Theme.selectionEmphasis)
+                                    : 1.0
+
+                                Behavior on scale {
+                                    NumberAnimation { duration: Theme.motion.quick; easing.type: Easing.Bezier; easing.bezierCurve: Theme.ease.standard }
+                                }
+                            }
+
+                            FadeText {
+                                width: parent.width
+                                visible: row.subtitle.length > 0
+                                text: row.subtitle
+                                color: row.current && root.active ? Palette.onSecondaryContainer : Palette.onSurfaceVariant
+                                font.pixelSize: Theme.clamp(row.height * 0.24, 10, 14)
+                                elide: Text.ElideRight
+                                animated: false
+                            }
                         }
 
                         FadeText {
-                            width: parent.width
-                            visible: row.subtitle.length > 0
-                            text: row.subtitle
+                            id: metaLabel
+                            anchors.right: parent.right
+                            anchors.rightMargin: row.height * 0.18
+                            anchors.verticalCenter: parent.verticalCenter
+                            text: row.meta
                             color: row.current && root.active ? Palette.onSecondaryContainer : Palette.onSurfaceVariant
-                            font.pixelSize: Theme.clamp(row.height * 0.24, 10, 14)
-                            elide: Text.ElideRight
+                            font.pixelSize: Theme.clamp(row.height * 0.26, 10, 14)
                             animated: false
                         }
-                    }
 
-                    FadeText {
-                        id: metaLabel
-                        anchors.right: parent.right
-                        anchors.rightMargin: row.height * 0.18
-                        anchors.verticalCenter: parent.verticalCenter
-                        text: row.meta
-                        color: row.current && root.active ? Palette.onSecondaryContainer : Palette.onSurfaceVariant
-                        font.pixelSize: Theme.clamp(row.height * 0.26, 10, 14)
-                        animated: false
-                    }
+                        // Hover only signals clickability (S-5); the cursor moves
+                        // on click or keys, never on hover.
+                        HoverHandler {
+                            id: rowHover
+                            cursorShape: Qt.PointingHandCursor
+                        }
 
-                    // Hover only signals clickability (S-5); the cursor moves
-                    // on click or keys, never on hover.
-                    HoverHandler {
-                        id: rowHover
-                        cursorShape: Qt.PointingHandCursor
-                    }
-
-                    TapHandler {
-                        onTapped: root.picked(row.index)
+                        TapHandler {
+                            onTapped: root.picked(row.index)
+                        }
                     }
                 }
             }
@@ -258,26 +254,10 @@ Item {
                 font.pixelSize: root.height * 0.055
             }
 
-            // Skeleton while the request is in flight.
-            Column {
+            // Skeleton while the request is in flight (shared UI-22 pattern).
+            SkeletonList {
                 anchors.fill: parent
-                anchors.margins: root.height * 0.03
-                spacing: root.height * 0.025
                 visible: root.loading && root.model && root.model.count === 0
-
-                Repeater {
-                    model: 4
-
-                    delegate: Rectangle {
-                        required property int index
-
-                        width: parent.width * (1 - index * 0.12)
-                        height: root.height * 0.075
-                        radius: Theme.radius
-                        color: Palette.surfaceContainer
-                        opacity: 0.6
-                    }
-                }
             }
         }
     }

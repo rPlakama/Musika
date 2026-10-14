@@ -41,13 +41,15 @@ Rectangle {
     property string albumNotes: ""
     // UI-14: album notes clamp to three lines until clicked.
     property bool notesExpanded: false
+    // UI-22: true while the album's songs are in flight.
+    property bool loading: false
 
     // Header geometry (roadmap "Album page cover" D-3): the hero cover is
     // sized from the pane height, beside the description when there is room
     // and stacked over it on narrow panes.
     readonly property real headerHeight: Math.min(height * 0.44, 512 + height * 0.02)
     readonly property real coverSide: Math.max(160, Math.min(height * 0.42, 512))
-    readonly property bool sideBySide: width >= 900
+    readonly property bool sideBySide: width >= Theme.breakpoints.compact
 
     color: Palette.surface
 
@@ -63,6 +65,7 @@ Rectangle {
     function reload() {
         if (root.albumId === "")
             return;
+        root.loading = true;
         Backend.requestAlbumSongs(root.albumId);
         Backend.requestAlbumInfo(root.albumId);
     }
@@ -83,6 +86,7 @@ Rectangle {
                 duration: Theme.formatTime(song.duration)
             });
         }
+        root.loading = false;
     }
 
     Component.onCompleted: reload()
@@ -291,6 +295,7 @@ Rectangle {
             Layout.fillHeight: true
             clip: true
             model: songs
+            visible: !(root.loading && songs.count === 0)
             boundsBehavior: Flickable.StopAtBounds
 
             delegate: Rectangle {
@@ -356,6 +361,24 @@ Rectangle {
                     }
                 }
             }
+        }
+
+        // UI-22: the songs area has a wait state and a real empty-album state.
+        SkeletonList {
+            Layout.fillWidth: true
+            Layout.fillHeight: true
+            visible: root.loading && songs.count === 0
+        }
+
+        FadeText {
+            Layout.fillWidth: true
+            Layout.fillHeight: true
+            visible: !root.loading && songs.count === 0
+            text: "No songs in this album"
+            color: Palette.onSurfaceVariant
+            font.pixelSize: Theme.fontSize("body", root.height)
+            horizontalAlignment: Text.AlignHCenter
+            verticalAlignment: Text.AlignVCenter
         }
     }
 }

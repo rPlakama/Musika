@@ -20,20 +20,25 @@ import musika
 import "Theme.js" as Theme
 
 // Left sidebar: the library segments. `selected` is this region's cursor and is
-// only moved while the sidebar is the active region.
+// only moved while the sidebar is the active region. Below the narrow
+// breakpoint it collapses to an icon strip (UI-32 R2): same segments, same
+// cursor, labels and stats out of the way.
 Rectangle {
     id: root
 
     signal segmentActivated(int index)
 
+    /// Icon-only strip (set by Home from the window width).
+    property bool narrow: false
+
     property int selected: 0
     // UI-6: Playlists/Radio are placeholders — visibly disabled, not fake-active.
     readonly property var segments: [
-        { label: "Albums", enabled: true },
-        { label: "Songs", enabled: true },
-        { label: "Artists", enabled: true },
-        { label: "Playlists", enabled: false },
-        { label: "Radio", enabled: false }
+        { label: "Albums", enabled: true, icon: "qrc:/app/icons/album.svg" },
+        { label: "Songs", enabled: true, icon: "qrc:/app/icons/track-svgrepo-com.svg" },
+        { label: "Artists", enabled: true, icon: "qrc:/app/icons/person-walking-svgrepo-com.svg" },
+        { label: "Playlists", enabled: false, icon: "qrc:/app/icons/playlist-svgrepo-com.svg" },
+        { label: "Radio", enabled: false, icon: "qrc:/app/icons/radio-signal-1026-svgrepo-com.svg" }
     ]
 
     color: Palette.surfaceContainerLow
@@ -82,7 +87,7 @@ Rectangle {
         anchors.top: brand.bottom
         anchors.left: parent.left
         anchors.right: parent.right
-        anchors.margins: root.width * 0.07
+        anchors.margins: root.narrow ? root.width * 0.14 : root.width * 0.07
         spacing: root.height * 0.004
 
         Repeater {
@@ -126,12 +131,25 @@ Rectangle {
                     anchors.verticalCenter: parent.verticalCenter
                     anchors.left: parent.left
                     anchors.leftMargin: root.width * 0.1
+                    visible: !root.narrow
                     text: segment.modelData.label
                     color: !segment.usable
                         ? Theme.stateDisabledContent
                         : (segment.index === root.selected ? Palette.onSecondaryContainer : Palette.onSurfaceVariant)
                     font.pixelSize: root.height * 0.022
                     font.bold: segment.usable && segment.index === root.selected
+                }
+
+                // UI-32 R2: the label becomes an icon in the narrow strip.
+                SymbolIcon {
+                    anchors.centerIn: parent
+                    visible: root.narrow
+                    width: Math.min(root.width * 0.5, segment.height * 0.5)
+                    height: width
+                    source: segment.modelData.icon
+                    symbolColor: !segment.usable
+                        ? Theme.stateDisabledContent
+                        : (segment.index === root.selected ? Palette.onSecondaryContainer : Palette.onSurfaceVariant)
                 }
 
                 HoverHandler {
@@ -152,12 +170,14 @@ Rectangle {
     }
 
     // Library quantity statistics (the sync action lives in the top bar).
+    // Hidden in the narrow strip: no room for labels + values.
     ColumnLayout {
         anchors.left: parent.left
         anchors.right: parent.right
         anchors.bottom: parent.bottom
         anchors.margins: root.width * 0.1
         spacing: root.height * 0.012
+        visible: !root.narrow
 
         Rectangle {
             Layout.fillWidth: true

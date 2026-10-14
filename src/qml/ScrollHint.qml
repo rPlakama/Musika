@@ -55,7 +55,7 @@ Item {
         height: root.thumbHeight
         y: root.scrollable ? root.view.visibleArea.yPosition * root.height : 0
         radius: width * 0.5
-        color: root.emphasized ? Palette.onSurfaceVariant : Palette.outlineVariant
+        color: root.emphasized ? Palette.iconStrong : Palette.onSurface
 
         Behavior on color {
             ColorAnimation {

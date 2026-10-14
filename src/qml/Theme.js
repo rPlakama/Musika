@@ -56,6 +56,12 @@ var motion = {
 // a user setting later; functional motion (progress, seek) never honours it.
 var reduceMotion = false
 
+// LYR-8: a manual scroll pauses the lyrics centre-follow for this idle window
+// before the active phrase re-centres; the wait shortens while the pane is
+// not the focused/highlighted section.
+var lyricsResume = 5000
+var lyricsResumeUnfocused = 2000
+
 var ease = {
     standard: [0.2, 0, 0, 1],
     decelerate: [0.05, 0.7, 0.1, 1],
@@ -140,6 +146,21 @@ var outlineVariant = "#49454F"
 // ---------------------------------------------------------------------------
 var scrim = "#000000"
 var scrimOpacity = 0.5
+
+// ---------------------------------------------------------------------------
+// UI-55: Acrylic panels (MS Fluent recipe; the R1/R2 depth amendment). A
+// translucent tint over a blurred, desaturated copy of what sits behind the
+// panel. `enabled: false` restores the solid role fill for accessibility and
+// low-end hardware (the MS fallback list).
+// ---------------------------------------------------------------------------
+var acrylic = {
+    enabled: true,
+    tintAlpha: 0.76,  // tint opacity over the blur
+    blur: 0.8,        // MultiEffect blur amount
+    blurMax: 64,      // blur kernel ceiling
+    saturation: 0.6,  // niri-like desaturation (1.6x)
+    downscale: 0.5    // backdrop texture fraction (the blur hides it)
+}
 
 // Fixed glyphs: play/pause stays white on every surface and every seeded
 // palette (UI-31); it is the one glyph that never follows the theme roles.

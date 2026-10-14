@@ -542,6 +542,8 @@ Item {
     QueueDrawer {
         id: queueDrawer
         anchors.fill: parent
+        // UI-55: acrylic blurs the shell behind the drawer.
+        backdrop: shell
     }
 
     Connections {

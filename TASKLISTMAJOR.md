@@ -693,7 +693,8 @@ The product is incomplete without these.
     - distance-aware duration — `clamp(px / ~2.5, 80, 240)` ms with
       `ease.decelerate`, retarget a running animation instead of restarting;
     - follow guard: pause while `dragging`/`movementState` is non-stop, resume
-      on selection/track change or after idle (lyrics ~4 s);
+      on selection/track change or after idle (lyrics: 5 s, dropping to 2 s
+      while the pane is unfocused — LYR-8);
     - instant `positionViewAtIndex` only for far jumps (`gg`/`G`);
     - `boundsBehavior: DragOverBounds` + `reuseItems`/`cacheBuffer: height` so
       delegates don't pop in blank; no effects during movement;
@@ -713,6 +714,75 @@ The product is incomplete without these.
   - **Verify:** frame graph (`QSG_RENDER_TIMING=1`) smooth for 1-row, 5-row
     and 20-row moves; wheel mid-follow doesn't stutter; long titles don't
     clip while expanding; `reduceMotion` flat.
+
+- [ ] **UI-55 · Design task — Acrylic panels: substitute the solid surfaces** — P2 · (MS Fluent Acrylic; R1/R2 amendment)
+  - **Why:** every chrome surface paints an opaque role fill — `SuperiorBar:30`
+    and `SideBar:44` (`surfaceContainerLow`), `InferiorBar:26`
+    (`surfaceContainer`), `QueueDrawer:147` (`surfaceContainerHigh`),
+    `SearchOverlay:351` (`surface`) and `Toast:38`
+    (`errorContainer`/`tertiaryContainer`) — because R1/R2 reserve depth for
+    the tonal ladder and allow blur only for the modal scrim. Microsoft's
+    acrylic material (learn.microsoft.com/pt-br/windows/apps/design/style/acrylic)
+    is the researched answer to that gap: translucency + blur + noise + tint
+    gives surfaces depth without shadows, and it is the solid-panel
+    substitution this task schedules.
+  - **Details:**
+    - **MS recipe:** translucency, blur and noise build the physical texture;
+      an exclusion/blend layer guarantees UI contrast on top; a colour tint
+      carries personalisation. Two blend types: *background acrylic* reveals
+      the desktop/windows behind the app (transient surfaces: context menus,
+      light-dismiss popups); *in-app acrylic* adds depth inside the frame
+      (supporting UI that content scrolls under).
+    - **MS rules:** never layer acrylic surfaces; never place two acrylic
+      panes edge-to-edge (visible seam); no background acrylic on large
+      background surfaces; no accent-coloured text or hyperlinks over acrylic
+      (14 px body must keep its contrast ratio); vertical section-separating
+      panes get an opaque fill. GPU-heavy — MS disables it in battery saver.
+    - **MS fallbacks to solid:** transparency effects off, battery saver,
+      low-cost hardware, high-contrast mode; background acrylic also goes
+      solid on inactive windows and Xbox/HoloLens/tablet.
+    - **Qt mapping (no native acrylic brush):** a shared `AcrylicPanel.qml`
+      = `ShaderEffectSource` (`live: true`, `sourceRect` mapped to the panel)
+      → `MultiEffect` (`blurEnabled`, `blur` ≈ 0.5–1.0, `blurMax` 48–64,
+      `saturation` 0.6 — the existing niri-like pass, `Home.qml:362`) →
+      translucent tint (`Palette.surfaceContainer*` at ~0.72–0.8 alpha) →
+      tiled noise (`noise 0.03`; `Home.qml:359` already notes MultiEffect has
+      no grain — a fragment-shader hash or a small PNG fixes it).
+    - **No new dependency:** MultiEffect/ShaderEffectSource ship with the Qt
+      already in-tree (`Home.qml`, `CoverImage.qml:56`); crop `sourceRect` to
+      the panel and downscale `textureSize` to keep the pass cheap.
+      Compositor blur (KWin blur-behind, `org_kde_kwin_blur_manager`,
+      `ext-background-effect-v1`) is compositor-specific — niri/GNOME would
+      not honour it, so it stays out of the critical path.
+    - **Fallback token:** `Theme.acrylic` (tint alpha, blur, noise, `enabled`)
+      mirroring `scrimOpacity`; `enabled: false` renders today's solid fill,
+      so the accessibility and low-end paths are a one-flip change.
+  - **Plan:**
+    1. transient surfaces first, where MS wants background acrylic:
+       `QueueDrawer` and `SearchOverlay` panels, then `Toast`;
+    2. supporting chrome context: `SuperiorBar`/`InferiorBar` as in-app
+       acrylic with content extending under; `SideBar` is a
+       section-separating vertical pane, so it keeps the opaque fill unless
+       it overlays content (narrow/compact modes) — MS's own rule;
+    3. never stack the search overlay's shell-wide blur (`Home.qml:361`)
+       with a panel acrylic — pick one per state;
+    4. contrast pass (body text over the worst-case cover) and the
+       `Theme.acrylic.enabled: false` solid path before wiring the next
+       panel.
+  - **Verify:** Wayland desktop pass (blur reads under each panel, no seam at
+    bar/sidebar/drawer junctions, 14 px text keeps its ratio over artwork),
+    fallback flips every panel back to solid, `QSG_RENDER_TIMING=1` frame
+    cost while scrolling under a panel, qmllint clean.
+  - **Now (partial):** the base slice landed — `Theme.acrylic`
+    (`enabled`/`tintAlpha`/`blur`/`blurMax`/`saturation`/`downscale`; the
+    solid role fill is the disabled/no-backdrop path) and the shared
+    `AcrylicPanel.qml` (a `ShaderEffectSource` of `backdrop` mapped to the
+    panel rect and downscaled, run through the existing MultiEffect recipe;
+    translucent tint above; border/radius/anchors passthrough). First
+    consumer: the `QueueDrawer` panel (`backdrop: shell` from Home). Noise/
+    grain (MultiEffect has no; TODO in the component), SearchOverlay/Toast
+    and the bar panels, and the desktop contrast pass are the next
+    increments.
 
 - [ ] **THM-6 · Rewrite the color engine on DMS's pipeline** — P2 · (MATUGENSTUDY.md; roadmap T5+)
   - **Why:** DMS cleanly separates seed extraction, palette specs, caching,
@@ -1295,22 +1365,28 @@ Small, bounded, high-value changes.
     change (NowPlaying.qml:171-172), which fights manual scrolling whenever
     the 500 ms `Backend.position` tick moves `activeLyric` under the user's
     hand.
-  - **Details:** animate `contentY` to the active delegate's centre
-    (`standard`/`decelerate`, `quick` for tiny moves); pause follow on
-    `onMovementStarted`, resume after ~4 s idle or on track change; top/bottom
+  - **Details:** the active phrase stays centred; animate `contentY` to the
+    active delegate's centre (`standard`/`decelerate`, `quick` for tiny moves);
+    pause follow on `onMovementStarted` and resume after 5 s idle or on track
+    change — the idle wait drops to 2 s whenever the lyrics pane is not the
+    focused/highlighted section (cursor elsewhere or no pane highlight), so
+    re-centring happens sooner when the user is not reading there; top/bottom
     gradients from `surfaceContainerLow` to transparent.
   - **Verify:** the active line glides into centre; manual scroll is not
-    yanked while playing; follow resumes after idle or on track change;
-    unsynced lyrics stay static; gradients only over the scrollable range;
-    `reduceMotion` keeps an instant `positionViewAtIndex`.
-  - **Now (partial):** the smooth follow landed with a stronger rule than the
-    original 4 s resume — `followLyric` animates `contentY` to the active
-    delegate's centre (`standard`/`quick`, `decelerate`; instant
-    `positionViewAtIndex` for unrealised rows and `reduceMotion`), j/k, drag
-    and wheel hold the pane (`_lyricsHeld`) and it stays held until the next
-    track, so the view can never be yanked down while the user reads or
-    scrolls back to the top. No bounce and no edge fades (dropped after the
-    first review pass); the fades remain the open part.
+    yanked while playing; follow resumes after 5 s idle (2 s with the lyrics
+    pane unfocused) or on track change; unsynced lyrics stay static;
+    gradients only over the scrollable range; `reduceMotion` keeps an instant
+    `positionViewAtIndex`.
+  - **Now (partial):** the smooth follow is complete in behaviour:
+    `followLyric` animates `contentY` to the active delegate's centre
+    (`standard`/`quick`, `decelerate`; instant `positionViewAtIndex` for
+    unrealised rows and `reduceMotion`); j/k, drag and wheel pause it
+    (`holdLyrics`), and a single-shot `lyricResume` timer re-centres the
+    active phrase after the idle window — `Theme.lyricsResume` 5 s while the
+    lyrics pane is focused, `Theme.lyricsResumeUnfocused` 2 s otherwise,
+    re-armed when pane focus moves and dropped on track change. Open: edge
+    fades (dropped after the first review pass) and a desktop pass for the
+    timer feel.
 
 - [ ] **S-9 · Empty-query search surface + usage boost** — P2 · (roadmap mixed design, "Empty state" + "Selection, scope and ordering")
   - **Why:** an empty query leaves three empty columns; Noctalia leads with
@@ -2251,10 +2327,10 @@ Kept for rationale; the tree already carries these.
 | Bucket | Open | Solved |
 |--------|------|--------|
 | Must have | 7 | 2 |
-| Should have | 60 | 12 |
+| Should have | 61 | 12 |
 | Quick wins | 4 | 54 |
 | Solved (reference) | — | 36 |
-| **Total** | **71** | **104** |
+| **Total** | **72** | **104** |
 
 ### Coverage by area
 
@@ -2265,7 +2341,7 @@ Kept for rationale; the tree already carries these.
 | Player & media features | 5 | 2 |
 | Lyrics pipeline | 2 | 7 |
 | Search | 2 | 6 |
-| UI microdesigns | 18 | 30 |
+| UI microdesigns | 19 | 30 |
 | Dynamic color | 1 | 5 |
 | Architecture & robustness | 23 | 19 |
 | Media cache / offline | 5 | 2 |

@@ -27,6 +27,8 @@ Item {
     property bool opened: false
     property int cursor: 0
     property int nowPlaying: -1
+    // UI-55: the item behind the drawer whose pixels feed the acrylic blur.
+    property Item backdrop: null
     // A reorder round-trip re-emits the queue; don't crossfade that one.
     property bool _reordering: false
     // UI-54: first queue payload after opening restores the saved highlight.
@@ -138,13 +140,14 @@ Item {
         }
     }
 
-    Rectangle {
+    AcrylicPanel {
         id: panel
         anchors.top: parent.top
         anchors.bottom: parent.bottom
         anchors.right: parent.right
         width: root.width * 0.36
-        color: Palette.surfaceContainerHigh
+        tint: Palette.surfaceContainerHigh
+        backdrop: root.backdrop
         border.color: Palette.outlineVariant
         border.width: Math.max(1, root.width * Theme.hairlineRatio)
         opacity: root.opened ? 1 : 0

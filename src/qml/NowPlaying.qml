@@ -51,9 +51,10 @@ Rectangle {
         id: queueScroll
     }
 
-    // The active lyric glides to the pane centre, but a manual scroll owns
-    // the pane until the next track: no idle resume, so the view is never
-    // yanked back while the user is reading.
+    // The active lyric glides to the pane centre; a manual scroll owns the
+    // pane only until `lyricResume` fires (LYR-8): 5 s idle while lyrics is
+    // the focused pane, 2 s when focus is elsewhere, so a stale line is never
+    // left un-centred for long.
     property bool _lyricsHeld: false
 
     NumberAnimation {
@@ -62,6 +63,16 @@ Rectangle {
         duration: Theme.motion.standard
         easing.type: Easing.Bezier
         easing.bezierCurve: Theme.ease.decelerate
+    }
+
+    // LYR-8: resume the centre-follow after the manual-scroll idle window.
+    Timer {
+        id: lyricResume
+        repeat: false
+        onTriggered: {
+            root._lyricsHeld = false;
+            root.followLyric();
+        }
     }
 
     // Lyrics (override → cache → server; see src/lyrics.rs).
@@ -111,6 +122,8 @@ Rectangle {
     function holdLyrics() {
         root._lyricsHeld = true;
         lyricFollow.stop();
+        lyricResume.interval = root.pane === 1 ? Theme.lyricsResume : Theme.lyricsResumeUnfocused;
+        lyricResume.restart();
     }
 
     function followLyric() {
@@ -210,6 +223,7 @@ Rectangle {
         lyricsAvailable = lyricModel.count > 0 && data.source !== "none";
 
         lyricFollow.stop();
+        lyricResume.stop();
         lyricsView.contentY = 0;
         root._lyricsHeld = false;
         Qt.callLater(function () {
@@ -229,6 +243,9 @@ Rectangle {
     }
 
     onActiveLyricChanged: root.followLyric()
+
+    // LYR-8: re-arm the idle window when pane focus moves (5 s vs 2 s).
+    onPaneChanged: if (root._lyricsHeld) root.holdLyrics()
 
     // Fullscreen keys, scoped to the focused pane. Esc/back stays with Home.
     function handleAction(action) {

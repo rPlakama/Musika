@@ -1126,6 +1126,41 @@ Small, bounded, high-value changes.
   - **Verify:** cursor and hover over an album in ArtistEntry → cover/title
     expand like list rows, neighbours don't move, covers don't clip, long
     titles still elide, `reduceMotion` renders the plain grid.
+  - **Now:** grid cells carry an `emphasized` state (cursor or hover, off
+    under `reduceMotion`); the cover scales to `Theme.selectionEmphasis`
+    about its centre and the title uses the `Theme.fitScale` cap — both
+    transform-only with `quick`/`Theme.ease`; block highlight and primary
+    border kept. `qmllint` + offscreen run clean.
+
+- [ ] **UI-51 · Remove the transport scopes: decoration, never a selection** — P3 · **top priority** · (code removal & cleaning)
+  - **Why:** every transport verb is (or can be) a global binding, so letting
+    the transport own a focus region/pane is dead weight: it dilutes the
+    region model (`Home.activeRegion === 3`, the Ctrl-W candidate list, the
+    PLAYER frame at `Home.qml:597`), costs a fullscreen pane (Tab cycles
+    transport → lyrics → queue and pane 0 eats `h/l/n/p/Enter`), and keeps a
+    second keymap copy of the transport. The bar should stay visible and
+    clickable, but never be a keyboard destination.
+  - **Precondition:** add global binds for the verbs that only live in the
+    transport scope today — seek (its `h/l`): pick `,`/`.` or `Ctrl-H`/
+    `Ctrl-L` (`h/l` stay pane navigation), and stop if it returns; `Space`,
+    `n/p`, `Ctrl-N/P`, `m`, `±` are already global. Only then remove scopes.
+  - **Details (removal):**
+    - `Home.qml`: drop region 3 from the dispatch (`case 3`), the PLAYER
+      region box/title, the `regionInDirection` edges to/from the player, and
+      the `activeRegion === 3` condition on `toggle_fullscreen` (Shift+Enter
+      becomes global); Ctrl-W candidates = sidebar/main/status.
+    - `InferiorBar.qml`: delete `handleAction` — **keep the 500 ms
+      `Backend.tick()` timer**, playback/advance depends on it; buttons stay
+      clickable/hoverable as decoration.
+    - `NowPlaying.qml`: `pane` cycle becomes lyrics ↔ queue (drop pane 0 from
+      `pane_cycle`, the `pane === 0` key block, the transport focus hairline
+      and the keybar's transport hints); default pane = lyrics.
+    - Sweep comments/docs/README (region lists, "Tab pane cycle", keymap
+      table).
+  - **Verify:** Ctrl-W lists only sidebar/main/status; Shift+Enter toggles
+    fullscreen from anywhere; Tab in fullscreen cycles lyrics/queue only;
+    Space/`n/p`/`m`/`±`/seek work in every scope; mouse transport unchanged;
+    tick/auto-advance intact.
 
 - [x] **VI-6 · `Ctrl-[` alias + pending-sequence cancel** — P1 · (N3 residual)
   - **Why:** `Ctrl-[` is muscle memory for Esc; Esc should also clear a half-typed
@@ -1750,9 +1785,9 @@ Kept for rationale; the tree already carries these.
 |--------|------|--------|
 | Must have | 8 | 1 |
 | Should have | 60 | 5 |
-| Quick wins | 9 | 45 |
+| Quick wins | 10 | 45 |
 | Solved (reference) | — | 36 |
-| **Total** | **76** | **87** |
+| **Total** | **77** | **87** |
 
 ### Coverage by area
 
@@ -1763,7 +1798,7 @@ Kept for rationale; the tree already carries these.
 | Player & media features | 5 | 2 |
 | Lyrics pipeline | 2 | 7 |
 | Search | 2 | 6 |
-| UI microdesigns | 17 | 30 |
+| UI microdesigns | 18 | 30 |
 | Dynamic color | 1 | 5 |
 | Architecture & robustness | 22 | 15 |
 | Media cache / offline | 7 | 0 |

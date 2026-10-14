@@ -50,8 +50,8 @@ pub async fn load_album_songs_json(dbs: &crate::db::Dbs, album_id: &str) -> anyh
     song_rows_json(&songs, &covers)
 }
 
-pub async fn load_artists_json(dbs: &crate::db::Dbs) -> anyhow::Result<String> {
-    let artists = crate::library::artists(&dbs.library).await?;
+pub async fn load_artists_json(dbs: &crate::db::Dbs, order: &str) -> anyhow::Result<String> {
+    let artists = crate::library::artists(&dbs.library, order).await?;
     let covers = crate::covers::url_map(&dbs.covers).await?;
     let rows: Vec<serde_json::Value> = artists
         .iter()

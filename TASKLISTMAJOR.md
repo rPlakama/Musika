@@ -1078,7 +1078,7 @@ Small, bounded, high-value changes.
     and any hovered row show the identical full block fill as Albums/Songs/
     Artists; nothing spills over the dividers or panel edges.
 
-- [ ] **UI-49 · Microdesign: zero-result shake + icon flash in search** — P3 · (design microtask)
+- [x] **UI-49 · Microdesign: zero-result shake + icon flash in search** — P3 · (design microtask)
   - **Why:** a query with no hits only prints "no matches"; a physical
     "denied" cue makes the empty result register instantly, and a reusable FX
     covers every future rejected-input case.

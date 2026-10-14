@@ -303,15 +303,28 @@ pub struct ArtistRow {
 /// Year = byYear.
 pub const ORDERS: [&str; 3] = ["Artist", "Name", "Year"];
 
-/// Cycles an order label by `delta`; shared by albums and songs so the two
-/// lists can never drift apart.
-pub fn cycle_order(current: &str, delta: i64) -> &'static str {
-    let index = ORDERS
+/// Orderings offered by the artist list (`Shift-H`/`Shift-L`): alphabetical,
+/// or most albums first.
+pub const ARTIST_ORDERS: [&str; 2] = ["Name", "Albums"];
+
+/// Cycles one of the order lists by `delta`; shared so lists never drift.
+fn cycle_in(orders: &[&'static str], current: &str, delta: i64) -> &'static str {
+    let index = orders
         .iter()
         .position(|order| *order == current)
         .unwrap_or(0) as i64;
-    let next = (index + delta).rem_euclid(ORDERS.len() as i64) as usize;
-    ORDERS[next]
+    let next = (index + delta).rem_euclid(orders.len() as i64) as usize;
+    orders[next]
+}
+
+/// Cycles an album/song order label by `delta` (albums and songs share it).
+pub fn cycle_order(current: &str, delta: i64) -> &'static str {
+    cycle_in(&ORDERS, current, delta)
+}
+
+/// Cycles an artist order label by `delta` ([`ARTIST_ORDERS`]).
+pub fn cycle_artist_order(current: &str, delta: i64) -> &'static str {
+    cycle_in(&ARTIST_ORDERS, current, delta)
 }
 
 /// Albums for the central list, optionally filtered by artist name, ordered
@@ -385,13 +398,16 @@ pub async fn artist_albums(
     Ok(rows)
 }
 
-/// All artists, ordered by name.
-pub async fn artists(pool: &SqlitePool) -> Result<Vec<ArtistRow>> {
-    let rows = sqlx::query_as::<_, ArtistRow>(
-        "SELECT id, name, album_count, cover_art FROM artists ORDER BY name",
-    )
-    .fetch_all(pool)
-    .await?;
+/// All artists, ordered by one of [`ARTIST_ORDERS`].
+pub async fn artists(pool: &SqlitePool, order: &str) -> Result<Vec<ArtistRow>> {
+    let sql: &'static str = match order {
+        "Albums" => {
+            "SELECT id, name, album_count, cover_art FROM artists
+             ORDER BY album_count DESC, name"
+        }
+        _ => "SELECT id, name, album_count, cover_art FROM artists ORDER BY name",
+    };
+    let rows = sqlx::query_as::<_, ArtistRow>(sql).fetch_all(pool).await?;
     Ok(rows)
 }
 
@@ -702,6 +718,42 @@ mod tests {
         assert_eq!(cycle_order("Year", -1), "Name");
         // Unknown values snap back to the first order.
         assert_eq!(cycle_order("", 1), "Name");
+    }
+
+    #[test]
+    fn artist_order_cycles_both_ways() {
+        assert_eq!(cycle_artist_order("Name", 1), "Albums");
+        assert_eq!(cycle_artist_order("Albums", 1), "Name");
+        assert_eq!(cycle_artist_order("Name", -1), "Albums");
+        assert_eq!(cycle_artist_order("", 1), "Albums");
+    }
+
+    #[tokio::test]
+    async fn artist_orders_switch_between_name_and_album_count() {
+        let pool = memory_pool().await;
+        for (id, name, count) in [("a1", "Zed", 3), ("a2", "Alpha", 1), ("a3", "Beta", 5)] {
+            sqlx::query("INSERT INTO artists (id, name, album_count) VALUES (?1, ?2, ?3)")
+                .bind(id)
+                .bind(name)
+                .bind(count)
+                .execute(&pool)
+                .await
+                .unwrap();
+        }
+        let by_name: Vec<String> = artists(&pool, "Name")
+            .await
+            .unwrap()
+            .iter()
+            .map(|artist| artist.name.clone())
+            .collect();
+        assert_eq!(by_name, ["Alpha", "Beta", "Zed"]);
+        let by_albums: Vec<String> = artists(&pool, "Albums")
+            .await
+            .unwrap()
+            .iter()
+            .map(|artist| artist.name.clone())
+            .collect();
+        assert_eq!(by_albums, ["Beta", "Zed", "Alpha"]);
     }
 
     #[tokio::test]

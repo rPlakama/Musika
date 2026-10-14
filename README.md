@@ -4,7 +4,7 @@ A keyboard-driven Subsonic/Navidrome client for Linux — native Rust core, Qt 6
 interface, and **vi muscle memory everywhere**. Built for people who browse a
 music library the way they browse a buffer.
 
-> Space plays. `hjkl` moves. `:` is coming. Strawberry is great; this is for
+> Space plays. `hjkl` moves. `:` is coming. Strawberry is better than this; but, this one is for
 > living inside the keyboard.
 
 ## At a glance

@@ -65,6 +65,7 @@ pub struct Backend {
     queue_length: i64,
     album_order: String,
     song_order: String,
+    artist_order: String,
     server_type: String,
     search_open: bool,
     /// Last album page / song the session should return to (P-6).
@@ -195,6 +196,11 @@ impl Backend {
         Notify = song_order_changed
     );
     qproperty!(
+        "artistOrder",
+        Member = artist_order,
+        Notify = artist_order_changed
+    );
+    qproperty!(
         "serverType",
         Member = server_type,
         Notify = server_type_changed
@@ -280,6 +286,8 @@ impl Backend {
     #[qsignal]
     fn song_order_changed(&mut self);
     #[qsignal]
+    fn artist_order_changed(&mut self);
+    #[qsignal]
     fn server_type_changed(&mut self);
     #[qsignal]
     fn library_changed(&mut self);
@@ -356,6 +364,10 @@ impl Backend {
         if self.song_order.is_empty() {
             self.song_order = crate::library::ORDERS[0].to_string();
             self.song_order_changed();
+        }
+        if self.artist_order.is_empty() {
+            self.artist_order = crate::library::ARTIST_ORDERS[0].to_string();
+            self.artist_order_changed();
         }
         let invoker = self.get_qml_method_invoker();
         let sync_finish = self.get_qml_method_invoker();
@@ -936,6 +948,17 @@ impl Backend {
         self.step_song_order(-1);
     }
 
+    /// Cycles the Artists-segment order (Shift-L / Shift-H there).
+    #[qslot(qml_name = "artistOrderNext")]
+    fn artist_order_next(&mut self) {
+        self.step_artist_order(1);
+    }
+
+    #[qslot(qml_name = "artistOrderPrev")]
+    fn artist_order_prev(&mut self) {
+        self.step_artist_order(-1);
+    }
+
     fn step_album_order(&mut self, delta: i64) {
         let next = stepped_order(&self.album_order, delta);
         if self.album_order != next {
@@ -949,6 +972,14 @@ impl Backend {
         if self.song_order != next {
             self.song_order = next;
             self.song_order_changed();
+        }
+    }
+
+    fn step_artist_order(&mut self, delta: i64) {
+        let next = stepped_artist_order(&self.artist_order, delta);
+        if self.artist_order != next {
+            self.artist_order = next;
+            self.artist_order_changed();
         }
     }
 
@@ -979,8 +1010,13 @@ impl Backend {
         let Some(dbs) = crate::dbs().cloned() else {
             return;
         };
+        let order = if self.artist_order.is_empty() {
+            crate::library::ARTIST_ORDERS[0].to_string()
+        } else {
+            self.artist_order.clone()
+        };
         crate::runtime().spawn(async move {
-            match load_artists_json(&dbs).await {
+            match load_artists_json(&dbs, &order).await {
                 Ok(json) => {
                     qtbridge::invoke_method!(invoker, "emitData", "artists".to_string(), json);
                 }
@@ -1714,6 +1750,15 @@ fn stepped_order(current: &str, delta: i64) -> String {
         current
     };
     crate::library::cycle_order(current, delta).to_string()
+}
+
+fn stepped_artist_order(current: &str, delta: i64) -> String {
+    let current = if current.is_empty() {
+        crate::library::ARTIST_ORDERS[0]
+    } else {
+        current
+    };
+    crate::library::cycle_artist_order(current, delta).to_string()
 }
 
 /// Status-bar summary of a finished sync; lyrics only when any were fetched.

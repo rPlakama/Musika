@@ -32,6 +32,9 @@ Item {
     property bool loading: false
     property bool typing: true // false = search "normal mode" (hjkl navigates)
     property int activeColumn: 0 // 0 songs, 1 albums, 2 artists (priority Songs > Albums > Artists)
+    // UI-49: last query that already got the denied cue, so one response (or
+    // one Enter) lights it once and holding a zero query never strobes.
+    property string _zeroQuery: ""
 
     signal songActivated(string id)
     signal albumActivated(string albumId, string title, string artist, string year, string tracks, string cover)
@@ -40,6 +43,26 @@ Item {
     // Keep rendering while the close fade runs (the panel owns the opacity).
     visible: opened || panel.opacity > 0
     z: Theme.zOverlay
+
+    // UI-49: one reusable denied-input cue (shake + bounce); the red glyph
+    // flash below rides the same call.
+    ShakeFx {
+        id: denyFx
+        target: field
+    }
+
+    SequentialAnimation {
+        id: glyphFlash
+        NumberAnimation { target: glyphFlashIcon; property: "opacity"; to: 1; duration: Theme.motion.flash }
+        NumberAnimation { target: glyphFlashIcon; property: "opacity"; to: 0; duration: Theme.motion.quick }
+    }
+
+    function denied() {
+        if (Theme.reduceMotion || field.text.length === 0 || denyFx.swing.running)
+            return;
+        denyFx.shake();
+        glyphFlash.restart();
+    }
 
     function open() {
         openWith("");
@@ -128,6 +151,7 @@ Item {
         songsColumn.cursor = -1;
         albumsColumn.cursor = -1;
         artistsColumn.cursor = -1;
+        root._zeroQuery = "";
     }
 
     function columnFor(column) {
@@ -165,8 +189,12 @@ Item {
     function activate() {
         var column = columnFor(activeColumn);
         var hit = column.model ? column.model.get(column.cursor) : null;
-        if (!hit)
+        if (!hit) {
+            // UI-49: Enter on a query with no hits anywhere is denied input.
+            if (songResults.count + albumResults.count + artistResults.count === 0)
+                root.denied();
             return;
+        }
         if (activeColumn === 0)
             root.songActivated(hit.id);
         else if (activeColumn === 1)
@@ -232,6 +260,17 @@ Item {
 
         loading = false;
         Qt.callLater(function() { columnsRow.opacity = 1; });
+
+        // UI-49: the response landing on zero hits is denied input — once per
+        // distinct query, never again while the same zero query is held.
+        var total = songResults.count + albumResults.count + artistResults.count;
+        if (total === 0) {
+            if (field.text !== root._zeroQuery)
+                root.denied();
+            root._zeroQuery = field.text;
+        } else {
+            root._zeroQuery = "";
+        }
     }
 
     ListModel {
@@ -324,6 +363,8 @@ Item {
                     color: Palette.onSurface
                     font.family: Theme.fonts.body
                     font.pixelSize: panel.height * 0.035
+                    // UI-49: the denied shake is a transform, never a layout move.
+                    transform: Translate { x: denyFx.offset }
                     background: Rectangle {
                         color: Palette.surfaceContainerHighest
                         radius: Theme.radius
@@ -335,6 +376,7 @@ Item {
                         // the input edge still lines up with the columns below.
                         // Fixed white like the other SVG glyphs (Theme.iconStrong).
                         SymbolIcon {
+                            id: searchGlyph
                             anchors.left: parent.left
                             anchors.leftMargin: panel.height * 0.03
                             anchors.verticalCenter: parent.verticalCenter
@@ -342,6 +384,16 @@ Item {
                             height: width
                             source: "qrc:/app/icons/search-right-1505-svgrepo-com.svg"
                             symbolColor: Theme.iconStrong
+                        }
+
+                        // UI-49: the glyph asset is fixed white, so the denied
+                        // flash is a red-tinted copy fading over it.
+                        SymbolIcon {
+                            id: glyphFlashIcon
+                            anchors.fill: searchGlyph
+                            source: searchGlyph.source
+                            symbolColor: Palette.error
+                            opacity: 0
                         }
                     }
 

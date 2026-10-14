@@ -20,8 +20,7 @@ import musika
 // Artists segment: all indexed artists. The list structure (header, cursor,
 // gg/G, selection stage, gutters) is the shared `MediaList`, same as the
 // Albums/Songs entries; this wrapper owns the `artists` channel and maps the
-// payload. ArtistEntry is untouched. The order cue stays hidden until the
-// library exposes more than its fixed name order.
+// payload. ArtistEntry is untouched. Shift-H/L cycle the Name/Albums order.
 MediaList {
     id: root
 
@@ -29,6 +28,7 @@ MediaList {
 
     title: "Artists"
     roundedArt: true
+    orderText: Backend.artistOrder
 
     function reload() {
         Backend.requestArtists();
@@ -64,6 +64,9 @@ MediaList {
                 root.apply(payload);
         }
         function onLibrary_changed() {
+            root.reload();
+        }
+        function onArtist_order_changed() {
             root.reload();
         }
     }

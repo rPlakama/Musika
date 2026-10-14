@@ -33,6 +33,11 @@ Item {
 
     signal picked(int index)
 
+    // UI-48: the highlight block overflows the row bounds by this much on both
+    // sides, filling the column gutters. The list clips it at the column edge,
+    // so it reads as a full-bleed block and never crosses the UI-47 divider.
+    readonly property real overflow: width * 0.012
+
     // UI-41: ease the view to the cursor instead of teleporting.
     ListScroll {
         id: scroll
@@ -124,24 +129,39 @@ Item {
 
                     width: list.width
                     height: root.rowH
-                    // Only the focused column carries the full highlight; an
-                    // inactive column remembers its cursor with a dim tick.
-                    color: row.current && root.active
-                        ? Palette.secondaryContainer
-                        : "transparent"
+                    // The row is a layout container only (UI-48): the block
+                    // highlight lives in its own layer below, so it can
+                    // overflow the row without touching the content geometry.
+                    color: "transparent"
 
-                    Behavior on color {
-                        ColorAnimation { duration: Theme.motion.quick; easing.type: Easing.Bezier; easing.bezierCurve: Theme.ease.standard }
-                    }
-
+                    // Dedicated highlight layer over the row block, matching
+                    // the main lists: cursor fill + hover fill, full width.
                     Rectangle {
-                        visible: row.current && !root.active
+                        id: highlight
                         anchors.left: parent.left
+                        anchors.right: parent.right
                         anchors.top: parent.top
                         anchors.bottom: parent.bottom
-                        width: Math.max(2, row.height * 0.025)
-                        color: Palette.primary
-                        opacity: 0.35
+                        anchors.leftMargin: -root.overflow
+                        anchors.rightMargin: -root.overflow
+                        color: row.current && root.active
+                            ? Palette.secondaryContainer
+                            : (rowHover.hovered ? Palette.surfaceContainerHigh : "transparent")
+
+                        Behavior on color {
+                            ColorAnimation { duration: Theme.motion.quick; easing.type: Easing.Bezier; easing.bezierCurve: Theme.ease.standard }
+                        }
+
+                        // Inactive-column cue: a dim accent tick on the block.
+                        Rectangle {
+                            visible: row.current && !root.active
+                            anchors.left: parent.left
+                            anchors.top: parent.top
+                            anchors.bottom: parent.bottom
+                            width: Math.max(2, row.height * 0.025)
+                            color: Palette.primary
+                            opacity: 0.35
+                        }
                     }
 
                     Rectangle {

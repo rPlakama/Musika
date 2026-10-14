@@ -1055,7 +1055,7 @@ Small, bounded, high-value changes.
   - **Verify:** with results in every column the rules stay continuous over
     covers while scrolling; covers/rows stay clickable.
 
-- [ ] **UI-48 · Microdesign: search selection fills the whole row block** — P3 · (design microtask)
+- [x] **UI-48 · Microdesign: search selection fills the whole row block** — P3 · (design microtask)
   - **Why:** lists (Albums/Songs/Artists) highlight the cursor/hover with a
     full-bleed row block (`secondaryContainer` / `surfaceContainerHigh` edge
     to edge). `SearchColumn` only fills the focused column's cursor row and
@@ -1069,6 +1069,11 @@ Small, bounded, high-value changes.
     replacing it; the fill must not overflow the column (`clip: true` at the
     list, never across the UI-47 divider); keep the UI-45 scale emphasis and
     `Theme.selectionEmphasis` cap.
+  - **Now:** `SearchColumn` rows are layout-only; a dedicated `highlight`
+    layer sits over each row block, overflowing `width * 0.012` into the
+    column gutters (clipped at the list), with cursor `secondaryContainer`,
+    `MediaList`-style hover fill and the inactive cursor tick kept on the
+    block. `qmllint` + offscreen run clean.
   - **Verify:** with results in all three columns, each column's cursor row
     and any hovered row show the identical full block fill as Albums/Songs/
     Artists; nothing spills over the dividers or panel edges.
@@ -1696,9 +1701,9 @@ Kept for rationale; the tree already carries these.
 |--------|------|--------|
 | Must have | 8 | 1 |
 | Should have | 60 | 5 |
-| Quick wins | 9 | 43 |
+| Quick wins | 8 | 44 |
 | Solved (reference) | — | 36 |
-| **Total** | **76** | **85** |
+| **Total** | **75** | **86** |
 
 ### Coverage by area
 
@@ -1709,7 +1714,7 @@ Kept for rationale; the tree already carries these.
 | Player & media features | 5 | 2 |
 | Lyrics pipeline | 2 | 7 |
 | Search | 2 | 6 |
-| UI microdesigns | 17 | 28 |
+| UI microdesigns | 16 | 29 |
 | Dynamic color | 1 | 5 |
 | Architecture & robustness | 22 | 15 |
 | Media cache / offline | 7 | 0 |

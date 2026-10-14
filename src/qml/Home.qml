@@ -486,10 +486,16 @@ Item {
             autoPaddingEnabled: false
         }
 
-        // Enter/leave fullscreen is a highlight flip, not a scene change:
-        // keep it near-instant (`flash`), never the emphasized view speed.
+        // Enter/leave is a scene change, not a highlight flip: the black
+        // backdrop fades in/out (`emphasized`), decelerating in and
+        // accelerating out (motion §3.1). Toggling mid-fade retargets the same
+        // animation, so repeated enter/leave stays one smooth loop.
         Behavior on opacity {
-            NumberAnimation { duration: Theme.motion.flash; easing.type: Easing.Bezier; easing.bezierCurve: Theme.ease.standard }
+            NumberAnimation {
+                duration: Theme.motion.emphasized
+                easing.type: Easing.Bezier
+                easing.bezierCurve: root.nowPlayingExpanded ? Theme.ease.decelerate : Theme.ease.accelerate
+            }
         }
     }
 

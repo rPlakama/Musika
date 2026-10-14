@@ -302,6 +302,9 @@ Rectangle {
                     required property string cover
 
                     readonly property bool current: GridView.isCurrentItem
+                    // UI-50: cursor or hover expands the cover + title, the
+                    // same selection stage the lists and search use.
+                    readonly property bool emphasized: (cell.current || cellHover.hovered) && !Theme.reduceMotion
 
                     width: GridView.view.cellWidth
                     height: GridView.view.cellHeight
@@ -335,6 +338,13 @@ Rectangle {
                         border.width: Math.max(1, cell.height * Theme.hairlineRatio)
                         clip: true
 
+                        transformOrigin: Item.Center
+                        scale: cell.emphasized ? Theme.selectionEmphasis : 1.0
+
+                        Behavior on scale {
+                            NumberAnimation { duration: Theme.motion.quick; easing.type: Easing.Bezier; easing.bezierCurve: Theme.ease.standard }
+                        }
+
                         CoverImage {
                             anchors.fill: parent
                             source: cell.cover
@@ -353,6 +363,14 @@ Rectangle {
                     elide: Text.ElideRight
                     font.pixelSize: Math.max(10, cell.height * 0.0525)
                     animated: false
+                    transformOrigin: Item.Center
+                    scale: cell.emphasized
+                        ? Theme.fitScale(titleText.width, titleText.paintedWidth, Theme.selectionEmphasis)
+                        : 1.0
+
+                    Behavior on scale {
+                        NumberAnimation { duration: Theme.motion.quick; easing.type: Easing.Bezier; easing.bezierCurve: Theme.ease.standard }
+                    }
                 }
 
                 FadeText {

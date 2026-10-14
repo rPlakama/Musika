@@ -1099,8 +1099,15 @@ Small, bounded, high-value changes.
   - **Verify:** gibberish query → one shake + red flash <200 ms; holding a
     zero-result query doesn't strobe; typing more re-triggers once per
     response; `reduceMotion` flat.
+  - **Now:** `ShakeFx.qml` (reusable shake + bounce, transforms only, ~150 ms,
+    flat under `reduceMotion`); the overlay fires it once per zero-hit
+    response (guarded per distinct query via `_zeroQuery`) and on Enter with
+    a zero-hit query, with a red-tinted glyph copy fading over the
+    fixed-white SVG in the same window. Scripted harness: a repeated response
+    for the same query stays silent, a changed query and Enter each fire
+    once.
 
-- [ ] **UI-50 · Microdesign: ArtistEntry album selection expands like the lists** — P3 · (design microtask)
+- [x] **UI-50 · Microdesign: ArtistEntry album selection expands like the lists** — P3 · (design microtask)
   - **Why:** lists and search columns now emphasize the current selection with
     the UI-45 expand effect (`Theme.selectionEmphasis` + `fitScale` cap, full
     block highlight), but the ArtistEntry album grid only tints the cell
@@ -1743,9 +1750,9 @@ Kept for rationale; the tree already carries these.
 |--------|------|--------|
 | Must have | 8 | 1 |
 | Should have | 60 | 5 |
-| Quick wins | 10 | 44 |
+| Quick wins | 9 | 45 |
 | Solved (reference) | — | 36 |
-| **Total** | **77** | **86** |
+| **Total** | **76** | **87** |
 
 ### Coverage by area
 
@@ -1756,7 +1763,7 @@ Kept for rationale; the tree already carries these.
 | Player & media features | 5 | 2 |
 | Lyrics pipeline | 2 | 7 |
 | Search | 2 | 6 |
-| UI microdesigns | 18 | 29 |
+| UI microdesigns | 17 | 30 |
 | Dynamic color | 1 | 5 |
 | Architecture & robustness | 22 | 15 |
 | Media cache / offline | 7 | 0 |

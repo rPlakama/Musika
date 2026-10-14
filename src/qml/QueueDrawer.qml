@@ -29,6 +29,8 @@ Item {
     property int nowPlaying: -1
     // A reorder round-trip re-emits the queue; don't crossfade that one.
     property bool _reordering: false
+    // UI-54: first queue payload after opening restores the saved highlight.
+    property bool _recall: false
 
     // UI-41: ease the view to the cursor instead of teleporting.
     ListScroll {
@@ -41,12 +43,15 @@ Item {
 
     function open() {
         opened = true;
+        root._recall = true;
         cursor = Math.max(0, nowPlaying);
         Backend.requestQueue();
         Backend.releaseFocus();
     }
 
     function close() {
+        if (items.count > 0)
+            scroll.remember("queue", list);
         opened = false;
         Backend.releaseFocus();
     }
@@ -56,6 +61,12 @@ Item {
             close();
         else
             open();
+    }
+
+    function centerPlaying(index) {
+        cursor = Math.max(0, Math.min(items.count - 1, index));
+        list.currentIndex = cursor;
+        list.positionViewAtIndex(cursor, ListView.Contain);
     }
 
     function apply(payload) {
@@ -76,9 +87,13 @@ Item {
             });
         }
         nowPlaying = data.index;
-        cursor = Math.max(0, Math.min(items.count - 1, data.index));
-        list.currentIndex = cursor;
-        list.positionViewAtIndex(cursor, ListView.Contain);
+        // UI-54: restore the highlight where the user left it; a fresh drawer
+        // opens on the playing track.
+        if (!root._recall || !scroll.recall("queue", list))
+            centerPlaying(data.index);
+        else
+            cursor = list.currentIndex;
+        root._recall = false;
         Qt.callLater(function() { list.opacity = 1; });
     }
 

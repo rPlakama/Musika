@@ -18,7 +18,6 @@ import QtQuick
 import QtQuick.Layouts
 import QtQuick.Effects
 import musika
-import "ScrollMemory.js" as Memory
 import "Theme.js" as Theme
 
 // Album entry: hero cover beside the album description, then its songs.
@@ -66,6 +65,11 @@ Rectangle {
         id: songs
     }
 
+    // UI-41/UI-54: shared eased-scroll + scroll-memory mechanism.
+    ListScroll {
+        id: scroll
+    }
+
     function reload() {
         if (root.albumId === "")
             return;
@@ -93,21 +97,10 @@ Rectangle {
         root.loading = false;
         // UI-54: reopening the page restores the cursor + offset; later
         // reloads (library change, resync) keep the live state.
-        var saved = root._restored ? null : Memory.loadScroll(root.memoryKey);
-        root._restored = true;
-        if (saved && songs.count > 0) {
-            songList.currentIndex = Math.max(0, Math.min(songs.count - 1, saved.index));
-            songList.positionViewAtIndex(songList.currentIndex, ListView.Contain);
-            Qt.callLater(function () {
-                songList.contentY = Math.max(0, Math.min(saved.y,
-                    Math.max(0, songList.contentHeight - songList.height)));
-            });
+        if (!root._restored) {
+            root._restored = true;
+            scroll.recall(root.memoryKey, songList);
         }
-    }
-
-    function saveScroll() {
-        if (root.albumId.length > 0)
-            Memory.saveScroll(root.memoryKey, songList.currentIndex, songList.contentY);
     }
 
     Component.onCompleted: reload()
@@ -128,7 +121,7 @@ Rectangle {
             if (action === "move_down" && songs.count > 0) {
                 root.onToolbar = false;
                 songList.currentIndex = 0;
-                songList.positionViewAtIndex(0, ListView.Contain);
+                scroll.ensureVisible(songList, 0);
             } else if (action === "enter") {
                 root.back();
             }
@@ -146,7 +139,7 @@ Rectangle {
         } else if (action === "enter") {
             Backend.playAlbum(root.albumId, songList.currentIndex);
         }
-        songList.positionViewAtIndex(songList.currentIndex, ListView.Contain);
+        scroll.ensureVisible(songList, songList.currentIndex);
     }
 
     Connections {
@@ -411,7 +404,13 @@ Rectangle {
     // UI-54: keep the songs viewport in memory while the page lives.
     Connections {
         target: songList
-        function onContentYChanged() { root.saveScroll(); }
-        function onCurrentIndexChanged() { root.saveScroll(); }
+        function onContentYChanged() {
+            if (root.albumId.length > 0)
+                scroll.remember(root.memoryKey, songList);
+        }
+        function onCurrentIndexChanged() {
+            if (root.albumId.length > 0)
+                scroll.remember(root.memoryKey, songList);
+        }
     }
 }

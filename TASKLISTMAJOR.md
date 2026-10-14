@@ -1281,10 +1281,13 @@ Small, bounded, high-value changes.
   - **Now:** `ListScroll.qml` eases small `contentY` corrections
     (`quick`, Bezier standard, half-row context; instant `ListView.Contain`
     fallback for unrealised rows and under `reduceMotion`), wired into
-    `SearchColumn`, the `QueueDrawer` (reorder-guarded) and the fullscreen
+    `SearchColumn`, `MediaList` (Albums/Songs/Artists), `AlbumEntry`,
+    `ArtistEntry`, the `QueueDrawer` (reorder-guarded) and the fullscreen
     queue; payload swaps crossfade `quick` in the search columns and both
-    queues, with queue reorders staying live. The deeper distance-aware
-    engine (frame-timing, follow guards, reuseItems) is UI-46.
+    queues, with queue reorders staying live. UI-54 layered the scroll
+    memory on the same instance (`remember`/`recall`). The deeper
+    distance-aware engine (frame-timing, follow guards, reuseItems) is
+    UI-46.
 
 - [ ] **LYR-8 · Smooth centre-follow + edge fades** — P2 · (roadmap "Lyrics presentation" P1)
   - **Why:** `positionViewAtIndex(Center)` teleports each line — once when a
@@ -1360,7 +1363,7 @@ Small, bounded, high-value changes.
     contradicts; dated diagnostics/history stay as written, only status
     claims change.
 
-- [ ] **UI-47 · Microdesign: search column rule draws behind the next column's covers** — P3 · (design microtask)
+- [x] **UI-47 · Microdesign: search column rule draws behind the next column's covers** — P3 · (design microtask)
   - **Why:** the structural rule (`|`) between search columns is a RowLayout
     sibling declared *before* the following column, so that column's covers
     paint over it — the divider is created behind the album cover.
@@ -1370,6 +1373,9 @@ Small, bounded, high-value changes.
     layout-neutral.
   - **Verify:** with results in every column the rules stay continuous over
     covers while scrolling; covers/rows stay clickable.
+  - **Now:** both dividers carry `z: 1` (comments name UI-47); layout and
+    hit-testing untouched. Visual confirmation with results in all three
+    columns is deferred to a desktop session.
 
 - [x] **UI-48 · Microdesign: search selection fills the whole row block** — P3 · (design microtask)
   - **Why:** lists (Albums/Songs/Artists) highlight the cursor/hover with a
@@ -1603,21 +1609,24 @@ Small, bounded, high-value changes.
   - **Why:** the segment pages and the entry pages are destroyed when you
     leave them, so coming back reset the cursor and the viewport: the
     highlight was not visible at the point where the user stopped.
-  - **Details:** `ScrollMemory.js` (a `.pragma library`, engine-lifetime
-    store); `MediaList` (keys `albums`/`songs`/`artists`), `AlbumEntry`
-    (`album:<id>`) and `ArtistEntry` (`artist:<id>`) save cursor +
-    `contentY` continuously while alive and restore both on the first
-    payload after a reopen (later reloads keep the live state); the saved
-    offset is clamped to the fresh content and the cursor to the new row
-    count, with `positionViewAtIndex(Contain)` guaranteeing the highlight
-    stays visible even when the offset cannot be exact.
+  - **Details:** the `ListScroll` `remember`/`recall` pair over the
+    `ScrollMemory.js` `.pragma library` store (engine lifetime): `remember`
+    saves cursor + `contentY` (and the focused scope where one exists),
+    `recall` clamps the index to the fresh row count, sets
+    `positionViewAtIndex(Contain)` and re-applies the saved offset; the
+    first payload after a reopen restores, later reloads keep the live
+    state.
   - **Verify:** scroll a segment, switch away and back → cursor and offset
     return; reopen an album/artist page → its list/grid returns to where it
-    stopped; order changes and resync reloads do not jump the list.
-  - **Now:** landed for the three main segments and both entry pages;
-    offscreen harness covers destroy → recreate with cursor/offset restore
-    and fresh keys starting clean. The queue drawer, search columns and the
-    fullscreen queue/lyrics keep their existing behavior.
+    stopped; reopen the queue drawer / fullscreen → highlight and pane
+    return; order changes and resync reloads do not jump the list.
+  - **Now:** landed through the shared `ListScroll` seam: Main segments
+    (`albums`/`songs`/`artists`, saved continuously), `AlbumEntry`
+    (`album:<id>`), `ArtistEntry` (`artist:<id>`), the queue drawer
+    (`queue`, restored on open instead of snapping to the playing track)
+    and the fullscreen player (`fullscreen` queue + the `pane` scope,
+    restored on re-entry). Offscreen harness covers remember/recall, the
+    scope field and fresh keys; search columns stay query-bound and are out.
 
 - [x] **VI-6 · `Ctrl-[` alias + pending-sequence cancel** — P1 · (N3 residual)
   - **Why:** `Ctrl-[` is muscle memory for Esc; Esc should also clear a half-typed
@@ -2242,9 +2251,9 @@ Kept for rationale; the tree already carries these.
 |--------|------|--------|
 | Must have | 7 | 2 |
 | Should have | 60 | 12 |
-| Quick wins | 5 | 53 |
+| Quick wins | 4 | 54 |
 | Solved (reference) | — | 36 |
-| **Total** | **72** | **103** |
+| **Total** | **71** | **104** |
 
 ### Coverage by area
 

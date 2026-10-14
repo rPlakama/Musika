@@ -17,7 +17,6 @@
 import QtQuick
 import QtQuick.Layouts
 import musika
-import "ScrollMemory.js" as Memory
 import "Theme.js" as Theme
 
 // Artist entry (P-8, milestone A): round avatar + name over a four-column
@@ -169,6 +168,11 @@ Rectangle {
         id: albums
     }
 
+    // UI-41/UI-54: shared eased-scroll + scroll-memory mechanism.
+    ListScroll {
+        id: scroll
+    }
+
     function reload() {
         if (root.artistId === "")
             return;
@@ -237,21 +241,10 @@ Rectangle {
             grid.currentIndex = 0;
         // UI-54: reopening the entry restores the grid cursor + offset; later
         // reloads keep the live state.
-        var saved = root._restored ? null : Memory.loadScroll(root.memoryKey);
-        root._restored = true;
-        if (saved && albums.count > 0) {
-            grid.currentIndex = Math.max(0, Math.min(albums.count - 1, saved.index));
-            grid.positionViewAtIndex(grid.currentIndex, GridView.Contain);
-            Qt.callLater(function () {
-                grid.contentY = Math.max(0, Math.min(saved.y,
-                    Math.max(0, grid.contentHeight - grid.height)));
-            });
+        if (!root._restored) {
+            root._restored = true;
+            scroll.recall(root.memoryKey, grid);
         }
-    }
-
-    function saveScroll() {
-        if (root.artistId.length > 0)
-            Memory.saveScroll(root.memoryKey, grid.currentIndex, grid.contentY);
     }
 
     function activateCurrent() {
@@ -291,7 +284,7 @@ Rectangle {
             return false;
         }
         grid.currentIndex = target;
-        grid.positionViewAtIndex(target, GridView.Contain);
+        scroll.ensureVisible(grid, target);
         return true;
     }
 
@@ -771,7 +764,13 @@ Rectangle {
     // UI-54: keep the album-grid viewport in memory while the page lives.
     Connections {
         target: grid
-        function onContentYChanged() { root.saveScroll(); }
-        function onCurrentIndexChanged() { root.saveScroll(); }
+        function onContentYChanged() {
+            if (root.artistId.length > 0)
+                scroll.remember(root.memoryKey, grid);
+        }
+        function onCurrentIndexChanged() {
+            if (root.artistId.length > 0)
+                scroll.remember(root.memoryKey, grid);
+        }
     }
 }

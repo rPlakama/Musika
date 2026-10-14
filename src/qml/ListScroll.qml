@@ -15,12 +15,18 @@
 // along with this program; if not, see <https://www.gnu.org/licenses/>.
 
 import QtQuick
+import "ScrollMemory.js" as Memory
 import "Theme.js" as Theme
 
 // UI-41: keyboard scroll easing. Each list owns one instance; `ensureVisible`
 // nudges `contentY` with a short animation instead of teleporting, keeping a
 // half-row of context around the cursor. Rows that are not realised yet fall
 // back to an instant `ListView.Contain`, and `reduceMotion` stays flat.
+//
+// UI-54: the same instance is the shared scroll-memory seam — `remember`
+// stores the cursor + offset (and the focused scope, where one exists) and
+// `recall` restores them for a list that was just created or reopened. The
+// fullscreen queue, drawer, Main segments and both entry pages all use it.
 QtObject {
     id: root
 
@@ -63,5 +69,29 @@ QtObject {
         anim.from = top;
         anim.to = target;
         anim.start();
+    }
+
+    /// Saves `view`'s cursor and offset under `key`; `scope` is the focused
+    /// pane/column that owned the highlight, where the surface has one.
+    function remember(key, view, scope) {
+        if (key && view)
+            Memory.saveScroll(key, view.currentIndex, view.contentY, scope);
+    }
+
+    /// Restores a saved cursor + offset into `view` (clamped to its current
+    /// content) and guarantees the highlight is visible. Returns false when
+    /// there is nothing saved or the view is empty.
+    function recall(key, view) {
+        var saved = Memory.loadScroll(key);
+        if (!saved || !view || view.count === 0)
+            return false;
+        view.currentIndex = Math.max(0, Math.min(view.count - 1, saved.index));
+        view.positionViewAtIndex(view.currentIndex, ListView.Contain);
+        var y = saved.y;
+        Qt.callLater(function () {
+            view.contentY = Math.max(0, Math.min(y,
+                Math.max(0, view.contentHeight - view.height)));
+        });
+        return true;
     }
 }

@@ -510,11 +510,13 @@ Item {
                 }
 
                 // Structural rule: keeps each column's header/count contained
-                // instead of bleeding into its neighbour.
+                // instead of bleeding into its neighbour. UI-47: above the
+                // next column's covers, which otherwise paint over it.
                 Rectangle {
                     Layout.fillHeight: true
                     Layout.preferredWidth: Math.max(1, panel.height * Theme.hairlineRatio)
                     color: Palette.outlineVariant
+                    z: 1
                 }
 
                 SearchColumn {
@@ -539,6 +541,7 @@ Item {
                     Layout.fillHeight: true
                     Layout.preferredWidth: Math.max(1, panel.height * Theme.hairlineRatio)
                     color: Palette.outlineVariant
+                    z: 1
                 }
 
                 SearchColumn {

@@ -18,6 +18,7 @@ import QtQuick
 import QtQuick.Layouts
 import QtQuick.Effects
 import musika
+import "ScrollMemory.js" as Memory
 import "Theme.js" as Theme
 
 // Fullscreen player ("mainscreen"), a 50/50 split:
@@ -42,6 +43,8 @@ Rectangle {
     // One queue payload after a reorder keeps the moved cursor instead of
     // snapping back to the playing track (Q-9).
     property bool _reordering: false
+    // UI-54: first queue payload after entering restores the saved highlight.
+    property bool _recallQueue: false
 
     // UI-41: ease the queue view to the cursor instead of teleporting.
     ListScroll {
@@ -165,12 +168,20 @@ Rectangle {
         queueIndex = data.index;
         if (root._reordering) {
             root._reordering = false;
+            root._recallQueue = false;
             queueCursor = Math.max(0, Math.min(queueItems.count - 1, queueCursor));
+            queueList.currentIndex = queueCursor;
+            queueList.positionViewAtIndex(queueCursor, ListView.Contain);
+        } else if (root._recallQueue && queueScroll.recall("fullscreen", queueList)) {
+            // UI-54: re-entry restores the queue highlight where it stopped.
+            root._recallQueue = false;
+            queueCursor = queueList.currentIndex;
         } else {
+            root._recallQueue = false;
             queueCursor = Math.max(0, Math.min(data.index, Math.max(0, queueItems.count - 1)));
+            queueList.currentIndex = queueCursor;
+            queueList.positionViewAtIndex(queueCursor, ListView.Contain);
         }
-        queueList.currentIndex = queueCursor;
-        queueList.positionViewAtIndex(queueCursor, ListView.Contain);
         Qt.callLater(function () {
             queueList.opacity = 1;
         });
@@ -271,10 +282,16 @@ Rectangle {
 
     onVisibleChanged: {
         if (visible) {
-            pane = 1;
+            // UI-54: re-entering restores the last fullscreen scope (pane) and
+            // queue highlight; the first queue payload lands them.
+            var saved = Memory.loadScroll("fullscreen");
+            pane = saved && saved.scope >= 1 ? saved.scope : 1;
+            root._recallQueue = true;
             lyricsLoading = true;
             Backend.requestQueue();
             Backend.requestLyrics();
+        } else if (queueItems.count > 0) {
+            queueScroll.remember("fullscreen", queueList, pane);
         }
     }
 

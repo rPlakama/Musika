@@ -19,12 +19,17 @@
 // UI-54: session scroll memory. Pages save their cursor and viewport offset
 // here continuously (while alive), so the values are current the moment the
 // page is destroyed, and restore them on the first payload after reopening.
+// `scope` optionally carries the focused pane/column the highlight was in.
 var scrollPositions = ({})
 
-function saveScroll(key, index, y) {
+function saveScroll(key, index, y, scope) {
     if (!key)
         return
-    scrollPositions[key] = { index: index, y: y }
+    scrollPositions[key] = {
+        index: index,
+        y: y,
+        scope: scope === undefined ? -1 : scope
+    }
 }
 
 function loadScroll(key) {

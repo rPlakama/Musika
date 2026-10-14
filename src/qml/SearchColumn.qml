@@ -33,7 +33,16 @@ Item {
 
     signal picked(int index)
 
+    // UI-41: ease the view to the cursor instead of teleporting.
+    ListScroll {
+        id: scroll
+    }
+
     readonly property real headerH: height * 0.10
+    readonly property real rowH: height * 0.12
+    // Snap the viewport to full rows so the footer never slices one in half.
+    readonly property real listH: Math.max(rowH,
+        Math.floor((height - headerH) / rowH) * rowH)
 
     Column {
         anchors.fill: parent
@@ -53,12 +62,26 @@ Item {
                 font.bold: root.active
             }
 
-            FadeText {
+            // Count badge: contained by its own pill so the number can never
+            // read as the next column's title.
+            Rectangle {
                 anchors.right: parent.right
                 anchors.verticalCenter: parent.verticalCenter
-                text: root.model ? root.model.count : 0
-                color: root.active ? Palette.primary : Palette.onSurfaceVariant
-                font.pixelSize: root.headerH * 0.36
+                implicitWidth: countLabel.implicitWidth + root.headerH * 0.36
+                implicitHeight: root.headerH * 0.52
+                radius: Theme.radius
+                color: Palette.surfaceContainerHighest
+                border.color: root.active ? Palette.primary : Palette.outlineVariant
+                border.width: Math.max(1, root.headerH * Theme.hairlineRatio)
+
+                FadeText {
+                    id: countLabel
+                    anchors.centerIn: parent
+                    text: root.model ? root.model.count : 0
+                    color: root.active ? Palette.primary : Palette.onSurfaceVariant
+                    font.pixelSize: root.headerH * 0.34
+                    animated: false
+                }
             }
 
             Rectangle {
@@ -72,7 +95,7 @@ Item {
 
         Item {
             width: parent.width
-            height: parent.height - root.headerH
+            height: root.listH
 
             ListView {
                 id: list
@@ -84,7 +107,7 @@ Item {
 
                 onCurrentIndexChanged: {
                     if (currentIndex >= 0)
-                        positionViewAtIndex(currentIndex, ListView.Contain);
+                        scroll.ensureVisible(list, currentIndex);
                 }
 
                 delegate: Rectangle {
@@ -95,12 +118,30 @@ Item {
                     required property string meta
                     required property string cover
 
+                    readonly property bool current: index === root.cursor
+                    // UI-45: the focused cursor or any hovered row leads.
+                    readonly property bool emphasized: (row.current && root.active) || rowHover.hovered
+
                     width: list.width
-                    height: root.height * 0.12
-                    color: index === root.cursor ? Palette.secondaryContainer : "transparent"
+                    height: root.rowH
+                    // Only the focused column carries the full highlight; an
+                    // inactive column remembers its cursor with a dim tick.
+                    color: row.current && root.active
+                        ? Palette.secondaryContainer
+                        : "transparent"
 
                     Behavior on color {
                         ColorAnimation { duration: Theme.motion.quick; easing.type: Easing.Bezier; easing.bezierCurve: Theme.ease.standard }
+                    }
+
+                    Rectangle {
+                        visible: row.current && !root.active
+                        anchors.left: parent.left
+                        anchors.top: parent.top
+                        anchors.bottom: parent.bottom
+                        width: Math.max(2, row.height * 0.025)
+                        color: Palette.primary
+                        opacity: 0.35
                     }
 
                     Rectangle {
@@ -130,19 +171,28 @@ Item {
                         spacing: row.height * 0.04
 
                         FadeText {
+                            id: titleText
                             width: parent.width
                             text: row.title
-                            color: index === root.cursor ? Palette.onSecondaryContainer : Palette.onSurface
+                            color: row.current && root.active ? Palette.onSecondaryContainer : Palette.onSurface
                             font.pixelSize: Theme.clamp(row.height * 0.3, 12, 18)
                             elide: Text.ElideRight
                             animated: false
+                            transformOrigin: Item.Left
+                            scale: (row.emphasized && !Theme.reduceMotion)
+                                ? Theme.fitScale(titleText.width, titleText.paintedWidth, Theme.selectionEmphasis)
+                                : 1.0
+
+                            Behavior on scale {
+                                NumberAnimation { duration: Theme.motion.quick; easing.type: Easing.Bezier; easing.bezierCurve: Theme.ease.standard }
+                            }
                         }
 
                         FadeText {
                             width: parent.width
                             visible: row.subtitle.length > 0
                             text: row.subtitle
-                            color: index === root.cursor ? Palette.onSecondaryContainer : Palette.onSurfaceVariant
+                            color: row.current && root.active ? Palette.onSecondaryContainer : Palette.onSurfaceVariant
                             font.pixelSize: Theme.clamp(row.height * 0.24, 10, 14)
                             elide: Text.ElideRight
                             animated: false
@@ -155,7 +205,7 @@ Item {
                         anchors.rightMargin: row.height * 0.18
                         anchors.verticalCenter: parent.verticalCenter
                         text: row.meta
-                        color: index === root.cursor ? Palette.onSecondaryContainer : Palette.onSurfaceVariant
+                        color: row.current && root.active ? Palette.onSecondaryContainer : Palette.onSurfaceVariant
                         font.pixelSize: Theme.clamp(row.height * 0.26, 10, 14)
                         animated: false
                     }
@@ -163,6 +213,7 @@ Item {
                     // Hover only signals clickability (S-5); the cursor moves
                     // on click or keys, never on hover.
                     HoverHandler {
+                        id: rowHover
                         cursorShape: Qt.PointingHandCursor
                     }
 

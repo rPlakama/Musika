@@ -98,8 +98,7 @@ Rectangle {
                 font.bold: true
             }
 
-            // Order cue: keys -- right arrow -- current order. Sized from the
-            // header, never from the SVG's intrinsic size.
+            // Order cue: keys -- slash -- current order.
             Row {
                 anchors.verticalCenter: parent.verticalCenter
                 anchors.right: parent.right
@@ -113,18 +112,11 @@ Rectangle {
                     font.pixelSize: root.height * 0.021
                 }
 
-                Item {
+                FadeText {
                     anchors.verticalCenter: parent.verticalCenter
-                    width: root.height * 0.03
-                    height: width
-
-                    SymbolIcon {
-                        anchors.centerIn: parent
-                        source: "qrc:/app/icons/arrow-right-svgrepo-com.svg"
-                        symbolColor: Palette.onSurfaceVariant
-                        width: parent.width * 0.85
-                        height: width
-                    }
+                    text: "/"
+                    color: Palette.onSurfaceVariant
+                    font.pixelSize: root.height * 0.021
                 }
 
                 FadeText {
@@ -153,6 +145,8 @@ Rectangle {
                 required property string cover
 
                 readonly property real viewWidth: ListView.view ? ListView.view.width : 0
+                // Mouse/keyboard parity: the hovered row expands like the cursor.
+                readonly property bool emphasized: ListView.isCurrentItem || rowHover.hovered
 
                 width: viewWidth
                 height: ListView.view ? ListView.view.height * 0.105 : 0
@@ -174,7 +168,7 @@ Rectangle {
                     id: cover
                     anchors.left: parent.left
                     anchors.verticalCenter: parent.verticalCenter
-                    anchors.leftMargin: row.viewWidth * 0.02
+                    anchors.leftMargin: row.viewWidth * 0.04
                     width: row.height * 0.78
                     height: row.height * 0.78
                     radius: Theme.radius
@@ -188,29 +182,49 @@ Rectangle {
                 }
 
                 Column {
+                    id: textColumn
                     anchors.verticalCenter: parent.verticalCenter
-                    anchors.left: parent.left
-                    anchors.leftMargin: row.viewWidth * 0.02 + row.height * 0.78 + row.viewWidth * 0.02
+                    anchors.left: cover.right
+                    anchors.leftMargin: row.viewWidth * 0.04
+                    anchors.right: metaLabel.left
+                    anchors.rightMargin: row.viewWidth * 0.04
                     spacing: row.height * 0.05
 
                     FadeText {
+                        id: titleText
+                        width: parent.width
                         text: row.title
                         color: Palette.onSurface
                         font.pixelSize: row.height * 0.26
+                        elide: Text.ElideRight
                         animated: false
+                        transformOrigin: Item.Left
+                        // UI-45 selection stage: the cursor/hover row leads its
+                        // neighbours (transform only, no reflow), capped to the
+                        // title box so it never reaches the meta gutter.
+                        scale: (row.emphasized && !Theme.reduceMotion)
+                            ? Theme.fitScale(titleText.width, titleText.paintedWidth, Theme.selectionEmphasis)
+                            : 1.0
+
+                        Behavior on scale {
+                            NumberAnimation { duration: Theme.motion.quick; easing.type: Easing.Bezier; easing.bezierCurve: Theme.ease.standard }
+                        }
                     }
                     FadeText {
+                        width: parent.width
                         text: row.subtitle
                         color: Palette.onSurfaceVariant
                         font.pixelSize: row.height * 0.19
+                        elide: Text.ElideRight
                         animated: false
                     }
                 }
 
                 FadeText {
+                    id: metaLabel
                     anchors.verticalCenter: parent.verticalCenter
                     anchors.right: parent.right
-                    anchors.rightMargin: row.viewWidth * 0.02
+                    anchors.rightMargin: row.viewWidth * 0.04
                     text: row.meta
                     color: Palette.onSurfaceVariant
                     font.pixelSize: row.height * 0.19

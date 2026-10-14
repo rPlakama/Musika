@@ -155,6 +155,9 @@ var stateDisabledContent = "#61E6E0E9"   // 38% onSurface
 var contentDim = 0.8      // near lines / whole unsynced column
 var contentDimFar = 0.5   // far lines in the synced focus window
 var lyricsEmphasis = 1.12 // active-line scale (transform, never font size)
+// UI-45 selection stage: the cursor/hover row's primary text leads its
+// neighbours (transform only, so rows never reflow).
+var selectionEmphasis = 1.10
 
 // ---------------------------------------------------------------------------
 // Font families. App-scoped typefaces from the flake (`XDG_DATA_DIRS` in the
@@ -216,6 +219,15 @@ function cursorEdge(list, last, mode) {
         return;
     list.currentIndex = target;
     list.positionViewAtIndex(target, mode);
+}
+
+// UI-45: cap a selection emphasis so the scaled text stops at its own box
+// edge (the lyrics stage does the same against the pane margin). `room` is
+// the text box width, `needed` its painted width.
+function fitScale(room, needed, max) {
+    if (room <= 0 || needed <= 0)
+        return max;
+    return Math.min(max, room / needed);
 }
 
 // Shared "m:ss" (h:mm:ss past the hour), used by every time label (UI-26).

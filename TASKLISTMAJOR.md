@@ -575,11 +575,17 @@ The product is incomplete without these.
     - plumb the missing fields: `ping()` currently exposes only `type` —
       capture `serverVersion`/`openSubsonic` in the backend and notify, plus
       `Backend.username` display;
-    - keep the existing mode chip, "Last Sync" text, progress tick and
-      spinning sync button; identity is a FadeText with `elide`, no dead space;
+    - keep the "Last Sync" text, progress tick and spinning sync button;
+      the mode chip stays out of the bar (the search overlay owns
+      INSERT/NORMAL); identity is a FadeText with `elide`, no dead space;
     - offline/logged-out states: show "offline"/user only when known.
   - **Verify:** `getUser`/ping fields surfaced on login + reconnect; bar reads
     `user@Navidrome`; no overlap at minimum window width (pairs with UI-43).
+  - **Now (partial):** renamed to `SuperiorBar.qml`; identity landed as
+    "Welcome, <username>" on the left (body font, welcome scale, body 45%
+    elide cap) and "Last Sync" scaled to match; the old NORMAL chip is gone
+    and the sync glyph trimmed 10%. Open: `serverVersion`/`openSubsonic` from
+    ping, `user@server`/avatar wording, offline state.
 
 - [ ] **UI-43 · Text bounds sweep: a rectangle around every label** — P2 · (QML audit)
   - **Why:** several FadeText/Text items rely on implicit widths in Row/Column
@@ -620,7 +626,7 @@ The product is incomplete without these.
   - **Now:** principle stated; the order cue is the current example; no
     registry or audit exists yet.
 
-- [ ] **UI-45 · Selection stage: the cursor row expands like the lyrics stage** — P2 · (design task; LYR-7 reference)
+- [x] **UI-45 · Selection stage: the cursor row expands like the lyrics stage** — P2 · (design task; LYR-7 reference)
   - **Why:** list rows are uniform and the cursor is only a colour fill (the
     `MediaList` delegate tints `ListView.isCurrentItem`/hover), so a list reads
     flat. The lyrics stage already proved the small/BIG/small rhythm — the
@@ -645,14 +651,14 @@ The product is incomplete without these.
   - **Verify:** minimum window width with long titles: no clipping/overlap,
     elide still works, adjacent rows don't move, mouse hover and keyboard
     cursor expand identically, `reduceMotion` renders the plain list.
-  - **Now (partial):** `Theme.selectionEmphasis` (1.10, flat under
-    `reduceMotion`) plus the shared `Theme.fitScale` cap; the primary text of
-    the cursor/hover row scales about its left edge (transform only, no
-    reflow) in `MediaList`, `SearchColumn`, `QueueDrawer` and the fullscreen
-    queue (hover added to the fullscreen rows); `MediaList` gutters widened to
-    `viewWidth * 0.04` with bounded, elided titles so the grown row never
-    reaches the walls. Open: neighbour colour/contrast pass and a real-pointer
-    hover/keyboard parity audit.
+  - **Now:** `Theme.selectionEmphasis` (1.10, flat under `reduceMotion`) plus
+    the shared `Theme.fitScale` cap; the primary text of the cursor/hover row
+    scales about its left edge (transform only, no reflow) in `MediaList`,
+    `SearchColumn`, `QueueDrawer` and the fullscreen queue (hover added to the
+    fullscreen rows); `MediaList` gutters widened to `viewWidth * 0.04` with
+    bounded, elided titles so the grown row never reaches the walls. Left for
+    a desktop session: the neighbour colour/contrast polish and a real-pointer
+    hover parity pass.
 
 
 - [ ] **UI-46 · Smooth scroll engine (distance-aware cursor follow)** — P2 · (SCROLLSTUDY.md)
@@ -998,10 +1004,17 @@ Small, bounded, high-value changes.
   - **Details:** a QML `Palette` wrapper (or per-role Behaviors) animating
     role changes `micro`/`standard`, no animation on first apply/reset.
 
-- [ ] **UI-41 · List scroll easing + payload crossfades** — P3 · (POLISHAUDIT §4)
+- [x] **UI-41 · List scroll easing + payload crossfades** — P3 · (POLISHAUDIT §4)
   - **Why:** keyboard moves teleport and model swaps flash.
   - **Details:** animate small `contentY` corrections for search/queue,
     crossfade lists on payload swap (`quick`), keep lyric follow in LYR-8.
+  - **Now:** `ListScroll.qml` eases small `contentY` corrections
+    (`quick`, Bezier standard, half-row context; instant `ListView.Contain`
+    fallback for unrealised rows and under `reduceMotion`), wired into
+    `SearchColumn`, the `QueueDrawer` (reorder-guarded) and the fullscreen
+    queue; payload swaps crossfade `quick` in the search columns and both
+    queues, with queue reorders staying live. The deeper distance-aware
+    engine (frame-timing, follow guards, reuseItems) is UI-46.
 
 - [ ] **LYR-8 · Smooth centre-follow + edge fades** — P2 · (roadmap "Lyrics presentation" P1)
   - **Why:** `positionViewAtIndex(Center)` teleports each line and every
@@ -1459,7 +1472,13 @@ Kept for rationale; the tree already carries these.
 
 - [x] **S-2 · Search appearance pass** — P2 · (MD13/MD14/MD9/MD12)
   - **Now:** two-line title/subtitle cells, mode chip, mode-aware footer,
-    "N albums" wording, clamped type, `quick` easing.
+    "N albums" wording, clamped type, `quick` easing. Redesign pass: only the
+    focused column carries the full highlight (inactive cursors keep a dim
+    tick), column dividers + contained count pills, 38/40/22 weights with the
+    artist count stacked as the subtitle, the glyph moved inside the input's
+    padding, INSERT/NORMAL unified on the bar's primary accent, the viewport
+    snapped to full rows with a footer rule, and the region frame hidden while
+    the modal is up.
 
 - [x] **S-3 · Query `search.db` (FTS5), retire `fd`/tmpfs** — P0 · (O1, CRITIQUE §3.4)
   - **Now:** palette and overlay query FTS5 through `Backend.requestSearch`.

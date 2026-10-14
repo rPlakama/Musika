@@ -27,6 +27,13 @@ Item {
     property bool opened: false
     property int cursor: 0
     property int nowPlaying: -1
+    // A reorder round-trip re-emits the queue; don't crossfade that one.
+    property bool _reordering: false
+
+    // UI-41: ease the view to the cursor instead of teleporting.
+    ListScroll {
+        id: scroll
+    }
 
     // Keep rendering while the close fade runs (the panel owns the opacity).
     visible: opened || panel.opacity > 0
@@ -53,6 +60,11 @@ Item {
 
     function apply(payload) {
         var data = JSON.parse(payload);
+        // UI-41: a payload swap fades in quickly instead of flashing; a
+        // reorder keeps the list live.
+        if (!root._reordering)
+            list.opacity = 0;
+        root._reordering = false;
         items.clear();
         for (var i = 0; i < data.items.length; i++) {
             var track = data.items[i];
@@ -67,6 +79,7 @@ Item {
         cursor = Math.max(0, Math.min(items.count - 1, data.index));
         list.currentIndex = cursor;
         list.positionViewAtIndex(cursor, ListView.Contain);
+        Qt.callLater(function() { list.opacity = 1; });
     }
 
     function handleAction(action) {
@@ -84,16 +97,18 @@ Item {
         } else if (action === "enter")
             Backend.queueJump(cursor);
         else if (action === "queue_up" && cursor > 0) {
+            root._reordering = true;
             Backend.queueMove(cursor, cursor - 1);
             cursor -= 1;
         } else if (action === "queue_down" && cursor < items.count - 1) {
+            root._reordering = true;
             Backend.queueMove(cursor, cursor + 1);
             cursor += 1;
         } else if (action === "queue_remove")
             Backend.queueRemove(cursor);
 
         list.currentIndex = cursor;
-        list.positionViewAtIndex(cursor, ListView.Contain);
+        scroll.ensureVisible(list, cursor);
     }
 
     ListModel {
@@ -144,6 +159,10 @@ Item {
                 model: items
                 boundsBehavior: Flickable.StopAtBounds
 
+                Behavior on opacity {
+                    NumberAnimation { duration: Theme.motion.quick; easing.type: Easing.Bezier; easing.bezierCurve: Theme.ease.standard }
+                }
+
                 delegate: Rectangle {
                     id: row
                     required property int index
@@ -151,6 +170,8 @@ Item {
                     required property string subtitle
                     required property string duration
                     required property string cover
+
+                    readonly property bool emphasized: index === root.cursor || rowHover.hovered
 
                     width: list.width
                     height: panel.height * 0.06
@@ -175,6 +196,7 @@ Item {
                     }
 
                     FadeText {
+                        id: titleText
                         anchors.left: thumb.right
                         anchors.leftMargin: row.height * 0.16
                         anchors.right: durationLabel.left
@@ -184,6 +206,15 @@ Item {
                         color: index === root.cursor ? Palette.onSecondaryContainer : Palette.onSurface
                         font.pixelSize: row.height * 0.34
                         elide: Text.ElideRight
+                        transformOrigin: Item.Left
+                        // UI-45: the cursor/hover row leads, capped to its box.
+                        scale: (row.emphasized && !Theme.reduceMotion)
+                            ? Theme.fitScale(titleText.width, titleText.paintedWidth, Theme.selectionEmphasis)
+                            : 1.0
+
+                        Behavior on scale {
+                            NumberAnimation { duration: Theme.motion.quick; easing.type: Easing.Bezier; easing.bezierCurve: Theme.ease.standard }
+                        }
                     }
 
                     FadeText {
@@ -197,6 +228,7 @@ Item {
                     }
 
                     HoverHandler {
+                        id: rowHover
                         cursorShape: Qt.PointingHandCursor
                     }
 

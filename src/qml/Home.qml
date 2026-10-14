@@ -614,8 +614,11 @@ Item {
             color: "transparent"
             // Visual mode highlights only the candidate; otherwise only the
             // active (cursor) region is outlined. Fullscreen is an overlay, so
-            // no region highlight may show above it.
-            visible: !root.nowPlayingExpanded && (root.visualMode ? candidate : active)
+            // no region highlight may show above it; the modal search owns the
+            // focus border while it is up (the shell behind it is blurred, so
+            // the sharp frame would clash).
+            visible: !root.nowPlayingExpanded && !searchOverlay.opened
+                && (root.visualMode ? candidate : active)
             border.width: (candidate ? 3 : 2) * unit
             border.color: Palette.primary
 

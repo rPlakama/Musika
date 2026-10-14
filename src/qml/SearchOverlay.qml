@@ -180,6 +180,8 @@ Item {
         if (!root.opened || field.text.length === 0)
             return;
 
+        // UI-41: results crossfade in on payload swaps instead of flashing.
+        columnsRow.opacity = 0;
         songResults.clear();
         albumResults.clear();
         artistResults.clear();
@@ -211,11 +213,13 @@ Item {
         }
         for (i = 0; i < data.artists.length; i++) {
             var artist = data.artists[i];
+            // Count stacks under the name (two-line cell), so the narrow
+            // column needs no right-side meta gutter.
             artistResults.append({
                 id: artist.id,
                 title: artist.name,
-                subtitle: "",
-                meta: artist.album_count + " albums",
+                subtitle: artist.album_count + (artist.album_count === 1 ? " album" : " albums"),
+                meta: "",
                 cover: artist.cover
             });
         }
@@ -227,6 +231,7 @@ Item {
         activeColumn = songResults.count > 0 ? 0 : (albumResults.count > 0 ? 1 : 2);
 
         loading = false;
+        Qt.callLater(function() { columnsRow.opacity = 1; });
     }
 
     ListModel {
@@ -369,37 +374,45 @@ Item {
                 }
 
                 // Mode chip: INSERT while typing, NORMAL while navigating.
+                // Same geometry and accent as the superior-bar NORMAL chip.
                 Rectangle {
                     implicitWidth: modeChipLabel.implicitWidth + panel.height * 0.05
                     implicitHeight: panel.height * 0.06
                     radius: Theme.radius
                     color: Palette.surfaceContainerHighest
                     border.width: Math.max(1, root.height * Theme.hairlineRatio)
-                    border.color: root.typing ? Palette.tertiary : Palette.primary
+                    border.color: Palette.primary
 
                     FadeText {
                         id: modeChipLabel
                         anchors.centerIn: parent
                         text: root.typing ? "INSERT" : "NORMAL"
-                        color: root.typing ? Palette.tertiary : Palette.primary
+                        color: Palette.primary
                         font.pixelSize: Theme.fontSize("label", panel.height)
                         font.bold: true
-                        font.letterSpacing: panel.height * 0.006
+                        font.letterSpacing: panel.height * 0.01
                         animated: false
                     }
                 }
             }
 
-            // Column widths are RowLayout weights (40/32/28), not pixels.
+            // Column widths are RowLayout weights (38/40/22), not pixels:
+            // Albums gets the room its titles need, Artists is narrow since it
+            // only carries a name plus its count.
             RowLayout {
+                id: columnsRow
                 Layout.fillWidth: true
                 Layout.fillHeight: true
                 spacing: panel.width * 0.012
 
+                Behavior on opacity {
+                    NumberAnimation { duration: Theme.motion.quick; easing.type: Easing.Bezier; easing.bezierCurve: Theme.ease.standard }
+                }
+
                 SearchColumn {
                     id: songsColumn
                     Layout.fillWidth: true
-                    Layout.preferredWidth: 40
+                    Layout.preferredWidth: 38
                     Layout.fillHeight: true
                     title: "Songs"
                     model: songResults
@@ -414,10 +427,18 @@ Item {
                     }
                 }
 
+                // Structural rule: keeps each column's header/count contained
+                // instead of bleeding into its neighbour.
+                Rectangle {
+                    Layout.fillHeight: true
+                    Layout.preferredWidth: Math.max(1, panel.height * Theme.hairlineRatio)
+                    color: Palette.outlineVariant
+                }
+
                 SearchColumn {
                     id: albumsColumn
                     Layout.fillWidth: true
-                    Layout.preferredWidth: 32
+                    Layout.preferredWidth: 40
                     Layout.fillHeight: true
                     title: "Albums"
                     model: albumResults
@@ -432,10 +453,16 @@ Item {
                     }
                 }
 
+                Rectangle {
+                    Layout.fillHeight: true
+                    Layout.preferredWidth: Math.max(1, panel.height * Theme.hairlineRatio)
+                    color: Palette.outlineVariant
+                }
+
                 SearchColumn {
                     id: artistsColumn
                     Layout.fillWidth: true
-                    Layout.preferredWidth: 28
+                    Layout.preferredWidth: 22
                     Layout.fillHeight: true
                     title: "Artists"
                     roundedArt: true
@@ -450,6 +477,13 @@ Item {
                         root.activate();
                     }
                 }
+            }
+
+            // Footer rule: separates the keybinds from the snapped row area.
+            Rectangle {
+                Layout.fillWidth: true
+                Layout.preferredHeight: Math.max(1, root.height * Theme.hairlineRatio)
+                color: Palette.outlineVariant
             }
 
             // One cheat sheet, per mode (no duplicate Esc hint).

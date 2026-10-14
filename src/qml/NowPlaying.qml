@@ -41,6 +41,11 @@ Rectangle {
     // snapping back to the playing track (Q-9).
     property bool _reordering: false
 
+    // UI-41: ease the queue view to the cursor instead of teleporting.
+    ListScroll {
+        id: queueScroll
+    }
+
     // Lyrics (override → cache → server; see src/lyrics.rs).
     property bool lyricsSynced: false
     property bool lyricsAvailable: false
@@ -96,11 +101,14 @@ Rectangle {
             return;
         queueCursor = Math.max(0, Math.min(queueItems.count - 1, queueCursor + delta));
         queueList.currentIndex = queueCursor;
-        queueList.positionViewAtIndex(queueCursor, ListView.Contain);
+        queueScroll.ensureVisible(queueList, queueCursor);
     }
 
     function applyQueue(payload) {
         var data = JSON.parse(payload);
+        // UI-41: payload swaps fade in quickly; a reorder keeps the list live.
+        if (!root._reordering)
+            queueList.opacity = 0;
         queueItems.clear();
         for (var i = 0; i < data.items.length; i++) {
             var track = data.items[i];
@@ -118,6 +126,7 @@ Rectangle {
         }
         queueList.currentIndex = queueCursor;
         queueList.positionViewAtIndex(queueCursor, ListView.Contain);
+        Qt.callLater(function() { queueList.opacity = 1; });
     }
 
     function applyLyrics(payload) {
@@ -213,14 +222,14 @@ Rectangle {
             Backend.queueMove(queueCursor, queueCursor - 1);
             queueCursor -= 1;
             queueList.currentIndex = queueCursor;
-            queueList.positionViewAtIndex(queueCursor, ListView.Contain);
+            queueScroll.ensureVisible(queueList, queueCursor);
             return;
         } else if (action === "queue_down" && queueCursor < queueItems.count - 1) {
             root._reordering = true;
             Backend.queueMove(queueCursor, queueCursor + 1);
             queueCursor += 1;
             queueList.currentIndex = queueCursor;
-            queueList.positionViewAtIndex(queueCursor, ListView.Contain);
+            queueScroll.ensureVisible(queueList, queueCursor);
             return;
         } else if (action === "enter") {
             if (queueCursor >= 0)
@@ -837,11 +846,17 @@ Rectangle {
                             boundsBehavior: Flickable.StopAtBounds
                             visible: queueItems.count > 0
 
+                            Behavior on opacity {
+                                NumberAnimation { duration: Theme.motion.quick; easing.type: Easing.Bezier; easing.bezierCurve: Theme.ease.standard }
+                            }
+
                             delegate: Rectangle {
                                 id: row
                                 required property int index
                                 required property string title
                                 required property string duration
+
+                                readonly property bool emphasized: index === root.queueCursor || rowHover.hovered
 
                                 width: queueList.width
                                 height: queueList.height * 0.16
@@ -850,6 +865,7 @@ Rectangle {
                                     : (index === root.queueIndex ? Palette.surfaceContainer : "transparent")
 
                                 FadeText {
+                                    id: titleText
                                     anchors.left: parent.left
                                     anchors.leftMargin: queueList.width * 0.01
                                     anchors.right: durationLabel.left
@@ -860,6 +876,15 @@ Rectangle {
                                     font.pixelSize: Theme.fontSize("body", root.height)
                                     elide: Text.ElideRight
                                     animated: false
+                                    transformOrigin: Item.Left
+                                    // UI-45: the cursor/hover row leads, capped to its box.
+                                    scale: (row.emphasized && !Theme.reduceMotion)
+                                        ? Theme.fitScale(titleText.width, titleText.paintedWidth, Theme.selectionEmphasis)
+                                        : 1.0
+
+                                    Behavior on scale {
+                                        NumberAnimation { duration: Theme.motion.quick; easing.type: Easing.Bezier; easing.bezierCurve: Theme.ease.standard }
+                                    }
                                 }
 
                                 FadeText {
@@ -870,6 +895,11 @@ Rectangle {
                                     color: Palette.onSurfaceVariant
                                     font.pixelSize: Theme.fontSize("mono", root.height)
                                     animated: false
+                                }
+
+                                HoverHandler {
+                                    id: rowHover
+                                    cursorShape: Qt.PointingHandCursor
                                 }
 
                                 TapHandler {

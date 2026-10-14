@@ -87,41 +87,26 @@ Rectangle {
         anchors.rightMargin: root.width * 0.012
         spacing: root.width * 0.015
 
-        // Mode chip (N4 placeholder): always shows the mode; NORMAL until a
-        // global mode machine exists.
-        Rectangle {
-            implicitWidth: modeLabel.implicitWidth + root.height * 0.36
-            implicitHeight: root.height * 0.5
-            radius: Theme.radius
-            color: Palette.surfaceContainerHighest
-            border.color: Palette.primary
-            border.width: Math.max(1, root.height * Theme.hairlineRatio)
-
-            FadeText {
-                id: modeLabel
-                anchors.centerIn: parent
-                text: "NORMAL"
-                color: Palette.primary
-                font.pixelSize: Theme.fontSize("label", root.height)
-                font.bold: true
-                font.letterSpacing: root.height * 0.025
-                animated: false
-            }
-        }
+        // Mode chip removed: the bar carries identity (left) and status
+        // (right) only; the search overlay owns the INSERT/NORMAL chip.
 
         Item {
             Layout.fillWidth: true
         }
 
-        // One status line: "Last Sync: <status>, <provider>".
+        // One status line: "Last Sync: <status>, <provider>". Same scale as
+        // the welcome on the left so the bar reads as one line; elided before
+        // it can crowd the progress/sync cluster.
         FadeText {
+            Layout.maximumWidth: root.width * 0.5
             text: {
                 var status = Backend.librarySyncing ? "Syncing…" : root.lastSyncText();
                 var provider = root.serverName();
                 return "Last Sync: " + status + (provider.length > 0 ? ", " + provider : "");
             }
             color: Backend.librarySyncing ? Palette.tertiary : Palette.onSurfaceVariant
-            font.pixelSize: Theme.fontSize("label", root.height)
+            font.pixelSize: Theme.fontSize("title", root.height) * 1.5
+            elide: Text.ElideRight
         }
 
         // Determinate progress across the last reported stage. Collapsed to a
@@ -209,7 +194,7 @@ Rectangle {
                 anchors.centerIn: parent
                 source: "qrc:/app/icons/reload-ui-2-svgrepo-com.svg"
                 symbolColor: Palette.onSurfaceVariant
-                width: root.height * 0.29
+                width: root.height * 0.26
                 height: width
                 opacity: Backend.librarySyncing ? 0.38 : (syncHover.hovered ? 1.0 : 0.85)
 
@@ -241,19 +226,18 @@ Rectangle {
         }
     }
 
-    // Welcome, <user>: centred on the bar, independent of the left/right
-    // clusters so a long name never shifts the sync zone; elided before it
-    // can collide with either cluster. Overused Grotesk stands in for the
-    // unpackaged Bricolage Grotesque (see flake.nix `fonts`).
+    // Welcome, <user>: left-aligned in the bar (the old mode-chip spot),
+    // almost filling the bar's height, elided before it can reach the sync
+    // cluster. Same body face as the rest of the chrome.
     FadeText {
-        anchors.horizontalCenter: parent.horizontalCenter
+        anchors.left: parent.left
+        anchors.leftMargin: root.width * 0.012
         anchors.verticalCenter: parent.verticalCenter
-        width: Math.min(implicitWidth, root.width * 0.3)
-        horizontalAlignment: Text.AlignHCenter
+        width: Math.min(implicitWidth, root.width * 0.45)
+        horizontalAlignment: Text.AlignLeft
         text: Backend.username.length > 0 ? "Welcome, " + Backend.username : ""
         color: Palette.onSurfaceVariant
-        font.family: "Overused Grotesk Roman"
-        font.pixelSize: Theme.fontSize("title", root.height)
+        font.pixelSize: Theme.fontSize("title", root.height) * 1.5
         elide: Text.ElideRight
         animated: false
     }

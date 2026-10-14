@@ -1100,6 +1100,26 @@ Small, bounded, high-value changes.
     zero-result query doesn't strobe; typing more re-triggers once per
     response; `reduceMotion` flat.
 
+- [ ] **UI-50 · Microdesign: ArtistEntry album selection expands like the lists** — P3 · (design microtask)
+  - **Why:** lists and search columns now emphasize the current selection with
+    the UI-45 expand effect (`Theme.selectionEmphasis` + `fitScale` cap, full
+    block highlight), but the ArtistEntry album grid only tints the cell
+    (`cell.current ? secondaryContainer`, hover fill) — a cover wall that
+    reads flatter than every list it links to.
+  - **Details:**
+    - in `ArtistEntry.qml`'s grid delegate, apply the same emphasis to the
+      current/hovered album: scale the cover + title block about a stable
+      origin (top/center) at `Theme.selectionEmphasis`, title scale capped by
+      `Theme.fitScale` so long titles stay elided inside the cell;
+    - keep the block highlight + primary cover border, and hover expands too
+      (mouse/keyboard parity, exactly like `MediaList`/`SearchColumn`);
+    - transform-only (no `cellWidth`/layout change), `quick` with `Theme.ease`,
+      flat under `Theme.reduceMotion`; leave headroom so the scaled cover
+      doesn't clip at the cell edge.
+  - **Verify:** cursor and hover over an album in ArtistEntry → cover/title
+    expand like list rows, neighbours don't move, covers don't clip, long
+    titles still elide, `reduceMotion` renders the plain grid.
+
 - [x] **VI-6 · `Ctrl-[` alias + pending-sequence cancel** — P1 · (N3 residual)
   - **Why:** `Ctrl-[` is muscle memory for Esc; Esc should also clear a half-typed
     sequence/count.
@@ -1723,9 +1743,9 @@ Kept for rationale; the tree already carries these.
 |--------|------|--------|
 | Must have | 8 | 1 |
 | Should have | 60 | 5 |
-| Quick wins | 9 | 44 |
+| Quick wins | 10 | 44 |
 | Solved (reference) | — | 36 |
-| **Total** | **76** | **86** |
+| **Total** | **77** | **86** |
 
 ### Coverage by area
 
@@ -1736,7 +1756,7 @@ Kept for rationale; the tree already carries these.
 | Player & media features | 5 | 2 |
 | Lyrics pipeline | 2 | 7 |
 | Search | 2 | 6 |
-| UI microdesigns | 17 | 29 |
+| UI microdesigns | 18 | 29 |
 | Dynamic color | 1 | 5 |
 | Architecture & robustness | 22 | 15 |
 | Media cache / offline | 7 | 0 |

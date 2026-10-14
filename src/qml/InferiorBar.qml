@@ -30,20 +30,6 @@ Rectangle {
         return Theme.volumeIcon(Backend.volume, Backend.muted);
     }
 
-    // Scoped controls while the player bar is the active region.
-    function handleAction(action) {
-        if (action === "move_left")
-            Backend.playerSeek(Math.max(0, Backend.position - 5));
-        else if (action === "move_right")
-            Backend.playerSeek(Backend.position + 5);
-        else if (action === "move_up")
-            Backend.playerPrevious();
-        else if (action === "move_down")
-            Backend.playerNext();
-        else if (action === "enter")
-            Backend.playerToggle();
-    }
-
     // Polls the player for position and end-of-track.
     Timer {
         interval: 500

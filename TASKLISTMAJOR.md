@@ -1157,6 +1157,11 @@ Small, bounded, high-value changes.
       and the keybar's transport hints); default pane = lyrics.
     - Sweep comments/docs/README (region lists, "Tab pane cycle", keymap
       table).
+  - **Now (partial):** the player bar is out of the region model — `Home` has
+    no region 3 (no Ctrl-W candidate, no PLAYER frame, no dispatch case, no
+    `down` edge to it) and `InferiorBar.handleAction` is deleted (the 500 ms
+    `Backend.tick()` timer stays). Open: fullscreen pane 0 (seek lives there),
+    the global seek binds that let it go, and the comments/README sweep.
   - **Verify:** Ctrl-W lists only sidebar/main/status; Shift+Enter toggles
     fullscreen from anywhere; Tab in fullscreen cycles lyrics/queue only;
     Space/`n/p`/`m`/`±`/seek work in every scope; mouse transport unchanged;

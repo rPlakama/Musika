@@ -31,7 +31,8 @@ import "Theme.js" as Theme
 Item {
     id: root
 
-    // 0 = sidebar, 1 = main, 2 = status (top), 3 = inferior bar.
+    // 0 = sidebar, 1 = main, 2 = status (top). The player bar is decoration
+    // driven by global binds (UI-51), never a keyboard destination.
     property int activeRegion: 1
     property int visualSelection: 1
     property bool visualMode: false
@@ -84,8 +85,8 @@ Item {
         activeRegion = 1;
     }
 
-    // Spatial neighbours of a region: 0 sidebar, 1 main, 2 status (top),
-    // 3 player (bottom). Returns -1 when there is nothing in that direction.
+    // Spatial neighbours of a region: 0 sidebar, 1 main, 2 status (top).
+    // The player bar is decoration: no region, no Ctrl-W candidate (UI-51).
     function regionInDirection(region, dir) {
         switch (region) {
         case 1: // main
@@ -93,21 +94,15 @@ Item {
                 return 0;
             if (dir === "up")
                 return 2;
-            if (dir === "down")
-                return 3;
             return -1;
         case 0: // sidebar
             if (dir === "right")
                 return 1;
             if (dir === "up")
                 return 2;
-            if (dir === "down")
-                return 3;
             return -1;
         case 2: // status
             return dir === "down" ? 1 : -1;
-        case 3: // player
-            return dir === "up" ? 1 : -1;
         default:
             return -1;
         }
@@ -188,8 +183,8 @@ Item {
             return;
         }
         // List ordering (Shift-L / Shift-H) is scoped to the visible list:
-        // the Songs segment cycles the song order, everything else albums
-        // (one shared cycle, `library::ORDERS`).
+        // Songs cycles the song order, Artists its own Name/Albums cycle,
+        // everything else the album order (one shared cycle per scope).
         if (action === "order_next" || action === "order_prev") {
             var forward = action === "order_next";
             if (currentSegment === 1) {
@@ -197,6 +192,11 @@ Item {
                     Backend.songOrderNext();
                 else
                     Backend.songOrderPrev();
+            } else if (currentSegment === 2) {
+                if (forward)
+                    Backend.artistOrderNext();
+                else
+                    Backend.artistOrderPrev();
             } else {
                 if (forward)
                     Backend.albumOrderNext();
@@ -318,9 +318,6 @@ Item {
             break;
         case 2:
             topBar.handleAction(action);
-            break;
-        case 3:
-            player.handleAction(action);
             break;
         }
     }
@@ -586,15 +583,13 @@ Item {
     }
 
     // Region borders = the vi cursor, positioned from the layout ratios.
-    // 0 = sidebar, 1 = main, 2 = status (top), 3 = player (bottom).
+    // 0 = sidebar, 1 = main, 2 = status (top). The player bar has no region:
+    // it is decoration driven by global binds (UI-51).
     Repeater {
-        // UI-1: one state colour for every region — the frame marks focus, not
-        // identity, so all four use the primary accent.
         model: [
             { title: "LIBRARY", rotated: true },
             { title: "MAIN", rotated: false },
-            { title: "STATUS", rotated: false },
-            { title: "PLAYER", rotated: false }
+            { title: "STATUS", rotated: false }
         ]
 
         delegate: Rectangle {
@@ -607,9 +602,9 @@ Item {
             readonly property real unit: Math.max(1, root.width * 0.0015)
 
             x: index === 1 ? root.sideW : 0
-            y: index === 2 ? 0 : (index === 3 ? root.height - root.playH : root.barH)
-            width: (index === 2 || index === 3) ? root.width : (index === 1 ? root.width - root.sideW : root.sideW)
-            height: index === 2 ? root.barH : (index === 3 ? root.playH : root.bodyH)
+            y: index === 2 ? 0 : root.barH
+            width: index === 2 ? root.width : (index === 1 ? root.width - root.sideW : root.sideW)
+            height: index === 2 ? root.barH : root.bodyH
             z: Theme.zRegion
             color: "transparent"
             // Visual mode highlights only the candidate; otherwise only the

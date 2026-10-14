@@ -645,7 +645,42 @@ The product is incomplete without these.
   - **Verify:** minimum window width with long titles: no clipping/overlap,
     elide still works, adjacent rows don't move, mouse hover and keyboard
     cursor expand identically, `reduceMotion` renders the plain list.
+  - **Now (partial):** `Theme.selectionEmphasis` (1.10, flat under
+    `reduceMotion`) plus the shared `Theme.fitScale` cap; the primary text of
+    the cursor/hover row scales about its left edge (transform only, no
+    reflow) in `MediaList`, `SearchColumn`, `QueueDrawer` and the fullscreen
+    queue (hover added to the fullscreen rows); `MediaList` gutters widened to
+    `viewWidth * 0.04` with bounded, elided titles so the grown row never
+    reaches the walls. Open: neighbour colour/contrast pass and a real-pointer
+    hover/keyboard parity audit.
 
+
+- [ ] **UI-46 · Smooth scroll engine (distance-aware cursor follow)** — P2 · (SCROLLSTUDY.md)
+  - **Why:** every list follows the cursor with an instant
+    `positionViewAtIndex(..., Contain)` (MediaList:71, AlbumEntry:124,
+    ArtistList:72, SearchColumn:105, QueueDrawer:69/96, NowPlaying:99/120/148),
+    so moves teleport; fixed durations are distance-blind and the lyrics
+    follow fights manual scrolling. Reads as blocky.
+  - **Details:**
+    - shared `scrollIndex(list, index, mode)` helper (`Theme.js`/`ScrollAnim`):
+      target from `itemAtIndex` (minimal move for Contain, centring for
+      Center), clamped to `[0, contentHeight - height]`;
+    - distance-aware duration — `clamp(px / ~2.5, 80, 240)` ms with
+      `ease.decelerate`, retarget a running animation instead of restarting;
+    - follow guard: pause while `dragging`/`movementState` is non-stop, resume
+      on selection/track change or after idle (lyrics ~4 s);
+    - instant `positionViewAtIndex` only for far jumps (`gg`/`G`);
+    - `boundsBehavior: DragOverBounds` + `reuseItems`/`cacheBuffer: height` so
+      delegates don't pop in blank; no effects during movement;
+    - consider the ListView highlight machinery
+      (`highlightMoveDuration`/`highlightRangeMode`) once UI-45 gives the
+      cursor a visual highlight;
+    - `Theme.reduceMotion` → instant.
+  - **Consumers:** UI-41 (list easing), LYR-8 (lyrics follow), UI-45
+    (selection stage), queue/search lists.
+  - **Verify:** frame graph (`QSG_RENDER_TIMING=1`) smooth for 1-row, 5-row
+    and 20-row moves; wheel mid-follow doesn't stutter; long titles don't
+    clip while expanding; `reduceMotion` flat.
 
 - [ ] **THM-6 · Rewrite the color engine on DMS's pipeline** — P2 · (MATUGENSTUDY.md; roadmap T5+)
   - **Why:** DMS cleanly separates seed extraction, palette specs, caching,
@@ -1606,10 +1641,10 @@ Kept for rationale; the tree already carries these.
 | Bucket | Open | Solved |
 |--------|------|--------|
 | Must have | 8 | 1 |
-| Should have | 59 | 5 |
+| Should have | 60 | 5 |
 | Quick wins | 7 | 43 |
 | Solved (reference) | — | 36 |
-| **Total** | **74** | **85** |
+| **Total** | **75** | **85** |
 
 ### Coverage by area
 
@@ -1620,7 +1655,7 @@ Kept for rationale; the tree already carries these.
 | Player & media features | 5 | 2 |
 | Lyrics pipeline | 2 | 7 |
 | Search | 2 | 6 |
-| UI microdesigns | 14 | 28 |
+| UI microdesigns | 15 | 28 |
 | Dynamic color | 1 | 5 |
 | Architecture & robustness | 22 | 15 |
 | Media cache / offline | 7 | 0 |

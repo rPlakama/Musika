@@ -1402,7 +1402,7 @@ Small, bounded, high-value changes.
     Space/`n/p`/`m`/`±`/seek work in every scope; mouse transport unchanged;
     tick/auto-advance intact.
 
-- [ ] **UI-52 · ArtistEntry identity strip: biography slot + action chips (placeholders)** — P3 · (design microtask; ARTISTENTRYSTUDY.md §2, P-8, ARC-42)
+- [x] **UI-52 · ArtistEntry identity strip: biography slot + action chips** — P3 · (design microtask; ARTISTENTRYSTUDY.md §2, P-8, ARC-42)
   - **Why:** the artist header row is avatar + name + album count, and the
     whole right half of that parent rectangle sits empty while the album grid
     below owns the width. Navidrome fills exactly that space with the
@@ -1452,12 +1452,62 @@ Small, bounded, high-value changes.
     - header backdrop: the artist art gets the same D-5 ambience as
       `AlbumEntry`/`NowPlaying` (`CoverImage.ambient` + the surface gradient
       wash behind the content), so the entry floats on the artist's colours.
-  - **Verify:** at ≥narrow the header shows the biography placeholder over
-    four chips on the right with no overlap with the avatar/name at compact
-    widths; hovering a chip tints it and the cursor is a pointing hand;
-    clicking does nothing (no backend, no toast, no focus grab); below narrow
-    the strip is gone and the header reads exactly as today; biography text
-    wraps to two lines and elides; `reduceMotion` still fades nothing.
+  - **Verify:** at ≥narrow the header shows the biography over the chips on
+    the right with no overlap with the avatar/name at compact widths; hovering
+    a chip tints it and the cursor is a pointing hand; the favourite star
+    toggles (gray ↔ `Theme.favoriteStar`) and star clicks set/clear the
+    rating, both reconciled by the backend payloads; below narrow the strip is
+    gone and the header reads exactly as today; biography text wraps to two
+    lines and elides; `reduceMotion` still fades nothing.
+  - **Now:** the strip landed (`ActionChip` inline component,
+    stars · In-cache · Shuffle · Favorite; hover preview + hitbox slots; D-5
+    ambience) and its metadata is wired to ARC-42: the entry requests
+    `requestArtistUser` + `requestArtistInfo` on open, applies the
+    `artist_user`/`artist_info` payloads (id-guarded), toggles the favourite
+    star optimistically (`Theme.favoriteStar` yellow lit) and sets the rating
+    by clicking a star (clicking the lit top clears to 0); the backend
+    reconciles the optimistic state through the same payload on success and
+    failure (error toast rides `errorRaised`). In-cache and Shuffle stay
+    inert placeholders until their backends (CACHE-1/5, Q-3); keybar
+    `s`/`1..5`/`c` and the rating capability gate belong to ARC-42.
+
+- [x] **UI-53 · Header composition standard: one major + three containers** — P3 · (design standard; UI-52, ARTISTENTRYSTUDY.md §2, P-8)
+  - **Why:** the artist header was a flowing `RowLayout`: a long biography
+    negotiated width against the identity column and, when the description
+    was allowed to expand, the whole segment grew and squashed the name/count
+    (and the grid below via the layout). Containers with fixed anchors scale
+    predictably — each zone owns its box and nothing to fight over.
+  - **Standard (the issue):**
+    - one **major rectangle** owns the header box: transparent, height = the
+      identity cover/avatar side; it is the only element the outer layout
+      negotiates with;
+    - **left container**: anchored left/top/bottom, **30% of the major's
+      width**; owns the round avatar (responsive:
+      `min(avatarSide, 50% of the container)`) over the title + count (both
+      elide; the identity can shrink but never be squeezed by the text zone);
+    - **right stack**: the remaining width, from the left container's right
+      edge to the major's right edge, split **70% height** (long-form text:
+      biography) over **30% height** (action row); both transparent with
+      fixed anchors, so the two never negotiate with each other;
+    - **container-driven text sizing**: the 8 px floor defines the rectangle
+      capacity via `FontMetrics` (chars per line × lines that fit at 8); the
+      font ramps **8..14** by fill:
+      `clamp(8 + (1 − len / capacity) × 6, 8, 14)` — short text grows toward
+      14, text that exactly fills the box sits at 8, overflow clamps and
+      elides;
+    - below `narrow` the right stack hides and the left identity keeps the
+      major.
+  - **Applies to:** the ArtistEntry header now; future headers (AlbumEntry
+    D-3, NowPlaying identity) adopt the same three-container rule.
+  - **Verify:** a long biography fills its 70% box without moving the
+    identity or the major's height; the ramp lands between 8 and 14; the
+    chips stay inside the bottom 30%; identity wins below `narrow`.
+  - **Now:** `ArtistEntry` header reworked to the standard: `header` (major)
+    with `identityBox` (30%, avatar + name + count), `descriptionBox` (70%
+    height, FontMetrics capacity ramp 8..14 from the box's own height/width)
+    and `actionsBox` (30%, the star row + chips, vertically centred); the
+    avatar is `min(avatarSide, 50% of the identity box)` so the 30% column
+    never overflows; the right stack hides below `narrow`.
 
 - [x] **VI-6 · `Ctrl-[` alias + pending-sequence cancel** — P1 · (N3 residual)
   - **Why:** `Ctrl-[` is muscle memory for Esc; Esc should also clear a half-typed
@@ -2082,9 +2132,9 @@ Kept for rationale; the tree already carries these.
 |--------|------|--------|
 | Must have | 8 | 1 |
 | Should have | 62 | 9 |
-| Quick wins | 10 | 46 |
+| Quick wins | 9 | 48 |
 | Solved (reference) | — | 36 |
-| **Total** | **79** | **92** |
+| **Total** | **78** | **94** |
 
 ### Coverage by area
 

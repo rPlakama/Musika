@@ -155,6 +155,10 @@ var stateFocus = "#1AD0BCFF"            // 10% primary
 var stateDisabledContainer = "#1F36343B" // 12% surfaceContainerHighest
 var stateDisabledContent = "#61E6E0E9"   // 38% onSurface
 
+// Favourite star, lit: Material Yellow 400. A semantic state colour like the
+// error role, so it stays fixed across dynamic schemes (ARC-42).
+var favoriteStar = "#FFD54F"
+
 // ---------------------------------------------------------------------------
 // Lyrics stage (see roadmap "Lyrics presentation"): a focus window where the
 // active line is scaled and fully contrasted while neighbours dim with

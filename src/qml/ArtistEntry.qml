@@ -37,9 +37,15 @@ Rectangle {
     // UI-52: biography slot for the header's identity strip; ARC-42 fills it
     // from the `artist_info` channel. Empty shows the placeholder copy.
     property string artistDescription: ""
+    /// What the strip actually draws (placeholder when no biography yet).
+    readonly property string descriptionText: artistDescription.length > 0
+        ? artistDescription
+        : "Artist biography will appear here once the server metadata is wired."
     // UI-52: current artist rating, 0..5 (Subsonic `setRating` domain);
     // 0 = unrated. ARC-42 fetches and toggles it.
     property int artistRating: 0
+    // UI-52/ARC-42: favourite state from `artist_user.db`.
+    property bool artistStarred: false
     // UI-52: star under the cursor in the rating row, -1 = none. The row
     // previews the level incrementally up to this index.
     property int hoveredStar: -1
@@ -78,6 +84,9 @@ Rectangle {
 
         property string label: ""
         property url icon: ""
+        property color iconColor: Palette.onSurfaceVariant
+
+        signal clicked()
 
         height: root.height * 0.06
         // Icon-only chips are square; a label adds the text + side padding
@@ -105,7 +114,7 @@ Rectangle {
                 anchors.verticalCenter: parent.verticalCenter
                 visible: chip.icon.toString().length > 0
                 source: chip.icon
-                symbolColor: Palette.onSurfaceVariant
+                symbolColor: chip.iconColor
                 width: chip.height * 0.42
                 height: width
             }
@@ -124,6 +133,10 @@ Rectangle {
             id: chipHover
             cursorShape: Qt.PointingHandCursor
         }
+
+        TapHandler {
+            onTapped: chip.clicked()
+        }
     }
 
     ListModel {
@@ -134,6 +147,27 @@ Rectangle {
         if (root.artistId === "")
             return;
         Backend.requestArtist(root.artistId);
+        // ARC-42: user state (local index) + biography (library.db cache;
+        // the request refreshes from the server when reachable).
+        Backend.requestArtistUser(root.artistId);
+        Backend.requestArtistInfo(root.artistId);
+    }
+
+    // ARC-42: local favourite/rating state for this artist.
+    function applyUser(payload) {
+        var user = JSON.parse(payload);
+        if (user.id !== root.artistId)
+            return; // stale response for an artist we already left
+        root.artistStarred = user.starred === true;
+        root.artistRating = Number(user.rating) || 0;
+    }
+
+    // ARC-42: cached/refreshed biography for this artist.
+    function applyInfo(payload) {
+        var info = JSON.parse(payload);
+        if (info.id !== root.artistId)
+            return;
+        root.artistDescription = info.biography ? info.biography : "";
     }
 
     function apply(payload) {
@@ -222,6 +256,10 @@ Rectangle {
         function onDataReady(channel, payload) {
             if (channel === "artist")
                 root.apply(payload);
+            else if (channel === "artist_user")
+                root.applyUser(payload);
+            else if (channel === "artist_info")
+                root.applyInfo(payload);
         }
         function onLibrary_changed() {
             root.reload();
@@ -281,71 +319,127 @@ Rectangle {
             }
         }
 
-        // Header: the only circle in the product is the artist avatar (R3).
-        RowLayout {
+        // UI-53 header standard: one major rectangle holds three transparent
+        // containers — left identity (30% width: round avatar + name + album
+        // count) and a right stack (the remaining width) split 70% height for
+        // the biography over 30% for the action row. Fixed anchors, so a long
+        // biography can never squeeze the identity or grow the header.
+        Rectangle {
+            id: header
             Layout.fillWidth: true
-            spacing: root.width * 0.025
+            Layout.preferredHeight: root.avatarSide
+            color: "transparent"
 
             Rectangle {
-                Layout.preferredWidth: root.avatarSide
-                Layout.preferredHeight: root.avatarSide
-                Layout.alignment: Qt.AlignVCenter
-                radius: width * 0.5
-                color: Palette.primaryContainer
-                clip: true
+                id: identityBox
+                anchors.left: parent.left
+                anchors.top: parent.top
+                anchors.bottom: parent.bottom
+                width: parent.width * 0.3
+                color: "transparent"
 
-                CoverImage {
+                // The only circle in the product is the artist avatar (R3).
+                RowLayout {
                     anchors.fill: parent
-                    source: root.artistCover
+                    spacing: root.width * 0.015
+
+                    Rectangle {
+                        readonly property real side: Math.min(root.avatarSide,
+                            identityBox.width * 0.5)
+
+                        Layout.preferredWidth: side
+                        Layout.preferredHeight: side
+                        Layout.alignment: Qt.AlignVCenter
+                        radius: width * 0.5
+                        color: Palette.primaryContainer
+                        clip: true
+
+                        CoverImage {
+                            anchors.fill: parent
+                            source: root.artistCover
+                        }
+                    }
+
+                    ColumnLayout {
+                        Layout.fillWidth: true
+                        Layout.alignment: Qt.AlignVCenter
+                        spacing: root.height * 0.006
+
+                        FadeText {
+                            Layout.fillWidth: true
+                            text: root.artistName
+                            color: Palette.onSurface
+                            font.pixelSize: root.height * 0.036
+                            font.bold: true
+                            elide: Text.ElideRight
+                        }
+                        FadeText {
+                            Layout.fillWidth: true
+                            text: root.artistMeta + (root.serverTag.length > 0 ? "   ·   " + root.serverTag : "")
+                            color: Palette.onSurfaceVariant
+                            font.pixelSize: root.height * 0.02
+                            elide: Text.ElideRight
+                        }
+                    }
                 }
             }
 
-            ColumnLayout {
-                Layout.fillWidth: true
-                Layout.alignment: Qt.AlignVCenter
-                spacing: root.height * 0.006
-
-                FadeText {
-                    Layout.fillWidth: true
-                    text: root.artistName
-                    color: Palette.onSurface
-                    font.pixelSize: root.height * 0.036
-                    font.bold: true
-                    elide: Text.ElideRight
-                }
-                FadeText {
-                    Layout.fillWidth: true
-                    text: root.artistMeta + (root.serverTag.length > 0 ? "   ·   " + root.serverTag : "")
-                    color: Palette.onSurfaceVariant
-                    font.pixelSize: root.height * 0.02
-                    elide: Text.ElideRight
-                }
-            }
-
-            // UI-52: identity strip — the biography slot over the action chips
-            // (placeholders until ARC-42 supplies star/rating/cache/shuffle).
-            // Below the narrow breakpoint the header falls back to the
-            // avatar + name + count zones and this strip is hidden.
-            ColumnLayout {
-                Layout.fillWidth: true
-                Layout.maximumWidth: root.width * 0.5
-                Layout.alignment: Qt.AlignVCenter
-                spacing: root.height * 0.1
+            Rectangle {
+                id: descriptionBox
+                anchors.left: identityBox.right
+                anchors.right: parent.right
+                anchors.top: parent.top
+                height: parent.height * 0.7
+                color: "transparent"
                 visible: !Theme.isNarrow(root.width)
 
-                FadeText {
-                    Layout.fillWidth: true
-                    text: root.artistDescription.length > 0
-                        ? root.artistDescription
-                        : "Artist biography will appear here once the server metadata is wired."
-                    color: Palette.onSurfaceVariant
-                    font.pixelSize: root.height * 0.018
-                    wrapMode: Text.WordWrap
-                    maximumLineCount: 2
-                    elide: Text.ElideRight
+                // 9 px metrics: the capacity reference for the size ramp.
+                FontMetrics {
+                    id: bioMetrics
+                    font.family: Theme.fonts.body
+                    font.pixelSize: 9
                 }
 
+                FadeText {
+                    id: descriptionLabel
+                    anchors.fill: parent
+                    anchors.leftMargin: root.width * 0.015
+
+                    // UI-52/UI-53: font size ramps 9..14 by how much of this
+                    // rectangle the text fills — `capacity` is how many
+                    // characters fit at the 9 px floor (font metrics × the
+                    // lines that fit at that floor); a short biography grows
+                    // toward 14, one that exactly fills the box sits at 9,
+                    // overflow stays 9 and elides.
+                    readonly property int lines: Math.max(1,
+                        Math.floor(height / (9 * 1.3)))
+                    readonly property real charsPerLine: Math.max(1,
+                        Math.floor(width / bioMetrics.averageCharacterWidth))
+                    readonly property real capacity: charsPerLine * lines
+
+                    text: root.descriptionText
+                    color: Palette.onSurfaceVariant
+                    font.pixelSize: Theme.clamp(
+                        9 + (1 - text.length / capacity) * 5, 9, 14)
+                    wrapMode: Text.WordWrap
+                    maximumLineCount: lines
+                    elide: Text.ElideRight
+                }
+            }
+
+            Rectangle {
+                id: actionsBox
+                anchors.left: identityBox.right
+                anchors.right: parent.right
+                anchors.top: descriptionBox.bottom
+                anchors.bottom: parent.bottom
+                color: "transparent"
+                visible: !Theme.isNarrow(root.width)
+
                 Row {
+                    anchors.left: parent.left
+                    anchors.leftMargin: root.width * 0.015
+                    anchors.verticalCenter: parent.verticalCenter
                     spacing: root.height * 0.010
 
                     // UI-52: stars are glyphs, not a chip — five slots, the
@@ -402,9 +496,29 @@ Rectangle {
                                             starPress.press();
                                     }
                                 }
+
+                                TapHandler {
+                                    // ARC-42: optimistic level; clicking the
+                                    // lit top again clears it (rating 0). The
+                                    // `artist_user` payload reconciles.
+                                    onTapped: {
+                                        var level = starSlot.index + 1;
+                                        root.artistRating = root.artistRating === level ? 0 : level;
+                                        Backend.rateArtist(root.artistId, root.artistRating);
+                                    }
+                                }
                             }
                         }
                     }
+                }
+
+                // UI-53: stars hug the identity edge; the actions hug the
+                // right edge of the header.
+                Row {
+                    anchors.right: parent.right
+                    anchors.rightMargin: root.width * 0.015
+                    anchors.verticalCenter: parent.verticalCenter
+                    spacing: root.height * 0.010
 
                     ActionChip {
                         // ARC-42 placeholder: not downloaded uses the empty
@@ -421,10 +535,17 @@ Rectangle {
                     }
 
                     ActionChip {
-                        // ARC-42 placeholder: filled star, gray (`onSurface
-                        // Variant`) while not favorited; when favorited, tint
-                        // it yellow with the Material palette.
+                        // ARC-42: filled star, gray while not favourited and
+                        // the Material yellow when it is. Clicks toggle
+                        // optimistically; the backend reconciles through the
+                        // `artist_user` payload (also on failure, alongside
+                        // the error toast).
                         icon: "qrc:/app/icons/star.svg"
+                        iconColor: root.artistStarred ? Theme.favoriteStar : Palette.onSurfaceVariant
+                        onClicked: {
+                            root.artistStarred = !root.artistStarred;
+                            Backend.starArtist(root.artistId, root.artistStarred);
+                        }
                     }
                 }
             }

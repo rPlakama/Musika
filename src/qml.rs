@@ -1116,6 +1116,9 @@ impl Backend {
                     qtbridge::invoke_method!(invoker, "emitData", "artist_user".to_string(), json);
                 }
                 Err(err) => {
+                    // Reconcile the optimistic UI with what is stored.
+                    let json = crate::artist_user::payload(&dbs.artist_user, &artist_id).await;
+                    qtbridge::invoke_method!(invoker, "emitData", "artist_user".to_string(), json);
                     qtbridge::invoke_method!(
                         error_invoker,
                         "errorRaised",
@@ -1168,6 +1171,9 @@ impl Backend {
                     qtbridge::invoke_method!(invoker, "emitData", "artist_user".to_string(), json);
                 }
                 Err(err) => {
+                    // Reconcile the optimistic UI with what is stored.
+                    let json = crate::artist_user::payload(&dbs.artist_user, &artist_id).await;
+                    qtbridge::invoke_method!(invoker, "emitData", "artist_user".to_string(), json);
                     qtbridge::invoke_method!(
                         error_invoker,
                         "errorRaised",

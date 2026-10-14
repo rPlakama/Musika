@@ -635,6 +635,30 @@ pub async fn artist_song_ids(pool: &SqlitePool, artist_id: &str) -> Result<Vec<S
     Ok(ids)
 }
 
+/// `(artist_id, album_id)` per song id — the scope inputs for the CACHE-5
+/// coverage check (empty map for an empty `ids` list).
+pub async fn song_scopes(
+    pool: &SqlitePool,
+    ids: &[String],
+) -> Result<std::collections::HashMap<String, (Option<String>, Option<String>)>> {
+    if ids.is_empty() {
+        return Ok(std::collections::HashMap::new());
+    }
+    let mut builder =
+        sqlx::QueryBuilder::new("SELECT id, artist_id, album_id FROM songs WHERE id IN (");
+    let mut separated = builder.separated(", ");
+    for id in ids {
+        separated.push_bind(id);
+    }
+    separated.push_unseparated(")");
+    let rows: Vec<(String, Option<String>, Option<String>)> =
+        builder.build_query_as().fetch_all(pool).await?;
+    Ok(rows
+        .into_iter()
+        .map(|(id, artist, album)| (id, (artist, album)))
+        .collect())
+}
+
 /// Cached artist biography + external URL (ARC-42, `artist_info` table).
 #[derive(Debug, Clone, Default, PartialEq, Eq, sqlx::FromRow, serde::Serialize)]
 pub struct ArtistInfoRow {

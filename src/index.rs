@@ -193,6 +193,12 @@ where
         eprintln!("index: media cache purge failed: {err:#}");
     }
 
+    // 5c'. media cache: rule-owned blobs no longer inside a selected
+    // artist/album container (CACHE-5 coverage check)
+    if let Err(err) = crate::media::prune_uncovered(dbs).await {
+        eprintln!("index: media coverage prune failed: {err:#}");
+    }
+
     // 5d. download ledger: drop rows for songs that left the library
     match crate::library::song_ids(&dbs.library).await {
         Ok(ids) => {

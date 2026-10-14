@@ -50,9 +50,10 @@ fn download_payload(song_id: &str, state: &str) -> String {
     serde_json::json!({ "id": song_id, "state": state }).to_string()
 }
 
-/// The artist-container toggle payload (`artist_cache` channel, CACHE-5).
-fn artist_cache_payload(artist_id: &str, on: bool) -> String {
-    serde_json::json!({ "id": artist_id, "on": on }).to_string()
+/// The artist-container toggle payload (`artist_cache` channel, CACHE-5);
+/// `active` marks a fetch pass in flight for the chip's loading loop.
+fn artist_cache_payload(artist_id: &str, on: bool, active: bool) -> String {
+    serde_json::json!({ "id": artist_id, "on": on, "active": active }).to_string()
 }
 
 /// Fetches one song into the media cache unless it is already available or a
@@ -1358,7 +1359,7 @@ impl Backend {
                 crate::media::rule_for(&dbs.media, "artist", &artist_id).await,
                 Ok(Some(_))
             );
-            let json = artist_cache_payload(&artist_id, on);
+            let json = artist_cache_payload(&artist_id, on, false);
             qtbridge::invoke_method!(invoker, "emitData", "artist_cache".to_string(), json);
         });
     }
@@ -1403,6 +1404,9 @@ impl Backend {
                         eprintln!("media: could not mark {song}: {err:#}");
                     }
                 }
+                // The pass is now in flight: the chip shows its loading loop.
+                let json = artist_cache_payload(&artist_id, true, true);
+                qtbridge::invoke_method!(invoker, "emitData", "artist_cache".to_string(), json);
                 for chunk in songs.chunks(crate::consts::FETCH_CONCURRENCY) {
                     let mut set = tokio::task::JoinSet::new();
                     for song in chunk {
@@ -1416,7 +1420,7 @@ impl Backend {
                         }
                     }
                 }
-                let json = artist_cache_payload(&artist_id, true);
+                let json = artist_cache_payload(&artist_id, true, false);
                 qtbridge::invoke_method!(invoker, "emitData", "artist_cache".to_string(), json);
             } else {
                 let rule = match crate::media::rule_for(&dbs.media, "artist", &artist_id).await {
@@ -1437,7 +1441,7 @@ impl Backend {
                         eprintln!("media: could not remove the artist blobs: {err:#}");
                     }
                 }
-                let json = artist_cache_payload(&artist_id, false);
+                let json = artist_cache_payload(&artist_id, false, false);
                 qtbridge::invoke_method!(invoker, "emitData", "artist_cache".to_string(), json);
             }
         });

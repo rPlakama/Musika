@@ -297,6 +297,79 @@ pub async fn remove_rule_media(pool: &SqlitePool, rule_id: &str) -> Result<usize
     Ok(rows.len())
 }
 
+/// Reconciles rule-owned blobs against the selected containers: a downloaded
+/// song must still fall inside a live artist/album rule — anything else (the
+/// scope changed, the rule ref is stale) is removed. Explicit downloads
+/// (`rule_id NULL`, permanent) and the playback tiers are never touched; rule
+/// kinds without a scope check yet (playlist/genre/favourites) stay covered
+/// until their kinds land (CACHE-5 continues).
+///
+/// Runs in the sync's purge phase, after [`purge`].
+pub async fn prune_uncovered(dbs: &crate::db::Dbs) -> Result<usize> {
+    let rules: Vec<MediaRule> =
+        sqlx::query_as("SELECT id, kind, ref_id, created_at FROM media_rule")
+            .fetch_all(&dbs.media)
+            .await?;
+    let artist_refs: HashSet<&str> = rules
+        .iter()
+        .filter(|rule| rule.kind == "artist")
+        .filter_map(|rule| rule.ref_id.as_deref())
+        .collect();
+    let album_refs: HashSet<&str> = rules
+        .iter()
+        .filter(|rule| rule.kind == "album")
+        .filter_map(|rule| rule.ref_id.as_deref())
+        .collect();
+
+    // Rule-owned rows and the kind of the rule that selected them.
+    let rows: Vec<(String, String, String, String)> = sqlx::query_as(
+        "SELECT m.song_id, m.kind, m.file, r.kind
+         FROM media m JOIN media_rule r ON r.id = m.rule_id",
+    )
+    .fetch_all(&dbs.media)
+    .await?;
+    if rows.is_empty() {
+        return Ok(0);
+    }
+
+    let scopes = crate::library::song_scopes(
+        &dbs.library,
+        &rows
+            .iter()
+            .map(|(song, ..)| song.clone())
+            .collect::<Vec<_>>(),
+    )
+    .await?;
+
+    let mut removed = 0;
+    for (song_id, kind, file, rule_kind) in rows {
+        let scope = scopes.get(&song_id);
+        let artist_covered = scope
+            .and_then(|(artist, _)| artist.as_deref())
+            .is_some_and(|artist| artist_refs.contains(artist));
+        let album_covered = scope
+            .and_then(|(_, album)| album.as_deref())
+            .is_some_and(|album| album_refs.contains(album));
+        let covered =
+            artist_covered || album_covered || !matches!(rule_kind.as_str(), "artist" | "album");
+        if covered {
+            continue;
+        }
+
+        remove_blob(&Stored {
+            song_id: song_id.clone(),
+            kind,
+            file,
+        });
+        sqlx::query("DELETE FROM media WHERE song_id = ?1")
+            .bind(&song_id)
+            .execute(&dbs.media)
+            .await?;
+        removed += 1;
+    }
+    Ok(removed)
+}
+
 /// Used bytes per tier: `(config, cache)` (CACHE-7's accounting).
 pub async fn used_bytes(pool: &SqlitePool) -> Result<(i64, i64)> {
     let rows: Vec<(String, i64)> =
@@ -554,5 +627,76 @@ mod tests {
 
         delete_rule(&pool, &id).await.unwrap();
         assert!(rule_for(&pool, "artist", "a1").await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn prune_uncovered_drops_scope_mismatches_only() {
+        let media = media_pool().await;
+        let library = library_pool().await;
+
+        for (song, artist, album) in [
+            ("s1", "a1", "al1"), // artist rule covers it
+            ("s2", "a9", "al9"), // rule-owned but out of scope
+            ("s3", "a1", "al1"), // explicit download (permanent)
+            ("s4", "a5", "al7"), // album rule covers it
+        ] {
+            sqlx::query(
+                "INSERT INTO songs (id, title, artist_id, album_id) VALUES (?1, ?1, ?2, ?3)",
+            )
+            .bind(song)
+            .bind(artist)
+            .bind(album)
+            .execute(&library)
+            .await
+            .unwrap();
+        }
+
+        let artist_rule = set_rule(&media, "artist", "a1").await.unwrap();
+        let album_rule = set_rule(&media, "album", "al7").await.unwrap();
+        for (song, rule) in [
+            ("s1", Some(artist_rule.as_str())),
+            ("s2", Some(artist_rule.as_str())),
+            ("s3", None),
+            ("s4", Some(album_rule.as_str())),
+        ] {
+            let kind = if rule.is_some() {
+                KIND_RULE
+            } else {
+                KIND_PERMANENT
+            };
+            record(
+                &media,
+                song,
+                kind,
+                &format!("{song}.mp3"),
+                1,
+                "original",
+                "fp",
+                rule,
+            )
+            .await
+            .unwrap();
+        }
+
+        let dbs = crate::db::Dbs {
+            credentials: library.clone(),
+            library: library.clone(),
+            search: library.clone(),
+            covers: library.clone(),
+            lyrics: library.clone(),
+            colors: library.clone(),
+            status: library.clone(),
+            artist_user: library.clone(),
+            media: media.clone(),
+            download: library.clone(),
+        };
+        assert_eq!(prune_uncovered(&dbs).await.unwrap(), 1);
+
+        let mut left: Vec<String> = sqlx::query_scalar("SELECT song_id FROM media")
+            .fetch_all(&media)
+            .await
+            .unwrap();
+        left.sort();
+        assert_eq!(left, vec!["s1", "s3", "s4"]);
     }
 }

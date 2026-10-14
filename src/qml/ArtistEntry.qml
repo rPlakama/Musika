@@ -49,6 +49,9 @@ Rectangle {
     // CACHE-5/8: the artist container is selected for download (rule in
     // media.db + marks in download.db); the In-cache chip toggles it.
     property bool artistCacheOn: false
+    // CACHE-5: the fetch pass for this artist is running (the chip shows the
+    // spinning loading loop while the ledger works through the songs).
+    property bool artistDownloading: false
     // UI-52: star under the cursor in the rating row, -1 = none. The row
     // previews the level incrementally up to this index.
     property int hoveredStar: -1
@@ -80,14 +83,16 @@ Rectangle {
         return Qt.rgba(color.r, color.g, color.b, alpha);
     }
 
-    // UI-52: one reusable placeholder action chip for the identity strip;
-    // ARC-42 wires star/rating/cache/shuffle behind the same frame.
+    // UI-52: one reusable action chip for the identity strip; ARC-42 wires
+    // star/rating/cache/shuffle behind the same frame. `spinning` turns the
+    // glyph into the shared loading loop (CACHE-5 fetch in flight).
     component ActionChip: Rectangle {
         id: chip
 
         property string label: ""
         property url icon: ""
         property color iconColor: Palette.onSurfaceVariant
+        property bool spinning: false
 
         signal clicked()
 
@@ -114,12 +119,26 @@ Rectangle {
             spacing: chip.height * 0.18
 
             SymbolIcon {
+                id: chipGlyph
                 anchors.verticalCenter: parent.verticalCenter
                 visible: chip.icon.toString().length > 0
                 source: chip.icon
                 symbolColor: chip.iconColor
                 width: chip.height * 0.42
                 height: width
+                transformOrigin: Item.Center
+
+                // The same one-revolution loop the sync button spins with;
+                // `reduceMotion` keeps the glyph (the icon swap still reads).
+                NumberAnimation {
+                    target: chipGlyph
+                    property: "rotation"
+                    from: 0
+                    to: 360
+                    duration: Theme.motion.spin
+                    loops: Animation.Infinite
+                    running: chip.spinning && !Theme.reduceMotion
+                }
             }
 
             FadeText {
@@ -163,6 +182,7 @@ Rectangle {
         if (cache.id !== root.artistId)
             return;
         root.artistCacheOn = cache.on === true;
+        root.artistDownloading = cache.active === true;
     }
 
     // ARC-42: local favourite/rating state for this artist.
@@ -538,12 +558,18 @@ Rectangle {
                         // CACHE-5/8: artist container download toggle. ON
                         // marks and fetches every song of the artist, OFF
                         // drops the rule, its marks and its rule-owned blobs;
-                        // the `artist_cache` payload reconciles. The filled
+                        // the `artist_cache` payload reconciles (including
+                        // `active`, which swaps the glyph for the shared
+                        // loading loop and spins it). The filled
                         // `baseline-download.svg` / counts label arrive with
                         // CACHE-7.
-                        icon: "qrc:/app/icons/outline-download.svg"
+                        icon: root.artistDownloading
+                            ? "qrc:/app/icons/loading-loop.svg"
+                            : "qrc:/app/icons/outline-download.svg"
+                        spinning: root.artistDownloading
                         onClicked: {
                             root.artistCacheOn = !root.artistCacheOn;
+                            root.artistDownloading = root.artistCacheOn;
                             Backend.downloadArtist(root.artistId, root.artistCacheOn);
                         }
                     }

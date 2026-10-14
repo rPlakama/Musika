@@ -235,6 +235,89 @@ with a key at `~/.config/musika/key` (AES-256-GCM).
 | `MUSIKA_MPRIS_SCRIPT` | opt-in `mpv-mpris` fallback; disables the native MPRIS service |
 | `MUSIKA_COLOR_{VARIANT,CONTRAST,SOURCE,SPEC}` | palette knobs |
 
+## Installing (Nix / NixOS)
+
+The flake exposes `packages.default` — the wrapped binary with the Qt
+environment, `mpv`, the app-scoped display font, the `.desktop` entry and the
+hicolor icon ladder. Replace `github:rPlakama/musika` with your fork or a
+`path:/home/you/Projects/musika` checkout if you have one.
+
+### Try it without installing
+
+```sh
+nix run github:rPlakama/musika     # or: nix run .   inside a checkout
+```
+
+Builds and launches the wrapped binary; no launcher entry is registered.
+
+### Build and run the output directly
+
+```sh
+nix build                          # ./result/bin/musika
+./result/bin/musika
+```
+
+### Install into your user profile
+
+```sh
+nix profile install github:rPlakama/musika   # or: nix profile install .
+```
+
+- The desktop entry and icons land in `~/.nix-profile/share/…`, which is on
+  `XDG_DATA_DIRS`; GNOME/KDE launchers pick up **Musika** on next login (or
+  when the launcher rescans).
+- Everything runtime is in the wrapper: Qt plugins/QML, `mpv`, the display
+  font (`XDG_DATA_DIRS`), TLS certs. Nothing else to install.
+- Update with `nix profile upgrade musika`, remove with
+  `nix profile remove musika`.
+
+### Declarative (NixOS or home-manager)
+
+Add the flake as an input and install the package:
+
+```nix
+# flake.nix
+inputs.musika.url = "github:rPlakama/musika"; # or path:/home/you/Projects/musika
+```
+
+```nix
+# NixOS configuration.nix
+environment.systemPackages = [
+  inputs.musika.packages.${pkgs.system}.default
+];
+
+# home-manager home.nix
+home.packages = [ inputs.musika.packages.${pkgs.system}.default ];
+```
+
+(`inputs` must be in scope — pass it through `specialArgs = { inherit inputs; };`
+from your system flake, or reference the package by its store path if you
+prefer not to wire the input.)
+
+NixOS's default `xdg.menus` / `xdg.icons` / `xdg.mime` modules link
+`share/applications`, `share/icons/hicolor` and `share/pixmaps` into
+`/run/current-system/sw`, install `hicolor-icon-theme` and refresh
+`update-desktop-database` — so after `nixos-rebuild switch` the launcher entry
+and icon appear with **no extra configuration**. (See `DESKTOPICONSTUDY.md`
+for the spec details.) On non-NixOS hosts the same files come from the
+profile/share prefix.
+
+### First run
+
+1. Launch **Musika** from your launcher (or run `musika`).
+2. Enter the server URL (e.g. `https://music.example.com`), username and
+   password; `Log in`.
+3. Credentials are encrypted (AES-256-GCM) into
+   `~/.config/musika/credentials.db` with the key at `~/.config/musika/key`;
+   the library indexes into the other databases in the same directory.
+4. Optional MPRIS: put `mpv-mpris`'s `mpris.so`/`mpris.lua` in
+   `~/.config/mpv/scripts` (or set `MUSIKA_MPRIS_SCRIPT=/nix/store/...`), so
+   media keys and desktop panels control playback. A native MPRIS service is
+   planned (`Q-8`).
+
+Updating a flake-pinned install: `nix flake update musika &&
+nixos-rebuild switch`, or `nix profile upgrade musika`.
+
 ## Modules cross-talk
 
 ```mermaid

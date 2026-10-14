@@ -179,6 +179,13 @@ Rectangle {
                     radius: root.roundedArt ? width * 0.5 : Theme.radius
                     color: Palette.surfaceContainerHigh
                     clip: true
+                    // UI-45: the art grows with the emphasized row (same
+                    // animation as the title, transform only).
+                    scale: (row.emphasized && !Theme.reduceMotion) ? Theme.selectionEmphasis : 1.0
+
+                    Behavior on scale {
+                        NumberAnimation { duration: Theme.motion.quick; easing.type: Easing.Bezier; easing.bezierCurve: Theme.ease.standard }
+                    }
 
                     CoverImage {
                         anchors.fill: parent

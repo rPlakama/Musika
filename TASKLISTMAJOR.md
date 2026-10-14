@@ -1612,10 +1612,11 @@ Small, bounded, high-value changes.
   - **Details:** the `ListScroll` `remember`/`recall` pair over the
     `ScrollMemory.js` `.pragma library` store (engine lifetime): `remember`
     saves cursor + `contentY` (and the focused scope where one exists),
-    `recall` clamps the index to the fresh row count, sets
-    `positionViewAtIndex(Contain)` and re-applies the saved offset; the
-    first payload after a reopen restores, later reloads keep the live
-    state.
+    `recall` clamps the index to the fresh row count and restores the exact
+    offset in one step (a `Qt.callLater` retry only when the list had no
+    real geometry yet), so no intermediate `positionViewAt` frame can flick
+    before the offset lands; the first payload after a reopen restores,
+    later reloads keep the live state.
   - **Verify:** scroll a segment, switch away and back → cursor and offset
     return; reopen an album/artist page → its list/grid returns to where it
     stopped; reopen the queue drawer / fullscreen → highlight and pane

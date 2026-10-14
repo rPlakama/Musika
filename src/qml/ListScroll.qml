@@ -86,12 +86,22 @@ QtObject {
         if (!saved || !view || view.count === 0)
             return false;
         view.currentIndex = Math.max(0, Math.min(view.count - 1, saved.index));
-        view.positionViewAtIndex(view.currentIndex, ListView.Contain);
+        // One exact step: assigning `contentY` realises the rows around it.
+        // `positionViewAtIndex(Contain)` would paint its own offset first and
+        // the saved one would arrive a frame later — the visible flick — and
+        // it fights the layout while `contentHeight` is still an estimate
+        // (a not-yet-laid-out list has `height == 0` and an inflated estimate,
+        // so the clamp below would be wrong).
         var y = saved.y;
-        Qt.callLater(function () {
+        var apply = function () {
             view.contentY = Math.max(0, Math.min(y,
                 Math.max(0, view.contentHeight - view.height)));
-        });
+        };
+        apply();
+        // Retry once when the list had no real geometry yet; on a laid-out
+        // list the first assignment already stuck and no second frame exists.
+        if (Math.abs(view.contentY - y) > 1)
+            Qt.callLater(apply);
         return true;
     }
 }

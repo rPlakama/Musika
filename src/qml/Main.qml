@@ -190,6 +190,20 @@ ApplicationWindow {
             visible: false
         }
 
+        // Exponential hold acceleration for the vertical motions: after the
+        // initial repeat delay, each auto-repeat steps `2^n` rows, n growing
+        // every `holdStepMs` of continuous hold (capped), and the ramp resets
+        // on key release.
+        readonly property int holdStepMs: 1600
+        readonly property int holdMaxSteps: 4
+        property string _holdAction: ""
+        property real _holdStart: 0
+
+        function holdSteps() {
+            return Math.min(holdMaxSteps,
+                Math.pow(2, Math.floor((Date.now() - _holdStart) / holdStepMs)));
+        }
+
         Keys.onPressed: (event) => {
             var action = Backend.keyEvent(event.key, event.modifiers);
             if (action === "PENDING") {
@@ -197,10 +211,25 @@ ApplicationWindow {
                 return;
             }
             keyTimer.stop();
-            if (action.length > 0) {
-                event.accepted = true;
-                dispatch(action);
+            if (action.length === 0)
+                return;
+            event.accepted = true;
+            var steps = 1;
+            if (action === "move_up" || action === "move_down") {
+                if (event.isAutoRepeat && keyHandler._holdAction === action) {
+                    steps = keyHandler.holdSteps();
+                } else {
+                    keyHandler._holdAction = action;
+                    keyHandler._holdStart = Date.now();
+                }
             }
+            for (var i = 0; i < steps; i++)
+                dispatch(action);
+        }
+
+        Keys.onReleased: (event) => {
+            if (!event.isAutoRepeat)
+                keyHandler._holdAction = "";
         }
 
         StackView {

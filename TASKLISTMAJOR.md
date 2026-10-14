@@ -1078,6 +1078,28 @@ Small, bounded, high-value changes.
     and any hovered row show the identical full block fill as Albums/Songs/
     Artists; nothing spills over the dividers or panel edges.
 
+- [ ] **UI-49 · Microdesign: zero-result shake + icon flash in search** — P3 · (design microtask)
+  - **Why:** a query with no hits only prints "no matches"; a physical
+    "denied" cue makes the empty result register instantly, and a reusable FX
+    covers every future rejected-input case.
+  - **Details:**
+    - trigger: on the transition to zero results across all three columns for
+      a non-empty query (after the debounced response), and on Enter with a
+      zero-result query; not on every keystroke while it stays zero;
+    - FX: shake = horizontal keyframe oscillation of the search field/panel
+      (a few ±px cycles) with a small bounce scale on the same target — one
+      `ShakeFx`/extended `PressBounce` component so it is reusable, total
+      **under 200 ms** (`quick`/`micro` tiers);
+    - red flash: the search glyph flashes `Palette.error` and settles back
+      inside the same 200 ms (the SVG is fixed white — flash a tinted layer
+      behind/around it, or crossfade a red-tinted glyph copy instead of
+      trying to tint the VectorImage);
+    - `Theme.reduceMotion` skips both (or keeps only a static red tick);
+      no layout shift, the field keeps focus and text.
+  - **Verify:** gibberish query → one shake + red flash <200 ms; holding a
+    zero-result query doesn't strobe; typing more re-triggers once per
+    response; `reduceMotion` flat.
+
 - [x] **VI-6 · `Ctrl-[` alias + pending-sequence cancel** — P1 · (N3 residual)
   - **Why:** `Ctrl-[` is muscle memory for Esc; Esc should also clear a half-typed
     sequence/count.
@@ -1701,9 +1723,9 @@ Kept for rationale; the tree already carries these.
 |--------|------|--------|
 | Must have | 8 | 1 |
 | Should have | 60 | 5 |
-| Quick wins | 8 | 44 |
+| Quick wins | 9 | 44 |
 | Solved (reference) | — | 36 |
-| **Total** | **75** | **86** |
+| **Total** | **76** | **86** |
 
 ### Coverage by area
 
@@ -1714,7 +1736,7 @@ Kept for rationale; the tree already carries these.
 | Player & media features | 5 | 2 |
 | Lyrics pipeline | 2 | 7 |
 | Search | 2 | 6 |
-| UI microdesigns | 16 | 29 |
+| UI microdesigns | 17 | 29 |
 | Dynamic color | 1 | 5 |
 | Architecture & robustness | 22 | 15 |
 | Media cache / offline | 7 | 0 |

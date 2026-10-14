@@ -19,15 +19,11 @@
         ]
       );
 
-      # App-scoped typefaces: exposed to fontconfig through XDG_DATA_DIRS (by
+      # App-scoped typeface: exposed to fontconfig through XDG_DATA_DIRS (by
       # the wrapper below and the dev shell), never installed system-wide.
-      # Cormorant/Literata stand in for Instrument Serif/Newsreader (unpackaged);
-      # Overused Grotesk stands in for Bricolage Grotesque (unpackaged) and is
-      # the superior-bar welcome face.
+      # Overused Grotesk stands in for the unpackaged Bricolage Grotesque and
+      # is the single face for wordmark, lyrics and body (Theme.fonts).
       fonts = with pkgs; [
-        cormorant
-        literata
-        merriweather
         overused-grotesk
       ];
       fontDataDirs = pkgs.lib.makeSearchPath "share" fonts;

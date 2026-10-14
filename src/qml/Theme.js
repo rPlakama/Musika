@@ -160,15 +160,14 @@ var lyricsEmphasis = 1.12 // active-line scale (transform, never font size)
 var selectionEmphasis = 1.10
 
 // ---------------------------------------------------------------------------
-// Font families. App-scoped typefaces from the flake (`XDG_DATA_DIRS` in the
-// wrapper and dev shell), never installed system-wide. Instrument Serif and
-// Newsreader are not packaged, so the wordmark and body use the closest
-// nixpkgs replacements; lyrics keep Merriweather.
+// Font families. One app face: Overused Grotesk Roman stands in for the
+// unpackaged Bricolage Grotesque and covers wordmark, lyrics and body alike;
+// roles stay so adding a second face later is a one-line change.
 // ---------------------------------------------------------------------------
 var fonts = {
-    body: "Literata",        // everything that is not the wordmark/lyrics
-    lyrics: "Merriweather",  // lyric lines and the lyrics pane states
-    wordmark: "Cormorant"    // the MUSIKA name
+    body: "Overused Grotesk Roman",
+    lyrics: "Overused Grotesk Roman",
+    wordmark: "Overused Grotesk Roman"
 }
 
 // ---------------------------------------------------------------------------

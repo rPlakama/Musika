@@ -105,7 +105,7 @@ Rectangle {
                 return "Last Sync: " + status + (provider.length > 0 ? ", " + provider : "");
             }
             color: Backend.librarySyncing ? Palette.tertiary : Palette.onSurfaceVariant
-            font.pixelSize: Theme.fontSize("title", root.height) * 1.5
+            font.pixelSize: Theme.fontSize("title", root.height) * 1.35
             elide: Text.ElideRight
         }
 

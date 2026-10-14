@@ -684,6 +684,13 @@ The product is incomplete without these.
     - `Theme.reduceMotion` → instant.
   - **Consumers:** UI-41 (list easing), LYR-8 (lyrics follow), UI-45
     (selection stage), queue/search lists.
+  - **Now (partial):** `ListScroll.qml` eases small `contentY` corrections
+    (quick/Bezier, half-row context; instant fallback for unrealised rows and
+    `reduceMotion`) and is wired into the search columns and both queues;
+    payload swaps crossfade, reorders stay live. Open: the distance-aware
+    `clamp(px / 2.5, 80, 240)` helper for MediaList/AlbumEntry/ArtistList,
+    `DragOverBounds`, `reuseItems`/`cacheBuffer`, and the lyrics
+    `SmoothedAnimation` follower.
   - **Verify:** frame graph (`QSG_RENDER_TIMING=1`) smooth for 1-row, 5-row
     and 20-row moves; wheel mid-follow doesn't stutter; long titles don't
     clip while expanding; `reduceMotion` flat.
@@ -1037,6 +1044,34 @@ Small, bounded, high-value changes.
 
 - [ ] **DOC-1 · Keep design docs in sync with the tree** — P2 · (A10)
   - **Why:** CRITIQUE/roadmap/materialyou3 describe pre-implementation states.
+
+- [ ] **UI-47 · Microdesign: search column rule draws behind the next column's covers** — P3 · (design microtask)
+  - **Why:** the structural rule (`|`) between search columns is a RowLayout
+    sibling declared *before* the following column, so that column's covers
+    paint over it — the divider is created behind the album cover.
+  - **Details:** give the two divider Rectangles in `SearchOverlay.qml`
+    (`columnsRow`, ~:434 and ~:458) `z: 1` (or move them after the columns)
+    so they paint above covers; keep them non-interactive and layout-neutral.
+  - **Verify:** with results in every column the rules stay continuous over
+    covers while scrolling; covers/rows stay clickable.
+
+- [ ] **UI-48 · Microdesign: search selection fills the whole row block** — P3 · (design microtask)
+  - **Why:** lists (Albums/Songs/Artists) highlight the cursor/hover with a
+    full-bleed row block (`secondaryContainer` / `surfaceContainerHigh` edge
+    to edge). `SearchColumn` only fills the focused column's cursor row and
+    gives hover no block fill at all, remembering inactive cursors with a dim
+    left tick — partial marks where a block belongs, so search scans worse
+    than the main lists.
+  - **Details:** give every search row the list-style block highlight —
+    cursor fill spanning the full row (`list.width`, thumb through meta), and
+    the same `surfaceContainerHigh` hover fill as `MediaList`; keep the
+    inactive-column cue as an accent *on* the block (or a border) instead of
+    replacing it; the fill must not overflow the column (`clip: true` at the
+    list, never across the UI-47 divider); keep the UI-45 scale emphasis and
+    `Theme.selectionEmphasis` cap.
+  - **Verify:** with results in all three columns, each column's cursor row
+    and any hovered row show the identical full block fill as Albums/Songs/
+    Artists; nothing spills over the dividers or panel edges.
 
 - [x] **VI-6 · `Ctrl-[` alias + pending-sequence cancel** — P1 · (N3 residual)
   - **Why:** `Ctrl-[` is muscle memory for Esc; Esc should also clear a half-typed
@@ -1661,9 +1696,9 @@ Kept for rationale; the tree already carries these.
 |--------|------|--------|
 | Must have | 8 | 1 |
 | Should have | 60 | 5 |
-| Quick wins | 7 | 43 |
+| Quick wins | 9 | 43 |
 | Solved (reference) | — | 36 |
-| **Total** | **75** | **85** |
+| **Total** | **76** | **85** |
 
 ### Coverage by area
 
@@ -1674,7 +1709,7 @@ Kept for rationale; the tree already carries these.
 | Player & media features | 5 | 2 |
 | Lyrics pipeline | 2 | 7 |
 | Search | 2 | 6 |
-| UI microdesigns | 15 | 28 |
+| UI microdesigns | 17 | 28 |
 | Dynamic color | 1 | 5 |
 | Architecture & robustness | 22 | 15 |
 | Media cache / offline | 7 | 0 |

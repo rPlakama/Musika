@@ -291,7 +291,9 @@ Item {
         // Rise into place (preferred over scale, motion §3.1).
         x: (root.width - width) / 2
         y: (root.height - height) / 2 + (root.opened ? 0 : height * 0.04)
-        color: Palette.surfaceContainerHigh
+        // Same darkest tone as the main pane (Palette.surface); the field and
+        // chips keep the higher container tones for contrast.
+        color: Palette.surface
         radius: Theme.radius
         border.color: Palette.primary
         border.width: Math.max(1, root.height * Theme.hairlineRatio)

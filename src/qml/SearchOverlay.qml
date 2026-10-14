@@ -386,7 +386,7 @@ Item {
                     placeholderTextColor: Palette.onSurfaceVariant
                     color: Palette.onSurface
                     font.family: Theme.fonts.body
-                    font.pixelSize: panel.height * 0.035
+                    font.pixelSize: panel.height * 0.030
                     // UI-49: the denied shake is a transform, never a layout move.
                     transform: Translate {
                         x: denyFx.offset
@@ -406,7 +406,7 @@ Item {
                             anchors.left: parent.left
                             anchors.leftMargin: panel.height * 0.03
                             anchors.verticalCenter: parent.verticalCenter
-                            width: panel.height * 0.04
+                            width: panel.height * 0.03
                             height: width
                             source: "qrc:/app/icons/search-right-1505-svgrepo-com.svg"
                             symbolColor: Theme.iconStrong

@@ -144,6 +144,8 @@ Item {
     // search overlay, so every surface lands in the same page with the same
     // header payload.
     function openAlbum(albumId, title, artist, year, tracks, cover) {
+        // P-6 S2: the last opened album page is what a restart reopens.
+        Backend.rememberAlbum(albumId);
         var meta = [];
         if (year.length > 0)
             meta.push(year);
@@ -523,6 +525,22 @@ Item {
         function onPlaybackStarted() {
             nowPlayingExpanded = true;
         }
+        // P-6 S2: restored session. The queue loads paused (no autoplay, no
+        // fullscreen) and the remembered album page reopens; both are pumped
+        // so the backend is not re-entered while the signal is emitted.
+        function onStatusRestored(payload) {
+            var data = JSON.parse(payload);
+            Qt.callLater(function() {
+                if (data.queue && data.queue.length > 0)
+                    Backend.playerLoadPaused(data.queue, data.start);
+                if (data.album)
+                    root.openAlbum(data.album.id, data.album.title,
+                                   data.album.artist ? data.album.artist : "",
+                                   data.album.year ? String(data.album.year) : "",
+                                   String(data.album.tracks),
+                                   data.album.cover ? data.album.cover : "");
+            });
+        }
         // Single pumped event from `playSongInAlbum`: the queue + album
         // context. Deferred so the backend is not re-entered while the signal
         // is still being emitted.
@@ -534,6 +552,8 @@ Item {
                 Backend.playerLoad(data.queue, data.start);
                 if (!data.album)
                     return;
+                // Same detour rule as `openAlbum`: this is an album page too.
+                Backend.rememberAlbum(data.album.id);
                 nowPlayingExpanded = false;
                 var album = data.album;
                 var meta = [];

@@ -73,6 +73,9 @@ pub struct Backend {
     library_queue: Option<LibraryQueue>,
     /// Invalidates in-flight lazy appends when the queue is replaced.
     library_queue_epoch: u64,
+    /// Last album page / song the session should return to (P-6).
+    status_album: Option<String>,
+    status_song: Option<String>,
 }
 
 #[qobject(Singleton)]
@@ -281,6 +284,9 @@ impl Backend {
     fn server_type_changed(&mut self);
     #[qsignal]
     fn library_changed(&mut self);
+    /// P-6 S2: restored session payload `{album, queue, start}` for `Home`.
+    #[qsignal]
+    fn status_restored(&mut self, payload: String);
     /// User skip (transport/keyboard/IPC), so the skip buttons can bloom.
     #[qsignal(qml_name = "trackSkipped")]
     fn track_skipped(&mut self, forward: bool);
@@ -470,6 +476,16 @@ impl Backend {
                         return;
                     };
                     qtbridge::invoke_method!(invoker, "applyStatus", payload);
+                    // S2: navigation + paused queue, validated against the
+                    // local index (unknown ids are dropped in the payload).
+                    match crate::queue::resume_payload(&dbs, &status).await {
+                        Ok(resume) => {
+                            qtbridge::invoke_method!(invoker, "statusRestored", resume);
+                        }
+                        Err(err) => {
+                            eprintln!("status: could not build the resume payload: {err:#}");
+                        }
+                    }
                 }
                 Ok(_) => {}
                 Err(err) => eprintln!("status: could not read the session: {err:#}"),
@@ -486,7 +502,28 @@ impl Backend {
         };
         self.player.set_volume(status.volume);
         self.player.set_muted(status.muted);
+        self.status_album = status.album_id;
+        self.status_song = status.song_id;
         self.sync_player();
+    }
+
+    /// Remembers the album page to reopen on the next launch (P-6 S2).
+    #[qslot(qml_name = "rememberAlbum")]
+    fn remember_album(&mut self, album_id: String) {
+        if album_id.is_empty() || self.status_album.as_deref() == Some(album_id.as_str()) {
+            return;
+        }
+        self.status_album = Some(album_id);
+        self.queue_status_save();
+    }
+
+    /// Remembers the song to queue (paused) on the next launch (P-6 S2).
+    fn remember_song(&mut self, song_id: &str) {
+        if song_id.is_empty() || self.status_song.as_deref() == Some(song_id) {
+            return;
+        }
+        self.status_song = Some(song_id.to_string());
+        self.queue_status_save();
     }
 
     /// Arms the 500 ms session debounce: volume/mute drags coalesce into one
@@ -501,6 +538,8 @@ impl Backend {
         };
         let server_url = self.server_url.trim().to_string();
         let username = self.username.trim().to_string();
+        let album_id = self.status_album.clone();
+        let song_id = self.status_song.clone();
         let volume = self.player.volume();
         let muted = self.player.muted();
         crate::runtime().spawn(async move {
@@ -518,6 +557,8 @@ impl Backend {
             }
             status.server_url = server_url;
             status.username = username;
+            status.album_id = album_id;
+            status.song_id = song_id;
             status.volume = volume;
             status.muted = muted;
             status.updated_at = crate::consts::now_secs();
@@ -1064,6 +1105,25 @@ impl Backend {
         self.load_queue(tracks_json, start, true);
     }
 
+    /// Loads the restored queue paused (P-6 S2): no autoplay, no fullscreen;
+    /// `Space` resumes immediately.
+    #[qslot(qml_name = "playerLoadPaused")]
+    fn player_load_paused(&mut self, tracks_json: String, start: i64) {
+        match serde_json::from_str::<Vec<crate::player::Track>>(&tracks_json) {
+            Ok(tracks) => {
+                self.library_queue = None;
+                self.library_queue_epoch += 1;
+                self.player.load_paused(tracks, start.max(0) as usize);
+                self.sync_player();
+                self.emit_queue();
+            }
+            Err(err) => {
+                eprintln!("player: bad queue payload: {err}");
+                self.error_raised("playback".to_string(), format!("Bad queue payload: {err}"));
+            }
+        }
+    }
+
     /// First Songs-segment window: loads without the fullscreen flip and
     /// stores the extension cursor (`next`/`total` in `all_songs`).
     #[qslot(qml_name = "playerLoadLibrary")]
@@ -1560,6 +1620,10 @@ impl Backend {
                     .map(|track| track.id.clone())
                     .unwrap_or_default();
                 self.current_song_id_changed();
+                // P-6 S2: starts, skips and auto-advance all count as "last
+                // song"; clearing the track keeps the previous one.
+                let song_id = self.current_song_id.clone();
+                self.remember_song(&song_id);
             }
             if title_changed {
                 self.current_title = self

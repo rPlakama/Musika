@@ -171,6 +171,13 @@ impl Player {
         self.play_current();
     }
 
+    /// Replaces the queue and loads `start` paused: a restored session waits
+    /// for an explicit Space instead of autoplaying (P-6 S2).
+    pub fn load_paused(&mut self, tracks: Vec<Track>, start: usize) {
+        self.load(tracks, start);
+        self.pause();
+    }
+
     /// Appends tracks to the queue; the playing track and cursor are
     /// untouched. Used by the library queue's lazy extension.
     pub fn append(&mut self, tracks: Vec<Track>) {

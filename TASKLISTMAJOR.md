@@ -387,7 +387,7 @@ The product is incomplete without these.
     reopened, last song queued paused -- no autoplay); unknown ids / account
     mismatch are ignored silently. Milestones S0-S3 in the roadmap's "Session
     status" design. DB7 stays separate: credentials is login material only.
-  - **Now (partial):** S0 + S1 landed — DB7 `statussave.db`
+  - **Now (partial):** S0–S2 landed — DB7 `statussave.db`
     (`migrations_status/`, `src/status.rs`: single-row upsert + load with
     tests, `MUSIKA_STATUS_FILE`; `Dbs.status`). Writes are account-scoped and
     coalesced by a generation debounce (500 ms task, deliberately not the
@@ -395,9 +395,17 @@ The product is incomplete without these.
     `login_succeeded` through `applyStatus`, with auto-login now calling
     `rememberAccount` (it never touched the Login fields, so the row could
     not be matched before). Verified live: MPRIS set 0.42 → stored row →
-    restored 0.42 on relaunch. Open: S2 album/song ids +
-    `statusRestored` navigation and the paused queue; S3 queue snapshot +
-    position.
+    restored 0.42 on relaunch. S2: `rememberAlbum` on every album-page push
+    (grid/list/search/song-album flows) and `rememberSong` on
+    `current_song_id` changes feed the same row; restore validates both ids
+    against library.db (`resume_payload`, unknown ids dropped like a first
+    launch) and emits `statusRestored` → `Home` reopens the album page and
+    loads the song's album queue **paused** (`Player::load_paused`, no
+    autoplay/fullscreen; a missing-credentials queue degrades to just the
+    album page instead of failing the login). Unit tests cover id validation
+    and the start-index helper (80 pass). E2E restart test was deferred: a
+    live instance shares `~/.config/musika` and writes the same row.
+    Open: S3 queue snapshot + saved position.
 
 - [ ] **LYR-6 · Optional: karaoke v2, lyric FTS, `:lyrics`** — P3 · (roadmap L5)
   - **Why:** word-level timing and lyric search are stretch goals; server

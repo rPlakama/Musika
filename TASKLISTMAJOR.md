@@ -655,10 +655,11 @@ The product is incomplete without these.
     the shared `Theme.fitScale` cap; the primary text of the cursor/hover row
     scales about its left edge (transform only, no reflow) in `MediaList`,
     `SearchColumn`, `QueueDrawer` and the fullscreen queue (hover added to the
-    fullscreen rows); `MediaList` gutters widened to `viewWidth * 0.04` with
-    bounded, elided titles so the grown row never reaches the walls. Left for
-    a desktop session: the neighbour colour/contrast polish and a real-pointer
-    hover parity pass.
+    fullscreen rows), and the cover/thumbnail grows with the same
+    `quick`/Bezier animation wherever the row has art; `MediaList` gutters
+    widened to `viewWidth * 0.04` with bounded, elided titles so the grown row
+    never reaches the walls. Left for a desktop session: the neighbour
+    colour/contrast polish and a real-pointer hover parity pass.
 
 
 - [ ] **UI-46 · Smooth scroll engine (distance-aware cursor follow)** — P2 · (SCROLLSTUDY.md)
@@ -1002,8 +1003,21 @@ Small, bounded, high-value changes.
 > **0.0.8 batch** — moved from Should have on 2026-10-13 (small, bounded,
 > low-risk): UI-13, UI-40, UI-41, LYR-8, S-9, AUTH-3, DOC-1.
 
-- [ ] **UI-13 · Scroll position hint** — P3 · (MD21)
+- [ ] **UI-13 · Scroll position hint** — P3
   - **Why:** long lists have no scrollbar/position feedback for mouse users.
+  - **Details:** one reusable `ScrollHint.qml` (opacity/transform only, never
+    part of layout) attached to each long list: a slim bar pinned to the
+    list's right edge, thumb height `max(h * h / contentHeight, h * 0.04)`,
+    offset from `visibleArea.yPosition`, width
+    `Math.max(2, h * Theme.hairlineRatio)`, `Palette.outlineVariant` at rest
+    and `onSurfaceVariant` while scrolling or hovered; fade `quick`, hidden
+    when `contentHeight <= height`.
+  - **Targets:** `MediaList` (Albums/Songs/Artists), `SearchColumn`, the
+    fullscreen queue in `NowPlaying.qml` and `QueueDrawer`; lyrics keep their
+    own auto-follow and are out.
+  - **Verify:** long lists show a proportional thumb that tracks wheel,
+    trackpad and keyboard moves; short lists show nothing; no cursor/hover/
+    click behaviour changes; `reduceMotion` shows/hides it without fading.
 
 - [ ] **UI-40 · Palette transition wrapper (finish THM-4)** — P2 · (POLISHAUDIT §1.3)
   - **Why:** `Palette.apply` snaps every colour in one frame; THM-4 promised
@@ -1024,34 +1038,79 @@ Small, bounded, high-value changes.
     engine (frame-timing, follow guards, reuseItems) is UI-46.
 
 - [ ] **LYR-8 · Smooth centre-follow + edge fades** — P2 · (roadmap "Lyrics presentation" P1)
-  - **Why:** `positionViewAtIndex(Center)` teleports each line and every
-    500 ms tick fights manual scrolling (NowPlaying.qml:109-110, 124-127).
+  - **Why:** `positionViewAtIndex(Center)` teleports each line — once when a
+    payload lands (NowPlaying.qml:156-157) and again on every active-line
+    change (NowPlaying.qml:171-172), which fights manual scrolling whenever
+    the 500 ms `Backend.position` tick moves `activeLyric` under the user's
+    hand.
   - **Details:** animate `contentY` to the active delegate's centre
     (`standard`/`decelerate`, `quick` for tiny moves); pause follow on
     `onMovementStarted`, resume after ~4 s idle or on track change; top/bottom
     gradients from `surfaceContainerLow` to transparent.
+  - **Verify:** the active line glides into centre; manual scroll is not
+    yanked while playing; follow resumes after idle or on track change;
+    unsynced lyrics stay static; gradients only over the scrollable range;
+    `reduceMotion` keeps an instant `positionViewAtIndex`.
 
-- [ ] **S-9 · Empty-query search surface + usage boost** — P2 · (roadmap mixed design)
+- [ ] **S-9 · Empty-query search surface + usage boost** — P2 · (roadmap mixed design, "Empty state" + "Selection, scope and ordering")
   - **Why:** an empty query leaves three empty columns; Noctalia leads with
     pinned/recent instead.
-  - **Details:** one "Most played" list when the query is empty
-    (`songs.play_count` desc, then title); while typing, boost FTS hits by
-    `play_count`; keep the selected row across scope/order changes.
+  - **Details:**
+    - empty query: hide the results body (and the scope chips once S-6
+      lands) and show one "Most played" surface instead — rows laid out like
+      songs, play count as the right meta, ordered `play_count` desc, then
+      title;
+    - `song_search` carries no `play_count` and SQLite cannot join
+      `search.db` to `library.db` (`search.rs:20-21`): copy the column into
+      `song_search` (`migrations_search` + `rebuild` + `SongSearchRow`) and
+      order typed hits by a bounded boost that keeps rank leading for strong
+      matches, e.g. `ORDER BY rank - play_count * 0.1, rank` (tune the weight
+      once against a real library);
+    - scope switches keep each column's cursor and scroll position until the
+      query changes (per-column cursors already exist; verify with S-6).
+  - **Verify:** an empty field shows one Most-played list and no dead
+    columns; typing restores the three columns with frequently played
+    matches leading; clearing the field returns to Most played.
 
 - [ ] **AUTH-3 · Login error/status roles** — P2
-  - **Why:** login surface predates the MY3 roles (no container/error tokens,
-    clamped type); align with Theme.
+  - **Why:** `Login.qml` predates the MY3 roles: hand-written type fractions
+    (`root.height * 0.0175`) and status as bare `Palette.error` text
+    (Login.qml:127-135), so errors read as plain body copy.
+  - **Details:** use `Theme.fontSize("label"|"body", root.height)` for the
+    fields, button and status; render `Backend.statusMessage` on an
+    `errorContainer`/`onErrorContainer` surface when not logged in and
+    `primaryContainer`/`onPrimaryContainer` when logged in (hairline border,
+    `Theme.radius`, word wrap, height reserved so the form does not jump).
+  - **Verify:** a failed login shows a wrapping container message with AA
+    contrast; success shows the primary container; no layout shift between
+    states; no raw type fractions left in the file.
 
 - [ ] **DOC-1 · Keep design docs in sync with the tree** — P2 · (A10)
   - **Why:** CRITIQUE/roadmap/materialyou3 describe pre-implementation states.
+  - **Details:** a bounded pass, not a rewrite: add a one-line status header
+    to `CRITIQUE.md`, `roadmap.md` and `materialyou3idea.md` ("study/
+    proposal; `TASKLISTMAJOR.md` is the only status source; the tree wins")
+    and fix the stale *current-state* claims found in this pass —
+    `materialyou3idea.md:8` points at a non-existent `TASKS.md`;
+    `materialyou3idea.md:44` ("one duration token") predates the
+    `Theme.motion` tiers (Theme.js:43); `materialyou3idea.md:50` lists
+    missing roles that `palette.rs` now ships (`errorContainer`,
+    `tertiaryContainer`, `inverseSurface`, `scrim`, `surfaceDim`);
+    `CRITIQUE.md:115` ("monolithic hardcoded actions") predates
+    `keybind.rs`; tick the landed POLISHAUDIT quick-win items (§1.1 close
+    fades, §1.4/AUTH-2 loading bar, §4 list easing) as consumed.
+  - **Verify:** the three docs no longer assert anything the tree
+    contradicts; dated diagnostics/history stay as written, only status
+    claims change.
 
 - [ ] **UI-47 · Microdesign: search column rule draws behind the next column's covers** — P3 · (design microtask)
   - **Why:** the structural rule (`|`) between search columns is a RowLayout
     sibling declared *before* the following column, so that column's covers
     paint over it — the divider is created behind the album cover.
   - **Details:** give the two divider Rectangles in `SearchOverlay.qml`
-    (`columnsRow`, ~:434 and ~:458) `z: 1` (or move them after the columns)
-    so they paint above covers; keep them non-interactive and layout-neutral.
+    (`columnsRow`, `:484-488` and `:508-512`) `z: 1` (or move them after the
+    columns) so they paint above covers; keep them non-interactive and
+    layout-neutral.
   - **Verify:** with results in every column the rules stay continuous over
     covers while scrolling; covers/rows stay clickable.
 
@@ -1132,36 +1191,45 @@ Small, bounded, high-value changes.
     transform-only with `quick`/`Theme.ease`; block highlight and primary
     border kept. `qmllint` + offscreen run clean.
 
-- [ ] **UI-51 · Remove the transport scopes: decoration, never a selection** — P3 · **top priority** · (code removal & cleaning)
+- [x] **UI-51 · Remove the transport scopes: decoration, never a selection** — P3 · **top priority** · (code removal & cleaning)
   - **Why:** every transport verb is (or can be) a global binding, so letting
     the transport own a focus region/pane is dead weight: it dilutes the
     region model (`Home.activeRegion === 3`, the Ctrl-W candidate list, the
-    PLAYER frame at `Home.qml:597`), costs a fullscreen pane (Tab cycles
-    transport → lyrics → queue and pane 0 eats `h/l/n/p/Enter`), and keeps a
-    second keymap copy of the transport. The bar should stay visible and
-    clickable, but never be a keyboard destination.
-  - **Precondition:** add global binds for the verbs that only live in the
-    transport scope today — seek (its `h/l`): pick `,`/`.` or `Ctrl-H`/
-    `Ctrl-L` (`h/l` stay pane navigation), and stop if it returns; `Space`,
-    `n/p`, `Ctrl-N/P`, `m`, `±` are already global. Only then remove scopes.
+    PLAYER frame — all already gone, see Now), costs a fullscreen pane (Tab
+    cycles transport → lyrics → queue and pane 0 eats `h/l/n/p/Enter`), and
+    keeps a second keymap copy of the transport. The bar should stay visible
+    and clickable, but never be a keyboard destination.
+  - **Precondition:** bind seek globally first — new `SeekBack`/
+    `SeekForward` actions on `,`/`.` (`h`/`l` stay `move_left`/`move_right`;
+    `ctrl-h`/`ctrl-l` stay free), routed in `Home` to
+    `Backend.playerSeek(±5)` like `next_track` (Home.qml:258-266). `Space`,
+    `n/p`, `Ctrl-N/P`, `m`, `±` are already global; stop is MPRIS-only
+    (`Main.qml:108-109`) and gets no key. Only then remove scopes.
   - **Details (removal):**
-    - `Home.qml`: drop region 3 from the dispatch (`case 3`), the PLAYER
-      region box/title, the `regionInDirection` edges to/from the player, and
-      the `activeRegion === 3` condition on `toggle_fullscreen` (Shift+Enter
-      becomes global); Ctrl-W candidates = sidebar/main/status.
-    - `InferiorBar.qml`: delete `handleAction` — **keep the 500 ms
-      `Backend.tick()` timer**, playback/advance depends on it; buttons stay
-      clickable/hoverable as decoration.
+    - `Home.qml` (done — see Now): drop region 3 from the dispatch
+      (`case 3`), the PLAYER region box/title, the `regionInDirection` edges
+      to/from the player, and the `activeRegion === 3` condition on
+      `toggle_fullscreen` (Shift+Enter becomes global); Ctrl-W candidates =
+      sidebar/main/status.
+    - `InferiorBar.qml` (done — see Now): delete `handleAction` — **keep the
+      500 ms `Backend.tick()` timer**, playback/advance depends on it;
+      buttons stay clickable/hoverable as decoration.
     - `NowPlaying.qml`: `pane` cycle becomes lyrics ↔ queue (drop pane 0 from
       `pane_cycle`, the `pane === 0` key block, the transport focus hairline
       and the keybar's transport hints); default pane = lyrics.
     - Sweep comments/docs/README (region lists, "Tab pane cycle", keymap
       table).
-  - **Now (partial):** the player bar is out of the region model — `Home` has
-    no region 3 (no Ctrl-W candidate, no PLAYER frame, no dispatch case, no
-    `down` edge to it) and `InferiorBar.handleAction` is deleted (the 500 ms
-    `Backend.tick()` timer stays). Open: fullscreen pane 0 (seek lives there),
-    the global seek binds that let it go, and the comments/README sweep.
+  - **Now:** the player bar is out of the region model — `Home` has no region 3
+    (no Ctrl-W candidate, no PLAYER frame, no dispatch case, no `down` edge to
+    it) and `InferiorBar.handleAction` is deleted (the 500 ms `Backend.tick()`
+    timer stays). Seek moved out of the fullscreen transport pane: `SeekBack`/
+    `SeekForward` on `,`/`.` (`token_from_qt` maps `0x2C`/`0x2E`) route in
+    `Home` next to `next_track` (±5 s, works in every scope). Fullscreen `pane`
+    is lyrics (1) ↔ queue (2) only: `Tab` toggles, `h`/`l` switch between the
+    two, the `pane === 0` key block, transport focus hairline and
+    click-to-focus are gone, and the keybar hints now show `,/.` seek and
+    `Tab lyrics/queue`. README keymap swept (`Tab pane cycle` row removed,
+    seek added to Playback).
   - **Verify:** Ctrl-W lists only sidebar/main/status; Shift+Enter toggles
     fullscreen from anywhere; Tab in fullscreen cycles lyrics/queue only;
     Space/`n/p`/`m`/`±`/seek work in every scope; mouse transport unchanged;
@@ -1790,9 +1858,9 @@ Kept for rationale; the tree already carries these.
 |--------|------|--------|
 | Must have | 8 | 1 |
 | Should have | 60 | 5 |
-| Quick wins | 10 | 45 |
+| Quick wins | 9 | 46 |
 | Solved (reference) | — | 36 |
-| **Total** | **77** | **87** |
+| **Total** | **76** | **88** |
 
 ### Coverage by area
 

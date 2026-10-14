@@ -34,6 +34,15 @@ Rectangle {
     property string artistName: ""
     property string artistCover: ""
     property string artistMeta: ""
+    // UI-52: biography slot for the header's identity strip; ARC-42 fills it
+    // from the `artist_info` channel. Empty shows the placeholder copy.
+    property string artistDescription: ""
+    // UI-52: current artist rating, 0..5 (Subsonic `setRating` domain);
+    // 0 = unrated. ARC-42 fetches and toggles it.
+    property int artistRating: 0
+    // UI-52: star under the cursor in the rating row, -1 = none. The row
+    // previews the level incrementally up to this index.
+    property int hoveredStar: -1
 
     // Home uses this to send `Esc` straight to Main (P-8) instead of popping
     // back to the Artists segment or a search result.
@@ -55,6 +64,67 @@ Rectangle {
     }
 
     color: Palette.surface
+
+    // A color with a replaced alpha, for the ambience gradient stops (same
+    // helper AlbumEntry/NowPlaying carry).
+    function withAlpha(color, alpha) {
+        return Qt.rgba(color.r, color.g, color.b, alpha);
+    }
+
+    // UI-52: one reusable placeholder action chip for the identity strip;
+    // ARC-42 wires star/rating/cache/shuffle behind the same frame.
+    component ActionChip: Rectangle {
+        id: chip
+
+        property string label: ""
+        property url icon: ""
+
+        height: root.height * 0.06
+        // Icon-only chips are square; a label adds the text + side padding
+        // (ARC-42 brings `Cached · <bytes>` back).
+        width: chip.label.length > 0 ? content.implicitWidth + height * 0.8 : height
+        radius: Theme.radius
+        color: chipHover.hovered ? Palette.secondaryContainer : Palette.surfaceContainerHigh
+        border.color: Palette.outlineVariant
+        border.width: Math.max(1, root.height * Theme.hairlineRatio)
+
+        Behavior on color {
+            ColorAnimation {
+                duration: Theme.motion.quick
+                easing.type: Easing.Bezier
+                easing.bezierCurve: Theme.ease.standard
+            }
+        }
+
+        Row {
+            id: content
+            anchors.centerIn: parent
+            spacing: chip.height * 0.18
+
+            SymbolIcon {
+                anchors.verticalCenter: parent.verticalCenter
+                visible: chip.icon.toString().length > 0
+                source: chip.icon
+                symbolColor: Palette.onSurfaceVariant
+                width: chip.height * 0.42
+                height: width
+            }
+
+            FadeText {
+                id: chipLabel
+                anchors.verticalCenter: parent.verticalCenter
+                text: chip.label
+                color: Palette.onSurface
+                font.pixelSize: root.height * 0.016
+                animated: false
+            }
+        }
+
+        HoverHandler {
+            id: chipHover
+            cursorShape: Qt.PointingHandCursor
+        }
+    }
 
     ListModel {
         id: albums
@@ -161,6 +231,35 @@ Rectangle {
         }
     }
 
+    // Ambience (D-5): same rule as AlbumEntry/NowPlaying — the artist art
+    // through `CoverImage.ambient`, blurred and washed into the surface by the
+    // gradient; the one non-modal blur (content ambience, never elevation).
+    CoverImage {
+        id: coverBackdrop
+        anchors.fill: parent
+        source: root.artistCover
+        ambient: true
+    }
+
+    Rectangle {
+        anchors.fill: parent
+        visible: coverBackdrop.visible
+        gradient: Gradient {
+            GradientStop {
+                position: 0.0
+                color: root.withAlpha(Palette.surface, 0.82)
+            }
+            GradientStop {
+                position: 0.38
+                color: root.withAlpha(Palette.surface, 0.30)
+            }
+            GradientStop {
+                position: 1.0
+                color: root.withAlpha(Palette.surface, 1.0)
+            }
+        }
+    }
+
     ColumnLayout {
         anchors.fill: parent
         anchors.margins: root.width * 0.02
@@ -220,6 +319,113 @@ Rectangle {
                     color: Palette.onSurfaceVariant
                     font.pixelSize: root.height * 0.02
                     elide: Text.ElideRight
+                }
+            }
+
+            // UI-52: identity strip — the biography slot over the action chips
+            // (placeholders until ARC-42 supplies star/rating/cache/shuffle).
+            // Below the narrow breakpoint the header falls back to the
+            // avatar + name + count zones and this strip is hidden.
+            ColumnLayout {
+                Layout.fillWidth: true
+                Layout.maximumWidth: root.width * 0.5
+                Layout.alignment: Qt.AlignVCenter
+                spacing: root.height * 0.1
+                visible: !Theme.isNarrow(root.width)
+
+                FadeText {
+                    Layout.fillWidth: true
+                    text: root.artistDescription.length > 0
+                        ? root.artistDescription
+                        : "Artist biography will appear here once the server metadata is wired."
+                    color: Palette.onSurfaceVariant
+                    font.pixelSize: root.height * 0.018
+                    wrapMode: Text.WordWrap
+                    maximumLineCount: 2
+                    elide: Text.ElideRight
+                }
+
+                Row {
+                    spacing: root.height * 0.010
+
+                    // UI-52: stars are glyphs, not a chip — five slots, the
+                    // first `artistRating` filled (Subsonic rating 1..5, 0 =
+                    // unrated; ARC-42 supplies the level). Hovering previews a
+                    // level incrementally (everything up to the cursor lights)
+                    // and gives the hovered star the shared press bounce.
+                    // Centred against the chip row.
+                    Row {
+                        anchors.verticalCenter: parent.verticalCenter
+                        spacing: root.height * 0.002
+
+                        Repeater {
+                            model: 5
+
+                            // UI-52: the slot is the hitbox (bigger than the
+                            // glyph), so the star is easier to hover/click
+                            // without growing the drawn star.
+                            delegate: Item {
+                                id: starSlot
+
+                                required property int index
+
+                                readonly property bool lit: index < root.artistRating
+                                    || index <= root.hoveredStar
+
+                                width: root.height * 0.05
+                                height: width
+
+                                SymbolIcon {
+                                    id: starGlyph
+                                    anchors.centerIn: parent
+                                    width: root.height * 0.032
+                                    height: width
+                                    source: starSlot.lit
+                                        ? "qrc:/app/icons/star.svg"
+                                        : "qrc:/app/icons/star-outline.svg"
+                                    symbolColor: starSlot.lit
+                                        ? Palette.primary
+                                        : Palette.onSurfaceVariant
+                                }
+
+                                PressBounce {
+                                    id: starPress
+                                    target: starGlyph
+                                }
+
+                                HoverHandler {
+                                    id: starHover
+                                    cursorShape: Qt.PointingHandCursor
+                                    onHoveredChanged: {
+                                        root.hoveredStar = starHover.hovered ? starSlot.index : -1;
+                                        if (starHover.hovered)
+                                            starPress.press();
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    ActionChip {
+                        // ARC-42 placeholder: not downloaded uses the empty
+                        // `outline-download.svg`; when the artist cache rule
+                        // reports cached, swap to the filled
+                        // `baseline-download.svg` tinted green with the
+                        // Material You accent (`Palette.tertiary`) and show
+                        // the `Cached · <bytes>` label.
+                        icon: "qrc:/app/icons/outline-download.svg"
+                    }
+
+                    ActionChip {
+                        icon: "qrc:/app/icons/outline-shuffle.svg"
+                    }
+
+                    ActionChip {
+                        // ARC-42 placeholder: filled star, gray (`onSurface
+                        // Variant`) while not favorited; when favorited, tint
+                        // it yellow with the Material palette.
+                        icon: "qrc:/app/icons/star.svg"
+                    }
                 }
             }
         }

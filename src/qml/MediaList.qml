@@ -19,20 +19,23 @@ import QtQuick.Layouts
 import musika
 import "Theme.js" as Theme
 
-// Full-width library list shared by the Albums and Songs segments: header with
-// the Shift-H / Shift-L order cue, then covers, titles and right-aligned meta.
-// The wrappers (`AlbumList`, `SongList`) own the backend channel and map their
-// payload into rows via `setRows`; this component owns the rows, the cursor
-// (j/k, gg/G) and activation. Every row is a JS object with the normalized
-// fields `title`, `subtitle`, `meta` and `cover` (extra fields pass through to
-// the `activated` signal).
+// Full-width library list shared by the Albums, Songs and Artists segments:
+// header with the Shift-H / Shift-L order cue, then covers, titles and
+// right-aligned meta. The wrappers (`AlbumList`, `SongList`, `ArtistList`)
+// own the backend channel and map their payload into rows via `setRows`; this
+// component owns the rows, the cursor (j/k, gg/G) and activation. Every row is
+// a JS object with the normalized fields `title`, `subtitle`, `meta` and
+// `cover` (extra fields pass through to the `activated` signal).
 Rectangle {
     id: root
 
     property string title: ""
     property string emptyText: "Nothing indexed yet — run a sync"
-    // Current order label, beside the Shift-H / Shift-L cue.
+    // Current order label beside the Shift-H / Shift-L cue; an empty label
+    // hides the cue (e.g. Artists, whose order is fixed for now).
     property string orderText: ""
+    // Artists wear a circle avatar (the one sanctioned circle, R3).
+    property bool roundedArt: false
 
     signal activated(var item)
 
@@ -98,8 +101,10 @@ Rectangle {
                 font.bold: true
             }
 
-            // Order cue: keys -- slash -- current order.
+            // Order cue: keys -- slash -- current order. Hidden when a segment
+            // has no order cycle (Artists).
             Row {
+                visible: root.orderText.length > 0
                 anchors.verticalCenter: parent.verticalCenter
                 anchors.right: parent.right
                 anchors.rightMargin: root.width * 0.02
@@ -171,7 +176,7 @@ Rectangle {
                     anchors.leftMargin: row.viewWidth * 0.04
                     width: row.height * 0.78
                     height: row.height * 0.78
-                    radius: Theme.radius
+                    radius: root.roundedArt ? width * 0.5 : Theme.radius
                     color: Palette.surfaceContainerHigh
                     clip: true
 

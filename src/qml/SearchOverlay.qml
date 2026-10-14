@@ -391,8 +391,6 @@ Item {
                         text: root.typing ? "INSERT" : "NORMAL"
                         color: Palette.primary
                         font.pixelSize: Theme.fontSize("label", panel.height)
-                        font.bold: true
-                        font.letterSpacing: panel.height * 0.01
                         animated: false
                     }
                 }

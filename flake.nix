@@ -99,6 +99,12 @@
         # The sandbox has no /etc/ssl; reqwest builds a client even in tests.
         SSL_CERT_FILE = "${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt";
 
+        # ARC-41: refuse an unbaked icon asset or a dangling qrc reference
+        # before compiling (unused spares only warn; prune them eventually).
+        preBuild = ''
+          sh scripts/check-icons.sh
+        '';
+
         # Wrap by hand: the merged `qt` env is what qtbridge resolves against,
         # and adding individual Qt modules breaks that discovery. The wrapper
         # mirrors the dev-shell environment (plugins, QML imports) and puts the

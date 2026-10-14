@@ -16,6 +16,7 @@
 
 import QtQuick
 import QtQuick.Effects
+import QtQuick.Window
 import "Theme.js" as Theme
 
 // Cover/artist art with a fade-in once decoded (POLISHAUDIT §3). Drop-in for
@@ -23,10 +24,26 @@ import "Theme.js" as Theme
 // owns the rounded/clipped container, this owns the pixels and the fade.
 // `ambient` is the shared D-5 backdrop mode: the GPU layer blurs and
 // desaturates the art, and the caller lays a theme gradient on top.
+//
+// ARC-40: the decode is bounded per surface — `sizeFactor` adds headroom over
+// the painted size (list/grid thumbs 2 for the hover scale, hero covers 1),
+// the ambient backdrop decodes for the blur texture instead, and everything is
+// bound to device pixels (×DPR) on a 32 px grid so resizes do not reload the
+// image per pixel. Aspect ratio is preserved by `sourceSize`.
 Image {
     id: root
 
     property bool ambient: false
+
+    /// Decode headroom over the painted size (1.0 = exactly the painted size).
+    property real sizeFactor: 1.0
+
+    readonly property real decodeFactor: root.ambient ? 0.25 : root.sizeFactor
+
+    sourceSize.width: Math.max(32,
+        Math.ceil(width * Screen.devicePixelRatio * root.decodeFactor / 32) * 32)
+    sourceSize.height: Math.max(32,
+        Math.ceil(height * Screen.devicePixelRatio * root.decodeFactor / 32) * 32)
 
     asynchronous: true
     cache: false

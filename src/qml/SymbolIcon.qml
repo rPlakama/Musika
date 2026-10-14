@@ -21,10 +21,10 @@ import musika
 import "Theme.js" as Theme
 
 // Reusable recolourable SVG icon (roadmap D-6). Assets keep baked white fills
-// (VectorImage cannot tint); `symbolColor` re-colours them through
-// MultiEffect colorization, so any QML module can request a palette role
-// without touching the asset. The caller owns the fixed frame; the glyph is
-// the largest centred square inside it.
+// (VectorImage cannot tint; re-bake with `scripts/bake-icons-white.sh`);
+// `symbolColor` re-colours them through MultiEffect colorization, so any QML
+// module can request a palette role without touching the asset. The caller
+// owns the fixed frame; the glyph is the largest centred square inside it.
 Item {
     id: root
 
@@ -32,6 +32,9 @@ Item {
     property color symbolColor: Palette.onSurface
     /// Glyph size as a fraction of the smaller frame side (1.0 = full bleed).
     property real iconRatio: 1.0
+    /// The source parsed and has an intrinsic size (ARC-38 fallback signal:
+    /// a broken vector reports 0). False for an empty source too.
+    readonly property bool ready: glyph.implicitWidth > 0
 
     implicitWidth: 0
     implicitHeight: 0

@@ -31,6 +31,8 @@ Rectangle {
 
     property string title: ""
     property string emptyText: "Nothing indexed yet — run a sync"
+    /// UI-22: true while the segment's first payload is in flight.
+    property bool loading: false
     // Current order label beside the Shift-H / Shift-L cue; an empty label
     // hides the cue (e.g. Artists, whose order is fixed for now).
     property string orderText: ""
@@ -76,10 +78,21 @@ Rectangle {
 
     FadeText {
         anchors.centerIn: parent
-        visible: mediaRows.count === 0
+        visible: !root.loading && mediaRows.count === 0
         text: root.emptyText
         color: Palette.onSurfaceVariant
         font.pixelSize: Theme.fontSize("body", root.height)
+    }
+
+    // UI-22/UI-38: while the first payload is in flight, the shared skeleton
+    // over the list area (below the section header) instead of a blank pane.
+    SkeletonList {
+        anchors.left: parent.left
+        anchors.right: parent.right
+        anchors.top: parent.top
+        anchors.bottom: parent.bottom
+        anchors.topMargin: root.height * 0.1
+        visible: root.loading && mediaRows.count === 0
     }
 
     ColumnLayout {
@@ -190,6 +203,8 @@ Rectangle {
                     CoverImage {
                         anchors.fill: parent
                         source: row.cover
+                        // ARC-40: ×2 headroom for the UI-45 hover scale.
+                        sizeFactor: 2
                     }
                 }
 

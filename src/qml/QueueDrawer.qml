@@ -199,6 +199,8 @@ Item {
                         CoverImage {
                             anchors.fill: parent
                             source: row.cover
+                            // ARC-40: ×2 headroom for the UI-45 hover scale.
+                            sizeFactor: 2
                         }
                     }
 

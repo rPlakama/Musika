@@ -302,6 +302,8 @@ Rectangle {
                         CoverImage {
                             anchors.fill: parent
                             source: cell.cover
+                            // ARC-40: ×2 headroom for the UI-50 hover scale.
+                            sizeFactor: 2
                         }
                     }
 

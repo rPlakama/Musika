@@ -26,6 +26,7 @@ MediaList {
 
     title: "Songs"
     orderText: Backend.songOrder
+    memoryKey: "songs"
 
     function reload() {
         root.loading = true;

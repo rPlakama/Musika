@@ -477,7 +477,7 @@ impl Palette {
             self,
             roles,
             on_inverse_surface,
-            "on_inverse_surface",
+            "inverse_on_surface",
             on_inverse_surface_changed
         );
         apply_role!(

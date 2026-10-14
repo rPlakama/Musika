@@ -48,6 +48,19 @@ Rectangle {
         id: queueScroll
     }
 
+    // The active lyric glides to the pane centre, but a manual scroll owns
+    // the pane until the next track: no idle resume, so the view is never
+    // yanked back while the user is reading.
+    property bool _lyricsHeld: false
+
+    NumberAnimation {
+        id: lyricFollow
+        property: "contentY"
+        duration: Theme.motion.standard
+        easing.type: Easing.Bezier
+        easing.bezierCurve: Theme.ease.decelerate
+    }
+
     // Lyrics (override → cache → server; see src/lyrics.rs).
     property bool lyricsSynced: false
     property bool lyricsAvailable: false
@@ -87,8 +100,40 @@ Rectangle {
     }
 
     function scrollLyrics(delta) {
+        root.holdLyrics();
         var limit = Math.max(0, lyricsView.contentHeight - lyricsView.height);
         lyricsView.contentY = Math.max(0, Math.min(limit, lyricsView.contentY + delta));
+    }
+
+    function holdLyrics() {
+        root._lyricsHeld = true;
+        lyricFollow.stop();
+    }
+
+    function followLyric() {
+        if (root._lyricsHeld || !lyricsSynced || activeLyric < 0 || lyricModel.count === 0)
+            return;
+        if (Theme.reduceMotion) {
+            lyricsView.positionViewAtIndex(activeLyric, ListView.Center);
+            return;
+        }
+        var item = lyricsView.itemAtIndex(activeLyric);
+        if (!item) {
+            lyricsView.positionViewAtIndex(activeLyric, ListView.Center);
+            return;
+        }
+        var limit = Math.max(0, lyricsView.contentHeight - lyricsView.height);
+        var target = Math.max(0, Math.min(limit,
+            item.y + item.height * 0.5 - lyricsView.height * 0.5));
+        var distance = Math.abs(target - lyricsView.contentY);
+        if (distance < 1)
+            return;
+        lyricFollow.stop();
+        lyricFollow.target = lyricsView;
+        lyricFollow.from = lyricsView.contentY;
+        lyricFollow.to = target;
+        lyricFollow.duration = distance < lyricsView.height * 0.3 ? Theme.motion.quick : Theme.motion.standard;
+        lyricFollow.start();
     }
 
     // A color with a replaced alpha, for the ambience gradient stops.
@@ -153,12 +198,13 @@ Rectangle {
         }
         lyricsAvailable = lyricModel.count > 0 && data.source !== "none";
 
+        lyricFollow.stop();
         lyricsView.contentY = 0;
+        root._lyricsHeld = false;
         Qt.callLater(function () {
             lyricsView.opacity = 1;
+            root.followLyric();
         });
-        if (lyricsSynced && activeLyric >= 0)
-            lyricsView.positionViewAtIndex(activeLyric, ListView.Center);
     }
 
     function lyricsTag() {
@@ -171,10 +217,7 @@ Rectangle {
         return tag;
     }
 
-    onActiveLyricChanged: {
-        if (lyricsSynced && activeLyric >= 0 && lyricsView.count > 0)
-            lyricsView.positionViewAtIndex(activeLyric, ListView.Center);
-    }
+    onActiveLyricChanged: root.followLyric()
 
     // Fullscreen keys, scoped to the focused pane. Esc/back stays with Home.
     function handleAction(action) {
@@ -636,6 +679,10 @@ Rectangle {
                                 boundsBehavior: Flickable.StopAtBounds
                                 visible: root.lyricsAvailable
 
+                                // A hand on the pane owns it until the next
+                                // track.
+                                onMovementStarted: root.holdLyrics()
+
                                 Behavior on opacity {
                                     NumberAnimation {
                                         duration: Theme.motion.quick
@@ -712,6 +759,11 @@ Rectangle {
                                             easing.bezierCurve: Theme.ease.standard
                                         }
                                     }
+                                }
+
+                                // UI-13: proportional scroll hint.
+                                ScrollHint {
+                                    view: lyricsView
                                 }
                             }
                         }
@@ -889,6 +941,11 @@ Rectangle {
                                                 Backend.queueJump(row.index);
                                             }
                                         }
+                                    }
+
+                                    // UI-13: proportional scroll hint.
+                                    ScrollHint {
+                                        view: queueList
                                     }
                                 }
                             }

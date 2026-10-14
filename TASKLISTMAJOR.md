@@ -1234,27 +1234,45 @@ Small, bounded, high-value changes.
 > **0.0.8 batch** — moved from Should have on 2026-10-13 (small, bounded,
 > low-risk): UI-13, UI-40, UI-41, LYR-8, S-9, AUTH-3, DOC-1.
 
-- [ ] **UI-13 · Scroll position hint** — P3
+- [x] **UI-13 · Scroll position hint** — P3
   - **Why:** long lists have no scrollbar/position feedback for mouse users.
   - **Details:** one reusable `ScrollHint.qml` (opacity/transform only, never
     part of layout) attached to each long list: a slim bar pinned to the
-    list's right edge, thumb height `max(h * h / contentHeight, h * 0.04)`,
+    list's left edge, thumb height `max(h * h / contentHeight, h * 0.02)`,
     offset from `visibleArea.yPosition`, width
-    `Math.max(2, h * Theme.hairlineRatio)`, `Palette.outlineVariant` at rest
+    `Math.max(1, h * Theme.hairlineRatio * 0.5)`, `Palette.outlineVariant` at rest
     and `onSurfaceVariant` while scrolling or hovered; fade `quick`, hidden
     when `contentHeight <= height`.
   - **Targets:** `MediaList` (Albums/Songs/Artists), `SearchColumn`, the
-    fullscreen queue in `NowPlaying.qml` and `QueueDrawer`; lyrics keep their
-    own auto-follow and are out.
+    fullscreen queue and lyrics in `NowPlaying.qml`, `QueueDrawer`,
+    `AlbumEntry`'s song list, `ArtistEntry`'s album grid.
   - **Verify:** long lists show a proportional thumb that tracks wheel,
     trackpad and keyboard moves; short lists show nothing; no cursor/hover/
     click behaviour changes; `reduceMotion` shows/hides it without fading.
+  - **Now:** `ScrollHint.qml` is instantiated as a direct child of every
+    scrollable list/grid; the root carries the state (`scrollable`,
+    `emphasized`) and the thumb is a `visibleArea`-driven Rectangle
+    (`max(h²/content, h*0.02)`, half-hairline width, `quick` fade, instant
+    under `reduceMotion`), hidden while the content fits. Pinned to the left
+    edge so it never covers the right-aligned row meta. Real-pointer
+    hover/tracking acceptance is deferred to a desktop session.
 
-- [ ] **UI-40 · Palette transition wrapper (finish THM-4)** — P2 · (POLISHAUDIT §1.3)
+- [x] **UI-40 · Palette transition wrapper (finish THM-4)** — P2 · (POLISHAUDIT §1.3)
   - **Why:** `Palette.apply` snaps every colour in one frame; THM-4 promised
     an animated swap.
   - **Details:** a QML `Palette` wrapper (or per-role Behaviors) animating
     role changes `micro`/`standard`, no animation on first apply/reset.
+  - **Now:** landed without a QML wrapper — a QML singleton named `Palette`
+    can never shadow QtQuick's `Palette` attached type (probed with `qml`;
+    only the C++ registration can), so the crossfade lives in `Main.qml`,
+    where the `colors` payload already arrives: `fadePalette` snapshots the
+    painted roles, `pushPalette` mixes old/new hex maps and re-applies them
+    through `Palette.apply` on a `standard`-tier NumberAnimation, so a
+    re-target mid-fade continues from the painted colours. First apply,
+    reset/no-art and `reduceMotion` snap; `paletteCamel` maps the payload's
+    snake_case roles (`inverse_on_surface` now updates — a latent key
+    mismatch in `palette.rs` is fixed). Offscreen harness verified snap,
+    fade, mid-fade retarget, reset and post-reset fade.
 
 - [x] **UI-41 · List scroll easing + payload crossfades** — P3 · (POLISHAUDIT §4)
   - **Why:** keyboard moves teleport and model swaps flash.
@@ -1282,6 +1300,14 @@ Small, bounded, high-value changes.
     yanked while playing; follow resumes after idle or on track change;
     unsynced lyrics stay static; gradients only over the scrollable range;
     `reduceMotion` keeps an instant `positionViewAtIndex`.
+  - **Now (partial):** the smooth follow landed with a stronger rule than the
+    original 4 s resume — `followLyric` animates `contentY` to the active
+    delegate's centre (`standard`/`quick`, `decelerate`; instant
+    `positionViewAtIndex` for unrealised rows and `reduceMotion`), j/k, drag
+    and wheel hold the pane (`_lyricsHeld`) and it stays held until the next
+    track, so the view can never be yanked down while the user reads or
+    scrolls back to the top. No bounce and no edge fades (dropped after the
+    first review pass); the fades remain the open part.
 
 - [ ] **S-9 · Empty-query search surface + usage boost** — P2 · (roadmap mixed design, "Empty state" + "Selection, scope and ordering")
   - **Why:** an empty query leaves three empty columns; Noctalia leads with
@@ -1572,6 +1598,26 @@ Small, bounded, high-value changes.
     and `actionsBox` (30%, the star row + chips, vertically centred); the
     avatar is `min(avatarSide, 50% of the identity box)` so the 30% column
     never overflows; the right stack hides below `narrow`.
+
+- [x] **UI-54 · Session scroll memory per page** — P2 · (request)
+  - **Why:** the segment pages and the entry pages are destroyed when you
+    leave them, so coming back reset the cursor and the viewport: the
+    highlight was not visible at the point where the user stopped.
+  - **Details:** `ScrollMemory.js` (a `.pragma library`, engine-lifetime
+    store); `MediaList` (keys `albums`/`songs`/`artists`), `AlbumEntry`
+    (`album:<id>`) and `ArtistEntry` (`artist:<id>`) save cursor +
+    `contentY` continuously while alive and restore both on the first
+    payload after a reopen (later reloads keep the live state); the saved
+    offset is clamped to the fresh content and the cursor to the new row
+    count, with `positionViewAtIndex(Contain)` guaranteeing the highlight
+    stays visible even when the offset cannot be exact.
+  - **Verify:** scroll a segment, switch away and back → cursor and offset
+    return; reopen an album/artist page → its list/grid returns to where it
+    stopped; order changes and resync reloads do not jump the list.
+  - **Now:** landed for the three main segments and both entry pages;
+    offscreen harness covers destroy → recreate with cursor/offset restore
+    and fresh keys starting clean. The queue drawer, search columns and the
+    fullscreen queue/lyrics keep their existing behavior.
 
 - [x] **VI-6 · `Ctrl-[` alias + pending-sequence cancel** — P1 · (N3 residual)
   - **Why:** `Ctrl-[` is muscle memory for Esc; Esc should also clear a half-typed
@@ -2194,11 +2240,11 @@ Kept for rationale; the tree already carries these.
 
 | Bucket | Open | Solved |
 |--------|------|--------|
-| Must have | 8 | 1 |
-| Should have | 61 | 11 |
-| Quick wins | 9 | 48 |
+| Must have | 7 | 2 |
+| Should have | 60 | 12 |
+| Quick wins | 5 | 53 |
 | Solved (reference) | — | 36 |
-| **Total** | **77** | **96** |
+| **Total** | **72** | **103** |
 
 ### Coverage by area
 

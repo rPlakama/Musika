@@ -21,6 +21,7 @@ import musika
 import "Theme.js" as Theme
 
 ApplicationWindow {
+    id: root
     visible: true
     width: Screen.width * 0.68
     height: Screen.height * 0.72
@@ -32,6 +33,65 @@ ApplicationWindow {
     // P-6: the session debounce cannot be awaited during teardown, so the
     // backend does one synchronous last-chance write (own DB, single row).
     onClosing: Backend.flushStatus()
+
+    // UI-40: `Palette.apply` snaps every role, so a cover swap is mixed here
+    // (the colors payload arrives here) and pushed back through `apply` each
+    // animation step. The first apply, resets and `reduceMotion` snap.
+    property bool paletteAnimated: false
+    property var paletteFrom: ({})
+    property var paletteTo: ({})
+    property real paletteT: 1
+
+    // Payload roles are snake_case, QML roles camelCase (`inverse_on_surface`
+    // is the one key that maps around a `Palette` property name).
+    function paletteCamel(role) {
+        if (role === "inverse_on_surface")
+            return "onInverseSurface";
+        return role.replace(/_([a-z])/g, function (_, c) { return c.toUpperCase() });
+    }
+
+    function pushPalette(t) {
+        var mixed = {};
+        for (var role in paletteTo) {
+            var to = Qt.color(paletteTo[role]);
+            var from = paletteFrom[role] !== undefined ? Qt.color(paletteFrom[role]) : to;
+            mixed[role] = Qt.rgba(
+                from.r + (to.r - from.r) * t,
+                from.g + (to.g - from.g) * t,
+                from.b + (to.b - from.b) * t,
+                from.a + (to.a - from.a) * t).toString();
+        }
+        Palette.apply(JSON.stringify({ dark: mixed }));
+    }
+
+    function fadePalette(dark) {
+        if (!paletteAnimated || Theme.reduceMotion) {
+            paletteAnimated = true;
+            paletteFade.stop();
+            Palette.apply(JSON.stringify({ dark: dark }));
+            return;
+        }
+        var from = {};
+        // The painted colors, so a re-target mid-fade continues from them.
+        for (var role in dark)
+            from[role] = Palette[paletteCamel(role)];
+        paletteFrom = from;
+        paletteTo = dark;
+        paletteFade.restart();
+    }
+
+    onPaletteTChanged: pushPalette(paletteT)
+
+    NumberAnimation {
+        id: paletteFade
+        target: root
+        property: "paletteT"
+        from: 0
+        to: 1
+        duration: Theme.motion.standard
+        easing.type: Easing.Bezier
+        easing.bezierCurve: Theme.ease.standard
+    }
 
     // Global key handler. It wraps the screen stack so unhandled keys bubble up
     // to it from whatever holds focus; focused controls (text fields) accept
@@ -230,21 +290,31 @@ ApplicationWindow {
         }
     }
 
-    // Dynamic palette (THM-3/THM-4): generate once per playing cover, apply
-    // the payload only while it still matches the current art.
+    // Dynamic palette (THM-3/THM-4 + UI-40): generate once per playing cover,
+    // apply the payload only while it still matches the current art, and
+    // crossfade it in.
     Connections {
         target: Backend
         function onCurrent_cover_art_changed() {
-            if (Backend.currentCoverArt.length > 0)
+            if (Backend.currentCoverArt.length > 0) {
                 Backend.requestColors();
-            else
+            } else {
+                paletteFade.stop();
                 Palette.reset();
+            }
         }
         function onDataReady(channel, payload) {
             if (channel !== "colors")
                 return;
-            if (JSON.parse(payload).cover_art === Backend.currentCoverArt)
-                Palette.apply(payload);
+            var data = JSON.parse(payload);
+            if (data.cover_art !== Backend.currentCoverArt)
+                return;
+            if (!data.dark) {
+                paletteFade.stop();
+                Palette.reset();
+                return;
+            }
+            root.fadePalette(data.dark);
         }
     }
 

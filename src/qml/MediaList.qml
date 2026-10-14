@@ -17,6 +17,7 @@
 import QtQuick
 import QtQuick.Layouts
 import musika
+import "ScrollMemory.js" as Memory
 import "Theme.js" as Theme
 
 // Full-width library list shared by the Albums, Songs and Artists segments:
@@ -38,6 +39,9 @@ Rectangle {
     property string orderText: ""
     // Artists wear a circle avatar (the one sanctioned circle, R3).
     property bool roundedArt: false
+    // UI-54: session scroll memory key; the wrappers pass their segment name.
+    property string memoryKey: ""
+    property bool _restored: false
 
     signal activated(var item)
 
@@ -51,9 +55,28 @@ Rectangle {
         mediaRows.clear();
         for (var i = 0; i < rows.length; i++)
             mediaRows.append(rows[i]);
+        // UI-54: the first payload after a reopen restores the saved viewport
+        // (cursor + offset), so the highlight sits where the user left it;
+        // later reloads keep the live state.
+        var saved = root._restored ? null : Memory.loadScroll(root.memoryKey);
+        root._restored = true;
+        if (saved && mediaRows.count > 0) {
+            list.currentIndex = Math.max(0, Math.min(mediaRows.count - 1, saved.index));
+            list.positionViewAtIndex(list.currentIndex, ListView.Contain);
+            Qt.callLater(function () {
+                list.contentY = Math.max(0, Math.min(saved.y,
+                    Math.max(0, list.contentHeight - list.height)));
+            });
+            return;
+        }
         // UI-10: a cursor row exists from the first paint.
         if (mediaRows.count > 0 && (list.currentIndex < 0 || list.currentIndex >= mediaRows.count))
             list.currentIndex = 0;
+    }
+
+    function saveScroll() {
+        if (root.memoryKey.length > 0)
+            Memory.saveScroll(root.memoryKey, list.currentIndex, list.contentY);
     }
 
     function activateCurrent() {
@@ -270,6 +293,19 @@ Rectangle {
                     }
                 }
             }
+
+            // UI-13: proportional scroll hint on the list's left edge.
+            ScrollHint {
+                view: list
+            }
         }
+    }
+
+    // UI-54: keep the memory current while the page lives (a destruction hook
+    // would fire with the child list already gone).
+    Connections {
+        target: list
+        function onContentYChanged() { root.saveScroll(); }
+        function onCurrentIndexChanged() { root.saveScroll(); }
     }
 }

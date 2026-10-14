@@ -29,6 +29,7 @@ MediaList {
     title: "Artists"
     roundedArt: true
     orderText: Backend.artistOrder
+    memoryKey: "artists"
 
     function reload() {
         root.loading = true;

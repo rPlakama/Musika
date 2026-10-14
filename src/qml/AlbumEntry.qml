@@ -18,6 +18,7 @@ import QtQuick
 import QtQuick.Layouts
 import QtQuick.Effects
 import musika
+import "ScrollMemory.js" as Memory
 import "Theme.js" as Theme
 
 // Album entry: hero cover beside the album description, then its songs.
@@ -43,6 +44,9 @@ Rectangle {
     property bool notesExpanded: false
     // UI-22: true while the album's songs are in flight.
     property bool loading: false
+    // UI-54: per-album scroll memory for the songs viewport.
+    readonly property string memoryKey: "album:" + root.albumId
+    property bool _restored: false
 
     // Header geometry (roadmap "Album page cover" D-3): the hero cover is
     // sized from the pane height, beside the description when there is room
@@ -87,6 +91,23 @@ Rectangle {
             });
         }
         root.loading = false;
+        // UI-54: reopening the page restores the cursor + offset; later
+        // reloads (library change, resync) keep the live state.
+        var saved = root._restored ? null : Memory.loadScroll(root.memoryKey);
+        root._restored = true;
+        if (saved && songs.count > 0) {
+            songList.currentIndex = Math.max(0, Math.min(songs.count - 1, saved.index));
+            songList.positionViewAtIndex(songList.currentIndex, ListView.Contain);
+            Qt.callLater(function () {
+                songList.contentY = Math.max(0, Math.min(saved.y,
+                    Math.max(0, songList.contentHeight - songList.height)));
+            });
+        }
+    }
+
+    function saveScroll() {
+        if (root.albumId.length > 0)
+            Memory.saveScroll(root.memoryKey, songList.currentIndex, songList.contentY);
     }
 
     Component.onCompleted: reload()
@@ -361,6 +382,11 @@ Rectangle {
                     }
                 }
             }
+
+            // UI-13: proportional scroll hint on the list's left edge.
+            ScrollHint {
+                view: songList
+            }
         }
 
         // UI-22: the songs area has a wait state and a real empty-album state.
@@ -380,5 +406,12 @@ Rectangle {
             horizontalAlignment: Text.AlignHCenter
             verticalAlignment: Text.AlignVCenter
         }
+    }
+
+    // UI-54: keep the songs viewport in memory while the page lives.
+    Connections {
+        target: songList
+        function onContentYChanged() { root.saveScroll(); }
+        function onCurrentIndexChanged() { root.saveScroll(); }
     }
 }

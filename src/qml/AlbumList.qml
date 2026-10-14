@@ -30,6 +30,7 @@ MediaList {
 
     title: "Albums"
     orderText: Backend.albumOrder
+    memoryKey: "albums"
 
     function reload() {
         root.loading = true;

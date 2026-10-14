@@ -387,6 +387,17 @@ The product is incomplete without these.
     reopened, last song queued paused -- no autoplay); unknown ids / account
     mismatch are ignored silently. Milestones S0-S3 in the roadmap's "Session
     status" design. DB7 stays separate: credentials is login material only.
+  - **Now (partial):** S0 + S1 landed — DB7 `statussave.db`
+    (`migrations_status/`, `src/status.rs`: single-row upsert + load with
+    tests, `MUSIKA_STATUS_FILE`; `Dbs.status`). Writes are account-scoped and
+    coalesced by a generation debounce (500 ms task, deliberately not the
+    player tick, so stopped-state changes persist); volume/mute restore in
+    `login_succeeded` through `applyStatus`, with auto-login now calling
+    `rememberAccount` (it never touched the Login fields, so the row could
+    not be matched before). Verified live: MPRIS set 0.42 → stored row →
+    restored 0.42 on relaunch. Open: S2 album/song ids +
+    `statusRestored` navigation and the paused queue; S3 queue snapshot +
+    position.
 
 - [ ] **LYR-6 · Optional: karaoke v2, lyric FTS, `:lyrics`** — P3 · (roadmap L5)
   - **Why:** word-level timing and lyric search are stretch goals; server

@@ -228,7 +228,7 @@ with a key at `~/.config/musika/key` (AES-256-GCM).
 
 | Variable | Effect |
 |---|---|
-| `MUSIKA_{CREDENTIALS,LIBRARY,SEARCH,COVERS,LYRICS,COLORS}_FILE` | database paths |
+| `MUSIKA_{CREDENTIALS,LIBRARY,SEARCH,COVERS,LYRICS,COLORS,STATUS}_FILE` | database paths |
 | `MUSIKA_COVERS_DIR` | cover blob directory |
 | `MUSIKA_IPC_SOCKET` | command socket path |
 | `MUSIKA_KEY_FILE` | credential encryption key |

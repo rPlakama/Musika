@@ -40,6 +40,7 @@ mod qml;
 mod queue;
 mod search;
 mod sqlite;
+mod status;
 
 static DBS: OnceLock<db::Dbs> = OnceLock::new();
 

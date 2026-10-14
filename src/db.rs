@@ -16,8 +16,8 @@
 
 //! Database layout for Musika.
 //!
-//! Six independent SQLite databases live under `~/.config/musika` (each with
-//! its own connection pool, so separate worker threads can write without
+//! Seven independent SQLite databases live under `~/.config/musika` (each
+//! with its own connection pool, so separate worker threads can write without
 //! contending on a single writer lock):
 //!
 //! - `credentials.db` — encrypted account information (DB1)
@@ -26,6 +26,7 @@
 //! - `covers.db`      — cover-art cache index; blobs sit in `covers/` (DB3)
 //! - `lyrics.db`      — lyric cache (DB5)
 //! - `colors.db`      — cover-seeded dynamic color cache (DB6)
+//! - `statussave.db`  — last session status, restored on login (DB7)
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -33,7 +34,7 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 use sqlx::sqlite::{SqliteJournalMode, SqlitePool, SqlitePoolOptions};
 
-/// The six databases, opened and migrated at start-up.
+/// The seven databases, opened and migrated at start-up.
 #[derive(Clone)]
 pub struct Dbs {
     pub credentials: SqlitePool,
@@ -42,6 +43,7 @@ pub struct Dbs {
     pub covers: SqlitePool,
     pub lyrics: SqlitePool,
     pub colors: SqlitePool,
+    pub status: SqlitePool,
 }
 
 /// Opens every database and applies its migrations.
@@ -69,6 +71,10 @@ pub async fn init() -> Result<Dbs> {
     let colors = open_file(&colors_path()?, 3).await?;
     sqlx::migrate!("./migrations_colors").run(&colors).await?;
 
+    // Single row, tiny: one connection is plenty.
+    let status = open_file(&status_path()?, 1).await?;
+    sqlx::migrate!("./migrations_status").run(&status).await?;
+
     Ok(Dbs {
         credentials,
         library,
@@ -76,6 +82,7 @@ pub async fn init() -> Result<Dbs> {
         covers,
         lyrics,
         colors,
+        status,
     })
 }
 
@@ -126,6 +133,10 @@ pub fn lyrics_path() -> Result<PathBuf> {
 
 pub fn colors_path() -> Result<PathBuf> {
     db_path("colors.db", "MUSIKA_COLORS_FILE")
+}
+
+pub fn status_path() -> Result<PathBuf> {
+    db_path("statussave.db", "MUSIKA_STATUS_FILE")
 }
 
 /// Plain-text mirror of the library, for external tools such as `rg`.

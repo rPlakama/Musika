@@ -15,6 +15,7 @@
 // along with this program; if not, see <https://www.gnu.org/licenses/>.
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use qtbridge::{QmlMethodInvoker, QmlObject, qobject};
 
@@ -29,6 +30,10 @@ use crate::queue::{
     LIBRARY_QUEUE_AHEAD, LibraryQueue, album_tracks_json, library_chunk_json,
     library_queue_payload, song_album_payload,
 };
+
+/// Bumped by every status change; the debounced writer only persists when its
+/// captured generation is still the latest (P-6 / roadmap "Session status").
+static STATUS_WRITE_GEN: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Default)]
 pub struct Backend {
@@ -382,6 +387,14 @@ impl Backend {
                                     eprintln!("Failed to refresh server type: {err:#}");
                                 }
                             }
+                            // Auto-login never goes through the Login fields;
+                            // the status row is account-scoped (P-6).
+                            qtbridge::invoke_method!(
+                                invoker,
+                                "rememberAccount",
+                                credentials.server_url.clone(),
+                                credentials.username.clone()
+                            );
                             invoker.invoke_method("login_succeeded");
                             spawn_index_sync(
                                 sync_finish,
@@ -414,6 +427,20 @@ impl Backend {
         });
     }
 
+    /// Records the account the session belongs to; auto-login never goes
+    /// through the Login fields, and the status row is account-scoped (P-6).
+    #[qslot(qml_name = "rememberAccount")]
+    fn remember_account(&mut self, server_url: String, username: String) {
+        if self.server_url != server_url {
+            self.server_url = server_url;
+            self.server_url_changed();
+        }
+        if self.username != username {
+            self.username = username;
+            self.username_changed();
+        }
+    }
+
     #[qslot]
     fn login_succeeded(&mut self) {
         self.busy = false;
@@ -422,6 +449,82 @@ impl Backend {
         self.logged_in_changed();
         self.status_message = "Logged in.".to_string();
         self.status_message_changed();
+        self.restore_status();
+    }
+
+    /// S1 restore: volume/mute only. Album/queue navigation and the paused
+    /// queue are S2; transient UI is never restored.
+    fn restore_status(&mut self) {
+        let Some(dbs) = crate::dbs().cloned() else {
+            return;
+        };
+        let server_url = self.server_url.trim().to_string();
+        let username = self.username.trim().to_string();
+        let invoker = self.get_qml_method_invoker();
+        crate::runtime().spawn(async move {
+            match crate::status::load(&dbs.status).await {
+                Ok(Some(status))
+                    if status.server_url == server_url && status.username == username =>
+                {
+                    let Ok(payload) = serde_json::to_string(&status) else {
+                        return;
+                    };
+                    qtbridge::invoke_method!(invoker, "applyStatus", payload);
+                }
+                Ok(_) => {}
+                Err(err) => eprintln!("status: could not read the session: {err:#}"),
+            }
+        });
+    }
+
+    /// Applies a restored [`crate::status::SessionStatus`] payload.
+    #[qslot(qml_name = "applyStatus")]
+    fn apply_status(&mut self, payload: String) {
+        let Ok(status) = serde_json::from_str::<crate::status::SessionStatus>(&payload) else {
+            eprintln!("status: ignoring malformed session payload");
+            return;
+        };
+        self.player.set_volume(status.volume);
+        self.player.set_muted(status.muted);
+        self.sync_player();
+    }
+
+    /// Arms the 500 ms session debounce: volume/mute drags coalesce into one
+    /// write; a row from another account is discarded first (P-6 / S1).
+    fn queue_status_save(&mut self) {
+        if !self.logged_in || self.server_url.trim().is_empty() || self.username.trim().is_empty() {
+            return;
+        }
+        let generation = STATUS_WRITE_GEN.fetch_add(1, Ordering::Relaxed) + 1;
+        let Some(dbs) = crate::dbs().cloned() else {
+            return;
+        };
+        let server_url = self.server_url.trim().to_string();
+        let username = self.username.trim().to_string();
+        let volume = self.player.volume();
+        let muted = self.player.muted();
+        crate::runtime().spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+            if STATUS_WRITE_GEN.load(Ordering::Relaxed) != generation {
+                return;
+            }
+            let mut status = crate::status::load(&dbs.status)
+                .await
+                .ok()
+                .flatten()
+                .unwrap_or_default();
+            if status.server_url != server_url || status.username != username {
+                status = crate::status::SessionStatus::default();
+            }
+            status.server_url = server_url;
+            status.username = username;
+            status.volume = volume;
+            status.muted = muted;
+            status.updated_at = crate::consts::now_secs();
+            if let Err(err) = crate::status::save(&dbs.status, &status).await {
+                eprintln!("status: could not save the session: {err:#}");
+            }
+        });
     }
 
     #[qslot]
@@ -1129,6 +1232,7 @@ impl Backend {
         }
         self.player.set_volume(volume);
         self.sync_player();
+        self.queue_status_save();
     }
 
     /// Steps the volume by `delta`; stepping up unmutes.
@@ -1140,6 +1244,7 @@ impl Backend {
         }
         self.player.set_volume(volume);
         self.sync_player();
+        self.queue_status_save();
     }
 
     /// Mutes or unmutes (M).
@@ -1147,6 +1252,7 @@ impl Backend {
     fn player_toggle_mute(&mut self) {
         self.player.toggle_mute();
         self.sync_player();
+        self.queue_status_save();
     }
 
     /// Requests lyrics for the current track (override → cache → server).

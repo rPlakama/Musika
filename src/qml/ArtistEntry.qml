@@ -35,16 +35,49 @@ Rectangle {
     // open "—".
     signal quickAction(var target, var actions)
 
+    /// VI-4: anchored visual selection over the album cards.
+    Selection {
+        id: sel
+    }
+
+    readonly property bool hasSelection: sel.hasSelection
+    readonly property int selectionCount: sel.count(grid.currentIndex)
+
+    /// VI-4: `v` toggles visual mode on the cursor card.
+    function toggleSelection() {
+        if (albums.count === 0 || grid.currentIndex < 0)
+            return;
+        if (sel.hasSelection)
+            sel.clear();
+        else
+            sel.start(grid.currentIndex);
+    }
+
+    /// VI-4: `V` selects every card.
+    function selectAll() {
+        if (albums.count === 0)
+            return;
+        sel.all();
+        grid.currentIndex = albums.count - 1;
+        scroll.ensureVisible(grid, grid.currentIndex);
+    }
+
+    function clearSelection() {
+        sel.clear();
+    }
+
     /// ARC-43/ARC-UI-1: Alt armed the gesture — anchor on the keyboard cursor
-    /// card with the recycled album verb set.
+    /// card with the recycled album verb set; a visual selection swaps in the
+    /// batch verb set (VI-4).
     function armQuickActions() {
         if (albums.count === 0 || grid.currentIndex < 0)
             return;
-        var item = albums.get(grid.currentIndex);
         var cell = grid.itemAtIndex(grid.currentIndex);
-        if (!item || !cell)
-            return;
-        quickAction(cell, verbs.album(item));
+        var actions = sel.hasSelection
+            ? verbs.forSelection("album", sel.ids(albums, grid.currentIndex, "albumId"))
+            : (albums.get(grid.currentIndex) ? verbs.album(albums.get(grid.currentIndex)) : null);
+        if (actions && cell)
+            quickAction(cell, actions);
     }
 
     property string artistId: ""
@@ -232,6 +265,8 @@ Rectangle {
     }
 
     function apply(payload) {
+        // VI-4: a reload invalidates the selected range.
+        sel.clear();
         var artist = JSON.parse(payload);
         if (artist.name && artist.name.length > 0)
             root.artistName = artist.name;
@@ -313,10 +348,13 @@ Rectangle {
     // Movement and Enter belong to the cover grid; `Esc` is handled by Home
     // (leaves the entry for Main regardless of where it was opened from).
     function handleAction(action) {
-        if (action === "enter")
+        if (action === "enter") {
+            // VI-4: opening an album ends the visual selection.
+            sel.clear();
             activateCurrent();
-        else
+        } else {
             moveWithinGrid(action);
+        }
     }
 
     Connections {
@@ -647,6 +685,15 @@ Rectangle {
             Layout.fillWidth: true
             Layout.fillHeight: true
 
+            // VI-4: the selection count pill over the grid corner.
+            SelectionBadge {
+                anchors.top: parent.top
+                anchors.right: parent.right
+                anchors.margins: parent.width * 0.01
+                count: root.selectionCount
+                z: 2
+            }
+
             GridView {
                 id: grid
                 anchors.fill: parent
@@ -677,11 +724,17 @@ Rectangle {
                     height: GridView.view.cellHeight
                     color: "transparent"
 
+                    // VI-4: a card inside the visual selection wears the
+                    // cursor fill.
+                    readonly property bool selectedCard: sel.selected(grid.currentIndex, cell.index)
+
                     Rectangle {
                         anchors.fill: parent
                         anchors.margins: cell.width * 0.03
                         radius: Theme.radius
-                        color: cell.current ? Palette.secondaryContainer : (cellHover.hovered ? Palette.surfaceContainerHigh : "transparent")
+                        color: (cell.current || cell.selectedCard)
+                            ? Palette.secondaryContainer
+                            : (cellHover.hovered ? Palette.surfaceContainerHigh : "transparent")
 
                         Behavior on color {
                             ColorAnimation {

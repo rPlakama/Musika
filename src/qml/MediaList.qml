@@ -44,15 +44,57 @@ ScrollPanel {
         id: verbs
     }
 
-    /// ARC-43: Alt armed the gesture — anchor on the keyboard cursor row.
+    /// VI-4: anchored visual row selection (`v` / `V`), derived from the
+    /// shared cursor.
+    Selection {
+        id: sel
+    }
+
+    /// The id field a selection batch resolves to (`quickActionKind` names the
+    /// kind on the backend side).
+    readonly property string selectionField: quickActionKind === "album" ? "albumId" : "songId"
+    readonly property bool hasSelection: sel.hasSelection
+    readonly property int selectionCount: sel.count(currentIndex)
+
+    /// VI-4: `v` toggles visual mode on the cursor row.
+    function toggleSelection() {
+        if (quickActionKind === "" || count === 0 || currentIndex < 0)
+            return;
+        if (sel.hasSelection)
+            sel.clear();
+        else
+            sel.start(currentIndex);
+    }
+
+    /// VI-4: `V` selects the whole list (Home routes `visual_all`).
+    function selectAll() {
+        if (quickActionKind === "" || count === 0)
+            return;
+        sel.all();
+        currentIndex = count - 1;
+        ensureVisible();
+    }
+
+    function clearSelection() {
+        sel.clear();
+    }
+
+    /// ARC-43: Alt armed the gesture — anchor on the keyboard cursor row, or
+    /// on the range with the selection verb set (VI-4).
     function armQuickActions() {
         if (quickActionKind === "" || count === 0 || currentIndex < 0)
             return;
-        var item = mediaRows.get(currentIndex);
-        var actions = item
-            ? (quickActionKind === "album" ? verbs.album(item) : verbs.song(item))
-            : null;
         var row = view.itemAtIndex(currentIndex);
+        var actions = null;
+        if (sel.hasSelection) {
+            actions = verbs.forSelection(quickActionKind,
+                sel.ids(mediaRows, currentIndex, selectionField));
+        } else {
+            var item = mediaRows.get(currentIndex);
+            actions = item
+                ? (quickActionKind === "album" ? verbs.album(item) : verbs.song(item))
+                : null;
+        }
         if (actions && row)
             quickAction(row, actions);
     }
@@ -66,6 +108,8 @@ ScrollPanel {
     model: mediaRows
 
     function setRows(rows) {
+        // VI-4: a reload invalidates the selected range.
+        sel.clear();
         mediaRows.clear();
         for (var i = 0; i < rows.length; i++)
             mediaRows.append(rows[i]);
@@ -80,9 +124,20 @@ ScrollPanel {
     }
 
     onItemActivated: (index) => {
+        // VI-4: opening/playing a row ends the visual selection.
+        sel.clear();
         var item = mediaRows.get(index);
         if (item)
             root.activated(item);
+    }
+
+    // VI-4: the selection count pill rides at the header's right edge.
+    SelectionBadge {
+        id: selectionBadge
+        anchors.verticalCenter: parent.verticalCenter
+        anchors.right: parent.right
+        anchors.rightMargin: root.width * 0.02
+        count: root.selectionCount
     }
 
     // Header (A): the Shift-H / Shift-L order cue, vertically centred.
@@ -90,7 +145,9 @@ ScrollPanel {
         visible: root.orderText.length > 0
         anchors.verticalCenter: parent.verticalCenter
         anchors.right: parent.right
+        // VI-4: step left of the selection pill when it is up.
         anchors.rightMargin: root.width * 0.02
+            + (selectionBadge.visible ? selectionBadge.width + root.height * 0.012 : 0)
         spacing: root.height * 0.012
 
         FadeText {
@@ -129,10 +186,12 @@ ScrollPanel {
             readonly property real viewWidth: ListView.view ? ListView.view.width : 0
             // Mouse/keyboard parity: the hovered row expands like the cursor.
             readonly property bool emphasized: ListView.isCurrentItem || rowHover.hovered
+            // VI-4: the row sits inside the visual selection range.
+            readonly property bool selectedRow: sel.selected(root.currentIndex, index)
 
             width: viewWidth
             height: ListView.view ? ListView.view.height * 0.105 : 0
-            color: ListView.isCurrentItem
+            color: (ListView.isCurrentItem || row.selectedRow)
                 ? Palette.secondaryContainer
                 : (rowHover.hovered
                     ? Palette.surfaceContainerHigh

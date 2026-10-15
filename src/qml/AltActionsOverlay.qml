@@ -112,13 +112,13 @@ Item {
 
     /// Keyboard aiming (h/j/k/l, arrows). The center is a real neutral state:
     /// aiming toward the quadrant opposite the current one steps back to
-    /// neutral first, the next press continues to that side. An open slot is
-    /// never aimed — a press toward it lands on neutral.
+    /// neutral first, the next press continues to that side. An open or
+    /// disabled slot is never aimed — a press toward it lands on neutral.
     function aim(direction) {
         if (!armed)
             return;
         var next = aimed === opposite(direction) ? "" : direction;
-        if (next.length > 0 && (!config || !config[next]))
+        if (next.length > 0 && (!config || !config[next] || config[next].disabled === true))
             next = "";
         aimed = next;
     }
@@ -253,13 +253,17 @@ Item {
             readonly property string labelText: box.slot && box.slot.label ? box.slot.label : "—"
             readonly property string iconSource: box.slot && box.slot.icon ? box.slot.icon : ""
             readonly property bool isAimed: root.aimed === box.direction
+            // VI-4: a verb that does not apply to the current selection is
+            // shown gray and cannot be aimed.
+            readonly property bool isDisabled: !!box.slot && box.slot.disabled === true
 
             width: board.boxSide
             height: board.boxSide
             radius: 0
             backdrop: root.backdrop
-            tint: box.isAimed ? Palette.primaryContainer : Palette.surfaceContainerHigh
-            opacity: !root.aimed || box.isAimed ? 1 : 0.55
+            tint: box.isDisabled ? Theme.stateDisabledContainer
+                : (box.isAimed ? Palette.primaryContainer : Palette.surfaceContainerHigh)
+            opacity: box.isDisabled ? 0.7 : (!root.aimed || box.isAimed ? 1 : 0.55)
             scale: box.isAimed ? 1.05 : 1.0
 
             Behavior on tint {
@@ -288,7 +292,8 @@ Item {
                 height: width
                 visible: box.iconSource.length > 0
                 source: box.iconSource
-                symbolColor: box.isAimed ? Palette.onPrimaryContainer : Palette.onSurfaceVariant
+                symbolColor: box.isDisabled ? Theme.stateDisabledContent
+                    : (box.isAimed ? Palette.onPrimaryContainer : Palette.onSurfaceVariant)
             }
 
             Text {
@@ -296,7 +301,8 @@ Item {
                 anchors.centerIn: parent
                 visible: box.iconSource.length === 0
                 text: box.labelText
-                color: box.isAimed ? Palette.onPrimaryContainer : Palette.onSurfaceVariant
+                color: box.isDisabled ? Theme.stateDisabledContent
+                    : (box.isAimed ? Palette.onPrimaryContainer : Palette.onSurfaceVariant)
                 font.family: "monospace"
                 font.pixelSize: board.boxFont
             }

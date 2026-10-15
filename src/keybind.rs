@@ -36,6 +36,8 @@ pub enum Action {
     Bottom,
     Search,
     VisualMode,
+    VisualSelect,
+    VisualAll,
     Enter,
     Back,
     ToggleFullscreen,
@@ -71,6 +73,8 @@ impl Action {
             Self::Bottom => "bottom",
             Self::Search => "search",
             Self::VisualMode => "visual_mode",
+            Self::VisualSelect => "visual",
+            Self::VisualAll => "visual_all",
             Self::Enter => "enter",
             Self::Back => "back",
             Self::ToggleFullscreen => "toggle_fullscreen",
@@ -148,6 +152,8 @@ fn defaults() -> Vec<(&'static str, Action)> {
         ("g g", Action::Top),
         ("shift-g", Action::Bottom),
         ("ctrl-w", Action::VisualMode),
+        ("v", Action::VisualSelect),
+        ("shift-v", Action::VisualAll),
         ("enter", Action::Enter),
         ("shift-enter", Action::ToggleFullscreen),
         ("i", Action::InsertMode),
@@ -413,6 +419,16 @@ mod tests {
         assert_eq!(keymap.feed("g"), Outcome::Pending);
         assert_eq!(keymap.feed("escape"), Outcome::Action(Action::Back));
         assert!(!keymap.is_pending());
+    }
+
+    #[test]
+    fn visual_selection_keys() {
+        let mut keymap = Keymap::new();
+        assert_eq!(keymap.feed("v"), Outcome::Action(Action::VisualSelect));
+        assert_eq!(keymap.feed("shift-v"), Outcome::Action(Action::VisualAll));
+        assert_eq!(token_from_qt(0x56, QT_SHIFT).as_deref(), Some("shift-v"));
+        // Ctrl-W stays the region picker (VI-3), not row selection.
+        assert_eq!(keymap.feed("ctrl-w"), Outcome::Action(Action::VisualMode));
     }
 
     #[test]

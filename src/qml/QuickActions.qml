@@ -71,6 +71,34 @@ QtObject {
         };
     }
 
+    /// VI-4: with a visual selection active only Add to Queue applies to the
+    /// whole range; the go-to/favourite verbs stay visible but disabled
+    /// (gray), because they act on a single row.
+    function forSelection(kind, ids) {
+        return {
+            north: {
+                label: "Add to Queue",
+                icon: "qrc:/app/icons/baseline-playlist-add.svg",
+                invoke: function() { Backend.queueAddSelection(kind, JSON.stringify(ids)) }
+            },
+            south: {
+                label: "Favorite",
+                icon: "qrc:/app/icons/baseline-favorite.svg",
+                disabled: true
+            },
+            west: {
+                label: "Go to Artist",
+                icon: "qrc:/app/icons/person-walking-svgrepo-com.svg",
+                disabled: true
+            },
+            east: {
+                label: "Go to Album",
+                icon: "qrc:/app/icons/album.svg",
+                disabled: true
+            }
+        };
+    }
+
     /// Artist hit (search): queue the whole artist and favourite it; both
     /// jumps stay open ("—") — the artist page is the row's Enter already.
     function artist(item) {

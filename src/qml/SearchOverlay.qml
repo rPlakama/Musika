@@ -107,6 +107,10 @@ Item {
     function close() {
         opened = false;
         typing = false;
+        // VI-4: leaving the overlay clears every column's visual selection.
+        songsColumn.clearSelection();
+        albumsColumn.clearSelection();
+        artistsColumn.clearSelection();
         Backend.setSearchOpen(false);
         Backend.releaseFocus();
     }
@@ -123,6 +127,8 @@ Item {
     }
 
     function enterTyping() {
+        // VI-4: going back to typing ends the normal-mode selection.
+        columnFor(activeColumn).clearSelection();
         typing = true;
         field.forceActiveFocus();
         field.selectAll();
@@ -146,22 +152,30 @@ Item {
 
     // Search normal mode: hjkl navigates, Enter opens/plays, i types again.
     function handleAction(action) {
-        if (action === "back")
-            close();
-        else if (action === "insert_mode")
+        if (action === "back") {
+            // VI-4: the first Esc ends the active column's visual selection.
+            var column = columnFor(activeColumn);
+            if (column.hasSelection)
+                column.clearSelection();
+            else
+                close();
+        } else if (action === "insert_mode") {
             enterTyping();
-        else if (action === "move_left")
-            moveColumn(-1);
-        else if (action === "move_right")
-            moveColumn(1);
-        else if (action === "move_up")
+        } else if (action === "move_left" || action === "move_right") {
+            moveColumn(action === "move_left" ? -1 : 1);
+        } else if (action === "move_up") {
             moveRow(-1);
-        else if (action === "move_down")
+        } else if (action === "move_down") {
             moveRow(1);
-        else if (action === "top" || action === "bottom")
+        } else if (action === "top" || action === "bottom") {
             moveEdge(action === "bottom");
-        else if (action === "enter")
+        } else if (action === "visual") {
+            columnFor(activeColumn).toggleSelection();
+        } else if (action === "visual_all") {
+            columnFor(activeColumn).selectAll();
+        } else if (action === "enter") {
             activate();
+        }
     }
 
     function clearResults() {
@@ -206,6 +220,8 @@ Item {
         // S-9: the empty-query surface has a single column.
         if (field.text.length === 0)
             return;
+        // VI-4: one column's selection at a time.
+        columnFor(activeColumn).clearSelection();
         activeColumn = (activeColumn + delta + 3) % 3;
         var column = columnFor(activeColumn);
         if (column.cursor < 0 && column.model && column.model.count > 0)
@@ -230,6 +246,8 @@ Item {
                 root.denied();
             return;
         }
+        // VI-4: activating a row ends its column's visual selection.
+        column.clearSelection();
         if (activeColumn === 0)
             root.songActivated(hit.id);
         else if (activeColumn === 1)
@@ -550,6 +568,7 @@ Item {
                     loading: root.loading
                     hasQuery: field.text.length > 0
                     quickActionKind: "song"
+                    selectionField: "songId"
 
                     onQuickAction: (target, actions) => root.quickAction(target, actions)
 
@@ -583,6 +602,7 @@ Item {
                     hasQuery: field.text.length > 0
                     visible: field.text.length > 0
                     quickActionKind: "album"
+                    selectionField: "albumId"
 
                     onQuickAction: (target, actions) => root.quickAction(target, actions)
 
@@ -614,6 +634,7 @@ Item {
                     hasQuery: field.text.length > 0
                     visible: field.text.length > 0
                     quickActionKind: "artist"
+                    selectionField: "artistId"
 
                     onQuickAction: (target, actions) => root.quickAction(target, actions)
 

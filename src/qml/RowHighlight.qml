@@ -38,6 +38,8 @@ Rectangle {
     property bool active: true
     /// Mouse is over the row.
     property bool hovered: false
+    /// VI-4: the row is inside the visual selection.
+    property bool selected: false
     /// How far the block bleeds past the row on each side.
     property real overflow: 0
 
@@ -47,7 +49,7 @@ Rectangle {
     anchors.bottom: parent.bottom
     anchors.leftMargin: -root.overflow
     anchors.rightMargin: -root.overflow
-    color: root.current && root.active
+    color: root.selected || (root.current && root.active)
         ? Palette.secondaryContainer
         : (root.hovered ? Palette.surfaceContainerHigh : "transparent")
 

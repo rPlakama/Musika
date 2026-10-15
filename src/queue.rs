@@ -231,6 +231,32 @@ pub async fn quick_tracks_json(
     tracks_json(dbs, songs).await
 }
 
+/// VI-4: expands one visual selection (same kind, several ids) to rows.
+async fn quick_songs_many(
+    dbs: &crate::db::Dbs,
+    kind: &str,
+    ids: &[String],
+) -> anyhow::Result<Vec<crate::library::SongRow>> {
+    let mut songs = Vec::new();
+    for id in ids {
+        songs.extend(quick_songs(dbs, kind, id).await?);
+    }
+    Ok(songs)
+}
+
+/// Batch twin of [`quick_tracks_json`] for a visual selection (VI-4): the
+/// selected ids are resolved and offline-filtered as one queue append.
+pub async fn quick_tracks_json_many(
+    dbs: &crate::db::Dbs,
+    kind: &str,
+    ids: &[String],
+    offline: bool,
+) -> anyhow::Result<String> {
+    let mut songs = quick_songs_many(dbs, kind, ids).await?;
+    filter_offline(dbs, offline, &mut songs).await?;
+    tracks_json(dbs, songs).await
+}
+
 /// Album-page payload for ARC-43 "Go to Album" (navigation only, no queue):
 /// the same JSON shape [`queue_album_json`] gives the album page.
 pub async fn song_album_page_json(dbs: &crate::db::Dbs, song_id: &str) -> anyhow::Result<String> {
@@ -617,6 +643,17 @@ mod tests {
         let songs = quick_songs(&dbs, "album", "al1").await.unwrap();
         assert_eq!(songs.len(), 2);
         assert!(quick_songs(&dbs, "bogus", "s2").await.is_err());
+
+        // VI-4: a visual selection expands every id, in row order.
+        let ids = vec!["s1".to_string(), "s2".to_string()];
+        let songs = quick_songs_many(&dbs, "song", &ids).await.unwrap();
+        assert_eq!(
+            songs.iter().map(|s| s.id.as_str()).collect::<Vec<_>>(),
+            ["s1", "s2"]
+        );
+        let ids = vec!["al1".to_string()];
+        let songs = quick_songs_many(&dbs, "album", &ids).await.unwrap();
+        assert_eq!(songs.len(), 2);
 
         // ARC-I: an artist hit queues every song of the artist's albums.
         let songs = quick_songs(&dbs, "artist", "ar1").await.unwrap();

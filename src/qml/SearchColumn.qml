@@ -36,22 +36,61 @@ Item {
     // ARC-I: which recycled Alt-hold verb set this column arms ("song",
     // "album" or "artist"); the column only relays the cursor row it anchors.
     property string quickActionKind: ""
+    /// VI-4: the id field a selection batch resolves to (set by the overlay).
+    property string selectionField: "songId"
     signal quickAction(var target, var actions)
 
     QuickActions {
         id: verbs
     }
 
-    /// ARC-I: Alt armed the gesture — anchor on the cursor row.
+    /// VI-4: anchored visual row selection over the result rows.
+    Selection {
+        id: sel
+    }
+
+    readonly property bool hasSelection: sel.hasSelection
+    readonly property int selectionCount: sel.count(root.cursor)
+
+    /// VI-4: `v` toggles visual mode on the cursor row.
+    function toggleSelection() {
+        if (quickActionKind === "" || !model || model.count === 0 || root.cursor < 0)
+            return;
+        if (sel.hasSelection)
+            sel.clear();
+        else
+            sel.start(root.cursor);
+    }
+
+    /// VI-4: `V` selects every result.
+    function selectAll() {
+        if (quickActionKind === "" || !model || model.count === 0)
+            return;
+        sel.all();
+        root.cursor = model.count - 1;
+        scroll.ensureVisible(list, root.cursor);
+    }
+
+    function clearSelection() {
+        sel.clear();
+    }
+
+    /// ARC-I: Alt armed the gesture — anchor on the cursor row; a visual
+    /// selection swaps in the batch verb set (VI-4).
     function armQuickActions() {
         if (quickActionKind === "" || !model || model.count === 0 || cursor < 0)
             return;
-        var item = model.get(cursor);
-        var actions = item
-            ? (quickActionKind === "artist" ? verbs.artist(item)
-                : quickActionKind === "album" ? verbs.album(item) : verbs.song(item))
-            : null;
         var row = list.itemAtIndex(cursor);
+        var actions = null;
+        if (sel.hasSelection) {
+            actions = verbs.forSelection(quickActionKind, sel.ids(model, cursor, selectionField));
+        } else {
+            var item = model.get(cursor);
+            actions = item
+                ? (quickActionKind === "artist" ? verbs.artist(item)
+                    : quickActionKind === "album" ? verbs.album(item) : verbs.song(item))
+                : null;
+        }
         if (actions && row)
             quickAction(row, actions);
     }
@@ -91,9 +130,19 @@ Item {
                 font.bold: root.active
             }
 
+            // VI-4: the selection count sits beside the result count.
+            SelectionBadge {
+                compact: true
+                anchors.right: countBadge.left
+                anchors.verticalCenter: parent.verticalCenter
+                anchors.rightMargin: root.headerH * 0.12
+                count: root.selectionCount
+            }
+
             // Count badge: contained by its own pill so the number can never
             // read as the next column's title.
             Rectangle {
+                id: countBadge
                 anchors.right: parent.right
                 anchors.verticalCenter: parent.verticalCenter
                 implicitWidth: countLabel.implicitWidth + root.headerH * 0.36
@@ -161,6 +210,8 @@ Item {
                         required property bool starred
 
                         readonly property bool current: index === root.cursor
+                        // VI-4: the row sits inside the visual selection range.
+                        readonly property bool selectedRow: sel.selected(root.cursor, index)
                         // UI-45: the focused cursor or any hovered row leads.
                         readonly property bool emphasized: (row.current && root.active) || rowHover.hovered
 
@@ -178,6 +229,7 @@ Item {
                             current: row.current
                             active: root.active
                             hovered: rowHover.hovered
+                            selected: row.selectedRow
                             overflow: root.overflow
                         }
 
@@ -220,7 +272,7 @@ Item {
                                 id: titleText
                                 width: parent.width
                                 text: row.title
-                                color: row.current && root.active ? Palette.onSecondaryContainer : Palette.onSurface
+                                color: (row.current && root.active) || row.selectedRow ? Palette.onSecondaryContainer : Palette.onSurface
                                 font.pixelSize: Theme.clamp(row.height * 0.3, 12, 18)
                                 elide: Text.ElideRight
                                 animated: false
@@ -257,7 +309,7 @@ Item {
                                         - (subtitleHeart.visible
                                             ? subtitleHeart.width + parent.spacing : 0))
                                     text: row.subtitle
-                                    color: row.current && root.active ? Palette.onSecondaryContainer : Palette.onSurfaceVariant
+                                    color: (row.current && root.active) || row.selectedRow ? Palette.onSecondaryContainer : Palette.onSurfaceVariant
                                     font.pixelSize: Theme.clamp(row.height * 0.24, 10, 14)
                                     elide: Text.ElideRight
                                     animated: false
@@ -284,7 +336,7 @@ Item {
                             anchors.rightMargin: row.height * 0.18
                             anchors.verticalCenter: parent.verticalCenter
                             text: row.meta
-                            color: row.current && root.active ? Palette.onSecondaryContainer : Palette.onSurfaceVariant
+                            color: (row.current && root.active) || row.selectedRow ? Palette.onSecondaryContainer : Palette.onSurfaceVariant
                             font.pixelSize: Theme.clamp(row.height * 0.26, 10, 14)
                             animated: false
                         }

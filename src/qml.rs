@@ -1923,6 +1923,42 @@ impl Backend {
         });
     }
 
+    /// VI-4: Alt "Add to Queue" on a visual row selection — every selected id
+    /// is resolved and appended as one batch.
+    #[qslot(qml_name = "queueAddSelection")]
+    fn queue_add_selection(&mut self, kind: String, ids_json: String) {
+        let ids: Vec<String> = match serde_json::from_str(&ids_json) {
+            Ok(ids) => ids,
+            Err(err) => {
+                eprintln!("alt actions: bad selection payload: {err}");
+                self.error_raised("playback".to_string(), format!("Bad selection payload: {err}"));
+                return;
+            }
+        };
+        let invoker = self.get_qml_method_invoker();
+        let error_invoker = self.get_qml_method_invoker();
+        let Some(dbs) = crate::dbs().cloned() else {
+            return;
+        };
+        let offline = self.offline;
+        crate::runtime().spawn(async move {
+            match crate::queue::quick_tracks_json_many(&dbs, &kind, &ids, offline).await {
+                Ok(json) => {
+                    qtbridge::invoke_method!(invoker, "playerAppend", json);
+                }
+                Err(err) => {
+                    eprintln!("alt actions: could not queue the selection ({kind}): {err:#}");
+                    qtbridge::invoke_method!(
+                        error_invoker,
+                        "errorRaised",
+                        "playback".to_string(),
+                        format!("Could not add to queue: {err:#}")
+                    );
+                }
+            }
+        });
+    }
+
     /// Favourites one song or album on the server (overlay South).
     #[qslot(qml_name = "altFavorite")]
     fn alt_favorite(&mut self, kind: String, id: String) {

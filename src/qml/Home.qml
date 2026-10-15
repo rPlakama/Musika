@@ -130,7 +130,16 @@ Item {
     // Clipboard paste (VI-21): the text lands visibly in the search field so
     // the user can correct it; Enter plays the selection.
     function pasteSearch(text) {
+        clearMainSelection();
         searchOverlay.openWith(text);
+    }
+
+    // VI-4: entering another surface (search, sidebar, Ctrl-W regions) ends
+    // the main list's visual selection.
+    function clearMainSelection() {
+        var view = contentStack.currentItem;
+        if (view && view.clearSelection)
+            view.clearSelection();
     }
 
     // P-8: returning from an artist entry always lands on Main — the plain
@@ -264,13 +273,30 @@ Item {
                 nowPlayingExpanded = false;
                 return;
             }
+            clearMainSelection();
             visualMode = !visualMode;
             visualSelection = activeRegion;
             return;
         }
 
+        // VI-4: `v`/`V` start visual row selection on the focused list. The
+        // search overlay handles its own (modal routing above).
+        if (action === "visual" || action === "visual_all") {
+            if (nowPlayingExpanded || activeRegion !== 1)
+                return;
+            var listView = contentStack.currentItem;
+            if (!listView)
+                return;
+            if (action === "visual" && listView.toggleSelection)
+                listView.toggleSelection();
+            else if (action === "visual_all" && listView.selectAll)
+                listView.selectAll();
+            return;
+        }
+
         // Search is global scope: open the floating search from any region.
         if (action === "search") {
+            clearMainSelection();
             searchOverlay.open();
             return;
         }
@@ -278,6 +304,7 @@ Item {
         // region (VI-19); inside the overlay the modal routing above re-enters
         // typing instead.
         if (action === "insert_mode") {
+            clearMainSelection();
             searchOverlay.openWith("");
             return;
         }
@@ -333,6 +360,11 @@ Item {
                 nowPlayingExpanded = false;
                 return;
             }
+            // VI-4: the first Esc ends the focused list's visual selection.
+            if (contentStack.currentItem && contentStack.currentItem.hasSelection) {
+                contentStack.currentItem.clearSelection();
+                return;
+            }
             // P-8: an artist entry is a detour — back lands on Main.
             if (contentStack.currentItem && contentStack.currentItem.exitsToMain)
                 root.leaveArtistEntry();
@@ -355,6 +387,7 @@ Item {
             var content = contentStack.currentItem;
             if (content && content.moveWithinGrid && content.moveWithinGrid(action))
                 return;
+            clearMainSelection();
             activeRegion = 0;
             return;
         }

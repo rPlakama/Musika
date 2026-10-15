@@ -121,6 +121,13 @@ Item {
     property real followVelocity: 1400
     property real followBegin: 0.15
     property real followEnd: 0.85
+    /// Optional soothing follow: when >= 0 the highlight rides this fixed
+    /// duration (ms) instead of the constant-velocity walk — the lyrics
+    /// pane wants a paced ~300 ms glide per phrase, not a flick.
+    property int followMs: -1
+    /// Extra spacing between list rows (0 = the delegate owns it); grid
+    /// cells are placed by `cellHeight`.
+    property real rowSpacing: 0
     /// A landing farther than this many rows outside the visible band
     /// catches instantly — the highlight walk over dozens of rows reads as
     /// lag (and blanks the viewport while it travels).
@@ -474,12 +481,14 @@ Item {
             visible: root.layout !== "grid"
             model: root.layout === "grid" ? null : root.model
             delegate: root.rowDelegate
+            spacing: root.rowSpacing
             boundsBehavior: Flickable.StopAtBounds
 
             highlight: followHighlight
             highlightFollowsCurrentItem: true
             highlightMoveVelocity: root.followVelocity
-            highlightMoveDuration: (root._instantFollow || Theme.reduceMotion) ? 0 : -1
+            highlightMoveDuration: (root._instantFollow || Theme.reduceMotion) ? 0
+                : (root.followMs >= 0 ? root.followMs : -1)
             preferredHighlightBegin: height * root.followBegin
             preferredHighlightEnd: height * root.followEnd
             highlightRangeMode: ListView.ApplyRange
@@ -502,7 +511,8 @@ Item {
             highlightFollowsCurrentItem: true
             // SCROLLGRIDSTUDY §3: GridView has no `highlightMoveVelocity`;
             // the duration token is the nearest documented follow.
-            highlightMoveDuration: (root._instantFollow || Theme.reduceMotion) ? 0 : Theme.motion.standard
+            highlightMoveDuration: (root._instantFollow || Theme.reduceMotion) ? 0
+                : (root.followMs >= 0 ? root.followMs : Theme.motion.standard)
             preferredHighlightBegin: height * root.followBegin
             preferredHighlightEnd: height * root.followEnd
             highlightRangeMode: GridView.ApplyRange

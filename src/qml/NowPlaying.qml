@@ -57,19 +57,13 @@ Rectangle {
     // UI-54: first queue payload after entering restores the saved highlight.
     property bool _recallQueue: false
 
-    // The active lyric glides to the pane centre; a manual scroll owns the
-    // pane only until `lyricResume` fires (LYR-8): 5 s idle while lyrics is
-    // the focused pane, 2 s when focus is elsewhere, so a stale line is never
-    // left un-centred for long.
+    // The active lyric glides to the pane centre through the shared scroll
+    // modal (LYR-8): a soothing fixed-duration follow (`followMs`) inside the
+    // centred band, never a teleport/flick. A manual scroll owns the pane
+    // only until `lyricResume` fires: 5 s idle while lyrics is the focused
+    // pane, 2 s when focus is elsewhere, so a stale line is never left
+    // un-centred for long.
     property bool _lyricsHeld: false
-
-    NumberAnimation {
-        id: lyricFollow
-        property: "contentY"
-        duration: Theme.motion.standard
-        easing.type: Easing.Bezier
-        easing.bezierCurve: Theme.ease.decelerate
-    }
 
     // LYR-8: resume the centre-follow after the manual-scroll idle window.
     Timer {
@@ -121,41 +115,24 @@ Rectangle {
 
     function scrollLyrics(delta) {
         root.holdLyrics();
-        var limit = Math.max(0, lyricsView.contentHeight - lyricsView.height);
-        lyricsView.contentY = Math.max(0, Math.min(limit, lyricsView.contentY + delta));
+        var view = lyricsView.view;
+        var limit = Math.max(0, view.contentHeight - view.height);
+        view.contentY = Math.max(0, Math.min(limit, view.contentY + delta));
     }
 
     function holdLyrics() {
         root._lyricsHeld = true;
-        lyricFollow.stop();
         lyricResume.interval = root.pane === 1 ? Theme.lyricsResume : Theme.lyricsResumeUnfocused;
         lyricResume.restart();
     }
 
+    /// The shared body owns the motion: pushing the active line makes the
+    /// view glide it into the centred band over `followMs` (soothing, no
+    /// teleport fallback for unrealised lines — the body estimates them).
     function followLyric() {
         if (root._lyricsHeld || !lyricsSynced || activeLyric < 0 || lyricModel.count === 0)
             return;
-        if (Theme.reduceMotion) {
-            lyricsView.positionViewAtIndex(activeLyric, ListView.Center);
-            return;
-        }
-        var item = lyricsView.itemAtIndex(activeLyric);
-        if (!item) {
-            lyricsView.positionViewAtIndex(activeLyric, ListView.Center);
-            return;
-        }
-        var limit = Math.max(0, lyricsView.contentHeight - lyricsView.height);
-        var target = Math.max(0, Math.min(limit,
-            item.y + item.height * 0.5 - lyricsView.height * 0.5));
-        var distance = Math.abs(target - lyricsView.contentY);
-        if (distance < 1)
-            return;
-        lyricFollow.stop();
-        lyricFollow.target = lyricsView;
-        lyricFollow.from = lyricsView.contentY;
-        lyricFollow.to = target;
-        lyricFollow.duration = distance < lyricsView.height * 0.3 ? Theme.motion.quick : Theme.motion.standard;
-        lyricFollow.start();
+        lyricsView.currentIndex = root.activeLyric;
     }
 
     // A color with a replaced alpha, for the ambience gradient stops.
@@ -270,9 +247,11 @@ Rectangle {
         }
         lyricsAvailable = lyricModel.count > 0 && data.source !== "none";
 
-        lyricFollow.stop();
         lyricResume.stop();
-        lyricsView.contentY = 0;
+        // A new song carries no cursor: clear it, top the body, then let the
+        // first `followLyric` glide to the opening phrase.
+        lyricsView.currentIndex = -1;
+        lyricsView.view.positionViewAtBeginning();
         root._lyricsHeld = false;
         Qt.callLater(function () {
             lyricsView.opacity = 1;
@@ -844,17 +823,26 @@ Rectangle {
                             color: "transparent"
                             clip: true
 
-                            ListView {
+                            ScrollContent {
                                 id: lyricsView
                                 anchors.fill: parent
-                                model: lyricModel
-                                spacing: root.lyricSize * 0.9
-                                boundsBehavior: Flickable.StopAtBounds
                                 visible: root.lyricsAvailable
+                                model: lyricModel
+                                rowSpacing: root.lyricSize * 0.9
+                                // LYR-8: the soothing lyrics follow — a fixed
+                                // ~300 ms glide inside a centre band, with no
+                                // teleport fallback and no far-snap flick.
+                                followMs: 300
+                                followSnapRows: 0
+                                followBegin: 0.45
+                                followEnd: 0.55
 
                                 // A hand on the pane owns it until the next
                                 // track.
-                                onMovementStarted: root.holdLyrics()
+                                Connections {
+                                    target: lyricsView.view
+                                    function onMovementStarted() { root.holdLyrics(); }
+                                }
 
                                 Behavior on opacity {
                                     NumberAnimation {
@@ -864,72 +852,74 @@ Rectangle {
                                     }
                                 }
 
-                                delegate: FadeText {
-                                    id: lyricLine
-                                    required property int index
-                                    required property real t
-                                    required property string line
+                                rowDelegate: Component {
+                                    FadeText {
+                                        id: lyricLine
+                                        required property int index
+                                        required property real t
+                                        required property string line
 
-                                    // Lyrics stage (roadmap "Lyrics presentation"):
-                                    // active = scale + full contrast, near = dim,
-                                    // far = dimmer; unsynced is one uniform column.
-                                    readonly property bool active: index === root.activeLyric
-                                    readonly property int distance: root.activeLyric >= 0 ? Math.abs(index - root.activeLyric) : -1
+                                        // Lyrics stage (roadmap "Lyrics presentation"):
+                                        // active = scale + full contrast, near = dim,
+                                        // far = dimmer; unsynced is one uniform column.
+                                        readonly property bool active: index === root.activeLyric
+                                        readonly property int distance: root.activeLyric >= 0 ? Math.abs(index - root.activeLyric) : -1
 
-                                    // Pre-calculated emphasis: the full 1.12
-                                    // while the wrapped line stays clear of the
-                                    // margin, otherwise exactly the scale that
-                                    // fits between the paddings (never touching
-                                    // the stage walls). Long unbreakable words
-                                    // can shrink below 1 instead of being cut.
-                                    readonly property real emphasis: {
-                                        if (!lyricLine.active)
-                                            return 1.0;
-                                        var room = lyricLine.width - lyricLine.leftPadding - lyricLine.rightPadding;
-                                        if (room <= 0 || lyricLine.paintedWidth <= 0)
-                                            return Theme.lyricsEmphasis;
-                                        return Math.min(Theme.lyricsEmphasis, room / lyricLine.paintedWidth);
-                                    }
-                                    // Grow the slot symmetrically so the big
-                                    // line stays centred and its neighbours
-                                    // make room instead of getting overlapped.
-                                    readonly property real emphasisPad: Math.max(0, lyricLine.paintedHeight * (lyricLine.emphasis - 1) / 2)
-
-                                    width: lyricsView.width
-                                    leftPadding: root.lyricPad
-                                    rightPadding: root.lyricPad
-                                    topPadding: lyricLine.emphasisPad
-                                    bottomPadding: lyricLine.emphasisPad
-                                    text: lyricLine.line
-                                    horizontalAlignment: Text.AlignHCenter
-                                    color: lyricLine.active ? Palette.onSurface : Palette.onSurfaceVariant
-                                    font.family: Theme.fonts.lyrics
-                                    font.pixelSize: root.lyricSize
-                                    wrapMode: Text.WordWrap
-                                    animated: false
-                                    transformOrigin: Item.Center
-                                    opacity: lyricLine.distance < 0 ? Theme.contentDim : (lyricLine.active ? 1.0 : (lyricLine.distance === 1 ? Theme.contentDim : Theme.contentDimFar))
-                                    scale: lyricLine.emphasis
-
-                                    Behavior on opacity {
-                                        NumberAnimation {
-                                            duration: Theme.motion.quick
-                                            easing.type: Easing.Bezier
-                                            easing.bezierCurve: Theme.ease.standard
+                                        // Pre-calculated emphasis: the full 1.12
+                                        // while the wrapped line stays clear of the
+                                        // margin, otherwise exactly the scale that
+                                        // fits between the paddings (never touching
+                                        // the stage walls). Long unbreakable words
+                                        // can shrink below 1 instead of being cut.
+                                        readonly property real emphasis: {
+                                            if (!lyricLine.active)
+                                                return 1.0;
+                                            var room = lyricLine.width - lyricLine.leftPadding - lyricLine.rightPadding;
+                                            if (room <= 0 || lyricLine.paintedWidth <= 0)
+                                                return Theme.lyricsEmphasis;
+                                            return Math.min(Theme.lyricsEmphasis, room / lyricLine.paintedWidth);
                                         }
-                                    }
-                                    Behavior on scale {
-                                        NumberAnimation {
-                                            duration: Theme.motion.quick
-                                            easing.type: Easing.Bezier
-                                            easing.bezierCurve: Theme.ease.standard
+                                        // Grow the slot symmetrically so the big
+                                        // line stays centred and its neighbours
+                                        // make room instead of getting overlapped.
+                                        readonly property real emphasisPad: Math.max(0, lyricLine.paintedHeight * (lyricLine.emphasis - 1) / 2)
+
+                                        width: lyricsView.width
+                                        leftPadding: root.lyricPad
+                                        rightPadding: root.lyricPad
+                                        topPadding: lyricLine.emphasisPad
+                                        bottomPadding: lyricLine.emphasisPad
+                                        text: lyricLine.line
+                                        horizontalAlignment: Text.AlignHCenter
+                                        color: lyricLine.active ? Palette.onSurface : Palette.onSurfaceVariant
+                                        font.family: Theme.fonts.lyrics
+                                        font.pixelSize: root.lyricSize
+                                        wrapMode: Text.WordWrap
+                                        animated: false
+                                        transformOrigin: Item.Center
+                                        opacity: lyricLine.distance < 0 ? Theme.contentDim : (lyricLine.active ? 1.0 : (lyricLine.distance === 1 ? Theme.contentDim : Theme.contentDimFar))
+                                        scale: lyricLine.emphasis
+
+                                        Behavior on opacity {
+                                            NumberAnimation {
+                                                duration: Theme.motion.quick
+                                                easing.type: Easing.Bezier
+                                                easing.bezierCurve: Theme.ease.standard
+                                            }
                                         }
-                                    }
-                                    Behavior on color {
-                                        ColorAnimation {
-                                            duration: Theme.motion.micro
-                                            easing.type: Easing.Bezier
-                                            easing.bezierCurve: Theme.ease.standard
+                                        Behavior on scale {
+                                            NumberAnimation {
+                                                duration: Theme.motion.quick
+                                                easing.type: Easing.Bezier
+                                                easing.bezierCurve: Theme.ease.standard
+                                            }
+                                        }
+                                        Behavior on color {
+                                            ColorAnimation {
+                                                duration: Theme.motion.micro
+                                                easing.type: Easing.Bezier
+                                                easing.bezierCurve: Theme.ease.standard
+                                            }
                                         }
                                     }
                                 }

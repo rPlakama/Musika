@@ -34,8 +34,8 @@ Item {
     // UI-54: first queue payload after opening restores the saved highlight.
     property bool _recall: false
 
-    // Keep rendering while the close fade runs (the panel owns the opacity).
-    visible: opened || panel.opacity > 0
+    // Keep rendering while the close slide runs (the panel owns the x).
+    visible: opened || panel.x < root.width
     z: 25
 
     function open() {
@@ -160,20 +160,46 @@ Item {
         }
     }
 
+    // UI-35: the drawer owns the context while open — the shared scrim dims
+    // whatever is behind, and a click outside closes (search-overlay parity).
+    Rectangle {
+        anchors.fill: parent
+        color: Palette.scrim
+        opacity: root.opened ? Theme.scrimOpacity : 0
+
+        Behavior on opacity {
+            NumberAnimation {
+                duration: Theme.motion.standard
+                easing.type: Easing.Bezier
+                easing.bezierCurve: Theme.ease.standard
+            }
+        }
+
+        TapHandler {
+            enabled: root.opened
+            onTapped: root.close()
+        }
+    }
+
     AcrylicPanel {
         id: panel
         anchors.top: parent.top
         anchors.bottom: parent.bottom
-        anchors.right: parent.right
         width: root.width * 0.36
         tint: Palette.surfaceContainerHigh
         backdrop: root.backdrop
         border.color: Palette.outlineVariant
         border.width: Math.max(1, root.width * Theme.hairlineRatio)
-        opacity: root.opened ? 1 : 0
+        // UI-35: slide in/out from the right edge (`standard`); the root stays
+        // visible while the slide-out runs.
+        x: root.opened ? root.width - width : root.width
 
-        Behavior on opacity {
-            NumberAnimation { duration: Theme.motion.quick; easing.type: Easing.Bezier; easing.bezierCurve: Theme.ease.standard }
+        Behavior on x {
+            NumberAnimation {
+                duration: Theme.motion.standard
+                easing.type: Easing.Bezier
+                easing.bezierCurve: root.opened ? Theme.ease.decelerate : Theme.ease.accelerate
+            }
         }
 
         ColumnLayout {

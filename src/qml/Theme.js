@@ -68,6 +68,9 @@ var ease = {
     accelerate: [0.3, 0, 0.8, 0.15],
     // Overshooting release for press feedback (button scale-down bounce).
     bounce: [0.34, 1.56, 0.64, 1]
+    // Note: Qt's Easing.Bezier clamps y control points above 1 (probed), so
+    // CSS spring curves like cubic-bezier(.63,.12,.84,1.72) must be carried
+    // by OutBack + easing.overshoot instead.
 }
 
 // Legacy aliases; new code uses motion.* / ease.*.

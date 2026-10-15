@@ -69,15 +69,42 @@ Item {
         return Qt.rect(tl.x, tl.y, br.x - tl.x, br.y - tl.y);
     }
 
-    opacity: armed ? 1 : 0
-    visible: opacity > 0
+    /// Spawn motion: the cluster zooms out of the target (0 → 1) on a spring
+    /// (one overshoot and settle) and collapses back with a plain ease-in;
+    /// visibility follows the animated value so the collapse plays out.
+    property real spawn: 0
+    visible: spawn > 0.001
 
-    Behavior on opacity {
-        NumberAnimation {
-            duration: Theme.motion.quick
-            easing.type: Easing.Bezier
-            easing.bezierCurve: Theme.ease.standard
-        }
+    // Qt clamps `Easing.Bezier` y > 1, so the CSS spring
+    // cubic-bezier(.63,.12,.84,1.72) is carried by OutBack instead: the
+    // default overshoot peaks at ~1.098, right on that curve's crest.
+    NumberAnimation {
+        id: spawnIn
+        target: root
+        property: "spawn"
+        to: 1
+        duration: Theme.motion.emphasized
+        easing.type: Easing.OutBack
+        easing.overshoot: 1.7
+    }
+
+    NumberAnimation {
+        id: spawnOut
+        target: root
+        property: "spawn"
+        to: 0
+        duration: Theme.motion.quick
+        easing.type: Easing.Bezier
+        easing.bezierCurve: Theme.ease.accelerate
+    }
+
+    // The zoom pivot is the board's drawn centre, so the cluster grows out of
+    // the row it is anchored on (the board keeps its own fit scale).
+    transform: Scale {
+        origin.x: board.x + board.drawnWidth / 2
+        origin.y: board.y + board.drawnHeight / 2
+        xScale: root.spawn
+        yScale: root.spawn
     }
 
     function arm(item, cfg) {
@@ -87,11 +114,21 @@ Item {
         config = cfg;
         aimed = "";
         armed = true;
+        spawnOut.stop();
+        if (Theme.reduceMotion)
+            spawn = 1;
+        else
+            spawnIn.restart();
     }
 
     function cancel() {
         armed = false;
         aimed = "";
+        spawnIn.stop();
+        if (Theme.reduceMotion)
+            spawn = 0;
+        else
+            spawnOut.restart();
     }
 
     /// Esc: cancel and keep the overlay down for the rest of this Alt hold.
@@ -336,15 +373,25 @@ Item {
             anchors.verticalCenter: parent.verticalCenter
         }
 
-        // Center mark: the neutral aim. Grows while neutral so the state reads.
-        Rectangle {
+        // Center mark: the neutral aim (the four-way move glyph). Grows while
+        // neutral so the state reads.
+        Icon {
             anchors.centerIn: parent
-            width: Math.max(5, root.height * 0.008) * (root.aimed === "" ? 1.6 : 1.0)
+            width: Math.max(16, root.height * 0.026)
             height: width
-            radius: width / 2
-            color: Palette.primary
+            source: "qrc:/app/icons/arrow-move-20-regular.svg"
+            symbolColor: Palette.primary
+            opacity: root.aimed === "" ? 1.0 : 0.6
+            scale: root.aimed === "" ? 1.3 : 1.0
 
-            Behavior on width {
+            Behavior on scale {
+                NumberAnimation {
+                    duration: Theme.motion.micro
+                    easing.type: Easing.Bezier
+                    easing.bezierCurve: Theme.ease.standard
+                }
+            }
+            Behavior on opacity {
                 NumberAnimation { duration: Theme.motion.micro }
             }
         }

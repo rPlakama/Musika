@@ -773,61 +773,6 @@ The product is incomplete without these.
 - [ ] **ARC-2 · Cover revalidation cheaper/cancellable** — P1 · (A4, O6)
   - **Why:** an unchanged sync still revalidates and `UPDATE`s every cover.
 
-- [ ] **ARC-7 · Trim `api.rs` to used endpoints** — P0 · (O2)
-  - **Why:** `api.rs` is 1894 lines behind `#![allow(dead_code)]`, and most of it
-    is an endpoint layer for families the app never calls (playlists, shares,
-    podcasts, jukebox, chat, radio, users, videos, scanning, bookmarks,
-    now-playing, similar/top songs). It is not a second client: it extends the
-    live `http_client::SubsonicClient` via `impl SubsonicClient`, so deleting
-    an endpoint is safe and self-contained.
-  - **Inventory (compiler ground truth: `#![warn(dead_code)]` on HEAD):**
-    - 79 endpoint methods, **14 live / 65 dead**;
-    - live set: `get_album`, `get_album_info2`, `get_artist`,
-      `get_artist_info`, `get_artist_info2`, `get_indexes`, `get_lyrics`,
-      `get_lyrics_by_song_id`, `get_open_subsonic_extensions`, `ping`,
-      `set_rating`, `star`, `unstar`, `stream_url`;
-    - dead methods (one line each, by family): playlists (`get_playlists`,
-      `get_playlist`, `create_playlist`, `update_playlist`,
-      `delete_playlist`), shares (`get_shares`, `create_share`,
-      `update_share`, `delete_share`), podcasts (`get_podcasts`,
-      `create/delete_podcast_channel`, `download/delete_podcast_episode`,
-      `refresh_podcasts`, `get_newest_podcasts`), jukebox (`jukebox_control`,
-      `get_play_queue`,
-      `save_play_queue`), chat (`get_chat_messages`, `add_chat_message`),
-      bookmarks (`get_bookmarks`, `create_bookmark`, `delete_bookmark`),
-      radio (`get/create/update/delete_internet_radio_station`), users
-      (`get_user(s)`, `create/update/delete_user`, `change_password`,
-      `get_license`, `UserRoles`), video (`get_videos`, `get_video_info`),
-      scan (`get_scan_status`, `start_scan`), now-playing (`get_now_playing`),
-      starred (`get_starred`, `get_starred2`), similar/top
-      (`get_similar_songs`, `get_similar_songs2`, `get_top_songs`),
-      discovery (`get_genres`, `get_music_folders`, `get_music_directory`,
-      `get_artists`, `get_album_list*`, `get_avatar_url`,
-      `get_cover_art_url` — the live path builds cover URLs in
-      `http_client`), downloads (`download_url` — `download_media` is the
-      live twin), `hls_url`, `scrobble`, `search`/`search2`/`search3`
-      (searching is local FTS5 since S-9);
-    - dead helpers: `string_or_number`, `search_params`, `album_list_params`,
-      two `as_str`, `append`;
-    - 49 structs are never referenced (the `docs/api` families above); the
-      rest of the dead set is fields reachable only from dead types.
-  - **Details/Plan:**
-    1. delete the 65 dead methods; then delete every type/helper the compiler
-       reports once the methods are gone (iterate `#![warn(dead_code)]` to
-       fixpoint) — keep the live 14's response-type closure (`Child`,
-       `AlbumID3`, `AlbumWithSongsID3`, `ArtistID3`,
-       `ArtistWithAlbumsID3`, `AlbumInfo2`/`ArtistInfo(2)`, `Indexes`/`Index`,
-       `Lyrics`/`LyricsList`/`StructuredLyrics`/`LyricLine`,
-       `OpenSubsonicExtension`, …) even when the lint calls it unconstructed
-       (serde builds them);
-    2. keep the serde tests that cover live types; rewrite/drop the rest;
-    3. remove `#![allow(dead_code)]` from `api.rs` once it is warning-free
-       (out-of-scope: the other module-level allows tracked by ARC-11/36);
-    4. expected shape: 1894 → ~400 lines; no runtime path touched.
-  - **Verify:** `cargo check` shows zero `dead_code` warnings for `api.rs`
-    without the file-level allow; `cargo test` green; `rg "crate::api::"`
-    call sites (library/index/lyrics) compile unchanged.
-
 - [ ] **ARC-8 · Merge duplicate sync/login pipelines** — P1 · (O3)
   - **Why:** the same auth → client → `index::sync_library` → report
     orchestration is written three times in `qml.rs`, so fixes (re-entrancy,
@@ -2590,6 +2535,24 @@ Small, bounded, high-value changes.
 - [x] **ARC-9 · Cache `SecretKey`, honor `XDG_CONFIG_HOME`** — P1 · (O7)
   - **Why:** re-reads the key file per call; path bypasses `config_dir`.
 
+- [x] **ARC-7 · Trim `api.rs` to used endpoints** — P0 · (O2)
+  - **Why:** `api.rs` was 1894 lines behind `#![allow(dead_code)]`: an endpoint
+    layer for families the app never calls (playlists, shares, podcasts,
+    jukebox, chat, radio, users, video, scanning, bookmarks, now-playing,
+    similar/top songs, searching — FTS is local since S-9).
+  - **Now:** landed — 1894 → **514 lines**; the file-level allow is gone and
+    `cargo check` is warning-free. Compiler-guided fixpoint (temporary
+    `#![warn(dead_code)]` + a brace-matching stripper) removed 121 items in
+    one pass: 65 dead `SubsonicClient` endpoints, their response types (49
+    structs), two parameter enums with impls, and the dead helpers
+    (`string_or_number`, `search_params`, `album_list_params`, `append`,
+    2× `as_str`); orphan section banners pruned; rustfmt clean. The live 14
+    remain (`ping`, `get_indexes`, `get_artist(_info/_info2)`,
+    `get_album(_info2)`, `get_lyrics(_by_song_id)`,
+    `get_open_subsonic_extensions`, `star`, `unstar`, `set_rating`,
+    `stream_url`). Tests: the one dead-type fixture (`ArtistsID3`) was
+    rewritten against the live `Indexes` shape; 117 pass.
+
 - [x] **ARC-10 · `sync_player` signal thrift** — P1 · (O8)
   - **Why:** ~13 signals + string clones every 500 ms tick.
 
@@ -3034,10 +2997,10 @@ Kept for rationale; the tree already carries these.
 | Bucket | Open | Solved |
 |--------|------|--------|
 | Must have | 6 | 2 |
-| Should have | 83 | 16 |
+| Should have | 82 | 16 |
 | Quick wins | 6 | 58 |
-| Solved (reference) | — | 38 |
-| **Total** | **95** | **114** |
+| Solved (reference) | — | 39 |
+| **Total** | **94** | **115** |
 
 ### Coverage by area
 
@@ -3052,7 +3015,7 @@ Kept for rationale; the tree already carries these.
 | Alt action menu (ARC-UI) | 0 | 1 |
 | Incremental (ARC-I) | 2 | 2 |
 | Dynamic color | 1 | 5 |
-| Architecture & robustness | 23 | 19 |
+| Architecture & robustness | 22 | 20 |
 | Recycling | 27 | 0 |
 | Media cache / offline | 5 | 2 |
 | Auth / startup | 0 | 2 |

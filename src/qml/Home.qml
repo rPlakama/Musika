@@ -279,10 +279,18 @@ Item {
             return;
         }
 
-        // VI-4: `v`/`V` start visual row selection on the focused list. The
-        // search overlay handles its own (modal routing above).
+        // VI-4: `v`/`V` start visual row selection on the focused list — the
+        // fullscreen queue when the player is up. The search overlay handles
+        // its own (modal routing above).
         if (action === "visual" || action === "visual_all") {
-            if (nowPlayingExpanded || activeRegion !== 1)
+            if (nowPlayingExpanded) {
+                if (action === "visual")
+                    nowPlaying.toggleSelection();
+                else
+                    nowPlaying.selectAll();
+                return;
+            }
+            if (activeRegion !== 1)
                 return;
             var listView = contentStack.currentItem;
             if (!listView)
@@ -355,8 +363,13 @@ Item {
         }
 
         if (action === "back") {
-            // Fullscreen is the topmost context: back leaves it first.
+            // Fullscreen is the topmost context: the first Esc ends a queue
+            // selection, the next leaves the player.
             if (nowPlayingExpanded) {
+                if (nowPlaying.hasSelection) {
+                    nowPlaying.clearSelection();
+                    return;
+                }
                 nowPlayingExpanded = false;
                 return;
             }

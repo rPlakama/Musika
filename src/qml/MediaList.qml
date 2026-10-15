@@ -44,40 +44,12 @@ ScrollPanel {
         id: verbs
     }
 
-    /// VI-4: anchored visual row selection (`v` / `V`), derived from the
-    /// shared cursor.
-    Selection {
-        id: sel
-    }
-
-    /// The id field a selection batch resolves to (`quickActionKind` names the
-    /// kind on the backend side).
+    /// VI-4: the selection state lives in `ScrollContent` and is forwarded by
+    /// `ScrollPanel` (`toggleSelection`/`selectAll`/`clearSelection`/…); the
+    /// list only gates it on the Alt verb kind and names the id field batch
+    /// actions resolve to.
+    selectable: quickActionKind !== ""
     readonly property string selectionField: quickActionKind === "album" ? "albumId" : "songId"
-    readonly property bool hasSelection: sel.hasSelection
-    readonly property int selectionCount: sel.count(currentIndex)
-
-    /// VI-4: `v` toggles visual mode on the cursor row.
-    function toggleSelection() {
-        if (quickActionKind === "" || count === 0 || currentIndex < 0)
-            return;
-        if (sel.hasSelection)
-            sel.clear();
-        else
-            sel.start(currentIndex);
-    }
-
-    /// VI-4: `V` selects the whole list (Home routes `visual_all`).
-    function selectAll() {
-        if (quickActionKind === "" || count === 0)
-            return;
-        sel.all();
-        currentIndex = count - 1;
-        ensureVisible();
-    }
-
-    function clearSelection() {
-        sel.clear();
-    }
 
     /// ARC-43: Alt armed the gesture — anchor on the keyboard cursor row, or
     /// on the range with the selection verb set (VI-4).
@@ -86,9 +58,8 @@ ScrollPanel {
             return;
         var row = view.itemAtIndex(currentIndex);
         var actions = null;
-        if (sel.hasSelection) {
-            actions = verbs.forSelection(quickActionKind,
-                sel.ids(mediaRows, currentIndex, selectionField));
+        if (root.hasSelection) {
+            actions = verbs.forSelection(quickActionKind, root.selectedIds(selectionField));
         } else {
             var item = mediaRows.get(currentIndex);
             actions = item
@@ -109,7 +80,7 @@ ScrollPanel {
 
     function setRows(rows) {
         // VI-4: a reload invalidates the selected range.
-        sel.clear();
+        root.clearSelection();
         mediaRows.clear();
         for (var i = 0; i < rows.length; i++)
             mediaRows.append(rows[i]);
@@ -125,7 +96,7 @@ ScrollPanel {
 
     onItemActivated: (index) => {
         // VI-4: opening/playing a row ends the visual selection.
-        sel.clear();
+        root.clearSelection();
         var item = mediaRows.get(index);
         if (item)
             root.activated(item);
@@ -138,6 +109,7 @@ ScrollPanel {
         anchors.right: parent.right
         anchors.rightMargin: root.width * 0.02
         count: root.selectionCount
+        pixelSize: root.height * 0.021
     }
 
     // Header (A): the Shift-H / Shift-L order cue, vertically centred.
@@ -187,7 +159,7 @@ ScrollPanel {
             // Mouse/keyboard parity: the hovered row expands like the cursor.
             readonly property bool emphasized: ListView.isCurrentItem || rowHover.hovered
             // VI-4: the row sits inside the visual selection range.
-            readonly property bool selectedRow: sel.selected(root.currentIndex, index)
+            readonly property bool selectedRow: root.isSelected(index)
 
             width: viewWidth
             height: ListView.view ? ListView.view.height * 0.105 : 0

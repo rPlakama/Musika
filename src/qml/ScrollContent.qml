@@ -1,0 +1,185 @@
+// Musika — a keyboard-driven music player.
+// Copyright (C) 2026 rPlakama <rPlakama@proton.me>
+//
+// This program is free software; you can redistribute it and/or modify
+// it under the terms of the GNU General Public License as published by
+// the Free Software Foundation; either version 2 of the License, or
+// (at your option) any later version.
+//
+// This program is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU General Public License for more details.
+//
+// You should have received a copy of the GNU General Public License
+// along with this program; if not, see <https://www.gnu.org/licenses/>.
+
+import QtQuick
+import QtQuick.Layouts
+import "Theme.js" as Theme
+
+// The shared scroll body every cursor list reuses (Albums/Songs/Artists via
+// `ScrollPanel`, the search columns, the fullscreen queue, the drawer and the
+// album page). It owns the one seam that was copied everywhere:
+//
+//   - the UI-48 overflow stage: the list bleeds `bleed` into the gutters so a
+//     row highlight can go full-bleed while rows still clip vertically;
+//   - the cursor (`currentIndex`), the view-owned follow (UI-41) and the
+//     scroll memory (UI-54) through a single `ListScroll`.
+//
+// The follow is the ListView's own highlight machinery (SCROLLCONTENTSTUDY.md):
+// an invisible 1x1 highlight is the follow target, `highlightMoveVelocity`
+// gives a constant-speed SmoothedAnimation that retargets without re-easing
+// and respects flick velocity, and the preferred range keeps the cursor in
+// view with a margin. No `contentY` animation exists to fight
+// `positionViewAtIndex` jumps (gg/G, recall, select-all) or user input.
+//
+// Drop it inside any parent Rectangle/Item: with a Layout parent it fills the
+// cell (the attached fills below), with an anchor parent the caller anchors
+// it (`anchors.fill: parent`); the list itself always fills the component.
+Item {
+    id: root
+
+    /// Gutter bleed on each side (UI-48); 0 clips at the list edge.
+    property real bleed: 0
+    property var model: null
+    property Component rowDelegate: null
+    /// UI-41: the view-owned follow speed (px/s) and the preferred band the
+    /// cursor is kept in (fractions of the viewport). `reduceMotion` snaps.
+    property real followVelocity: 1400
+    property real followBegin: 0.15
+    property real followEnd: 0.85
+    /// VI-4: `v`/`V` row selection. The model owns the state; hosts gate it
+    /// (e.g. only when the Alt verb kind exists) and keep their own cursor.
+    property bool selectable: false
+    /// UI-54: remember/restore cursor + offset under this key ("" = off).
+    property string memoryKey: ""
+    property int memoryScope: -1
+
+    // Auto-fill inside Layout parents; anchor callers size it themselves.
+    Layout.fillWidth: true
+    Layout.fillHeight: true
+
+    property alias currentIndex: list.currentIndex
+    property alias count: list.count
+    /// The ListView itself (itemAtIndex, positionViewAtIndex, …).
+    property alias view: list
+
+    signal itemActivated(int index)
+
+    ListScroll {
+        id: scroll
+    }
+
+    // VI-4: anchored visual selection over the cursor range.
+    Selection {
+        id: sel
+    }
+
+    readonly property bool hasSelection: sel.hasSelection
+    readonly property int selectionCount: sel.count(list.currentIndex)
+
+    /// `v`: start a selection on the cursor row, or end the current one.
+    function toggleSelection() {
+        if (!root.selectable || list.count === 0 || list.currentIndex < 0)
+            return;
+        if (sel.hasSelection)
+            sel.clear();
+        else
+            sel.start(list.currentIndex);
+    }
+
+    /// `V`: the whole list. The cursor is the host's (a binding in the search
+    /// columns), so the host moves it and this only widens the anchor.
+    function selectAllRows() {
+        if (!root.selectable || list.count === 0)
+            return;
+        sel.all();
+    }
+
+    function clearSelection() {
+        sel.clear();
+    }
+
+    function selected(index) {
+        return sel.selected(list.currentIndex, index);
+    }
+
+    /// Ids of the selected rows ("" when there is no selection).
+    function selectionIds(field) {
+        return sel.ids(root.model, list.currentIndex, field);
+    }
+
+    /// Instant `Contain` for semantic jumps (toolbar reset, select-all,
+    /// reorder centring). Cursor moves rely on the view's follow; with no
+    /// custom animation left there is nothing this teleport can fight.
+    function ensureVisible(index) {
+        var i = index === undefined ? list.currentIndex : index;
+        if (i >= 0)
+            list.positionViewAtIndex(i, ListView.Contain);
+    }
+
+    function activate() {
+        if (list.currentIndex >= 0)
+            root.itemActivated(list.currentIndex);
+    }
+
+    /// UI-54: restore the remembered cursor + offset (false when empty).
+    function restore() {
+        return scroll.recall(root.memoryKey, list);
+    }
+
+    function remember(scope) {
+        if (root.memoryKey)
+            scroll.remember(root.memoryKey, list, scope === undefined ? root.memoryScope : scope);
+    }
+
+    Item {
+        id: stage
+        x: -root.bleed
+        width: root.width + 2 * root.bleed
+        height: root.height
+        clip: true
+
+        ListView {
+            id: list
+            anchors.fill: parent
+            anchors.leftMargin: root.bleed
+            anchors.rightMargin: root.bleed
+            // With bleed the stage clips for it; otherwise the list does.
+            clip: root.bleed <= 0
+            model: root.model
+            delegate: root.rowDelegate
+            boundsBehavior: Flickable.StopAtBounds
+
+            // The invisible follow target (the visible row highlight is the
+            // delegate's). Duration stays -1 so the velocity drives the move;
+            // `reduceMotion` collapses it to a snap.
+            highlight: Component {
+                Rectangle {
+                    width: 1
+                    height: 1
+                    color: "transparent"
+                }
+            }
+            highlightFollowsCurrentItem: true
+            highlightMoveVelocity: root.followVelocity
+            highlightMoveDuration: Theme.reduceMotion ? 0 : -1
+            preferredHighlightBegin: height * root.followBegin
+            preferredHighlightEnd: height * root.followEnd
+            highlightRangeMode: ListView.ApplyRange
+        }
+    }
+
+    Connections {
+        target: list
+        function onContentYChanged() {
+            if (root.memoryKey)
+                scroll.remember(root.memoryKey, list, root.memoryScope);
+        }
+        function onCurrentIndexChanged() {
+            if (root.memoryKey)
+                scroll.remember(root.memoryKey, list, root.memoryScope);
+        }
+    }
+}

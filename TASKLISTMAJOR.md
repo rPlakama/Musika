@@ -170,12 +170,6 @@ The product is incomplete without these.
   - **Now:** blur overlay retired (scrim + border, Home.qml); Ctrl-W still
     toggles the region overlay instead of jumping.
 
-- [ ] **VI-4 · `v`/`V` content selection** — P1 · (CRITIQUE Ph1.2/§2.5, N1)
-  - **Why:** visual mode must mean "select rows", not "pick a pane"; batch
-    queueing/deleting depends on it.
-  - **Details:** row selection with `secondaryContainer` + count badge; operators
-    (VI-8) act on the selection.
-
 - [ ] **VI-7 · Count register (`3j`, `10l`, `5G`)** — P1 · (N2a, CRITIQUE Ph2.2, MY3 §4.2)
   - **Why:** counts turn motions into a grammar; today digits are dropped.
   - **Details:** numeric prefixes in `keybind.rs`; consume in lists (rows) and in
@@ -780,10 +774,101 @@ The product is incomplete without these.
   - **Why:** an unchanged sync still revalidates and `UPDATE`s every cover.
 
 - [ ] **ARC-7 · Trim `api.rs` to used endpoints** — P0 · (O2)
-  - **Why:** ~1,600 lines behind `#![allow(dead_code)]`.
+  - **Why:** `api.rs` is 1894 lines behind `#![allow(dead_code)]`, and most of it
+    is an endpoint layer for families the app never calls (playlists, shares,
+    podcasts, jukebox, chat, radio, users, videos, scanning, bookmarks,
+    now-playing, similar/top songs). It is not a second client: it extends the
+    live `http_client::SubsonicClient` via `impl SubsonicClient`, so deleting
+    an endpoint is safe and self-contained.
+  - **Inventory (compiler ground truth: `#![warn(dead_code)]` on HEAD):**
+    - 79 endpoint methods, **14 live / 65 dead**;
+    - live set: `get_album`, `get_album_info2`, `get_artist`,
+      `get_artist_info`, `get_artist_info2`, `get_indexes`, `get_lyrics`,
+      `get_lyrics_by_song_id`, `get_open_subsonic_extensions`, `ping`,
+      `set_rating`, `star`, `unstar`, `stream_url`;
+    - dead methods (one line each, by family): playlists (`get_playlists`,
+      `get_playlist`, `create_playlist`, `update_playlist`,
+      `delete_playlist`), shares (`get_shares`, `create_share`,
+      `update_share`, `delete_share`), podcasts (`get_podcasts`,
+      `create/delete_podcast_channel`, `download/delete_podcast_episode`,
+      `refresh_podcasts`, `get_newest_podcasts`), jukebox (`jukebox_control`,
+      `get_play_queue`,
+      `save_play_queue`), chat (`get_chat_messages`, `add_chat_message`),
+      bookmarks (`get_bookmarks`, `create_bookmark`, `delete_bookmark`),
+      radio (`get/create/update/delete_internet_radio_station`), users
+      (`get_user(s)`, `create/update/delete_user`, `change_password`,
+      `get_license`, `UserRoles`), video (`get_videos`, `get_video_info`),
+      scan (`get_scan_status`, `start_scan`), now-playing (`get_now_playing`),
+      starred (`get_starred`, `get_starred2`), similar/top
+      (`get_similar_songs`, `get_similar_songs2`, `get_top_songs`),
+      discovery (`get_genres`, `get_music_folders`, `get_music_directory`,
+      `get_artists`, `get_album_list*`, `get_avatar_url`,
+      `get_cover_art_url` — the live path builds cover URLs in
+      `http_client`), downloads (`download_url` — `download_media` is the
+      live twin), `hls_url`, `scrobble`, `search`/`search2`/`search3`
+      (searching is local FTS5 since S-9);
+    - dead helpers: `string_or_number`, `search_params`, `album_list_params`,
+      two `as_str`, `append`;
+    - 49 structs are never referenced (the `docs/api` families above); the
+      rest of the dead set is fields reachable only from dead types.
+  - **Details/Plan:**
+    1. delete the 65 dead methods; then delete every type/helper the compiler
+       reports once the methods are gone (iterate `#![warn(dead_code)]` to
+       fixpoint) — keep the live 14's response-type closure (`Child`,
+       `AlbumID3`, `AlbumWithSongsID3`, `ArtistID3`,
+       `ArtistWithAlbumsID3`, `AlbumInfo2`/`ArtistInfo(2)`, `Indexes`/`Index`,
+       `Lyrics`/`LyricsList`/`StructuredLyrics`/`LyricLine`,
+       `OpenSubsonicExtension`, …) even when the lint calls it unconstructed
+       (serde builds them);
+    2. keep the serde tests that cover live types; rewrite/drop the rest;
+    3. remove `#![allow(dead_code)]` from `api.rs` once it is warning-free
+       (out-of-scope: the other module-level allows tracked by ARC-11/36);
+    4. expected shape: 1894 → ~400 lines; no runtime path touched.
+  - **Verify:** `cargo check` shows zero `dead_code` warnings for `api.rs`
+    without the file-level allow; `cargo test` green; `rg "crate::api::"`
+    call sites (library/index/lyrics) compile unchanged.
 
 - [ ] **ARC-8 · Merge duplicate sync/login pipelines** — P1 · (O3)
-  - **Why:** `qml.rs::sync_library` vs `spawn_index_sync`; login/startup copies.
+  - **Why:** the same auth → client → `index::sync_library` → report
+    orchestration is written three times in `qml.rs`, so fixes (re-entrancy,
+    offline flag, toasts, progress) have to be applied per copy.
+  - **Inventory:**
+    - `qml.rs:443 login()` (fresh): `authenticate` → `save_credentials` →
+      `noteServerType`/`noteOnline`/`login_succeeded` → `spawn_index_sync`;
+    - `qml.rs:504 startup()` (stored): `load_credentials` → `noteServerType` →
+      `offlineLogin` + `prefillCredentials` → `authenticate` →
+      `noteServerType`/`noteOnline` → `spawn_index_sync` (auth failure stays
+      offline, CACHE-9);
+    - `qml.rs:1000 syncLibrary` slot (manual `r`/button/IPC): re-entrancy
+      guard + `library_sync_started` → `load_credentials` → client →
+      progress → `index::sync_library` → `sync_summary` / `raiseError`;
+    - `qml.rs:2475 spawn_index_sync`: `librarySyncStarted` (from the async
+      body) → client from raw strings → the same progress closure → the same
+      `sync_library` → `noteOnline` + summary / error (log line differs);
+    - client construction also repeats: `qml.rs:1039`, `:2490`, and the
+      existing `qml.rs:37 client(dbs)` helper, plus `browse.rs`/`queue.rs`.
+  - **Details/Plan:**
+    1. one `fn spawn_sync(client: SubsonicClient, opts)` (or an enum reason)
+       owning: `librarySyncStarted`, the progress closure, the
+       `index::sync_library` call, `sync_summary`, the error toast and
+       `noteOnline`; the async body must not re-emit `librarySyncStarted`
+       (today the manual path emits it synchronously, the login path from
+       inside the task);
+    2. `syncLibrary` slot = guard + `library_sync_started` + credentials via
+       the shared helper + `spawn_sync`; after-login paths call `spawn_sync`
+       directly;
+    3. route every credential→client construction through `qml.rs::client`
+       (async) so `queue.rs`/`browse.rs`/login all share one constructor
+       seam (overlaps ARC-36's `async fn client`);
+    4. keep failure semantics: login-background sync stays quiet on success
+       but reports a failed sync through the same toast as the manual path;
+    5. extract the pure decision bits (summary text, whether `noteOnline`
+       fires) so they are unit-testable without Qt.
+  - **Verify:** manual sync via `r`, button and IPC shows one
+    `librarySyncStarted`, one progress stream, one summary and (on failure)
+    one toast; fresh login syncs exactly once; cached auto-login syncs
+    exactly once and flips `offline` via `noteOnline`; re-entrancy guard still
+    rejects a second manual sync; `cargo test` green.
 
 - [ ] **ARC-11 · Collapse structural duplication** — P1 · (O9)
   - **Why:** fetch helpers, JSON loaders and song projections repeat.
@@ -2592,6 +2677,26 @@ Kept for rationale; the tree already carries these.
   - **Now:** `NORMAL` chip replaced the "LIBRARY" title (RightBar.qml); the
     search overlay shows an `INSERT`/`NORMAL` chip too.
 
+- [x] **VI-4 · `v`/`V` content selection** — P1 · (CRITIQUE Ph1.2/§2.5, N1)
+  - **Why:** visual mode must mean "select rows", not "pick a pane"; batch
+    queueing/deleting depends on it.
+  - **Details:** row selection with `secondaryContainer` + count badge;
+    operators (VI-8) act on the selection; the Alt menu adapts (batch "Add to
+    Queue" live, single-row verbs gray).
+  - **Now:** the selection state lives in the shared scroll model
+    (`ScrollContent`/`Selection`), so every list carries it: Albums/Songs via
+    `MediaList`/`ScrollPanel`, `AlbumEntry`, the three search columns and the
+    fullscreen queue (`ArtistEntry`'s grid keeps its own — GridView has no
+    follow API). `v` toggles at the cursor, `j/k`/`gg`/`G` extend, `V`
+    selects the list, Esc clears first, and entering another surface
+    (activation, search, sidebar, segment) trashes it. Selected rows wear the
+    cursor fill; a ratcheting `SelectionBadge` shows the count without
+    reflowing on every move. Alt on a selection shows the batch verb set
+    (`QuickActions.forSelection`: Add to Queue live, the rest disabled) and
+    `Backend.queueAddSelection` resolves the ids through
+    `queue::quick_tracks_json_many`. `cargo test` 117 pass; Selection and
+    ScrollContent selection APIs carry QtQuickTest coverage; qmllint clean.
+
 - [x] **VI-5 · Single `Esc` dismisses overlays** — P1 · (N3, CRITIQUE Ph1.3)
   - **Why:** Esc is the invariant cancel key; unbound Esc feels broken.
   - **Details:** close fullscreen → pop album page → close search, in order.
@@ -2929,16 +3034,16 @@ Kept for rationale; the tree already carries these.
 | Bucket | Open | Solved |
 |--------|------|--------|
 | Must have | 6 | 2 |
-| Should have | 84 | 16 |
+| Should have | 83 | 16 |
 | Quick wins | 6 | 58 |
-| Solved (reference) | — | 37 |
-| **Total** | **96** | **113** |
+| Solved (reference) | — | 38 |
+| **Total** | **95** | **114** |
 
 ### Coverage by area
 
 | Area | Open | Solved |
 |------|------|--------|
-| Vi modal engine | 11 | 10 |
+| Vi modal engine | 10 | 11 |
 | Queue & playback grammar | 2 | 8 |
 | Player & media features | 5 | 2 |
 | Lyrics pipeline | 2 | 7 |

@@ -55,10 +55,15 @@ Rectangle {
     property string emptyText: ""
 
     // --- Cursor / memory -----------------------------------------------------
-    property alias currentIndex: list.currentIndex
-    property alias count: list.count
+    property alias currentIndex: content.currentIndex
+    property alias count: content.count
     /// Escape hatch for surfaces that need the ListView itself (lyrics follow).
-    property alias view: list
+    property alias view: content.view
+    /// VI-4: the selection lives in `ScrollContent`; the panel only forwards
+    /// it (the wrappers call these inherited members directly).
+    property alias selectable: content.selectable
+    readonly property alias hasSelection: content.hasSelection
+    readonly property alias selectionCount: content.selectionCount
     property string memoryKey: ""
     property int memoryScope: -1
     property bool _restored: false
@@ -69,59 +74,66 @@ Rectangle {
 
     color: Palette.surface
 
-    // UI-41/UI-54: the shared eased-scroll + scroll-memory seam.
-    ListScroll {
-        id: scroll
-    }
-
-    // UI-54: keep the memory current while the panel lives.
-    Connections {
-        target: list
-        function onContentYChanged() {
-            if (root.memoryKey)
-                scroll.remember(root.memoryKey, list, root.memoryScope);
-        }
-        function onCurrentIndexChanged() {
-            if (root.memoryKey)
-                scroll.remember(root.memoryKey, list, root.memoryScope);
-        }
-    }
-
     /// UI-54: first payload after a reopen restores cursor + offset; later
     /// reloads keep the live state. Returns true when a memory was applied.
     function restore() {
         if (root._restored)
             return false;
         root._restored = true;
-        return scroll.recall(root.memoryKey, list);
+        return content.restore();
+    }
+
+    // VI-4: selection forwards (see `ScrollContent`).
+    function toggleSelection() {
+        content.toggleSelection();
+    }
+
+    /// `V`: the cursor moves here (the panel owns it), the anchor widens.
+    function selectAll() {
+        if (!selectable || count === 0)
+            return;
+        currentIndex = count - 1;
+        content.selectAllRows();
+        ensureVisible();
+    }
+
+    function clearSelection() {
+        content.clearSelection();
+    }
+
+    function isSelected(index) {
+        return content.selected(index);
+    }
+
+    function selectedIds(field) {
+        return content.selectionIds(field);
     }
 
     function ensureVisible(index) {
-        scroll.ensureVisible(list, index === undefined ? list.currentIndex : index);
+        content.ensureVisible(index);
     }
 
     function activate() {
-        if (list.currentIndex >= 0)
-            root.itemActivated(list.currentIndex);
+        content.activate();
     }
 
     // Shared cursor grammar: j/k, gg/G, Enter; unknown actions go to
-    // `actionHandler` (search columns, queue reorder, …). Every move keeps
-    // the cursor visible with the eased follow.
+    // `actionHandler` (search columns, queue reorder, …). Cursor moves are
+    // followed by the view itself (ScrollContent highlight machinery); gg/G
+    // snap instantly via `cursorEdge`.
     function handleAction(action) {
-        if (list.count === 0)
+        if (count === 0)
             return;
         if (action === "move_up")
-            list.currentIndex = Math.max(0, list.currentIndex - 1);
+            currentIndex = Math.max(0, currentIndex - 1);
         else if (action === "move_down")
-            list.currentIndex = Math.min(list.count - 1, list.currentIndex + 1);
+            currentIndex = Math.min(count - 1, currentIndex + 1);
         else if (action === "top" || action === "bottom")
-            Theme.cursorEdge(list, action === "bottom", ListView.Contain);
+            Theme.cursorEdge(content.view, action === "bottom", ListView.Contain);
         else if (action === "enter")
             root.activate();
         else if (root.actionHandler)
             root.actionHandler(action);
-        root.ensureVisible();
     }
 
     // A: title band (20% of the panel by default).
@@ -156,31 +168,22 @@ Rectangle {
         color: "transparent"
         clip: true
 
-        // UI-48: the overflow stage is wider than the list and carries the
-        // clip, so a row highlight can bleed into the gutters (`bleed`).
-        Item {
-            id: stage
-            x: -root.bleed
-            width: parent.width + 2 * root.bleed
-            height: parent.height
-            clip: true
-
-            ListView {
-                id: list
-                anchors.fill: parent
-                anchors.leftMargin: root.bleed
-                anchors.rightMargin: root.bleed
-                // With bleed the stage clips for it; otherwise the list does.
-                clip: root.bleed <= 0
-                model: root.model
-                boundsBehavior: Flickable.StopAtBounds
-                delegate: root.rowDelegate
-            }
+        // The shared scroll body (UI-48 stage, cursor, eased follow, memory).
+        ScrollContent {
+            id: content
+            anchors.fill: parent
+            bleed: root.bleed
+            model: root.model
+            rowDelegate: root.rowDelegate
+            selectable: root.selectable
+            memoryKey: root.memoryKey
+            memoryScope: root.memoryScope
+            onItemActivated: (index) => root.itemActivated(index)
         }
 
         FadeText {
             anchors.centerIn: parent
-            visible: !root.loading && list.count === 0 && root.emptyText.length > 0
+            visible: !root.loading && count === 0 && root.emptyText.length > 0
             text: root.emptyText
             color: Palette.onSurfaceVariant
             font.pixelSize: Theme.fontSize("body", root.height)
@@ -190,7 +193,7 @@ Rectangle {
         // UI-22/UI-38: the shared wait state while the first payload lands.
         SkeletonList {
             anchors.fill: parent
-            visible: root.loading && list.count === 0
+            visible: root.loading && count === 0
         }
     }
 }

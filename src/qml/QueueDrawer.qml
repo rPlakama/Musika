@@ -34,11 +34,6 @@ Item {
     // UI-54: first queue payload after opening restores the saved highlight.
     property bool _recall: false
 
-    // UI-41: ease the view to the cursor instead of teleporting.
-    ListScroll {
-        id: scroll
-    }
-
     // Keep rendering while the close fade runs (the panel owns the opacity).
     visible: opened || panel.opacity > 0
     z: 25
@@ -53,7 +48,7 @@ Item {
 
     function close() {
         if (items.count > 0)
-            scroll.remember("queue", list);
+            content.remember();
         opened = false;
         Backend.releaseFocus();
     }
@@ -67,8 +62,8 @@ Item {
 
     function centerPlaying(index) {
         cursor = Math.max(0, Math.min(items.count - 1, index));
-        list.currentIndex = cursor;
-        list.positionViewAtIndex(cursor, ListView.Contain);
+        content.currentIndex = cursor;
+        content.view.positionViewAtIndex(cursor, ListView.Contain);
     }
 
     function apply(payload) {
@@ -76,7 +71,7 @@ Item {
         // UI-41: a payload swap fades in quickly instead of flashing; a
         // reorder keeps the list live.
         if (!root._reordering)
-            list.opacity = 0;
+            content.opacity = 0;
         root._reordering = false;
         items.clear();
         for (var i = 0; i < data.items.length; i++) {
@@ -91,12 +86,12 @@ Item {
         nowPlaying = data.index;
         // UI-54: restore the highlight where the user left it; a fresh drawer
         // opens on the playing track.
-        if (!root._recall || !scroll.recall("queue", list))
+        if (!root._recall || !content.restore())
             centerPlaying(data.index);
         else
-            cursor = list.currentIndex;
+            cursor = content.currentIndex;
         root._recall = false;
-        Qt.callLater(function() { list.opacity = 1; });
+        Qt.callLater(function() { content.opacity = 1; });
     }
 
     function handleAction(action) {
@@ -109,8 +104,8 @@ Item {
         else if (action === "move_down")
             cursor = Math.min(items.count - 1, cursor + 1);
         else if ((action === "top" || action === "bottom") && items.count > 0) {
-            Theme.cursorEdge(list, action === "bottom", ListView.Contain);
-            cursor = list.currentIndex;
+            Theme.cursorEdge(content.view, action === "bottom", ListView.Contain);
+            cursor = content.currentIndex;
         } else if (action === "enter")
             Backend.queueJump(cursor);
         else if (action === "queue_up" && cursor > 0) {
@@ -124,8 +119,8 @@ Item {
         } else if (action === "queue_remove")
             Backend.queueRemove(cursor);
 
-        list.currentIndex = cursor;
-        scroll.ensureVisible(list, cursor);
+        // The view follows cursor changes itself; gg/G snap via cursorEdge.
+        content.currentIndex = cursor;
     }
 
     ListModel {
@@ -169,20 +164,20 @@ Item {
                 font.bold: true
             }
 
-            ListView {
-                id: list
+            ScrollContent {
+                id: content
                 Layout.fillWidth: true
                 Layout.fillHeight: true
-                clip: true
                 model: items
-                boundsBehavior: Flickable.StopAtBounds
+                memoryKey: "queue"
 
                 Behavior on opacity {
                     NumberAnimation { duration: Theme.motion.quick; easing.type: Easing.Bezier; easing.bezierCurve: Theme.ease.standard }
                 }
 
-                delegate: Rectangle {
-                    id: row
+                rowDelegate: Component {
+                    Rectangle {
+                        id: row
                     required property int index
                     required property string title
                     required property string subtitle
@@ -191,7 +186,7 @@ Item {
 
                     readonly property bool emphasized: index === root.cursor || rowHover.hovered
 
-                    width: list.width
+                    width: ListView.view.width
                     height: panel.height * 0.06
                     color: index === root.cursor
                         ? Palette.secondaryContainer
@@ -265,6 +260,7 @@ Item {
                             Backend.queueJump(row.index);
                         }
                     }
+                }
                 }
             }
 

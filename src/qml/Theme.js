@@ -243,13 +243,14 @@ function volumeIcon(volume, muted) {
 // VI-11: `gg`/`G` land a list cursor on the first/last row and keep it
 // visible. `last` picks the edge; `mode` is the ListView position mode
 // (callers pass ListView.Contain — a `.pragma library` has no QtQuick globals).
-// Empty lists and already-at-the-edge are no-ops.
+// Empty lists are no-ops. The view is snapped even when the cursor already
+// sits on the edge: the view can be elsewhere (mouse scroll, a lagging
+// follow), and skipping the snap made the next key animatively swoosh the
+// whole way back.
 function cursorEdge(list, last, mode) {
     if (!list || list.count === 0)
         return;
     var target = last ? list.count - 1 : 0;
-    if (target === list.currentIndex)
-        return;
     list.currentIndex = target;
     list.positionViewAtIndex(target, mode);
 }

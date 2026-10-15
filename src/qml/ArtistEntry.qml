@@ -691,6 +691,7 @@ Rectangle {
                 anchors.right: parent.right
                 anchors.margins: parent.width * 0.01
                 count: root.selectionCount
+                pixelSize: root.height * 0.02
                 z: 2
             }
 

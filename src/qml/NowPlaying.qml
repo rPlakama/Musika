@@ -49,11 +49,6 @@ Rectangle {
     // UI-54: first queue payload after entering restores the saved highlight.
     property bool _recallQueue: false
 
-    // UI-41: ease the queue view to the cursor instead of teleporting.
-    ListScroll {
-        id: queueScroll
-    }
-
     // The active lyric glides to the pane centre; a manual scroll owns the
     // pane only until `lyricResume` fires (LYR-8): 5 s idle while lyrics is
     // the focused pane, 2 s when focus is elsewhere, so a stale line is never
@@ -164,15 +159,38 @@ Rectangle {
         if (queueItems.count === 0)
             return;
         queueCursor = Math.max(0, Math.min(queueItems.count - 1, queueCursor + delta));
-        queueList.currentIndex = queueCursor;
-        queueScroll.ensureVisible(queueList, queueCursor);
+        // The view follows cursor changes itself (SCROLLCONTENTSTUDY.md).
+        queueContent.currentIndex = queueCursor;
+    }
+
+    // VI-4: visual selection over the fullscreen queue. The state lives in
+    // `queueContent` (the shared scroll model); Home routes `v`/`V`/Esc here
+    // while the player is up.
+    readonly property bool hasSelection: queueContent.hasSelection
+    readonly property int selectionCount: queueContent.selectionCount
+
+    function toggleSelection() {
+        queueContent.toggleSelection();
+    }
+
+    function selectAll() {
+        if (queueItems.count === 0)
+            return;
+        queueCursor = queueItems.count - 1;
+        queueContent.currentIndex = queueCursor;
+        queueContent.selectAllRows();
+        queueContent.ensureVisible(queueCursor);
+    }
+
+    function clearSelection() {
+        queueContent.clearSelection();
     }
 
     function applyQueue(payload) {
         var data = JSON.parse(payload);
         // UI-41: payload swaps fade in quickly; a reorder keeps the list live.
         if (!root._reordering)
-            queueList.opacity = 0;
+            queueContent.opacity = 0;
         queueItems.clear();
         for (var i = 0; i < data.items.length; i++) {
             var track = data.items[i];
@@ -189,20 +207,20 @@ Rectangle {
             root._reordering = false;
             root._recallQueue = false;
             queueCursor = Math.max(0, Math.min(queueItems.count - 1, queueCursor));
-            queueList.currentIndex = queueCursor;
-            queueList.positionViewAtIndex(queueCursor, ListView.Contain);
-        } else if (root._recallQueue && queueScroll.recall("fullscreen", queueList)) {
+            queueContent.currentIndex = queueCursor;
+            queueContent.view.positionViewAtIndex(queueCursor, ListView.Contain);
+        } else if (root._recallQueue && queueContent.restore()) {
             // UI-54: re-entry restores the queue highlight where it stopped.
             root._recallQueue = false;
-            queueCursor = queueList.currentIndex;
+            queueCursor = queueContent.currentIndex;
         } else {
             root._recallQueue = false;
             queueCursor = Math.max(0, Math.min(data.index, Math.max(0, queueItems.count - 1)));
-            queueList.currentIndex = queueCursor;
-            queueList.positionViewAtIndex(queueCursor, ListView.Contain);
+            queueContent.currentIndex = queueCursor;
+            queueContent.view.positionViewAtIndex(queueCursor, ListView.Contain);
         }
         Qt.callLater(function () {
-            queueList.opacity = 1;
+            queueContent.opacity = 1;
         });
     }
 
@@ -256,12 +274,15 @@ Rectangle {
     /// ARC-UI-1: Alt armed the gesture — anchor on the queue row under the
     /// cursor; the fullscreen queue reuses the shared track verb set.
     function armQuickActions() {
-        if (queueItems.count === 0 || queueList.currentIndex < 0)
+        if (queueItems.count === 0 || queueContent.currentIndex < 0)
             return;
-        var item = queueItems.get(queueList.currentIndex);
-        var row = queueList.itemAtIndex(queueList.currentIndex);
-        if (item && row)
-            quickAction(row, verbs.song(item));
+        var item = queueItems.get(queueContent.currentIndex);
+        var row = queueContent.view.itemAtIndex(queueContent.currentIndex);
+        var actions = root.hasSelection
+            ? verbs.forSelection("song", queueContent.selectionIds("songId"))
+            : (item ? verbs.song(item) : null);
+        if (actions && row)
+            quickAction(row, actions);
     }
 
     // Fullscreen keys, scoped to the focused pane. Esc/back stays with Home.
@@ -295,19 +316,22 @@ Rectangle {
             moveQueueCursor(1);
         else if (action === "queue_up" && queueCursor > 0) {
             root._reordering = true;
+            // VI-4: a reorder shifts every anchored row; the range dies.
+            queueContent.clearSelection();
             Backend.queueMove(queueCursor, queueCursor - 1);
             queueCursor -= 1;
-            queueList.currentIndex = queueCursor;
-            queueScroll.ensureVisible(queueList, queueCursor);
+            queueContent.currentIndex = queueCursor;
             return;
         } else if (action === "queue_down" && queueCursor < queueItems.count - 1) {
             root._reordering = true;
+            queueContent.clearSelection();
             Backend.queueMove(queueCursor, queueCursor + 1);
             queueCursor += 1;
-            queueList.currentIndex = queueCursor;
-            queueScroll.ensureVisible(queueList, queueCursor);
+            queueContent.currentIndex = queueCursor;
             return;
         } else if (action === "enter") {
+            // VI-4: jumping to a track ends the visual selection.
+            queueContent.clearSelection();
             if (queueCursor >= 0)
                 Backend.queueJump(queueCursor);
         } else if (action === "move_left" || action === "move_right")
@@ -325,7 +349,9 @@ Rectangle {
             Backend.requestQueue();
             Backend.requestLyrics();
         } else if (queueItems.count > 0) {
-            queueScroll.remember("fullscreen", queueList, pane);
+            queueContent.remember(pane);
+            // VI-4: leaving fullscreen ends the queue selection.
+            queueContent.clearSelection();
         }
     }
 
@@ -888,6 +914,13 @@ Rectangle {
                                 Layout.fillWidth: true
                             }
 
+                            // VI-4: the selection count while a range is up.
+                            SelectionBadge {
+                                Layout.alignment: Qt.AlignVCenter
+                                count: root.selectionCount
+                                pixelSize: Theme.fontSize("label", root.height)
+                            }
+
                             FadeText {
                                 text: Backend.queueLength > 0 ? (Backend.queueIndex + 1) + " / " + Backend.queueLength : ""
                                 color: Palette.onSurfaceVariant
@@ -905,38 +938,33 @@ Rectangle {
                             Layout.fillWidth: true
                             Layout.fillHeight: true
 
-                            // UI-48: the overflow stage is wider than the list
-                            // and carries the clip, so the highlight block can
-                            // truly bleed past the row; rows still clip
-                            // vertically at the list bounds.
-                            Item {
-                                id: queueOverflow
-                                property real bleed: (parent ? parent.width : 0) * 0.012
+                            // UI-48: the shared scroll body carries the
+                            // overflow stage — the highlight bleeds into the
+                            // gutters while rows still clip vertically at the
+                            // list bounds.
+                            ScrollContent {
+                                id: queueContent
+                                anchors.fill: parent
+                                bleed: width * 0.012
+                                model: queueItems
+                                selectable: true
+                                memoryKey: "fullscreen"
+                                // The fullscreen memory also stores the focused
+                                // pane; without this the continuous remembers
+                                // clobbered it to the default scope.
+                                memoryScope: root.pane
+                                visible: queueItems.count > 0
 
-                                x: -bleed
-                                width: parent.width + 2 * bleed
-                                height: parent.height
-                                clip: true
-
-                                ListView {
-                                    id: queueList
-                                    anchors.fill: parent
-                                    anchors.leftMargin: queueOverflow.bleed
-                                    anchors.rightMargin: queueOverflow.bleed
-                                    clip: false
-                                    model: queueItems
-                                    boundsBehavior: Flickable.StopAtBounds
-                                    visible: queueItems.count > 0
-
-                                    Behavior on opacity {
-                                        NumberAnimation {
-                                            duration: Theme.motion.quick
-                                            easing.type: Easing.Bezier
-                                            easing.bezierCurve: Theme.ease.standard
-                                        }
+                                Behavior on opacity {
+                                    NumberAnimation {
+                                        duration: Theme.motion.quick
+                                        easing.type: Easing.Bezier
+                                        easing.bezierCurve: Theme.ease.standard
                                     }
+                                }
 
-                                    delegate: Rectangle {
+                                rowDelegate: Component {
+                                    Rectangle {
                                         id: row
                                         required property int index
                                         required property string title
@@ -945,8 +973,8 @@ Rectangle {
 
                                         readonly property bool emphasized: index === root.queueCursor || rowHover.hovered
 
-                                        width: queueList.width
-                                        height: queueList.height * 0.16
+                                        width: ListView.view.width
+                                        height: ListView.view.height * 0.16
                                         // Playing-track tint stays on the row; the
                                         // cursor/hover block is the shared UI-48 layer.
                                         color: index === root.queueIndex ? Palette.surfaceContainer : "transparent"
@@ -954,15 +982,16 @@ Rectangle {
                                         RowHighlight {
                                             current: index === root.queueCursor
                                             hovered: rowHover.hovered
-                                            overflow: queueOverflow.bleed
+                                            selected: queueContent.selected(index)
+                                            overflow: queueContent.bleed
                                         }
 
                                         FadeText {
                                             id: titleText
                                             anchors.left: parent.left
-                                            anchors.leftMargin: queueList.width * 0.01
+                                            anchors.leftMargin: ListView.view.width * 0.01
                                             anchors.right: durationLabel.left
-                                            anchors.rightMargin: queueList.width * 0.01
+                                            anchors.rightMargin: ListView.view.width * 0.01
                                             anchors.verticalCenter: parent.verticalCenter
                                             text: row.title
                                             color: index === root.queueCursor ? Palette.onSecondaryContainer : Palette.onSurface
@@ -998,7 +1027,7 @@ Rectangle {
                                             visible: row.starred
                                             anchors.verticalCenter: parent.verticalCenter
                                             anchors.right: durationLabel.left
-                                            anchors.rightMargin: queueList.width * 0.01
+                                            anchors.rightMargin: ListView.view.width * 0.01
                                             width: durationLabel.font.pixelSize * 0.8
                                             height: width
                                             name: "baseline-favorite"

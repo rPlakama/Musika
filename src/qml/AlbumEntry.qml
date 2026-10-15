@@ -76,23 +76,17 @@ Rectangle {
         id: verbs
     }
 
-    /// VI-4: anchored visual row selection over the song rows.
-    Selection {
-        id: sel
-    }
-
-    readonly property bool hasSelection: sel.hasSelection
-    readonly property int selectionCount: sel.count(songList.currentIndex)
+    /// VI-4: the selection state lives in `ScrollContent` below; this page
+    /// owns only its cursor/toolbar semantics.
+    readonly property bool hasSelection: content.hasSelection
+    readonly property int selectionCount: content.selectionCount
 
     /// VI-4: `v` toggles visual mode on the cursor row (the toolbar owns no
     /// selection).
     function toggleSelection() {
-        if (root.onToolbar || songs.count === 0 || songList.currentIndex < 0)
+        if (root.onToolbar)
             return;
-        if (sel.hasSelection)
-            sel.clear();
-        else
-            sel.start(songList.currentIndex);
+        content.toggleSelection();
     }
 
     /// VI-4: `V` selects the whole track list.
@@ -100,32 +94,27 @@ Rectangle {
         if (songs.count === 0)
             return;
         root.onToolbar = false;
-        sel.all();
-        songList.currentIndex = songs.count - 1;
-        scroll.ensureVisible(songList, songList.currentIndex);
+        content.currentIndex = songs.count - 1;
+        content.selectAllRows();
+        content.ensureVisible();
     }
 
     function clearSelection() {
-        sel.clear();
+        content.clearSelection();
     }
 
     /// ARC-I-2: Alt armed the gesture — anchor on the song row under the
     /// cursor (the toolbar is a no-op, like an empty list); a visual selection
     /// swaps in the batch verb set (VI-4).
     function armQuickActions() {
-        if (root.onToolbar || songs.count === 0 || songList.currentIndex < 0)
+        if (root.onToolbar || songs.count === 0 || content.currentIndex < 0)
             return;
-        var row = songList.itemAtIndex(songList.currentIndex);
-        var actions = sel.hasSelection
-            ? verbs.forSelection("song", sel.ids(songs, songList.currentIndex, "songId"))
-            : (songs.get(songList.currentIndex) ? verbs.song(songs.get(songList.currentIndex)) : null);
+        var row = content.view.itemAtIndex(content.currentIndex);
+        var actions = root.hasSelection
+            ? verbs.forSelection("song", content.selectionIds("songId"))
+            : (songs.get(content.currentIndex) ? verbs.song(songs.get(content.currentIndex)) : null);
         if (actions && row)
             quickAction(row, actions);
-    }
-
-    // UI-41/UI-54: shared eased-scroll + scroll-memory mechanism.
-    ListScroll {
-        id: scroll
     }
 
     function reload() {
@@ -143,7 +132,7 @@ Rectangle {
 
     function apply(payload) {
         // VI-4: a reload invalidates the selected range.
-        sel.clear();
+        content.clearSelection();
         songs.clear();
         var list = JSON.parse(payload);
         for (var i = 0; i < list.length; i++) {
@@ -162,7 +151,7 @@ Rectangle {
         // reloads (library change, resync) keep the live state.
         if (!root._restored) {
             root._restored = true;
-            scroll.recall(root.memoryKey, songList);
+            content.restore();
         }
     }
 
@@ -175,7 +164,7 @@ Rectangle {
             if (songs.count === 0)
                 return;
             root.onToolbar = false;
-            Theme.cursorEdge(songList, action === "bottom", ListView.Contain);
+            Theme.cursorEdge(content.view, action === "bottom", ListView.Contain);
             return;
         }
 
@@ -183,8 +172,8 @@ Rectangle {
             // Cursor is on the toolbar (Back). Down returns to the songs.
             if (action === "move_down" && songs.count > 0) {
                 root.onToolbar = false;
-                songList.currentIndex = 0;
-                scroll.ensureVisible(songList, 0);
+                // The view follows the cursor itself.
+                content.currentIndex = 0;
             } else if (action === "enter") {
                 root.back();
             }
@@ -192,21 +181,20 @@ Rectangle {
         }
 
         if (action === "move_up") {
-            if (songList.currentIndex > 0) {
-                songList.currentIndex -= 1;
+            if (content.currentIndex > 0) {
+                content.currentIndex -= 1;
             } else {
                 // VI-4: leaving the rows for the toolbar ends the selection.
-                sel.clear();
+                content.clearSelection();
                 root.onToolbar = true;
             }
         } else if (action === "move_down") {
             if (songs.count > 0)
-                songList.currentIndex = Math.min(songs.count - 1, songList.currentIndex + 1);
+                content.currentIndex = Math.min(songs.count - 1, content.currentIndex + 1);
         } else if (action === "enter") {
-            sel.clear();
-            Backend.playAlbum(root.albumId, songList.currentIndex);
+            content.clearSelection();
+            Backend.playAlbum(root.albumId, content.currentIndex);
         }
-        scroll.ensureVisible(songList, songList.currentIndex);
     }
 
     Connections {
@@ -397,20 +385,22 @@ Rectangle {
             SelectionBadge {
                 Layout.alignment: Qt.AlignVCenter
                 count: root.selectionCount
+                pixelSize: root.height * 0.02
             }
         }
 
-        ListView {
-            id: songList
+        ScrollContent {
+            id: content
             Layout.fillWidth: true
             Layout.fillHeight: true
-            clip: true
             model: songs
+            selectable: true
+            memoryKey: root.memoryKey
             visible: !(root.loading && songs.count === 0)
-            boundsBehavior: Flickable.StopAtBounds
 
-            delegate: Rectangle {
-                id: songRow
+            rowDelegate: Component {
+                Rectangle {
+                    id: songRow
                 required property int index
                 required property string track
                 required property string title
@@ -418,9 +408,9 @@ Rectangle {
                 required property bool starred
 
                 // VI-4: a row inside the visual selection wears the cursor fill.
-                readonly property bool selectedRow: sel.selected(songList.currentIndex, index)
+                readonly property bool selectedRow: content.selected(index)
 
-                width: songList.width
+                width: ListView.view.width
                 height: root.height * 0.055
                 color: ((ListView.isCurrentItem && !root.onToolbar) || songRow.selectedRow)
                     ? Palette.secondaryContainer
@@ -486,10 +476,11 @@ Rectangle {
                 TapHandler {
                     onTapped: {
                         // VI-4: direct play ends the visual selection.
-                        sel.clear();
-                        songList.currentIndex = songRow.index;
+                        content.clearSelection();
+                        content.currentIndex = songRow.index;
                         Backend.playAlbum(root.albumId, songRow.index);
                     }
+                }
                 }
             }
         }
@@ -513,16 +504,4 @@ Rectangle {
         }
     }
 
-    // UI-54: keep the songs viewport in memory while the page lives.
-    Connections {
-        target: songList
-        function onContentYChanged() {
-            if (root.albumId.length > 0)
-                scroll.remember(root.memoryKey, songList);
-        }
-        function onCurrentIndexChanged() {
-            if (root.albumId.length > 0)
-                scroll.remember(root.memoryKey, songList);
-        }
-    }
 }

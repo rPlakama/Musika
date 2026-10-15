@@ -44,35 +44,28 @@ Item {
         id: verbs
     }
 
-    /// VI-4: anchored visual row selection over the result rows.
-    Selection {
-        id: sel
-    }
-
-    readonly property bool hasSelection: sel.hasSelection
-    readonly property int selectionCount: sel.count(root.cursor)
+    /// VI-4: the selection state lives in `ScrollContent` below; the column
+    /// owns only its cursor (bound into the list) and the id field.
+    readonly property bool hasSelection: content.hasSelection
+    readonly property int selectionCount: content.selectionCount
 
     /// VI-4: `v` toggles visual mode on the cursor row.
     function toggleSelection() {
-        if (quickActionKind === "" || !model || model.count === 0 || root.cursor < 0)
-            return;
-        if (sel.hasSelection)
-            sel.clear();
-        else
-            sel.start(root.cursor);
+        content.toggleSelection();
     }
 
-    /// VI-4: `V` selects every result.
+    /// VI-4: `V` selects every result (the cursor is this column's binding,
+    /// so it moves first, then the anchor widens).
     function selectAll() {
         if (quickActionKind === "" || !model || model.count === 0)
             return;
-        sel.all();
         root.cursor = model.count - 1;
-        scroll.ensureVisible(list, root.cursor);
+        content.selectAllRows();
+        content.ensureVisible(root.cursor);
     }
 
     function clearSelection() {
-        sel.clear();
+        content.clearSelection();
     }
 
     /// ARC-I: Alt armed the gesture — anchor on the cursor row; a visual
@@ -80,10 +73,10 @@ Item {
     function armQuickActions() {
         if (quickActionKind === "" || !model || model.count === 0 || cursor < 0)
             return;
-        var row = list.itemAtIndex(cursor);
+        var row = content.view.itemAtIndex(cursor);
         var actions = null;
-        if (sel.hasSelection) {
-            actions = verbs.forSelection(quickActionKind, sel.ids(model, cursor, selectionField));
+        if (root.hasSelection) {
+            actions = verbs.forSelection(quickActionKind, content.selectionIds(selectionField));
         } else {
             var item = model.get(cursor);
             actions = item
@@ -100,11 +93,6 @@ Item {
     // the gutter edge, so it reads as a full-bleed block and never crosses the
     // UI-47 divider.
     readonly property real overflow: width * 0.012
-
-    // UI-41: ease the view to the cursor instead of teleporting.
-    ListScroll {
-        id: scroll
-    }
 
     readonly property real headerH: height * 0.10
     readonly property real rowH: height * 0.12
@@ -137,6 +125,7 @@ Item {
                 anchors.verticalCenter: parent.verticalCenter
                 anchors.rightMargin: root.headerH * 0.12
                 count: root.selectionCount
+                pixelSize: root.headerH * 0.34
             }
 
             // Count badge: contained by its own pill so the number can never
@@ -175,32 +164,19 @@ Item {
             width: parent.width
             height: root.listH
 
-            // UI-48: the highlight clips at the gutter edge, not the list
-            // edge. This overflow stage is wider than the column and carries
-            // the clip, so the block truly bleeds past the row while
-            // scrolling rows still clip vertically at the list bounds.
-            Item {
-                x: -root.overflow
-                width: parent.width + 2 * root.overflow
-                height: parent.height
-                clip: true
+            // UI-48: the shared scroll body carries the overflow stage, so
+            // the highlight bleeds past the row (clipped at the gutter edge)
+            // while rows still clip vertically at the list bounds.
+            ScrollContent {
+                id: content
+                anchors.fill: parent
+                bleed: root.overflow
+                currentIndex: root.cursor
+                model: root.model
+                selectable: quickActionKind !== ""
 
-                ListView {
-                    id: list
-                    anchors.fill: parent
-                    anchors.leftMargin: root.overflow
-                    anchors.rightMargin: root.overflow
-                    clip: false
-                    model: root.model
-                    currentIndex: root.cursor
-                    boundsBehavior: Flickable.StopAtBounds
-
-                    onCurrentIndexChanged: {
-                        if (currentIndex >= 0)
-                            scroll.ensureVisible(list, currentIndex);
-                    }
-
-                    delegate: Rectangle {
+                rowDelegate: Component {
+                    Rectangle {
                         id: row
                         required property int index
                         required property string title
@@ -211,11 +187,11 @@ Item {
 
                         readonly property bool current: index === root.cursor
                         // VI-4: the row sits inside the visual selection range.
-                        readonly property bool selectedRow: sel.selected(root.cursor, index)
+                        readonly property bool selectedRow: content.selected(index)
                         // UI-45: the focused cursor or any hovered row leads.
                         readonly property bool emphasized: (row.current && root.active) || rowHover.hovered
 
-                        width: list.width
+                        width: ListView.view.width
                         height: root.rowH
                         // The row is a layout container only (UI-48): the block
                         // highlight lives in its own layer below, so it can

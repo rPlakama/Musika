@@ -25,6 +25,10 @@ Rectangle {
 
     color: Palette.surfaceContainer
 
+    // UI-57: the shared width ramp — the now-playing type shrinks with the
+    // window instead of only with its height.
+    readonly property real widthScale: Theme.widthScale(root.width)
+
     // Speaker icon by volume tier: muted / silent / low (≤33) / high.
     function volumeIcon() {
         return Theme.volumeIcon(Backend.volume, Backend.muted);
@@ -135,7 +139,7 @@ Rectangle {
                             anchors.fill: parent
                             text: Backend.currentTitle.length > 0 ? Backend.currentTitle : "Nothing playing"
                             color: Palette.onSurface
-                            font.pixelSize: root.height * 0.18
+                            font.pixelSize: root.height * 0.18 * root.widthScale
                             elide: Text.ElideRight
                             animated: false
                         }
@@ -151,7 +155,7 @@ Rectangle {
                             anchors.fill: parent
                             text: Backend.currentArtist
                             color: Palette.onSurfaceVariant
-                            font.pixelSize: root.height * 0.15
+                            font.pixelSize: root.height * 0.15 * root.widthScale
                             elide: Text.ElideRight
                             animated: false
                         }
@@ -206,7 +210,7 @@ Rectangle {
                     Layout.alignment: Qt.AlignVCenter | Qt.AlignRight
                     text: Theme.formatTime(Backend.position) + " / " + Theme.formatTime(Backend.duration)
                     color: Palette.onSurfaceVariant
-                    font.pixelSize: root.height * 0.15
+                    font.pixelSize: root.height * 0.15 * root.widthScale
                     horizontalAlignment: Text.AlignRight
                     elide: Text.ElideRight
                     animated: false

@@ -1785,18 +1785,22 @@ Small, bounded, high-value changes.
     full footprint: the title sat at `Theme.fontSize("headline", …)` while
     the band stayed at `headerRatio` (0.2 of the panel), so the title + hint
     row squashed the scroll body below.
-  - **Now:** `ScrollPanel` derives `compressed` from the same `narrow`
-    breakpoint `ArtistEntry` uses and a continuous `compression` ramp
-    (`width / Theme.breakpoints.narrow`, floored at 0.5). The title ramps
-    toward the 18 px headline floor using the same linear-toward-a-clamp
-    mechanism as `ArtistEntry`'s description (`18 + (full - 18) * c`,
-    clamped), and the band becomes `headerRatio * (0.7 + 0.3c)`; full-size
-    viewports are byte-identical (compression 1). The ramp is continuous in
-    width, so crossing the breakpoint never jumps, and the right-anchored
-    Shift-H/Shift-L cue and selection badge stay centred in the shrinking
-    band. Applies to every `ScrollPanel` list (Albums/Songs/Artists) by
-    construction. `qmllint` clean; offscreen run silent; **visual pass
-    pending** (dials: the 0.5 floor and the 0.7 band factor).
+  - **Now:** `Theme.widthScale(width)` is the one shared width ramp — 1 at
+    `Theme.breakpoints.compact`, tapering linearly to 0.7 at the `narrow`
+    breakpoint ArtistEntry uses. `ScrollPanel` scales its title
+    (`clamp(full * widthScale, 18, full)`: the 18 px headline floor, never
+    body-text weight, via the same linear-toward-a-clamp mechanism as
+    `ArtistEntry`'s description) and its band
+    (`headerRatio * widthScale`, with the default `headerRatio` cut 30%,
+    0.2 → 0.14), so the reclaimed height goes to the list. The same ramp now
+    also scales the status bar's identity/report type (`SuperiorBar`) and the
+    now-playing title/artist/time (`InferiorBar`). Full-size viewports are
+    byte-identical; the ramp is continuous in width, so resizing or crossing
+    the breakpoint never jumps, and the right-anchored Shift-H/Shift-L cue and
+    selection badge stay centred in the shrinking band. Applies to every
+    `ScrollPanel` list (Albums/Songs/Artists) by construction. `qmllint`
+    clean; offscreen run silent; **visual pass pending** (dials: the 0.7
+    floor and the narrow→compact span).
 
 - [x] **UI-13 · Scroll position hint** — P3 · **removed 2026-10-14**
   - **Why:** long lists have no scrollbar/position feedback for mouse users.

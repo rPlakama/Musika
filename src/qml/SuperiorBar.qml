@@ -32,6 +32,9 @@ Rectangle {
     /// Tab scope: which control Enter activates (0 = sync, 1 = trashcan).
     /// The ring marks it while the status region owns the cursor.
     property int scope: 0
+    /// UI-57: the shared width ramp — identity and report type shrink with
+    /// the window instead of only with its height.
+    readonly property real widthScale: Theme.widthScale(root.width)
     /// The trashcan: the wipe menu's anchor (a click, or Alt while it is
     /// scoped, asks Home to arm it).
     readonly property Item wipeAnchor: wipeButton
@@ -146,7 +149,7 @@ Rectangle {
                     ? (Backend.offline ? "Offline, " : "Welcome, ") + Backend.username
                     : (Backend.offline ? "Offline" : "")
                 color: Backend.offline ? Palette.tertiary : Palette.onSurfaceVariant
-                font.pixelSize: Theme.fontSize("title", root.height) * 1.5
+                font.pixelSize: Theme.fontSize("title", root.height) * 1.5 * root.widthScale
                 elide: Text.ElideRight
                 animated: false
             }
@@ -173,7 +176,7 @@ Rectangle {
                     return "Last Sync: " + status + (provider.length > 0 ? ", " + provider : "");
                 }
                 color: Backend.librarySyncing ? Palette.tertiary : Palette.onSurfaceVariant
-                font.pixelSize: Theme.fontSize("title", root.height) * 1.35
+                font.pixelSize: Theme.fontSize("title", root.height) * 1.35 * root.widthScale
                 elide: Text.ElideRight
             }
         }

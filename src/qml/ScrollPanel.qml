@@ -39,26 +39,25 @@ Rectangle {
     // --- Split geometry ------------------------------------------------------
     // A = this fraction of the height, B = the rest. Both bands are
     // horizontal-centred; B is bottom-anchored to the surface.
-    property real headerRatio: 0.2
+    // UI-57: the band sits 30% below the original 0.2 (0.14) and
+    // `widthScale` ramps it further as the window narrows.
+    property real headerRatio: 0.14
     // UI-48: horizontal gutter the body overflows into (highlight bleed).
     property real bleed: 0
 
-    // UI-57: compressed viewports (the same `narrow` trigger ArtistEntry
-    // uses) ramp the title toward the headline floor and shrink the band, so
-    // the reclaimed height goes to the list. `compression` is continuous in
-    // width (floor 0.5), so crossing the breakpoint never jumps; full-size
-    // viewports are untouched (compression = 1).
-    readonly property bool compressed: Theme.isNarrow(root.width)
-    readonly property real compression: Math.max(0.5,
-        Math.min(1, root.width / Theme.breakpoints.narrow))
+    // UI-57: the header ramps with the panel width, not only its height. The
+    // title shrinks toward the headline floor (18 px, never body-text weight)
+    // as the window narrows and the band follows it, handing the reclaimed
+    // height back to the list. `widthScale` is 1 at `compact` and above,
+    // tapering to 0.7 at the `narrow` breakpoint ArtistEntry uses; it is
+    // continuous, so resizing — or crossing the breakpoint — never jumps.
+    readonly property real widthScale: Theme.widthScale(root.width)
     readonly property real titlePixelSize: {
-        // The linear-toward-a-clamp ramp ArtistEntry's description uses; the
-        // 18 px floor is the headline token (never body-text weight).
+        // The linear-toward-a-clamp ramp ArtistEntry's description uses.
         var full = Theme.fontSize("headline", root.height);
-        return Theme.clamp(18 + (full - 18) * root.compression, 18, full);
+        return Theme.clamp(full * root.widthScale, 18, full);
     }
-    readonly property real effectiveHeaderRatio: root.headerRatio
-        * (0.7 + 0.3 * root.compression)
+    readonly property real effectiveHeaderRatio: root.headerRatio * root.widthScale
 
     // --- Header (A) ----------------------------------------------------------
     // Children declared on the panel land in the title band.

@@ -231,6 +231,17 @@ function fontSize(role, reference) {
     return clamp(reference * spec[0], spec[1], spec[2])
 }
 
+// UI-57: one width-driven type ramp for the chrome (list header title, status
+// bar, player bar) — 1 at `compact` and above, tapering linearly to `floor`
+// (default 0.7) at the `narrow` breakpoint, so type shrinks with the window
+// instead of only with its height. Continuous, so resizing or crossing a
+// breakpoint never jumps.
+function widthScale(width, floor) {
+    var base = (floor === undefined) ? 0.7 : floor
+    return clamp(base + (1 - base) * ((width - breakpoints.narrow)
+        / (breakpoints.compact - breakpoints.narrow)), base, 1)
+}
+
 // Speaker icon by volume tier: muted / silent / low (≤33) / high. Shared by
 // the player bar and the fullscreen transport (Q-4/P-7).
 function volumeIcon(volume, muted) {

@@ -1394,17 +1394,23 @@ The product is incomplete without these.
   - **Now (partial):** M0–M2 landed (SCROLLGRIDSTUDY.md) — `ScrollContent`
     gained `layout`/`columns`/`cellDelegate` (`layouts` order + `toggleLayout`)
     with one shared stage, band, memory, selection, search contract and
-    adaptive sizing; `ArtistEntry` is now a grid body with a compact list
-    fallback and its `GridView`/`ListScroll`/`Selection` copies are gone; the
-    grid grind is fixed by the view-owned follow (`highlightMoveDuration`,
-    since GridView has **no** `highlightMoveVelocity`); `Shift-C`
-    (`Action::LayoutToggle`) swaps live and `ScrollMemory` carries the layout
-    beside cursor + offset; the body's `currentIndex` is the single source of
-    truth (view refill transients are overwritten, never adopted; `edgeJump`
-    replaced direct `Theme.cursorEdge` writes). A QtQuickTest harness covers
-    list/grid sync, the swap carry, search rows and the memory round-trip;
-    `cargo test` 121 pass, QML parses clean. Open: M3 (UI-58 adaptive cells
-    for the grid), extending the toggle to Search/Album, the hardware pass.
+    adaptive sizing; `ArtistEntry` and the Main segments (`MediaList`:
+    Albums/Songs/Artists) both ride the shared `ScrollPanel` now — the wall
+    is grid mode with a compact list fallback, the segments default list with
+    a cover wall on Shift-C — so `gg`/`G`, the `/` contract, selection and
+    the empty/loading states come from one modal. Movement is one shared
+    `moveStep` (grid walks by columns, list ±1) exposed as `moveWithinGrid`,
+    so Home's `h`-to-sidebar edge works everywhere; the grid grind is fixed
+    by the view-owned follow (`highlightMoveDuration`, since GridView has
+    **no** `highlightMoveVelocity`); the body's `currentIndex` is the single
+    source of truth (view refill transients are overwritten, never adopted;
+    `edgeJump` replaced direct `Theme.cursorEdge` writes); `ScrollMemory`
+    carries the layout beside cursor + offset. UI-58's band edge moved
+    0.7 → 0.82, so row reduction initiates 40% sooner (user call). A
+    QtQuickTest harness covers list/grid sync, the swap carry, search rows,
+    the memory round-trip and the panel aliases/toggle (12 pass); `cargo
+    test` 121 pass, QML parses clean. Open: M3 (UI-58 adaptive cells for the
+    grid), extending the toggle to Search columns, the hardware pass.
 
 ### Incremental (ARC-I)
 

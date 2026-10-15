@@ -162,6 +162,13 @@ Rectangle {
         content.toggleLayout();
     }
 
+    /// ARC-UI-3: the shared 2-D cursor step (grid walks the wall by columns,
+    /// list steps ±1); Home probes this for `h`, so the leftmost column can
+    /// hand the cursor to the sidebar.
+    function moveWithinGrid(action) {
+        return content.moveStep(action);
+    }
+
     // Shared cursor grammar: j/k, gg/G, Enter; unknown actions go to
     // `actionHandler` (search columns, queue reorder, …). Cursor moves are
     // followed by the view itself (ScrollContent highlight machinery); gg/G
@@ -175,10 +182,9 @@ Rectangle {
         }
         if (count === 0)
             return;
-        if (action === "move_up")
-            currentIndex = Math.max(0, currentIndex - 1);
-        else if (action === "move_down")
-            currentIndex = Math.min(count - 1, currentIndex + 1);
+        if (action === "move_up" || action === "move_down"
+                || action === "move_left" || action === "move_right")
+            content.moveStep(action);
         else if (action === "top" || action === "bottom")
             content.edgeJump(action === "bottom");
         else if (action === "enter")

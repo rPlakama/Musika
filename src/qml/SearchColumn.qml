@@ -129,7 +129,7 @@ Item {
     readonly property real overflow: width * 0.012
 
     readonly property real headerH: height * 0.10
-    /// UI-58: adaptive row height — inside the 30% band it scales, past it a
+    /// UI-58: adaptive row height — inside the 18% band it scales, past it a
     /// row is cut. The baseline (0.12 of the column) is captured on the
     /// first real measure.
     property real _rowBase: 0

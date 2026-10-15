@@ -81,6 +81,12 @@ ScrollPanel {
     searchFields: ["title", "subtitle", "meta"]
     // UI-58: the row fraction the adaptive rule preserves.
     rowRatio: 0.105
+    // ARC-UI-3: Shift-C flips every segment between the row list and a cover
+    // wall — the same shared body ArtistEntry uses, with gg/G, the search
+    // contract, selection and the scroll memory.
+    layouts: ["list", "grid"]
+    columns: 4
+    cellHeight: root.cellWidth * 0.78 + root.height * 0.085
 
     function setRows(rows) {
         // VI-4: a reload invalidates the selected range.
@@ -166,7 +172,7 @@ ScrollPanel {
             readonly property bool selectedRow: root.isSelected(index)
 
             width: viewWidth
-            // UI-58: adaptive — the 30% band scales, past it a row is cut.
+            // UI-58: adaptive — the 18% band scales, past it a row is cut.
             height: root.adaptiveRowHeight > 0
                 ? root.adaptiveRowHeight
                 : (ListView.view ? ListView.view.height * 0.105 : 0)
@@ -288,6 +294,143 @@ ScrollPanel {
             TapHandler {
                 onTapped: {
                     root.currentIndex = row.index;
+                    root.activate();
+                }
+            }
+        }
+    }
+
+    // The cover-wall cell: the row payload laid out like ArtistEntry's cards
+    // (cover with the favourite mark in the corner, title + mixed meta line).
+    cellDelegate: Component {
+        Rectangle {
+            id: cell
+            required property int index
+            required property string title
+            required property string subtitle
+            required property string meta
+            required property string cover
+            required property bool starred
+
+            readonly property bool current: GridView.isCurrentItem
+            readonly property bool selectedCard: root.isSelected(cell.index)
+            // UI-50: cursor or hover expands the cover + title.
+            readonly property bool emphasized: (cell.current || cellHover.hovered) && !Theme.reduceMotion
+
+            width: GridView.view.cellWidth
+            height: GridView.view.cellHeight
+            color: "transparent"
+
+            Rectangle {
+                anchors.fill: parent
+                anchors.margins: cell.width * 0.03
+                radius: Theme.radius
+                color: (cell.current || cell.selectedCard)
+                    ? Palette.secondaryContainer
+                    : (cellHover.hovered ? Palette.surfaceContainerHigh : "transparent")
+
+                Behavior on color {
+                    ColorAnimation {
+                        duration: Theme.motion.quick
+                        easing.type: Easing.Bezier
+                        easing.bezierCurve: Theme.ease.standard
+                    }
+                }
+            }
+
+            Rectangle {
+                id: coverBox
+                width: cell.width * 0.78
+                height: width
+                anchors.horizontalCenter: parent.horizontalCenter
+                anchors.top: parent.top
+                anchors.topMargin: cell.height * 0.05
+                radius: root.roundedArt ? width * 0.5 : Theme.radius
+                color: Palette.surfaceContainerLowest
+                border.color: cell.current ? Palette.primary : "transparent"
+                border.width: Math.max(1, cell.height * Theme.hairlineRatio)
+                clip: true
+
+                transformOrigin: Item.Center
+                scale: cell.emphasized ? Theme.selectionEmphasis : 1.0
+
+                Behavior on scale {
+                    NumberAnimation { duration: Theme.motion.quick; easing.type: Easing.Bezier; easing.bezierCurve: Theme.ease.standard }
+                }
+
+                CoverImage {
+                    anchors.fill: parent
+                    source: cell.cover
+                    // ARC-40: ×2 headroom for the UI-50 hover scale.
+                    sizeFactor: 2
+                }
+
+                // UI-56: the favourite mark rides the cover corner.
+                Icon {
+                    visible: cell.starred
+                    anchors.right: parent.right
+                    anchors.bottom: parent.bottom
+                    anchors.margins: parent.width * 0.06
+                    width: parent.width * 0.085
+                    height: width
+                    name: "baseline-favorite"
+                    symbolColor: Theme.iconStrong
+                }
+            }
+
+            Column {
+                anchors.top: coverBox.bottom
+                anchors.topMargin: cell.height * 0.02
+                anchors.horizontalCenter: parent.horizontalCenter
+                width: parent.width * 0.86
+                spacing: cell.height * 0.012
+
+                SearchText {
+                    id: cellTitle
+                    width: parent.width
+                    text: cell.title
+                    color: Palette.onSurface
+                    horizontalAlignment: Text.AlignHCenter
+                    elide: Text.ElideRight
+                    font.pixelSize: Math.max(10, cell.height * 0.05)
+                    animated: false
+                    query: root.searchQuery
+                    currentMatch: cell.index === root.searchCurrentRow
+                    transformOrigin: Item.Center
+                    scale: cell.emphasized
+                        ? Theme.fitScale(cellTitle.width, cellTitle.paintedWidth, Theme.selectionEmphasis)
+                        : 1.0
+
+                    Behavior on scale {
+                        NumberAnimation { duration: Theme.motion.quick; easing.type: Easing.Bezier; easing.bezierCurve: Theme.ease.standard }
+                    }
+                }
+
+                // One muted line: the row's subtitle and meta joined, so a
+                // song reads "Artist · Album · 3:45" under its cover.
+                SearchText {
+                    width: parent.width
+                    text: cell.subtitle
+                        + (cell.subtitle.length > 0 && cell.meta.length > 0 ? "   ·   " : "")
+                        + cell.meta
+                    color: Palette.onSurfaceVariant
+                    horizontalAlignment: Text.AlignHCenter
+                    elide: Text.ElideRight
+                    font.pixelSize: Math.max(9, cell.height * 0.038)
+                    animated: false
+                    query: root.searchQuery
+                    currentMatch: cell.index === root.searchCurrentRow
+                }
+            }
+
+            HoverHandler {
+                id: cellHover
+                cursorShape: Qt.PointingHandCursor
+            }
+
+            TapHandler {
+                onTapped: {
+                    root.currentIndex = cell.index;
                     root.activate();
                 }
             }

@@ -1050,7 +1050,7 @@ Rectangle {
 
                                         width: ListView.view.width
                                         // UI-58: adaptive — cut a row past the
-                                        // 30% squeeze instead of shrinking.
+                                        // 18% squeeze instead of shrinking.
                                         height: queueContent.adaptiveRowHeight > 0
                                             ? queueContent.adaptiveRowHeight
                                             : ListView.view.height * 0.16

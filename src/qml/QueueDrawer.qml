@@ -215,7 +215,7 @@ Item {
                     readonly property bool emphasized: index === root.cursor || rowHover.hovered
 
                     width: ListView.view.width
-                    // UI-58: adaptive — cut a row past the 30% squeeze.
+                    // UI-58: adaptive — cut a row past the 18% squeeze.
                     height: Theme.adaptiveRow(panel.height, 0.06, root._rowBase)
                     color: index === root.cursor
                         ? Palette.secondaryContainer

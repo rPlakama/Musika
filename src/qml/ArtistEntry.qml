@@ -35,46 +35,44 @@ Rectangle {
     // open "—".
     signal quickAction(var target, var actions)
 
-    /// ARC-UI-3: the album wall is the shared scroll body in grid mode
-    /// (SCROLLGRIDSTUDY.md); `Shift-C` swaps it to a compact list. Selection,
-    /// cursor, memory, search and the follow all live in `content` below.
-    readonly property bool hasSelection: content.hasSelection
-    readonly property int selectionCount: content.selectionCount
+    /// ARC-UI-3: the album wall rides the same panel as the Main lists
+    /// (`ScrollPanel`, SCROLLGRIDSTUDY.md) in grid mode; `Shift-C` swaps it
+    /// to a compact list and every shared goodie (gg/G, the `/` contract,
+    /// selection, memory, adaptive states) comes with it. The wall lives in
+    /// `wall` below.
+    readonly property bool hasSelection: wall.hasSelection
+    readonly property int selectionCount: wall.selectionCount
 
     /// VI-4: `v` toggles visual mode on the cursor card.
     function toggleSelection() {
-        content.toggleSelection();
+        wall.toggleSelection();
     }
 
     /// VI-4: `V` selects every card.
     function selectAll() {
-        if (albums.count === 0)
-            return;
-        content.currentIndex = albums.count - 1;
-        content.selectAllRows();
-        content.ensureVisible(content.currentIndex);
+        wall.selectAll();
     }
 
     function clearSelection() {
-        content.clearSelection();
+        wall.clearSelection();
     }
 
     /// ARC-UI-2 M2: the live `/` session, painted by the card/row text.
-    property alias searchQuery: content.searchQuery
-    property alias searchCurrentRow: content.searchCurrentRow
+    property alias searchQuery: wall.searchQuery
+    property alias searchCurrentRow: wall.searchCurrentRow
     /// The view cursor, exposed so Home's up-edge can hand it to the status
     /// region at the first card (the other surfaces alias `currentIndex`).
-    readonly property alias currentIndex: content.currentIndex
+    readonly property alias currentIndex: wall.currentIndex
 
-    /// ARC-UI-2 M1: the search contract (see `ScrollContent`); the grid
+    /// ARC-UI-2 M1: the search contract (see `ScrollContent`); the wall
     /// paints the title and the meta line. Matching is viewport-scoped: cards
     /// scrolled out of the viewport come back empty and never match.
     function searchRows() {
-        return content.searchRows();
+        return wall.searchRows();
     }
 
     function searchJump(row) {
-        content.searchJump(row);
+        wall.searchJump(row);
     }
 
     /// ARC-I-4 (decoration only): the Favorite verb stars on the server and
@@ -94,17 +92,17 @@ Rectangle {
     /// card with the recycled album verb set; a visual selection swaps in the
     /// batch verb set (VI-4).
     function armQuickActions() {
-        if (albums.count === 0 || content.currentIndex < 0)
+        if (albums.count === 0 || wall.currentIndex < 0)
             return;
-        var cell = content.view.itemAtIndex(content.currentIndex);
+        var cell = wall.view.itemAtIndex(wall.currentIndex);
         if (!cell)
             return;
-        var ids = content.hasSelection
-            ? content.selectionIds("albumId")
-            : [albums.get(content.currentIndex).albumId];
-        var actions = content.hasSelection
+        var ids = wall.hasSelection
+            ? wall.selectedIds("albumId")
+            : [albums.get(wall.currentIndex).albumId];
+        var actions = wall.hasSelection
             ? verbs.forSelection("album", ids)
-            : verbs.album(albums.get(content.currentIndex));
+            : verbs.album(albums.get(wall.currentIndex));
         // ARC-I-4: the decoration rides the verb so the mark tracks the
         // action immediately; the server call inside `star` is unchanged.
         var star = actions.south.invoke;
@@ -143,8 +141,6 @@ Rectangle {
     property int hoveredStar: -1
     // UI-54: per-artist scroll memory for the album grid.
     readonly property string memoryKey: "artist:" + root.artistId
-    property bool _restored: false
-
     // Home uses this to send `Esc` straight to Main (P-8) instead of popping
     // back to the Artists segment or a search result.
     readonly property bool exitsToMain: true
@@ -295,7 +291,7 @@ Rectangle {
 
     function apply(payload) {
         // VI-4: a reload invalidates the selected range.
-        content.clearSelection();
+        wall.clearSelection();
         var artist = JSON.parse(payload);
         if (artist.name && artist.name.length > 0)
             root.artistName = artist.name;
@@ -323,18 +319,15 @@ Rectangle {
                 starred: album.starred === true
             });
         }
-        if (albums.count > 0 && (content.currentIndex < 0 || content.currentIndex >= albums.count))
-            content.currentIndex = 0;
+        if (albums.count > 0 && (wall.currentIndex < 0 || wall.currentIndex >= albums.count))
+            wall.currentIndex = 0;
         // UI-54: reopening the entry restores the cursor + offset (and the
         // ARC-UI-3 layout); later reloads keep the live state.
-        if (!root._restored) {
-            root._restored = true;
-            content.restore();
-        }
+        wall.restore();
     }
 
     function activateCurrent() {
-        var album = albums.get(content.currentIndex);
+        var album = albums.get(wall.currentIndex);
         if (album)
             root.albumActivated(album.albumId, album.title, album.artist, album.year, album.tracks, album.cover, album.starred === true);
     }
@@ -365,67 +358,35 @@ Rectangle {
 
     Component.onCompleted: reload()
 
-    // Edge-aware movement for both layouts: in grid mode the cursor walks the
-    // cover wall (no wrap-around — GridView's own moveCurrentIndex* crosses
-    // rows, which feels wrong); in list mode it is a plain up/down. Returns
-    // false when the surface cannot move that way, so Home can hand `h` to
-    // the sidebar only from the leftmost column.
+    // The shared panel owns movement (grid walks the wall by columns, list
+    // steps ±1, gg/G snap through `edgeJump`); this only tracks the header
+    // chip scope and the Home edge contract: false lets `h` leave for the
+    // sidebar from the leftmost column.
     function moveWithinGrid(action) {
-        if (albums.count === 0)
+        if (!wall.moveWithinGrid(action))
             return false;
-        var cols = content.layout === "grid" ? root.columns : 1;
-        var column = content.currentIndex % cols;
-        var target = content.currentIndex;
-        if (action === "move_left") {
-            if (column === 0)
-                return false;
-            target -= 1;
-        } else if (action === "move_right") {
-            if (column === cols - 1 || content.currentIndex + 1 >= albums.count)
-                return false;
-            target += 1;
-        } else if (action === "move_up") {
-            if (content.currentIndex - cols < 0)
-                return false;
-            target -= cols;
-        } else if (action === "move_down") {
-            if (content.currentIndex + cols >= albums.count)
-                return false;
-            target += cols;
-        } else {
-            return false;
-        }
-        // The view-owned follow animates the move (SCROLLGRIDSTUDY §2).
-        content.currentIndex = target;
         // Moving the wall ends the header chip scope (Enter opens albums).
         root.chipScope = -1;
         return true;
     }
 
-    // Movement and Enter belong to the album wall; `Esc` is handled by Home
-    // (leaves the entry for Main regardless of where it was opened from).
+    // Chip scope and Enter-on-chip are the host's; everything else goes to
+    // the shared panel (movement, gg/G, Enter on a card, layout_toggle).
+    // `Esc` is handled by Home (leaves the entry for Main regardless of
+    // where it was opened from).
     function handleAction(action) {
         if (action === "pane_cycle") {
             // Tab cycles the header chips (Download → Shuffle → Favorite).
             root.chipScope = (root.chipScope + 1) % 3;
             return;
         }
-        if (action === "layout_toggle") {
-            // ARC-UI-3: grid ⇄ list for the wall.
-            content.toggleLayout();
+        if (action === "enter" && root.chipScope >= 0) {
+            root.activateChip();
             return;
         }
-        if (action === "enter") {
-            if (root.chipScope >= 0) {
-                root.activateChip();
-                return;
-            }
-            // VI-4: opening an album ends the visual selection.
-            root.clearSelection();
-            activateCurrent();
-        } else {
-            moveWithinGrid(action);
-        }
+        if (moveWithinGrid(action))
+            return;
+        wall.handleAction(action);
     }
 
     Connections {
@@ -763,11 +724,11 @@ Rectangle {
             color: Palette.outlineVariant
         }
 
-        // Albums: the shared scroll body (ARC-UI-3, SCROLLGRIDSTUDY.md) —
-        // grid mode by default, four covers per row with the title and
-        // year/count underneath; Shift-C swaps it to a compact list. The body
-        // owns cursor, follow, memory, selection and the `/` contract; the
-        // host supplies both delegates.
+        // Albums: the shared panel (ARC-UI-3, SCROLLGRIDSTUDY.md) — the same
+        // `ScrollPanel` the Main list segments use, in grid mode: four covers
+        // per row with the title and year/count underneath, gg/G, the `/`
+        // contract, selection, memory and the empty/loading states. Shift-C
+        // swaps it to a compact list.
         Item {
             Layout.fillWidth: true
             Layout.fillHeight: true
@@ -782,17 +743,22 @@ Rectangle {
                 z: 2
             }
 
-            ScrollContent {
-                id: content
+            ScrollPanel {
+                id: wall
                 anchors.fill: parent
+                title: ""
+                headerRatio: 0
                 model: albums
                 layouts: ["grid", "list"]
                 layout: "grid"
                 columns: root.columns
-                cellHeight: content.cellWidth * 0.78 + content.height * 0.085
+                cellHeight: wall.cellWidth * 0.78 + wall.height * 0.085
                 selectable: true
                 memoryKey: root.memoryKey
                 searchFields: ["title", "meta"]
+                emptyText: "No albums indexed yet"
+
+                onItemActivated: (index) => root.activateCurrent()
 
                 cellDelegate: Component {
                     Rectangle {
@@ -818,7 +784,7 @@ Rectangle {
 
                         // VI-4: a card inside the visual selection wears the
                         // cursor fill.
-                        readonly property bool selectedCard: content.selected(cell.index)
+                        readonly property bool selectedCard: wall.isSelected(cell.index)
 
                         Rectangle {
                             anchors.fill: parent
@@ -887,8 +853,8 @@ Rectangle {
                             text: cell.title
                             color: Palette.onSurface
                             horizontalAlignment: Text.AlignHCenter
-                            query: content.searchQuery
-                            currentMatch: cell.index === content.searchCurrentRow
+                            query: wall.searchQuery
+                            currentMatch: cell.index === wall.searchCurrentRow
                             elide: Text.ElideRight
                             font.pixelSize: Math.max(10, cell.height * 0.0525)
                             animated: false
@@ -914,8 +880,8 @@ Rectangle {
                             elide: Text.ElideRight
                             font.pixelSize: Math.max(9, cell.height * 0.04)
                             animated: false
-                            query: content.searchQuery
-                            currentMatch: cell.index === content.searchCurrentRow
+                            query: wall.searchQuery
+                            currentMatch: cell.index === wall.searchCurrentRow
                         }
 
                         HoverHandler {
@@ -925,7 +891,7 @@ Rectangle {
 
                         TapHandler {
                             onTapped: {
-                                content.currentIndex = cell.index;
+                                wall.currentIndex = cell.index;
                                 root.activateCurrent();
                             }
                         }
@@ -946,7 +912,7 @@ Rectangle {
                         required property bool starred
 
                         readonly property bool current: ListView.isCurrentItem
-                        readonly property bool selectedRow: content.selected(row.index)
+                        readonly property bool selectedRow: wall.isSelected(row.index)
 
                         width: ListView.view.width
                         height: Math.max(48, root.height * 0.09)
@@ -1008,8 +974,8 @@ Rectangle {
                                 elide: Text.ElideRight
                                 font.pixelSize: Theme.clamp(row.height * 0.26, 12, 18)
                                 animated: false
-                                query: content.searchQuery
-                                currentMatch: row.index === content.searchCurrentRow
+                                query: wall.searchQuery
+                                currentMatch: row.index === wall.searchCurrentRow
                             }
 
                             SearchText {
@@ -1019,8 +985,8 @@ Rectangle {
                                 elide: Text.ElideRight
                                 font.pixelSize: Theme.clamp(row.height * 0.19, 10, 14)
                                 animated: false
-                                query: content.searchQuery
-                                currentMatch: row.index === content.searchCurrentRow
+                                query: wall.searchQuery
+                                currentMatch: row.index === wall.searchCurrentRow
                             }
                         }
 
@@ -1031,20 +997,12 @@ Rectangle {
 
                         TapHandler {
                             onTapped: {
-                                content.currentIndex = row.index;
+                                wall.currentIndex = row.index;
                                 root.activateCurrent();
                             }
                         }
                     }
                 }
-            }
-
-            FadeText {
-                anchors.centerIn: parent
-                visible: albums.count === 0
-                text: "No albums indexed yet"
-                color: Palette.onSurfaceVariant
-                font.pixelSize: Theme.fontSize("body", root.height)
             }
         }
     }

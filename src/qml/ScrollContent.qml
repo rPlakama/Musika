@@ -81,7 +81,8 @@ Item {
     /// window geometry (Main starts at `Screen.height * 0.72`).
     property real _rowBase: 0
     /// UI-58: the row height to paint — scales with the viewport inside the
-    /// 30% band, cuts whole rows past it (see `Theme.adaptiveRow`).
+    /// 18% band (0.82, 40% sooner than the original), cuts whole rows past
+    /// it (see `Theme.adaptiveRow`).
     readonly property real adaptiveRowHeight: Theme.adaptiveRow(height, root.rowRatio, root._rowBase)
 
     Component.onCompleted: {
@@ -223,6 +224,39 @@ Item {
             return;
         root.currentIndex = last ? root.count - 1 : 0;
         ensureVisible(root.currentIndex);
+    }
+
+    /// Shared cursor step: in grid mode the wall walks by `columns` (no
+    /// wrap-around — GridView's own moveCurrentIndex* crosses rows), in list
+    /// mode it is a plain ±1. Returns false when the edge blocks the move,
+    /// so Home can hand `h` to the sidebar from the leftmost column.
+    function moveStep(action) {
+        if (root.count === 0)
+            return false;
+        var cols = root.layout === "grid" ? Math.max(1, root.columns) : 1;
+        var column = root.currentIndex % cols;
+        var target = root.currentIndex;
+        if (action === "move_left") {
+            if (column === 0)
+                return false;
+            target -= 1;
+        } else if (action === "move_right") {
+            if (column === cols - 1 || root.currentIndex + 1 >= root.count)
+                return false;
+            target += 1;
+        } else if (action === "move_up") {
+            if (root.currentIndex - cols < 0)
+                return false;
+            target -= cols;
+        } else if (action === "move_down") {
+            if (root.currentIndex + cols >= root.count)
+                return false;
+            target += cols;
+        } else {
+            return false;
+        }
+        root.currentIndex = target;
+        return true;
     }
 
     function activate() {

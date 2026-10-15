@@ -487,7 +487,7 @@ Rectangle {
                 readonly property bool selectedRow: content.selected(index)
 
                 width: ListView.view.width
-                // UI-58: adaptive — cut a row past the 30% squeeze.
+                // UI-58: adaptive — cut a row past the 18% squeeze.
                 height: Theme.adaptiveRow(root.height, 0.055, root._rowBase)
                 color: ((ListView.isCurrentItem && !root.onToolbar) || songRow.selectedRow)
                     ? Palette.secondaryContainer

@@ -3,6 +3,18 @@
 All notable changes to Musika, newest first. `TASKLISTMAJOR.md` tracks the
 open work; this file is the release history.
 
+## 0.1.4 — _Inertia Creeps_ (Width! Height! All that moves, creeping in our eyes, perhaps, recollect me!)
+
+All commits since `v0.1.3`:
+
+- `93ac03b` UI-57: shared widthScale ramp — status/player chrome; header band
+  −30%
+- `f5c2ba9` rm unecessary copy of navidrome ref
+- `3c5545b` UI-57: responsive list header — title ramp + shrinking band in
+  narrow viewports
+- `bbcb975` ARC-8: one sync pipeline (spawn_sync) for manual, login and
+  auto-login
+
 ## 0.1.3 — _Actions! Actions! It's all talk! Talk! Chitat! <-- ifuk, uk_
 
 All commits since `v0.1.2`:

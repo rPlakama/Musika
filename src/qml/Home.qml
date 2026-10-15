@@ -159,21 +159,26 @@ Item {
         });
     }
 
-    // ARC-43/ARC-UI-1: a surface arms the Alt-hold overlay through here; the
-    // action closures come from the shared QuickActions verb sets. Modal
-    // surfaces outrank the gesture (the fullscreen player arms its own queue).
+    // ARC-43/ARC-UI-1/ARC-I: a surface arms the Alt-hold overlay through here;
+    // the action closures come from the shared QuickActions verb sets. The
+    // search arms its own active column while open; only the drawer blocks.
     function armQuickActions(target, actions) {
-        if (searchOverlay.opened || queueDrawer.opened)
+        if (queueDrawer.opened)
             return;
         quickActions.arm(target, actions);
     }
 
-    // ARC-43/ARC-UI-1: Alt pressed — the active surface anchors the overlay on
-    // its keyboard cursor row/card through its own `armQuickActions`: the
+    // ARC-43/ARC-UI-1/ARC-I: Alt pressed — the active surface anchors the
+    // overlay on its keyboard cursor row/card through its own
+    // `armQuickActions`: the search's active column while it is open, the
     // fullscreen queue when the player is up, the current view otherwise.
     function beginQuickActions() {
-        if (searchOverlay.opened || queueDrawer.opened)
+        if (queueDrawer.opened)
             return;
+        if (searchOverlay.opened) {
+            searchOverlay.armQuickActions();
+            return;
+        }
         var view = root.nowPlayingExpanded ? nowPlaying : contentStack.currentItem;
         if (view && view.armQuickActions)
             view.armQuickActions();
@@ -557,8 +562,11 @@ Item {
     AltActionsOverlay {
         id: quickActions
         anchors.fill: parent
-        z: Theme.zRegion + 1
-        backdrop: root.nowPlayingExpanded ? nowPlaying : shell
+        // ARC-I: while the search is open its column arms the same overlay,
+        // which must paint above the search panel (search z = zOverlay).
+        z: searchOverlay.opened ? Theme.zOverlay + 1 : Theme.zRegion + 1
+        backdrop: root.nowPlayingExpanded ? nowPlaying
+            : (searchOverlay.opened ? searchOverlay : shell)
     }
 
     Toast {
@@ -584,6 +592,9 @@ Item {
         anchors.fill: parent
         // UI-55: blur the shell, or the fullscreen player when it is up.
         backdrop: root.nowPlayingExpanded ? nowPlaying : shell
+
+        // ARC-I: the active column arms the shared Alt overlay.
+        onQuickAction: (target, actions) => root.armQuickActions(target, actions)
 
         // A search song hit goes through the same command pump as external
         // IPC, so the flow stays scriptable and single-sourced.
@@ -668,10 +679,13 @@ Item {
                 return;
             }
             // ARC-43: Go to Album / Go to Artist from the quick-action
-            // overlay — navigation only, no queue change.
+            // overlay — navigation only, no queue change. ARC-I: a jump from a
+            // search hit closes the search so the page is actually shown.
             if (channel === "open_album") {
                 var page = JSON.parse(payload);
                 Qt.callLater(function() {
+                    if (searchOverlay.opened)
+                        searchOverlay.close();
                     root.openAlbum(page.id, page.title, page.artist ? page.artist : "",
                                    page.year ? String(page.year) : "",
                                    String(page.tracks), page.cover ? page.cover : "");
@@ -681,6 +695,8 @@ Item {
             if (channel === "open_artist") {
                 var artist = JSON.parse(payload);
                 Qt.callLater(function() {
+                    if (searchOverlay.opened)
+                        searchOverlay.close();
                     contentStack.push(artistEntryComponent, {
                         artistId: artist.id,
                         artistName: artist.name,

@@ -42,6 +42,9 @@ Item {
     signal songActivated(string id)
     signal albumActivated(string albumId, string title, string artist, string year, string tracks, string cover)
     signal artistActivated(string artistId, string artistName, string artistCover)
+    /// ARC-I: Alt-hold quick actions armed on the active column's cursor row;
+    /// Home routes it to the shared overlay.
+    signal quickAction(var target, var actions)
 
     // Keep rendering while the close fade runs (the panel owns the opacity).
     visible: opened || panel.opacity > 0
@@ -179,6 +182,12 @@ Item {
         return artistsColumn;
     }
 
+    /// ARC-I: Alt armed — the active column anchors the overlay on its cursor
+    /// row with the recycled verb set for its kind (song/album/artist).
+    function armQuickActions() {
+        columnFor(activeColumn).armQuickActions();
+    }
+
     function moveRow(delta) {
         var column = columnFor(activeColumn);
         if (!column.model || column.model.count === 0)
@@ -257,7 +266,10 @@ Item {
                 meta: data.most_played
                     ? root.playCountLabel(song.play_count)
                     : Theme.formatTime(song.duration),
-                cover: song.cover
+                cover: song.cover,
+                // ARC-I: the recycled Alt verbs key on these names.
+                songId: song.id,
+                albumId: song.album_id ? song.album_id : ""
             });
         }
         for (i = 0; i < data.albums.length; i++) {
@@ -270,7 +282,8 @@ Item {
                 cover: album.cover,
                 artist: album.artist ? album.artist : "",
                 year: album.year ? String(album.year) : "",
-                tracks: String(album.song_count)
+                tracks: String(album.song_count),
+                albumId: album.id
             });
         }
         for (i = 0; i < data.artists.length; i++) {
@@ -282,7 +295,8 @@ Item {
                 title: artist.name,
                 subtitle: artist.album_count + (artist.album_count === 1 ? " album" : " albums"),
                 meta: "",
-                cover: artist.cover
+                cover: artist.cover,
+                artistId: artist.id
             });
         }
 
@@ -532,6 +546,9 @@ Item {
                     active: root.activeColumn === 0
                     loading: root.loading
                     hasQuery: field.text.length > 0
+                    quickActionKind: "song"
+
+                    onQuickAction: (target, actions) => root.quickAction(target, actions)
 
                     onPicked: index => {
                         songsColumn.cursor = index;
@@ -562,6 +579,9 @@ Item {
                     loading: root.loading
                     hasQuery: field.text.length > 0
                     visible: field.text.length > 0
+                    quickActionKind: "album"
+
+                    onQuickAction: (target, actions) => root.quickAction(target, actions)
 
                     onPicked: index => {
                         albumsColumn.cursor = index;
@@ -590,6 +610,9 @@ Item {
                     loading: root.loading
                     hasQuery: field.text.length > 0
                     visible: field.text.length > 0
+                    quickActionKind: "artist"
+
+                    onQuickAction: (target, actions) => root.quickAction(target, actions)
 
                     onPicked: index => {
                         artistsColumn.cursor = index;

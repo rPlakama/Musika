@@ -1935,6 +1935,7 @@ impl Backend {
                 match kind.as_str() {
                     "song" => client.star(&[id.as_str()], &[], &[]).await,
                     "album" => client.star(&[], &[id.as_str()], &[]).await,
+                    "artist" => client.star(&[], &[], &[id.as_str()]).await,
                     other => Err(anyhow::anyhow!("unknown favourite kind: {other}")),
                 }
             }

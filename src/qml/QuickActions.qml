@@ -70,4 +70,23 @@ QtObject {
             east: null
         };
     }
+
+    /// Artist hit (search): queue the whole artist and favourite it; both
+    /// jumps stay open ("—") — the artist page is the row's Enter already.
+    function artist(item) {
+        return {
+            north: {
+                label: "Add to Queue",
+                icon: "qrc:/app/icons/baseline-playlist-add.svg",
+                invoke: function() { Backend.altAddToQueue("artist", item.artistId) }
+            },
+            south: {
+                label: "Favorite",
+                icon: "qrc:/app/icons/baseline-favorite.svg",
+                invoke: function() { Backend.altFavorite("artist", item.artistId) }
+            },
+            west: null,
+            east: null
+        };
+    }
 }

@@ -210,6 +210,7 @@ pub async fn quick_songs(
             .into_iter()
             .collect()),
         "album" => crate::library::album_songs(&dbs.library, id).await,
+        "artist" => crate::library::artist_songs(&dbs.library, id).await,
         other => Err(anyhow::anyhow!("unknown quick-action kind: {other}")),
     }
 }
@@ -612,6 +613,28 @@ mod tests {
         let songs = quick_songs(&dbs, "album", "al1").await.unwrap();
         assert_eq!(songs.len(), 2);
         assert!(quick_songs(&dbs, "bogus", "s2").await.is_err());
+
+        // ARC-I: an artist hit queues every song of the artist's albums.
+        let songs = quick_songs(&dbs, "artist", "ar1").await.unwrap();
+        assert_eq!(songs.len(), 2);
+        assert!(songs
+            .iter()
+            .all(|song| song.album_id.as_deref() == Some("al1")));
+        assert!(quick_songs(&dbs, "artist", "gone")
+            .await
+            .unwrap()
+            .is_empty());
+
+        // ARC-I: the search payload album-id map (the search index carries no
+        // album ids; the library lookup fills the Go to Artist jump).
+        let albums = crate::library::song_album_ids(
+            &dbs.library,
+            &["s1".to_string(), "s2".to_string(), "gone".to_string()],
+        )
+        .await
+        .unwrap();
+        assert_eq!(albums.get("s1").map(String::as_str), Some("al1"));
+        assert!(!albums.contains_key("gone"));
 
         // Navigation payloads carry the shape the pages consume.
         let json = song_album_page_json(&dbs, "s1").await.unwrap();

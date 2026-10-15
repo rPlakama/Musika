@@ -294,6 +294,7 @@ pub async fn search_json(
 
     let song_ids: Vec<String> = songs.iter().map(|song| song.song_id.clone()).collect();
     let song_covers = crate::library::song_cover_ids(&dbs.library, &song_ids).await?;
+    let song_albums = crate::library::song_album_ids(&dbs.library, &song_ids).await?;
 
     let artist_rows: Vec<serde_json::Value> = artists
         .into_iter()
@@ -332,6 +333,7 @@ pub async fn search_json(
                 "title": song.title,
                 "artist": song.artist,
                 "album": song.album,
+                "album_id": song_albums.get(&song.song_id),
                 "duration": song.duration,
                 "play_count": song.play_count,
                 "cover": cover,

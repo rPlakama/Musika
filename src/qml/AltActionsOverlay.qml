@@ -47,7 +47,9 @@ Item {
     /// Esc retired this hold; arming stays off until Alt is released.
     property bool dismissed: false
 
-    readonly property bool available: !Backend.searchOpen && !Backend.keyPending
+    /// ARC-I: the search column arms this too, so an open search no longer
+    /// disarms the gesture (only a half-typed sequence does).
+    readonly property bool available: !Backend.keyPending
 
     readonly property point anchor: (targetItem && targetItem.visible && targetItem.width > 0)
         ? targetItem.mapToItem(root, targetItem.width / 2, targetItem.height / 2)
@@ -142,6 +144,8 @@ Item {
             if (Backend.keyPending)
                 root.cancel();
         }
+        // ARC-I: the search arms its own column while open; opening it
+        // otherwise retires a list-armed overlay.
         function onSearch_open_changed() {
             if (Backend.searchOpen)
                 root.cancel();

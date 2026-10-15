@@ -299,6 +299,30 @@ pub async fn song_cover_ids(
         .collect())
 }
 
+/// Maps song ids to their album ids (ARC-I: the search hits' Go to Artist
+/// jump needs the album the search index does not carry).
+pub async fn song_album_ids(
+    pool: &SqlitePool,
+    ids: &[String],
+) -> Result<std::collections::HashMap<String, String>> {
+    if ids.is_empty() {
+        return Ok(std::collections::HashMap::new());
+    }
+
+    let mut builder = sqlx::QueryBuilder::new("SELECT id, album_id FROM songs WHERE id IN (");
+    let mut separated = builder.separated(", ");
+    for id in ids {
+        separated.push_bind(id.clone());
+    }
+    separated.push_unseparated(")");
+
+    let rows: Vec<(String, Option<String>)> = builder.build_query_as().fetch_all(pool).await?;
+    Ok(rows
+        .into_iter()
+        .filter_map(|(id, album_id)| album_id.map(|album_id| (id, album_id)))
+        .collect())
+}
+
 /// Every `coverArt` id referenced by the library, used to drive the cover
 /// cache and to know which cached images became stale.
 ///
@@ -670,6 +694,22 @@ pub async fn album_songs(pool: &SqlitePool, album_id: &str) -> Result<Vec<SongRo
          ORDER BY s.disc_number, s.track, s.title",
     )
     .bind(album_id)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows)
+}
+
+/// Every song of an artist's albums (ARC-I "Add to Queue" on an artist hit),
+/// album-major then disc/track order.
+pub async fn artist_songs(pool: &SqlitePool, artist_id: &str) -> Result<Vec<SongRow>> {
+    let rows = sqlx::query_as::<_, SongRow>(
+        "SELECT s.id, s.title, s.artist, s.album, s.album_id, s.track, s.duration,
+                COALESCE(al.cover_art, s.cover_art) AS cover_art
+         FROM songs s JOIN albums al ON al.id = s.album_id
+         WHERE al.artist_id = ?1
+         ORDER BY al.name, s.disc_number, s.track, s.title",
+    )
+    .bind(artist_id)
     .fetch_all(pool)
     .await?;
     Ok(rows)

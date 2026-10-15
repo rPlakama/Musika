@@ -26,21 +26,24 @@ the reference section at the bottom.
 
 Order = trust/correctness > unblocking > user value > effort.
 
-1. **S-8** — Songs column follows a single album match (top priority:
+1. **UI-56** — favourited rows lead with a heart before their meta (top
+   priority: favourites are invisible in every list, and the flag is already
+   cached in `library.db`).
+2. **S-8** — Songs column follows a single album match (top priority:
    album-scoped search reads in track order).
-2. **ARC-25** — partial-fetch guard before the destructive purge (data loss).
-3. **ARC-5** — errors to toasts instead of `eprintln!`.
-4. **VI-11** — `gg`/`G` in every list (high priority: already-bound motions that
+3. **ARC-25** — partial-fetch guard before the destructive purge (data loss).
+4. **ARC-5** — errors to toasts instead of `eprintln!`.
+5. **VI-11** — `gg`/`G` in every list (high priority: already-bound motions that
    dead-end).
-5. **UI-17 + Q-3** — shuffle is the last inert control; wire it + repeat.
-6. **UI-22** — empty/error states (P0, half-landed).
-7. **VI-2** — mode machine; unblocks VI-3/4/7/12/13/14/15.
-8. **S-4 + Q-10** — search scope order/priority (Songs first) and song
+6. **UI-17 + Q-3** — shuffle is the last inert control; wire it + repeat.
+7. **UI-22** — empty/error states (P0, half-landed).
+8. **VI-2** — mode machine; unblocks VI-3/4/7/12/13/14/15.
+9. **S-4 + Q-10** — search scope order/priority (Songs first) and song
    activation opening fullscreen.
-9. **LYR-8** — smooth centre-follow + edge fades.
-10. **ARC-24 + ARC-33** — `catalog_epoch` + `schema_generation` in every meta.
-11. **ARC-29 + ARC-30** — content-addressed covers + hash-keyed colors.
-12. **VI-4** — visual selection (rows + count badge).
+10. **LYR-8** — smooth centre-follow + edge fades.
+11. **ARC-24 + ARC-33** — `catalog_epoch` + `schema_generation` in every meta.
+12. **ARC-29 + ARC-30** — content-addressed covers + hash-keyed colors.
+13. **VI-4** — visual selection (rows + count badge).
 
 ## Must have
 
@@ -1182,10 +1185,53 @@ The product is incomplete without these.
     shared by the lists, `ArtistEntry` and the fullscreen queue, which arms
     the overlay too (`player::Track` gained `album_id`, emitted in the queue
     payload). Each tile carries its SVG verb (queue `baseline-playlist-add`,
-    favorite `baseline-favorite`, artist jump `arrow-right`, album jump
+    favorite `baseline-favorite`, artist jump `person-walking`, album jump
     `album`) recoloured through the shared `Icon`; the glyph set is baked
     white per `scripts/check-icons.sh`. `cargo test` 114 pass; QML parses
     clean under `qmllint`. Open: the manual acceptance pass on hardware.
+
+### Incremental (ARC-I)
+
+- [x] **ARC-I · Alt menu in the Search overlay** — P3 · (ARC-UI-1 follow-up)
+  - **Why:** the Alt verbs stop at the lists, `ArtistEntry` and the fullscreen
+    queue; search hits are the fastest path to a song/album/artist and should
+    offer the same fixed menu instead of forcing Enter + navigation.
+  - **Details:**
+    - arm from `SearchOverlay` on the active column's cursor row
+      (`songsColumn`/`albumsColumn`/`artistsColumn` via `activeColumn`),
+      exposing a `quickAction(target, actions)` signal like
+      `MediaList`/`NowPlaying`; `SearchColumn` relays it from
+      `list.itemAtIndex(cursor)` + `model.get(cursor)`;
+    - routing: `Home.beginQuickActions` must target the search while it is
+      open, and `Home.armQuickActions`/`AltActionsOverlay.available` currently
+      block on `Backend.searchOpen` — the search arm path has to bypass that
+      without letting the scrim dismiss the overlay; `Esc` keeps
+      `quick_cancel`;
+    - verbs: songs → `QuickActions.song`, albums → `QuickActions.album`; the
+      hits key their ids as `id` (not `songId`/`albumId`), so map at arm time
+      or alias in `QuickActions`;
+    - backend gaps: `browse::search_json` song rows need `album_id` for
+      Go to Artist (same as `song_rows_json` in ARC-UI-1); artist hits need
+      their own set — at least Favorite (`altFavorite` kind "artist" →
+      `starArtist`, ARC-42) and Add to Queue ("artist" → every indexed song),
+      with both jumps as open "—" slots;
+    - the acrylic backdrop stays the search panel/scrim.
+  - **Verify:** Alt arms on the active column's row; song hits show the four
+    verbs (Go to Artist resolving), album hits keep Go to Album open, artist
+    hits show the chosen subset; h/j/k/l aim, neutral fires nothing, Alt
+    release invokes without closing the search; Esc still exits the overlay.
+  - **Now:** landed — `SearchColumn` arms on its cursor row
+    (`quickActionKind` song/album/artist through the recycled `QuickActions`)
+    and `SearchOverlay` relays the active column; Home routes it to the shared
+    overlay while the search is open (the overlay paints above the search
+    panel, backdrop = the search, `available` no longer blocks
+    `Backend.searchOpen`), and the two jumps close the search so the page is
+    shown. The search song payload carries `album_id`
+    (`library::song_album_ids`); artist hits queue every song of the artist's
+    albums (`library::artist_songs` → `quick_songs("artist")`) and favourite
+    through `altFavorite("artist")` → `star`, with both jumps as open "—".
+    `cargo test` 114 pass; `scripts/check-icons.sh` ok; QML parses clean under
+    `qmllint`. Open: the manual acceptance pass on hardware.
 
 - [x] **CACHE-1 · DB4 `media.db` + `media/` blobs** — P2 · (roadmap Media cache; MEDIACACHESTUDY.md §3/§5)
   - **Why:** audio is never stored; playback dies without network. Research
@@ -1617,6 +1663,48 @@ Small, bounded, high-value changes.
 
 > **Easiest batch** — moved from Should have on 2026-10-14 (the smallest
 > remaining work): UI-35, S-6, UI-42, CACHE-3, CACHE-4, P-1.
+
+- [ ] **UI-56 · Microdesign: favorites lead with a heart before their meta** — P3 · **top priority** · (design microtask; P-2, ARC-42)
+  - **Why:** every album, song and artist row shows its `<track amount>` /
+    `<track duration>` / `<album quantity>` meta with no way to tell a
+    favourited row from a plain one — the heart reads only after opening the
+    row (ArtistEntry chip) or arming the Alt overlay, so favourites are
+    invisible while browsing. The data is already cached: `library.db` writes
+    `starred` for all three tables (`library.rs:60-117`) and `artist_user.db`
+    tracks the artist favourite (ARC-42), but the row structs (`AlbumRow`,
+    `SongRow`, `ArtistRow`), `browse.rs` JSON and the QML row models drop it.
+  - **Details:**
+    - backend: select `starred` into the three row structs, thread it through
+      `browse.rs` (`album_json`/`song_rows_json`/`artist_json`) as a boolean
+      (`"starred": starred.is_some()`; artists: OR the `artist_user` flag so
+      both surfaces agree), and keep the search payloads (`search.rs`,
+      `search_json`) in step — unit test the JSON key on a starred fixture;
+    - QML: `MediaList`'s delegate gains a `required property bool starred` and
+      the heart is **anchored at the left edge of the meta label** (meta stays
+      right-aligned; the title/subtitle's right anchor already points at the
+      meta label, so nothing else moves): `Icon` (`name:
+      "baseline-favorite"`, `symbolColor: Theme.favoriteStar`, fixed
+      `0.8 × meta font` frame, meta-label spacing) visible only when
+      `row.starred`; the wrappers (`AlbumList`, `SongList`, `ArtistList`) map
+      the payload flag into their rows and set `starred: album.starred` etc.;
+    - placement contract: the glyph sits in front of (left of)
+      `<track count> tracks` / `<track duration>` / `<album count> albums` on
+      Albums/Songs/Artists; the same flag/placement extends to `AlbumEntry`
+      song rows, `ArtistEntry` album cards and the search columns as a
+      follow-up, not in this task;
+    - the heart is not interactive (no hitbox, no cursor change, hover/cursor
+      block unchanged) — it is a state mark, not a button;
+    - live parity: `altFavorite` on a song/album stars on the server but the
+      list payload is not re-fetched, so either toggle the row's flag locally
+      when the call succeeds and let `onDataReady`/`onLibrary_changed` resync,
+      or map `altFavorite` to unstar too (api.rs already wraps `unstar`) so
+      the mark can be lightened as well as lit; artist rows read the
+      `artist_user` payload.
+  - **Verify:** star an album/song/artist on the server, sync, then browse:
+    the heart leads the meta on exactly the favourited rows (Albums, Songs,
+    Artists), and unstarred rows show none; long titles/durations keep elide
+    and the meta never shifts; hover, cursor, click and keyboard flows are
+    unchanged; `mapRow`/JSON test passes and `qmllint`/offscreen run is clean.
 
 - [x] **UI-13 · Scroll position hint** — P3 · **removed 2026-10-14**
   - **Why:** long lists have no scrollbar/position feedback for mouse users.
@@ -2724,10 +2812,10 @@ Kept for rationale; the tree already carries these.
 | Bucket | Open | Solved |
 |--------|------|--------|
 | Must have | 7 | 2 |
-| Should have | 82 | 14 |
+| Should have | 82 | 15 |
 | Quick wins | 7 | 57 |
 | Solved (reference) | — | 36 |
-| **Total** | **96** | **109** |
+| **Total** | **96** | **110** |
 
 ### Coverage by area
 
@@ -2738,8 +2826,9 @@ Kept for rationale; the tree already carries these.
 | Player & media features | 5 | 2 |
 | Lyrics pipeline | 2 | 7 |
 | Search | 2 | 6 |
-| UI microdesigns | 19 | 30 |
+| UI microdesigns | 20 | 30 |
 | Alt action menu (ARC-UI) | 0 | 1 |
+| Incremental (ARC-I) | 0 | 1 |
 | Dynamic color | 1 | 5 |
 | Architecture & robustness | 23 | 19 |
 | Recycling | 27 | 0 |

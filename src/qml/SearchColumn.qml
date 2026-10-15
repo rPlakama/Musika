@@ -33,6 +33,29 @@ Item {
 
     signal picked(int index)
 
+    // ARC-I: which recycled Alt-hold verb set this column arms ("song",
+    // "album" or "artist"); the column only relays the cursor row it anchors.
+    property string quickActionKind: ""
+    signal quickAction(var target, var actions)
+
+    QuickActions {
+        id: verbs
+    }
+
+    /// ARC-I: Alt armed the gesture — anchor on the cursor row.
+    function armQuickActions() {
+        if (quickActionKind === "" || !model || model.count === 0 || cursor < 0)
+            return;
+        var item = model.get(cursor);
+        var actions = item
+            ? (quickActionKind === "artist" ? verbs.artist(item)
+                : quickActionKind === "album" ? verbs.album(item) : verbs.song(item))
+            : null;
+        var row = list.itemAtIndex(cursor);
+        if (actions && row)
+            quickAction(row, actions);
+    }
+
     // UI-48: the highlight block overflows the row bounds by this much on both
     // sides, filling the column gutters. The overflow stage below clips it at
     // the gutter edge, so it reads as a full-bleed block and never crosses the

@@ -170,7 +170,12 @@ Rectangle {
         // reloads (library change, resync) keep the live state.
         if (!root._restored) {
             root._restored = true;
-            content.restore();
+            // A remembered cursor lands via `restore()`; a fresh page lands
+            // on row 0 immediately — otherwise the first `j` only reaches
+            // row 0 and a second press is needed to move (the "second J"
+            // bug).
+            if (!content.restore() && songs.count > 0)
+                content.land(0);
         }
     }
 
@@ -450,13 +455,13 @@ Rectangle {
             color: Palette.outlineVariant
         }
 
-        // Songs.
+        // Tracks.
         RowLayout {
             Layout.fillWidth: true
             spacing: root.height * 0.012
 
             FadeText {
-                text: "Songs"
+                text: "Tracks"
                 color: Palette.primary
                 font.pixelSize: root.height * 0.024
                 font.bold: true
@@ -591,7 +596,7 @@ Rectangle {
             Layout.fillWidth: true
             Layout.fillHeight: true
             visible: !root.loading && songs.count === 0
-            text: "No songs in this album"
+            text: "No tracks in this album"
             color: Palette.onSurfaceVariant
             font.pixelSize: Theme.fontSize("body", root.height)
             horizontalAlignment: Text.AlignHCenter

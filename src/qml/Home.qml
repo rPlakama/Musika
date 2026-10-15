@@ -111,7 +111,7 @@ Item {
         if (year.length > 0)
             meta.push(year);
         if (tracks.length > 0)
-            meta.push(tracks + " songs");
+            meta.push(tracks + " tracks");
         contentStack.push(albumEntryComponent, {
             albumId: albumId,
             albumTitle: title,
@@ -892,7 +892,7 @@ Item {
                     if (album.year)
                         meta.push(String(album.year));
                     if (album.tracks)
-                        meta.push(album.tracks + " songs");
+                        meta.push(album.tracks + " tracks");
                     contentStack.push(albumEntryComponent, {
                         albumId: album.id,
                         albumTitle: album.title,

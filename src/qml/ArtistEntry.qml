@@ -30,8 +30,9 @@ Rectangle {
     signal back
     signal albumActivated(string albumId, string title, string artist, string year, string tracks, string cover)
 
-    // ARC-43: Alt-hold quick actions for an album card. The contextual slot
-    // is open here: Go to Artist would be the page already open.
+    // ARC-43/ARC-UI-1: Alt-hold quick actions for an album card — four fixed
+    // verbs, minus Go to Album (Enter already opens it): that slot stays the
+    // open "—".
     signal quickAction(var target, var actions)
 
     /// ARC-43: Alt armed the gesture — anchor on the keyboard cursor card.
@@ -45,8 +46,8 @@ Rectangle {
         quickAction(cell, {
             north: { label: "Add to Queue", invoke: function() { Backend.altAddToQueue("album", item.albumId) } },
             south: { label: "Favorite", invoke: function() { Backend.altFavorite("album", item.albumId) } },
-            east: null,
-            west: null
+            west: { label: "Go to Artist", invoke: function() { Backend.altGoToArtist(item.albumId) } },
+            east: null
         });
     }
 

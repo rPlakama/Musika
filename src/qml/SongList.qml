@@ -45,7 +45,8 @@ MediaList {
                 subtitle: artist + (album.length > 0 ? " · " + album : ""),
                 meta: Theme.formatTime(song.duration),
                 cover: song.cover ? song.cover : "",
-                songId: song.id
+                songId: song.id,
+                albumId: song.album_id ? song.album_id : ""
             });
         }
         root.setRows(rows);
@@ -54,13 +55,14 @@ MediaList {
 
     onActivated: (item) => Backend.playSong(item.songId)
 
-    // ARC-43: Alt-hold quick actions for a track row.
+    // ARC-43/ARC-UI-1: Alt-hold quick actions for a track row — the four
+    // fixed verbs (queue, favourite and both jumps).
     quickActions: function(item) {
         return {
             north: { label: "Add to Queue", invoke: function() { Backend.altAddToQueue("song", item.songId) } },
             south: { label: "Favorite", invoke: function() { Backend.altFavorite("song", item.songId) } },
-            east: { label: "Go to Album", invoke: function() { Backend.altGoToAlbum(item.songId) } },
-            west: null
+            west: { label: "Go to Artist", invoke: function() { Backend.altGoToArtist(item.albumId) } },
+            east: { label: "Go to Album", invoke: function() { Backend.altGoToAlbum(item.songId) } }
         };
     }
 

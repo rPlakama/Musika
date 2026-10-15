@@ -212,6 +212,7 @@ fn song_rows_json(
                 "title": song.title,
                 "artist": song.artist,
                 "album": song.album,
+                "album_id": song.album_id,
                 "track": song.track,
                 "duration": song.duration,
                 "cover": cover,
@@ -346,4 +347,33 @@ pub async fn search_json(
         "songs": song_rows,
     })
     .to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn song_row(id: &str, album_id: Option<&str>) -> crate::library::SongRow {
+        crate::library::SongRow {
+            id: id.to_string(),
+            title: id.to_string(),
+            artist: Some("Radiohead".to_string()),
+            album: Some("Kid A".to_string()),
+            album_id: album_id.map(str::to_string),
+            track: Some(1),
+            duration: Some(200),
+            cover_art: None,
+        }
+    }
+
+    /// ARC-UI-1: the Songs list maps `album_id` into the row so the Alt
+    /// "Go to Artist" jump can resolve the album's artist.
+    #[test]
+    fn song_rows_carry_the_album_id_for_the_alt_jumps() {
+        let rows = vec![song_row("s1", Some("al1")), song_row("s2", None)];
+        let json = song_rows_json(&rows, &HashMap::new()).unwrap();
+        let parsed: Vec<serde_json::Value> = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed[0]["album_id"], "al1");
+        assert!(parsed[1]["album_id"].is_null());
+    }
 }

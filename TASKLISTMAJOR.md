@@ -8,8 +8,8 @@ organised by delivery bucket.
 Legend: `[x]` solved · `[ ]` open. Priorities: **P0** correctness/robustness ·
 **P1** vi fidelity · **P2** player/UX features · **P3** nice-to-have.
 Each task keeps its area id (`VI`, `Q`, `P`, `LYR`, `S`, `UI`, `THM`, `ARC`,
-`CACHE`, `AUTH`, `DOC`, `REC`), its **Why** and **Details**; solved and
-partial tasks add **Now** with the current evidence. Solved entries live in
+`ARC-UI`, `CACHE`, `AUTH`, `DOC`, `REC`), its **Why** and **Details**; solved
+and partial tasks add **Now** with the current evidence. Solved entries live in
 the reference section at the bottom.
 
 ### Buckets
@@ -1138,9 +1138,36 @@ The product is incomplete without these.
     was updated. Tests:
     `player::append_extends_the_queue_without_moving_the_cursor`,
     `queue::quick_actions_resolve_songs_albums_and_pages`, plus the keymap's
-    `alt-j`/`alt-k`-unbound assertion (113 total). Open: the manual
-    acceptance run on hardware, the fourth action, and mouse/arrow-key
-    aiming (roadmap X2/open questions).
+    `alt-j`/`alt-k`-unbound assertion (114 total). Open: the manual
+    acceptance run on hardware, and mouse/arrow-key aiming (roadmap
+    X2/open questions).
+
+### Alt action menu (ARC-UI-1)
+
+- [x] **ARC-UI-1 · Four fixed Alt menu verbs** — P3 · (ARC-43 follow-up; roadmap Alt-hold quick actions)
+  - **Why:** ARC-43 v1 leaves one horizontal slot open ("—") and makes the
+    other swap contextually (Go to Album on tracks / Go to Artist on
+    albums); both jumps are real destinations and deserve permanent
+    squares. Four squares, the neutral center excluded from the count.
+  - **Details:** the quadrants carry Favorite, Queue (Add to Queue),
+    Jump to Artist and Jump to Album. Suggested placement keeps the v1
+    anchors — N Queue, S Favorite — and fills W Jump to Artist, E Jump to
+    Album. When the current selection **is an album**, Jump to Album is
+    substituted by the open "—" slot (never offer the page already open),
+    while Jump to Artist stays live; a track carries both jumps. No new
+    backend: `altFavorite`, `altAddToQueue`, `altGoToArtist` and
+    `altGoToAlbum` already exist — only the `quickActions` config in
+    `SongList`/`AlbumList`/`ArtistEntry` changes, inside the same neutral
+    machine, acrylic tiles and aim keys as ARC-43.
+  - **Verify:** track rows show all four verbs; album rows show the
+    Jump-to-Album "—" substitution with Jump to Artist still live; aiming
+    and neutral-release behavior matches ARC-43; the ARC-43 acceptance list
+    still passes.
+  - **Now:** landed — `song_rows_json` emits `album_id` (locked by a Rust
+    test) so the Songs list can feed the existing `altGoToArtist`; `SongList`
+    shows all four verbs, `AlbumList`/`ArtistEntry` put Go to Artist on W
+    with the open "—" on E. `cargo test` 114 pass; QML parses clean under
+    `qmllint`. Open: the manual acceptance pass on hardware.
 
 - [x] **CACHE-1 · DB4 `media.db` + `media/` blobs** — P2 · (roadmap Media cache; MEDIACACHESTUDY.md §3/§5)
   - **Why:** audio is never stored; playback dies without network. Research
@@ -2687,10 +2714,10 @@ Kept for rationale; the tree already carries these.
 | Bucket | Open | Solved |
 |--------|------|--------|
 | Must have | 7 | 2 |
-| Should have | 82 | 13 |
+| Should have | 82 | 14 |
 | Quick wins | 7 | 57 |
 | Solved (reference) | — | 36 |
-| **Total** | **96** | **108** |
+| **Total** | **96** | **109** |
 
 ### Coverage by area
 
@@ -2702,6 +2729,7 @@ Kept for rationale; the tree already carries these.
 | Lyrics pipeline | 2 | 7 |
 | Search | 2 | 6 |
 | UI microdesigns | 19 | 30 |
+| Alt action menu (ARC-UI) | 0 | 1 |
 | Dynamic color | 1 | 5 |
 | Architecture & robustness | 23 | 19 |
 | Recycling | 27 | 0 |

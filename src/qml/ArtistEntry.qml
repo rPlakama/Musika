@@ -310,6 +310,30 @@ Rectangle {
             root.albumActivated(album.albumId, album.title, album.artist, album.year, album.tracks, album.cover, album.starred === true);
     }
 
+    /// Tab scope over the header chips (same ring as the status bar): 0
+    /// download, 1 shuffle, 2 favorite. -1 returns Enter to the album grid;
+    /// any grid move drops the ring back there.
+    property int chipScope: -1
+
+    function toggleCache() {
+        root.artistCacheOn = !root.artistCacheOn;
+        root.artistDownloading = root.artistCacheOn;
+        Backend.downloadArtist(root.artistId, root.artistCacheOn);
+    }
+
+    function toggleFavorite() {
+        root.artistStarred = !root.artistStarred;
+        Backend.starArtist(root.artistId, root.artistStarred);
+    }
+
+    /// Enter on the scoped chip (shuffle is still inert — ARC-I-3).
+    function activateChip() {
+        if (root.chipScope === 0)
+            root.toggleCache();
+        else if (root.chipScope === 2)
+            root.toggleFavorite();
+    }
+
     Component.onCompleted: reload()
 
     // Edge-aware grid movement: no row wrap-around (GridView's own
@@ -342,13 +366,24 @@ Rectangle {
         }
         grid.currentIndex = target;
         scroll.ensureVisible(grid, target);
+        // Moving the grid ends the header chip scope (Enter opens albums).
+        root.chipScope = -1;
         return true;
     }
 
     // Movement and Enter belong to the cover grid; `Esc` is handled by Home
     // (leaves the entry for Main regardless of where it was opened from).
     function handleAction(action) {
+        if (action === "pane_cycle") {
+            // Tab cycles the header chips (Download → Shuffle → Favorite).
+            root.chipScope = (root.chipScope + 1) % 3;
+            return;
+        }
         if (action === "enter") {
+            if (root.chipScope >= 0) {
+                root.activateChip();
+                return;
+            }
             // VI-4: opening an album ends the visual selection.
             sel.clear();
             activateCurrent();
@@ -647,14 +682,22 @@ Rectangle {
                             : Palette.onSurfaceVariant
                         spinning: root.artistDownloading
                         onClicked: {
-                            root.artistCacheOn = !root.artistCacheOn;
-                            root.artistDownloading = root.artistCacheOn;
-                            Backend.downloadArtist(root.artistId, root.artistCacheOn);
+                            root.chipScope = 0;
+                            root.toggleCache();
+                        }
+
+                        ScopeRing {
+                            shown: root.chipScope === 0
                         }
                     }
 
                     ActionChip {
                         icon: "qrc:/app/icons/outline-shuffle.svg"
+                        onClicked: root.chipScope = 1
+
+                        ScopeRing {
+                            shown: root.chipScope === 1
+                        }
                     }
 
                     ActionChip {
@@ -666,8 +709,12 @@ Rectangle {
                         icon: "qrc:/app/icons/star.svg"
                         iconColor: root.artistStarred ? Theme.favoriteStar : Palette.onSurfaceVariant
                         onClicked: {
-                            root.artistStarred = !root.artistStarred;
-                            Backend.starArtist(root.artistId, root.artistStarred);
+                            root.chipScope = 2;
+                            root.toggleFavorite();
+                        }
+
+                        ScopeRing {
+                            shown: root.chipScope === 2
                         }
                     }
                 }

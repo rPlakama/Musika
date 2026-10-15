@@ -173,7 +173,7 @@ Item {
     // the action closures come from the shared QuickActions verb sets. The
     // search arms its own active column while open; only the drawer blocks.
     function armQuickActions(target, actions) {
-        if (queueDrawer.opened)
+        if (queueDrawer.opened || lineSearch.opened)
             return;
         quickActions.arm(target, actions);
     }
@@ -187,7 +187,8 @@ Item {
         // replace its config with the current view's verbs.
         if (quickActions.armed && quickActions.sticky)
             return;
-        if (queueDrawer.opened)
+        // ARC-UI-2: the command line blocks arming too (the drawer's gate).
+        if (queueDrawer.opened || lineSearch.opened)
             return;
         if (searchOverlay.opened) {
             searchOverlay.armQuickActions();
@@ -272,6 +273,18 @@ Item {
             return;
         }
 
+        // ARC-UI-2 M0: the `/` command line is the topmost modal while it is
+        // up (the keymap is dead in Backend, so this normally only sees IPC);
+        // `/` opens it over whatever surface or overlay is on top.
+        if (lineSearch.opened) {
+            lineSearch.handleAction(action);
+            return;
+        }
+        if (action === "search_action") {
+            clearMainSelection();
+            lineSearch.open();
+            return;
+        }
         // The floating search is modal: while open, all keys go to it.
         if (searchOverlay.opened) {
             searchOverlay.handleAction(action);
@@ -717,6 +730,17 @@ Item {
         anchors.fill: parent
         // UI-55: acrylic blurs the shell behind the drawer.
         backdrop: shell
+    }
+
+    // ARC-UI-2 M0: the `/` in-surface search command line. `zCommand` rides
+    // over every overlay; the strip sits above the player bar (or the bottom
+    // edge when fullscreen is up).
+    LineSearch {
+        id: lineSearch
+        anchors.fill: parent
+        bottomOffset: root.nowPlayingExpanded
+            ? root.height * 0.04
+            : root.playH + root.height * 0.015
     }
 
     Connections {

@@ -179,6 +179,8 @@ pub struct Backend {
     artist_order: String,
     server_type: String,
     search_open: bool,
+    /// ARC-UI-2 M0: the `/` line prompt is open (see `key_event`).
+    line_search_open: bool,
     /// ARC-43: bare Alt held, reported by the window key handler.
     alt_held: bool,
     /// ARC-43: a half-typed keyboard sequence disarms the overlay.
@@ -332,6 +334,11 @@ impl Backend {
         Member = search_open,
         Notify = search_open_changed
     );
+    qproperty!(
+        "lineSearchOpen",
+        Member = line_search_open,
+        Notify = line_search_open_changed
+    );
 
     fn set_server_url(&mut self, v: String) {
         self.server_url = v;
@@ -426,6 +433,8 @@ impl Backend {
     fn key_pending_changed(&mut self);
     #[qsignal]
     fn search_open_changed(&mut self);
+    #[qsignal]
+    fn line_search_open_changed(&mut self);
     #[qsignal]
     fn library_changed(&mut self);
     /// P-6 S2: restored session payload `{album, queue, start}` for `Home`.
@@ -881,6 +890,15 @@ impl Backend {
             return String::new();
         };
 
+        // ARC-UI-2 M0: while the `/` prompt is up the keymap is dead — the
+        // field owns every key (Esc/Enter stop at its own handlers, Tab and
+        // Ctrl-W are accepted there, everything else types).
+        if self.line_search_open {
+            self.keymap.reset();
+            self.mark_key_pending(false);
+            return String::new();
+        }
+
         // While the search overlay is open the scope switch (`Ctrl-W`) is
         // simply unavailable: the overlay owns the keyboard context, and the
         // field handles Ctrl-W itself as word-delete while typing.
@@ -915,6 +933,18 @@ impl Backend {
         if self.search_open != open {
             self.search_open = open;
             self.search_open_changed();
+        }
+    }
+
+    /// ARC-UI-2 M0: marks the `/` line prompt as open/closed (see
+    /// `key_event`).
+    #[qslot(qml_name = "setLineSearchOpen")]
+    fn set_line_search_open(&mut self, open: bool) {
+        self.keymap.reset();
+        self.mark_key_pending(false);
+        if self.line_search_open != open {
+            self.line_search_open = open;
+            self.line_search_open_changed();
         }
     }
 

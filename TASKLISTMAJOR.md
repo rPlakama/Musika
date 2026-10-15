@@ -193,6 +193,8 @@ The product is incomplete without these.
 - [ ] **VI-14 · In-list `/` and `?` with `n`/`N`** — P1 · (N5b, CRITIQUE §2.6)
   - **Why:** vi search is an in-buffer motion, not only a global palette.
   - **Details:** `/` filters/highlights the active list; `n`/`N` cycle matches.
+  - **Note:** generalised by ARC-UI-2 (SEARCHACTIONSTUDY.md); the in-list case
+    is its M1–M3 acceptance subset.
 
 - [ ] **VI-15 · `?` / `:help` cheatsheet** — P2 · (N8c, MY3 step 10)
   - **Why:** discoverability of the whole grammar.
@@ -1167,6 +1169,47 @@ The product is incomplete without these.
     `album`) recoloured through the shared `Icon`; the glyph set is baked
     white per `scripts/check-icons.sh`. `cargo test` 114 pass; QML parses
     clean under `qmllint`. Open: the manual acceptance pass on hardware.
+
+### Surface search (ARC-UI-2)
+
+- [ ] **ARC-UI-2 · Global `/` in-surface search (incremental, highlight, Enter jumps)** — P1 · (VI-14 generalised; N5b, CRITIQUE §2.6; SEARCHACTIONSTUDY.md)
+  - **Why:** vi search is an in-buffer motion, not only a global palette: `/`
+    must search the text of whatever surface is on top — the main lists, the
+    album page, the artist grid, the queue drawer, fullscreen and even the
+    search overlay's columns — highlight the matched words in place, and jump
+    on Enter; today `/` is not tokenized at all (`keybind.rs:285-322`) and the
+    only search is the server-side FTS palette.
+  - **Details:** the Neovim reference (`pattern.txt`/`cmdline.txt`/
+    `syntax.txt` quotes), the surface/selectable-text inventory, the `n`/`N`
+    decision and the highlight-rendering study live in
+    `SEARCHACTIONSTUDY.md`; the contract:
+    - new `Action::SearchAction` + `/` token, and a bottom `LineSearch`
+      prompt (`zCommand`, no scrim) that opens over the current
+      overlay/location from any region; text fields keep typing `/`;
+    - matching is client-side over the top surface's *selectable* cells only
+      (title/subtitle/meta, …; headers/hints never match), literal smartcase
+      substring; a matching row is the jump unit;
+    - matches get a block overlay inside the text (shared `SearchText.qml`
+      with `FontMetrics`-measured rects — `Text.RichText` breaks `elide`,
+      documented in the study); the current candidate row is emphasized
+      (`primary` vs `primaryContainer`) and `[i/N]` shows in the prompt;
+    - `Enter` jumps the surface cursor (`searchRows()`/`searchJump(row)`
+      contract on MediaList/SearchColumn/QueueDrawer/NowPlaying/AlbumEntry/
+      ArtistEntry) and keeps the session; `n`/`N` cycle matching rows while a
+      session is live, track skips otherwise (VI-10 preserved); no match =
+      the UI-49 denied cue with the cursor untouched (E486);
+    - `Esc` while typing abandons; `Esc` after commit is `:noh`.
+  - **Milestones (SEARCHACTIONSTUDY.md §7):** M0 input skeleton + prompt ·
+    M1 surface contract + matcher/counter · M2 highlight rendering · M3
+    commit + `n`/`N` · M4 `?`/history/FTS + sidebar coverage · M5 docs.
+  - **Verify:** the 14-case matrix in SEARCHACTIONSTUDY.md §8 (chrome never
+    matches, drawer-over-main scoping, typing parity, abandon vs `:noh`,
+    elided-title paint, live palette, held-key + palette churn).
+  - **Now:** M0 landed (2d63e28) — `/` token + `Action::SearchAction`,
+    `LineSearch.qml` command strip at `zCommand` (open/close, Esc abandons,
+    Enter commits), Home routing ahead of the FTS/drawer branches, Alt-arm
+    gates, `setLineSearchOpen` keymap lock; M1 (surface contract + matcher +
+    counter) is next.
 
 ### Incremental (ARC-I)
 
@@ -2987,10 +3030,10 @@ Kept for rationale; the tree already carries these.
 | Bucket | Open | Solved |
 |--------|------|--------|
 | Must have | 6 | 2 |
-| Should have | 54 | 16 |
+| Should have | 55 | 16 |
 | Quick wins | 33 | 59 |
 | Solved (reference) | — | 40 |
-| **Total** | **93** | **117** |
+| **Total** | **94** | **117** |
 
 ### Coverage by area
 
@@ -3002,7 +3045,7 @@ Kept for rationale; the tree already carries these.
 | Lyrics pipeline | 2 | 7 |
 | Search | 2 | 6 |
 | UI microdesigns | 19 | 32 |
-| Alt action menu (ARC-UI) | 0 | 1 |
+| Alt action menu (ARC-UI) | 1 | 1 |
 | Incremental (ARC-I) | 2 | 2 |
 | Dynamic color | 1 | 5 |
 | Architecture & robustness | 21 | 21 |

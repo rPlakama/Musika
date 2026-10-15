@@ -35,6 +35,7 @@ pub enum Action {
     Top,
     Bottom,
     Search,
+    SearchAction,
     VisualMode,
     VisualSelect,
     VisualAll,
@@ -72,6 +73,7 @@ impl Action {
             Self::Top => "top",
             Self::Bottom => "bottom",
             Self::Search => "search",
+            Self::SearchAction => "search_action",
             Self::VisualMode => "visual_mode",
             Self::VisualSelect => "visual",
             Self::VisualAll => "visual_all",
@@ -145,6 +147,7 @@ fn defaults() -> Vec<(&'static str, Action)> {
         ("shift-l", Action::OrderNext),
         ("shift-space f", Action::Search),
         ("shift-space shift-f", Action::Search),
+        ("/", Action::SearchAction),
         ("h", Action::MoveLeft),
         ("j", Action::MoveDown),
         ("k", Action::MoveUp),
@@ -303,6 +306,7 @@ pub fn token_from_qt(key: i32, modifiers: i32) -> Option<String> {
         0x2C => ",".to_string(),                               // comma
         0x2D => "-".to_string(),                               // minus / keypad minus
         0x2E => ".".to_string(),                               // period
+        0x2F => "/".to_string(),                               // slash (ARC-UI-2)
         0x2B => "+".to_string(),                               // keypad plus
         0x3D => "=".to_string(),                               // '+' on the main row (shifted)
         0x5B => "[".to_string(),                               // Ctrl-[ == Escape
@@ -374,6 +378,17 @@ mod tests {
             Some("shift-enter")
         );
         assert_eq!(token_from_qt(0x0100_0009, 0), None); // unbound special key
+        assert_eq!(token_from_qt(0x2F, 0).as_deref(), Some("/")); // Key_Slash
+        assert_eq!(token_from_qt(0x3F, 0), None); // `?` stays unbound until M4
+    }
+
+    #[test]
+    fn slash_opens_the_surface_search() {
+        let mut keymap = Keymap::new();
+        assert_eq!(
+            keymap.feed("/"),
+            Outcome::Action(Action::SearchAction)
+        );
     }
 
     #[test]

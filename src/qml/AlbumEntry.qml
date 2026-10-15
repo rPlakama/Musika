@@ -60,6 +60,13 @@ Rectangle {
     readonly property real coverSide: Math.max(160, Math.min(height * 0.42, 512))
     readonly property bool sideBySide: width >= Theme.breakpoints.compact
 
+    // The compact flip reflows the header: restart the cover's blink-and-fade
+    // (below) so the reflow does not read as a flick.
+    onSideBySideChanged: {
+        if (!Theme.reduceMotion)
+            coverAppear.restart();
+    }
+
     color: Palette.surface
 
     // A color with a replaced alpha, for the ambience gradient stops.
@@ -281,6 +288,29 @@ Rectangle {
                 radius: Theme.radius
                 color: Palette.primaryContainer
                 clip: true
+
+                // Crossing the compact breakpoint reflows the hero — and
+                // re-decodes the art at its new box — so the cover blinks
+                // out over the flash tier and fades back in over the
+                // emphasized one (a hard reset to 0 read as a flick).
+                SequentialAnimation {
+                    id: coverAppear
+                    NumberAnimation {
+                        target: coverBox
+                        property: "opacity"
+                        to: 0
+                        duration: Theme.motion.flash
+                    }
+                    NumberAnimation {
+                        target: coverBox
+                        property: "opacity"
+                        from: 0
+                        to: 1
+                        duration: Theme.motion.emphasized
+                        easing.type: Easing.Bezier
+                        easing.bezierCurve: Theme.ease.decelerate
+                    }
+                }
 
                 CoverImage {
                     id: coverImage

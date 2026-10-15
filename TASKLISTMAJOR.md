@@ -1447,256 +1447,6 @@ The product is incomplete without these.
     wired in `flake.nix` and verified with `nix build` (store layout). GNOME/KDE
     launcher + dock grouping still a manual pass on a desktop session.
 
-### Recycling (REC-1 – REC-27)
-
-> **All findings initialised** (2026-10-14) from `RECYCLECRITIQUE.md` (tree
-> `e9419c9`); the critique's `REC-*` ids are canonical here. Phases: **0**
-> mechanical dedup (REC-5…15, 17, 18) · **1** API seam (REC-1…4) · **2** QML
-> macros & plumbing (REC-19…23, 25, 26) · **3** cross-module merges (REC-16,
-> 24, 27). Work in phase order; every finding is independently shippable and
-> behaviour-preserving. Verify with `cargo test` (111) + `cargo clippy` per
-> commit; phases 2–3 also need a QML smoke run (search palette, album page,
-> queue drawer metadata, palette swap) — tests cannot catch a renamed QML
-> method or JSON key. REC-24 must reconcile `song_count`/`tracks` with the QML
-> readers **before** extraction.
-
-- [ ] **REC-1 · API envelope helpers (`get_key`/`get_key_opt`/`call_ok`)** — P2 · (RECYCLECRITIQUE §A, phase 1)
-  - **Why:** the `call::<Value>` + `extract` two-step repeats across ~43
-    methods (49 `extract` + 2 `extract_opt` pairs) and 24 command endpoints
-    end `map(|_| ())` — the single biggest repeat in the tree.
-  - **Details:** add the three helpers beside `extract`/`extract_opt`/
-    `one_or_many` (`api.rs:38-89`); convert the ~75 call sites; zero call
-    semantics change.
-
-- [ ] **REC-2 · `push_all(params, key, values)` for multi-value params** — P3 · (RECYCLECRITIQUE §A, phase 1)
-  - **Why:** `for id in ids { params.push(("id", id.to_string())) }` appears 9×
-    (`api.rs:1236,1260,1263,1398,1428,1544,1743,1826-1833`).
-  - **Details:** one helper taking `impl IntoIterator<Item = impl ToString>`;
-    no call-site behaviour changes.
-
-- [ ] **REC-3 · Bounded fan-out `map_bounded(ids, f)`** — P2 · (RECYCLECRITIQUE §A, phase 1)
-  - **Why:** `index.rs::fetch_artists` (`:310`) and `fetch_albums` (`:344`)
-    are 32-line clones differing in one method call; `covers::refresh` and
-    `lyrics::backfill` repeat the same chunk/`JoinSet`/`join_next` scaffold
-    (~18 lines each).
-  - **Details:** keep `FETCH_CONCURRENCY` chunking and per-item error
-    collection in the helper; callers keep their `ensure_complete`/progress
-    logic and pass only the fetch fn.
-
-- [ ] **REC-4 · HTTP pipeline + cover URL builders** — P3 · (RECYCLECRITIQUE §A, phase 1)
-  - **Why:** `http_client.rs:101/123/166` each repeat
-    send → `status().is_success()` → body; `api.rs:1289/1320` rebuild the same
-    cover/download params that `http_client.rs:122/152` rebuild again.
-  - **Details:** `get_checked(url) -> Result<Response>` (304 stays the
-    cover-art special case); `download_media` takes the client's own
-    `download_url`.
-
-- [ ] **REC-5 · Lyrics `Line` ↔ text codec** — P3 · (RECYCLECRITIQUE §A, phase 0)
-  - **Why:** the same `lines.iter().map(...).join("\n")` / split appears 5×
-    (`lyrics.rs:105,135,360,515,664`).
-  - **Details:** `lines_to_text(&[Line]) -> String` and
-    `text_to_lines(&str) -> Vec<Line>`.
-
-- [ ] **REC-6 · `delete_by` for the static `DELETE`s** — P3 · (RECYCLECRITIQUE §B, phase 0)
-  - **Why:** the seven static `DELETE FROM <table> WHERE <col>` blocks repeat
-    the same execute envelope (`covers.rs:177`; `media.rs:272,292,364,434`;
-    `lyrics.rs:316,387`).
-  - **Details:** `async fn delete_by(pool, sql: &'static str, key: &str)`;
-    SQL stays literal per call site — never interpolate identifiers.
-
-- [ ] **REC-7 · `SONG_SELECT` + `song_order()`** — P2 · (RECYCLECRITIQUE §B, phase 0)
-  - **Why:** the 4-line column list + `LEFT JOIN albums` repeats 9× and the
-    three `ORDER BY` strings twice (`library.rs::all_songs` `:468-495`,
-    `songs_range` `:539-566`, `song` `:571`, `songs_by_ids` `:635`,
-    `album_songs` `:655`, `song_ordinal` `:504-522`); the next ORDER change
-    must touch every copy.
-  - **Details:** `const SONG_SELECT` and `fn song_order(order) -> &'static str`;
-    expect ~80 lines removed.
-
-- [ ] **REC-8 · `ALBUM_SELECT`/`ARTIST_SELECT` + order** — P3 · (RECYCLECRITIQUE §B, phase 0)
-  - **Why:** 11 album projections (`library.rs:261,386-408,432-442,605`),
-    4 artist column copies (`:249,455,458,618`) and 9 order strings repeat the
-    REC-7 shape.
-  - **Details:** `const ALBUM_SELECT`, `const ARTIST_SELECT`,
-    `album_order(order, by_artist)`.
-
-- [ ] **REC-9 · `db_path!` + `open_migrated`** — P2 · (RECYCLECRITIQUE §B, phase 0)
-  - **Why:** 11 one-line path wrappers (`db.rs:136-174`), 3 env-override-else-
-    `config_dir` copies (`:182-205`), 2 XDG-else-HOME copies (`:207-228`) and
-    10 `open_file` + `sqlx::migrate!().run()` pairs (`:65-95`).
-  - **Details:** `macro_rules! db_path`, `fn dir_from_env(env, fallback)`,
-    `async fn open_migrated(path, max_connections, migrations, ignore_missing)`;
-    removes the `set_ignore_missing` special case buried in `init()`.
-
-- [ ] **REC-10 · Upsert pairs (`artist_user`, `download`)** — P3 · (RECYCLECRITIQUE §B, phase 0)
-  - **Why:** `set_starred`/`set_rating` (`artist_user.rs:38/56`) and
-    `mark_queued`/`set_state` (`download.rs:54/77`) each rewrite the same
-    `INSERT … ON CONFLICT DO UPDATE` COALESCE-preserve-column shape.
-  - **Details:** `upsert_artist_user(pool, artist_id, starred, rating)` and
-    `set_download_state(pool, song_id, state, …)`; callers pass only the field
-    they change.
-
-- [ ] **REC-11 · Dynamic SQL assembly (`push_in_list`/`insert_many`)** — P2 · (RECYCLECRITIQUE §B, phase 0)
-  - **Why:** 4 copies of the `builder.separated(", ") … push_bind …
-    push_unseparated(")")` `IN`-list (`library.rs:203,284,634,697`) and 4
-    row-by-row insert loops in a transaction (`library.rs:58,73,93`,
-    `search.rs:57`); only `downloaded_owners` chunks at 500 today, so the rest
-    can drift into oversized statements.
-  - **Details:** `push_in_list(&mut qb, &ids)` and
-    `insert_many(tx, const SQL, rows, bind)`; centralising makes chunking
-    consistent.
-
-- [ ] **REC-12 · Test memory pools** — P3 · (RECYCLECRITIQUE §B, phase 0)
-  - **Why:** 8 copies of `SqlitePoolOptions::new().max_connections(1)
-    .connect_with("sqlite::memory:")` plus 5–6 `sqlx::migrate!` runs
-    (`library.rs:823`, `search.rs:147`, `status.rs:97`, `artist_user.rs:123`,
-    `download.rs:192`, `cache.rs:72`, `media.rs:455`, `lyrics.rs:711`) — test
-    code is where the next schema change will hurt.
-  - **Details:** one `#[cfg(test)] pub(crate) async fn memory_pool(migrations)`
-    in `sqlite.rs`; ~50 test-only lines.
-
-- [ ] **REC-13 · Small persistence drifts** — P2 · (RECYCLECRITIQUE §B, phase 0)
-  - **Why:** `library.rs:810` `unix_now()` duplicates `consts::now_secs`
-    (`consts.rs:27`) with a different return type; `db.rs:112` vs
-    `library.rs:786` both do `create_dir_all(parent).with_context(...)`;
-    `library.rs:130` `touch_last_sync` vs `:794` `set_meta` are the same
-    statement on different executors; `.bind(bool as i64)` at
-    `artist_user.rs:47`/`status.rs:72` casts sqlx already does.
-  - **Details:** delete `unix_now` and bind `now_secs()` (add
-    `now_secs_text()` if the five `.to_string()` sites annoy);
-    `ensure_parent_dir(path)`; `upsert_meta(executor, key, value)`; drop the
-    bool casts. Reconcile the drifts before extracting.
-
-- [ ] **REC-14 · `index.rs` volume (`report`/`best_effort`)** — P3 · (RECYCLECRITIQUE §B, phase 0)
-  - **Why:** 8 five-line `SyncProgress` literals
-    (`index.rs:72,87,123,139,158,181,230,259`, `total` always 100) and 7
-    fail-log-continue blocks (`:176-228`).
-  - **Details:** `report(progress, message, done)` and
-    `best_effort("lyric cache purge", fut)`; ~34 lines and the "always 100"
-    assumption lives once.
-
-- [ ] **REC-15 · Socket plumbing (`config_socket`, `spawn_line_reader`)** — P2 · (RECYCLECRITIQUE §C, phase 0)
-  - **Why:** `player.rs:487` and `ipc.rs:36` derive the same mpv socket path;
-    `player.rs:391,482` and `ipc.rs:53` remove stale sockets; `player.rs:515`
-    `spawn_reader` and `ipc.rs:70` `serve` are the same line-reader loop.
-  - **Details:** `db::config_socket(name) -> PathBuf` and
-    `ipc::spawn_line_reader(stream, on_line)`.
-
-- [ ] **REC-16 · Raw mpv commands** — P3 · (RECYCLECRITIQUE §C, phase 3)
-  - **Why:** 9 sites push `json!(["set_property", …])` / `observe_property`
-    by hand (`player.rs:219,220,240,248,349,359,452`); 7 sites take
-    `self.shared.lock().unwrap()`; 3 sites clear the same `position/eof/error`
-    trio (`:206,255,559`).
-  - **Details:** `Player::set_property(name, value)`,
-    `Player::observe(id, name)`, `Shared::reset()`, `Player::shared()`;
-    command IDs stay literal — only the envelope dedupes.
-
-- [ ] **REC-17 · MPRIS minors (`put_nonempty`, `submit!`, `mpris_script`)** — P3 · (RECYCLECRITIQUE §C, phase 0)
-  - **Why:** `mpris.rs:258-289` repeats the
-    `if !empty { map.insert(key, owned(Value::from(clone))) }` shape six
-    times; `:437-459` six action methods are one `submit("<verb>")` each; the
-    `MUSIKA_MPRIS_SCRIPT` empty-check is duplicated at `mpris.rs:144` and
-    `player.rs:407`.
-  - **Details:** `put_nonempty(map, key, &str)`, a `submit!`-style macro and
-    `mpris_script() -> Option`.
-
-- [ ] **REC-18 · State naming (`State::mpris_status()`)** — P3 · (RECYCLECRITIQUE §C, phase 0)
-  - **Why:** `player.rs:64` `State::name()` and the rematch to
-    `"Playing"/"Paused"/"Stopped"` in `qml.rs:2202-2206` are the same table.
-  - **Details:** one `State::mpris_status()` so the strings live once.
-
-- [ ] **REC-19 · Palette role application (`apply_roles`)** — P3 · (RECYCLECRITIQUE §D, phase 2)
-  - **Why:** `apply_role!` (`palette.rs:107-116`) is invoked 32× in `apply`
-    (`:341-498`) and `restore!` (`:506-513`) is a copy of the same macro
-    invoked 32× in `reset` (`:515-546`) — the role list exists twice.
-  - **Details:** `fn apply_roles(&mut self, roles: &BTreeMap<String, String>)`;
-    `apply` calls it and `reset` builds the default map once; ~36 lines.
-
-- [ ] **REC-20 · Enum string tables (`name_enum!`)** — P3 · (RECYCLECRITIQUE §D, phase 2)
-  - **Why:** `seed.rs:69` `SourceMode`, `scheme.rs:42` `Spec`,
-    `scheme.rs:78` `VariantChoice`, plus `scheme.rs:259` `variant_name`
-    duplicating `VariantChoice::name`, all hand-roll `name()`/`from_name()`
-    with the same `trim().to_ascii_lowercase()` prelude.
-  - **Details:** one `name_enum!` macro removes ~25 lines and the fourth copy
-    of the variant names.
-
-- [ ] **REC-21 · Colors minors (`spec_scheme`, `rgb` codec, `build_scheme`)** — P3 · (RECYCLECRITIQUE §D, phase 2)
-  - **Why:** `DynamicScheme::from_spec(hct, variant, is_dark, Some(contrast),
-    Platform::Phone, SpecVersion::Spec2025)` is written 7×
-    (`scheme.rs:164-243`); `fetch_into` (`engine.rs:193`) and `build_scheme`
-    (`:238`) construct `CoverScheme` twice; hex/ARGB conversion is split
-    between `seed.rs:95,363`, `engine.rs:350` and `scheme.rs:327`.
-  - **Details:** `spec_scheme(hct, variant, version, contrast, is_dark)`;
-    `fetch_into` calls `build_scheme`; one `rgb` codec module.
-
-- [ ] **REC-22 · QML async-slot prelude (`spawn_data`)** — P2 · (RECYCLECRITIQUE §E, phase 2)
-  - **Why:** 9+ slots repeat the same 15-line shape
-    (`qml.rs:1069,1148,1170,1192,1220,1420,1519,1537,1551`): invoker, `dbs`
-    clone, `runtime().spawn`, `emitData`/`eprintln!`.
-  - **Details:** `spawn_data<F, Fut>(&self, channel, load)` where
-    `F: FnOnce(Dbs) -> Fut`, `Fut: Future<Output = anyhow::Result<String>>`;
-    keep a second path (or a bool) for slots that raise `errorRaised`; ~100
-    lines, every new slot becomes one line.
-
-- [ ] **REC-23 · QML property plumbing (`qprop!`, `sync_field!`)** — P2 · (RECYCLECRITIQUE §E, phase 2)
-  - **Why:** 31 `qproperty!` declarations (`qml.rs:194-319`), 29 matching
-    `#[qsignal]` stubs (`:334-403`) and 3 hand-written setters (`:321-332`)
-    must be written twice because of the derive; `sync_player` (`:2054`) adds
-    21 more compare/assign/notify blocks.
-  - **Details:** `qprop!(server_url, "serverURL", write)` collapses each
-    property to one line; `sync_field!` covers `sync_player`; ~130 lines.
-    Medium risk around macro hygiene and the `Notify` signal names — do it
-    property-by-property with `cargo test` after each.
-
-- [ ] **REC-24 · Row→JSON builders + the `song_count`/`tracks` drift** — P2 · (RECYCLECRITIQUE §E, phase 3)
-  - **Why:** `artist_json` (`browse.rs:172`), `album_json` (`:186`) and
-    `song_rows_json` (`:202`) are re-implemented inline in `search_json`
-    (`:297-339`); `queue_album_json` (`queue.rs:134`) copies `album_json`;
-    `emit_queue` (`qml.rs:1771`) and the mpv metadata (`player.rs:195`) repeat
-    the same key sets. The copies disagree on the count key — browse emits
-    `"song_count"`, queue emits `"tracks"`, and QML reads both per context
-    (`SearchOverlay.qml:273` and `ArtistEntry.qml:229,235` read `song_count`;
-    `Home.qml:578,600` read `tracks`).
-  - **Details:** reconcile the key in QML **first**, then give
-    `AlbumRow`/`ArtistRow`/`SongRow`/`player::Track` a `qml_json(covers, …)`
-    in one module; ~60 lines and the next key addition happens once.
-
-- [ ] **REC-25 · Error/emit plumbing (`raise`, `emit`)** — P3 · (RECYCLECRITIQUE §E, phase 2)
-  - **Why:** `errorRaised` + `format!("...{err:#}")` appears 12×
-    (`qml.rs:1246,1274,1306,1329,1408,1453,1596,1628,1666,2312` …) and
-    `emitData` 23×.
-  - **Details:** `raise(&invoker, kind, &err)` and
-    `emit(&invoker, channel, payload)`; the 10 invoke sites become one line
-    each; ~30 lines.
-
-- [ ] **REC-26 · Session, sync and auth handshake** — P3 · (RECYCLECRITIQUE §E, phase 2)
-  - **Why:** `queue_status_save` (`qml.rs:709-753`) and `flush_status`
-    (`:770-794`) build the same `SessionStatus` field-by-field; the
-    `SyncProgress` closure (`:990`, `:2277`) and its `librarySyncFinished` +
-    `raiseError("sync")` branch (`:1008`, `:2305`) are identical; `login`'s
-    completion (`:443`) and `startup`'s (`:539`) run the same
-    `noteServerType` → `noteOnline` → `spawn_index_sync` → `authenticated(...)`
-    chain.
-  - **Details:** `session_status()`, `sync_progress_cb(invoker)` and
-    `authenticated(...)` helpers; ~50 lines, medium risk (QML-visible).
-
-- [ ] **REC-27 · Small QML clusters** — P2 · (RECYCLECRITIQUE §E, phase 3)
-  - **Why:** `client(dbs)` already exists (`qml.rs:37`) but is re-inlined in
-    `sync_library` (`:984`), `request_lyrics` (`:1872`), `browse::album_notes`
-    (`:226`) and `queue::tracks_json` (`:297`); the offline filter is spelled
-    out in `browse::offline_filter` (`:36`), `queue::filter_offline` (`:62`)
-    and `queue::resume_payload` (`:215`); order defaulting
-    `if self.x_order.is_empty() { ORDERS[0] }` appears 7×
-    (`:484,1075,1154,1176,1198,1616`) and `stepped_order`/
-    `stepped_artist_order` (`:2227-2243`) duplicate `library::cycle_order`/
-    `cycle_artist_order` (`:361-378`); `star_artist` (`:1236`) and
-    `rate_artist` (`:1288`) are 45-line clones; `v.max(0) as usize` 5×
-    (`:1690,1715,1801,1808,1816`).
-  - **Details:** make `client` `pub(crate)` and call it;
-    `offline_song_ids(dbs, offline)`; one
-    `effective_order(orders, current, delta)` in `library.rs`; one
-    `apply_artist_user(...)`; `fn index(v: i64) -> usize`; ~80 lines.
-
 ## Quick wins
 
 > **All quick wins are done** (2026-10-13): UI-2, UI-4, UI-6, UI-7, UI-10,
@@ -2620,6 +2370,256 @@ Small, bounded, high-value changes.
   - **Why:** play counts / recently played never update server-side.
   - **Details:** `scrobble` at 50%/4 min and on completion; `api.rs:1318` ready.
 
+### Recycling (REC-1 – REC-27)
+
+> **All findings initialised** (2026-10-14) from `RECYCLECRITIQUE.md` (tree
+> `e9419c9`); the critique's `REC-*` ids are canonical here. Phases: **0**
+> mechanical dedup (REC-5…15, 17, 18) · **1** API seam (REC-1…4) · **2** QML
+> macros & plumbing (REC-19…23, 25, 26) · **3** cross-module merges (REC-16,
+> 24, 27). Work in phase order; every finding is independently shippable and
+> behaviour-preserving. Verify with `cargo test` (111) + `cargo clippy` per
+> commit; phases 2–3 also need a QML smoke run (search palette, album page,
+> queue drawer metadata, palette swap) — tests cannot catch a renamed QML
+> method or JSON key. REC-24 must reconcile `song_count`/`tracks` with the QML
+> readers **before** extraction.
+
+- [ ] **REC-1 · API envelope helpers (`get_key`/`get_key_opt`/`call_ok`)** — P2 · (RECYCLECRITIQUE §A, phase 1)
+  - **Why:** the `call::<Value>` + `extract` two-step repeats across ~43
+    methods (49 `extract` + 2 `extract_opt` pairs) and 24 command endpoints
+    end `map(|_| ())` — the single biggest repeat in the tree.
+  - **Details:** add the three helpers beside `extract`/`extract_opt`/
+    `one_or_many` (`api.rs:38-89`); convert the ~75 call sites; zero call
+    semantics change.
+
+- [ ] **REC-2 · `push_all(params, key, values)` for multi-value params** — P3 · (RECYCLECRITIQUE §A, phase 1)
+  - **Why:** `for id in ids { params.push(("id", id.to_string())) }` appears 9×
+    (`api.rs:1236,1260,1263,1398,1428,1544,1743,1826-1833`).
+  - **Details:** one helper taking `impl IntoIterator<Item = impl ToString>`;
+    no call-site behaviour changes.
+
+- [ ] **REC-3 · Bounded fan-out `map_bounded(ids, f)`** — P2 · (RECYCLECRITIQUE §A, phase 1)
+  - **Why:** `index.rs::fetch_artists` (`:310`) and `fetch_albums` (`:344`)
+    are 32-line clones differing in one method call; `covers::refresh` and
+    `lyrics::backfill` repeat the same chunk/`JoinSet`/`join_next` scaffold
+    (~18 lines each).
+  - **Details:** keep `FETCH_CONCURRENCY` chunking and per-item error
+    collection in the helper; callers keep their `ensure_complete`/progress
+    logic and pass only the fetch fn.
+
+- [ ] **REC-4 · HTTP pipeline + cover URL builders** — P3 · (RECYCLECRITIQUE §A, phase 1)
+  - **Why:** `http_client.rs:101/123/166` each repeat
+    send → `status().is_success()` → body; `api.rs:1289/1320` rebuild the same
+    cover/download params that `http_client.rs:122/152` rebuild again.
+  - **Details:** `get_checked(url) -> Result<Response>` (304 stays the
+    cover-art special case); `download_media` takes the client's own
+    `download_url`.
+
+- [ ] **REC-5 · Lyrics `Line` ↔ text codec** — P3 · (RECYCLECRITIQUE §A, phase 0)
+  - **Why:** the same `lines.iter().map(...).join("\n")` / split appears 5×
+    (`lyrics.rs:105,135,360,515,664`).
+  - **Details:** `lines_to_text(&[Line]) -> String` and
+    `text_to_lines(&str) -> Vec<Line>`.
+
+- [ ] **REC-6 · `delete_by` for the static `DELETE`s** — P3 · (RECYCLECRITIQUE §B, phase 0)
+  - **Why:** the seven static `DELETE FROM <table> WHERE <col>` blocks repeat
+    the same execute envelope (`covers.rs:177`; `media.rs:272,292,364,434`;
+    `lyrics.rs:316,387`).
+  - **Details:** `async fn delete_by(pool, sql: &'static str, key: &str)`;
+    SQL stays literal per call site — never interpolate identifiers.
+
+- [ ] **REC-7 · `SONG_SELECT` + `song_order()`** — P2 · (RECYCLECRITIQUE §B, phase 0)
+  - **Why:** the 4-line column list + `LEFT JOIN albums` repeats 9× and the
+    three `ORDER BY` strings twice (`library.rs::all_songs` `:468-495`,
+    `songs_range` `:539-566`, `song` `:571`, `songs_by_ids` `:635`,
+    `album_songs` `:655`, `song_ordinal` `:504-522`); the next ORDER change
+    must touch every copy.
+  - **Details:** `const SONG_SELECT` and `fn song_order(order) -> &'static str`;
+    expect ~80 lines removed.
+
+- [ ] **REC-8 · `ALBUM_SELECT`/`ARTIST_SELECT` + order** — P3 · (RECYCLECRITIQUE §B, phase 0)
+  - **Why:** 11 album projections (`library.rs:261,386-408,432-442,605`),
+    4 artist column copies (`:249,455,458,618`) and 9 order strings repeat the
+    REC-7 shape.
+  - **Details:** `const ALBUM_SELECT`, `const ARTIST_SELECT`,
+    `album_order(order, by_artist)`.
+
+- [ ] **REC-9 · `db_path!` + `open_migrated`** — P2 · (RECYCLECRITIQUE §B, phase 0)
+  - **Why:** 11 one-line path wrappers (`db.rs:136-174`), 3 env-override-else-
+    `config_dir` copies (`:182-205`), 2 XDG-else-HOME copies (`:207-228`) and
+    10 `open_file` + `sqlx::migrate!().run()` pairs (`:65-95`).
+  - **Details:** `macro_rules! db_path`, `fn dir_from_env(env, fallback)`,
+    `async fn open_migrated(path, max_connections, migrations, ignore_missing)`;
+    removes the `set_ignore_missing` special case buried in `init()`.
+
+- [ ] **REC-10 · Upsert pairs (`artist_user`, `download`)** — P3 · (RECYCLECRITIQUE §B, phase 0)
+  - **Why:** `set_starred`/`set_rating` (`artist_user.rs:38/56`) and
+    `mark_queued`/`set_state` (`download.rs:54/77`) each rewrite the same
+    `INSERT … ON CONFLICT DO UPDATE` COALESCE-preserve-column shape.
+  - **Details:** `upsert_artist_user(pool, artist_id, starred, rating)` and
+    `set_download_state(pool, song_id, state, …)`; callers pass only the field
+    they change.
+
+- [ ] **REC-11 · Dynamic SQL assembly (`push_in_list`/`insert_many`)** — P2 · (RECYCLECRITIQUE §B, phase 0)
+  - **Why:** 4 copies of the `builder.separated(", ") … push_bind …
+    push_unseparated(")")` `IN`-list (`library.rs:203,284,634,697`) and 4
+    row-by-row insert loops in a transaction (`library.rs:58,73,93`,
+    `search.rs:57`); only `downloaded_owners` chunks at 500 today, so the rest
+    can drift into oversized statements.
+  - **Details:** `push_in_list(&mut qb, &ids)` and
+    `insert_many(tx, const SQL, rows, bind)`; centralising makes chunking
+    consistent.
+
+- [ ] **REC-12 · Test memory pools** — P3 · (RECYCLECRITIQUE §B, phase 0)
+  - **Why:** 8 copies of `SqlitePoolOptions::new().max_connections(1)
+    .connect_with("sqlite::memory:")` plus 5–6 `sqlx::migrate!` runs
+    (`library.rs:823`, `search.rs:147`, `status.rs:97`, `artist_user.rs:123`,
+    `download.rs:192`, `cache.rs:72`, `media.rs:455`, `lyrics.rs:711`) — test
+    code is where the next schema change will hurt.
+  - **Details:** one `#[cfg(test)] pub(crate) async fn memory_pool(migrations)`
+    in `sqlite.rs`; ~50 test-only lines.
+
+- [ ] **REC-13 · Small persistence drifts** — P2 · (RECYCLECRITIQUE §B, phase 0)
+  - **Why:** `library.rs:810` `unix_now()` duplicates `consts::now_secs`
+    (`consts.rs:27`) with a different return type; `db.rs:112` vs
+    `library.rs:786` both do `create_dir_all(parent).with_context(...)`;
+    `library.rs:130` `touch_last_sync` vs `:794` `set_meta` are the same
+    statement on different executors; `.bind(bool as i64)` at
+    `artist_user.rs:47`/`status.rs:72` casts sqlx already does.
+  - **Details:** delete `unix_now` and bind `now_secs()` (add
+    `now_secs_text()` if the five `.to_string()` sites annoy);
+    `ensure_parent_dir(path)`; `upsert_meta(executor, key, value)`; drop the
+    bool casts. Reconcile the drifts before extracting.
+
+- [ ] **REC-14 · `index.rs` volume (`report`/`best_effort`)** — P3 · (RECYCLECRITIQUE §B, phase 0)
+  - **Why:** 8 five-line `SyncProgress` literals
+    (`index.rs:72,87,123,139,158,181,230,259`, `total` always 100) and 7
+    fail-log-continue blocks (`:176-228`).
+  - **Details:** `report(progress, message, done)` and
+    `best_effort("lyric cache purge", fut)`; ~34 lines and the "always 100"
+    assumption lives once.
+
+- [ ] **REC-15 · Socket plumbing (`config_socket`, `spawn_line_reader`)** — P2 · (RECYCLECRITIQUE §C, phase 0)
+  - **Why:** `player.rs:487` and `ipc.rs:36` derive the same mpv socket path;
+    `player.rs:391,482` and `ipc.rs:53` remove stale sockets; `player.rs:515`
+    `spawn_reader` and `ipc.rs:70` `serve` are the same line-reader loop.
+  - **Details:** `db::config_socket(name) -> PathBuf` and
+    `ipc::spawn_line_reader(stream, on_line)`.
+
+- [ ] **REC-16 · Raw mpv commands** — P3 · (RECYCLECRITIQUE §C, phase 3)
+  - **Why:** 9 sites push `json!(["set_property", …])` / `observe_property`
+    by hand (`player.rs:219,220,240,248,349,359,452`); 7 sites take
+    `self.shared.lock().unwrap()`; 3 sites clear the same `position/eof/error`
+    trio (`:206,255,559`).
+  - **Details:** `Player::set_property(name, value)`,
+    `Player::observe(id, name)`, `Shared::reset()`, `Player::shared()`;
+    command IDs stay literal — only the envelope dedupes.
+
+- [ ] **REC-17 · MPRIS minors (`put_nonempty`, `submit!`, `mpris_script`)** — P3 · (RECYCLECRITIQUE §C, phase 0)
+  - **Why:** `mpris.rs:258-289` repeats the
+    `if !empty { map.insert(key, owned(Value::from(clone))) }` shape six
+    times; `:437-459` six action methods are one `submit("<verb>")` each; the
+    `MUSIKA_MPRIS_SCRIPT` empty-check is duplicated at `mpris.rs:144` and
+    `player.rs:407`.
+  - **Details:** `put_nonempty(map, key, &str)`, a `submit!`-style macro and
+    `mpris_script() -> Option`.
+
+- [ ] **REC-18 · State naming (`State::mpris_status()`)** — P3 · (RECYCLECRITIQUE §C, phase 0)
+  - **Why:** `player.rs:64` `State::name()` and the rematch to
+    `"Playing"/"Paused"/"Stopped"` in `qml.rs:2202-2206` are the same table.
+  - **Details:** one `State::mpris_status()` so the strings live once.
+
+- [ ] **REC-19 · Palette role application (`apply_roles`)** — P3 · (RECYCLECRITIQUE §D, phase 2)
+  - **Why:** `apply_role!` (`palette.rs:107-116`) is invoked 32× in `apply`
+    (`:341-498`) and `restore!` (`:506-513`) is a copy of the same macro
+    invoked 32× in `reset` (`:515-546`) — the role list exists twice.
+  - **Details:** `fn apply_roles(&mut self, roles: &BTreeMap<String, String>)`;
+    `apply` calls it and `reset` builds the default map once; ~36 lines.
+
+- [ ] **REC-20 · Enum string tables (`name_enum!`)** — P3 · (RECYCLECRITIQUE §D, phase 2)
+  - **Why:** `seed.rs:69` `SourceMode`, `scheme.rs:42` `Spec`,
+    `scheme.rs:78` `VariantChoice`, plus `scheme.rs:259` `variant_name`
+    duplicating `VariantChoice::name`, all hand-roll `name()`/`from_name()`
+    with the same `trim().to_ascii_lowercase()` prelude.
+  - **Details:** one `name_enum!` macro removes ~25 lines and the fourth copy
+    of the variant names.
+
+- [ ] **REC-21 · Colors minors (`spec_scheme`, `rgb` codec, `build_scheme`)** — P3 · (RECYCLECRITIQUE §D, phase 2)
+  - **Why:** `DynamicScheme::from_spec(hct, variant, is_dark, Some(contrast),
+    Platform::Phone, SpecVersion::Spec2025)` is written 7×
+    (`scheme.rs:164-243`); `fetch_into` (`engine.rs:193`) and `build_scheme`
+    (`:238`) construct `CoverScheme` twice; hex/ARGB conversion is split
+    between `seed.rs:95,363`, `engine.rs:350` and `scheme.rs:327`.
+  - **Details:** `spec_scheme(hct, variant, version, contrast, is_dark)`;
+    `fetch_into` calls `build_scheme`; one `rgb` codec module.
+
+- [ ] **REC-22 · QML async-slot prelude (`spawn_data`)** — P2 · (RECYCLECRITIQUE §E, phase 2)
+  - **Why:** 9+ slots repeat the same 15-line shape
+    (`qml.rs:1069,1148,1170,1192,1220,1420,1519,1537,1551`): invoker, `dbs`
+    clone, `runtime().spawn`, `emitData`/`eprintln!`.
+  - **Details:** `spawn_data<F, Fut>(&self, channel, load)` where
+    `F: FnOnce(Dbs) -> Fut`, `Fut: Future<Output = anyhow::Result<String>>`;
+    keep a second path (or a bool) for slots that raise `errorRaised`; ~100
+    lines, every new slot becomes one line.
+
+- [ ] **REC-23 · QML property plumbing (`qprop!`, `sync_field!`)** — P2 · (RECYCLECRITIQUE §E, phase 2)
+  - **Why:** 31 `qproperty!` declarations (`qml.rs:194-319`), 29 matching
+    `#[qsignal]` stubs (`:334-403`) and 3 hand-written setters (`:321-332`)
+    must be written twice because of the derive; `sync_player` (`:2054`) adds
+    21 more compare/assign/notify blocks.
+  - **Details:** `qprop!(server_url, "serverURL", write)` collapses each
+    property to one line; `sync_field!` covers `sync_player`; ~130 lines.
+    Medium risk around macro hygiene and the `Notify` signal names — do it
+    property-by-property with `cargo test` after each.
+
+- [ ] **REC-24 · Row→JSON builders + the `song_count`/`tracks` drift** — P2 · (RECYCLECRITIQUE §E, phase 3)
+  - **Why:** `artist_json` (`browse.rs:172`), `album_json` (`:186`) and
+    `song_rows_json` (`:202`) are re-implemented inline in `search_json`
+    (`:297-339`); `queue_album_json` (`queue.rs:134`) copies `album_json`;
+    `emit_queue` (`qml.rs:1771`) and the mpv metadata (`player.rs:195`) repeat
+    the same key sets. The copies disagree on the count key — browse emits
+    `"song_count"`, queue emits `"tracks"`, and QML reads both per context
+    (`SearchOverlay.qml:273` and `ArtistEntry.qml:229,235` read `song_count`;
+    `Home.qml:578,600` read `tracks`).
+  - **Details:** reconcile the key in QML **first**, then give
+    `AlbumRow`/`ArtistRow`/`SongRow`/`player::Track` a `qml_json(covers, …)`
+    in one module; ~60 lines and the next key addition happens once.
+
+- [ ] **REC-25 · Error/emit plumbing (`raise`, `emit`)** — P3 · (RECYCLECRITIQUE §E, phase 2)
+  - **Why:** `errorRaised` + `format!("...{err:#}")` appears 12×
+    (`qml.rs:1246,1274,1306,1329,1408,1453,1596,1628,1666,2312` …) and
+    `emitData` 23×.
+  - **Details:** `raise(&invoker, kind, &err)` and
+    `emit(&invoker, channel, payload)`; the 10 invoke sites become one line
+    each; ~30 lines.
+
+- [ ] **REC-26 · Session, sync and auth handshake** — P3 · (RECYCLECRITIQUE §E, phase 2)
+  - **Why:** `queue_status_save` (`qml.rs:709-753`) and `flush_status`
+    (`:770-794`) build the same `SessionStatus` field-by-field; the
+    `SyncProgress` closure (`:990`, `:2277`) and its `librarySyncFinished` +
+    `raiseError("sync")` branch (`:1008`, `:2305`) are identical; `login`'s
+    completion (`:443`) and `startup`'s (`:539`) run the same
+    `noteServerType` → `noteOnline` → `spawn_index_sync` → `authenticated(...)`
+    chain.
+  - **Details:** `session_status()`, `sync_progress_cb(invoker)` and
+    `authenticated(...)` helpers; ~50 lines, medium risk (QML-visible).
+
+- [ ] **REC-27 · Small QML clusters** — P2 · (RECYCLECRITIQUE §E, phase 3)
+  - **Why:** `client(dbs)` already exists (`qml.rs:37`) but is re-inlined in
+    `sync_library` (`:984`), `request_lyrics` (`:1872`), `browse::album_notes`
+    (`:226`) and `queue::tracks_json` (`:297`); the offline filter is spelled
+    out in `browse::offline_filter` (`:36`), `queue::filter_offline` (`:62`)
+    and `queue::resume_payload` (`:215`); order defaulting
+    `if self.x_order.is_empty() { ORDERS[0] }` appears 7×
+    (`:484,1075,1154,1176,1198,1616`) and `stepped_order`/
+    `stepped_artist_order` (`:2227-2243`) duplicate `library::cycle_order`/
+    `cycle_artist_order` (`:361-378`); `star_artist` (`:1236`) and
+    `rate_artist` (`:1288`) are 45-line clones; `v.max(0) as usize` 5×
+    (`:1690,1715,1801,1808,1816`).
+  - **Details:** make `client` `pub(crate)` and call it;
+    `offline_song_ids(dbs, offline)`; one
+    `effective_order(orders, current, delta)` in `library.rs`; one
+    `apply_artist_user(...)`; `fn index(v: i64) -> usize`; ~80 lines.
+
 ## Solved (reference)
 
 Kept for rationale; the tree already carries these.
@@ -2987,8 +2987,8 @@ Kept for rationale; the tree already carries these.
 | Bucket | Open | Solved |
 |--------|------|--------|
 | Must have | 6 | 2 |
-| Should have | 81 | 16 |
-| Quick wins | 6 | 59 |
+| Should have | 54 | 16 |
+| Quick wins | 33 | 59 |
 | Solved (reference) | — | 40 |
 | **Total** | **93** | **117** |
 

@@ -101,8 +101,54 @@ Item {
     property int currentIndex: -1
     onCurrentIndexChanged: {
         var v = root.view;
-        if (v && v.count > 0 && v.currentIndex !== root.currentIndex)
+        if (v && v.count > 0 && v.currentIndex !== root.currentIndex) {
             v.currentIndex = root.currentIndex;
+            if (root.glideToCenter)
+                root._glideTo(v, root.currentIndex);
+        }
+    }
+
+    // LYR-8: the centred viewport glide (see `glideToCenter`).
+    NumberAnimation {
+        id: centerGlide
+        target: root.view
+        property: "contentY"
+        duration: root.followMs >= 0 ? root.followMs : Theme.motion.standard
+        easing.type: Easing.Bezier
+        easing.bezierCurve: Theme.ease.decelerate
+    }
+
+    /// Centre the cursor over `followMs` — the delegate itself is the target
+    /// (lyric rows have variable heights); an unrealised line falls back to
+    /// an instant `Center`.
+    function _glideTo(v, index) {
+        if (!v || v.count === 0 || index < 0)
+            return;
+        var item = v.itemAtIndex(index);
+        if (!item) {
+            centerGlide.stop();
+            v.positionViewAtIndex(index, ListView.Center);
+            return;
+        }
+        var limit = Math.max(0, v.contentHeight - v.height);
+        var target = Math.max(0, Math.min(limit,
+            item.y + item.height * 0.5 - v.height * 0.5));
+        if (Math.abs(target - v.contentY) < 1)
+            return;
+        if (Theme.reduceMotion) {
+            v.contentY = target;
+            return;
+        }
+        centerGlide.stop();
+        centerGlide.from = v.contentY;
+        centerGlide.to = target;
+        centerGlide.start();
+    }
+
+    /// Stop the glide (a manual scroll owns the viewport until the host
+    /// re-follows).
+    function stopFollow() {
+        centerGlide.stop();
     }
 
     /// The active view (itemAtIndex, positionViewAtIndex, …).
@@ -123,11 +169,19 @@ Item {
     property real followEnd: 0.85
     /// Optional soothing follow: when >= 0 the highlight rides this fixed
     /// duration (ms) instead of the constant-velocity walk — the lyrics
-    /// pane wants a paced ~600 ms glide per phrase, not a flick.
+    /// pane wants a paced ~1000 ms glide per phrase, not a flick. In
+    /// `glideToCenter` mode it is the viewport animation's duration.
     property int followMs: -1
     /// Extra spacing between list rows (0 = the delegate owns it); grid
     /// cells are placed by `cellHeight`.
     property real rowSpacing: 0
+    /// Lyrics-style follow: animate the viewport to centre the cursor over
+    /// `followMs` instead of the highlight band — `ApplyRange` enforces the
+    /// band *instantly*, so small moves (one lyric line) snap while only
+    /// far ones glide (probed 2026-10-15). The body's own walk is off in
+    /// this mode; a drag stops the glide and the host's manual scroll just
+    /// writes `contentY`.
+    property bool glideToCenter: false
     /// A landing farther than this many rows outside the visible band
     /// catches instantly — the highlight walk over dozens of rows reads as
     /// lag (and blanks the viewport while it travels).
@@ -485,13 +539,14 @@ Item {
             boundsBehavior: Flickable.StopAtBounds
 
             highlight: followHighlight
-            highlightFollowsCurrentItem: true
+            highlightFollowsCurrentItem: !root.glideToCenter
             highlightMoveVelocity: root.followVelocity
             highlightMoveDuration: (root._instantFollow || Theme.reduceMotion) ? 0
                 : (root.followMs >= 0 ? root.followMs : -1)
             preferredHighlightBegin: height * root.followBegin
             preferredHighlightEnd: height * root.followEnd
-            highlightRangeMode: ListView.ApplyRange
+            highlightRangeMode: root.glideToCenter
+                ? ListView.NoHighlightRange : ListView.ApplyRange
         }
 
         GridView {
@@ -508,14 +563,15 @@ Item {
             boundsBehavior: Flickable.StopAtBounds
 
             highlight: followHighlight
-            highlightFollowsCurrentItem: true
+            highlightFollowsCurrentItem: !root.glideToCenter
             // SCROLLGRIDSTUDY §3: GridView has no `highlightMoveVelocity`;
             // the duration token is the nearest documented follow.
             highlightMoveDuration: (root._instantFollow || Theme.reduceMotion) ? 0
                 : (root.followMs >= 0 ? root.followMs : Theme.motion.standard)
             preferredHighlightBegin: height * root.followBegin
             preferredHighlightEnd: height * root.followEnd
-            highlightRangeMode: GridView.ApplyRange
+            highlightRangeMode: root.glideToCenter
+                ? GridView.NoHighlightRange : GridView.ApplyRange
         }
     }
 
@@ -526,6 +582,11 @@ Item {
         function onContentYChanged() {
             if (root.memoryKey)
                 root.remember();
+        }
+        // A drag owns the viewport: kill any centre glide in flight.
+        function onMovementStarted() {
+            if (root.glideToCenter)
+                root.stopFollow();
         }
         function onCurrentIndexChanged() {
             // A landing owns the view while it runs (its re-arm would

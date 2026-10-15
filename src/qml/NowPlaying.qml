@@ -122,13 +122,13 @@ Rectangle {
 
     function holdLyrics() {
         root._lyricsHeld = true;
+        lyricsView.stopFollow();
         lyricResume.interval = root.pane === 1 ? Theme.lyricsResume : Theme.lyricsResumeUnfocused;
         lyricResume.restart();
     }
 
     /// The shared body owns the motion: pushing the active line makes the
-    /// view glide it into the centred band over `followMs` (soothing, no
-    /// teleport fallback for unrealised lines — the body estimates them).
+    /// view glide it to the pane centre over `followMs`.
     function followLyric() {
         if (root._lyricsHeld || !lyricsSynced || activeLyric < 0 || lyricModel.count === 0)
             return;
@@ -250,6 +250,7 @@ Rectangle {
         lyricResume.stop();
         // A new song carries no cursor: clear it, top the body, then let the
         // first `followLyric` glide to the opening phrase.
+        lyricsView.stopFollow();
         lyricsView.currentIndex = -1;
         lyricsView.view.positionViewAtBeginning();
         root._lyricsHeld = false;
@@ -830,12 +831,13 @@ Rectangle {
                                 model: lyricModel
                                 rowSpacing: root.lyricSize * 0.9
                                 // LYR-8: the soothing lyrics follow — a fixed
-                                // ~600 ms glide inside a centre band, with no
-                                // teleport fallback and no far-snap flick.
-                                followMs: 600
+                                // ~1000 ms viewport glide that centres the
+                                // phrase itself (band enforcement lands small
+                                // moves instantly, so the body's own walk is
+                                // off here).
+                                followMs: 1000
                                 followSnapRows: 0
-                                followBegin: 0.45
-                                followEnd: 0.55
+                                glideToCenter: true
 
                                 // A hand on the pane owns it until the next
                                 // track.

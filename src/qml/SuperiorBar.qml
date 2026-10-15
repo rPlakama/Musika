@@ -20,12 +20,23 @@ import QtQuick.VectorImage
 import musika
 import "Theme.js" as Theme
 
-// Top status bar: indexed counts, sync state/progress and a sync action.
+// Top status bar: identity, sync state/progress and the maintenance actions.
+// Three panes share the width automatically — identity (left) and the sync
+// report (right 1) split the leftover space, while the controls (right 2:
+// progress track, sync, trashcan, action hint) size themselves.
 Rectangle {
     id: root
 
     // True while the status region owns the cursor (VI-17).
     property bool active: false
+    /// Tab scope: which control Enter activates (0 = sync, 1 = trashcan).
+    /// The ring marks it while the status region owns the cursor.
+    property int scope: 0
+    /// The trashcan: the wipe menu's anchor (a click, or Alt while it is
+    /// scoped, asks Home to arm it).
+    readonly property Item wipeAnchor: wipeButton
+
+    signal wipeRequested(var target)
 
     color: Palette.surfaceContainerLow
 
@@ -66,10 +77,30 @@ Rectangle {
         return Math.floor(days / 365) + "y";
     }
 
-    // The status panel has no cursor of its own; Enter triggers a sync.
     function handleAction(action) {
-        if (action === "enter")
+        if (action === "pane_cycle") {
+            root.scope = (root.scope + 1) % 2;
+            return;
+        }
+        if (action !== "enter")
+            return;
+        if (root.scope === 0)
             Backend.syncLibrary();
+        else
+            root.wipeRequested(wipeButton);
+    }
+
+    /// Alt-menu availability: the reusable conditional hosts check before
+    /// arming (`view.altActionsAvailable !== false`). The status bar only
+    /// offers the wipe quadrants while the trashcan is scoped — the sync
+    /// button has no Alt action.
+    readonly property bool altActionsAvailable: root.scope === 1
+
+    /// Alt hold: the same menu a trashcan click opens, when available.
+    function armQuickActions() {
+        if (!root.altActionsAvailable)
+            return;
+        root.wipeRequested(wipeButton);
     }
 
     // UI-49 bounce-back: on unhover without a tap, the same shake as the
@@ -77,6 +108,23 @@ Rectangle {
     ShakeFx {
         id: syncFx
         target: syncIcon
+    }
+
+    // Tab scope ring: one reusable hairline frame. It lives on the stationary
+    // button rectangle (the parent), never on the spinning glyph.
+    component ScopeRing: Rectangle {
+        required property bool shown
+
+        anchors.fill: parent
+        radius: Theme.radius
+        color: "transparent"
+        border.width: Math.max(1, root.height * Theme.hairlineRatio * 1.5)
+        border.color: Palette.primary
+        opacity: shown ? 1 : 0
+
+        Behavior on opacity {
+            NumberAnimation { duration: Theme.motion.micro; easing.type: Easing.Bezier; easing.bezierCurve: Theme.ease.standard }
+        }
     }
 
     // Bottom divider.
@@ -94,201 +142,280 @@ Rectangle {
         anchors.rightMargin: root.width * 0.012
         spacing: root.width * 0.015
 
-        // Mode chip removed: the bar carries identity (left) and status
-        // (right) only; the search overlay owns the INSERT/NORMAL chip.
-
-        Item {
+        // -------------------------------------------------------------------
+        // Left pane: identity. Takes half the leftover width.
+        // -------------------------------------------------------------------
+        Rectangle {
+            id: identityPane
             Layout.fillWidth: true
-        }
-
-        // One status line: "Last Sync: <status>, <provider>". Same scale as
-        // the welcome on the left so the bar reads as one line; elided before
-        // it can crowd the progress/sync cluster.
-        FadeText {
-            Layout.maximumWidth: root.width * 0.5
-            text: {
-                var status = Backend.librarySyncing ? "Syncing…" : root.lastSyncText();
-                var provider = root.serverName();
-                return "Last Sync: " + status + (provider.length > 0 ? ", " + provider : "");
-            }
-            color: Backend.librarySyncing ? Palette.tertiary : Palette.onSurfaceVariant
-            font.pixelSize: Theme.fontSize("title", root.height) * 1.35
-            elide: Text.ElideRight
-        }
-
-        // Determinate progress across the last reported stage. Collapsed to a
-        // 2px tick when idle, expanding while a sync runs (the cluster is
-        // right-anchored, so the bar grows/shrinks toward the sync icon).
-        Rectangle {
-            id: track
-            Layout.preferredWidth: Backend.librarySyncing ? root.width * 0.12 : 2
-            Layout.preferredHeight: Math.max(2, root.height * 0.16)
-            color: Palette.outlineVariant
-            clip: true
-
-            Behavior on Layout.preferredWidth {
-                NumberAnimation { duration: Theme.motion.standard; easing.type: Easing.Bezier; easing.bezierCurve: Theme.ease.standard }
-            }
-
-            Rectangle {
-                width: track.width * Math.max(0, Math.min(1, Backend.syncProgress))
-                height: parent.height
-                color: Backend.librarySyncing ? Palette.tertiary : Palette.primary
-
-                Behavior on width {
-                    NumberAnimation {
-                        id: progressAnim
-                        duration: Theme.motion.quick
-                        easing.type: Easing.Linear
-                        // Spin follows the bar: when the fill settles after the
-                        // last progress step, the icon winds down with it.
-                        onRunningChanged: syncButton.updateSpin()
-                    }
-                }
-            }
-        }
-
-        // Sync button (roadmap D-6): the container is invisible but keeps the
-        // hit area/proportions; the reload SVG is the whole control. While a
-        // sync runs the container spins and the icon follows it.
-        Rectangle {
-            id: syncButton
-            Layout.preferredWidth: root.height * 0.6
-            Layout.preferredHeight: root.height * 0.6
-            radius: Theme.radius
+            Layout.fillHeight: true
             color: "transparent"
 
-            // Set on tap so an unhover after asking for a sync never bounces
-            // back over the sync spin.
-            property bool tapped: false
-
-            // Spin while the progress bar is moving (a sync runs / the fill is
-            // still settling) and on hover (slow). The icon and the bar are
-            // coupled: when the bar stops, the spin stops too. Restarting
-            // resumes from the current angle and stopping leaves the icon in
-            // place; `settle()` puts it back when a hover ends untapped.
-            function spinning() {
-                return Backend.librarySyncing || progressAnim.running || syncHover.hovered;
+            FadeText {
+                anchors.left: parent.left
+                anchors.verticalCenter: parent.verticalCenter
+                width: parent.width
+                horizontalAlignment: Text.AlignLeft
+                // CACHE-9: offline mode greets as "Offline, <user>".
+                text: Backend.username.length > 0
+                    ? (Backend.offline ? "Offline, " : "Welcome, ") + Backend.username
+                    : (Backend.offline ? "Offline" : "")
+                color: Backend.offline ? Palette.tertiary : Palette.onSurfaceVariant
+                font.pixelSize: Theme.fontSize("title", root.height) * 1.5
+                elide: Text.ElideRight
+                animated: false
             }
+        }
 
-            function updateSpin() {
-                if (spinning()) {
-                    spin.stop();
-                    settleSpin.stop();
-                    spin.from = syncButton.rotation;
-                    spin.to = spin.from + 360;
-                    spin.duration = Backend.librarySyncing ? Theme.motion.spin : Theme.motion.spinSlow;
-                    spin.start();
-                } else {
-                    spin.stop();
-                    // A multiple of 360 is the same angle: bound the value
-                    // without moving the icon.
-                    syncButton.rotation = syncButton.rotation % 360;
+        // -------------------------------------------------------------------
+        // Right 1: the sync report. Takes the other half, right-aligned so it
+        // sits beside the controls.
+        // -------------------------------------------------------------------
+        Rectangle {
+            id: reportPane
+            Layout.fillWidth: true
+            Layout.fillHeight: true
+            color: "transparent"
+
+            FadeText {
+                anchors.right: parent.right
+                anchors.verticalCenter: parent.verticalCenter
+                width: parent.width
+                horizontalAlignment: Text.AlignRight
+                text: {
+                    var status = Backend.librarySyncing ? "Syncing…" : root.lastSyncText();
+                    var provider = root.serverName();
+                    return "Last Sync: " + status + (provider.length > 0 ? ", " + provider : "");
                 }
+                color: Backend.librarySyncing ? Palette.tertiary : Palette.onSurfaceVariant
+                font.pixelSize: Theme.fontSize("title", root.height) * 1.35
+                elide: Text.ElideRight
             }
+        }
 
-            // Hover left without a tap: shake and bounce the glyph back to
-            // its original angle instead of parking it mid-spin.
-            function settle() {
-                settleSpin.stop();
-                settleSpin.from = syncButton.rotation;
-                settleSpin.to = Math.round(syncButton.rotation / 360) * 360;
-                settleSpin.start();
-                syncFx.shake();
-            }
+        // -------------------------------------------------------------------
+        // Right 2: the controls, sized by their own contents.
+        // -------------------------------------------------------------------
+        Rectangle {
+            id: controlPane
+            Layout.preferredWidth: controls.implicitWidth
+            Layout.fillHeight: true
+            color: "transparent"
 
-            NumberAnimation {
-                id: spin
-                target: syncButton
-                property: "rotation"
-                loops: Animation.Infinite
-                easing.type: Easing.Linear
-            }
+            RowLayout {
+                id: controls
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.verticalCenter: parent.verticalCenter
+                spacing: root.width * 0.015
 
-            NumberAnimation {
-                id: settleSpin
-                target: syncButton
-                property: "rotation"
-                duration: Theme.motion.standard
-                easing.type: Easing.Bezier
-                easing.bezierCurve: Theme.ease.bounce
-            }
+                // Determinate progress across the last reported stage.
+                // Collapsed to a 2px tick when idle, expanding while a sync
+                // runs.
+                Rectangle {
+                    id: track
+                    Layout.preferredWidth: Backend.librarySyncing ? root.width * 0.12 : 2
+                    Layout.preferredHeight: Math.max(2, root.height * 0.16)
+                    color: Palette.outlineVariant
+                    clip: true
 
-            Connections {
-                target: Backend
-                function onLibrary_syncing_changed() {
-                    syncButton.updateSpin();
-                }
-            }
+                    Behavior on Layout.preferredWidth {
+                        NumberAnimation { duration: Theme.motion.standard; easing.type: Easing.Bezier; easing.bezierCurve: Theme.ease.standard }
+                    }
 
-            SymbolIcon {
-                id: syncIcon
-                anchors.centerIn: parent
-                source: "qrc:/app/icons/reload-ui-2-svgrepo-com.svg"
-                symbolColor: Palette.onSurfaceVariant
-                width: root.height * 0.26
-                height: width
-                opacity: Backend.librarySyncing ? 0.38 : (syncHover.hovered ? 1.0 : 0.85)
-                // UI-49: untapped unhover bounce, a transform so nothing
-                // shifts layout.
-                transform: Translate { x: syncFx.offset }
+                    Rectangle {
+                        width: track.width * Math.max(0, Math.min(1, Backend.syncProgress))
+                        height: parent.height
+                        color: Backend.librarySyncing ? Palette.tertiary : Palette.primary
 
-                Behavior on opacity {
-                    NumberAnimation { duration: Theme.motion.micro; easing.type: Easing.Bezier; easing.bezierCurve: Theme.ease.standard }
-                }
-            }
-
-            // Clickable affordance (reuse for every clickable): the hover
-            // handler carries the pointing-hand cursor, the tap handler the
-            // action. Pair them like this wherever something is clickable.
-            HoverHandler {
-                id: syncHover
-                cursorShape: Qt.PointingHandCursor
-                onHoveredChanged: {
-                    if (hovered) {
-                        syncButton.tapped = false;
-                        syncButton.updateSpin();
-                    } else {
-                        syncButton.updateSpin();
-                        if (!syncButton.tapped && !syncButton.spinning() && !Theme.reduceMotion)
-                            syncButton.settle();
+                        Behavior on width {
+                            NumberAnimation {
+                                id: progressAnim
+                                duration: Theme.motion.quick
+                                easing.type: Easing.Linear
+                                // Spin follows the bar: when the fill settles
+                                // after the last progress step, the icon winds
+                                // down with it.
+                                onRunningChanged: syncButton.updateSpin()
+                            }
+                        }
                     }
                 }
-            }
-            TapHandler {
-                enabled: !Backend.librarySyncing
-                onTapped: {
-                    syncButton.tapped = true;
-                    Backend.syncLibrary();
+
+                // Sync button (roadmap D-6): the frame is invisible but keeps
+                // the hit area/proportions and the static scope ring; only the
+                // glyph spins.
+                Rectangle {
+                    id: syncButton
+                    Layout.preferredWidth: root.height * 0.6
+                    Layout.preferredHeight: root.height * 0.6
+                    radius: Theme.radius
+                    color: "transparent"
+
+                    // Set on tap so an unhover after asking for a sync never
+                    // bounces back over the sync spin.
+                    property bool tapped: false
+
+                    // Spin while the progress bar is moving (a sync runs / the
+                    // fill is still settling) and on hover (slow). The glyph
+                    // and the bar are coupled: when the bar stops, the spin
+                    // stops too; restarting resumes from the current angle;
+                    // `settle()` puts it back when a hover ends untapped.
+                    function spinning() {
+                        return Backend.librarySyncing || progressAnim.running || syncHover.hovered;
+                    }
+
+                    function updateSpin() {
+                        if (spinning()) {
+                            spin.stop();
+                            settleSpin.stop();
+                            spin.from = syncIcon.rotation;
+                            spin.to = spin.from + 360;
+                            spin.duration = Backend.librarySyncing ? Theme.motion.spin : Theme.motion.spinSlow;
+                            spin.start();
+                        } else {
+                            spin.stop();
+                            // A multiple of 360 is the same angle: bound the
+                            // value without moving the glyph.
+                            syncIcon.rotation = syncIcon.rotation % 360;
+                        }
+                    }
+
+                    // Hover left without a tap: shake and bounce the glyph
+                    // back to its original angle instead of parking it
+                    // mid-spin.
+                    function settle() {
+                        settleSpin.stop();
+                        settleSpin.from = syncIcon.rotation;
+                        settleSpin.to = Math.round(syncIcon.rotation / 360) * 360;
+                        settleSpin.start();
+                        syncFx.shake();
+                    }
+
+                    NumberAnimation {
+                        id: spin
+                        target: syncIcon
+                        property: "rotation"
+                        loops: Animation.Infinite
+                        easing.type: Easing.Linear
+                    }
+
+                    NumberAnimation {
+                        id: settleSpin
+                        target: syncIcon
+                        property: "rotation"
+                        duration: Theme.motion.standard
+                        easing.type: Easing.Bezier
+                        easing.bezierCurve: Theme.ease.bounce
+                    }
+
+                    Connections {
+                        target: Backend
+                        function onLibrary_syncing_changed() {
+                            syncButton.updateSpin();
+                        }
+                    }
+
+                    SymbolIcon {
+                        id: syncIcon
+                        anchors.centerIn: parent
+                        source: "qrc:/app/icons/reload-ui-2-svgrepo-com.svg"
+                        symbolColor: Palette.onSurfaceVariant
+                        width: root.height * 0.26
+                        height: width
+                        opacity: Backend.librarySyncing ? 0.38 : (syncHover.hovered ? 1.0 : 0.85)
+                        // UI-49: untapped unhover bounce, a transform so
+                        // nothing shifts layout.
+                        transform: Translate { x: syncFx.offset }
+
+                        Behavior on opacity {
+                            NumberAnimation { duration: Theme.motion.micro; easing.type: Easing.Bezier; easing.bezierCurve: Theme.ease.standard }
+                        }
+                    }
+
+                    ScopeRing {
+                        shown: root.active && root.scope === 0
+                    }
+
+                    // Clickable affordance (reuse for every clickable): the
+                    // hover handler carries the pointing-hand cursor, the tap
+                    // handler the action.
+                    HoverHandler {
+                        id: syncHover
+                        cursorShape: Qt.PointingHandCursor
+                        onHoveredChanged: {
+                            if (hovered) {
+                                syncButton.tapped = false;
+                                syncButton.updateSpin();
+                            } else {
+                                syncButton.updateSpin();
+                                if (!syncButton.tapped && !syncButton.spinning() && !Theme.reduceMotion)
+                                    syncButton.settle();
+                            }
+                        }
+                    }
+                    TapHandler {
+                        enabled: !Backend.librarySyncing
+                        onTapped: {
+                            root.scope = 0;
+                            syncButton.tapped = true;
+                            Backend.syncLibrary();
+                        }
+                    }
+                }
+
+                // Trashcan: opens the wipe quadrant menu (Home arms the shared
+                // Alt overlay in sticky mode; h/j/k/l or arrows aim, Enter
+                // fires, Esc cancels). Disabled while a sync writes the
+                // databases.
+                Rectangle {
+                    id: wipeButton
+                    Layout.preferredWidth: root.height * 0.6
+                    Layout.preferredHeight: root.height * 0.6
+                    radius: Theme.radius
+                    color: "transparent"
+
+                    SymbolIcon {
+                        anchors.centerIn: parent
+                        source: "qrc:/app/icons/delete-outline.svg"
+                        symbolColor: wipeHover.hovered ? Palette.error : Palette.onSurfaceVariant
+                        width: root.height * 0.26
+                        height: width
+                        opacity: Backend.librarySyncing ? 0.38 : (wipeHover.hovered ? 1.0 : 0.85)
+
+                        Behavior on opacity {
+                            NumberAnimation { duration: Theme.motion.micro; easing.type: Easing.Bezier; easing.bezierCurve: Theme.ease.standard }
+                        }
+                    }
+
+                    ScopeRing {
+                        shown: root.active && root.scope === 1
+                    }
+
+                    HoverHandler {
+                        id: wipeHover
+                        cursorShape: Qt.PointingHandCursor
+                    }
+                    TapHandler {
+                        enabled: !Backend.librarySyncing
+                        onTapped: {
+                            root.scope = 1;
+                            root.wipeRequested(wipeButton);
+                        }
+                    }
+                }
+
+                // Focus hint while the status region owns the cursor (VI-17).
+                FadeText {
+                    visible: root.active
+                    text: (root.scope === 0
+                        ? "Enter: sync"
+                        : "Enter: wipe · Alt: menu")
+                        + " · Tab: cycle"
+                    color: Palette.onSurfaceVariant
+                    font.pixelSize: Theme.fontSize("label", root.height)
                 }
             }
         }
-
-        // Focus hint while the status region owns the cursor (VI-17).
-        FadeText {
-            visible: root.active
-            text: "Enter: sync"
-            color: Palette.onSurfaceVariant
-            font.pixelSize: Theme.fontSize("label", root.height)
-        }
-    }
-
-    // Welcome, <user>: left-aligned in the bar (the old mode-chip spot),
-    // almost filling the bar's height, elided before it can reach the sync
-    // cluster. Same body face as the rest of the chrome.
-    FadeText {
-        anchors.left: parent.left
-        anchors.leftMargin: root.width * 0.012
-        anchors.verticalCenter: parent.verticalCenter
-        width: Math.min(implicitWidth, root.width * 0.45)
-        horizontalAlignment: Text.AlignLeft
-        // CACHE-9: offline mode greets as "Offline, <user>".
-        text: Backend.username.length > 0
-            ? (Backend.offline ? "Offline, " : "Welcome, ") + Backend.username
-            : (Backend.offline ? "Offline" : "")
-        color: Backend.offline ? Palette.tertiary : Palette.onSurfaceVariant
-        font.pixelSize: Theme.fontSize("title", root.height) * 1.5
-        elide: Text.ElideRight
-        animated: false
     }
 }

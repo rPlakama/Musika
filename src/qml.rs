@@ -1089,6 +1089,75 @@ impl Backend {
         self.library_changed();
     }
 
+    /// Destructive maintenance (the SuperiorBar trashcan's quadrant menu —
+    /// a click or Alt while it is scoped): `scope` is "all", "library",
+    /// "indexes" or "covers". The databases are dropped and re-migrated from
+    /// the embedded schema; "all" also removes credentials and returns to the
+    /// Login screen.
+    #[qslot(qml_name = "wipeDatabases")]
+    fn wipe_databases(&mut self, scope: String) {
+        let invoker = self.get_qml_method_invoker();
+        let error_invoker = self.get_qml_method_invoker();
+        let Some(dbs) = crate::dbs().cloned() else {
+            return;
+        };
+        self.library_sync_started();
+        self.sync_message = format!("Wiping {scope}…");
+        self.sync_message_changed();
+        crate::runtime().spawn(async move {
+            let result = match scope.as_str() {
+                "library" => crate::db::wipe_library(&dbs).await,
+                "indexes" => crate::db::wipe_indexes(&dbs).await,
+                "covers" => crate::db::wipe_covers(&dbs).await,
+                _ => crate::db::wipe(&dbs).await,
+            };
+            match result {
+                Ok(()) => {
+                    qtbridge::invoke_method!(invoker, "wipeFinished", scope);
+                }
+                Err(err) => {
+                    eprintln!("db: wipe ({scope}) failed: {err:#}");
+                    qtbridge::invoke_method!(
+                        error_invoker,
+                        "librarySyncFinished",
+                        format!("Wipe failed: {err:#}")
+                    );
+                    qtbridge::invoke_method!(
+                        error_invoker,
+                        "errorRaised",
+                        "error".to_string(),
+                        format!("Wipe failed: {err:#}")
+                    );
+                }
+            }
+        });
+    }
+
+    /// Wipe completed on the runtime thread: "all" resets the session back to
+    /// Login (credentials are gone); the partial wipes just refresh the UI.
+    #[qslot(qml_name = "wipeFinished")]
+    fn wipe_finished(&mut self, scope: String) {
+        if scope == "all" {
+            self.player.stop();
+            self.sync_player();
+            self.offline = false;
+            self.offline_changed();
+            self.logged_in = false;
+            self.logged_in_changed();
+            self.status_message = "Databases wiped — sign in again.".to_string();
+            self.status_message_changed();
+            self.library_sync_finished("Databases wiped — sign in again.".to_string());
+            self.login_required();
+            return;
+        }
+        self.library_sync_finished(match scope.as_str() {
+            "library" => "Library metadata wiped — run a sync to refetch.".to_string(),
+            "indexes" => "Search indexes wiped — rebuilt on the next sync.".to_string(),
+            "covers" => "Cover cache wiped — art refetches on demand.".to_string(),
+            other => format!("Wiped {other}."),
+        });
+    }
+
     // -----------------------------------------------------------------------
     // Async library reads (never block the Qt thread)
     // -----------------------------------------------------------------------
@@ -1931,7 +2000,10 @@ impl Backend {
             Ok(ids) => ids,
             Err(err) => {
                 eprintln!("alt actions: bad selection payload: {err}");
-                self.error_raised("playback".to_string(), format!("Bad selection payload: {err}"));
+                self.error_raised(
+                    "playback".to_string(),
+                    format!("Bad selection payload: {err}"),
+                );
                 return;
             }
         };

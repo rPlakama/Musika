@@ -183,15 +183,40 @@ Item {
     // `armQuickActions`: the search's active column while it is open, the
     // fullscreen queue when the player is up, the current view otherwise.
     function beginQuickActions() {
+        // A sticky menu (the wipe chooser) keeps the overlay: Alt must not
+        // replace its config with the current view's verbs.
+        if (quickActions.armed && quickActions.sticky)
+            return;
         if (queueDrawer.opened)
             return;
         if (searchOverlay.opened) {
             searchOverlay.armQuickActions();
             return;
         }
-        var view = root.nowPlayingExpanded ? nowPlaying : contentStack.currentItem;
-        if (view && view.armQuickActions)
+        // Reusable gate: any surface opts out of the Alt menu with
+        // `altActionsAvailable: false` (the status bar's sync scope does).
+        var view = root.activeRegion === 2
+            ? topBar
+            : (root.nowPlayingExpanded ? nowPlaying : contentStack.currentItem);
+        if (view && view.armQuickActions && view.altActionsAvailable !== false)
             view.armQuickActions();
+    }
+
+    /// Destructive maintenance menu (the SuperiorBar trashcan — a click, Alt
+    /// while it is scoped, or the `wipe_databases` IPC command): the shared
+    /// overlay arms in sticky mode on the trashcan — the four quadrants wipe,
+    /// Enter fires the aim, Esc cancels.
+    function armWipeMenu(target) {
+        if (Backend.librarySyncing) {
+            toast.show("sync", "Wait for the sync to finish before wiping.");
+            return;
+        }
+        if (target)
+            quickActions.arm(target, verbs.wipe());
+    }
+
+    QuickActions {
+        id: verbs
     }
 
     // Actions dispatched from the global key handler, scoped to the active
@@ -219,6 +244,31 @@ Item {
         }
         if (action === "quick_cancel") {
             quickActions.dismiss();
+            return;
+        }
+
+        // Sticky quadrant menu (the wipe chooser): h/j/k/l or arrows aim,
+        // Enter fires the aimed wipe, Esc closes — no Alt hold involved.
+        if (quickActions.armed && quickActions.sticky) {
+            if (action === "move_up")
+                quickActions.aim("north");
+            else if (action === "move_down")
+                quickActions.aim("south");
+            else if (action === "move_left")
+                quickActions.aim("west");
+            else if (action === "move_right")
+                quickActions.aim("east");
+            else if (action === "enter")
+                quickActions.confirm();
+            else if (action === "back")
+                quickActions.cancel();
+            return;
+        }
+
+        // IPC command parity: `wipe_databases` opens the wipe menu anchored
+        // on the trashcan (the keyboard path is Alt while it is scoped).
+        if (action === "wipe_databases") {
+            root.armWipeMenu(topBar.wipeAnchor);
             return;
         }
 
@@ -455,6 +505,7 @@ Item {
             Layout.fillWidth: true
             Layout.preferredHeight: root.barH
             active: root.activeRegion === 2
+            onWipeRequested: (target) => root.armWipeMenu(target)
         }
 
         RowLayout {
@@ -625,8 +676,9 @@ Item {
         anchors.horizontalCenter: parent.horizontalCenter
         anchors.bottom: parent.bottom
         anchors.bottomMargin: root.playH + root.height * 0.02
-        width: root.width * 0.42
-        height: root.height * 0.06
+        // The banner grows with its message; the cap is everything above the
+        // player bar, so a long error can take the whole screen.
+        maxHeight: root.height - root.playH - root.height * 0.06
         z: Theme.zToast
         // UI-55: blur whatever the toast actually floats over.
         backdrop: root.nowPlayingExpanded ? nowPlaying : shell

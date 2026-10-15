@@ -54,58 +54,167 @@ pub struct Dbs {
 
 /// Opens every database and applies its migrations.
 pub async fn init() -> Result<Dbs> {
-    let credentials = open_file(&credentials_path()?, 5).await?;
+    let dbs = Dbs {
+        credentials: open_file(&credentials_path()?, 5).await?,
+        library: open_file(&library_path()?, 5).await?,
+        search: open_file(&search_path()?, 3).await?,
+        covers: open_file(&covers_path()?, 5).await?,
+        media: open_file(&media_path()?, 3).await?,
+        lyrics: open_file(&lyrics_path()?, 3).await?,
+        colors: open_file(&colors_path()?, 3).await?,
+        // Single row, tiny: one connection is plenty.
+        status: open_file(&status_path()?, 1).await?,
+        artist_user: open_file(&artist_user_path()?, 3).await?,
+        download: open_file(&download_path()?, 3).await?,
+    };
+    migrate(&dbs).await?;
+    Ok(dbs)
+}
+
+/// Applies every pool's embedded migrations (shared by [`init`] and [`wipe`]).
+pub async fn migrate(dbs: &Dbs) -> Result<()> {
     // Two early no-op migrations were removed (ARC-18); ignore them if this
     // database already applied them.
     sqlx::migrate!("./migrations")
         .set_ignore_missing(true)
-        .run(&credentials)
+        .run(&dbs.credentials)
         .await?;
-
-    let library = open_file(&library_path()?, 5).await?;
-    sqlx::migrate!("./migrations_library").run(&library).await?;
-
-    let search = open_file(&search_path()?, 3).await?;
-    sqlx::migrate!("./migrations_search").run(&search).await?;
-
-    let covers = open_file(&covers_path()?, 5).await?;
-    sqlx::migrate!("./migrations_covers").run(&covers).await?;
-
-    let media = open_file(&media_path()?, 3).await?;
-    sqlx::migrate!("./migrations_media").run(&media).await?;
-
-    let lyrics = open_file(&lyrics_path()?, 3).await?;
-    sqlx::migrate!("./migrations_lyrics").run(&lyrics).await?;
-
-    let colors = open_file(&colors_path()?, 3).await?;
-    sqlx::migrate!("./migrations_colors").run(&colors).await?;
-
-    // Single row, tiny: one connection is plenty.
-    let status = open_file(&status_path()?, 1).await?;
-    sqlx::migrate!("./migrations_status").run(&status).await?;
-
-    let artist_user = open_file(&artist_user_path()?, 3).await?;
+    sqlx::migrate!("./migrations_library")
+        .run(&dbs.library)
+        .await?;
+    sqlx::migrate!("./migrations_search")
+        .run(&dbs.search)
+        .await?;
+    sqlx::migrate!("./migrations_covers")
+        .run(&dbs.covers)
+        .await?;
+    sqlx::migrate!("./migrations_media").run(&dbs.media).await?;
+    sqlx::migrate!("./migrations_lyrics")
+        .run(&dbs.lyrics)
+        .await?;
+    sqlx::migrate!("./migrations_colors")
+        .run(&dbs.colors)
+        .await?;
+    sqlx::migrate!("./migrations_status")
+        .run(&dbs.status)
+        .await?;
     sqlx::migrate!("./migrations_artist_user")
-        .run(&artist_user)
+        .run(&dbs.artist_user)
         .await?;
-
-    let download = open_file(&download_path()?, 3).await?;
     sqlx::migrate!("./migrations_download")
-        .run(&download)
+        .run(&dbs.download)
         .await?;
+    Ok(())
+}
 
-    Ok(Dbs {
-        credentials,
-        library,
-        search,
-        covers,
-        media,
-        lyrics,
-        colors,
-        status,
-        artist_user,
-        download,
-    })
+/// Wipes only the library metadata (`library.db`): artists, albums, songs,
+/// artist info and the sync bookkeeping. The next sync repopulates it; the
+/// derived `index.txt` mirror goes with it.
+pub async fn wipe_library(dbs: &Dbs) -> Result<()> {
+    wipe_pool(&dbs.library).await?;
+    sqlx::migrate!("./migrations_library")
+        .run(&dbs.library)
+        .await?;
+    remove_mirror();
+    Ok(())
+}
+
+/// Wipes the derived text indexes (`search.db` FTS plus the `index.txt`
+/// mirror). Both rebuild from `library.db` on the next sync.
+pub async fn wipe_indexes(dbs: &Dbs) -> Result<()> {
+    wipe_pool(&dbs.search).await?;
+    sqlx::migrate!("./migrations_search")
+        .run(&dbs.search)
+        .await?;
+    remove_mirror();
+    Ok(())
+}
+
+/// Wipes the cover-art cache: `covers.db`, the blob directory and the
+/// cover-derived color cache (`colors.db`), all refetched on demand.
+pub async fn wipe_covers(dbs: &Dbs) -> Result<()> {
+    wipe_pool(&dbs.covers).await?;
+    sqlx::migrate!("./migrations_covers")
+        .run(&dbs.covers)
+        .await?;
+    wipe_pool(&dbs.colors).await?;
+    sqlx::migrate!("./migrations_colors")
+        .run(&dbs.colors)
+        .await?;
+    remove_dir(&covers_dir()?)?;
+    Ok(())
+}
+
+fn remove_mirror() {
+    if let Ok(mirror) = mirror_path() {
+        let _ = std::fs::remove_file(mirror);
+    }
+}
+
+fn remove_dir(dir: &Path) -> Result<()> {
+    match std::fs::remove_dir_all(dir) {
+        Ok(()) => Ok(()),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(err) => Err(err).with_context(|| format!("failed to remove {}", dir.display())),
+    }
+}
+
+/// Destructive recovery: every database is stripped to an empty schema and
+/// re-migrated, and the derived blobs (covers/media) and the `index.txt`
+/// mirror are removed. Credentials go too, so the caller must return to the
+/// login screen afterwards.
+pub async fn wipe(dbs: &Dbs) -> Result<()> {
+    for pool in [
+        &dbs.credentials,
+        &dbs.library,
+        &dbs.search,
+        &dbs.covers,
+        &dbs.media,
+        &dbs.lyrics,
+        &dbs.colors,
+        &dbs.status,
+        &dbs.artist_user,
+        &dbs.download,
+    ] {
+        wipe_pool(pool).await?;
+    }
+    migrate(dbs).await?;
+
+    for dir in [covers_dir(), media_dir(), playback_dir()] {
+        if let Ok(dir) = dir {
+            remove_dir(&dir)?;
+        }
+    }
+    remove_mirror();
+    Ok(())
+}
+
+/// Drops every user table in one database (virtual/FTS tables first, so their
+/// shadow tables fall with them; FK checks are off while DROP implicitly
+/// deletes rows).
+async fn wipe_pool(pool: &SqlitePool) -> Result<()> {
+    let mut conn = pool.acquire().await?;
+    sqlx::query("PRAGMA foreign_keys = OFF")
+        .execute(&mut *conn)
+        .await?;
+    let tables: Vec<String> = sqlx::query_scalar(
+        "SELECT name FROM sqlite_master
+         WHERE type = 'table' AND name NOT LIKE 'sqlite_%'
+         ORDER BY (sql LIKE 'CREATE VIRTUAL%') DESC, name",
+    )
+    .fetch_all(&mut *conn)
+    .await?;
+    for table in tables {
+        // The name comes from sqlite_master, never from user input, and is
+        // double-quoted with embedded quotes escaped.
+        let escaped = table.replace('"', "\"\"");
+        let sql = sqlx::AssertSqlSafe(format!("DROP TABLE IF EXISTS \"{escaped}\""));
+        sqlx::raw_sql(sql)
+            .execute(&mut *conn)
+            .await
+            .with_context(|| format!("failed to drop {table}"))?;
+    }
+    Ok(())
 }
 
 async fn open_file(path: &Path, max_connections: u32) -> Result<SqlitePool> {
@@ -229,4 +338,50 @@ pub fn config_dir() -> Result<PathBuf> {
 
 fn non_empty_env(key: &str) -> Option<String> {
     std::env::var(key).ok().filter(|value| !value.is_empty())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::str::FromStr;
+
+    use super::*;
+
+    #[tokio::test]
+    async fn wipe_pool_drops_every_table_and_migrations_rebuild_them() {
+        let options = sqlx::sqlite::SqliteConnectOptions::from_str("sqlite::memory:").unwrap();
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect_with(options)
+            .await
+            .unwrap();
+        sqlx::migrate!("./migrations_library")
+            .run(&pool)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO artists (id, name) VALUES ('a', 'A')")
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        wipe_pool(&pool).await.unwrap();
+        let tables: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(tables, 0);
+
+        // Re-migrating yields the empty schema again (the wipe path's second
+        // half): tables exist, rows are gone.
+        sqlx::migrate!("./migrations_library")
+            .run(&pool)
+            .await
+            .unwrap();
+        let artists: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM artists")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(artists, 0);
+    }
 }

@@ -99,6 +99,35 @@ QtObject {
         };
     }
 
+    /// Destructive maintenance verbs (the SuperiorBar trashcan / `Del`): the
+    /// quadrant picks what to wipe. `sticky` keeps the overlay open until
+    /// Enter fires the aim or Esc cancels (no Alt-hold gesture).
+    function wipe() {
+        return {
+            sticky: true,
+            north: {
+                label: "Wipe all!",
+                icon: "qrc:/app/icons/delete-outline.svg",
+                invoke: function() { Backend.wipeDatabases("all") }
+            },
+            south: {
+                label: "Wipe albums!",
+                icon: "qrc:/app/icons/album.svg",
+                invoke: function() { Backend.wipeDatabases("library") }
+            },
+            east: {
+                label: "Wipe indexes!",
+                icon: "qrc:/app/icons/search-right-1505-svgrepo-com.svg",
+                invoke: function() { Backend.wipeDatabases("indexes") }
+            },
+            west: {
+                label: "Wipe covers!",
+                icon: "qrc:/app/icons/album-2-svgrepo-com.svg",
+                invoke: function() { Backend.wipeDatabases("covers") }
+            }
+        };
+    }
+
     /// Artist hit (search): queue the whole artist and favourite it; both
     /// jumps stay open ("—") — the artist page is the row's Enter already.
     function artist(item) {

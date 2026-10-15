@@ -46,6 +46,9 @@ Item {
     property Item backdrop: null
     /// Esc retired this hold; arming stays off until Alt is released.
     property bool dismissed: false
+    /// Sticky menus (the wipe chooser) skip the Alt-hold gesture: they stay
+    /// armed until Enter fires the aim or Esc cancels.
+    property bool sticky: false
 
     /// ARC-I: the search column arms this too, so an open search no longer
     /// disarms the gesture (only a half-typed sequence does).
@@ -112,6 +115,7 @@ Item {
             return;
         targetItem = item;
         config = cfg;
+        sticky = cfg.sticky === true;
         aimed = "";
         armed = true;
         spawnOut.stop();
@@ -124,6 +128,7 @@ Item {
     function cancel() {
         armed = false;
         aimed = "";
+        sticky = false;
         spawnIn.stop();
         if (Theme.reduceMotion)
             spawn = 0;
@@ -174,7 +179,9 @@ Item {
         function onAlt_held_changed() {
             if (!Backend.altHeld) {
                 root.dismissed = false;
-                root.confirm();
+                // Sticky menus fire on Enter, not on an Alt release.
+                if (!root.sticky)
+                    root.confirm();
             }
         }
         function onKey_pending_changed() {
@@ -301,7 +308,7 @@ Item {
             tint: box.isDisabled ? Theme.stateDisabledContainer
                 : (box.isAimed ? Palette.primaryContainer : Palette.surfaceContainerHigh)
             opacity: box.isDisabled ? 0.7 : (!root.aimed || box.isAimed ? 1 : 0.55)
-            scale: box.isAimed ? 1.05 : 1.0
+            scale: box.isAimed ? 1.3 : 1.0
 
             Behavior on tint {
                 ColorAnimation {

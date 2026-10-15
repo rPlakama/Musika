@@ -39,6 +39,14 @@ Rectangle {
     /// Home routes it to the shared overlay.
     signal quickAction(var target, var actions)
 
+    // UI-57: the track title ramps with the window width like the list
+    // headers do (ScrollPanel), toward the headline floor — never below it.
+    readonly property real widthScale: Theme.widthScale(root.width)
+    readonly property real trackTitlePixelSize: {
+        var full = Theme.fontSize("headline", root.height);
+        return Theme.clamp(full * root.widthScale, 18, full);
+    }
+
     // Keyboard pane: 1 = lyrics, 2 = queue. Transport is never a pane.
     property int pane: 1
     property int queueCursor: 0
@@ -528,7 +536,7 @@ Rectangle {
                     Layout.fillWidth: true
                     text: Backend.currentTitle.length > 0 ? Backend.currentTitle : "No track playing"
                     color: Palette.onSurface
-                    font.pixelSize: Theme.fontSize("headline", root.height)
+                    font.pixelSize: root.trackTitlePixelSize
                     font.bold: true
                     elide: Text.ElideRight
                 }

@@ -100,6 +100,11 @@ Item {
     /// live view mirrors it (an alias cannot follow the active view).
     property int currentIndex: -1
     onCurrentIndexChanged: {
+        // A landing (`land`) owns the view: it positions and mirrors the
+        // index itself; starting a glide here would fight it and leave a
+        // corrupted contentY behind.
+        if (root._instantFollow)
+            return;
         var v = root.view;
         if (v && v.count > 0 && v.currentIndex !== root.currentIndex) {
             v.currentIndex = root.currentIndex;
@@ -121,21 +126,29 @@ Item {
         easing.overshoot: 1.7
         // The clamp at the content ends eats the overshoot there (the
         // scrolloff edge rule), so the spring is a mid-list effect.
+        // The content estimate can grow while the glide runs (bottom
+        // delegates realise late), so the last few rows get a settle pass.
+        onFinished: root._settleGlide()
     }
 
     /// Centre the cursor over `followMs` — the delegate itself is the target
     /// (lyric rows have variable heights); an unrealised line falls back to
     /// an instant `Center`.
     function _glideTo(v, index) {
-        if (!v || v.count === 0 || index < 0)
+        if (!v || v.count === 0 || index < 0 || root._instantFollow)
             return;
         var item = v.itemAtIndex(index);
         if (!item) {
-            // Unrealised line (a far landing): bring it into view instantly
-            // first — `Center` here can leave a negative contentY at the
-            // top — then glide it to the centre once the delegate exists.
+            // Unrealised line (a far landing): with the list scrolled, Qt's
+            // `Contain`/`Center` can park a negative contentY that cascades
+            // (probed in both follow modes), so land proportionally inside
+            // the content bounds — exact at both ends — then let the
+            // deferred glide refine once the row exists.
             centerGlide.stop();
-            v.positionViewAtIndex(index, ListView.Contain);
+            var limit = Math.max(0, v.contentHeight - v.height);
+            var approx = v.count > 1
+                ? Math.round(index / (v.count - 1) * limit) : 0;
+            v.contentY = Math.max(0, Math.min(limit, approx));
             Qt.callLater(function () {
                 if (root.glideToCenter && root.currentIndex === index)
                     root._glideTo(root.view, index);
@@ -161,6 +174,22 @@ Item {
     /// re-follows).
     function stopFollow() {
         centerGlide.stop();
+    }
+
+    /// The end-of-list settle: `ListView.contentHeight` is an estimate until
+    /// the bottom delegates exist, so a glide toward the last rows can stop
+    /// short with the cursor under the viewport's end. Qt's own `Contain`
+    /// uses the true content; it only moves the shortfall.
+    function _settleGlide() {
+        var v = root.view;
+        if (!v || root.currentIndex < 0)
+            return;
+        var item = v.itemAtIndex(root.currentIndex);
+        if (!item)
+            return;
+        if (item.y < v.contentY
+                || item.y + item.height > v.contentY + v.height)
+            v.positionViewAtIndex(root.currentIndex, ListView.Contain);
     }
 
     /// The active view (itemAtIndex, positionViewAtIndex, …).
@@ -246,6 +275,11 @@ Item {
         if (v && v.count > 0) {
             root._rearmHighlight(v, index);
             v.positionViewAtIndex(index, ListView.Contain);
+            // Repair the same negative-contentY quirk (`Contain` after a
+            // scrolled list can leave one on the target's side).
+            var limit = Math.max(0, v.contentHeight - v.height);
+            if (v.contentY < 0 || v.contentY > limit)
+                v.contentY = Math.max(0, Math.min(limit, v.contentY));
         }
         Qt.callLater(function () { root._instantFollow = false; });
     }
@@ -293,8 +327,20 @@ Item {
     /// custom animation left for a same-tick teleport to fight.
     function ensureVisible(index) {
         var i = index === undefined ? root.currentIndex : index;
-        if (i >= 0 && root.view)
-            root.view.positionViewAtIndex(i, ListView.Contain);
+        if (i < 0 || !root.view)
+            return;
+        // A semantic jump owns the landing: the running glide would
+        // otherwise override this `Contain` with its (possibly estimated)
+        // target — the queue's current track ended up below the viewport
+        // that way. Land exactly, then re-centre on the next tick once the
+        // layout is true.
+        centerGlide.stop();
+        root.view.positionViewAtIndex(i, ListView.Contain);
+        if (root.glideToCenter)
+            Qt.callLater(function () {
+                if (root.glideToCenter && root.currentIndex === i)
+                    root._glideTo(root.view, i);
+            });
     }
 
     /// `gg`/`G`: instant edge landing — the follow band has nothing to

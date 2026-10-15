@@ -1979,10 +1979,12 @@ Small, bounded, high-value changes.
     pane unfocused) or on track change; unsynced lyrics stay static;
     gradients only over the scrollable range; `reduceMotion` keeps an instant
     `positionViewAtIndex`.
-  - **Now (partial):** the smooth follow is complete in behaviour:
-    `followLyric` animates `contentY` to the active delegate's centre
-    (`standard`/`quick`, `decelerate`; instant `positionViewAtIndex` for
-    unrealised rows and `reduceMotion`); j/k, drag and wheel pause it
+  - **Now (partial):** the lyrics list rides the shared scroll body now —
+    `followLyric` pushes the active line into a centred band
+    (`followBegin/End` 0.45/0.55) and `ScrollContent.followMs: 300` glides it
+    there: a fixed-duration soothing follow with `followSnapRows: 0`, so a
+    far phrase animates instead of teleporting and the old unrealised-row
+    `positionViewAtIndex` flicks are gone. j/k, drag and wheel pause it
     (`holdLyrics`), and a single-shot `lyricResume` timer re-centres the
     active phrase after the idle window — `Theme.lyricsResume` 5 s while the
     lyrics pane is focused, `Theme.lyricsResumeUnfocused` 2 s otherwise,

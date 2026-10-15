@@ -50,23 +50,18 @@ Item {
     visible: opened || panel.opacity > 0
     z: Theme.zOverlay
 
-    // UI-49: one reusable denied-input cue (shake + bounce); the red mode-chip
-    // flash below rides the same call.
-    ShakeFx {
-        id: denyFx
-        target: field
-    }
-
+    // UI-49: denied-input cue for unmatched results. The bar itself never
+    // moves (no shake): the cue is a red outline flash on the field.
     SequentialAnimation {
         id: modeFlash
         NumberAnimation {
-            target: modeFlashLabel
+            target: fieldFlash
             property: "opacity"
             to: 1
             duration: Theme.motion.flash
         }
         NumberAnimation {
-            target: modeFlashLabel
+            target: fieldFlash
             property: "opacity"
             to: 0
             duration: Theme.motion.quick
@@ -74,9 +69,8 @@ Item {
     }
 
     function denied() {
-        if (Theme.reduceMotion || field.text.length === 0 || denyFx.swing.running)
+        if (Theme.reduceMotion || field.text.length === 0)
             return;
-        denyFx.shake();
         modeFlash.restart();
     }
 
@@ -235,6 +229,9 @@ Item {
         if (!column.model || column.model.count === 0)
             return;
         column.cursor = last ? column.model.count - 1 : 0;
+        // Snap, don't scroll: a long edge jump must not play the follow
+        // animation all the way across the column (the lists snap too).
+        column.snapToCursor();
     }
 
     function activate() {
@@ -441,66 +438,23 @@ Item {
             anchors.margins: panel.height * 0.035
             spacing: panel.height * 0.025
 
-            // Mode chip + search bar in one parent rectangle, so the spacing
-            // is explicit: 10% of the row is the chip (beside the bar, never
-            // inside it), the rest is the field, with a margin between them
-            // and the chip inset vertically.
+            // The search bar, full width: the old mode chip is gone — the
+            // bar's own focus highlight is the INSERT cue.
             Rectangle {
                 id: searchRow
                 Layout.fillWidth: true
                 implicitHeight: panel.height * 0.06
                 color: "transparent"
 
-                Rectangle {
-                    id: modeChip
-                    anchors.left: parent.left
-                    anchors.verticalCenter: parent.verticalCenter
-                    width: parent.width * 0.10
-                    height: parent.height * 0.82
-                    radius: Theme.radius
-                    color: Palette.surfaceContainerHighest
-                    border.width: Math.max(1, root.height * Theme.hairlineRatio)
-                    border.color: Palette.primary
-
-                    // INSERT while typing, NORMAL while navigating.
-                    FadeText {
-                        id: modeChipLabel
-                        anchors.centerIn: parent
-                        text: root.typing ? "I" : "N"
-                        color: Palette.primary
-                        font.pixelSize: Theme.fontSize("label", panel.height)
-                        animated: false
-                    }
-
-                    // UI-49: the denied cue's red copy of the label, fading in
-                    // over the normal one.
-                    FadeText {
-                        id: modeFlashLabel
-                        anchors.centerIn: parent
-                        text: modeChipLabel.text
-                        color: Palette.error
-                        font.pixelSize: Theme.fontSize("label", panel.height)
-                        opacity: 0
-                        animated: false
-                    }
-                }
-
                 TextField {
                     id: field
-                    anchors.left: modeChip.right
-                    anchors.leftMargin: parent.width * 0.012
+                    anchors.left: parent.left
                     anchors.right: parent.right
                     anchors.top: parent.top
                     anchors.bottom: parent.bottom
-                    placeholderText: "Search anything"
-                    placeholderTextColor: Palette.onSurfaceVariant
                     color: Palette.onSurface
                     font.family: Theme.fonts.body
                     font.pixelSize: panel.height * 0.030
-                    // UI-49: the denied shake is a transform, never a layout move.
-                    transform: Translate {
-                        x: denyFx.offset
-                    }
                     background: Rectangle {
                         color: Palette.surfaceContainerHighest
                         radius: Theme.radius
@@ -536,6 +490,32 @@ Item {
                         root.pressEscape();
                         event.accepted = true;
                     }
+                }
+
+                // The hint is ours, not the style's: Qt hides a centred
+                // placeholder while the field is focused, and this one must
+                // stay in INSERT too — it vanishes only when there is text.
+                FadeText {
+                    anchors.fill: field
+                    visible: field.text.length === 0
+                    text: "Search anything"
+                    color: Palette.onSurfaceVariant
+                    font.family: Theme.fonts.body
+                    font.pixelSize: panel.height * 0.030
+                    horizontalAlignment: Text.AlignHCenter
+                    verticalAlignment: Text.AlignVCenter
+                    animated: false
+                }
+
+                // UI-49: the denied cue — a red outline flash over the bar.
+                Rectangle {
+                    id: fieldFlash
+                    anchors.fill: field
+                    radius: Theme.radius
+                    color: "transparent"
+                    border.width: Math.max(1, root.height * Theme.hairlineRatio)
+                    border.color: Palette.error
+                    opacity: 0
                 }
             }
 

@@ -68,6 +68,13 @@ Item {
         content.clearSelection();
     }
 
+    /// Instant snap for far jumps (`gg`/`G`): the lists do the same through
+    /// `Theme.cursorEdge`, so the view-owned follow has nothing left to
+    /// animate once the target is already on screen.
+    function snapToCursor() {
+        content.ensureVisible(root.cursor);
+    }
+
     /// ARC-I: Alt armed the gesture — anchor on the cursor row; a visual
     /// selection swaps in the batch verb set (VI-4).
     function armQuickActions() {

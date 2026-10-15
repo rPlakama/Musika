@@ -176,7 +176,8 @@ browsing never paints a palette.
 | Playback | `Space` play/pause, `n`/`p` or `Ctrl-N`/`Ctrl-P` next/prev, `,`/`.` seek ±5 s, `m` mute, `-`/`+` volume |
 | Library | `r` sync now, `Shift-H`/`Shift-L` list order (Artist → Name → Year): albums, or songs in the Songs segment |
 | Clipboard | `y` yank the playing track, `Shift-P`/`Ctrl-V` paste into search |
-| Queue | `Ctrl-Q` drawer, `Shift-J`/`Shift-K` or `Alt-J`/`Alt-K` reorder, `d d` remove, `Enter` jump |
+| Queue | `Ctrl-Q` drawer, `Shift-J`/`Shift-K` reorder, `d d` remove, `Enter` jump |
+| Item actions | hold `Alt` on the cursor item: `h`/`j`/`k`/`l` or arrows aim (toward the opposite side passes through neutral), release Alt fires; neutral release fires nothing, Esc cancels |
 | Search | `Shift Space F` floating search, or `i` to start typing (Songs | Albums | Artists) |
 
 Fullscreen (`Shift-Enter`) adds a lyrics/queue split; `Tab` cycles the two

@@ -34,6 +34,10 @@ ApplicationWindow {
     // backend does one synchronous last-chance write (own DB, single row).
     onClosing: Backend.flushStatus()
 
+    // ARC-43: a focus loss can swallow the Alt release; never leave the
+    // quick-action overlay armed across applications.
+    onActiveChanged: if (!active) Backend.setAltHeld(false)
+
     // UI-40: `Palette.apply` snaps every role, so a cover swap is mixed here
     // (the colors payload arrives here) and pushed back through `apply` each
     // animation step. The first apply, resets and `reduceMotion` snap.
@@ -191,6 +195,36 @@ ApplicationWindow {
         }
 
         Keys.onPressed: (event) => {
+            // ARC-43: bare Alt opens the quick-action menu; it must not feed
+            // the keymap, so a half-typed sequence stays pending (which keeps
+            // the overlay disarmed).
+            if (event.key === Qt.Key_Alt) {
+                Backend.setAltHeld(true);
+                return;
+            }
+            // ARC-43: with Alt held, h/j/k/l (or the arrow keys) aim the
+            // quick-action quadrants — releasing Alt fires the aim, releasing
+            // in the neutral center fires nothing — and Esc cancels. These
+            // keys never reach the keymap.
+            if (Backend.altHeld) {
+                var aim = "";
+                if (event.key === Qt.Key_H || event.key === Qt.Key_Left)
+                    aim = "west";
+                else if (event.key === Qt.Key_J || event.key === Qt.Key_Down)
+                    aim = "south";
+                else if (event.key === Qt.Key_K || event.key === Qt.Key_Up)
+                    aim = "north";
+                else if (event.key === Qt.Key_L || event.key === Qt.Key_Right)
+                    aim = "east";
+                if (aim.length > 0) {
+                    dispatch("quick_aim " + aim);
+                    return;
+                }
+                if (event.key === Qt.Key_Escape) {
+                    dispatch("quick_cancel");
+                    return;
+                }
+            }
             var action = Backend.keyEvent(event.key, event.modifiers);
             if (action === "PENDING") {
                 keyTimer.restart();
@@ -201,6 +235,11 @@ ApplicationWindow {
                 event.accepted = true;
                 dispatch(action);
             }
+        }
+
+        Keys.onReleased: (event) => {
+            if (event.key === Qt.Key_Alt)
+                Backend.setAltHeld(false);
         }
 
         StackView {

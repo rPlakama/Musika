@@ -197,6 +197,80 @@ pub async fn song_album_payload(
     .to_string())
 }
 
+/// Rows for the ARC-43 "Add to Queue" overlay: one song or a whole album.
+pub async fn quick_songs(
+    dbs: &crate::db::Dbs,
+    kind: &str,
+    id: &str,
+) -> anyhow::Result<Vec<crate::library::SongRow>> {
+    match kind {
+        "song" => Ok(crate::library::song(&dbs.library, id)
+            .await?
+            .into_iter()
+            .collect()),
+        "album" => crate::library::album_songs(&dbs.library, id).await,
+        other => Err(anyhow::anyhow!("unknown quick-action kind: {other}")),
+    }
+}
+
+/// Serialized tracks for the ARC-43 "Add to Queue" overlay (the overlay is
+/// offline-filtered like every other queue).
+pub async fn quick_tracks_json(
+    dbs: &crate::db::Dbs,
+    kind: &str,
+    id: &str,
+    offline: bool,
+) -> anyhow::Result<String> {
+    let mut songs = quick_songs(dbs, kind, id).await?;
+    filter_offline(dbs, offline, &mut songs).await?;
+    tracks_json(dbs, songs).await
+}
+
+/// Album-page payload for ARC-43 "Go to Album" (navigation only, no queue):
+/// the same JSON shape [`queue_album_json`] gives the album page.
+pub async fn song_album_page_json(dbs: &crate::db::Dbs, song_id: &str) -> anyhow::Result<String> {
+    let song = crate::library::song(&dbs.library, song_id)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("song not found in index"))?;
+    let album_id = song
+        .album_id
+        .as_deref()
+        .filter(|id| !id.is_empty())
+        .ok_or_else(|| anyhow::anyhow!("song has no album"))?;
+    let album = crate::library::album(&dbs.library, album_id)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("album not found in index"))?;
+    let covers = crate::covers::url_map(&dbs.covers).await?;
+    Ok(queue_album_json(&album, &covers).to_string())
+}
+
+/// Artist-page payload for ARC-43 "Go to Artist" (navigation only).
+pub async fn album_artist_page_json(
+    dbs: &crate::db::Dbs,
+    album_id: &str,
+) -> anyhow::Result<String> {
+    let artist_id = crate::library::album_artist_id(&dbs.library, album_id)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("album has no artist"))?;
+    let artist = crate::library::artist(&dbs.library, &artist_id)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("artist not found in index"))?;
+    let covers = crate::covers::url_map(&dbs.covers).await?;
+    let cover = artist
+        .cover_art
+        .as_deref()
+        .and_then(|id| covers.get(id))
+        .cloned()
+        .unwrap_or_default();
+    Ok(serde_json::json!({
+        "id": artist.id,
+        "name": artist.name,
+        "album_count": artist.album_count,
+        "cover": cover,
+    })
+    .to_string())
+}
+
 /// S2/S3 resume payload (P-6): validates the remembered ids against the
 /// local index and returns `{album, queue, start, position}` — the album
 /// page to reopen (or null) and the restored queue (or ""), already pointing
@@ -493,5 +567,62 @@ mod tests {
         assert_eq!(value["queue"], "");
         assert_eq!(value["start"], 0);
         assert_eq!(value["position"], 0.0);
+    }
+
+    #[tokio::test]
+    async fn quick_actions_resolve_songs_albums_and_pages() {
+        let dbs = test_dbs().await;
+        for (id, artist_id, name) in [("al1", "ar1", "Kid A"), ("al2", "ar2", "Absolution")] {
+            sqlx::query(
+                "INSERT INTO albums (id, artist_id, name, artist, year, song_count)
+                 VALUES (?1, ?2, ?3, 'Radiohead', 2000, 2)",
+            )
+            .bind(id)
+            .bind(artist_id)
+            .bind(name)
+            .execute(&dbs.library)
+            .await
+            .unwrap();
+        }
+        sqlx::query("INSERT INTO artists (id, name, album_count) VALUES ('ar1', 'Radiohead', 2)")
+            .execute(&dbs.library)
+            .await
+            .unwrap();
+        for (id, album_id, title, track) in
+            [("s1", "al1", "Everything", 1), ("s2", "al1", "Kid A", 2)]
+        {
+            sqlx::query(
+                "INSERT INTO songs (id, album_id, artist_id, title, track)
+                 VALUES (?1, ?2, 'ar1', ?3, ?4)",
+            )
+            .bind(id)
+            .bind(album_id)
+            .bind(title)
+            .bind(track)
+            .execute(&dbs.library)
+            .await
+            .unwrap();
+        }
+
+        // "Add to Queue" selection: one song, or the album's rows.
+        let songs = quick_songs(&dbs, "song", "s2").await.unwrap();
+        assert_eq!(songs.len(), 1);
+        assert_eq!(songs[0].id, "s2");
+        let songs = quick_songs(&dbs, "album", "al1").await.unwrap();
+        assert_eq!(songs.len(), 2);
+        assert!(quick_songs(&dbs, "bogus", "s2").await.is_err());
+
+        // Navigation payloads carry the shape the pages consume.
+        let json = song_album_page_json(&dbs, "s1").await.unwrap();
+        let value: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(value["id"], "al1");
+        assert_eq!(value["tracks"], 2);
+        assert!(song_album_page_json(&dbs, "gone").await.is_err());
+
+        let json = album_artist_page_json(&dbs, "al1").await.unwrap();
+        let value: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(value["id"], "ar1");
+        assert_eq!(value["name"], "Radiohead");
+        assert!(album_artist_page_json(&dbs, "al2").await.is_err());
     }
 }

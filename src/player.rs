@@ -179,6 +179,12 @@ impl Player {
         self.pause();
     }
 
+    /// Appends tracks to the end of the queue (ARC-43 "Add to Queue"): nothing
+    /// starts playing, and an empty queue starts on the next [`Self::toggle`].
+    pub fn append(&mut self, tracks: Vec<Track>) {
+        self.queue.extend(tracks);
+    }
+
     /// (Re)starts the current track from the beginning.
     pub fn play_current(&mut self) {
         if self.queue.is_empty() {
@@ -633,5 +639,30 @@ mod tests {
         );
         assert!(shared.eof);
         assert!(shared.error);
+    }
+
+    fn track(id: &str) -> Track {
+        Track {
+            id: id.to_string(),
+            title: id.to_string(),
+            artist: String::new(),
+            album: String::new(),
+            duration: 1.0,
+            url: String::new(),
+            cover_art: String::new(),
+            cover_url: String::new(),
+        }
+    }
+
+    #[test]
+    fn append_extends_the_queue_without_moving_the_cursor() {
+        let mut player = Player::new();
+        player.append(vec![track("s1"), track("s2")]);
+        assert_eq!(player.len(), 2);
+        assert_eq!(player.index(), 0);
+        assert_eq!(player.current().map(|t| t.id.as_str()), Some("s1"));
+        player.append(vec![track("s3")]);
+        assert_eq!(player.len(), 3);
+        assert_eq!(player.index(), 0);
     }
 }

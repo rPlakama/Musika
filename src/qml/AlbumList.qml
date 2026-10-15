@@ -61,6 +61,17 @@ MediaList {
 
     onActivated: (item) => root.albumActivated(item.albumId, item.title, item.artist, item.year, item.tracks, item.cover)
 
+    // ARC-43: Alt-hold quick actions for an album row; the contextual slot
+    // swaps Go to Album for Go to Artist.
+    quickActions: function(item) {
+        return {
+            north: { label: "Add to Queue", invoke: function() { Backend.altAddToQueue("album", item.albumId) } },
+            south: { label: "Favorite", invoke: function() { Backend.altFavorite("album", item.albumId) } },
+            east: { label: "Go to Artist", invoke: function() { Backend.altGoToArtist(item.albumId) } },
+            west: null
+        };
+    }
+
     Component.onCompleted: reload()
 
     onArtistFilterChanged: reload()

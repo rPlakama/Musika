@@ -34,6 +34,23 @@ ScrollPanel {
 
     signal activated(var item)
 
+    // ARC-43: maps a row item to its Alt-hold quadrant config
+    // (`{north,south,east,west}` of `{label, invoke}`, null = open). The
+    // wrappers own the verbs; the list only relays.
+    property var quickActions: null
+    signal quickAction(var target, var actions)
+
+    /// ARC-43: Alt armed the gesture — anchor on the keyboard cursor row.
+    function armQuickActions() {
+        if (!quickActions || count === 0 || currentIndex < 0)
+            return;
+        var item = mediaRows.get(currentIndex);
+        var actions = item ? quickActions(item) : null;
+        var row = view.itemAtIndex(currentIndex);
+        if (actions && row)
+            quickAction(row, actions);
+    }
+
     emptyText: "Nothing indexed yet — run a sync"
 
     ListModel {

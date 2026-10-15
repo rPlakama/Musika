@@ -113,8 +113,8 @@ pub enum Outcome {
 ///
 /// - `j`/`k` keep the list cursor (and scrolling); `n`/`p` and `Ctrl-N`/
 ///   `Ctrl-P` skip tracks wherever a list owns focus (VI-10).
-/// - `Shift-J`/`Shift-K` and `Alt-J`/`Alt-K` move the selected queue track
-///   down/up.
+/// - `Shift-J`/`Shift-K` move the selected queue track down/up (bare `Alt`
+///   opens the quick-action menu, ARC-43; its chords stay out of the keymap).
 /// - `i` starts typing: it opens the floating search in INSERT mode.
 /// - `Enter` is context-confirm: open/play a row, jump in the queue, go back
 ///   on the album toolbar, sync in the status bar, commit in visual mode.
@@ -163,8 +163,6 @@ fn defaults() -> Vec<(&'static str, Action)> {
         ("ctrl-q", Action::QueueToggle),
         ("shift-k", Action::QueueUp),
         ("shift-j", Action::QueueDown),
-        ("alt-k", Action::QueueUp),
-        ("alt-j", Action::QueueDown),
         ("d d", Action::QueueRemove),
     ]
 }
@@ -485,9 +483,10 @@ mod tests {
         let mut keymap = Keymap::new();
         assert_eq!(keymap.feed("shift-j"), Outcome::Action(Action::QueueDown));
         assert_eq!(keymap.feed("shift-k"), Outcome::Action(Action::QueueUp));
-        assert_eq!(keymap.feed("alt-j"), Outcome::Action(Action::QueueDown));
-        assert_eq!(keymap.feed("alt-k"), Outcome::Action(Action::QueueUp));
-        assert_eq!(token_from_qt(0x4A, QT_ALT).as_deref(), Some("alt-j"));
+        // ARC-43: Alt chords belong to the quick-action overlay; the keymap
+        // must not claim them.
+        assert_eq!(keymap.feed("alt-j"), Outcome::None);
+        assert_eq!(keymap.feed("alt-k"), Outcome::None);
     }
 
     #[test]

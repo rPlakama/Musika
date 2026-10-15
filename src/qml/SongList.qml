@@ -54,6 +54,16 @@ MediaList {
 
     onActivated: (item) => Backend.playSong(item.songId)
 
+    // ARC-43: Alt-hold quick actions for a track row.
+    quickActions: function(item) {
+        return {
+            north: { label: "Add to Queue", invoke: function() { Backend.altAddToQueue("song", item.songId) } },
+            south: { label: "Favorite", invoke: function() { Backend.altFavorite("song", item.songId) } },
+            east: { label: "Go to Album", invoke: function() { Backend.altGoToAlbum(item.songId) } },
+            west: null
+        };
+    }
+
     Component.onCompleted: reload()
 
     Connections {

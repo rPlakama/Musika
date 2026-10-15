@@ -159,6 +159,25 @@ Item {
         });
     }
 
+    // ARC-43: a list arms the Alt-hold overlay through here; the action
+    // closures come from the list wrapper's `quickActions` config. Modal
+    // surfaces and the fullscreen player outrank the gesture.
+    function armQuickActions(target, actions) {
+        if (root.nowPlayingExpanded || searchOverlay.opened || queueDrawer.opened)
+            return;
+        quickActions.arm(target, actions);
+    }
+
+    // ARC-43: Alt pressed — the active view anchors the overlay on its
+    // keyboard cursor row/card through its own `armQuickActions`.
+    function beginQuickActions() {
+        if (root.nowPlayingExpanded || searchOverlay.opened || queueDrawer.opened)
+            return;
+        var view = contentStack.currentItem;
+        if (view && view.armQuickActions)
+            view.armQuickActions();
+    }
+
     // Actions dispatched from the global key handler, scoped to the active
     // region: movement only ever affects the region the cursor is in.
     function handleAction(action) {
@@ -173,6 +192,17 @@ Item {
         // (CACHE-8). Any future UI trigger goes through the same slot.
         if (action.indexOf("download_song ") === 0) {
             Backend.downloadSong(action.substring("download_song ".length));
+            return;
+        }
+
+        // ARC-43: keyboard aiming while Alt is held (h/j/k/l) and Esc cancel;
+        // sent by the window's key handler, never by the keymap.
+        if (action.indexOf("quick_aim ") === 0) {
+            quickActions.aim(action.substring("quick_aim ".length));
+            return;
+        }
+        if (action === "quick_cancel") {
+            quickActions.dismiss();
             return;
         }
 
@@ -412,12 +442,17 @@ Item {
                         AlbumList {
                             onAlbumActivated: (albumId, title, artist, year, tracks, cover) =>
                                 root.openAlbum(albumId, title, artist, year, tracks, cover)
+                            onQuickAction: (target, actions) =>
+                                root.armQuickActions(target, actions)
                         }
                     }
 
                     Component {
                         id: songListComponent
-                        SongList {}
+                        SongList {
+                            onQuickAction: (target, actions) =>
+                                root.armQuickActions(target, actions)
+                        }
                     }
 
                     Component {
@@ -438,6 +473,8 @@ Item {
                             onBack: root.leaveArtistEntry()
                             onAlbumActivated: (albumId, title, artist, year, tracks, cover) =>
                                 root.openAlbum(albumId, title, artist, year, tracks, cover)
+                            onQuickAction: (target, actions) =>
+                                root.armQuickActions(target, actions)
                         }
                     }
 
@@ -508,6 +545,17 @@ Item {
         }
     }
 
+    // ARC-43: the Alt-hold quick-action overlay. Alt anchors it on the active
+    // view's cursor item through `armQuickActions`; h/j/k/l aim and the Alt
+    // release fires. Acrylic tiles over the shell, below the toast so errors
+    // stay readable mid-gesture.
+    AltActionsOverlay {
+        id: quickActions
+        anchors.fill: parent
+        z: Theme.zRegion + 1
+        backdrop: root.nowPlayingExpanded ? nowPlaying : shell
+    }
+
     Toast {
         id: toast
         anchors.horizontalCenter: parent.horizontalCenter
@@ -557,6 +605,12 @@ Item {
         function onErrorRaised(kind, message) {
             toast.show(kind, message);
         }
+        // ARC-43: holding Alt opens the quick-action overlay on the active
+        // view's keyboard cursor item.
+        function onAlt_held_changed() {
+            if (Backend.altHeld)
+                root.beginQuickActions();
+        }
         // Q-10 (roadmap D-4): activating a song opens Fullscreen Playback.
         // Album/artist activation keeps its navigation; the album-page IPC
         // flow below clears the flag again when it pushes the album page.
@@ -583,30 +637,52 @@ Item {
         // context. Deferred so the backend is not re-entered while the signal
         // is still being emitted.
         function onDataReady(channel, payload) {
-            if (channel !== "song_album")
-                return;
-            var data = JSON.parse(payload);
-            Qt.callLater(function() {
-                Backend.playerLoad(data.queue, data.start);
-                if (!data.album)
-                    return;
-                // Same detour rule as `openAlbum`: this is an album page too.
-                Backend.rememberAlbum(data.album.id);
-                nowPlayingExpanded = false;
-                var album = data.album;
-                var meta = [];
-                if (album.year)
-                    meta.push(String(album.year));
-                if (album.tracks)
-                    meta.push(album.tracks + " songs");
-                contentStack.push(albumEntryComponent, {
-                    albumId: album.id,
-                    albumTitle: album.title,
-                    albumArtist: album.artist ? album.artist : "",
-                    albumCover: album.cover ? album.cover : "",
-                    albumMeta: meta.join("   ·   ")
+            if (channel === "song_album") {
+                var data = JSON.parse(payload);
+                Qt.callLater(function() {
+                    Backend.playerLoad(data.queue, data.start);
+                    if (!data.album)
+                        return;
+                    // Same detour rule as `openAlbum`: this is an album page too.
+                    Backend.rememberAlbum(data.album.id);
+                    nowPlayingExpanded = false;
+                    var album = data.album;
+                    var meta = [];
+                    if (album.year)
+                        meta.push(String(album.year));
+                    if (album.tracks)
+                        meta.push(album.tracks + " songs");
+                    contentStack.push(albumEntryComponent, {
+                        albumId: album.id,
+                        albumTitle: album.title,
+                        albumArtist: album.artist ? album.artist : "",
+                        albumCover: album.cover ? album.cover : "",
+                        albumMeta: meta.join("   ·   ")
+                    });
                 });
-            });
+                return;
+            }
+            // ARC-43: Go to Album / Go to Artist from the quick-action
+            // overlay — navigation only, no queue change.
+            if (channel === "open_album") {
+                var page = JSON.parse(payload);
+                Qt.callLater(function() {
+                    root.openAlbum(page.id, page.title, page.artist ? page.artist : "",
+                                   page.year ? String(page.year) : "",
+                                   String(page.tracks), page.cover ? page.cover : "");
+                });
+                return;
+            }
+            if (channel === "open_artist") {
+                var artist = JSON.parse(payload);
+                Qt.callLater(function() {
+                    contentStack.push(artistEntryComponent, {
+                        artistId: artist.id,
+                        artistName: artist.name,
+                        artistCover: artist.cover ? artist.cover : ""
+                    });
+                });
+            }
         }
     }
 

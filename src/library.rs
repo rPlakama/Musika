@@ -612,6 +612,17 @@ pub async fn album(pool: &SqlitePool, id: &str) -> Result<Option<AlbumRow>> {
     Ok(row)
 }
 
+/// The owning artist id of an album (ARC-43 "Go to Artist"); list payloads
+/// never need it, so [`AlbumRow`] omits the column.
+pub async fn album_artist_id(pool: &SqlitePool, album_id: &str) -> Result<Option<String>> {
+    let row: Option<Option<String>> =
+        sqlx::query_scalar("SELECT artist_id FROM albums WHERE id = ?1")
+            .bind(album_id)
+            .fetch_optional(pool)
+            .await?;
+    Ok(row.flatten())
+}
+
 /// A single artist by id.
 pub async fn artist(pool: &SqlitePool, id: &str) -> Result<Option<ArtistRow>> {
     let row = sqlx::query_as::<_, ArtistRow>(

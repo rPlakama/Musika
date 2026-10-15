@@ -179,6 +179,10 @@ pub struct Backend {
     artist_order: String,
     server_type: String,
     search_open: bool,
+    /// ARC-43: bare Alt held, reported by the window key handler.
+    alt_held: bool,
+    /// ARC-43: a half-typed keyboard sequence disarms the overlay.
+    key_pending: bool,
     /// Last album page / song the session should return to (P-6).
     status_album: Option<String>,
     status_song: Option<String>,
@@ -317,6 +321,17 @@ impl Backend {
         Member = server_type,
         Notify = server_type_changed
     );
+    qproperty!("altHeld", Member = alt_held, Notify = alt_held_changed);
+    qproperty!(
+        "keyPending",
+        Member = key_pending,
+        Notify = key_pending_changed
+    );
+    qproperty!(
+        "searchOpen",
+        Member = search_open,
+        Notify = search_open_changed
+    );
 
     fn set_server_url(&mut self, v: String) {
         self.server_url = v;
@@ -401,6 +416,12 @@ impl Backend {
     fn artist_order_changed(&mut self);
     #[qsignal]
     fn server_type_changed(&mut self);
+    #[qsignal]
+    fn alt_held_changed(&mut self);
+    #[qsignal]
+    fn key_pending_changed(&mut self);
+    #[qsignal]
+    fn search_open_changed(&mut self);
     #[qsignal]
     fn library_changed(&mut self);
     /// P-6 S2: restored session payload `{album, queue, start}` for `Home`.
@@ -844,6 +865,7 @@ impl Backend {
     fn key_event(&mut self, key: i32, modifiers: i32) -> String {
         let Some(token) = crate::keybind::token_from_qt(key, modifiers) else {
             self.keymap.reset();
+            self.mark_key_pending(false);
             return String::new();
         };
 
@@ -852,30 +874,63 @@ impl Backend {
         // field handles Ctrl-W itself as word-delete while typing.
         if self.search_open && token == "ctrl-w" {
             self.keymap.reset();
+            self.mark_key_pending(false);
             return String::new();
         }
 
         match self.keymap.feed(&token) {
-            Outcome::Action(action) => action.name().to_string(),
-            Outcome::Pending => "PENDING".to_string(),
-            Outcome::None => String::new(),
+            Outcome::Action(action) => {
+                self.mark_key_pending(false);
+                action.name().to_string()
+            }
+            Outcome::Pending => {
+                self.mark_key_pending(true);
+                "PENDING".to_string()
+            }
+            Outcome::None => {
+                self.mark_key_pending(false);
+                String::new()
+            }
         }
     }
 
     /// Marks the floating search as open/closed (see `key_event`).
     #[qslot(qml_name = "setSearchOpen")]
     fn set_search_open(&mut self, open: bool) {
-        self.search_open = open;
         // Leaving the previous context may have left a half-typed sequence.
         self.keymap.reset();
+        self.mark_key_pending(false);
+        if self.search_open != open {
+            self.search_open = open;
+            self.search_open_changed();
+        }
+    }
+
+    /// ARC-43: the window reports the bare Alt state; the overlay arms only
+    /// while it is held.
+    #[qslot(qml_name = "setAltHeld")]
+    fn set_alt_held(&mut self, held: bool) {
+        if self.alt_held != held {
+            self.alt_held = held;
+            self.alt_held_changed();
+        }
     }
 
     /// Resolves a deferred key sequence after the inter-key timeout.
     #[qslot(qml_name = "keyTimeout")]
     fn key_timeout(&mut self) -> String {
+        self.mark_key_pending(false);
         match self.keymap.feed_timeout() {
             Outcome::Action(action) => action.name().to_string(),
             Outcome::Pending | Outcome::None => String::new(),
+        }
+    }
+
+    /// ARC-43: pending-token bookkeeping for the quick-action overlay.
+    fn mark_key_pending(&mut self, pending: bool) {
+        if self.key_pending != pending {
+            self.key_pending = pending;
+            self.key_pending_changed();
         }
     }
 
@@ -1815,6 +1870,122 @@ impl Backend {
         self.player
             .move_item(from.max(0) as usize, to.max(0) as usize);
         self.emit_queue();
+    }
+
+    // -----------------------------------------------------------------------
+    // ARC-43 — Alt-hold quick actions
+    // -----------------------------------------------------------------------
+
+    /// Appends a serialized track list to the live queue (ARC-43 "Add to
+    /// Queue"); unlike `playerLoad`, nothing starts playing.
+    #[qslot(qml_name = "playerAppend")]
+    fn player_append(&mut self, tracks_json: String) {
+        match serde_json::from_str::<Vec<crate::player::Track>>(&tracks_json) {
+            Ok(tracks) => {
+                self.player.append(tracks);
+                self.sync_player();
+                self.emit_queue();
+                self.queue_status_save();
+            }
+            Err(err) => {
+                eprintln!("player: bad append payload: {err}");
+                self.error_raised("playback".to_string(), format!("Bad queue payload: {err}"));
+            }
+        }
+    }
+
+    /// Appends one song or a whole album to the queue (overlay North).
+    #[qslot(qml_name = "altAddToQueue")]
+    fn alt_add_to_queue(&mut self, kind: String, id: String) {
+        let invoker = self.get_qml_method_invoker();
+        let error_invoker = self.get_qml_method_invoker();
+        let Some(dbs) = crate::dbs().cloned() else {
+            return;
+        };
+        let offline = self.offline;
+        crate::runtime().spawn(async move {
+            match crate::queue::quick_tracks_json(&dbs, &kind, &id, offline).await {
+                Ok(json) => {
+                    qtbridge::invoke_method!(invoker, "playerAppend", json);
+                }
+                Err(err) => {
+                    eprintln!("alt actions: could not queue {kind} {id}: {err:#}");
+                    qtbridge::invoke_method!(
+                        error_invoker,
+                        "errorRaised",
+                        "playback".to_string(),
+                        format!("Could not add to queue: {err:#}")
+                    );
+                }
+            }
+        });
+    }
+
+    /// Favourites one song or album on the server (overlay South).
+    #[qslot(qml_name = "altFavorite")]
+    fn alt_favorite(&mut self, kind: String, id: String) {
+        let error_invoker = self.get_qml_method_invoker();
+        let Some(dbs) = crate::dbs().cloned() else {
+            return;
+        };
+        crate::runtime().spawn(async move {
+            let result = async {
+                let client = client(&dbs).await?;
+                match kind.as_str() {
+                    "song" => client.star(&[id.as_str()], &[], &[]).await,
+                    "album" => client.star(&[], &[id.as_str()], &[]).await,
+                    other => Err(anyhow::anyhow!("unknown favourite kind: {other}")),
+                }
+            }
+            .await;
+            if let Err(err) = result {
+                eprintln!("alt actions: could not favourite {kind} {id}: {err:#}");
+                qtbridge::invoke_method!(
+                    error_invoker,
+                    "errorRaised",
+                    "error".to_string(),
+                    format!("Could not favourite: {err:#}")
+                );
+            }
+        });
+    }
+
+    /// Opens the album page owning a track (overlay East on track rows).
+    #[qslot(qml_name = "altGoToAlbum")]
+    fn alt_go_to_album(&mut self, song_id: String) {
+        let invoker = self.get_qml_method_invoker();
+        let Some(dbs) = crate::dbs().cloned() else {
+            return;
+        };
+        crate::runtime().spawn(async move {
+            match crate::queue::song_album_page_json(&dbs, &song_id).await {
+                Ok(json) => {
+                    qtbridge::invoke_method!(invoker, "emitData", "open_album".to_string(), json);
+                }
+                Err(err) => {
+                    eprintln!("alt actions: could not open the album for {song_id}: {err:#}");
+                }
+            }
+        });
+    }
+
+    /// Opens the artist page owning an album (overlay East on album rows).
+    #[qslot(qml_name = "altGoToArtist")]
+    fn alt_go_to_artist(&mut self, album_id: String) {
+        let invoker = self.get_qml_method_invoker();
+        let Some(dbs) = crate::dbs().cloned() else {
+            return;
+        };
+        crate::runtime().spawn(async move {
+            match crate::queue::album_artist_page_json(&dbs, &album_id).await {
+                Ok(json) => {
+                    qtbridge::invoke_method!(invoker, "emitData", "open_artist".to_string(), json);
+                }
+                Err(err) => {
+                    eprintln!("alt actions: could not open the artist for {album_id}: {err:#}");
+                }
+            }
+        });
     }
 
     /// Seeks to an absolute position (seconds).

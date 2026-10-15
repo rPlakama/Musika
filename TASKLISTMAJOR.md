@@ -1093,23 +1093,53 @@ The product is incomplete without these.
     Open: capability gate for ratings (needs UI-42's ping fields), QML wiring
     (UI-52), artist-scoped shuffle (Q-3), In-cache aggregation (CACHE-1/5).
 
-- [ ] **ARC-43 · Alt-hold quick actions — radial quadrant overlay (experimental)** — P3 · (roadmap Alt-hold quick actions; UI-52, ARC-42)
+- [ ] **ARC-43 · Alt-hold quick actions — radial quadrant overlay** — P3 · (roadmap Alt-hold quick actions; UI-52, ARC-42)
   - **Why:** per-item actions are keyboard-only today (queue moves,
-    activation, navigation) and there is no context menu; a mouse user hovers
-    a row and has to leave it to act. The overlay is mouse parity for the same
-    verbs.
-  - **Details:** hold Alt over a track/album → four equal boxes N/S/E/W around
-    a center anchor: N Add to Queue, S Favorite, one horizontal slot
-    contextual Go to Album (track) / Go to Artist (album), the opposite slot
-    open in v1 ("—"); release over a box fires, center dead zone / leaving the
-    item / Esc cancels; TUI styling (monospace, box-drawing borders, single
-    accent, `Palette` tokens, center crosshair); one component taking item +
-    `{quadrant -> action, label}` config; flag off by default; suppress while
-    the keymap has a pending token so `alt-j`/`alt-k` never arm it.
+    activation, navigation) and there is no context menu; exposing them as a
+    transient Alt-hold menu keeps the vi grammar readable instead of hiding
+    it behind memorised chords.
+  - **Details:** hold Alt on the current track/album → four equal boxes
+    N/S/E/W around a center anchor: N Add to Queue, S Favorite, one
+    horizontal slot contextual Go to Album (track) / Go to Artist (album),
+    the opposite slot open in v1 ("—"); `h`/`j`/`k`/`l` or the arrow keys aim
+    west/south/north/east while Alt is held and the center is the neutral
+    aim — aiming toward the opposite quadrant steps back to neutral first,
+    the next press continues (north + `j` = neutral, `j` again = south).
+    Releasing Alt is Enter (fires the aim), releasing on neutral or Esc
+    cancels. TUI styling: monospace labels, 1px hard edges, `Palette` roles,
+    a neutral center dot, and acrylic option tiles over the shell (UI-55
+    blur, like the search overlay), ~70% larger than the first pass; one
+    component taking item + `{quadrant -> action, label}` config; suppress
+    while the keymap has a pending token.
   - **Verify:** track row + album card repro; context swap correct in both
-    directions; center dead zone never fires; overlay absent with Alt up and
-    never steals hover/click; flag off = zero items/animations; the acceptance
-    list in the roadmap design section passes.
+    directions; release on neutral and Esc never fire; overlay absent with
+    Alt up and never steals hover/click; the acceptance list in the roadmap
+    design section passes.
+  - **Now (partial: X0 + X1 code paths):** `AltActionsOverlay.qml` — the
+    self-contained arm/aim/confirm/cancel state machine with the roadmap hard
+    rules (Alt release confirms, neutral aim fires nothing, Esc dismisses for
+    the rest of the hold, aiming toward the opposite quadrant passes through
+    neutral), acrylic option tiles over the blurred shell (AcrylicPanel,
+    UI-55) at 1.7× and a neutral center dot, plus a config-driven
+    `{north,south,east,west}` of `{label, invoke}` slots (open slots draw
+    "—" and cannot be aimed). Alt press anchors on the active view's keyboard
+    cursor: `MediaList` rows (Songs and Albums segments) and `ArtistEntry`
+    album cards; `h/j/k/l` or the arrow keys reach the overlay as
+    `quick_aim`/`quick_cancel` pumps without touching the keymap. Actions: N Add to Queue (new
+    `playerAppend` → `player.append`, playback untouched), S Favorite
+    (`star` on song/album ids), E the contextual swap — Go to Album on
+    tracks (`altGoToAlbum`) / Go to Artist on albums (`altGoToArtist`),
+    pumped as `open_album` / `open_artist` channels — W open. Disarmed while
+    the keymap is pending (`Backend.keyPending`), the search is open, or the
+    fullscreen player / side modals own the screen. Alt is a default binding
+    (no flag): `alt-j`/`alt-k` were retired from the keymap in its favour
+    (queue reorder stays `Shift-J`/`Shift-K`) and the fullscreen pane hint
+    was updated. Tests:
+    `player::append_extends_the_queue_without_moving_the_cursor`,
+    `queue::quick_actions_resolve_songs_albums_and_pages`, plus the keymap's
+    `alt-j`/`alt-k`-unbound assertion (113 total). Open: the manual
+    acceptance run on hardware, the fourth action, and mouse/arrow-key
+    aiming (roadmap X2/open questions).
 
 - [x] **CACHE-1 · DB4 `media.db` + `media/` blobs** — P2 · (roadmap Media cache; MEDIACACHESTUDY.md §3/§5)
   - **Why:** audio is never stored; playback dies without network. Research
@@ -1796,6 +1826,8 @@ Small, bounded, high-value changes.
     (alongside Shift-J/K) and the fullscreen queue pane reorders, with a
     one-payload `_reordering` guard so the cursor does not snap back to the
     playing track; the pane hint shows `Alt-J/K move`. `Ctrl-N/P` are global.
+    (ARC-43 later re-homed the Alt chords to the quick-action overlay, so the
+    pane hint is `Shift-J/K move` and reorder is Shift-only.)
 
 - [x] **Q-10 · Song activation enters Fullscreen Playback** — P2 · (roadmap D-4)
   - **Why:** activating a song is the deliberate "listen now" verb; the user

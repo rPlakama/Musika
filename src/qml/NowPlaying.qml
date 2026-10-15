@@ -110,7 +110,7 @@ Rectangle {
     function keyHints() {
         if (pane === 1)
             return "j/k scroll   ·   ,/. seek   ·   Ctrl-N/P track   ·   Tab queue   ·   Esc exit";
-        return "j/k select   ·   Alt-J/K move   ·   Enter jump   ·   ,/. seek   ·   Ctrl-N/P track   ·   Tab lyrics   ·   Esc exit";
+        return "j/k select   ·   Shift-J/K move   ·   Enter jump   ·   ,/. seek   ·   Ctrl-N/P track   ·   Tab lyrics   ·   Esc exit";
     }
 
     function scrollLyrics(delta) {

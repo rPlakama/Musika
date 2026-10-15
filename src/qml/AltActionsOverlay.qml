@@ -157,10 +157,10 @@ Item {
     }
 
     // ARC-UI-1: one parent rectangle owns the cluster — the margin between the
-    // target and each tile, and the option scale. The tiles anchor to its
-    // edges (up/down horizontally centred, left/right vertically centred) and
-    // the neutral mark sits at its centre; the rectangle sizes itself around
-    // the target plus the opposing tiles.
+    // frame and each tile, and the option scale. The frame is a square built
+    // on the target's larger side, so the four tiles (edge midpoints) are
+    // equidistant from the neutral centre and h/j/k/l travel the same
+    // distance; the neutral mark sits at its centre.
     Rectangle {
         id: board
 
@@ -172,13 +172,14 @@ Item {
 
         /// Scale-independent tile metrics: `unitFont` sizes the open-slot
         /// "—" and `unitBoxSide` the square the verb icon fills; the ramp
-        /// scales both.
+        /// scales both. The tile side was halved per review (the squares
+        /// were scaling too large).
         readonly property real unitFont: Math.max(11, root.height * 0.018)
-        readonly property real unitBoxSide: root.height * 0.14
+        readonly property real unitBoxSide: root.height * 0.07
         readonly property real maxBoxSide: unitBoxSide * maxOptionScale
 
-        /// The target↔tile gap, grown so UP/DOWN and LEFT/RIGHT squares
-        /// always clear each other (the old fixed margin let them overlap).
+        /// The frame↔tile gap, grown so the four squares always clear each
+        /// other (the old fixed margin let them overlap).
         readonly property real baseMargin: root.height * 0.02
         readonly property real margin: Math.max(baseMargin, maxBoxSide * 0.25,
             (maxBoxSide - Math.max(root.targetWidth, root.targetHeight)) / 2 + baseMargin)
@@ -201,8 +202,8 @@ Item {
                                       safeRect.height / rampHeight),
             minOptionScale, maxOptionScale)
 
-        /// The four tiles are squares of one side, so the margin between the
-        /// target and each tile reads the same UP/DOWN and LEFT/RIGHT.
+        /// The four tiles are squares of one side, placed on the edge
+        /// midpoints of the board's square frame.
         readonly property real boxFont: unitFont * optionScale
         readonly property real boxSide: unitBoxSide * optionScale
 
@@ -214,8 +215,19 @@ Item {
         readonly property real drawnWidth: width * fitScale
         readonly property real drawnHeight: height * fitScale
 
-        width: root.targetWidth + 2 * margin + 2 * boxSide
-        height: root.targetHeight + 2 * margin + 2 * boxSide
+        /// The square frame: the target's larger side plus the margin on
+        /// every side and a tile on each edge, so all four moves land the
+        /// same distance from the centre. The interior gap (centre to a
+        /// tile's inner edge) is capped at 3x the tile, so a wide target
+        /// cannot fling the tiles far from the neutral (frame = 2 tiles +
+        /// 6 tiles = 8 tiles at the cap).
+        readonly property real frameMaxSide: 8 * boxSide
+        readonly property real frameSide: Math.min(
+            Math.max(root.targetWidth, root.targetHeight) + 2 * margin + 2 * boxSide,
+            frameMaxSide)
+
+        width: frameSide
+        height: frameSide
         color: "transparent"
         transformOrigin: Item.TopLeft
         scale: fitScale

@@ -1465,6 +1465,39 @@ The product is incomplete without these.
     a reopened queue (or restart) shows the true membership; chrome/rows
     without a queue meaning never draw the mark.
 
+### Lyrics experience (ARC-UI-5)
+
+- [ ] **ARC-UI-5 · Spotify-grade lyrics stage — soothing, springy, dots + effects** — P2 · **"Research up what makes it good! Lyrics."** · (LYRICSEXPERIENCESTUDY.md; LYR-8/LYR-10/LYR-6, roadmap "Lyrics presentation")
+  - **Why:** the lyrics pane is already synced and glides (LYR-8/LYR-9),
+    but Spotify's stage reads *good* for reasons ours does not yet carry:
+    the focus window has an affordance for non-lyric time (the **"…"** trio
+    during intros and instrumental breaks), the motion settles with a spring
+    instead of a linear ease, lines are addressable (tap to seek), and the
+    scroll has a rubber-band edge. The research (quoted Newsroom/Support/
+    Musixmatch sources + observed behaviour) is in
+    `LYRICSEXPERIENCESTUDY.md` §1–§4.
+  - **Details (LYRICSEXPERIENCESTUDY.md §3/§6):**
+    - **L0 dots** — a pure `Lyrics.js` waiting-helper (`activeLyric < 0`
+      before the first timed line, instrumental gaps past a ~4 s threshold,
+      timed empty lines) drives three staggered dots in the focus slot;
+      they dissolve into the first line; `reduceMotion` keeps them static.
+    - **L1 spring** — the `glideToCenter` motion gains a spring settle
+      (`Easing.OutBack`, bounded overshoot, or a damped follower) at the same
+      `followMs: 300` and bezier the pane fade binds to; far/seek landings
+      stay decelerate/instant; retarget in place mid-flight.
+    - **L2 addressable lines** — click/tap a line seeks to its `t` with a
+      hover state; `Enter`-on-lyrics parity decided in the study; the
+      hold/resume window and j/k scrolling stay intact.
+    - **L3 polish** — elastic `DragOverBounds` on the lyrics body only, and
+      the top/bottom edge fades (closes the LYR-8 residual).
+    - **L4 karaoke (stretch)** — per-word accent fill only when the
+      OpenSubsonic `cueLine` payload exists (LYR-6/LYR-10); never fake timing.
+  - **Verify:** the §7 matrix — helper cases in the harness, the spring
+    glide trace (mid-flight samples, bounded overshoot, settle), real intros
+    with dots, an instrumental break, click-seek + `,/.` seek, manual
+    scroll + resume, unsynced/loading/no-lyrics states, track change
+    mid-glide, palette swap while playing.
+
 ### Incremental (ARC-I)
 
 - [x] **ARC-I · Alt menu in the Search overlay** — P3 · (ARC-UI-1 follow-up)
@@ -3358,10 +3391,10 @@ Kept for rationale; the tree already carries these.
 | Bucket | Open | Solved |
 |--------|------|--------|
 | Must have | 6 | 2 |
-| Should have | 57 | 16 |
+| Should have | 58 | 16 |
 | Quick wins | 32 | 62 |
 | Solved (reference) | — | 40 |
-| **Total** | **95** | **120** |
+| **Total** | **96** | **120** |
 
 ### Coverage by area
 
@@ -3373,7 +3406,7 @@ Kept for rationale; the tree already carries these.
 | Lyrics pipeline | 2 | 7 |
 | Search | 2 | 6 |
 | UI microdesigns | 19 | 32 |
-| Overlay & scroll (ARC-UI) | 3 | 1 |
+| Overlay & scroll (ARC-UI) | 4 | 1 |
 | Incremental (ARC-I) | 2 | 2 |
 | Dynamic color | 1 | 5 |
 | Architecture & robustness | 21 | 21 |

@@ -46,7 +46,8 @@ MediaList {
                 meta: Theme.formatTime(song.duration),
                 cover: song.cover ? song.cover : "",
                 songId: song.id,
-                albumId: song.album_id ? song.album_id : ""
+                albumId: song.album_id ? song.album_id : "",
+                starred: song.starred === true
             });
         }
         root.setRows(rows);

@@ -49,7 +49,8 @@ MediaList {
                 cover: artist.cover ? artist.cover : "",
                 artistId: artist.id,
                 artistName: artist.name,
-                artistCover: artist.cover ? artist.cover : ""
+                artistCover: artist.cover ? artist.cover : "",
+                starred: artist.starred === true
             });
         }
         root.setRows(rows);

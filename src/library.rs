@@ -57,7 +57,7 @@ pub async fn replace(
 
     for artist in artists {
         sqlx::query(
-            "INSERT INTO artists (id, name, album_count, cover_art, image_url, starred)
+            "INSERT INTO artists (id, name, album_count, cover_art, starred, image_url, starred)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
         )
         .bind(&artist.id)
@@ -246,7 +246,7 @@ pub async fn search_artists_albums(
     let like = format!("%{escaped}%");
 
     let artists = sqlx::query_as::<_, ArtistRow>(
-        "SELECT id, name, album_count, cover_art
+        "SELECT id, name, album_count, cover_art, starred
          FROM artists
          WHERE name LIKE ?1 ESCAPE '\\'
          ORDER BY name
@@ -258,7 +258,7 @@ pub async fn search_artists_albums(
     .await?;
 
     let albums = sqlx::query_as::<_, AlbumRow>(
-        "SELECT id, name AS title, artist, year, song_count, cover_art
+        "SELECT id, name AS title, artist, year, song_count, cover_art, starred
          FROM albums
          WHERE name LIKE ?1 ESCAPE '\\' OR artist LIKE ?1 ESCAPE '\\'
          ORDER BY artist, name
@@ -323,6 +323,30 @@ pub async fn song_album_ids(
         .collect())
 }
 
+/// The subset of `ids` the server marks as favourites (UI-56): the search
+/// index carries no `starred`, so the search payload joins it back in from
+/// the library.
+pub async fn song_starred_ids(
+    pool: &SqlitePool,
+    ids: &[String],
+) -> Result<std::collections::HashSet<String>> {
+    if ids.is_empty() {
+        return Ok(std::collections::HashSet::new());
+    }
+
+    let mut builder = sqlx::QueryBuilder::new(
+        "SELECT id FROM songs WHERE starred IS NOT NULL AND id IN (",
+    );
+    let mut separated = builder.separated(", ");
+    for id in ids {
+        separated.push_bind(id.clone());
+    }
+    separated.push_unseparated(")");
+
+    let rows: Vec<String> = builder.build_query_scalar().fetch_all(pool).await?;
+    Ok(rows.into_iter().collect())
+}
+
 /// Every `coverArt` id referenced by the library, used to drive the cover
 /// cache and to know which cached images became stale.
 ///
@@ -347,6 +371,8 @@ pub struct AlbumRow {
     pub year: Option<i32>,
     pub song_count: i64,
     pub cover_art: Option<String>,
+    /// Server `starred` timestamp; `Some` = favourited (UI-56).
+    pub starred: Option<String>,
 }
 
 /// A row for an album's song list.
@@ -360,6 +386,8 @@ pub struct SongRow {
     pub track: Option<i32>,
     pub duration: Option<i32>,
     pub cover_art: Option<String>,
+    /// Server `starred` timestamp; `Some` = favourited (UI-56).
+    pub starred: Option<String>,
 }
 
 /// A row for the artist list.
@@ -369,6 +397,9 @@ pub struct ArtistRow {
     pub name: String,
     pub album_count: i64,
     pub cover_art: Option<String>,
+    /// Server `starred` timestamp; the payload ORs the local `artist_user`
+    /// overlay on top (UI-56).
+    pub starred: Option<String>,
 }
 
 /// Orderings offered by the album list and the song list (`Shift-H`/
@@ -407,27 +438,27 @@ pub fn cycle_artist_order(current: &str, delta: i64) -> &'static str {
 pub async fn albums(pool: &SqlitePool, artist: Option<&str>, order: &str) -> Result<Vec<AlbumRow>> {
     let sql: &'static str = match (artist.is_some(), order) {
         (true, "Name") => {
-            "SELECT id, name AS title, artist, year, song_count, cover_art
+            "SELECT id, name AS title, artist, year, song_count, cover_art, starred
              FROM albums WHERE artist = ?1 ORDER BY name"
         }
         (true, "Year") => {
-            "SELECT id, name AS title, artist, year, song_count, cover_art
+            "SELECT id, name AS title, artist, year, song_count, cover_art, starred
              FROM albums WHERE artist = ?1 ORDER BY year DESC, name"
         }
         (true, _) => {
-            "SELECT id, name AS title, artist, year, song_count, cover_art
+            "SELECT id, name AS title, artist, year, song_count, cover_art, starred
              FROM albums WHERE artist = ?1 ORDER BY artist, name"
         }
         (false, "Name") => {
-            "SELECT id, name AS title, artist, year, song_count, cover_art
+            "SELECT id, name AS title, artist, year, song_count, cover_art, starred
              FROM albums ORDER BY name"
         }
         (false, "Year") => {
-            "SELECT id, name AS title, artist, year, song_count, cover_art
+            "SELECT id, name AS title, artist, year, song_count, cover_art, starred
              FROM albums ORDER BY year DESC, name"
         }
         (false, _) => {
-            "SELECT id, name AS title, artist, year, song_count, cover_art
+            "SELECT id, name AS title, artist, year, song_count, cover_art, starred
              FROM albums ORDER BY artist, name"
         }
     };
@@ -453,15 +484,15 @@ pub async fn artist_albums(
 ) -> Result<Vec<AlbumRow>> {
     let sql: &'static str = match order {
         "Name" => {
-            "SELECT id, name AS title, artist, year, song_count, cover_art
+            "SELECT id, name AS title, artist, year, song_count, cover_art, starred
              FROM albums WHERE artist_id = ?1 ORDER BY name"
         }
         "Year" => {
-            "SELECT id, name AS title, artist, year, song_count, cover_art
+            "SELECT id, name AS title, artist, year, song_count, cover_art, starred
              FROM albums WHERE artist_id = ?1 ORDER BY year DESC, name"
         }
         _ => {
-            "SELECT id, name AS title, artist, year, song_count, cover_art
+            "SELECT id, name AS title, artist, year, song_count, cover_art, starred
              FROM albums WHERE artist_id = ?1 ORDER BY year, name"
         }
     };
@@ -476,10 +507,10 @@ pub async fn artist_albums(
 pub async fn artists(pool: &SqlitePool, order: &str) -> Result<Vec<ArtistRow>> {
     let sql: &'static str = match order {
         "Albums" => {
-            "SELECT id, name, album_count, cover_art FROM artists
+            "SELECT id, name, album_count, cover_art, starred FROM artists
              ORDER BY album_count DESC, name"
         }
-        _ => "SELECT id, name, album_count, cover_art FROM artists ORDER BY name",
+        _ => "SELECT id, name, album_count, cover_art, starred FROM artists ORDER BY name",
     };
     let rows = sqlx::query_as::<_, ArtistRow>(sql).fetch_all(pool).await?;
     Ok(rows)
@@ -489,19 +520,19 @@ pub async fn artists(pool: &SqlitePool, order: &str) -> Result<Vec<ArtistRow>> {
 pub async fn all_songs(pool: &SqlitePool, order: &str) -> Result<Vec<SongRow>> {
     let sql: &'static str = match order {
         "Name" => {
-            "SELECT s.id, s.title, s.artist, s.album, s.album_id, s.track, s.duration,
+            "SELECT s.id, s.title, s.artist, s.album, s.album_id, s.track, s.duration, s.starred,
                     COALESCE(al.cover_art, s.cover_art) AS cover_art
              FROM songs s LEFT JOIN albums al ON al.id = s.album_id
              ORDER BY s.title, s.artist, s.album"
         }
         "Year" => {
-            "SELECT s.id, s.title, s.artist, s.album, s.album_id, s.track, s.duration,
+            "SELECT s.id, s.title, s.artist, s.album, s.album_id, s.track, s.duration, s.starred,
                     COALESCE(al.cover_art, s.cover_art) AS cover_art
              FROM songs s LEFT JOIN albums al ON al.id = s.album_id
              ORDER BY s.year DESC, s.title, s.artist"
         }
         _ => {
-            "SELECT s.id, s.title, s.artist, s.album, s.album_id, s.track, s.duration,
+            "SELECT s.id, s.title, s.artist, s.album, s.album_id, s.track, s.duration, s.starred,
                     COALESCE(al.cover_art, s.cover_art) AS cover_art
              FROM songs s LEFT JOIN albums al ON al.id = s.album_id
              ORDER BY s.artist, s.album, s.disc_number, s.track, s.title"
@@ -560,21 +591,21 @@ pub async fn songs_range(
 ) -> Result<Vec<SongRow>> {
     let sql: &'static str = match order {
         "Name" => {
-            "SELECT s.id, s.title, s.artist, s.album, s.album_id, s.track, s.duration,
+            "SELECT s.id, s.title, s.artist, s.album, s.album_id, s.track, s.duration, s.starred,
                     COALESCE(al.cover_art, s.cover_art) AS cover_art
              FROM songs s LEFT JOIN albums al ON al.id = s.album_id
              ORDER BY s.title, s.artist, s.album
              LIMIT ?1 OFFSET ?2"
         }
         "Year" => {
-            "SELECT s.id, s.title, s.artist, s.album, s.album_id, s.track, s.duration,
+            "SELECT s.id, s.title, s.artist, s.album, s.album_id, s.track, s.duration, s.starred,
                     COALESCE(al.cover_art, s.cover_art) AS cover_art
              FROM songs s LEFT JOIN albums al ON al.id = s.album_id
              ORDER BY s.year DESC, s.title, s.artist
              LIMIT ?1 OFFSET ?2"
         }
         _ => {
-            "SELECT s.id, s.title, s.artist, s.album, s.album_id, s.track, s.duration,
+            "SELECT s.id, s.title, s.artist, s.album, s.album_id, s.track, s.duration, s.starred,
                     COALESCE(al.cover_art, s.cover_art) AS cover_art
              FROM songs s LEFT JOIN albums al ON al.id = s.album_id
              ORDER BY s.artist, s.album, s.disc_number, s.track, s.title
@@ -592,7 +623,7 @@ pub async fn songs_range(
 /// A single song by id.
 pub async fn song(pool: &SqlitePool, id: &str) -> Result<Option<SongRow>> {
     let row = sqlx::query_as::<_, SongRow>(
-        "SELECT s.id, s.title, s.artist, s.album, s.album_id, s.track, s.duration,
+        "SELECT s.id, s.title, s.artist, s.album, s.album_id, s.track, s.duration, s.starred,
                 COALESCE(al.cover_art, s.cover_art) AS cover_art
          FROM songs s LEFT JOIN albums al ON al.id = s.album_id
          WHERE s.id = ?1",
@@ -626,7 +657,7 @@ pub async fn find_song_id(
 /// A single album by id.
 pub async fn album(pool: &SqlitePool, id: &str) -> Result<Option<AlbumRow>> {
     let row = sqlx::query_as::<_, AlbumRow>(
-        "SELECT id, name AS title, artist, year, song_count, cover_art
+        "SELECT id, name AS title, artist, year, song_count, cover_art, starred
          FROM albums
          WHERE id = ?1",
     )
@@ -650,7 +681,7 @@ pub async fn album_artist_id(pool: &SqlitePool, album_id: &str) -> Result<Option
 /// A single artist by id.
 pub async fn artist(pool: &SqlitePool, id: &str) -> Result<Option<ArtistRow>> {
     let row = sqlx::query_as::<_, ArtistRow>(
-        "SELECT id, name, album_count, cover_art FROM artists WHERE id = ?1",
+        "SELECT id, name, album_count, cover_art, starred FROM artists WHERE id = ?1",
     )
     .bind(id)
     .fetch_optional(pool)
@@ -667,7 +698,7 @@ pub async fn songs_by_ids(pool: &SqlitePool, ids: &[String]) -> Result<Vec<SongR
     }
 
     let mut builder = sqlx::QueryBuilder::new(
-        "SELECT s.id, s.title, s.artist, s.album, s.album_id, s.track, s.duration,
+        "SELECT s.id, s.title, s.artist, s.album, s.album_id, s.track, s.duration, s.starred,
                 COALESCE(al.cover_art, s.cover_art) AS cover_art
          FROM songs s LEFT JOIN albums al ON al.id = s.album_id
          WHERE s.id IN (",
@@ -687,7 +718,7 @@ pub async fn songs_by_ids(pool: &SqlitePool, ids: &[String]) -> Result<Vec<SongR
 /// Songs of one album, in disc/track order. Covers come from the album.
 pub async fn album_songs(pool: &SqlitePool, album_id: &str) -> Result<Vec<SongRow>> {
     let rows = sqlx::query_as::<_, SongRow>(
-        "SELECT s.id, s.title, s.artist, s.album, s.album_id, s.track, s.duration,
+        "SELECT s.id, s.title, s.artist, s.album, s.album_id, s.track, s.duration, s.starred,
                 COALESCE(al.cover_art, s.cover_art) AS cover_art
          FROM songs s LEFT JOIN albums al ON al.id = s.album_id
          WHERE s.album_id = ?1
@@ -703,7 +734,7 @@ pub async fn album_songs(pool: &SqlitePool, album_id: &str) -> Result<Vec<SongRo
 /// album-major then disc/track order.
 pub async fn artist_songs(pool: &SqlitePool, artist_id: &str) -> Result<Vec<SongRow>> {
     let rows = sqlx::query_as::<_, SongRow>(
-        "SELECT s.id, s.title, s.artist, s.album, s.album_id, s.track, s.duration,
+        "SELECT s.id, s.title, s.artist, s.album, s.album_id, s.track, s.duration, s.starred,
                 COALESCE(al.cover_art, s.cover_art) AS cover_art
          FROM songs s JOIN albums al ON al.id = s.album_id
          WHERE al.artist_id = ?1

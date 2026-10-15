@@ -269,7 +269,8 @@ Item {
                 cover: song.cover,
                 // ARC-I: the recycled Alt verbs key on these names.
                 songId: song.id,
-                albumId: song.album_id ? song.album_id : ""
+                albumId: song.album_id ? song.album_id : "",
+                starred: song.starred === true
             });
         }
         for (i = 0; i < data.albums.length; i++) {
@@ -283,7 +284,8 @@ Item {
                 artist: album.artist ? album.artist : "",
                 year: album.year ? String(album.year) : "",
                 tracks: String(album.song_count),
-                albumId: album.id
+                albumId: album.id,
+                starred: album.starred === true
             });
         }
         for (i = 0; i < data.artists.length; i++) {
@@ -296,7 +298,8 @@ Item {
                 subtitle: artist.album_count + (artist.album_count === 1 ? " album" : " albums"),
                 meta: "",
                 cover: artist.cover,
-                artistId: artist.id
+                artistId: artist.id,
+                starred: artist.starred === true
             });
         }
 

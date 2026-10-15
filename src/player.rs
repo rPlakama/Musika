@@ -51,6 +51,9 @@ pub struct Track {
     /// optional so payloads serialized before the field still deserialize.
     #[serde(default)]
     pub album_id: String,
+    /// UI-56: the queue row's favourite mark; optional for old payloads.
+    #[serde(default)]
+    pub favorite: bool,
     pub duration: f64,
     pub url: String,
     pub cover_art: String,
@@ -652,6 +655,7 @@ mod tests {
             artist: String::new(),
             album: String::new(),
             album_id: String::new(),
+            favorite: false,
             duration: 1.0,
             url: String::new(),
             cover_art: String::new(),

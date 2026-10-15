@@ -1834,6 +1834,7 @@ impl Backend {
                     "artist": track.artist,
                     "album": track.album,
                     "album_id": track.album_id,
+                    "starred": track.favorite,
                     "duration": track.duration,
                     "cover": track.cover_url,
                 })

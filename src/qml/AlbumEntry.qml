@@ -91,7 +91,8 @@ Rectangle {
             songs.append({
                 track: song.track ? String(song.track) : String(i + 1),
                 title: song.title,
-                duration: Theme.formatTime(song.duration)
+                duration: Theme.formatTime(song.duration),
+                starred: song.starred === true
             });
         }
         root.loading = false;
@@ -318,6 +319,7 @@ Rectangle {
                 required property string track
                 required property string title
                 required property string duration
+                required property bool starred
 
                 width: songList.width
                 height: root.height * 0.055
@@ -362,6 +364,18 @@ Rectangle {
                     color: Palette.onSurfaceVariant
                     font.pixelSize: songRow.height * 0.32
                     animated: false
+                }
+
+                // UI-56: the favourite heart leads the duration.
+                Icon {
+                    visible: songRow.starred
+                    anchors.verticalCenter: parent.verticalCenter
+                    anchors.right: songDuration.left
+                    anchors.rightMargin: songRow.height * 0.12
+                    width: songDuration.font.pixelSize * 0.8
+                    height: width
+                    name: "baseline-favorite"
+                    symbolColor: Theme.iconStrong
                 }
 
                 HoverHandler {

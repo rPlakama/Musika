@@ -180,7 +180,8 @@ Rectangle {
                 title: track.title,
                 duration: Theme.formatTime(track.duration),
                 songId: track.id,
-                albumId: track.album_id ? track.album_id : ""
+                albumId: track.album_id ? track.album_id : "",
+                starred: track.starred === true
             });
         }
         queueIndex = data.index;
@@ -940,6 +941,7 @@ Rectangle {
                                         required property int index
                                         required property string title
                                         required property string duration
+                                        required property bool starred
 
                                         readonly property bool emphasized: index === root.queueCursor || rowHover.hovered
 
@@ -988,6 +990,19 @@ Rectangle {
                                             color: Palette.onSurfaceVariant
                                             font.pixelSize: Theme.fontSize("mono", root.height)
                                             animated: false
+                                        }
+
+                                        // UI-56: the favourite heart leads the
+                                        // duration (state mark, no hitbox).
+                                        Icon {
+                                            visible: row.starred
+                                            anchors.verticalCenter: parent.verticalCenter
+                                            anchors.right: durationLabel.left
+                                            anchors.rightMargin: queueList.width * 0.01
+                                            width: durationLabel.font.pixelSize * 0.8
+                                            height: width
+                                            name: "baseline-favorite"
+                                            symbolColor: Theme.iconStrong
                                         }
 
                                         HoverHandler {

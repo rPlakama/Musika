@@ -124,6 +124,7 @@ ScrollPanel {
             required property string subtitle
             required property string meta
             required property string cover
+            required property bool starred
 
             readonly property real viewWidth: ListView.view ? ListView.view.width : 0
             // Mouse/keyboard parity: the hovered row expands like the cursor.
@@ -219,6 +220,19 @@ ScrollPanel {
                 color: Palette.onSurfaceVariant
                 font.pixelSize: row.height * 0.19
                 animated: false
+            }
+
+            // UI-56: the favourite heart leads the meta text — a state mark
+            // (no hitbox); unstarred rows draw nothing and leave no gap.
+            Icon {
+                visible: row.starred
+                anchors.verticalCenter: parent.verticalCenter
+                anchors.right: metaLabel.left
+                anchors.rightMargin: row.viewWidth * 0.015
+                width: metaLabel.font.pixelSize * 0.8
+                height: width
+                name: "baseline-favorite"
+                symbolColor: Theme.iconStrong
             }
 
             HoverHandler {

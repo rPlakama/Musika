@@ -1664,7 +1664,7 @@ Small, bounded, high-value changes.
 > **Easiest batch** — moved from Should have on 2026-10-14 (the smallest
 > remaining work): UI-35, S-6, UI-42, CACHE-3, CACHE-4, P-1.
 
-- [ ] **UI-56 · Microdesign: favorites lead with a heart before their meta** — P3 · **top priority** · (design microtask; P-2, ARC-42)
+- [x] **UI-56 · Microdesign: favorites lead with a heart before their meta** — P3 · **top priority** · (design microtask; P-2, ARC-42)
   - **Why:** every album, song and artist row shows its `<track amount>` /
     `<track duration>` / `<album quantity>` meta with no way to tell a
     favourited row from a plain one — the heart reads only after opening the
@@ -1674,11 +1674,18 @@ Small, bounded, high-value changes.
     tracks the artist favourite (ARC-42), but the row structs (`AlbumRow`,
     `SongRow`, `ArtistRow`), `browse.rs` JSON and the QML row models drop it.
   - **Details:**
+    - regions (all row surfaces): the Main lists (`MediaList` →
+      `AlbumList`/`SongList`/`ArtistList`), `AlbumEntry`'s song list,
+      `ArtistEntry`'s album cards, the fullscreen playback queue in
+      `NowPlaying`, and all three search columns;
     - backend: select `starred` into the three row structs, thread it through
       `browse.rs` (`album_json`/`song_rows_json`/`artist_json`) as a boolean
       (`"starred": starred.is_some()`; artists: OR the `artist_user` flag so
-      both surfaces agree), and keep the search payloads (`search.rs`,
-      `search_json`) in step — unit test the JSON key on a starred fixture;
+      both surfaces agree), the search payloads (`search.rs` song hits need
+      the library lookup `search_json` already does for `album_id`) and the
+      queue (`player::Track` gains a `#[serde(default)]` favourite field, as
+      `album_id` did in ARC-UI-1); unit test the JSON key on a starred
+      fixture;
     - QML: `MediaList`'s delegate gains a `required property bool starred` and
       the heart is **anchored at the left edge of the meta label** (meta stays
       right-aligned; the title/subtitle's right anchor already points at the
@@ -1687,11 +1694,12 @@ Small, bounded, high-value changes.
       `0.8 × meta font` frame, meta-label spacing) visible only when
       `row.starred`; the wrappers (`AlbumList`, `SongList`, `ArtistList`) map
       the payload flag into their rows and set `starred: album.starred` etc.;
+      the same spawn/spacing lands in `SearchColumn`, `AlbumEntry`'s song
+      rows, `ArtistEntry`'s album cards and the `NowPlaying` queue delegate;
     - placement contract: the glyph sits in front of (left of)
-      `<track count> tracks` / `<track duration>` / `<album count> albums` on
-      Albums/Songs/Artists; the same flag/placement extends to `AlbumEntry`
-      song rows, `ArtistEntry` album cards and the search columns as a
-      follow-up, not in this task;
+      `<track count> tracks` / `<track duration>` / `<album count> albums` in
+      every region; the search artist column carries no meta, so the heart
+      leads its count subtitle instead;
     - the heart is not interactive (no hitbox, no cursor change, hover/cursor
       block unchanged) — it is a state mark, not a button;
     - live parity: `altFavorite` on a song/album stars on the server but the
@@ -1701,10 +1709,23 @@ Small, bounded, high-value changes.
       the mark can be lightened as well as lit; artist rows read the
       `artist_user` payload.
   - **Verify:** star an album/song/artist on the server, sync, then browse:
-    the heart leads the meta on exactly the favourited rows (Albums, Songs,
-    Artists), and unstarred rows show none; long titles/durations keep elide
-    and the meta never shifts; hover, cursor, click and keyboard flows are
-    unchanged; `mapRow`/JSON test passes and `qmllint`/offscreen run is clean.
+    the heart leads the meta on exactly the favourited rows in the Main lists,
+    the album page, `ArtistEntry`'s cards, the fullscreen queue and all three
+    search columns, and unstarred rows show none; long titles/durations keep
+    elide and the meta never shifts; hover, cursor, click and keyboard flows
+    are unchanged; `mapRow`/JSON test passes and `qmllint`/offscreen run is
+    clean.
+  - **Now:** landed — `starred` rides every row payload (`AlbumRow`/`SongRow`/
+    `ArtistRow` selects, `player::Track.favorite`), `browse.rs` emits
+    `"starred"` for albums/songs/artists (artists OR the `artist_user`
+    overlay) and the search payload joins it back from the library
+    (`library::song_starred_ids`); the white `baseline-favorite` heart
+    (`Theme.iconStrong`) leads the meta in `MediaList` (Albums/Songs/
+    Artists), `SearchColumn` (artists via the count subtitle), `AlbumEntry`
+    songs, `ArtistEntry` cards and the fullscreen queue — no hitbox, no gap
+    when unstarred. `cargo test` 115 pass (row-JSON flag test);
+    `scripts/check-icons.sh` ok; QML parses clean under `qmllint`. Open:
+    optimistic toggle parity with `altFavorite`/P-2 and the manual pass.
 
 - [x] **UI-13 · Scroll position hint** — P3 · **removed 2026-10-14**
   - **Why:** long lists have no scrollbar/position feedback for mouse users.
@@ -2813,9 +2834,9 @@ Kept for rationale; the tree already carries these.
 |--------|------|--------|
 | Must have | 7 | 2 |
 | Should have | 82 | 15 |
-| Quick wins | 7 | 57 |
+| Quick wins | 6 | 58 |
 | Solved (reference) | — | 36 |
-| **Total** | **96** | **110** |
+| **Total** | **95** | **111** |
 
 ### Coverage by area
 
@@ -2826,7 +2847,7 @@ Kept for rationale; the tree already carries these.
 | Player & media features | 5 | 2 |
 | Lyrics pipeline | 2 | 7 |
 | Search | 2 | 6 |
-| UI microdesigns | 20 | 30 |
+| UI microdesigns | 19 | 31 |
 | Alt action menu (ARC-UI) | 0 | 1 |
 | Incremental (ARC-I) | 0 | 1 |
 | Dynamic color | 1 | 5 |

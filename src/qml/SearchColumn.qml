@@ -158,6 +158,7 @@ Item {
                         required property string subtitle
                         required property string meta
                         required property string cover
+                        required property bool starred
 
                         readonly property bool current: index === root.cursor
                         // UI-45: the focused cursor or any hovered row leads.
@@ -233,15 +234,48 @@ Item {
                                 }
                             }
 
-                            FadeText {
+                            Row {
                                 width: parent.width
+                                spacing: row.height * 0.06
                                 visible: row.subtitle.length > 0
-                                text: row.subtitle
-                                color: row.current && root.active ? Palette.onSecondaryContainer : Palette.onSurfaceVariant
-                                font.pixelSize: Theme.clamp(row.height * 0.24, 10, 14)
-                                elide: Text.ElideRight
-                                animated: false
+
+                                // UI-56: the artist column carries no meta, so
+                                // the heart leads its count subtitle instead.
+                                Icon {
+                                    id: subtitleHeart
+                                    visible: row.starred && row.meta.length === 0
+                                    anchors.verticalCenter: parent.verticalCenter
+                                    width: subtitleLabel.font.pixelSize * 0.8
+                                    height: width
+                                    name: "baseline-favorite"
+                                    symbolColor: Theme.iconStrong
+                                }
+
+                                FadeText {
+                                    id: subtitleLabel
+                                    width: Math.max(0, parent.width
+                                        - (subtitleHeart.visible
+                                            ? subtitleHeart.width + parent.spacing : 0))
+                                    text: row.subtitle
+                                    color: row.current && root.active ? Palette.onSecondaryContainer : Palette.onSurfaceVariant
+                                    font.pixelSize: Theme.clamp(row.height * 0.24, 10, 14)
+                                    elide: Text.ElideRight
+                                    animated: false
+                                }
                             }
+                        }
+
+                        // UI-56: the favourite heart leads the meta text (a
+                        // state mark, no hitbox); unstarred rows draw none.
+                        Icon {
+                            visible: row.starred && row.meta.length > 0
+                            anchors.verticalCenter: parent.verticalCenter
+                            anchors.right: metaLabel.left
+                            anchors.rightMargin: row.height * 0.06
+                            width: metaLabel.font.pixelSize * 0.8
+                            height: width
+                            name: "baseline-favorite"
+                            symbolColor: Theme.iconStrong
                         }
 
                         FadeText {

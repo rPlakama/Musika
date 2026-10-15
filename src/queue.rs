@@ -51,6 +51,7 @@ fn build_track(
         artist: song.artist.unwrap_or_default(),
         album: song.album.unwrap_or_default(),
         album_id: song.album_id.unwrap_or_default(),
+        favorite: song.starred.is_some(),
         duration: song.duration.unwrap_or(0) as f64,
         url: url.to_string(),
         cover_art,
@@ -407,6 +408,7 @@ mod tests {
             track: Some(1),
             duration: Some(200),
             cover_art: None,
+            starred: None,
         }
     }
 

@@ -114,6 +114,13 @@ pub async fn load_artists_json(
         artists.retain(|artist| filter.artists.contains_key(&artist.id));
     }
     let covers = crate::covers::url_map(&dbs.covers).await?;
+    // UI-56: the artist favourite is the server flag ORed with the local
+    // `artist_user` overlay (ARC-42), so both surfaces agree.
+    let user_starred: std::collections::HashSet<String> =
+        crate::artist_user::starred_ids(&dbs.artist_user)
+            .await?
+            .into_iter()
+            .collect();
     let rows: Vec<serde_json::Value> = artists
         .iter()
         .map(|artist| {
@@ -123,6 +130,7 @@ pub async fn load_artists_json(
                 filter
                     .as_ref()
                     .and_then(|filter| filter.artists.get(&artist.id).copied()),
+                artist.starred.is_some() || user_starred.contains(&artist.id),
             )
         })
         .collect();
@@ -145,12 +153,18 @@ pub async fn load_artist_json(
         albums.retain(|album| filter.albums.contains_key(&album.id));
     }
     let covers = crate::covers::url_map(&dbs.covers).await?;
+    let user_starred: std::collections::HashSet<String> =
+        crate::artist_user::starred_ids(&dbs.artist_user)
+            .await?
+            .into_iter()
+            .collect();
     let mut value = artist_json(
         &artist,
         &covers,
         filter
             .as_ref()
             .and_then(|filter| filter.artists.get(&artist.id).copied()),
+        artist.starred.is_some() || user_starred.contains(&artist.id),
     );
     value["albums"] = serde_json::Value::Array(
         albums
@@ -173,6 +187,7 @@ fn artist_json(
     artist: &crate::library::ArtistRow,
     covers: &HashMap<String, String>,
     album_count: Option<i64>,
+    starred: bool,
 ) -> serde_json::Value {
     let cover = cover_url(artist.cover_art.as_deref(), covers);
     serde_json::json!({
@@ -180,6 +195,8 @@ fn artist_json(
         "name": artist.name,
         "album_count": album_count.unwrap_or(artist.album_count),
         "cover": cover,
+        // UI-56: server starred OR the local `artist_user` overlay.
+        "starred": starred,
     })
 }
 
@@ -196,6 +213,7 @@ fn album_json(
         "year": album.year,
         "song_count": song_count.unwrap_or(album.song_count),
         "cover": cover,
+        "starred": album.starred.is_some(),
     })
 }
 
@@ -216,6 +234,7 @@ fn song_rows_json(
                 "track": song.track,
                 "duration": song.duration,
                 "cover": cover,
+                "starred": song.starred.is_some(),
             })
         })
         .collect();
@@ -295,6 +314,14 @@ pub async fn search_json(
     let song_ids: Vec<String> = songs.iter().map(|song| song.song_id.clone()).collect();
     let song_covers = crate::library::song_cover_ids(&dbs.library, &song_ids).await?;
     let song_albums = crate::library::song_album_ids(&dbs.library, &song_ids).await?;
+    // UI-56: the search index carries no starred; join it back from the
+    // library, and OR artists with the local `artist_user` overlay.
+    let song_starred = crate::library::song_starred_ids(&dbs.library, &song_ids).await?;
+    let user_starred: std::collections::HashSet<String> =
+        crate::artist_user::starred_ids(&dbs.artist_user)
+            .await?
+            .into_iter()
+            .collect();
 
     let artist_rows: Vec<serde_json::Value> = artists
         .into_iter()
@@ -304,6 +331,7 @@ pub async fn search_json(
                 "name": artist.name,
                 "album_count": artist.album_count,
                 "cover": cover_url(artist.cover_art.as_deref(), &covers),
+                "starred": artist.starred.is_some() || user_starred.contains(&artist.id),
             })
         })
         .collect();
@@ -317,6 +345,7 @@ pub async fn search_json(
                 "year": album.year,
                 "song_count": album.song_count,
                 "cover": cover_url(album.cover_art.as_deref(), &covers),
+                "starred": album.starred.is_some(),
             })
         })
         .collect();
@@ -337,6 +366,7 @@ pub async fn search_json(
                 "duration": song.duration,
                 "play_count": song.play_count,
                 "cover": cover,
+                "starred": song_starred.contains(&song.song_id),
             })
         })
         .collect();
@@ -365,6 +395,7 @@ mod tests {
             track: Some(1),
             duration: Some(200),
             cover_art: None,
+            starred: None,
         }
     }
 
@@ -377,5 +408,17 @@ mod tests {
         let parsed: Vec<serde_json::Value> = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed[0]["album_id"], "al1");
         assert!(parsed[1]["album_id"].is_null());
+    }
+
+    /// UI-56: the favourite flag rides the row JSON as a boolean.
+    #[test]
+    fn song_rows_carry_the_starred_flag() {
+        let mut starred = song_row("s1", Some("al1"));
+        starred.starred = Some("2026-10-14T00:00:00Z".to_string());
+        let rows = vec![starred, song_row("s2", Some("al1"))];
+        let json = song_rows_json(&rows, &HashMap::new()).unwrap();
+        let parsed: Vec<serde_json::Value> = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed[0]["starred"], true);
+        assert_eq!(parsed[1]["starred"], false);
     }
 }

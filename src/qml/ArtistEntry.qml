@@ -255,7 +255,8 @@ Rectangle {
                 year: album.year ? String(album.year) : "",
                 tracks: String(album.song_count),
                 meta: meta.join("   ·   "),
-                cover: album.cover ? album.cover : ""
+                cover: album.cover ? album.cover : "",
+                starred: album.starred === true
             });
         }
         if (albums.count > 0 && (grid.currentIndex < 0 || grid.currentIndex >= albums.count))
@@ -665,6 +666,7 @@ Rectangle {
                     required property string tracks
                     required property string meta
                     required property string cover
+                    required property bool starred
 
                     readonly property bool current: GridView.isCurrentItem
                     // UI-50: cursor or hover expands the cover + title, the
@@ -740,17 +742,30 @@ Rectangle {
                     }
                 }
 
-                FadeText {
-                    anchors.top: titleText.bottom
-                    anchors.topMargin: cell.height * 0.015
-                    anchors.horizontalCenter: parent.horizontalCenter
-                    width: parent.width * 0.86
-                    text: cell.meta
-                    color: Palette.onSurfaceVariant
-                    horizontalAlignment: Text.AlignHCenter
-                    elide: Text.ElideRight
-                    font.pixelSize: Math.max(9, cell.height * 0.04)
-                        animated: false
+                    FadeText {
+                        id: metaText
+                        anchors.top: titleText.bottom
+                        anchors.topMargin: cell.height * 0.015
+                        anchors.horizontalCenter: parent.horizontalCenter
+                        width: parent.width * 0.86
+                        text: cell.meta
+                        color: Palette.onSurfaceVariant
+                        horizontalAlignment: Text.AlignHCenter
+                        elide: Text.ElideRight
+                        font.pixelSize: Math.max(9, cell.height * 0.04)
+                            animated: false
+                    }
+
+                    // UI-56: the favourite heart leads the card's meta line.
+                    Icon {
+                        visible: cell.starred
+                        anchors.right: metaText.left
+                        anchors.rightMargin: cell.height * 0.02
+                        anchors.verticalCenter: metaText.verticalCenter
+                        width: metaText.font.pixelSize * 0.8
+                        height: width
+                        name: "baseline-favorite"
+                        symbolColor: Theme.iconStrong
                     }
 
                     HoverHandler {

@@ -1230,6 +1230,54 @@ The product is incomplete without these.
     every row surface's cells; `SearchMatch.js` gained `spans()` (tested).
     Open next: `n`/`N` repeat + Up/Down history + `?` backward (M3/M4).
 
+### Scroll layouts (ARC-UI-3)
+
+- [ ] **ARC-UI-3 · `ScrollContent` list/grid modes (Shift-C)** — P2 · (SCROLLGRIDSTUDY.md; SCROLLCONTENTSTUDY.md, UI-58, VI-4, ARC-UI-2)
+  - **Why:** ArtistEntry's scrolling grinds while the shared scroll bodies
+    follow smoothly — its bespoke `GridView` + `ListScroll` + `Selection`
+    stack re-implements everything `ScrollContent` already owns (follow,
+    memory, adaptive rows, selection, the ARC-UI-2 search contract, the Alt
+    anchor) and drifts from it with every fix. One scroll body that can
+    render a list *or* a cover grid de-forks ArtistEntry and lets Search, the
+    album page and ArtistEntry ride the same machinery; the queue stays
+    list-only (a queue has no grid metaphor).
+  - **Details:**
+    - `ScrollContent` gains a layout mode — `layout: "list"` (default) or
+      `"grid"` with `columns` — and keeps one active view (`ListView` ↔
+      `GridView`, one auto-created pair), carrying the same invisible 1×1
+      highlight follow — `highlightMoveVelocity` on the list,
+      `highlightMoveDuration` on the grid (GridView has **no** velocity
+      property; SCROLLGRIDSTUDY §3/§5) — the shared preferred band,
+      `ListScroll` memory/`ensureVisible`, the UI-58 adaptive squeeze,
+      `Selection`, `searchRows()`/`searchJump(row)` (both-corners viewport
+      probe) and the Alt anchor (`itemAtIndex` exists on both views); the
+      grid's grind is today's per-move `ensureVisible` teleport
+      (`ArtistEntry.qml:430`, SCROLLGRIDSTUDY §2) and disappears with the
+      view-owned follow;
+    - hosts keep supplying the delegate(s): a row delegate for list, a cell
+      delegate for grid (cover + title underneath, like ArtistEntry today);
+      `ArtistEntry` drops its `GridView`/`ListScroll`/`Selection` copies and
+      becomes `ScrollContent { layout: "grid"; columns: 4 }`, preserving its
+      `moveWithinGrid` edge rule (column edges still return false so `h` can
+      leave for the sidebar) and its viewport-scoped search rows;
+    - `Shift-C` toggles the mode where both layouts are wired: new
+      `Action::LayoutToggle` (`"layout_toggle"`, `shift-c` token — currently
+      unbound) consumed by the host's `toggleLayout()`; cursor index and
+      viewport map 1:1, and the choice is remembered per `memoryKey`
+      (`ScrollMemory`) so a reopen restores the last layout;
+    - scope: ArtistEntry first (grid default, list on Shift-C); Search
+      columns and the album page inherit the shared body but stay list-only
+      until a grid cell delegate earns its keep there — the toggle is only
+      advertised on a surface that declares both layouts; the queue never
+      exposes it.
+  - **Verify:** ArtistEntry behaves identically after the migration (cursor
+    edges, `moveWithinGrid`, Enter, Alt anchor, `/` viewport-scoped matching,
+    scroll memory) and the follow no longer grinds under held-key and wheel
+    input (SCROLLCONTENTSTUDY.md matrix); `Shift-C` swaps list ↔ grid live
+    without losing the cursor or viewport; queues never show a grid;
+    `cargo test` + QML parse clean, existing QtQuickTest scroll/selection
+    checks still pass.
+
 ### Incremental (ARC-I)
 
 - [x] **ARC-I · Alt menu in the Search overlay** — P3 · (ARC-UI-1 follow-up)
@@ -1342,6 +1390,13 @@ The product is incomplete without these.
       fullscreen queue (whose `player::Track.favorite` must follow) — shows
       the same state without a manual sync; revert on failure with the toast;
     - P-2's `s`/`*` binding reuses this one verb instead of a second path.
+  - **Now (partial):** the decoration-only rule (no DB check; the next payload
+    reconciles) landed on `ArtistEntry` album cards — `decorateFavorite`
+    wraps the Alt verb so the heart lights at invoke time.
+    Pending: the same immediate mark in the `ScrollContent` hosts — Main
+    Songs/Albums (`MediaList` rows) and the fullscreen queue — so the
+    optimistic heart is a property of the scroll model, not one surface;
+    plus the real toggle/unstar, db writes and revert-on-failure above.
   - **Verify:** favouriting a song/album lights the mark immediately in every
     region and survives a restart (db); a second Favorite unstars on the
     server and db and the mark clears; a failed call reverts with the error
@@ -3075,10 +3130,10 @@ Kept for rationale; the tree already carries these.
 | Bucket | Open | Solved |
 |--------|------|--------|
 | Must have | 6 | 2 |
-| Should have | 55 | 16 |
+| Should have | 56 | 16 |
 | Quick wins | 34 | 59 |
 | Solved (reference) | — | 40 |
-| **Total** | **95** | **117** |
+| **Total** | **96** | **117** |
 
 ### Coverage by area
 
@@ -3090,7 +3145,7 @@ Kept for rationale; the tree already carries these.
 | Lyrics pipeline | 2 | 7 |
 | Search | 2 | 6 |
 | UI microdesigns | 19 | 32 |
-| Alt action menu (ARC-UI) | 1 | 1 |
+| Overlay & scroll (ARC-UI) | 2 | 1 |
 | Incremental (ARC-I) | 2 | 2 |
 | Dynamic color | 1 | 5 |
 | Architecture & robustness | 21 | 21 |

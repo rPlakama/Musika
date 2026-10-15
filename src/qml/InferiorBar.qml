@@ -166,6 +166,11 @@ Rectangle {
                         Layout.fillWidth: true
                         Layout.preferredHeight: artistText.implicitHeight
                         color: "transparent"
+                        // Empty state: with no artist the row leaves the
+                        // layout, so "Nothing playing" is the column's only
+                        // item and sits on the bar's vertical centre (left
+                        // rail horizontally) instead of floating above it.
+                        visible: artistText.text.length > 0
 
                         FadeText {
                             id: artistText

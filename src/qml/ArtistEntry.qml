@@ -103,6 +103,19 @@ Rectangle {
         scroll.ensureVisible(grid, row);
     }
 
+    /// ARC-I-4 (decoration only): the Favorite verb stars on the server and
+    /// emits nothing back, so light the card's heart the moment the verb
+    /// fires — no DB check, no reload; the next payload carries the truth and
+    /// can clear it again.
+    function decorateFavorite(albumId) {
+        for (var i = 0; i < albums.count; ++i) {
+            if (albums.get(i).albumId === albumId) {
+                albums.setProperty(i, "starred", true);
+                return;
+            }
+        }
+    }
+
     /// ARC-43/ARC-UI-1: Alt armed the gesture — anchor on the keyboard cursor
     /// card with the recycled album verb set; a visual selection swaps in the
     /// batch verb set (VI-4).
@@ -110,11 +123,23 @@ Rectangle {
         if (albums.count === 0 || grid.currentIndex < 0)
             return;
         var cell = grid.itemAtIndex(grid.currentIndex);
+        if (!cell)
+            return;
+        var ids = sel.hasSelection
+            ? sel.ids(albums, grid.currentIndex, "albumId")
+            : [albums.get(grid.currentIndex).albumId];
         var actions = sel.hasSelection
-            ? verbs.forSelection("album", sel.ids(albums, grid.currentIndex, "albumId"))
-            : (albums.get(grid.currentIndex) ? verbs.album(albums.get(grid.currentIndex)) : null);
-        if (actions && cell)
-            quickAction(cell, actions);
+            ? verbs.forSelection("album", ids)
+            : verbs.album(albums.get(grid.currentIndex));
+        // ARC-I-4: the decoration rides the verb so the mark tracks the
+        // action immediately; the server call inside `star` is unchanged.
+        var star = actions.south.invoke;
+        actions.south.invoke = function() {
+            star();
+            for (var i = 0; i < ids.length; ++i)
+                root.decorateFavorite(ids[i]);
+        };
+        quickAction(cell, actions);
     }
 
     property string artistId: ""

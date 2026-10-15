@@ -1979,18 +1979,18 @@ Small, bounded, high-value changes.
     pane unfocused) or on track change; unsynced lyrics stay static;
     gradients only over the scrollable range; `reduceMotion` keeps an instant
     `positionViewAtIndex`.
-  - **Now (partial):** the lyrics list rides the shared scroll body now —
-    `followLyric` pushes the active line into a centred band
-    (`followBegin/End` 0.45/0.55) and `ScrollContent.followMs: 600` glides it
-    there: a fixed-duration soothing follow with `followSnapRows: 0`, so a
-    far phrase animates instead of teleporting and the old unrealised-row
-    `positionViewAtIndex` flicks are gone. j/k, drag and wheel pause it
-    (`holdLyrics`), and a single-shot `lyricResume` timer re-centres the
-    active phrase after the idle window — `Theme.lyricsResume` 5 s while the
-    lyrics pane is focused, `Theme.lyricsResumeUnfocused` 2 s otherwise,
-    re-armed when pane focus moves and dropped on track change. Open: edge
-    fades (dropped after the first review pass) and a desktop pass for the
-    timer feel.
+  - **Now (partial):** the lyrics list rides the shared scroll body in
+    `glideToCenter` mode — a harness probe showed the highlight-band follow
+    snaps one-line moves instantly (ApplyRange enforces the band), so the
+    body now animates the viewport itself to the active delegate's centre
+    over `followMs: 1000` (variable heights measured, instant `Center` only
+    for unrealised lines, `followSnapRows: 0`, drags stop it via
+    `movementStarted`). j/k, drag and wheel pause it (`holdLyrics`), and a
+    single-shot `lyricResume` timer re-centres the active phrase after the
+    idle window — `Theme.lyricsResume` 5 s while the lyrics pane is focused,
+    `Theme.lyricsResumeUnfocused` 2 s otherwise, re-armed when pane focus
+    moves and dropped on track change. Open: edge fades (dropped after the
+    first review pass) and a desktop pass for the timer feel.
 
 - [x] **S-9 · Empty-query search surface + usage boost** — P2 · (roadmap mixed design, "Empty state" + "Selection, scope and ordering")
   - **Why:** an empty query leaves three empty columns; Noctalia leads with

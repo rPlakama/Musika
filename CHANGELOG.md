@@ -3,6 +3,51 @@
 All notable changes to Musika, newest first. `TASKLISTMAJOR.md` tracks the
 open work; this file is the release history.
 
+## 0.1.5 — _I am no Model Man_, but here I give everything for you! (A Lie!)
+
+All commits since `v0.1.4`:
+
+- `0d3eff5` Wipe: reload the UI after any wipe — queue covers, palette,
+  counts
+- `d097c0f` Fullscreen: contained transport/volume bar; lyrics re-centre on
+  seek
+- `0763115` Search: instant gg/G snaps; retire the mode chip (centred
+  placeholder, outline flash)
+- `5decec2` TASKLIST: fold the REC batch into Quick wins
+- `ccd41fe` Fullscreen: centre the transport until the volume box pushes it
+  left
+- `1968f0a` AlbumEntry: blink-and-fade the hero cover across the compact flip
+- `a6dfcc2` AlbumEntry: dim-and-blur the hero cover across the compact flip
+- `03599a5` Search: open the / command line over every surface (ARC-UI-2 M0)
+- `8a98d80` NowPlaying: ramp the track title with the window width (UI-57)
+- `6967313` Search: row matching with Tab cycling and context-Enter commit
+  (ARC-UI-2 M1)
+- `1e69c0f` Search: shared input/pop FX, global targets, brand artwork, cache
+  probes
+- `56a35c5` Search: whole-window buffer, viewport matching, hlsearch blocks,
+  slide pop-ups
+- `42e4a6a` ScrollContent: adaptive rows — cut a row past a 30% squeeze
+  (UI-58)
+- `0f028fc` Chrome: retire Ctrl-W (up-edge, H/L scope); ramp bar type; breathe
+  collapsed rows
+- `fe1421a` Chrome: batch favorite on visual selections; LeftCenter the bar
+  title
+- `92247ba` Chrome: optimistic favourite heart; centre the empty bar title
+- `49a8136` TASKLIST: ARC-44 — playlist.db plan (Subsonic + M3U), P-4
+  absorbed
+- `d558c44` ScrollContent: ARC-UI-3 list/grid modes — ArtistEntry rides the
+  shared body
+- `5a4cc4f` ScrollContent: one modal everywhere — MediaList grid,
+  ArtistEntry on the panel, sooner squeeze
+- `04a5ba2` Icons: rebake the set white; add heart-add-fill, heart-minus and
+  the Spinlogo source
+- `0875321` TASKLIST: ARC-UI-4 — queue add/remove row marks on the favourite
+  scheme
+- `5f8662d` Favourites: local flag write + in-place hearts; Playlists:
+  playlist.db M0 + the Subsonic list (ARC-44)
+- `e1f33be` Lists: filter/order swaps reset to row 0 on an instant snap (no
+  follow walk)
+
 ## 0.1.4 — _Inertia Creeps_ (Width! Height! All that moves, creeping in our eyes, perhaps, recollect me!)
 
 All commits since `v0.1.3`:

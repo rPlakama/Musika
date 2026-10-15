@@ -107,6 +107,14 @@ ScrollPanel {
         mediaRows.clear();
         for (var i = 0; i < rows.length; i++)
             mediaRows.append(rows[i]);
+        // UI-10: a filter/order swap lands on row 0 with the top pinned —
+        // the old cursor/offset point at different rows now, so the restore
+        // would chase a stale spot.
+        if (root.resetPending) {
+            root.resetPending = false;
+            root.resetViewNow();
+            return;
+        }
         // UI-54: the first payload after a reopen restores the saved viewport
         // (cursor + offset), so the highlight sits where the user left it;
         // later reloads keep the live state.

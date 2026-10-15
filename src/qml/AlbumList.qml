@@ -68,7 +68,12 @@ MediaList {
 
     Component.onCompleted: reload()
 
-    onArtistFilterChanged: reload()
+    // UI-10: a new filter is a new list — reset before the payload so the
+    // old cursor is not chased into the rebuilt rows.
+    onArtistFilterChanged: {
+        root.resetView();
+        reload();
+    }
 
     Connections {
         target: Backend
@@ -80,6 +85,8 @@ MediaList {
             root.reload();
         }
         function onAlbum_order_changed() {
+            // UI-10: the same indices now hold different rows — reset first.
+            root.resetView();
             root.reload();
         }
     }

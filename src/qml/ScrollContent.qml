@@ -213,6 +213,27 @@ Item {
         return sel.starred(root.model, list.currentIndex, field);
     }
 
+    /// UI-10: a filter/order swap rebuilds the rows under the same indices,
+    /// so the next payload must land on row 0 with the offset at the top —
+    /// the hosts raise this before reloading and the payload consumes it.
+    property bool resetPending: false
+
+    function resetView() {
+        root.resetPending = true;
+    }
+
+    /// The landing itself: row 0, top, and the memory agrees (so the next
+    /// restore cannot recall the old spot). The cursor edge is the VI-11
+    /// instant snap — setting the index first would arm the view's highlight
+    /// follow and make it walk the whole list back to the top (slow, and the
+    /// viewport blanks while it travels).
+    function resetViewNow() {
+        if (list.count > 0)
+            Theme.cursorEdge(list, false, ListView.Beginning);
+        if (root.memoryKey)
+            scroll.remember(root.memoryKey, root.view, root.memoryScope, undefined, 0);
+    }
+
     /// ARC-I-4: write the favourite state back into the model in place — the
     /// cursor row, or the whole selected range while a selection is live — so
     /// the affected rows' hearts track the Alt verb with no reload.

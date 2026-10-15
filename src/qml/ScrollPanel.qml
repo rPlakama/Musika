@@ -135,6 +135,17 @@ Rectangle {
         content.markStarred(on);
     }
 
+    /// UI-10: reset the view on a filter/order swap (see `ScrollContent`).
+    property alias resetPending: content.resetPending
+
+    function resetView() {
+        content.resetView();
+    }
+
+    function resetViewNow() {
+        content.resetViewNow();
+    }
+
     function ensureVisible(index) {
         content.ensureVisible(index);
     }

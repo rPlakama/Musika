@@ -61,17 +61,9 @@ MediaList {
 
     onActivated: (item) => root.albumActivated(item.albumId, item.title, item.artist, item.year, item.tracks, item.cover)
 
-    // ARC-43/ARC-UI-1: Alt-hold quick actions for an album row — four fixed
-    // verbs, minus Go to Album (Enter already opens it): that slot stays the
-    // open "—".
-    quickActions: function(item) {
-        return {
-            north: { label: "Add to Queue", invoke: function() { Backend.altAddToQueue("album", item.albumId) } },
-            south: { label: "Favorite", invoke: function() { Backend.altFavorite("album", item.albumId) } },
-            west: { label: "Go to Artist", invoke: function() { Backend.altGoToArtist(item.albumId) } },
-            east: null
-        };
-    }
+    // ARC-UI-1: album rows keep three verbs live and the Go to Album slot
+    // open (Enter already opens the album).
+    quickActionKind: "album"
 
     Component.onCompleted: reload()
 

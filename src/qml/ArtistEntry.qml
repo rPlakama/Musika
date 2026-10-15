@@ -35,7 +35,8 @@ Rectangle {
     // open "—".
     signal quickAction(var target, var actions)
 
-    /// ARC-43: Alt armed the gesture — anchor on the keyboard cursor card.
+    /// ARC-43/ARC-UI-1: Alt armed the gesture — anchor on the keyboard cursor
+    /// card with the recycled album verb set.
     function armQuickActions() {
         if (albums.count === 0 || grid.currentIndex < 0)
             return;
@@ -43,12 +44,7 @@ Rectangle {
         var cell = grid.itemAtIndex(grid.currentIndex);
         if (!item || !cell)
             return;
-        quickAction(cell, {
-            north: { label: "Add to Queue", invoke: function() { Backend.altAddToQueue("album", item.albumId) } },
-            south: { label: "Favorite", invoke: function() { Backend.altFavorite("album", item.albumId) } },
-            west: { label: "Go to Artist", invoke: function() { Backend.altGoToArtist(item.albumId) } },
-            east: null
-        });
+        quickAction(cell, verbs.album(item));
     }
 
     property string artistId: ""
@@ -187,6 +183,10 @@ Rectangle {
 
     ListModel {
         id: albums
+    }
+
+    QuickActions {
+        id: verbs
     }
 
     // UI-41/UI-54: shared eased-scroll + scroll-memory mechanism.

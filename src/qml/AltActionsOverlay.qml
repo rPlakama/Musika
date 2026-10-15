@@ -30,10 +30,10 @@ import "Theme.js" as Theme
 // nothing, Esc dismisses for the rest of the hold, and aiming toward the
 // opposite quadrant first passes through neutral (north + `j` = neutral, `j`
 // again = south). The host arms it with the current item and a
-// `{north,south,east,west}` config of `{label, invoke}` slots (null = open,
-// drawn as "—"); one `board` rectangle owns the margin and scale and the
-// tiles anchor to its edges. The option tiles are acrylic panels (blurred
-// backdrop, like the search overlay).
+// `{north,south,east,west}` config of `{label, icon, invoke}` slots (null =
+// open, drawn as "—"; the verb is its SVG glyph); one `board` rectangle owns
+// the margin and scale and the tiles anchor to its edges. The option tiles
+// are acrylic panels (blurred backdrop, like the search overlay).
 Item {
     id: root
 
@@ -164,19 +164,17 @@ Item {
     Rectangle {
         id: board
 
-        /// ARC-UI-1 scale ramp: the old fixed 1.7 is the pre-ramp value; the
-        /// ramp caps at 20% less and eases down with the room the window
-        /// leaves around the target (the bio-font idea on the whole tile).
-        readonly property real maxOptionScale: 1.7 * 0.8
+        /// ARC-UI-1 scale ramp: 1.7 was the pre-ramp value; each review pass
+        /// trimmed the cap (x0.8, then 60% of that) and the ramp keeps easing
+        /// down with the window itself.
+        readonly property real maxOptionScale: 1.7 * 0.8 * 0.6
         readonly property real minOptionScale: 0.5
 
-        /// Scale-independent tile metrics. `unitBoxSide` is the largest of
-        /// the four labels at the 1.0 scale (the minimum tile side too).
+        /// Scale-independent tile metrics: `unitFont` sizes the open-slot
+        /// "—" and `unitBoxSide` the square the verb icon fills; the ramp
+        /// scales both.
         readonly property real unitFont: Math.max(11, root.height * 0.018)
-        readonly property real unitPadding: Math.max(6, root.height * 0.008)
-        readonly property real unitBoxSide: Math.max(
-            northBox.unitSide, southBox.unitSide, westBox.unitSide, eastBox.unitSide,
-            root.height * 0.09)
+        readonly property real unitBoxSide: root.height * 0.14
         readonly property real maxBoxSide: unitBoxSide * maxOptionScale
 
         /// The target↔tile gap, grown so UP/DOWN and LEFT/RIGHT squares
@@ -193,19 +191,19 @@ Item {
             Math.max(1, root.windowRect.width - 2 * wallGap),
             Math.max(1, root.windowRect.height - 2 * wallGap))
 
-        /// The scale ramp: up to `maxOptionScale` when the window has room,
-        /// easing down as the space around the target shrinks.
-        readonly property real optionScale: {
-            var room = Math.min(safeRect.width - root.targetWidth,
-                                safeRect.height - root.targetHeight) / 2 - margin;
-            return Theme.clamp(room / Math.max(1, unitBoxSide),
-                minOptionScale, maxOptionScale);
-        }
+        /// The scale ramp: the cap on a large window, easing down with the
+        /// window itself (the old fixed 1.7 was tuned for ~1280x720 and up).
+        /// Overflow a wide target leaves is still caught by `fitScale` below.
+        readonly property real rampWidth: 1280
+        readonly property real rampHeight: 720
+        readonly property real optionScale: Theme.clamp(
+            maxOptionScale * Math.min(safeRect.width / rampWidth,
+                                      safeRect.height / rampHeight),
+            minOptionScale, maxOptionScale)
 
         /// The four tiles are squares of one side, so the margin between the
         /// target and each tile reads the same UP/DOWN and LEFT/RIGHT.
         readonly property real boxFont: unitFont * optionScale
-        readonly property real boxPadding: unitPadding * optionScale
         readonly property real boxSide: unitBoxSide * optionScale
 
         /// Fit: the board shrinks only when moving cannot keep it whole (it
@@ -237,18 +235,8 @@ Item {
 
             readonly property var slot: root.config ? root.config[box.direction] : null
             readonly property string labelText: box.slot && box.slot.label ? box.slot.label : "—"
+            readonly property string iconSource: box.slot && box.slot.icon ? box.slot.icon : ""
             readonly property bool isAimed: root.aimed === box.direction
-
-            /// Scale-independent side: measured at the unit font so the board
-            /// can ramp without reading a scaled label (no binding loop).
-            FontMetrics {
-                id: unitMetrics
-                font.family: "monospace"
-                font.pixelSize: board.unitFont
-            }
-            readonly property real unitSide: Math.max(
-                unitMetrics.advanceWidth(box.labelText), unitMetrics.height)
-                + board.unitPadding * 2
 
             width: board.boxSide
             height: board.boxSide
@@ -276,9 +264,21 @@ Item {
                 }
             }
 
+            // ARC-UI-1: the verb is its SVG glyph; an open slot keeps the
+            // "—" text.
+            Icon {
+                anchors.centerIn: parent
+                width: Math.min(parent.width, parent.height) * 0.55
+                height: width
+                visible: box.iconSource.length > 0
+                source: box.iconSource
+                symbolColor: box.isAimed ? Palette.onPrimaryContainer : Palette.onSurfaceVariant
+            }
+
             Text {
                 id: boxLabel
                 anchors.centerIn: parent
+                visible: box.iconSource.length === 0
                 text: box.labelText
                 color: box.isAimed ? Palette.onPrimaryContainer : Palette.onSurfaceVariant
                 font.family: "monospace"

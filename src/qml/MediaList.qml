@@ -34,18 +34,24 @@ ScrollPanel {
 
     signal activated(var item)
 
-    // ARC-43: maps a row item to its Alt-hold quadrant config
-    // (`{north,south,east,west}` of `{label, invoke}`, null = open). The
-    // wrappers own the verbs; the list only relays.
-    property var quickActions: null
+    // ARC-UI-1: which recycled Alt-hold verb set this list arms — "song" for
+    // track rows, "album" for album rows, "" for no overlay. The verbs live
+    // in `QuickActions`; the list only relays the row it anchors.
+    property string quickActionKind: ""
     signal quickAction(var target, var actions)
+
+    QuickActions {
+        id: verbs
+    }
 
     /// ARC-43: Alt armed the gesture — anchor on the keyboard cursor row.
     function armQuickActions() {
-        if (!quickActions || count === 0 || currentIndex < 0)
+        if (quickActionKind === "" || count === 0 || currentIndex < 0)
             return;
         var item = mediaRows.get(currentIndex);
-        var actions = item ? quickActions(item) : null;
+        var actions = item
+            ? (quickActionKind === "album" ? verbs.album(item) : verbs.song(item))
+            : null;
         var row = view.itemAtIndex(currentIndex);
         if (actions && row)
             quickAction(row, actions);

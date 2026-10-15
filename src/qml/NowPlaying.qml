@@ -35,6 +35,9 @@ Rectangle {
 
     /// Click/tap on the exit button (the header chip); Home leaves fullscreen.
     signal exitRequested
+    /// ARC-UI-1: Alt-hold quick actions on the queue row under the cursor;
+    /// Home routes it to the shared overlay.
+    signal quickAction(var target, var actions)
 
     // Keyboard pane: 1 = lyrics, 2 = queue. Transport is never a pane.
     property int pane: 1
@@ -175,7 +178,9 @@ Rectangle {
             var track = data.items[i];
             queueItems.append({
                 title: track.title,
-                duration: Theme.formatTime(track.duration)
+                duration: Theme.formatTime(track.duration),
+                songId: track.id,
+                albumId: track.album_id ? track.album_id : ""
             });
         }
         queueIndex = data.index;
@@ -246,6 +251,17 @@ Rectangle {
 
     // LYR-8: re-arm the idle window when pane focus moves (5 s vs 2 s).
     onPaneChanged: if (root._lyricsHeld) root.holdLyrics()
+
+    /// ARC-UI-1: Alt armed the gesture — anchor on the queue row under the
+    /// cursor; the fullscreen queue reuses the shared track verb set.
+    function armQuickActions() {
+        if (queueItems.count === 0 || queueList.currentIndex < 0)
+            return;
+        var item = queueItems.get(queueList.currentIndex);
+        var row = queueList.itemAtIndex(queueList.currentIndex);
+        if (item && row)
+            quickAction(row, verbs.song(item));
+    }
 
     // Fullscreen keys, scoped to the focused pane. Esc/back stays with Home.
     function handleAction(action) {
@@ -339,6 +355,11 @@ Rectangle {
 
     ListModel {
         id: queueItems
+    }
+
+    // ARC-UI-1: the recycled Alt verb set; fullscreen queue rows are tracks.
+    QuickActions {
+        id: verbs
     }
 
     ListModel {

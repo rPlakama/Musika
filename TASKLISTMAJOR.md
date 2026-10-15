@@ -1131,8 +1131,9 @@ The product is incomplete without these.
     (`star` on song/album ids), E the contextual swap — Go to Album on
     tracks (`altGoToAlbum`) / Go to Artist on albums (`altGoToArtist`),
     pumped as `open_album` / `open_artist` channels — W open. Disarmed while
-    the keymap is pending (`Backend.keyPending`), the search is open, or the
-    fullscreen player / side modals own the screen. Alt is a default binding
+    the keymap is pending (`Backend.keyPending`) or the search is open; side
+    modals own the screen (ARC-UI-1 added the fullscreen queue). Alt is a
+    default binding
     (no flag): `alt-j`/`alt-k` were retired from the keymap in its favour
     (queue reorder stays `Shift-J`/`Shift-K`) and the fullscreen pane hint
     was updated. Tests:
@@ -1174,10 +1175,17 @@ The product is incomplete without these.
     clamps itself to the content rect inset by a 10 px no-cut margin: it
     shifts off a touched edge (right → left and vice versa) and scales down
     only when it cannot fit between both. The tile scale ramps with the
-    window's room (cap 20% under the old 1.7, floor 0.5) and the
-    target↔tile margin grows so the four squares never overlap. `cargo test`
-    114 pass; QML parses clean under `qmllint`. Open: the manual acceptance
-    pass on hardware.
+    window itself (cap 20% under the old 1.7, floor 0.5; wide targets are
+    caught by the board's fit scale) and the target↔tile margin grows so the
+    four squares never overlap. The verbs now
+    live in one recycled `QuickActions.qml` (`song(item)`/`album(item)`)
+    shared by the lists, `ArtistEntry` and the fullscreen queue, which arms
+    the overlay too (`player::Track` gained `album_id`, emitted in the queue
+    payload). Each tile carries its SVG verb (queue `baseline-playlist-add`,
+    favorite `baseline-favorite`, artist jump `arrow-right`, album jump
+    `album`) recoloured through the shared `Icon`; the glyph set is baked
+    white per `scripts/check-icons.sh`. `cargo test` 114 pass; QML parses
+    clean under `qmllint`. Open: the manual acceptance pass on hardware.
 
 - [x] **CACHE-1 · DB4 `media.db` + `media/` blobs** — P2 · (roadmap Media cache; MEDIACACHESTUDY.md §3/§5)
   - **Why:** audio is never stored; playback dies without network. Research
@@ -2087,7 +2095,7 @@ Small, bounded, high-value changes.
 
 - [x] **VI-19 · `i` is dead outside search** — P3 · (MD33)
   - **Why:** `InsertMode` is bound globally but only the overlay consumes it.
-  - **Details:** scope the binding or consume it (mode indicator). 
+  - **Details:** scope the binding or consume it (mode indicator).
   - **Now:** consumed — `i` opens the floating search in INSERT mode from any
     region (`Home`), while inside the overlay the modal routing re-enters
     typing; documented in the keymap semantics and the README.
@@ -2355,14 +2363,6 @@ Small, bounded, high-value changes.
   - **Details:** translate the panel in/out (`standard`), add the scrim at
     `Theme.scrimOpacity`, include `queueDrawer.opened` in the shell layer
     condition.
-
-- [ ] **S-6 · Noctalia-style search chrome (scope chips + sizing)** — P2 · (roadmap mixed design)
-  - **Why:** identity and counts live in the column headers, and the panel uses
-    a raw 70% × 65%; the mixed design gives one chip row and a measured range.
-  - **Details:** toolbar + `Songs 12 · Albums 4 · Artists 3` chip row (active
-    chip `primaryContainer`, others muted, only one accented — D-1), panel
-    `clamp(win*0.70, 560, 1100)` × `clamp(win*0.65, 420, 760)`, context
-    keybar; column headers drop the counts.
 
 - [ ] **UI-42 · SuperiorBar: API-backed server + user identity** — P2 · (RightBar audit)
   - **Why:** the top bar (today `RightBar.qml`) only shows a capitalized

@@ -55,16 +55,8 @@ MediaList {
 
     onActivated: (item) => Backend.playSong(item.songId)
 
-    // ARC-43/ARC-UI-1: Alt-hold quick actions for a track row — the four
-    // fixed verbs (queue, favourite and both jumps).
-    quickActions: function(item) {
-        return {
-            north: { label: "Add to Queue", invoke: function() { Backend.altAddToQueue("song", item.songId) } },
-            south: { label: "Favorite", invoke: function() { Backend.altFavorite("song", item.songId) } },
-            west: { label: "Go to Artist", invoke: function() { Backend.altGoToArtist(item.albumId) } },
-            east: { label: "Go to Album", invoke: function() { Backend.altGoToAlbum(item.songId) } }
-        };
-    }
+    // ARC-UI-1: track rows carry all four recycled Alt verbs.
+    quickActionKind: "song"
 
     Component.onCompleted: reload()
 

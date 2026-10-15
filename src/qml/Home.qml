@@ -159,21 +159,22 @@ Item {
         });
     }
 
-    // ARC-43: a list arms the Alt-hold overlay through here; the action
-    // closures come from the list wrapper's `quickActions` config. Modal
-    // surfaces and the fullscreen player outrank the gesture.
+    // ARC-43/ARC-UI-1: a surface arms the Alt-hold overlay through here; the
+    // action closures come from the shared QuickActions verb sets. Modal
+    // surfaces outrank the gesture (the fullscreen player arms its own queue).
     function armQuickActions(target, actions) {
-        if (root.nowPlayingExpanded || searchOverlay.opened || queueDrawer.opened)
+        if (searchOverlay.opened || queueDrawer.opened)
             return;
         quickActions.arm(target, actions);
     }
 
-    // ARC-43: Alt pressed — the active view anchors the overlay on its
-    // keyboard cursor row/card through its own `armQuickActions`.
+    // ARC-43/ARC-UI-1: Alt pressed — the active surface anchors the overlay on
+    // its keyboard cursor row/card through its own `armQuickActions`: the
+    // fullscreen queue when the player is up, the current view otherwise.
     function beginQuickActions() {
-        if (root.nowPlayingExpanded || searchOverlay.opened || queueDrawer.opened)
+        if (searchOverlay.opened || queueDrawer.opened)
             return;
-        var view = contentStack.currentItem;
+        var view = root.nowPlayingExpanded ? nowPlaying : contentStack.currentItem;
         if (view && view.armQuickActions)
             view.armQuickActions();
     }
@@ -518,6 +519,10 @@ Item {
         visible: opacity > 0
 
         onExitRequested: root.nowPlayingExpanded = false
+
+        // ARC-UI-1: the fullscreen queue arms the same Alt overlay as the
+        // lists.
+        onQuickAction: (target, actions) => root.armQuickActions(target, actions)
 
         // Niri-like backdrop blur for the Ctrl-W scope overlay, same recipe as
         // the shell. The search overlay's acrylic panel samples this item as

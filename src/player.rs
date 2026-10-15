@@ -47,6 +47,10 @@ pub struct Track {
     pub title: String,
     pub artist: String,
     pub album: String,
+    /// ARC-UI-1: source album id (the queue row's Go to Artist jump);
+    /// optional so payloads serialized before the field still deserialize.
+    #[serde(default)]
+    pub album_id: String,
     pub duration: f64,
     pub url: String,
     pub cover_art: String,
@@ -647,6 +651,7 @@ mod tests {
             title: id.to_string(),
             artist: String::new(),
             album: String::new(),
+            album_id: String::new(),
             duration: 1.0,
             url: String::new(),
             cover_art: String::new(),

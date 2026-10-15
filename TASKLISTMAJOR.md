@@ -1412,6 +1412,46 @@ The product is incomplete without these.
     test` 121 pass, QML parses clean. Open: M3 (UI-58 adaptive cells for the
     grid), extending the toggle to Search columns, the hardware pass.
 
+### Queue marks (ARC-UI-4)
+
+- [ ] **ARC-UI-4 · Row queue add/remove SVG by membership (the favourite scheme)** — P2 · (UI-56 pattern; Q-1, ARC-43)
+  - **Why:** a row cannot tell whether its song is already queued: the Alt
+    menu's North verb is always "Add to Queue"
+    (`baseline-playlist-add.svg`, QuickActions.qml:34/64/98/164) even for a
+    track the player queue already holds, and the queue drawer is the only
+    place membership shows. The favourite heart is the pattern to copy: one
+    state-driven mark (`row.starred` from the payload) that flips with the
+    user's action and reconciles on the next payload.
+  - **Design:**
+    - **one row mark, two glyphs** — not queued → `baseline-playlist-add`
+      (the Alt North icon); queued → a removal glyph (`playlist-remove`,
+      baked white through `scripts/check-icons.sh`; the set has
+      `baseline-playlist-add` and the `heart-minus` minus shape to lean on,
+      but no queue-remove SVG yet);
+    - **state** — membership of the row's song id in the player queue. The
+      `queue` channel already emits `id` per item (qml.rs `emit_queue`), so
+      the surface keeps a queue-id set from that payload
+      (`queueIndex`/`queueLength` only order it) and rows read it like they
+      read `starred` today; album/artist rows would need an any/all rule —
+      out of scope until that decision lands;
+    - **action** — the same verb toggles: unqueued rows queue
+      (`altAddToQueue`), queued rows remove (`queueRemove(index)` at the
+      queue position(s)); the Alt North label/glyph follows the state too;
+    - **update scheme** — flip the row's local flag at invoke time, exactly
+      like ARC-I-4's `decorateFavorite` decoration: no reload, no DB check,
+      the next `queue`/list payload reconciles. This is the same in-place
+      "row state swap" the favourite decoration still needs for
+      MediaList/SearchColumn/ArtistEntry (ARC-I-4's Now note), so both
+      features should land on **one** shared row-update path instead of two
+      copies — the reuse the sketch points at;
+    - **scope** — song rows first: Main Songs (`MediaList`), AlbumEntry,
+      SearchColumn songs, and the fullscreen queue rows (already queue-side,
+      where the same mark can mean remove).
+  - **Verify:** queueing from a row lights its mark immediately in every
+    visible region; removing — from the same verb or the drawer — clears it;
+    a reopened queue (or restart) shows the true membership; chrome/rows
+    without a queue meaning never draw the mark.
+
 ### Incremental (ARC-I)
 
 - [x] **ARC-I · Alt menu in the Search overlay** — P3 · (ARC-UI-1 follow-up)
@@ -1525,12 +1565,17 @@ The product is incomplete without these.
       the same state without a manual sync; revert on failure with the toast;
     - P-2's `s`/`*` binding reuses this one verb instead of a second path.
   - **Now (partial):** the decoration-only rule (no DB check; the next payload
-    reconciles) landed on `ArtistEntry` album cards — `decorateFavorite`
-    wraps the Alt verb so the heart lights at invoke time.
-    Pending: the same immediate mark in the `ScrollContent` hosts — Main
-    Songs/Albums (`MediaList` rows) and the fullscreen queue — so the
-    optimistic heart is a property of the scroll model, not one surface;
-    plus the real toggle/unstar, db writes and revert-on-failure above.
+    reconciles) landed on `ArtistEntry` album cards; the verb became a real
+    toggle (`altFavorite(kind, id, on)` → star/unstar) with state-aware
+    hearts (heart-add-fill / heart-minus, baked).
+    **New piece (this batch):** the Alt favourite verb writes the target's
+    state back into the owning scroll model *in place* — one shared
+    `ScrollContent.markStarred(on)` (cursor row, or the whole selected range)
+    invoked from every host's armed verb, so the affected rows' hearts track
+    addition/removal with no reload: MediaList rows, SearchColumn, AlbumEntry
+    songs, the fullscreen queue, ArtistEntry cards.
+    Pending still: db writes (`songs`/`albums` `starred`), revert-on-failure
+    with the toast, and `player::Track.favorite` following.
   - **Verify:** favouriting a song/album lights the mark immediately in every
     region and survives a restart (db); a second Favorite unstars on the
     server and db and the mark clears; a failed call reverts with the error
@@ -1742,6 +1787,27 @@ Small, bounded, high-value changes.
     MediaList 0.105, fullscreen queue 0.16), host-level baselines for
     AlbumEntry/SearchColumn/QueueDrawer; harness case + PTY smoke green.
     Uncommitted.
+
+- [ ] **UI-59 · Transport cluster: one horizontal row, squeeze-proof** — P1 · (design QuickWin; user-found while squeezing the bars)
+  - **Why:** previous/pause/next must always read as one horizontal line. Today
+    the play button carries a larger preferred size (InferiorBar 0.56 vs 0.46
+    of the bar height; fullscreen 0.058 vs 0.05) and the cluster lives between
+    fill zones / an absolute-x box, so when the bar or pane is squeezed the
+    pause drifts out of alignment with the skips — precisely when space is
+    tight, the thing that must stay crisp goes off-axis.
+  - **Details:** one shared horizontal `Row` for the three everywhere they
+    appear (InferiorBar centre zone; NowPlaying fullscreen transport bar), with
+    the icons pinned to a common centre line and the play on the row's
+    horizontal centre; make the buttons unsqueezable (`Layout.minimumWidth/
+    Height` = preferred) so a tight layout elides/clips the surrounding zones
+    first (the time box already elides before the volume cluster) instead of
+    deforming the cluster; keep the fullscreen yield rule intact (the cluster
+    slides left only when the volume would touch it, UI fix from
+    2026-10-15).
+  - **Verify:** squeeze both bars down through `compact` → `narrow` — the
+    three stay on one line with steady relative sizes and the pause centred;
+    no overlap with the time/volume clusters at any width.
+  - **Now:** planning only (waiting on the favourite-toggle test pass).
 
 - [x] **UI-56 · Microdesign: favorites lead with a heart before their meta** — P3 · **top priority** · (design microtask; P-2, ARC-42)
   - **Why:** every album, song and artist row shows its `<track amount>` /
@@ -3264,10 +3330,10 @@ Kept for rationale; the tree already carries these.
 | Bucket | Open | Solved |
 |--------|------|--------|
 | Must have | 6 | 2 |
-| Should have | 56 | 16 |
-| Quick wins | 34 | 59 |
+| Should have | 57 | 16 |
+| Quick wins | 35 | 59 |
 | Solved (reference) | — | 40 |
-| **Total** | **96** | **117** |
+| **Total** | **98** | **117** |
 
 ### Coverage by area
 
@@ -3279,7 +3345,7 @@ Kept for rationale; the tree already carries these.
 | Lyrics pipeline | 2 | 7 |
 | Search | 2 | 6 |
 | UI microdesigns | 19 | 32 |
-| Overlay & scroll (ARC-UI) | 2 | 1 |
+| Overlay & scroll (ARC-UI) | 3 | 1 |
 | Incremental (ARC-I) | 2 | 2 |
 | Dynamic color | 1 | 5 |
 | Architecture & robustness | 21 | 21 |

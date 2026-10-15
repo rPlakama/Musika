@@ -3,6 +3,15 @@
 All notable changes to Musika, newest first. `TASKLISTMAJOR.md` tracks the
 open work; this file is the release history.
 
+## 0.1.7 — _Talk! Lyrics, Arguments...!_
+
+All commits since `v0.1.61`:
+
+- `67951ac` NowPlaying: lyrics ride the shared scroll modal — soothing 300
+  ms follow
+- `60a3284` TASKLIST: LYR-8 now rides the shared scroll body (followMs 300)
+- `051bbd7` Lyrics: soothing follow 500 ms (was 300)
+
 ## 0.1.61 — _Small fix Patch_
 
 All commits since `v0.1.6`:

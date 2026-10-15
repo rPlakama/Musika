@@ -1497,6 +1497,12 @@ The product is incomplete without these.
     with dots, an instrumental break, click-seek + `,/.` seek, manual
     scroll + resume, unsynced/loading/no-lyrics states, track change
     mid-glide, palette swap while playing.
+  - **Now (partial):** L1 landed (`fe4f3da`) — the shared glide settles with
+    an `Easing.OutBack` spring (`overshoot: 1.7`, ~4 px on a row, monotonic
+    under held keys, edges clamped), used by every cursor list and the
+    lyrics pane alike; the glide is also the default follow now
+    (SCROLLMODELANALYSIS §3). Open: L0 dots, L2 addressable lines, L3 edge
+    fades + elastic bounds, L4 karaoke.
 
 ### Incremental (ARC-I)
 

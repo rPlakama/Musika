@@ -3,6 +3,15 @@
 All notable changes to Musika, newest first. `TASKLISTMAJOR.md` tracks the
 open work; this file is the release history.
 
+## 0.1.61 — _Small fix Patch_
+
+All commits since `v0.1.6`:
+
+- `bcdfe1f` AlbumEntry: "Tracks" wording; land row 0 on open (the second-J
+  bug)
+- `9fb0412` Icon: launcher wordmark black-on-white (white bg, black
+  letters)
+
 ## 0.1.6 — _Patching a worried heart!_
 
 All commits since `v0.1.5`:

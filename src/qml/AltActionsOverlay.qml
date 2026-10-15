@@ -74,33 +74,15 @@ Item {
         return Qt.rect(tl.x, tl.y, br.x - tl.x, br.y - tl.y);
     }
 
-    /// Spawn motion: the cluster zooms out of the target (0 → 1) on a spring
-    /// (one overshoot and settle) and collapses back with a plain ease-in;
-    /// visibility follows the animated value so the collapse plays out.
-    property real spawn: 0
+    /// Spawn motion: the shared spring pop (ARC-UI-2's `PopFx`, lifted from
+    /// this board) — the cluster zooms out of the target on one overshoot and
+    /// settle, and collapses back with a plain ease-in; visibility follows
+    /// the animated value so the collapse plays out.
+    readonly property real spawn: pop.value
     visible: spawn > 0.001
 
-    // Qt clamps `Easing.Bezier` y > 1, so the CSS spring
-    // cubic-bezier(.63,.12,.84,1.72) is carried by OutBack instead: the
-    // default overshoot peaks at ~1.098, right on that curve's crest.
-    NumberAnimation {
-        id: spawnIn
-        target: root
-        property: "spawn"
-        to: 1
-        duration: Theme.motion.emphasized
-        easing.type: Easing.OutBack
-        easing.overshoot: 1.7
-    }
-
-    NumberAnimation {
-        id: spawnOut
-        target: root
-        property: "spawn"
-        to: 0
-        duration: Theme.motion.quick
-        easing.type: Easing.Bezier
-        easing.bezierCurve: Theme.ease.accelerate
+    PopFx {
+        id: pop
     }
 
     // The zoom pivot is the board's drawn centre, so the cluster grows out of
@@ -120,22 +102,14 @@ Item {
         sticky = cfg.sticky === true;
         aimed = "";
         armed = true;
-        spawnOut.stop();
-        if (Theme.reduceMotion)
-            spawn = 1;
-        else
-            spawnIn.restart();
+        pop.play();
     }
 
     function cancel() {
         armed = false;
         aimed = "";
         sticky = false;
-        spawnIn.stop();
-        if (Theme.reduceMotion)
-            spawn = 0;
-        else
-            spawnOut.restart();
+        pop.collapse();
     }
 
     /// IPC `quick_cancel`: retire the overlay for the rest of this Alt hold.

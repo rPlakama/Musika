@@ -230,8 +230,12 @@ Item {
             return queueDrawer;
         if (nowPlayingExpanded)
             return nowPlaying;
-        if (activeRegion !== 1)
-            return null;
+        // Truly global: every region's surface answers, so long as its rows
+        // are interactable and carry text.
+        if (activeRegion === 0)
+            return sideBar;
+        if (activeRegion === 2)
+            return topBar;
         return contentStack.currentItem;
     }
 

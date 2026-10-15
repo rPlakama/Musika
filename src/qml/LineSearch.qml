@@ -54,6 +54,7 @@ Item {
     function open(t) {
         opened = true;
         target = t;
+        pop.play();
         // The global keymap dies while the command line types (see
         // `Backend::key_event`).
         Backend.setLineSearchOpen(true);
@@ -67,6 +68,7 @@ Item {
 
     function close() {
         opened = false;
+        pop.collapse();
         Backend.setLineSearchOpen(false);
         Backend.releaseFocus();
     }
@@ -139,6 +141,11 @@ Item {
     visible: opened || bar.opacity > 0
     z: Theme.zCommand
 
+    // ARC-UI-2: the shared spawn FX (see `PopFx`).
+    PopFx {
+        id: pop
+    }
+
     SequentialAnimation {
         id: deniedFlash
         NumberAnimation {
@@ -177,18 +184,20 @@ Item {
         id: bar
         width: root.width
         height: root.height * 0.07
-        y: root.height - height + (root.opened ? 0 : height)
+        y: root.height - height
         color: Palette.surface
         opacity: root.opened ? 1 : 0
         clip: true
 
-        Behavior on y {
-            NumberAnimation {
-                duration: Theme.motion.standard
-                easing.type: Easing.Bezier
-                easing.bezierCurve: root.opened ? Theme.ease.decelerate : Theme.ease.accelerate
-            }
+        // ARC-UI-2: the shared spawn FX (the Alt overlay's spring) instead
+        // of the old rise: the command line pops out of its bottom edge.
+        transform: Scale {
+            origin.x: bar.width / 2
+            origin.y: bar.height
+            xScale: pop.value
+            yScale: pop.value
         }
+
         Behavior on opacity {
             NumberAnimation {
                 duration: Theme.motion.standard
@@ -217,43 +226,25 @@ Item {
                 Layout.fillWidth: true
                 Layout.fillHeight: true
 
-                TextField {
+                // ARC-UI-2: the shared search input (binds live in
+                // `SearchInput`; Ctrl-W word-delete and paste included);
+                // Up/Down stay unconsumed context-wise until M4's history.
+                SearchInput {
                     id: field
                     anchors.fill: parent
+                    flat: true
                     leftPadding: 0
                     rightPadding: 0
                     color: Palette.onSurface
                     font.family: Theme.fonts.body
                     font.pixelSize: bar.height * 0.36
-                    // Flat: the bar is the surface, the caret the only chrome.
-                    background: null
 
                     onTextChanged: root.refresh()
 
-                    Keys.onPressed: event => {
-                        // The keymap is dead while typing; consume the keys
-                        // the field does not use itself so nothing bubbles to
-                        // it (Ctrl-W would scope-cycle).
-                        if (event.key === Qt.Key_W && (event.modifiers & Qt.ControlModifier))
-                            event.accepted = true;
-                    }
-                    Keys.onTabPressed: event => {
-                        root.step(1);
-                        event.accepted = true;
-                    }
-                    Keys.onBacktabPressed: event => {
-                        root.step(-1);
-                        event.accepted = true;
-                    }
-                    Keys.onReturnPressed: root.commit()
-                    Keys.onEnterPressed: root.commit()
-                    Keys.onEscapePressed: event => {
-                        root.abandon();
-                        event.accepted = true;
-                    }
-                    // History is M4; accept so the list cursor never moves.
-                    Keys.onUpPressed: event => event.accepted = true
-                    Keys.onDownPressed: event => event.accepted = true
+                    onStepNext: root.step(1)
+                    onStepPrevious: root.step(-1)
+                    onSubmitted: root.commit()
+                    onDismissed: root.abandon()
                 }
 
                 // The hint sits where the caret starts, so an empty prompt

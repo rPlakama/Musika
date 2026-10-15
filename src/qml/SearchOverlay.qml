@@ -83,6 +83,7 @@ Item {
     /// place before choosing a result.
     function openWith(text) {
         opened = true;
+        pop.play();
         // Scope-switching keys (Ctrl-W) are unavailable while search is open.
         Backend.setSearchOpen(true);
         clearResults();
@@ -101,6 +102,7 @@ Item {
     function close() {
         opened = false;
         typing = false;
+        pop.collapse();
         // VI-4: leaving the overlay clears every column's visual selection.
         songsColumn.clearSelection();
         albumsColumn.clearSelection();
@@ -125,23 +127,14 @@ Item {
         columnFor(activeColumn).clearSelection();
         typing = true;
         field.forceActiveFocus();
+        // Re-entry selects the whole query (qmllint cannot see TextInput's
+        // methods through a custom base; runtime is fine).
         field.selectAll();
     }
 
-    // Readline/vi-insert behaviour: Ctrl-W removes the word before the caret
-    // (trailing spaces first, then the word itself).
-    function deleteWordBack() {
-        var text = field.text;
-        var cursor = field.cursorPosition;
-        var start = cursor;
-        while (start > 0 && /\s/.test(text.charAt(start - 1)))
-            start--;
-        while (start > 0 && !/\s/.test(text.charAt(start - 1)))
-            start--;
-        if (start === cursor)
-            return;
-        field.text = text.slice(0, start) + text.slice(cursor);
-        field.cursorPosition = start;
+    // ARC-UI-2: the shared spawn FX (see `PopFx`).
+    PopFx {
+        id: pop
     }
 
     // Search normal mode: hjkl navigates, Enter opens/plays, i types again.
@@ -411,9 +404,8 @@ Item {
         id: panel
         width: root.width * 0.84
         height: root.height * 0.78
-        // Rise into place (preferred over scale, motion §3.1).
         x: (root.width - width) / 2
-        y: (root.height - height) / 2 + (root.opened ? 0 : height * 0.04)
+        y: (root.height - height) / 2
         // UI-55: the panel is the acrylic surface (Palette.surface tint over
         // the blurred backdrop); the field and chips keep the higher
         // container tones for contrast.
@@ -424,14 +416,14 @@ Item {
         border.width: Math.max(1, root.height * Theme.hairlineRatio)
         opacity: root.opened ? 1 : 0
 
-        Behavior on opacity {
-            NumberAnimation {
-                duration: Theme.motion.standard
-                easing.type: Easing.Bezier
-                easing.bezierCurve: Theme.ease.decelerate
-            }
+        // ARC-UI-2: the shared spawn FX (the Alt overlay's spring) instead of
+        // the old rise: the panel pops out of its own centre.
+        transform: Scale {
+            xScale: pop.value
+            yScale: pop.value
         }
-        Behavior on y {
+
+        Behavior on opacity {
             NumberAnimation {
                 duration: Theme.motion.standard
                 easing.type: Easing.Bezier
@@ -452,7 +444,9 @@ Item {
                 implicitHeight: panel.height * 0.06
                 color: "transparent"
 
-                TextField {
+                // ARC-UI-2: the shared search input (binds live in
+                // `SearchInput`); only the context routing is set here.
+                SearchInput {
                     id: field
                     anchors.left: parent.left
                     anchors.right: parent.right
@@ -461,41 +455,15 @@ Item {
                     color: Palette.onSurface
                     font.family: Theme.fonts.body
                     font.pixelSize: panel.height * 0.030
-                    background: Rectangle {
-                        color: Palette.surfaceContainerHighest
-                        radius: Theme.radius
-                        border.color: field.activeFocus ? Palette.primary : Palette.outlineVariant
-                        border.width: Math.max(1, root.height * Theme.hairlineRatio)
-                    }
 
                     onTextChanged: debounce.restart()
 
-                    Keys.onPressed: event => {
-                        if (event.key === Qt.Key_Tab) {
-                            root.moveColumn(1);
-                            event.accepted = true;
-                        } else if (event.key === Qt.Key_Backtab) {
-                            root.moveColumn(-1);
-                            event.accepted = true;
-                        } else if (event.key === Qt.Key_W && (event.modifiers & Qt.ControlModifier)) {
-                            root.deleteWordBack();
-                            event.accepted = true;
-                        } else if (event.key === Qt.Key_N && (event.modifiers & Qt.ControlModifier)) {
-                            root.moveRow(1);
-                            event.accepted = true;
-                        } else if (event.key === Qt.Key_P && (event.modifiers & Qt.ControlModifier)) {
-                            root.moveRow(-1);
-                            event.accepted = true;
-                        }
-                    }
-                    Keys.onDownPressed: root.moveRow(1)
-                    Keys.onUpPressed: root.moveRow(-1)
-                    Keys.onReturnPressed: root.activate()
-                    Keys.onEnterPressed: root.activate()
-                    Keys.onEscapePressed: event => {
-                        root.pressEscape();
-                        event.accepted = true;
-                    }
+                    onStepNext: root.moveColumn(1)
+                    onStepPrevious: root.moveColumn(-1)
+                    onStepUp: root.moveRow(-1)
+                    onStepDown: root.moveRow(1)
+                    onSubmitted: root.activate()
+                    onDismissed: root.pressEscape()
                 }
 
                 // The hint is ours, not the style's: Qt hides a centred

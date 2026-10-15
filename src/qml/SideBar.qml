@@ -62,6 +62,23 @@ Rectangle {
             segmentActivated(selected);
     }
 
+    /// ARC-UI-2: the search contract — one row per segment, aligned with the
+    /// cursor. A disabled segment renders nothing searchable (empty cell), so
+    /// it never matches and never affords a dead jump; a jump moves the
+    /// cursor, never activates (the study's rule).
+    function searchRows() {
+        var out = [];
+        for (var i = 0; i < segments.length; ++i)
+            out.push(segments[i].enabled ? [segments[i].label] : [""]);
+        return out;
+    }
+
+    function searchJump(row) {
+        if (row < 0 || row >= segments.length || !segments[row].enabled)
+            return;
+        selected = row;
+    }
+
     // Brand: the logo's original row, kept centered by its parent rectangle
     // at any width. The square side preserves aspect (never squashed); the
     // width cap keeps it clear of the pane walls.

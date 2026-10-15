@@ -1213,8 +1213,15 @@ The product is incomplete without these.
     live cursor preview, `[i/N]` counts, and 0 matches flash the red-underline
     E486 cue with the cursor untouched. Per user rule, Enter commits the
     row's own context-Enter (VI-16) on the match — this overrides the study's
-    cursor-only Enter; `n`/`N` repeat is still open. M2 (in-row block
-    highlights) is next.
+    cursor-only Enter; `n`/`N` repeat is still open. Truly global: the
+    sidebar's enabled segments and the status region's controls (Sync/Wipe)
+    are targets from their own regions (jump moves the cursor/scope ring,
+    never activates). The FTS box and `/` share one `SearchInput` (Ctrl-W
+    word-delete, paste/select-all native, context keys as signals; named so
+    because Qt 6.11's Controls ships its own `SearchField`, which shadowed
+    ours) and both
+    pop-ups ride the one spawn FX (`PopFx`, lifted from the Alt overlay).
+    M2 (in-row block highlights) is next.
 
 ### Incremental (ARC-I)
 

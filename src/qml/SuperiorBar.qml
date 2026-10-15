@@ -95,6 +95,20 @@ Rectangle {
             root.wipeRequested(wipeButton, true);
     }
 
+    /// ARC-UI-2: the search contract — the status region's interactable
+    /// controls (the sync button and the trashcan). A jump moves the scope
+    /// ring onto the control; Enter (the region's context-enter) then fires
+    /// it exactly as Tab-scoping would.
+    function searchRows() {
+        return [["Sync"], ["Wipe"]];
+    }
+
+    function searchJump(row) {
+        if (row < 0 || row > 1)
+            return;
+        root.scope = row;
+    }
+
     /// Alt-menu availability: the reusable conditional hosts check before
     /// arming (`view.altActionsAvailable !== false`). The status bar only
     /// offers the wipe quadrants while the trashcan is scoped — the sync
@@ -178,6 +192,34 @@ Rectangle {
                 color: Backend.librarySyncing ? Palette.tertiary : Palette.onSurfaceVariant
                 font.pixelSize: Theme.fontSize("title", root.height) * 1.35 * root.widthScale
                 elide: Text.ElideRight
+            }
+        }
+
+        // -------------------------------------------------------------------
+        // Right 1.5: the focus hint, in its own box (VI-17). It swaps width
+        // on Tab (sync vs wipe), so it must not live inside the controls: as
+        // a sibling, its width spends the report's slack and the buttons —
+        // with the scope ring riding them — never move. A safe margin keeps
+        // it clear of the buttons.
+        // -------------------------------------------------------------------
+        Rectangle {
+            id: hintPane
+            visible: root.active
+            Layout.preferredWidth: root.active ? hintText.implicitWidth : 0
+            Layout.rightMargin: root.width * 0.012
+            Layout.fillHeight: true
+            color: "transparent"
+
+            FadeText {
+                id: hintText
+                anchors.right: parent.right
+                anchors.verticalCenter: parent.verticalCenter
+                text: (root.scope === 0
+                    ? "Enter: sync"
+                    : "Enter: wipe · Alt: menu")
+                    + " · Tab: cycle"
+                color: Palette.onSurfaceVariant
+                font.pixelSize: Theme.fontSize("label", root.height)
             }
         }
 
@@ -393,16 +435,6 @@ Rectangle {
                     }
                 }
 
-                // Focus hint while the status region owns the cursor (VI-17).
-                FadeText {
-                    visible: root.active
-                    text: (root.scope === 0
-                        ? "Enter: sync"
-                        : "Enter: wipe · Alt: menu")
-                        + " · Tab: cycle"
-                    color: Palette.onSurfaceVariant
-                    font.pixelSize: Theme.fontSize("label", root.height)
-                }
             }
         }
     }

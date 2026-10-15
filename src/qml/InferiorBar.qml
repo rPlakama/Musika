@@ -140,6 +140,11 @@ Rectangle {
                             text: Backend.currentTitle.length > 0 ? Backend.currentTitle : "Nothing playing"
                             color: Palette.onSurface
                             font.pixelSize: root.height * 0.18 * root.widthScale
+                            // The empty state sits horizontally centered over
+                            // its box (no art to align under); a real title
+                            // keeps the left rail.
+                            horizontalAlignment: Backend.currentTitle.length > 0
+                                ? Text.AlignLeft : Text.AlignHCenter
                             elide: Text.ElideRight
                             animated: false
                         }

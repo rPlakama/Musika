@@ -1059,7 +1059,7 @@ Rectangle {
 
                                             Behavior on scale {
                                                 NumberAnimation {
-                                                    duration: Theme.motion.selection
+                                                    duration: Theme.motion.quick
                                                     easing.type: Easing.Bezier
                                                     easing.bezierCurve: Theme.ease.standard
                                                 }

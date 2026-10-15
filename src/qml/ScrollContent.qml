@@ -126,8 +126,15 @@ Item {
             return;
         var item = v.itemAtIndex(index);
         if (!item) {
+            // Unrealised line (a far landing): bring it into view instantly
+            // first — `Center` here can leave a negative contentY at the
+            // top — then glide it to the centre once the delegate exists.
             centerGlide.stop();
-            v.positionViewAtIndex(index, ListView.Center);
+            v.positionViewAtIndex(index, ListView.Contain);
+            Qt.callLater(function () {
+                if (root.glideToCenter && root.currentIndex === index)
+                    root._glideTo(root.view, index);
+            });
             return;
         }
         var limit = Math.max(0, v.contentHeight - v.height);
@@ -168,9 +175,9 @@ Item {
     /// above and below the cursor. 0 lets the cursor reach the edges; a very
     /// large value (here 0.5) keeps the cursor in the middle of the window
     /// — the window moves, the cursor stays put — **except at the start or
-    /// end** where there is not enough content to fill the limits. The Qt
-    /// band's `ApplyRange` clamps exactly there (its docs: the highlight
-    /// "can move outside of the range at the ends of the view").
+    /// end** where there is not enough content to fill the limits. Applies
+    /// to the band follow (`glideToCenter: false`); the default glide
+    /// centres with the same edge clamp built into its target.
     property real scrolloff: 0.5
     readonly property real followBegin: root.scrolloff > 0
         ? Math.min(root.scrolloff, 0.5 - 0.0005) : 0
@@ -185,21 +192,23 @@ Item {
             h = root.view.currentItem.height;
         return Math.max(0, h) / 2;
     }
-    /// Optional soothing follow: when >= 0 the highlight rides this fixed
-    /// duration (ms) instead of the constant-velocity walk — the lyrics
-    /// pane wants a paced ~300 ms glide per phrase, not a flick. In
-    /// `glideToCenter` mode it is the viewport animation's duration.
-    property int followMs: -1
+    /// The follow duration (ms): the rows drift up/down softly as the cursor
+    /// steps through the centered band — a fixed `Theme.motion.scroll`
+    /// (300 ms) instead of the old constant-velocity walk, which snapped a
+    /// one-row move. In `glideToCenter` mode it is the viewport animation's
+    /// duration. Set `-1` to ride `followVelocity` instead.
+    property int followMs: Theme.motion.scroll
     /// Extra spacing between list rows (0 = the delegate owns it); grid
     /// cells are placed by `cellHeight`.
     property real rowSpacing: 0
-    /// Lyrics-style follow: animate the viewport to centre the cursor over
-    /// `followMs` instead of the highlight band — `ApplyRange` enforces the
-    /// band *instantly*, so small moves (one lyric line) snap while only
-    /// far ones glide (probed 2026-10-15). The body's own walk is off in
-    /// this mode; a drag stops the glide and the host's manual scroll just
-    /// writes `contentY`.
-    property bool glideToCenter: false
+    /// The follow mode, default on: animate the viewport itself to the
+    /// cursor's centre over `followMs` — the rows drift up/down softly on
+    /// every step. The alternative (false) is the highlight band, whose
+    /// `ApplyRange` enforces *instantly* (probed: a one-row move jumps in
+    /// one frame even with a 300 ms move duration), snapping small moves.
+    /// Both clamp at the content ends; a drag stops the glide and the
+    /// host's manual scroll just writes `contentY`.
+    property bool glideToCenter: true
     /// A landing farther than this many rows outside the visible band
     /// catches instantly — the highlight walk over dozens of rows reads as
     /// lag (and blanks the viewport while it travels).
@@ -225,6 +234,7 @@ Item {
     function land(index) {
         if (index < 0)
             return;
+        centerGlide.stop();
         root._instantFollow = true;
         root.currentIndex = index;
         var v = root.view;
@@ -246,7 +256,9 @@ Item {
     /// §3: a far landing is a jump, not a step. Called on every view-side
     /// index change, after the cursor mirror.
     function _snapIfFar(v) {
-        if (!v || root.currentIndex < 0 || root.followSnapRows <= 0 || root._instantFollow)
+        // Glide mode owns the motion (far or near): no separate snap.
+        if (!v || root.currentIndex < 0 || root.followSnapRows <= 0
+                || root._instantFollow || root.glideToCenter)
             return;
         var middle = v.contentX + Math.max(1, v.width * 0.5);
         var top = v.indexAt(middle, v.contentY);

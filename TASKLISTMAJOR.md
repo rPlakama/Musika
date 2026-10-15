@@ -2691,13 +2691,18 @@ Small, bounded, high-value changes.
     auto-login — no countdown, no ping timeout); the Login screen remains the
     entry point for accounts without downloads.
 
-- [ ] **UI-35 · Queue drawer modal parity: slide + scrim + blur** — P2 · (POLISHAUDIT §1.2, D-2)
+- [x] **UI-35 · Queue drawer modal parity: slide + scrim + blur** — P2 · (POLISHAUDIT §1.2, D-2)
   - **Why:** the drawer is modal for keys but has no scrim and the shell blur
     ignores it (`Home.qml:254`), so cursors behind it stay visible — D-2 says
     an open overlay owns the only visible selection.
   - **Details:** translate the panel in/out (`standard`), add the scrim at
     `Theme.scrimOpacity`, include `queueDrawer.opened` in the shell layer
     condition.
+  - **Now:** landed (`9841d14`-era) — the drawer slides from the right edge
+    over `standard` (root visibility follows the slide) and carries the
+    shared scrim with click-outside-to-close; the acrylic panel already owns
+    the blur (UI-55 — the shell layer stack was retired with Ctrl-W), so no
+    layer condition is needed.
 
 - [ ] **UI-42 · SuperiorBar: API-backed server + user identity** — P2 · (RightBar audit)
   - **Why:** the top bar (today `RightBar.qml`) only shows a capitalized
@@ -3354,9 +3359,9 @@ Kept for rationale; the tree already carries these.
 |--------|------|--------|
 | Must have | 6 | 2 |
 | Should have | 57 | 16 |
-| Quick wins | 33 | 61 |
+| Quick wins | 32 | 62 |
 | Solved (reference) | — | 40 |
-| **Total** | **96** | **119** |
+| **Total** | **95** | **120** |
 
 ### Coverage by area
 

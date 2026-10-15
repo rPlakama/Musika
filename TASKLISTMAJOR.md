@@ -1780,6 +1780,24 @@ Small, bounded, high-value changes.
     `scripts/check-icons.sh` ok; QML parses clean under `qmllint`. Open:
     optimistic toggle parity with `altFavorite`/P-2 and the manual pass.
 
+- [x] **UI-57 · Responsive title ramp for list headers (Albums/Songs)** — P2 · (quick win; UI-56)
+  - **Why:** in compressed (narrow) viewports the shared list header kept its
+    full footprint: the title sat at `Theme.fontSize("headline", …)` while
+    the band stayed at `headerRatio` (0.2 of the panel), so the title + hint
+    row squashed the scroll body below.
+  - **Now:** `ScrollPanel` derives `compressed` from the same `narrow`
+    breakpoint `ArtistEntry` uses and a continuous `compression` ramp
+    (`width / Theme.breakpoints.narrow`, floored at 0.5). The title ramps
+    toward the 18 px headline floor using the same linear-toward-a-clamp
+    mechanism as `ArtistEntry`'s description (`18 + (full - 18) * c`,
+    clamped), and the band becomes `headerRatio * (0.7 + 0.3c)`; full-size
+    viewports are byte-identical (compression 1). The ramp is continuous in
+    width, so crossing the breakpoint never jumps, and the right-anchored
+    Shift-H/Shift-L cue and selection badge stay centred in the shrinking
+    band. Applies to every `ScrollPanel` list (Albums/Songs/Artists) by
+    construction. `qmllint` clean; offscreen run silent; **visual pass
+    pending** (dials: the 0.5 floor and the 0.7 band factor).
+
 - [x] **UI-13 · Scroll position hint** — P3 · **removed 2026-10-14**
   - **Why:** long lists have no scrollbar/position feedback for mouse users.
   - **Details:** one reusable `ScrollHint.qml` (opacity/transform only, never
@@ -2966,9 +2984,9 @@ Kept for rationale; the tree already carries these.
 |--------|------|--------|
 | Must have | 6 | 2 |
 | Should have | 81 | 16 |
-| Quick wins | 6 | 58 |
+| Quick wins | 6 | 59 |
 | Solved (reference) | — | 40 |
-| **Total** | **93** | **116** |
+| **Total** | **93** | **117** |
 
 ### Coverage by area
 
@@ -2979,7 +2997,7 @@ Kept for rationale; the tree already carries these.
 | Player & media features | 5 | 2 |
 | Lyrics pipeline | 2 | 7 |
 | Search | 2 | 6 |
-| UI microdesigns | 19 | 31 |
+| UI microdesigns | 19 | 32 |
 | Alt action menu (ARC-UI) | 0 | 1 |
 | Incremental (ARC-I) | 2 | 2 |
 | Dynamic color | 1 | 5 |

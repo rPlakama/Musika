@@ -43,6 +43,23 @@ Rectangle {
     // UI-48: horizontal gutter the body overflows into (highlight bleed).
     property real bleed: 0
 
+    // UI-57: compressed viewports (the same `narrow` trigger ArtistEntry
+    // uses) ramp the title toward the headline floor and shrink the band, so
+    // the reclaimed height goes to the list. `compression` is continuous in
+    // width (floor 0.5), so crossing the breakpoint never jumps; full-size
+    // viewports are untouched (compression = 1).
+    readonly property bool compressed: Theme.isNarrow(root.width)
+    readonly property real compression: Math.max(0.5,
+        Math.min(1, root.width / Theme.breakpoints.narrow))
+    readonly property real titlePixelSize: {
+        // The linear-toward-a-clamp ramp ArtistEntry's description uses; the
+        // 18 px floor is the headline token (never body-text weight).
+        var full = Theme.fontSize("headline", root.height);
+        return Theme.clamp(18 + (full - 18) * root.compression, 18, full);
+    }
+    readonly property real effectiveHeaderRatio: root.headerRatio
+        * (0.7 + 0.3 * root.compression)
+
     // --- Header (A) ----------------------------------------------------------
     // Children declared on the panel land in the title band.
     default property alias headerContent: header.data
@@ -136,13 +153,14 @@ Rectangle {
             root.actionHandler(action);
     }
 
-    // A: title band (20% of the panel by default).
+    // A: title band (20% of the panel by default; less while compressed,
+    // UI-57).
     Rectangle {
         id: header
         anchors.top: parent.top
         anchors.horizontalCenter: parent.horizontalCenter
         width: parent.width
-        height: root.height * root.headerRatio
+        height: root.height * root.effectiveHeaderRatio
         color: "transparent"
 
         FadeText {
@@ -152,7 +170,7 @@ Rectangle {
             anchors.leftMargin: root.width * 0.02
             text: root.title
             color: Palette.onSurface
-            font.pixelSize: Theme.fontSize("headline", root.height)
+            font.pixelSize: root.titlePixelSize
             font.bold: true
             animated: false
         }

@@ -378,6 +378,14 @@ Rectangle {
         function onPlayToggled() {
             playButton.press();
         }
+        // LYR-8: a seek (keys, seek bar, MPRIS) must not wait out the manual-
+        // scroll resume window — drop the hold and re-centre at once, so the
+        // lyrics land with the progress jump instead of 3/5 s later.
+        function onSeeked() {
+            root._lyricsHeld = false;
+            lyricResume.stop();
+            root.followLyric();
+        }
     }
 
     ListModel {
@@ -585,91 +593,125 @@ Rectangle {
                     }
                 }
 
-                // Transport row: mouse-only decoration (UI-51). It owns no
-                // keyboard pane, so it carries no focus hairline and no
-                // click-to-focus; Space/n/p/,/. are global.
+                // Transport bar: mouse-only decoration (UI-51; no focus
+                // hairline, Space/n/p/,/. are global). One major rectangle
+                // owns both clusters as their own rectangles: the volume box
+                // (right) yields its bar width first, and the transport box
+                // centres in the room left of it, sliding left as the column
+                // narrows — the two can never collide.
                 Rectangle {
+                    id: transportBar
                     Layout.fillWidth: true
                     Layout.preferredHeight: root.height * 0.07
                     color: "transparent"
                     radius: Theme.radius
 
-                    RowLayout {
-                        anchors.centerIn: parent
-                        spacing: root.width * 0.012
-
-                        IconButton {
-                            id: previousButton
-                            Layout.preferredWidth: root.height * 0.05
-                            Layout.preferredHeight: root.height * 0.05
-                            iconSource: "qrc:/app/icons/skip-previous-solid-svgrepo-com.svg"
-                            symbolRatio: 0.9
-                            onClicked: Backend.playerPrevious()
-                        }
-                        IconButton {
-                            id: playButton
-                            Layout.preferredWidth: root.height * 0.058
-                            Layout.preferredHeight: root.height * 0.058
-                            symbolRatio: 0.6
-                            iconSource: Backend.playbackState === "playing" ? "qrc:/app/icons/pause-svgrepo-com.svg" : "qrc:/app/icons/play-1001-svgrepo-com.svg"
-                            symbolColor: Theme.iconStrong
-                            onClicked: Backend.playerToggle()
-                        }
-                        IconButton {
-                            id: nextButton
-                            Layout.preferredWidth: root.height * 0.05
-                            Layout.preferredHeight: root.height * 0.05
-                            iconSource: "qrc:/app/icons/skip-next-circle-solid-svgrepo-com.svg"
-                            symbolRatio: 0.9
-                            onClicked: Backend.playerNext()
-                        }
-                    }
-
-                    // Volume cluster (P-7), right-anchored so play/pause stays
-                    // centred: tiered icon (click = mute) + compact bar.
-                    RowLayout {
+                    // Volume cluster (P-7): tiered icon (click = mute) + bar.
+                    // The bar is the elastic part; the box clamps to whatever
+                    // the transport is not using.
+                    Rectangle {
+                        id: volumeBox
                         anchors.right: parent.right
-                        anchors.rightMargin: root.width * 0.012
                         anchors.verticalCenter: parent.verticalCenter
-                        spacing: root.width * 0.008
+                        width: Math.max(root.height * 0.04,
+                            Math.min(volumeRow.implicitWidth,
+                                transportBar.width - transportBox.width - root.width * 0.012))
+                        height: parent.height
+                        color: "transparent"
 
-                        IconButton {
-                            Layout.preferredWidth: root.height * 0.04
-                            Layout.preferredHeight: root.height * 0.04
-                            iconSource: Theme.volumeIcon(Backend.volume, Backend.muted)
-                            symbolRatio: 0.95
-                            onClicked: Backend.playerToggleMute()
-                        }
+                        RowLayout {
+                            id: volumeRow
+                            anchors.right: parent.right
+                            anchors.verticalCenter: parent.verticalCenter
+                            width: parent.width
+                            spacing: root.width * 0.008
 
-                        Rectangle {
-                            id: volumeTrack
-                            Layout.preferredWidth: root.width * 0.06
-                            Layout.preferredHeight: Math.max(2, root.height * 0.006)
-                            color: Palette.outlineVariant
-                            radius: Theme.radius
+                            IconButton {
+                                Layout.preferredWidth: root.height * 0.04
+                                Layout.preferredHeight: root.height * 0.04
+                                iconSource: Theme.volumeIcon(Backend.volume, Backend.muted)
+                                symbolRatio: 0.95
+                                onClicked: Backend.playerToggleMute()
+                            }
 
                             Rectangle {
-                                width: parent.width * Math.max(0, Math.min(1, Backend.volume / 100))
-                                height: parent.height
+                                id: volumeTrack
+                                Layout.fillWidth: true
+                                Layout.minimumWidth: root.height * 0.02
+                                Layout.maximumWidth: root.width * 0.06
+                                Layout.preferredWidth: root.width * 0.06
+                                Layout.preferredHeight: Math.max(2, root.height * 0.006)
+                                color: Palette.outlineVariant
                                 radius: Theme.radius
-                                color: Backend.muted ? Palette.outline : Palette.primary
 
-                                Behavior on width {
-                                    NumberAnimation {
-                                        duration: Theme.motion.quick
-                                        easing.type: Easing.Linear
+                                Rectangle {
+                                    width: parent.width * Math.max(0, Math.min(1, Backend.volume / 100))
+                                    height: parent.height
+                                    radius: Theme.radius
+                                    color: Backend.muted ? Palette.outline : Palette.primary
+
+                                    Behavior on width {
+                                        NumberAnimation {
+                                            duration: Theme.motion.quick
+                                            easing.type: Easing.Linear
+                                        }
+                                    }
+                                }
+
+                                MouseArea {
+                                    anchors.fill: parent
+                                    cursorShape: Qt.PointingHandCursor
+                                    onPressed: mouse => Backend.playerSetVolume(Math.max(0, Math.min(1, mouse.x / width)) * 100)
+                                    onPositionChanged: mouse => {
+                                        if (pressed)
+                                            Backend.playerSetVolume(Math.max(0, Math.min(1, mouse.x / width)) * 100);
                                     }
                                 }
                             }
+                        }
+                    }
 
-                            MouseArea {
-                                anchors.fill: parent
-                                cursorShape: Qt.PointingHandCursor
-                                onPressed: mouse => Backend.playerSetVolume(Math.max(0, Math.min(1, mouse.x / width)) * 100)
-                                onPositionChanged: mouse => {
-                                    if (pressed)
-                                        Backend.playerSetVolume(Math.max(0, Math.min(1, mouse.x / width)) * 100);
-                                }
+                    // Transport cluster (skip / pause / next) in its own
+                    // rectangle: centred in the space left of the volume box
+                    // while it fits, sliding left (x = 0) as the column
+                    // narrows — the transport yields, the volume stays put.
+                    Rectangle {
+                        id: transportBox
+                        anchors.verticalCenter: parent.verticalCenter
+                        width: transportRow.implicitWidth
+                        height: parent.height
+                        color: "transparent"
+                        x: Math.max(0, (transportBar.width - volumeBox.width - width) / 2)
+
+                        RowLayout {
+                            id: transportRow
+                            anchors.centerIn: parent
+                            spacing: root.width * 0.012
+
+                            IconButton {
+                                id: previousButton
+                                Layout.preferredWidth: root.height * 0.05
+                                Layout.preferredHeight: root.height * 0.05
+                                iconSource: "qrc:/app/icons/skip-previous-solid-svgrepo-com.svg"
+                                symbolRatio: 0.9
+                                onClicked: Backend.playerPrevious()
+                            }
+                            IconButton {
+                                id: playButton
+                                Layout.preferredWidth: root.height * 0.058
+                                Layout.preferredHeight: root.height * 0.058
+                                symbolRatio: 0.6
+                                iconSource: Backend.playbackState === "playing" ? "qrc:/app/icons/pause-svgrepo-com.svg" : "qrc:/app/icons/play-1001-svgrepo-com.svg"
+                                symbolColor: Theme.iconStrong
+                                onClicked: Backend.playerToggle()
+                            }
+                            IconButton {
+                                id: nextButton
+                                Layout.preferredWidth: root.height * 0.05
+                                Layout.preferredHeight: root.height * 0.05
+                                iconSource: "qrc:/app/icons/skip-next-circle-solid-svgrepo-com.svg"
+                                symbolRatio: 0.9
+                                onClicked: Backend.playerNext()
                             }
                         }
                     }

@@ -396,6 +396,10 @@ impl Backend {
     fn login_required(&mut self);
     #[qsignal]
     fn playback_state_changed(&mut self);
+    /// The playhead jumped (a seek, not playback progression): the lyrics
+    /// follower drops its manual-scroll hold and re-centres at once (LYR-8).
+    #[qsignal]
+    fn seeked(&mut self);
     #[qsignal]
     fn position_changed(&mut self);
     #[qsignal]
@@ -2126,6 +2130,7 @@ impl Backend {
     fn player_seek(&mut self, seconds: f64) {
         self.player.seek(seconds);
         self.sync_player();
+        self.seeked();
     }
 
     /// Sets the volume (0-100). Adjusting up unmutes.

@@ -556,6 +556,14 @@ Item {
                     Item {
                         id: segmentHost
 
+                        // SCROLLMODELANALYSIS §3: a returning surface lands
+                        // its cursor instantly — a page pop must not walk a
+                        // far cursor back from wherever the view sat.
+                        onVisibleChanged: {
+                            if (visible && activeView && activeView.landCursor)
+                                activeView.landCursor();
+                        }
+
                         // The `count` read is the dependency that re-evaluates
                         // this when the Repeater builds its delegates: a bare
                         // `itemAt()` lookup before they exist returns null and
@@ -641,6 +649,12 @@ Item {
                                 // and keep it — no remount on return.
                                 active: true
                                 visible: index === root.currentSegment
+                                // SCROLLMODELANALYSIS §3: a segment coming
+                                // back lands its cursor instantly.
+                                onVisibleChanged: {
+                                    if (visible && item && item.landCursor)
+                                        item.landCursor();
+                                }
                                 sourceComponent: index === 1 ? songListComponent
                                     : index === 2 ? artistListComponent
                                     : index === 3 ? playlistListComponent

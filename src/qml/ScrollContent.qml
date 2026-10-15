@@ -107,7 +107,7 @@ Item {
 
     /// The active view (itemAtIndex, positionViewAtIndex, …).
     readonly property var view: root.layout === "grid" ? grid : list
-    onViewChanged: Qt.callLater(root._applyCursor)
+    onViewChanged: Qt.callLater(root.landCursor)
     onLayoutChanged: {
         // Only the layout field — a restore flips the layout before the
         // cursor is back, and a full save here would clobber the memory.
@@ -126,33 +126,70 @@ Item {
     /// lag (and blanks the viewport while it travels).
     property int followSnapRows: 15
 
-    /// Mirror the body's cursor onto the active view (`position` also
-    /// teleports the viewport — swaps and recalls, not payload reloads).
-    function _applyCursor(position) {
-        var v = root.view;
-        if (!v || v.count === 0 || root.currentIndex < 0)
+    /// True while a landing runs: the highlight move bindings collapse to
+    /// duration 0, so no walk can start (or survive — a running highlight
+    /// animation lives in content space, so teleporting the viewport alone
+    /// does not stop it).
+    property bool _instantFollow: false
+
+    /// Kill any highlight walk in flight: clearing the index and re-arming
+    /// it under `_instantFollow` places the follow at the new row now.
+    function _rearmHighlight(v, index) {
+        v.currentIndex = -1;
+        v.currentIndex = index;
+    }
+
+    /// The one landing primitive: cursor, viewport and highlight land
+    /// together with no walk (restores, `gg`/`G`, search, the filter reset
+    /// and any far snap). An empty view carries the cursor and lands it on
+    /// the next count change.
+    function land(index) {
+        if (index < 0)
             return;
-        if (v.currentIndex !== root.currentIndex)
-            v.currentIndex = root.currentIndex;
-        if (position)
-            v.positionViewAtIndex(root.currentIndex, ListView.Contain);
+        root._instantFollow = true;
+        root.currentIndex = index;
+        var v = root.view;
+        if (v && v.count > 0) {
+            root._rearmHighlight(v, index);
+            v.positionViewAtIndex(index, ListView.Contain);
+        }
+        Qt.callLater(function () { root._instantFollow = false; });
+    }
+
+    /// A surface returning to screen (segment switch, page pop) calls this:
+    /// if the cursor is far from the viewport — or the view lost its place
+    /// while hidden — it lands instantly instead of walking back.
+    function landCursor() {
+        if (root.currentIndex >= 0)
+            root.land(root.currentIndex);
     }
 
     /// §3: a far landing is a jump, not a step. Called on every view-side
-    /// index change, after the cursor mirror above.
+    /// index change, after the cursor mirror.
     function _snapIfFar(v) {
-        if (!v || root.currentIndex < 0 || root.followSnapRows <= 0)
+        if (!v || root.currentIndex < 0 || root.followSnapRows <= 0 || root._instantFollow)
             return;
-        var middle = v.contentX + v.width * 0.5;
+        var middle = v.contentX + Math.max(1, v.width * 0.5);
         var top = v.indexAt(middle, v.contentY);
         var bottom = v.indexAt(middle, v.contentY + Math.max(0, v.height - 1));
-        if (top < 0)
-            top = 0;
-        if (bottom < 0)
-            bottom = v.count - 1;
+        if (top < 0 || bottom < 0) {
+            // Nothing realised at the probe (a view that just returned):
+            // read the band from the content offset and the row unit.
+            var unit = root.layout === "grid"
+                ? Math.max(1, root.cellHeight)
+                : Math.max(1, root.adaptiveRowHeight > 0 ? root.adaptiveRowHeight
+                    : v.height * root.rowRatio);
+            if (unit <= 0)
+                return;
+            var cols = root.layout === "grid" ? Math.max(1, root.columns) : 1;
+            var firstRow = Math.floor(v.contentY / unit);
+            var rows = Math.max(1, Math.ceil(v.height / unit));
+            top = firstRow * cols;
+            bottom = Math.min(v.count - 1, (firstRow + rows) * cols - 1);
+        }
         if (root.currentIndex < top - root.followSnapRows
                 || root.currentIndex > bottom + root.followSnapRows)
-            v.positionViewAtIndex(root.currentIndex, ListView.Contain);
+            root.land(root.currentIndex);
     }
 
     /// Instant `Contain` for semantic jumps (gg/G, search, select-all,
@@ -164,13 +201,12 @@ Item {
             root.view.positionViewAtIndex(i, ListView.Contain);
     }
 
-    /// `gg`/`G`: instant edge jump — the follow band has nothing to animate
-    /// once the target is already on screen.
+    /// `gg`/`G`: instant edge landing — the follow band has nothing to
+    /// animate once the target is already on screen.
     function edgeJump(last) {
         if (root.count === 0)
             return;
-        root.currentIndex = last ? root.count - 1 : 0;
-        ensureVisible(root.currentIndex);
+        root.land(last ? root.count - 1 : 0);
     }
 
     /// Shared cursor step: in grid mode the wall walks by `columns` (no
@@ -220,14 +256,16 @@ Item {
     property int memoryScope: -1
 
     /// Restore the remembered cursor + offset (false when none). The saved
-    /// layout is applied first so the right view holds the offset; an empty
-    /// view lands the cursor on the next count change.
+    /// layout is applied first so the right view holds the offset; the
+    /// cursor lands instantly (a long return must not walk) and `recall`
+    /// then writes the exact offset. An empty view lands the cursor on the
+    /// next count change.
     function restore() {
         applySavedLayout();
         var index = scroll.savedIndex(root.memoryKey);
         if (index < 0)
             return false;
-        root.currentIndex = index;
+        root.land(index);
         scroll.recall(root.memoryKey, root.view);
         return true;
     }
@@ -254,7 +292,7 @@ Item {
     function resetViewNow() {
         if (root.count === 0)
             return;
-        root.currentIndex = 0;
+        root.land(0);
         root.view.positionViewAtBeginning();
         if (root.memoryKey)
             scroll.remember(root.memoryKey, root.view, root.memoryScope,
@@ -362,13 +400,12 @@ Item {
         return out;
     }
 
-    /// Land the view cursor on a matching row; the instant `Contain` keeps
+    /// Land the view cursor on a matching row; the instant landing keeps
     /// the jump from walking (the same path `gg`/`G` take).
     function searchJump(row) {
         if (row < 0 || row >= root.count)
             return;
-        root.currentIndex = row;
-        ensureVisible(row);
+        root.land(row);
     }
 
     // ── Rows (UI-58) ─────────────────────────────────────────────────────
@@ -442,7 +479,7 @@ Item {
             highlight: followHighlight
             highlightFollowsCurrentItem: true
             highlightMoveVelocity: root.followVelocity
-            highlightMoveDuration: Theme.reduceMotion ? 0 : -1
+            highlightMoveDuration: (root._instantFollow || Theme.reduceMotion) ? 0 : -1
             preferredHighlightBegin: height * root.followBegin
             preferredHighlightEnd: height * root.followEnd
             highlightRangeMode: ListView.ApplyRange
@@ -465,7 +502,7 @@ Item {
             highlightFollowsCurrentItem: true
             // SCROLLGRIDSTUDY §3: GridView has no `highlightMoveVelocity`;
             // the duration token is the nearest documented follow.
-            highlightMoveDuration: Theme.reduceMotion ? 0 : Theme.motion.standard
+            highlightMoveDuration: (root._instantFollow || Theme.reduceMotion) ? 0 : Theme.motion.standard
             preferredHighlightBegin: height * root.followBegin
             preferredHighlightEnd: height * root.followEnd
             highlightRangeMode: GridView.ApplyRange
@@ -481,7 +518,9 @@ Item {
                 root.remember();
         }
         function onCurrentIndexChanged() {
-            if (target.count === 0)
+            // A landing owns the view while it runs (its re-arm would
+            // otherwise re-enter this handler).
+            if (target.count === 0 || root._instantFollow)
                 return;
             if (root.currentIndex >= 0 && target.currentIndex !== root.currentIndex)
                 target.currentIndex = root.currentIndex;
@@ -490,13 +529,15 @@ Item {
                 root.remember();
         }
         // A payload (re)load: an index past the new end clamps, and a view
-        // that was empty a beat ago lands the carried cursor.
+        // that was empty a beat ago lands the carried cursor — both land
+        // instantly, a reload must not walk the viewport.
         function onCountChanged() {
             if (target.count === 0)
                 return;
             if (root.currentIndex > target.count - 1)
-                root.currentIndex = target.count - 1;
-            root._applyCursor(false);
+                root.land(target.count - 1);
+            else if (root.currentIndex >= 0 && target.currentIndex !== root.currentIndex)
+                root.land(root.currentIndex);
             if (root.memoryKey)
                 root.remember();
         }

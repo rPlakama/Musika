@@ -39,6 +39,7 @@ mod media;
 mod mpris;
 mod palette;
 mod player;
+mod playlists;
 mod qml;
 mod queue;
 mod search;

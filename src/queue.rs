@@ -510,6 +510,7 @@ mod tests {
             status: memory_pool().await,
             artist_user: memory_pool().await,
             download,
+            playlist: memory_pool().await,
         }
     }
 

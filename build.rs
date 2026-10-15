@@ -29,6 +29,7 @@ fn main() {
         "migrations_library",
         "migrations_lyrics",
         "migrations_media",
+        "migrations_playlist",
         "migrations_search",
         "migrations_status",
     ] {

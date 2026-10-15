@@ -158,6 +158,41 @@ pub struct AlbumWithSongsID3 {
     pub song: Vec<Child>,
 }
 
+/// The `playlist` element of `getPlaylists`/`getPlaylist` (ARC-44). The
+/// dates are the server's ISO-8601 `changed`, used for the staleness check.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct PlaylistID3 {
+    pub id: String,
+    pub name: String,
+    pub comment: Option<String>,
+    pub owner: Option<String>,
+    pub public: Option<bool>,
+    pub song_count: Option<i64>,
+    pub duration: Option<i64>,
+    pub created: Option<String>,
+    pub changed: Option<String>,
+    pub cover_art: Option<String>,
+}
+
+/// The `playlists` wrapper of `getPlaylists`.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct Playlists {
+    #[serde(deserialize_with = "one_or_many")]
+    pub playlist: Vec<PlaylistID3>,
+}
+
+/// `getPlaylist`: the element plus its ordered entries.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct PlaylistWithSongs {
+    #[serde(flatten)]
+    pub playlist: PlaylistID3,
+    #[serde(deserialize_with = "one_or_many")]
+    pub entry: Vec<Child>,
+}
+
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Child {
@@ -311,6 +346,22 @@ impl SubsonicClient {
         ]);
         let body = self.call::<Value>("getIndexes", &params).await?;
         extract(body, "indexes")
+    }
+
+    /// `getPlaylists` — the playlists the user may play. Never filter by
+    /// `username`: Navidrome ignores it (ARC-44/P-4).
+    pub async fn get_playlists(&self) -> Result<Vec<PlaylistID3>> {
+        let body = self.call::<Value>("getPlaylists", &[]).await?;
+        let lists: Playlists = extract(body, "playlists")?;
+        Ok(lists.playlist)
+    }
+
+    /// `getPlaylist` — the playlist plus its ordered `entry[]`. Duplicates
+    /// and positions are preserved; full Child metadata feeds the page.
+    pub async fn get_playlist(&self, id: &str) -> Result<PlaylistWithSongs> {
+        let params = query(&[("id", Some(id.to_string()))]);
+        let body = self.call::<Value>("getPlaylist", &params).await?;
+        extract(body, "playlist")
     }
 
     /// `getArtist` — artist details including albums.
@@ -506,6 +557,35 @@ mod tests {
         assert_eq!(album.album.name, "Album");
         assert_eq!(album.song.len(), 1);
         assert_eq!(album.song[0].title, "Track");
+    }
+
+    #[test]
+    fn parses_playlists_and_entries() {
+        // A single playlist object becomes a one-element list; fields map.
+        let body: Value = serde_json::from_str(
+            r#"{"playlists":{"playlist":{"id":"p1","name":"Mix","songCount":2,"duration":90,"owner":"me","public":true,"changed":"2026-01-01T00:00:00Z"}}}"#,
+        )
+        .unwrap();
+        let lists: Playlists = extract(body, "playlists").unwrap();
+        assert_eq!(lists.playlist.len(), 1);
+        assert_eq!(lists.playlist[0].name, "Mix");
+        assert_eq!(lists.playlist[0].song_count, Some(2));
+        assert_eq!(lists.playlist[0].public, Some(true));
+
+        // The entries flatten into the playlist and keep their order.
+        let body: Value = serde_json::from_str(
+            r#"{"playlist":{"id":"p1","name":"Mix","songCount":2,"duration":90,"entry":[{"id":"s1","isDir":false,"title":"A"},{"id":"s2","isDir":false,"title":"B"}]}}"#,
+        )
+        .unwrap();
+        let page: PlaylistWithSongs = extract(body, "playlist").unwrap();
+        assert_eq!(page.playlist.name, "Mix");
+        assert_eq!(page.entry.len(), 2);
+        assert_eq!(page.entry[0].title, "A");
+
+        // An absent element defaults to empty, never errors.
+        let body: Value = serde_json::from_str(r#"{"version":"1.16.1"}"#).unwrap();
+        let lists: Playlists = extract(body, "playlists").unwrap();
+        assert!(lists.playlist.is_empty());
     }
 
     #[test]

@@ -303,9 +303,21 @@ Rectangle {
         var item = queueItems.get(queueContent.currentIndex);
         var row = queueContent.view.itemAtIndex(queueContent.currentIndex);
         var actions = root.hasSelection
-            ? verbs.forSelection("song", queueContent.selectionIds("songId"))
+            ? verbs.forSelection("song", queueContent.selectionIds("songId"),
+                queueContent.selectionStarred("songId"))
             : (item ? verbs.song(item) : null);
-        if (actions && row)
+        if (!actions)
+            return;
+        // ARC-I-4: the heart tracks the verb immediately (see `MediaList`).
+        if (actions.south && actions.south.invoke) {
+            var want = actions.south.favorite === true;
+            var star = actions.south.invoke;
+            actions.south.invoke = function() {
+                star();
+                queueContent.markStarred(want);
+            };
+        }
+        if (row)
             quickAction(row, actions);
     }
 

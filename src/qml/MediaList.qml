@@ -59,14 +59,27 @@ ScrollPanel {
         var row = view.itemAtIndex(currentIndex);
         var actions = null;
         if (root.hasSelection) {
-            actions = verbs.forSelection(quickActionKind, root.selectedIds(selectionField));
+            actions = verbs.forSelection(quickActionKind, root.selectedIds(selectionField),
+                root.selectedStarred(selectionField));
         } else {
             var item = mediaRows.get(currentIndex);
             actions = item
                 ? (quickActionKind === "album" ? verbs.album(item) : verbs.song(item))
                 : null;
         }
-        if (actions && row)
+        if (!actions)
+            return;
+        // ARC-I-4: the heart tracks the verb immediately — the affected model
+        // row(s) are written in place (cursor or selection), no reload.
+        if (actions.south && actions.south.invoke) {
+            var want = actions.south.favorite === true;
+            var star = actions.south.invoke;
+            actions.south.invoke = function() {
+                star();
+                root.markStarred(want);
+            };
+        }
+        if (row)
             quickAction(row, actions);
     }
 

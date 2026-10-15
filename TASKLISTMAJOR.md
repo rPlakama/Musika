@@ -483,8 +483,21 @@ The product is incomplete without these.
     `index.rs` (stage + purge hooks), `qml.rs` (slots/channels/queue),
     `PlaylistList/PlaylistEntry` (+ later `Prompt/PlaylistPicker`), `SideBar`,
     `Home`, `keybind.rs`, `ipc.rs`, `build.rs`, README grammar.
-  - **Now:** planning only — no code yet; P-4's research is canonical for the
-    Subsonic half.
+  - **Now:** M0 backend landed — `migrations_playlist/` (`playlist`,
+    `playlist_song`, `playlist_meta`), `Dbs.playlist` + the `playlist.db`
+    path env (`MUSIKA_PLAYLIST_FILE`) + migrate + `build.rs` rerun,
+    `src/playlists.rs` (m3u discovery in `config_dir()/playlists` +
+    `MUSIKA_PLAYLISTS_DIR`, EXTINF/BOM/CRLF/relative-path parser, path →
+    basename → artist-title matcher, wholesale rewrite + vanished-file
+    purge, segment payload; parser/matcher unit tests + a scan integration
+    test), `Backend.requestPlaylists` → the `playlists` channel,
+    `PlaylistList.qml`, the SideBar segment enabled, Home component swap.
+    **The Subsonic list half landed too** — `getPlaylists`/`getPlaylist`
+    wrappers restored to `api.rs` (ARC-7 had trimmed them) with fixture
+    tests, `playlists::refresh_subsonic` (upsert + vanished purge, lazy
+    contents untouched) runs on segment open and as stage 8 of the library
+    sync (`SyncReport.playlists` in the log line). The entry page/playback/
+    verbs are M2; `getPlaylist` contents arrive with it.
 
 - [ ] **P-5 · Radio** — P2 · (M6, roadmap)
   - **Why:** sidebar segment is a placeholder; Subsonic radio endpoints exist.

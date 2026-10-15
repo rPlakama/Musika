@@ -50,6 +50,7 @@ pub struct Dbs {
     pub status: SqlitePool,
     pub artist_user: SqlitePool,
     pub download: SqlitePool,
+    pub playlist: SqlitePool,
 }
 
 /// Opens every database and applies its migrations.
@@ -66,6 +67,7 @@ pub async fn init() -> Result<Dbs> {
         status: open_file(&status_path()?, 1).await?,
         artist_user: open_file(&artist_user_path()?, 3).await?,
         download: open_file(&download_path()?, 3).await?,
+        playlist: open_file(&playlist_path()?, 3).await?,
     };
     migrate(&dbs).await?;
     Ok(dbs)
@@ -103,6 +105,9 @@ pub async fn migrate(dbs: &Dbs) -> Result<()> {
         .await?;
     sqlx::migrate!("./migrations_download")
         .run(&dbs.download)
+        .await?;
+    sqlx::migrate!("./migrations_playlist")
+        .run(&dbs.playlist)
         .await?;
     Ok(())
 }
@@ -280,6 +285,11 @@ pub fn artist_user_path() -> Result<PathBuf> {
 
 pub fn download_path() -> Result<PathBuf> {
     db_path("download.db", "MUSIKA_DOWNLOAD_FILE")
+}
+
+/// The playlist index (ARC-44) — Subsonic playlists + local m3u files.
+pub fn playlist_path() -> Result<PathBuf> {
+    db_path("playlist.db", "MUSIKA_PLAYLIST_FILE")
 }
 
 /// Plain-text mirror of the library, for external tools such as `rg`.

@@ -1259,6 +1259,35 @@ impl Backend {
         });
     }
 
+    /// ARC-44 M0: the Playlists segment — rescans the local m3u folder into
+    /// `playlist.db` and emits the list rows. Subsonic playlists join in M1.
+    #[qslot(qml_name = "requestPlaylists")]
+    fn request_playlists(&mut self) {
+        let invoker = self.get_qml_method_invoker();
+        let Some(dbs) = crate::dbs().cloned() else {
+            return;
+        };
+        crate::runtime().spawn(async move {
+            // Subsonic playlists + the local m3u folder; offline serves the
+            // cached rows and the m3u half.
+            let result = match client(&dbs).await {
+                Ok(client) => crate::playlists::refresh(&dbs, &client).await,
+                Err(_) => crate::playlists::scan(&dbs).await,
+            };
+            match result {
+                Ok(json) => {
+                    qtbridge::invoke_method!(
+                        invoker,
+                        "emitData",
+                        "playlists".to_string(),
+                        json
+                    );
+                }
+                Err(err) => eprintln!("playlists: could not refresh the index: {err:#}"),
+            }
+        });
+    }
+
     /// Cycles the main-scope album order (Shift-L / Shift-H).
     #[qslot(qml_name = "albumOrderNext")]
     fn album_order_next(&mut self) {
@@ -2080,7 +2109,7 @@ impl Backend {
 
     /// Favourites one song or album on the server (overlay South).
     #[qslot(qml_name = "altFavorite")]
-    fn alt_favorite(&mut self, kind: String, id: String) {
+    fn alt_favorite(&mut self, kind: String, id: String, on: bool) {
         let error_invoker = self.get_qml_method_invoker();
         let Some(dbs) = crate::dbs().cloned() else {
             return;
@@ -2088,21 +2117,37 @@ impl Backend {
         crate::runtime().spawn(async move {
             let result = async {
                 let client = client(&dbs).await?;
+                let (songs, albums, artists): (Vec<&str>, Vec<&str>, Vec<&str>) =
+                    match kind.as_str() {
+                        "song" => (vec![id.as_str()], vec![], vec![]),
+                        "album" => (vec![], vec![id.as_str()], vec![]),
+                        "artist" => (vec![], vec![], vec![id.as_str()]),
+                        other => return Err(anyhow::anyhow!("unknown favourite kind: {other}")),
+                    };
+                // ARC-I-4: the verb is now a real toggle — `on` picks star or
+                // unstar instead of always starring.
+                if on {
+                    client.star(&songs, &albums, &artists).await?
+                } else {
+                    client.unstar(&songs, &albums, &artists).await?
+                }
+                // The local half: the hearts read these flags; the next sync
+                // reconciles the exact server state (songs/albums →
+                // library.db, artists → artist_user.db).
                 match kind.as_str() {
-                    "song" => client.star(&[id.as_str()], &[], &[]).await,
-                    "album" => client.star(&[], &[id.as_str()], &[]).await,
-                    "artist" => client.star(&[], &[], &[id.as_str()]).await,
-                    other => Err(anyhow::anyhow!("unknown favourite kind: {other}")),
+                    "song" => crate::library::set_song_starred(&dbs.library, &id, on).await,
+                    "album" => crate::library::set_album_starred(&dbs.library, &id, on).await,
+                    _ => crate::artist_user::set_starred(&dbs.artist_user, &id, on).await,
                 }
             }
             .await;
             if let Err(err) = result {
-                eprintln!("alt actions: could not favourite {kind} {id}: {err:#}");
+                eprintln!("alt actions: could not update favourite {kind} {id}: {err:#}");
                 qtbridge::invoke_method!(
                     error_invoker,
                     "errorRaised",
                     "error".to_string(),
-                    format!("Could not favourite: {err:#}")
+                    format!("Could not update the favourite: {err:#}")
                 );
             }
         });
@@ -2625,12 +2670,13 @@ fn spawn_sync(
         match crate::index::sync_library(&dbs, client, progress).await {
             Ok(report) => {
                 eprintln!(
-                    "index: library updated: {} artists, {} albums, {} songs, {} lyrics, {} new covers",
+                    "index: library updated: {} artists, {} albums, {} songs, {} lyrics, {} new covers, {} playlists",
                     report.artists,
                     report.albums,
                     report.songs,
                     report.lyrics,
-                    report.covers.downloaded
+                    report.covers.downloaded,
+                    report.playlists
                 );
                 // CACHE-9: a successful sync means the server is back.
                 qtbridge::invoke_method!(finish_invoker, "noteOnline");

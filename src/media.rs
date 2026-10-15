@@ -566,6 +566,7 @@ mod tests {
             artist_user: library.clone(),
             media: media.clone(),
             download: library.clone(),
+            playlist: library.clone(),
         };
         assert_eq!(purge(&dbs).await.unwrap(), 2);
 
@@ -689,6 +690,7 @@ mod tests {
             artist_user: library.clone(),
             media: media.clone(),
             download: library.clone(),
+            playlist: library.clone(),
         };
         assert_eq!(prune_uncovered(&dbs).await.unwrap(), 1);
 

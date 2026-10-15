@@ -118,9 +118,21 @@ Rectangle {
             return;
         var row = content.view.itemAtIndex(content.currentIndex);
         var actions = root.hasSelection
-            ? verbs.forSelection("song", content.selectionIds("songId"))
+            ? verbs.forSelection("song", content.selectionIds("songId"),
+                content.selectionStarred("songId"))
             : (songs.get(content.currentIndex) ? verbs.song(songs.get(content.currentIndex)) : null);
-        if (actions && row)
+        if (!actions)
+            return;
+        // ARC-I-4: the heart tracks the verb immediately (see `MediaList`).
+        if (actions.south && actions.south.invoke) {
+            var want = actions.south.favorite === true;
+            var star = actions.south.invoke;
+            actions.south.invoke = function() {
+                star();
+                content.markStarred(want);
+            };
+        }
+        if (row)
             quickAction(row, actions);
     }
 

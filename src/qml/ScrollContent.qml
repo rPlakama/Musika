@@ -205,7 +205,26 @@ Item {
 
     /// Ids of the selected rows ("" when there is no selection).
     function selectionIds(field) {
-        return sel.ids(root.model, root.currentIndex, field);
+        return sel.ids(root.model, list.currentIndex, field);
+    }
+
+    /// The selected rows' `starred` flags, aligned with `selectionIds`.
+    function selectionStarred(field) {
+        return sel.starred(root.model, list.currentIndex, field);
+    }
+
+    /// ARC-I-4: write the favourite state back into the model in place — the
+    /// cursor row, or the whole selected range while a selection is live — so
+    /// the affected rows' hearts track the Alt verb with no reload.
+    function markStarred(on) {
+        if (!root.model || !root.model.setProperty || list.currentIndex < 0)
+            return;
+        var first = root.hasSelection
+            ? Math.min(sel.anchor, list.currentIndex) : list.currentIndex;
+        var last = root.hasSelection
+            ? Math.max(sel.anchor, list.currentIndex) : list.currentIndex;
+        for (var i = first; i <= last; ++i)
+            root.model.setProperty(i, "starred", on === true);
     }
 
     /// Instant `Contain` for semantic jumps (toolbar reset, select-all,

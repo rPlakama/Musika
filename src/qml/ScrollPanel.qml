@@ -126,6 +126,15 @@ Rectangle {
         return content.selectionIds(field);
     }
 
+    function selectedStarred(field) {
+        return content.selectionStarred(field);
+    }
+
+    /// ARC-I-4: the in-place favourite write (see `ScrollContent`).
+    function markStarred(on) {
+        content.markStarred(on);
+    }
+
     function ensureVisible(index) {
         content.ensureVisible(index);
     }

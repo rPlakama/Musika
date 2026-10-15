@@ -79,14 +79,8 @@ Rectangle {
     /// emits nothing back, so light the card's heart the moment the verb
     /// fires — no DB check, no reload; the next payload carries the truth and
     /// can clear it again.
-    function decorateFavorite(albumId) {
-        for (var i = 0; i < albums.count; ++i) {
-            if (albums.get(i).albumId === albumId) {
-                albums.setProperty(i, "starred", true);
-                return;
-            }
-        }
-    }
+    // ARC-I-4: the favourite write lives in the shared scroll model now
+    // (`wall.markStarred`) — cursor card or the whole selected range.
 
     /// ARC-43/ARC-UI-1: Alt armed the gesture — anchor on the keyboard cursor
     /// card with the recycled album verb set; a visual selection swaps in the
@@ -101,15 +95,16 @@ Rectangle {
             ? wall.selectedIds("albumId")
             : [albums.get(wall.currentIndex).albumId];
         var actions = wall.hasSelection
-            ? verbs.forSelection("album", ids)
+            ? verbs.forSelection("album", ids, wall.selectedStarred("albumId"))
             : verbs.album(albums.get(wall.currentIndex));
         // ARC-I-4: the decoration rides the verb so the mark tracks the
-        // action immediately; the server call inside `star` is unchanged.
+        // action immediately — `south.favorite` is the state the verb leaves
+        // every selected row in (the server call itself is unchanged).
+        var want = actions.south.favorite === true;
         var star = actions.south.invoke;
         actions.south.invoke = function() {
             star();
-            for (var i = 0; i < ids.length; ++i)
-                root.decorateFavorite(ids[i]);
+            wall.markStarred(want);
         };
         quickAction(cell, actions);
     }

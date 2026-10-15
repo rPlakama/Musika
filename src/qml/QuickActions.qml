@@ -23,8 +23,11 @@ import musika
 // `albumId` — or `album(item)` — album rows/cards carry `albumId`; on an
 // album the Go to Album slot stays open ("—"), since Enter already opens it.
 QtObject {
-    /// Track row: all four verbs live.
+    /// Track row: all four verbs live. The heart reads the row's own state —
+    /// already favourited shows heart-minus (the verb unstars), otherwise
+    /// heart-add-fill (ARC-I-4).
     function song(item) {
+        var fav = item.starred === true;
         return {
             north: {
                 label: "Add to Queue",
@@ -32,9 +35,12 @@ QtObject {
                 invoke: function() { Backend.altAddToQueue("song", item.songId) }
             },
             south: {
-                label: "Favorite",
-                icon: "qrc:/app/icons/baseline-favorite.svg",
-                invoke: function() { Backend.altFavorite("song", item.songId) }
+                label: fav ? "Unfavorite" : "Favorite",
+                icon: fav
+                    ? "qrc:/app/icons/heart-minus.svg"
+                    : "qrc:/app/icons/heart-add-fill.svg",
+                favorite: !fav,
+                invoke: function() { Backend.altFavorite("song", item.songId, !fav) }
             },
             west: {
                 label: "Go to Artist",
@@ -51,6 +57,7 @@ QtObject {
 
     /// Album row/card: Go to Album is the page Enter already opens.
     function album(item) {
+        var fav = item.starred === true;
         return {
             north: {
                 label: "Add to Queue",
@@ -58,9 +65,12 @@ QtObject {
                 invoke: function() { Backend.altAddToQueue("album", item.albumId) }
             },
             south: {
-                label: "Favorite",
-                icon: "qrc:/app/icons/baseline-favorite.svg",
-                invoke: function() { Backend.altFavorite("album", item.albumId) }
+                label: fav ? "Unfavorite" : "Favorite",
+                icon: fav
+                    ? "qrc:/app/icons/heart-minus.svg"
+                    : "qrc:/app/icons/heart-add-fill.svg",
+                favorite: !fav,
+                invoke: function() { Backend.altFavorite("album", item.albumId, !fav) }
             },
             west: {
                 label: "Go to Artist",
@@ -72,10 +82,16 @@ QtObject {
     }
 
     /// VI-4: with a visual selection active the range verbs apply to the
-    /// whole selection — Add to Queue and Favorite (one backend call per id;
-    /// they are cheap, idempotent toggles); the go-to verbs stay visible but
-    /// disabled (gray), because they act on a single row.
-    function forSelection(kind, ids) {
+    /// whole selection — Add to Queue and Favorite. `starred` is the flags
+    /// array paired with `ids` (Selection.starred): when every row is already
+    /// favourited the heart wears heart-minus and unstars the range, otherwise
+    /// it wears heart-add-fill and favourites only the rows that are not —
+    /// mixed selections converge, never flip backwards (ARC-I-4). The go-to
+    /// verbs stay single-row disabled.
+    function forSelection(kind, ids, starred) {
+        var all = ids.length > 0;
+        for (var i = 0; i < ids.length; ++i)
+            all = all && (starred && starred[i] === true);
         return {
             north: {
                 label: "Add to Queue",
@@ -83,11 +99,16 @@ QtObject {
                 invoke: function() { Backend.queueAddSelection(kind, JSON.stringify(ids)) }
             },
             south: {
-                label: "Favorite",
-                icon: "qrc:/app/icons/baseline-favorite.svg",
+                label: all ? "Unfavorite" : "Favorite",
+                icon: all
+                    ? "qrc:/app/icons/heart-minus.svg"
+                    : "qrc:/app/icons/heart-add-fill.svg",
+                favorite: !all,
                 invoke: function() {
+                    var want = !all;
                     for (var i = 0; i < ids.length; ++i)
-                        Backend.altFavorite(kind, ids[i]);
+                        if ((starred && starred[i] === true) !== want)
+                            Backend.altFavorite(kind, ids[i], want);
                 }
             },
             west: {
@@ -136,6 +157,7 @@ QtObject {
     /// Artist hit (search): queue the whole artist and favourite it; both
     /// jumps stay open ("—") — the artist page is the row's Enter already.
     function artist(item) {
+        var fav = item.starred === true;
         return {
             north: {
                 label: "Add to Queue",
@@ -143,9 +165,12 @@ QtObject {
                 invoke: function() { Backend.altAddToQueue("artist", item.artistId) }
             },
             south: {
-                label: "Favorite",
-                icon: "qrc:/app/icons/baseline-favorite.svg",
-                invoke: function() { Backend.altFavorite("artist", item.artistId) }
+                label: fav ? "Unfavorite" : "Favorite",
+                icon: fav
+                    ? "qrc:/app/icons/heart-minus.svg"
+                    : "qrc:/app/icons/heart-add-fill.svg",
+                favorite: !fav,
+                invoke: function() { Backend.altFavorite("artist", item.artistId, !fav) }
             },
             west: null,
             east: null

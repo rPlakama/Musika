@@ -48,6 +48,8 @@ pub struct SyncReport {
     pub covers: CoverReport,
     /// Lyrics fetched by the bounded sync backfill.
     pub lyrics: usize,
+    /// ARC-44: server playlists refreshed by this run.
+    pub playlists: usize,
 }
 
 /// Coarse progress update emitted while a sync runs.
@@ -227,6 +229,16 @@ where
         eprintln!("index: color cache purge failed: {err:#}");
     }
 
+    // 8. ARC-44: the Subsonic playlist list rides the library sync; the
+    // contents stay lazy, and a failure here never fails the sync.
+    let playlists = match crate::playlists::refresh_subsonic(dbs, &client).await {
+        Ok(count) => count,
+        Err(err) => {
+            eprintln!("index: could not refresh playlists: {err:#}");
+            0
+        }
+    };
+
     progress(SyncProgress {
         message: "Done".to_string(),
         done: 100,
@@ -240,6 +252,7 @@ where
         songs: songs.len(),
         covers,
         lyrics,
+        playlists,
     })
 }
 

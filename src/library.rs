@@ -126,6 +126,35 @@ pub async fn replace(
     Ok(())
 }
 
+/// ARC-I-4: the local half of the favourite toggle. The UI reads
+/// `starred IS NOT NULL` as "favourited" (UI-56); the exact server timestamp
+/// reconciles on the next sync. Songs and albums only — artists live in
+/// `artist_user.db` (`artist_user::set_starred`).
+pub async fn set_song_starred(pool: &SqlitePool, id: &str, on: bool) -> Result<()> {
+    sqlx::query(
+        "UPDATE songs SET starred = CASE WHEN ?1 THEN ?2 ELSE NULL END WHERE id = ?3",
+    )
+    .bind(on)
+    .bind(unix_now().to_string())
+    .bind(id)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+/// Album twin of [`set_song_starred`].
+pub async fn set_album_starred(pool: &SqlitePool, id: &str, on: bool) -> Result<()> {
+    sqlx::query(
+        "UPDATE albums SET starred = CASE WHEN ?1 THEN ?2 ELSE NULL END WHERE id = ?3",
+    )
+    .bind(on)
+    .bind(unix_now().to_string())
+    .bind(id)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
 /// Records that a sync was attempted even when the server reported no changes.
 pub async fn touch_last_sync(pool: &SqlitePool) -> Result<()> {
     sqlx::query(

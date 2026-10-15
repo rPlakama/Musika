@@ -37,7 +37,7 @@ Rectangle {
         { label: "Albums", enabled: true, icon: "qrc:/app/icons/album.svg" },
         { label: "Songs", enabled: true, icon: "qrc:/app/icons/track-svgrepo-com.svg" },
         { label: "Artists", enabled: true, icon: "qrc:/app/icons/person-walking-svgrepo-com.svg" },
-        { label: "Playlists", enabled: false, icon: "qrc:/app/icons/playlist-svgrepo-com.svg" },
+        { label: "Playlists", enabled: true, icon: "qrc:/app/icons/playlist-svgrepo-com.svg" },
         { label: "Radio", enabled: false, icon: "qrc:/app/icons/radio-signal-1026-svgrepo-com.svg" }
     ]
 

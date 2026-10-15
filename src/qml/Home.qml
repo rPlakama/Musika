@@ -602,9 +602,9 @@ Item {
 
                     Component {
                         id: playlistListComponent
-                        PlaceholderList {
-                            title: "Playlists"
-                            message: "Playlists are not indexed yet."
+                        PlaylistList {
+                            // ARC-44 M0: the list lands first; the entry page
+                            // (M2) hangs off this signal.
                         }
                     }
 

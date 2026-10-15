@@ -110,7 +110,8 @@ Item {
         var row = content.view.itemAtIndex(cursor);
         var actions = null;
         if (root.hasSelection) {
-            actions = verbs.forSelection(quickActionKind, content.selectionIds(selectionField));
+            actions = verbs.forSelection(quickActionKind, content.selectionIds(selectionField),
+                content.selectionStarred(selectionField));
         } else {
             var item = model.get(cursor);
             actions = item
@@ -118,7 +119,18 @@ Item {
                     : quickActionKind === "album" ? verbs.album(item) : verbs.song(item))
                 : null;
         }
-        if (actions && row)
+        if (!actions)
+            return;
+        // ARC-I-4: the heart tracks the verb immediately (see `MediaList`).
+        if (actions.south && actions.south.invoke) {
+            var want = actions.south.favorite === true;
+            var star = actions.south.invoke;
+            actions.south.invoke = function() {
+                star();
+                content.markStarred(want);
+            };
+        }
+        if (row)
             quickAction(row, actions);
     }
 

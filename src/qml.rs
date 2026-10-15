@@ -480,7 +480,12 @@ impl Backend {
                     qtbridge::invoke_method!(invoker, "noteServerType", info.kind.clone());
                     invoker.invoke_method("noteOnline");
                     invoker.invoke_method("login_succeeded");
-                    spawn_index_sync(sync_finish, sync_progress, server_url, username, password);
+                    spawn_sync(
+                        sync_finish,
+                        sync_progress,
+                        SubsonicClient::new(&server_url, &username, &password),
+                        true,
+                    );
                 }
                 Err(err) => {
                     // CACHE-9: with downloaded music, a dead server enters
@@ -567,12 +572,15 @@ impl Backend {
                         Ok(info) => {
                             qtbridge::invoke_method!(invoker, "noteServerType", info.kind);
                             invoker.invoke_method("noteOnline");
-                            spawn_index_sync(
+                            spawn_sync(
                                 sync_finish,
                                 sync_progress,
-                                credentials.server_url,
-                                credentials.username,
-                                credentials.password,
+                                SubsonicClient::new(
+                                    &credentials.server_url,
+                                    &credentials.username,
+                                    &credentials.password,
+                                ),
+                                true,
                             );
                         }
                         Err(err) => {
@@ -1036,44 +1044,18 @@ impl Backend {
                 }
             };
 
-            let client = Arc::new(SubsonicClient::new(
-                &credentials.server_url,
-                &credentials.username,
-                &credentials.password,
-            ));
-
-            let progress = move |update: crate::index::SyncProgress| {
-                qtbridge::invoke_method!(
-                    progress_invoker,
-                    "librarySyncProgress",
-                    update.message,
-                    update.done as i64,
-                    update.total as i64
-                );
-            };
-
-            match crate::index::sync_library(&dbs, client, progress).await {
-                Ok(report) => {
-                    qtbridge::invoke_method!(
-                        finish_invoker,
-                        "librarySyncFinished",
-                        sync_summary(&report)
-                    );
-                }
-                Err(err) => {
-                    qtbridge::invoke_method!(
-                        finish_invoker,
-                        "librarySyncFinished",
-                        format!("Sync failed: {err:#}")
-                    );
-                    qtbridge::invoke_method!(
-                        finish_invoker,
-                        "raiseError",
-                        "sync".to_string(),
-                        format!("{err:#}")
-                    );
-                }
-            };
+            // The shared pipeline (ARC-8): the started state was already
+            // shown synchronously above, so this only reports progress.
+            spawn_sync(
+                finish_invoker,
+                progress_invoker,
+                SubsonicClient::new(
+                    &credentials.server_url,
+                    &credentials.username,
+                    &credentials.password,
+                ),
+                false,
+            );
         });
     }
 
@@ -2540,16 +2522,18 @@ fn sync_summary(report: &crate::index::SyncReport) -> String {
     summary
 }
 
-/// Kicks off a background index sync (used after a successful login).
+/// One background index sync: the single pipeline behind the manual button/
+/// IPC, a fresh login and the cached auto-login (ARC-8).
 ///
-/// Progress is reported back for the status bar; failures are only logged, as
-/// the index is a cache and login has already succeeded.
-fn spawn_index_sync(
+/// `emit_started` lets synchronous callers (the manual slot) show "Syncing…"
+/// on the keypress instead of one task hop later. Success always logs the
+/// report, flips the offline flag back (CACHE-9) and finishes with the
+/// summary; failure raises the shared toast.
+fn spawn_sync(
     finish_invoker: QmlMethodInvoker,
     progress_invoker: QmlMethodInvoker,
-    server_url: String,
-    username: String,
-    password: String,
+    client: SubsonicClient,
+    emit_started: bool,
 ) {
     let Some(dbs) = crate::dbs().cloned() else {
         eprintln!("index: databases are not initialised");
@@ -2557,9 +2541,11 @@ fn spawn_index_sync(
     };
 
     crate::runtime().spawn(async move {
-        qtbridge::invoke_method!(progress_invoker, "librarySyncStarted");
+        if emit_started {
+            qtbridge::invoke_method!(progress_invoker, "librarySyncStarted");
+        }
 
-        let client = Arc::new(SubsonicClient::new(&server_url, &username, &password));
+        let client = Arc::new(client);
         let progress = move |update: crate::index::SyncProgress| {
             qtbridge::invoke_method!(
                 progress_invoker,

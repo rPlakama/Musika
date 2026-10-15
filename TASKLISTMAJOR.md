@@ -766,48 +766,6 @@ The product is incomplete without these.
 - [ ] **ARC-2 · Cover revalidation cheaper/cancellable** — P1 · (A4, O6)
   - **Why:** an unchanged sync still revalidates and `UPDATE`s every cover.
 
-- [ ] **ARC-8 · Merge duplicate sync/login pipelines** — P1 · (O3)
-  - **Why:** the same auth → client → `index::sync_library` → report
-    orchestration is written three times in `qml.rs`, so fixes (re-entrancy,
-    offline flag, toasts, progress) have to be applied per copy.
-  - **Inventory:**
-    - `qml.rs:443 login()` (fresh): `authenticate` → `save_credentials` →
-      `noteServerType`/`noteOnline`/`login_succeeded` → `spawn_index_sync`;
-    - `qml.rs:504 startup()` (stored): `load_credentials` → `noteServerType` →
-      `offlineLogin` + `prefillCredentials` → `authenticate` →
-      `noteServerType`/`noteOnline` → `spawn_index_sync` (auth failure stays
-      offline, CACHE-9);
-    - `qml.rs:1000 syncLibrary` slot (manual `r`/button/IPC): re-entrancy
-      guard + `library_sync_started` → `load_credentials` → client →
-      progress → `index::sync_library` → `sync_summary` / `raiseError`;
-    - `qml.rs:2475 spawn_index_sync`: `librarySyncStarted` (from the async
-      body) → client from raw strings → the same progress closure → the same
-      `sync_library` → `noteOnline` + summary / error (log line differs);
-    - client construction also repeats: `qml.rs:1039`, `:2490`, and the
-      existing `qml.rs:37 client(dbs)` helper, plus `browse.rs`/`queue.rs`.
-  - **Details/Plan:**
-    1. one `fn spawn_sync(client: SubsonicClient, opts)` (or an enum reason)
-       owning: `librarySyncStarted`, the progress closure, the
-       `index::sync_library` call, `sync_summary`, the error toast and
-       `noteOnline`; the async body must not re-emit `librarySyncStarted`
-       (today the manual path emits it synchronously, the login path from
-       inside the task);
-    2. `syncLibrary` slot = guard + `library_sync_started` + credentials via
-       the shared helper + `spawn_sync`; after-login paths call `spawn_sync`
-       directly;
-    3. route every credential→client construction through `qml.rs::client`
-       (async) so `queue.rs`/`browse.rs`/login all share one constructor
-       seam (overlaps ARC-36's `async fn client`);
-    4. keep failure semantics: login-background sync stays quiet on success
-       but reports a failed sync through the same toast as the manual path;
-    5. extract the pure decision bits (summary text, whether `noteOnline`
-       fires) so they are unit-testable without Qt.
-  - **Verify:** manual sync via `r`, button and IPC shows one
-    `librarySyncStarted`, one progress stream, one summary and (on failure)
-    one toast; fresh login syncs exactly once; cached auto-login syncs
-    exactly once and flips `offline` via `noteOnline`; re-entrancy guard still
-    rejects a second manual sync; `cargo test` green.
-
 - [ ] **ARC-11 · Collapse structural duplication** — P1 · (O9)
   - **Why:** fetch helpers, JSON loaders and song projections repeat.
 
@@ -2528,6 +2486,23 @@ Small, bounded, high-value changes.
 - [x] **ARC-9 · Cache `SecretKey`, honor `XDG_CONFIG_HOME`** — P1 · (O7)
   - **Why:** re-reads the key file per call; path bypasses `config_dir`.
 
+- [x] **ARC-8 · Merge duplicate sync/login pipelines** — P1 · (O3)
+  - **Why:** the same client → `index::sync_library` → report orchestration
+    was written three times in `qml.rs` (`login()` via `spawn_index_sync`,
+    `startup()` via the same, and the manual `syncLibrary` slot), so fixes
+    (re-entrancy, offline flag, toasts, progress) had to be applied per copy.
+  - **Now:** landed — one `spawn_sync(finish, progress, client, emit_started)`
+    free function owns the whole pipeline: optional `librarySyncStarted`
+    emission, the progress closure, `index::sync_library`, the "library
+    updated" log, `noteOnline` on success (CACHE-9), the `sync_summary`
+    finish and the failure toast. Login and cached auto-login pass
+    `SubsonicClient::new` from their raw credentials with
+    `emit_started: true`; the manual slot keeps its re-entrancy guard and
+    synchronous "Syncing…" state (UI-30) and passes the DB-loaded credentials
+    with `emit_started: false`. `spawn_index_sync` deleted; the manual path
+    now also logs the report and flips offline back on success. `cargo test`
+    119 pass.
+
 - [x] **ARC-7 · Trim `api.rs` to used endpoints** — P0 · (O2)
   - **Why:** `api.rs` was 1894 lines behind `#![allow(dead_code)]`: an endpoint
     layer for families the app never calls (playlists, shares, podcasts,
@@ -2990,10 +2965,10 @@ Kept for rationale; the tree already carries these.
 | Bucket | Open | Solved |
 |--------|------|--------|
 | Must have | 6 | 2 |
-| Should have | 82 | 16 |
+| Should have | 81 | 16 |
 | Quick wins | 6 | 58 |
-| Solved (reference) | — | 39 |
-| **Total** | **94** | **115** |
+| Solved (reference) | — | 40 |
+| **Total** | **93** | **116** |
 
 ### Coverage by area
 
@@ -3008,7 +2983,7 @@ Kept for rationale; the tree already carries these.
 | Alt action menu (ARC-UI) | 0 | 1 |
 | Incremental (ARC-I) | 2 | 2 |
 | Dynamic color | 1 | 5 |
-| Architecture & robustness | 22 | 20 |
+| Architecture & robustness | 21 | 21 |
 | Recycling | 27 | 0 |
 | Media cache / offline | 5 | 2 |
 | Auth / startup | 0 | 2 |

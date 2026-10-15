@@ -193,8 +193,10 @@ var contentDim = 0.8      // near lines / whole unsynced column
 var contentDimFar = 0.5   // far lines in the synced focus window
 var lyricsEmphasis = 1.12 // active-line scale (transform, never font size)
 // UI-45 selection stage: the cursor/hover row's primary text leads its
-// neighbours (transform only, so rows never reflow).
-var selectionEmphasis = 1.10
+// neighbours (transform only, so rows never reflow). The centred scroll
+// (scrolloff) keeps the cursor clear of the pane edges, so the stage can
+// read larger: 20% over the row.
+var selectionEmphasis = 1.20
 
 // ---------------------------------------------------------------------------
 // Font families. One app face: Overused Grotesk Roman stands in for the

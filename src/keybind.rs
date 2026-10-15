@@ -36,7 +36,6 @@ pub enum Action {
     Bottom,
     Search,
     SearchAction,
-    VisualMode,
     VisualSelect,
     VisualAll,
     Enter,
@@ -74,7 +73,6 @@ impl Action {
             Self::Bottom => "bottom",
             Self::Search => "search",
             Self::SearchAction => "search_action",
-            Self::VisualMode => "visual_mode",
             Self::VisualSelect => "visual",
             Self::VisualAll => "visual_all",
             Self::Enter => "enter",
@@ -154,7 +152,6 @@ fn defaults() -> Vec<(&'static str, Action)> {
         ("l", Action::MoveRight),
         ("g g", Action::Top),
         ("shift-g", Action::Bottom),
-        ("ctrl-w", Action::VisualMode),
         ("v", Action::VisualSelect),
         ("shift-v", Action::VisualAll),
         ("enter", Action::Enter),
@@ -344,8 +341,6 @@ mod tests {
 
         assert_eq!(keymap.feed("shift-space"), Outcome::Pending);
         assert_eq!(keymap.feed("f"), Outcome::Action(Action::Search));
-
-        assert_eq!(keymap.feed("ctrl-w"), Outcome::Action(Action::VisualMode));
     }
 
     #[test]
@@ -442,8 +437,9 @@ mod tests {
         assert_eq!(keymap.feed("v"), Outcome::Action(Action::VisualSelect));
         assert_eq!(keymap.feed("shift-v"), Outcome::Action(Action::VisualAll));
         assert_eq!(token_from_qt(0x56, QT_SHIFT).as_deref(), Some("shift-v"));
-        // Ctrl-W stays the region picker (VI-3), not row selection.
-        assert_eq!(keymap.feed("ctrl-w"), Outcome::Action(Action::VisualMode));
+        // Ctrl-W is retired: `/` owns cross-region reach (ARC-UI-2), so the
+        // token stays a plain no-binding now.
+        assert_eq!(keymap.feed("ctrl-w"), Outcome::None);
     }
 
     #[test]

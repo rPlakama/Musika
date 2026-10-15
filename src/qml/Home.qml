@@ -25,17 +25,15 @@ import "Theme.js" as Theme
 // bottom.
 //
 // Focus model (vi-like): `activeRegion` is the cursor and its border stays lit
-// at all times. Ctrl-W enters region mode: a niri-like blur + scrim dims the
-// shell and the region titles show inside the selection squares, j/k cycles
-// candidates, Enter accepts.
+// at all times. Cross-region reach is `/` (ARC-UI-2): a search jump moves the
+// cursor between the sidebar, main and the status region, so the old Ctrl-W
+// region picker is retired.
 Item {
     id: root
 
     // 0 = sidebar, 1 = main, 2 = status (top). The player bar is decoration
     // driven by global binds (UI-51), never a keyboard destination.
     property int activeRegion: 1
-    property int visualSelection: 1
-    property bool visualMode: false
     property bool nowPlayingExpanded: false
     property int currentSegment: 0
 
@@ -89,41 +87,9 @@ Item {
         activeRegion = 1;
     }
 
-    // Spatial neighbours of a region: 0 sidebar, 1 main, 2 status (top).
-    // The player bar is decoration: no region, no Ctrl-W candidate (UI-51).
-    function regionInDirection(region, dir) {
-        switch (region) {
-        case 1: // main
-            if (dir === "left")
-                return 0;
-            if (dir === "up")
-                return 2;
-            return -1;
-        case 0: // sidebar
-            if (dir === "right")
-                return 1;
-            if (dir === "up")
-                return 2;
-            return -1;
-        case 2: // status
-            return dir === "down" ? 1 : -1;
-        default:
-            return -1;
-        }
-    }
-
-    function moveVisual(dir) {
-        var target = regionInDirection(visualSelection, dir);
-        if (target >= 0)
-            visualSelection = target;
-    }
-
     // Global fullscreen toggle (dispatched by the app-level handler before
     // screen/region routing, so it works from any region and overlay state).
     function toggleFullscreen() {
-        // Fullscreen is the topmost overlay: region selection ends with it.
-        if (!nowPlayingExpanded)
-            visualMode = false;
         nowPlayingExpanded = !nowPlayingExpanded;
     }
 
@@ -134,8 +100,8 @@ Item {
         searchOverlay.openWith(text);
     }
 
-    // VI-4: entering another surface (search, sidebar, Ctrl-W regions) ends
-    // the main list's visual selection.
+    // VI-4: entering another surface (search, sidebar) ends the main list's
+    // visual selection.
     function clearMainSelection() {
         var view = contentStack.currentItem;
         if (view && view.clearSelection)
@@ -383,17 +349,6 @@ Item {
             return;
         }
 
-        if (action === "visual_mode") {
-            if (nowPlayingExpanded) {
-                nowPlayingExpanded = false;
-                return;
-            }
-            clearMainSelection();
-            visualMode = !visualMode;
-            visualSelection = activeRegion;
-            return;
-        }
-
         // VI-4: `v`/`V` start visual row selection on the focused list — the
         // fullscreen queue when the player is up. The search overlay handles
         // its own (modal routing above).
@@ -431,26 +386,6 @@ Item {
             searchOverlay.openWith("");
             return;
         }
-        // In visual mode, navigation selects a candidate region; Enter commits.
-        if (visualMode) {
-            if (action === "move_left")
-                moveVisual("left");
-            else if (action === "move_right")
-                moveVisual("right");
-            else if (action === "move_up")
-                moveVisual("up");
-            else if (action === "move_down")
-                moveVisual("down");
-            else if (action === "enter") {
-                // Accept the candidate: land in it and return to normal mode.
-                activeRegion = visualSelection;
-                visualMode = false;
-            } else if (action === "back") {
-                visualMode = false;
-            }
-            return;
-        }
-
         // Transport is global (VI-10/Q-9/UI-51): j/k keeps the list cursor,
         // Ctrl-N/Ctrl-P (and n/p) skip tracks and ,/. seek ±5 s wherever a
         // list owns focus. The player bar is decoration and owns no keys.
@@ -524,12 +459,44 @@ Item {
             return;
         }
 
-        // The status bar is a real surface (VI-17): Enter syncs
-        // (`SuperiorBar.handleAction`), down/left/right return to the main list.
-        if (activeRegion === 2
-                && (action === "move_down" || action === "move_left" || action === "move_right")) {
-            activeRegion = 1;
-            return;
+        // The status bar is a real surface (VI-17): Enter fires the scoped
+        // control, h/l cycle the scope (sync ↔ wipe — Tab's assignment with
+        // the hands still on hjkl), down returns to the main list.
+        if (activeRegion === 2) {
+            if (action === "move_down") {
+                activeRegion = 1;
+                return;
+            }
+            if (action === "move_left" || action === "move_right") {
+                topBar.handleAction("pane_cycle");
+                return;
+            }
+        }
+
+        // Up at the very top of a surface hands the cursor to the status
+        // region — the vertical twin of h/l crossing sidebar ↔ main. This is
+        // what replaces Ctrl-W's region picker: nothing above the first row
+        // (or the album toolbar, or the first segment) means the up motion
+        // reaches further up.
+        if (action === "move_up") {
+            if (activeRegion === 0 && sideBar.selected <= 0) {
+                activeRegion = 2;
+                return;
+            }
+            if (activeRegion === 1) {
+                var top = contentStack.currentItem;
+                if (top && top.onToolbar !== undefined && top.onToolbar) {
+                    // AlbumEntry: row 0's `k` lands on the toolbar first; only
+                    // after that is the up edge the status region.
+                    activeRegion = 2;
+                    return;
+                }
+                if (top && top.onToolbar === undefined && top.currentIndex !== undefined
+                        && top.currentIndex <= 0) {
+                    activeRegion = 2;
+                    return;
+                }
+            }
         }
 
         switch (activeRegion) {
@@ -550,20 +517,6 @@ Item {
         id: shell
         anchors.fill: parent
         spacing: 0
-
-        // Niri-like backdrop blur while the Ctrl-W scope overlay is up. Qt
-        // approximation of the niri config: passes/offset -> blur + blurMax,
-        // saturation 0.6 == niri's 1.6x, autoPadding off so the blur stays
-        // clipped to the window. The floating search rides the acrylic panel's
-        // own pass instead (UI-55: never stack acrylic layers).
-        layer.enabled: root.visualMode
-        layer.effect: MultiEffect {
-            blurEnabled: true
-            blur: 0.5
-            blurMax: 48
-            saturation: 0.6
-            autoPaddingEnabled: false
-        }
 
         SuperiorBar {
             id: topBar
@@ -695,19 +648,6 @@ Item {
         // ARC-UI-1: the fullscreen queue arms the same Alt overlay as the
         // lists.
         onQuickAction: (target, actions) => root.armQuickActions(target, actions)
-
-        // Niri-like backdrop blur for the Ctrl-W scope overlay, same recipe as
-        // the shell. The search overlay's acrylic panel samples this item as
-        // its backdrop when fullscreen is up (UI-55), so no second blur
-        // stacks here.
-        layer.enabled: root.visualMode
-        layer.effect: MultiEffect {
-            blurEnabled: true
-            blur: 0.5
-            blurMax: 48
-            saturation: 0.6
-            autoPaddingEnabled: false
-        }
 
         // Enter/leave is a scene change, not a highlight flip: the black
         // backdrop fades in/out (`emphasized`), decelerating in and
@@ -888,36 +828,17 @@ Item {
         }
     }
 
-    // Visual mode: niri-like backdrop blur (on the shell above) + dim, with the
-    // focus border as the only chrome.
-    Rectangle {
-        anchors.fill: parent
-        color: Palette.scrim
-        opacity: root.visualMode && !root.nowPlayingExpanded ? Theme.scrimOpacity : 0
-        z: Theme.zRegion - 1
-
-        Behavior on opacity {
-            NumberAnimation { duration: Theme.motion.standard; easing.type: Easing.Bezier; easing.bezierCurve: Theme.ease.standard }
-        }
-    }
-
     // Region borders = the vi cursor, positioned from the layout ratios.
     // 0 = sidebar, 1 = main, 2 = status (top). The player bar has no region:
     // it is decoration driven by global binds (UI-51).
     Repeater {
-        model: [
-            { title: "LIBRARY", rotated: true },
-            { title: "MAIN", rotated: false },
-            { title: "STATUS", rotated: false }
-        ]
+        model: 3
 
         delegate: Rectangle {
             id: regionBox
             required property int index
-            required property var modelData
 
             readonly property bool active: index === root.activeRegion
-            readonly property bool candidate: root.visualMode && index === root.visualSelection
             readonly property real unit: Math.max(1, root.width * 0.0015)
 
             x: index === 1 ? root.sideW : 0
@@ -926,31 +847,16 @@ Item {
             height: index === 2 ? root.barH : root.bodyH
             z: Theme.zRegion
             color: "transparent"
-            // Visual mode highlights only the candidate; otherwise only the
-            // active (cursor) region is outlined. Fullscreen is an overlay, so
-            // no region highlight may show above it; the modal search owns the
-            // focus border while it is up (the shell behind it is blurred, so
-            // the sharp frame would clash).
-            visible: !root.nowPlayingExpanded && !searchOverlay.opened
-                && (root.visualMode ? candidate : active)
-            border.width: (candidate ? 3 : 2) * unit
+            // Only the active (cursor) region is outlined. Fullscreen is an
+            // overlay, so no region highlight may show above it; the modal
+            // search owns the focus border while it is up.
+            visible: !root.nowPlayingExpanded && !searchOverlay.opened && active
+            border.width: 2 * unit
             border.color: Palette.primary
 
             // Width is instant (R5); only the colour eases.
             Behavior on border.color {
                 ColorAnimation { duration: Theme.motion.micro; easing.type: Easing.Bezier; easing.bezierCurve: Theme.ease.standard }
-            }
-
-            // Region title shown only while choosing in visual mode.
-            Text {
-                anchors.centerIn: parent
-                text: regionBox.modelData.title
-                color: Palette.primary
-                font.family: Theme.fonts.body
-                font.pixelSize: root.height * 0.03
-                font.bold: true
-                font.letterSpacing: root.height * 0.008
-                opacity: root.visualMode ? 1 : 0
             }
         }
     }

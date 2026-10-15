@@ -28,6 +28,19 @@ Rectangle {
     // UI-57: the shared width ramp — the now-playing type shrinks with the
     // window instead of only with its height.
     readonly property real widthScale: Theme.widthScale(root.width)
+    // UI-57: every text in the bar rides the shared type ramp — the role's
+    // floor is the hard stop, so a narrow (or short) bar never squeezes the
+    // title, the artist or the timecode into illegibility.
+    readonly property real titlePixelSize: {
+        // The title reads 60% larger than the shared label floor.
+        var full = Theme.fontSize("label", root.height) * 1.6;
+        return Theme.clamp(full * root.widthScale, 16, full);
+    }
+    readonly property real artistPixelSize: titlePixelSize
+    readonly property real timePixelSize: {
+        var full = Theme.fontSize("mono", root.height);
+        return Theme.clamp(full * root.widthScale, 10, full);
+    }
 
     // Speaker icon by volume tier: muted / silent / low (≤33) / high.
     function volumeIcon() {
@@ -139,12 +152,13 @@ Rectangle {
                             anchors.fill: parent
                             text: Backend.currentTitle.length > 0 ? Backend.currentTitle : "Nothing playing"
                             color: Palette.onSurface
-                            font.pixelSize: root.height * 0.18 * root.widthScale
-                            // The empty state sits horizontally centered over
-                            // its box (no art to align under); a real title
-                            // keeps the left rail.
+                            font.pixelSize: root.titlePixelSize
+                            // The empty state centers in its parent rectangle
+                            // (no art to align under); a real title keeps the
+                            // left rail, both vertically centered.
                             horizontalAlignment: Backend.currentTitle.length > 0
                                 ? Text.AlignLeft : Text.AlignHCenter
+                            verticalAlignment: Text.AlignVCenter
                             elide: Text.ElideRight
                             animated: false
                         }
@@ -160,7 +174,7 @@ Rectangle {
                             anchors.fill: parent
                             text: Backend.currentArtist
                             color: Palette.onSurfaceVariant
-                            font.pixelSize: root.height * 0.15 * root.widthScale
+                            font.pixelSize: root.artistPixelSize
                             elide: Text.ElideRight
                             animated: false
                         }
@@ -215,7 +229,7 @@ Rectangle {
                     Layout.alignment: Qt.AlignVCenter | Qt.AlignRight
                     text: Theme.formatTime(Backend.position) + " / " + Theme.formatTime(Backend.duration)
                     color: Palette.onSurfaceVariant
-                    font.pixelSize: root.height * 0.15 * root.widthScale
+                    font.pixelSize: root.timePixelSize
                     horizontalAlignment: Text.AlignRight
                     elide: Text.ElideRight
                     animated: false

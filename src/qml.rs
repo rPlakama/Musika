@@ -899,15 +899,6 @@ impl Backend {
             return String::new();
         }
 
-        // While the search overlay is open the scope switch (`Ctrl-W`) is
-        // simply unavailable: the overlay owns the keyboard context, and the
-        // field handles Ctrl-W itself as word-delete while typing.
-        if self.search_open && token == "ctrl-w" {
-            self.keymap.reset();
-            self.mark_key_pending(false);
-            return String::new();
-        }
-
         match self.keymap.feed(&token) {
             Outcome::Action(action) => {
                 self.mark_key_pending(false);

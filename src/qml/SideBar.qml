@@ -43,6 +43,15 @@ Rectangle {
 
     color: Palette.surfaceContainerLow
 
+    // UI-58: the row breathing ramp — driven by the window width, 1 at
+    // `compact` and above, rising to 1.4 at the `narrow` icon strip.
+    readonly property real _winWidth: Window.window ? Window.window.width : root.width
+    readonly property real rowBreathe: {
+        var s = Theme.widthScale(root._winWidth);
+        var t = Math.max(0, Math.min(1, (1 - s) / 0.3));
+        return 1 + 0.4 * t;
+    }
+
     function moveSelection(delta) {
         var next = selected;
         for (var step = 0; step < segments.length; step++) {
@@ -118,7 +127,11 @@ Rectangle {
                 readonly property bool usable: modelData.enabled
 
                 Layout.fillWidth: true
-                implicitHeight: root.height * 0.064
+                // UI-58 (left bar): as the pane collapses by width the rows
+                // breathe — up to 40% taller on a continuous ramp (1 at the
+                // default width, where the spacing reads right), so the icon
+                // strip stays legible.
+                implicitHeight: root.height * 0.064 * root.rowBreathe
                 radius: Theme.radius
                 color: !usable
                     ? "transparent"

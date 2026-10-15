@@ -69,6 +69,9 @@ Rectangle {
     /// ARC-UI-2 M2: the live `/` session, painted by the card text.
     property string searchQuery: ""
     property int searchCurrentRow: -1
+    /// The grid cursor, exposed so Home's up-edge can hand it to the status
+    /// region at the first card (the other surfaces alias `currentIndex`).
+    readonly property alias currentIndex: grid.currentIndex
 
     /// ARC-UI-2 M1: the search contract (see `ScrollContent`); the grid
     /// paints the title and the meta line. Matching is viewport-scoped: cards

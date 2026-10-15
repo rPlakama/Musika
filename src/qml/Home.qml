@@ -64,26 +64,13 @@ Item {
         }
     }
 
-    function rootFor(index) {
-        switch (index) {
-        case 1:
-            return songListComponent;
-        case 2:
-            return artistListComponent;
-        case 3:
-            return playlistListComponent;
-        case 4:
-            return radioListComponent;
-        default:
-            return albumListComponent;
-        }
-    }
-
     function showSegment(index) {
         currentSegment = index;
         while (contentStack.depth > 1)
             contentStack.pop();
-        contentStack.replace(rootFor(index));
+        // The segment host stays mounted: switching is visibility, so the
+        // instance keeps its cursor, scroll memory and model — the return is
+        // instant instead of remount + async reload + restore.
         activeRegion = 1;
     }
 
@@ -550,7 +537,7 @@ Item {
                     id: contentStack
                     Layout.fillWidth: true
                     Layout.fillHeight: true
-                    initialItem: albumListComponent
+                    initialItem: segmentHost
 
                     pushEnter: EnterView {}
                     pushExit: ExitView {}
@@ -558,6 +545,110 @@ Item {
                     popExit: ExitView {}
                     replaceEnter: EnterView {}
                     replaceExit: ExitView {}
+
+                    // The five segments stay alive once instantiated —
+                    // switching is visibility, not a rebuild, so returning to
+                    // a tab lands instantly with its cursor, scroll memory and
+                    // model intact (no skeleton beat, no re-restore). Pages
+                    // (album/artist) still push/pop above this host, and every
+                    // row-surface call Home makes on `currentItem` forwards to
+                    // the visible view.
+                    Item {
+                        id: segmentHost
+
+                        // The `count` read is the dependency that re-evaluates
+                        // this when the Repeater builds its delegates: a bare
+                        // `itemAt()` lookup before they exist returns null and
+                        // registers nothing, so the binding would stay null
+                        // forever (the "scroll unavailable" bug).
+                        readonly property Item activeView: {
+                            if (segmentLoaders.count === 0)
+                                return null;
+                            var loader = segmentLoaders.itemAt(root.currentSegment);
+                            return loader ? loader.item : null;
+                        }
+                        readonly property bool hasSelection: activeView
+                            ? activeView.hasSelection === true : false
+                        readonly property bool exitsToMain: false
+                        readonly property int currentIndex: (activeView
+                            && activeView.currentIndex !== undefined)
+                            ? activeView.currentIndex : -1
+
+                        /// ARC-UI-2: the live `/` session forwards to the
+                        /// visible view (see `Home.lineSearchTargets`).
+                        property string searchQuery: ""
+                        property int searchCurrentRow: -1
+                        onSearchQueryChanged: _applySearch()
+                        onSearchCurrentRowChanged: _applySearch()
+
+                        function _applySearch() {
+                            var v = activeView;
+                            if (!v)
+                                return;
+                            try {
+                                v.searchQuery = searchQuery;
+                                v.searchCurrentRow = searchCurrentRow;
+                            } catch (e) {
+                            }
+                        }
+
+                        function handleAction(action) {
+                            var v = activeView;
+                            if (v && v.handleAction)
+                                v.handleAction(action);
+                        }
+                        function clearSelection() {
+                            var v = activeView;
+                            if (v && v.clearSelection)
+                                v.clearSelection();
+                        }
+                        function toggleSelection() {
+                            var v = activeView;
+                            if (v && v.toggleSelection)
+                                v.toggleSelection();
+                        }
+                        function selectAll() {
+                            var v = activeView;
+                            if (v && v.selectAll)
+                                v.selectAll();
+                        }
+                        function moveWithinGrid(action) {
+                            var v = activeView;
+                            return v && v.moveWithinGrid ? v.moveWithinGrid(action) : false;
+                        }
+                        function armQuickActions() {
+                            var v = activeView;
+                            if (v && v.armQuickActions)
+                                v.armQuickActions();
+                        }
+                        function searchRows() {
+                            return activeView && activeView.searchRows ? activeView.searchRows() : [];
+                        }
+                        function searchJump(row) {
+                            var v = activeView;
+                            if (v && v.searchJump)
+                                v.searchJump(row);
+                        }
+
+                        Repeater {
+                            id: segmentLoaders
+                            model: 5
+
+                            delegate: Loader {
+                                required property int index
+                                anchors.fill: parent
+                                // "So light": instantiate every segment once
+                                // and keep it — no remount on return.
+                                active: true
+                                visible: index === root.currentSegment
+                                sourceComponent: index === 1 ? songListComponent
+                                    : index === 2 ? artistListComponent
+                                    : index === 3 ? playlistListComponent
+                                    : index === 4 ? radioListComponent
+                                    : albumListComponent
+                            }
+                        }
+                    }
 
                     Component {
                         id: albumListComponent

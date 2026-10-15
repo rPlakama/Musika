@@ -117,6 +117,10 @@ Item {
     property real followVelocity: 1400
     property real followBegin: 0.15
     property real followEnd: 0.85
+    /// A cursor landing farther than this many rows outside the visible band
+    /// catches instantly — the highlight walk over dozens of rows reads as
+    /// lag (and blanks the viewport while it travels).
+    property int followSnapRows: 15
     /// VI-4: `v`/`V` row selection. The model owns the state; hosts gate it
     /// (e.g. only when the Alt verb kind exists) and keep their own cursor.
     property bool selectable: false
@@ -449,6 +453,22 @@ Item {
                 return;
             if (root.currentIndex >= 0 && target.currentIndex !== root.currentIndex)
                 target.currentIndex = root.currentIndex;
+            // UI-41: a cursor landing more than `followSnapRows` outside the
+            // visible band skips the walk and catches instantly (far jumps
+            // are searches/semantic moves, not steps).
+            if (root.currentIndex >= 0 && root.followSnapRows > 0) {
+                var middle = target.contentX + target.width * 0.5;
+                var top = target.indexAt(middle, target.contentY);
+                var bottom = target.indexAt(middle,
+                    target.contentY + Math.max(0, target.height - 1));
+                if (top < 0)
+                    top = 0;
+                if (bottom < 0)
+                    bottom = target.count - 1;
+                if (root.currentIndex < top - root.followSnapRows
+                        || root.currentIndex > bottom + root.followSnapRows)
+                    target.positionViewAtIndex(root.currentIndex, ListView.Contain);
+            }
             if (root.memoryKey)
                 root.remember();
         }

@@ -3,6 +3,12 @@
 All notable changes to Musika, newest first. `TASKLISTMAJOR.md` tracks the
 open work; this file is the release history.
 
+## 0.1.8 — _Push push push!_
+
+All commits since `v0.1.7`:
+
+- `2aecca8` Login: log the online mode on a successful ping
+
 ## 0.1.7 — _Talk! Lyrics, Arguments...!_
 
 All commits since `v0.1.61`:

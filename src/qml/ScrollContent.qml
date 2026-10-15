@@ -123,7 +123,7 @@ Item {
     property real followEnd: 0.85
     /// Optional soothing follow: when >= 0 the highlight rides this fixed
     /// duration (ms) instead of the constant-velocity walk — the lyrics
-    /// pane wants a paced ~300 ms glide per phrase, not a flick.
+    /// pane wants a paced ~500 ms glide per phrase, not a flick.
     property int followMs: -1
     /// Extra spacing between list rows (0 = the delegate owns it); grid
     /// cells are placed by `cellHeight`.

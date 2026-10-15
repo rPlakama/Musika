@@ -103,6 +103,7 @@ The app is unsafe or misleading without these.
 - [ ] **ARC-5 · Surface errors instead of `eprintln!`** — P0 · (A8)
   - **Why:** users never see console output.
   - **Now:** toast channel exists for sync/playback; many call sites still log.
+  - **Impl** Use notifications In-app (Top-right-corner) for logs and other information;
 
 - [ ] **ARC-12 · Poison-safe player lock** — P1 · (O10)
   - **Why:** `lock().unwrap()` on the reader thread can panic the UI tick.
@@ -161,14 +162,6 @@ The product is incomplete without these.
     has no explicit fallback state, so future features would guess.
   - **Details:** `Mode` enum (Normal/Visual/Command/Search/Insert) in Rust,
     reflected in QML; Esc invariant targets Normal; mode colors per MY3 §3.3.
-
-- [ ] **VI-3 · `Ctrl-W h/j/k/l` pane navigation** — P1 · (N1, CRITIQUE §3.1, MY3 §4.4)
-  - **Why:** vi window motions are instant and directional; the current Ctrl-W
-    modal lock with Enter-commit is not vi and blocks input.
-  - **Details:** directional focus jumps across sidebar/main/player; strip the
-    status bar from the ring; keep the region border as the only feedback.
-  - **Now:** blur overlay retired (scrim + border, Home.qml); Ctrl-W still
-    toggles the region overlay instead of jumping.
 
 - [ ] **VI-7 · Count register (`3j`, `10l`, `5G`)** — P1 · (N2a, CRITIQUE Ph2.2, MY3 §4.2)
   - **Why:** counts turn motions into a grammar; today digits are dropped.

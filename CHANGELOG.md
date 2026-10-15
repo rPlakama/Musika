@@ -3,6 +3,39 @@
 All notable changes to Musika, newest first. `TASKLISTMAJOR.md` tracks the
 open work; this file is the release history.
 
+## 0.1.3 — _Actions! Actions! It's all talk! Talk! Chitat! <-- ifuk, uk_
+
+All commits since `v0.1.2`:
+
+- `031832e` ArtistEntry: Tab cycles the Download/Shuffle/Favorite chip scope
+  (shared ring)
+- `6817ea4` Alt menu: release-over-neutral cancels (Esc swallowed); click
+  tiles fire, click outside closes
+- `cff7020` Toast: grows with the message — wrap, near-fullscreen cap, scroll
+  fallback
+- `3a6ee16` Wipe menu: scoped quadrants via the trashcan Alt menu; SuperiorBar
+  panes + Tab scope
+- `c5cbfab` DB: fix the artists INSERT (6 values for 7 columns); replace
+  regression test
+- `a9bc3d8` ARC-7: trim api.rs to the 14 used endpoints — 1894 → 514 lines
+- `03b2517` ARC-UI-1: springy zoom-in spawn; arrow-move neutral glyph
+- `12a279c` UI-46/VI-4: view-owned follow + model-owned selection; ARC-7/8
+  inits
+- `9f5da76` VI-4: visual row selection (v/V) — count badge, batch Alt
+  queue-add
+- `4ea3695` Q-5: windowed mpv playlist — gapless transitions, stream-error
+  retry/auto-advance
+- `0603994` UI-56: +30% cover-corner favourite mark; ARC-I-4 favourite toggle
+  task
+- `e7eed95` ARC-I-2: Alt menu in AlbumEntry, album favourite mark;
+  cover-corner star in ArtistEntry
+- `7bdff13` ARC-I-2/3: initialise AlbumEntry Alt menu and ArtistEntry chip
+  keybinds
+- `b2f1e90` UI-56: favourites lead with a white heart before the meta in every
+  region
+- `ff6bdda` ARC-I: Alt menu in the Search overlay (recycled verbs, artist
+  hits)
+
 ## 0.1.2 — _Alting_ my way into shortcuts!
 
 All commits since `v0.1.1`:

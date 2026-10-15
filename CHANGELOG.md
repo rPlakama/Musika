@@ -3,6 +3,16 @@
 All notable changes to Musika, newest first. `TASKLISTMAJOR.md` tracks the
 open work; this file is the release history.
 
+## 0.1.6 — _Patching a worried heart!_
+
+All commits since `v0.1.5`:
+
+- `7958335` Scroll: keep-alive segment host + far-landing snap
+  (SCROLLMODELANALYSIS.md)
+- `64746d3` ScrollContent: rewrite the body around SCROLLMODELANALYSIS.md
+- `4643500` Scroll: instant landing — a far cursor never walks back
+  (analysis §3)
+
 ## 0.1.5 — _I am no Model Man_, but here I give everything for you! (A Lie!)
 
 All commits since `v0.1.4`:

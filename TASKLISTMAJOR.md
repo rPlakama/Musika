@@ -1981,7 +1981,7 @@ Small, bounded, high-value changes.
     `positionViewAtIndex`.
   - **Now (partial):** the lyrics list rides the shared scroll body now —
     `followLyric` pushes the active line into a centred band
-    (`followBegin/End` 0.45/0.55) and `ScrollContent.followMs: 500` glides it
+    (`followBegin/End` 0.45/0.55) and `ScrollContent.followMs: 600` glides it
     there: a fixed-duration soothing follow with `followSnapRows: 0`, so a
     far phrase animates instead of teleporting and the old unrealised-row
     `positionViewAtIndex` flicks are gone. j/k, drag and wheel pause it

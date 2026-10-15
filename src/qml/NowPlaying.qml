@@ -830,9 +830,9 @@ Rectangle {
                                 model: lyricModel
                                 rowSpacing: root.lyricSize * 0.9
                                 // LYR-8: the soothing lyrics follow — a fixed
-                                // ~500 ms glide inside a centre band, with no
+                                // ~600 ms glide inside a centre band, with no
                                 // teleport fallback and no far-snap flick.
-                                followMs: 500
+                                followMs: 600
                                 followSnapRows: 0
                                 followBegin: 0.45
                                 followEnd: 0.55

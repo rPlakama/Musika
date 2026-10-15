@@ -1022,6 +1022,8 @@ Rectangle {
                                 // ARC-UI-2 M1: the queue rows paint title
                                 // and duration.
                                 searchFields: ["title", "duration"]
+                                // UI-58: adaptive rows for the queue pane.
+                                rowRatio: 0.16
                                 // The fullscreen memory also stores the focused
                                 // pane; without this the continuous remembers
                                 // clobbered it to the default scope.
@@ -1047,7 +1049,11 @@ Rectangle {
                                         readonly property bool emphasized: index === root.queueCursor || rowHover.hovered
 
                                         width: ListView.view.width
-                                        height: ListView.view.height * 0.16
+                                        // UI-58: adaptive — cut a row past the
+                                        // 30% squeeze instead of shrinking.
+                                        height: queueContent.adaptiveRowHeight > 0
+                                            ? queueContent.adaptiveRowHeight
+                                            : ListView.view.height * 0.16
                                         // Playing-track tint stays on the row; the
                                         // cursor/hover block is the shared UI-48 layer.
                                         color: index === root.queueIndex ? Palette.surfaceContainer : "transparent"

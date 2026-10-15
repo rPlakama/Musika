@@ -70,6 +70,18 @@ Item {
     property alias searchQuery: content.searchQuery
     property alias searchCurrentRow: content.searchCurrentRow
 
+    /// UI-58: the row baseline (0.06 of the panel), captured on the panel's
+    /// first real measure so the adaptive rule preserves the default size.
+    property real _rowBase: 0
+
+    Connections {
+        target: panel
+        function onHeightChanged() {
+            if (root._rowBase <= 0 && panel.height > 0)
+                root._rowBase = panel.height * 0.06;
+        }
+    }
+
     function searchRows() {
         return content.searchRows();
     }
@@ -203,7 +215,8 @@ Item {
                     readonly property bool emphasized: index === root.cursor || rowHover.hovered
 
                     width: ListView.view.width
-                    height: panel.height * 0.06
+                    // UI-58: adaptive — cut a row past the 30% squeeze.
+                    height: Theme.adaptiveRow(panel.height, 0.06, root._rowBase)
                     color: index === root.cursor
                         ? Palette.secondaryContainer
                         : (index === root.nowPlaying ? Palette.surfaceContainer : "transparent")

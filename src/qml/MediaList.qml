@@ -79,6 +79,8 @@ ScrollPanel {
     model: mediaRows
     // ARC-UI-2 M1: the rows paint title, subtitle and meta; nothing else.
     searchFields: ["title", "subtitle", "meta"]
+    // UI-58: the row fraction the adaptive rule preserves.
+    rowRatio: 0.105
 
     function setRows(rows) {
         // VI-4: a reload invalidates the selected range.
@@ -164,7 +166,10 @@ ScrollPanel {
             readonly property bool selectedRow: root.isSelected(index)
 
             width: viewWidth
-            height: ListView.view ? ListView.view.height * 0.105 : 0
+            // UI-58: adaptive — the 30% band scales, past it a row is cut.
+            height: root.adaptiveRowHeight > 0
+                ? root.adaptiveRowHeight
+                : (ListView.view ? ListView.view.height * 0.105 : 0)
             color: (ListView.isCurrentItem || row.selectedRow)
                 ? Palette.secondaryContainer
                 : (rowHover.hovered

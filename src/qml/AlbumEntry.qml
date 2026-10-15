@@ -168,6 +168,11 @@ Rectangle {
     property alias searchQuery: content.searchQuery
     property alias searchCurrentRow: content.searchCurrentRow
 
+    /// UI-58: the song-row baseline (0.055 of the page), captured on the
+    /// first real measure so the adaptive rule preserves the default size.
+    property real _rowBase: 0
+    onHeightChanged: if (_rowBase <= 0 && height > 0) _rowBase = height * 0.055
+
     function searchRows() {
         return content.searchRows();
     }
@@ -482,7 +487,8 @@ Rectangle {
                 readonly property bool selectedRow: content.selected(index)
 
                 width: ListView.view.width
-                height: root.height * 0.055
+                // UI-58: adaptive — cut a row past the 30% squeeze.
+                height: Theme.adaptiveRow(root.height, 0.055, root._rowBase)
                 color: ((ListView.isCurrentItem && !root.onToolbar) || songRow.selectedRow)
                     ? Palette.secondaryContainer
                     : (index % 2 === 0 ? Palette.surface : Palette.surfaceContainerLowest)

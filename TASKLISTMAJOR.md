@@ -1528,6 +1528,32 @@ Small, bounded, high-value changes.
 > **Easiest batch** — moved from Should have on 2026-10-14 (the smallest
 > remaining work): UI-35, S-6, UI-42, CACHE-3, CACHE-4, P-1.
 
+- [ ] **UI-58 · Adaptive rows — cut a row past a 30% squeeze** — P1 · **top priority** · (design; window-height responsive; last design before the next release)
+  - **Why:** every scroll list sizes its rows as a fraction of the live
+    viewport, so shrinking the window squeezes the rows endlessly until the
+    list is unreadable. The design rule instead: a row may lose at most 30%
+    of its nominal (default-window) height; past that the squeeze trades
+    whole rows — fewer, still-readable rows instead of a squashed list.
+  - **Details:** one pure helper `Theme.adaptiveRow(viewHeight, ratio,
+    baseline)` — the nominal row height while it stays ≥ 0.7× the captured
+    baseline, else `viewHeight / max(1, floor(viewHeight / (0.7 ×
+    baseline)))`, so rows oscillate in [0.7, 1]× the baseline and each step
+    cuts exactly one row. `ScrollContent` captures each list's baseline on
+    its first real measure and exposes `rowRatio`/`adaptiveRowHeight`
+    (`ScrollPanel` forwards; MediaList 0.105, fullscreen queue 0.16). Hosts
+    whose row height is page-relative capture their own baseline and call
+    the same helper (AlbumEntry songs 0.055 of the page, SearchColumn
+    columns 0.12, QueueDrawer rows 0.06 of the panel).
+  - **Verify:** harness cases for the helper (in-band scaling, the cut on
+    the 30% step, never above nominal, floor ≥ 0.7×) plus a PTY smoke;
+    manual: resize the window down through several steps and watch rows
+    drop one by one instead of squeezing.
+  - **Now:** implemented — `Theme.adaptiveRow`, `ScrollContent` baseline
+    capture + `rowRatio`/`adaptiveRowHeight` (`ScrollPanel` forwards;
+    MediaList 0.105, fullscreen queue 0.16), host-level baselines for
+    AlbumEntry/SearchColumn/QueueDrawer; harness case + PTY smoke green.
+    Uncommitted.
+
 - [x] **UI-56 · Microdesign: favorites lead with a heart before their meta** — P3 · **top priority** · (design microtask; P-2, ARC-42)
   - **Why:** every album, song and artist row shows its `<track amount>` /
     `<track duration>` / `<album quantity>` meta with no way to tell a
@@ -3050,9 +3076,9 @@ Kept for rationale; the tree already carries these.
 |--------|------|--------|
 | Must have | 6 | 2 |
 | Should have | 55 | 16 |
-| Quick wins | 33 | 59 |
+| Quick wins | 34 | 59 |
 | Solved (reference) | — | 40 |
-| **Total** | **94** | **117** |
+| **Total** | **95** | **117** |
 
 ### Coverage by area
 

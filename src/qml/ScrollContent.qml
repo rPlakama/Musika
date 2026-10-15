@@ -53,6 +53,24 @@ Item {
     /// Held by whoever owns the session (`LineSearch` pushes it down).
     property string searchQuery: ""
     property int searchCurrentRow: -1
+
+    /// UI-58: the host's nominal row fraction of this viewport (0 = the
+    /// delegates own their heights and nothing adapts).
+    property real rowRatio: 0
+    /// The row baseline captured on the first real measure — the default
+    /// window geometry (Main starts at `Screen.height * 0.72`).
+    property real _rowBase: 0
+    /// UI-58: the row height to paint — scales with the viewport inside the
+    /// 30% band, cuts whole rows past it (see `Theme.adaptiveRow`).
+    readonly property real adaptiveRowHeight: Theme.adaptiveRow(list.height, root.rowRatio, root._rowBase)
+
+    Component.onCompleted: captureRowBase()
+    onHeightChanged: captureRowBase()
+
+    function captureRowBase() {
+        if (root._rowBase <= 0 && root.rowRatio > 0 && list.height > 0)
+            root._rowBase = list.height * root.rowRatio;
+    }
     /// UI-41: the view-owned follow speed (px/s) and the preferred band the
     /// cursor is kept in (fractions of the viewport). `reduceMotion` snaps.
     property real followVelocity: 1400

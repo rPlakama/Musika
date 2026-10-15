@@ -117,7 +117,12 @@ Item {
     readonly property real overflow: width * 0.012
 
     readonly property real headerH: height * 0.10
-    readonly property real rowH: height * 0.12
+    /// UI-58: adaptive row height — inside the 30% band it scales, past it a
+    /// row is cut. The baseline (0.12 of the column) is captured on the
+    /// first real measure.
+    property real _rowBase: 0
+    onHeightChanged: if (_rowBase <= 0 && height > 0) _rowBase = height * 0.12
+    readonly property real rowH: Theme.adaptiveRow(height, 0.12, root._rowBase)
     // Snap the viewport to full rows so the footer never slices one in half.
     readonly property real listH: Math.max(rowH,
         Math.floor((height - headerH) / rowH) * rowH)

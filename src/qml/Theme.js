@@ -242,6 +242,22 @@ function widthScale(width, floor) {
         / (breakpoints.compact - breakpoints.narrow)), base, 1)
 }
 
+// UI-58: adaptive rows. A row may lose at most 30% of its baseline
+// (default-window) height; past that the squeeze trades whole rows — the
+// count drops by one and the rest land back in [0.7, 1]× the baseline —
+// instead of shrinking every row further. `ratio` is the host's nominal row
+// fraction of its viewport; `baseline` the row height captured on the first
+// real measure (0 before that: the nominal is returned untouched).
+function adaptiveRow(viewHeight, ratio, baseline) {
+    var nominal = viewHeight * ratio
+    if (baseline <= 0 || nominal <= 0)
+        return nominal
+    if (nominal >= 0.7 * baseline)
+        return nominal
+    var rows = Math.max(1, Math.floor(viewHeight / (0.7 * baseline)))
+    return viewHeight / rows
+}
+
 // Speaker icon by volume tier: muted / silent / low (≤33) / high. Shared by
 // the player bar and the fullscreen transport (Q-4/P-7).
 function volumeIcon(volume, muted) {

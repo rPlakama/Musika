@@ -137,6 +137,9 @@ Rectangle {
     property alias searchFields: content.searchFields
     property alias searchQuery: content.searchQuery
     property alias searchCurrentRow: content.searchCurrentRow
+    /// UI-58: adaptive rows forward too (see `ScrollContent`).
+    property alias rowRatio: content.rowRatio
+    readonly property alias adaptiveRowHeight: content.adaptiveRowHeight
 
     function searchRows() {
         return content.searchRows();

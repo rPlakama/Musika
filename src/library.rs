@@ -57,7 +57,7 @@ pub async fn replace(
 
     for artist in artists {
         sqlx::query(
-            "INSERT INTO artists (id, name, album_count, cover_art, starred, image_url, starred)
+            "INSERT INTO artists (id, name, album_count, cover_art, image_url, starred)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
         )
         .bind(&artist.id)
@@ -334,9 +334,8 @@ pub async fn song_starred_ids(
         return Ok(std::collections::HashSet::new());
     }
 
-    let mut builder = sqlx::QueryBuilder::new(
-        "SELECT id FROM songs WHERE starred IS NOT NULL AND id IN (",
-    );
+    let mut builder =
+        sqlx::QueryBuilder::new("SELECT id FROM songs WHERE starred IS NOT NULL AND id IN (");
     let mut separated = builder.separated(", ");
     for id in ids {
         separated.push_bind(id.clone());
@@ -914,6 +913,58 @@ mod tests {
             .await
             .unwrap();
         pool
+    }
+
+    #[tokio::test]
+    async fn replace_round_trips_artists_albums_and_songs() {
+        let pool = memory_pool().await;
+        let artist = ArtistID3 {
+            id: "ar1".into(),
+            name: "Radiohead".into(),
+            cover_art: Some("cov1".into()),
+            artist_image_url: Some("https://img/ar1".into()),
+            album_count: 1,
+            starred: Some("2026-01-02T03:04:05Z".into()),
+        };
+        let album = AlbumID3 {
+            id: "al1".into(),
+            artist_id: Some("ar1".into()),
+            name: "Kid A".into(),
+            artist: Some("Radiohead".into()),
+            song_count: 1,
+            ..AlbumID3::default()
+        };
+        let song = Child {
+            id: "s1".into(),
+            album_id: Some("al1".into()),
+            artist_id: Some("ar1".into()),
+            title: "Everything in Its Right Place".into(),
+            track: Some(1),
+            ..Child::default()
+        };
+
+        // Regression: the artists INSERT once listed `starred` twice (7
+        // columns for 6 values), failing every sync with SQLite error
+        // "6 values for 7 columns".
+        replace(&pool, &[artist], &[album], &[song], 42)
+            .await
+            .unwrap();
+
+        let (name, image, starred): (String, Option<String>, Option<String>) =
+            sqlx::query_as("SELECT name, image_url, starred FROM artists WHERE id = 'ar1'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(name, "Radiohead");
+        assert_eq!(image.as_deref(), Some("https://img/ar1"));
+        assert_eq!(starred.as_deref(), Some("2026-01-02T03:04:05Z"));
+
+        let songs: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM songs")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(songs, 1);
+        assert_eq!(last_modified(&pool).await.unwrap(), 42);
     }
 
     #[tokio::test]

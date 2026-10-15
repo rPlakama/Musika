@@ -276,7 +276,7 @@ The product is incomplete without these.
     Favorite/Stars/In-cache/Shuffle chips) is carved out as UI-52 with ARC-42
     as its backend; B–D stay behavioural and land on top of both.
 
-- [ ] **P-4 · Playlists (index, view, play, create/edit)** — P2 · (M6, roadmap; `api.rs` already wraps all five endpoints)
+- [ ] **P-4 · Playlists (index, view, play, create/edit)** — P2 · (M6, roadmap; **absorbed into ARC-44 — this entry keeps the roadmap framing; its Subsonic research feeds the ARC**)
   - **Why:** the Playlists sidebar segment is a disabled placeholder, the queue
     cannot be saved, and CACHE-5's playlist rule plus Q-8's optional MPRIS
     playlist interface both wait on an index. The whole Subsonic playlist
@@ -371,6 +371,120 @@ The product is incomplete without these.
     - **I5 polish/integration** — cover mosaic, reorder (remove+append or
       `createPlaylist` replace), CACHE-5 playlist rule hook, MPRIS playlist
       interface (Q-8 M5), unit tests (`playlists.rs` SQL + API fixtures).
+
+- [ ] **ARC-44 · playlist.db — Subsonic playlists + local M3U, the Playlists segment end to end** — P2 · (absorbs P-4/M6; roadmap; planning)
+  - **Why:** the Playlists sidebar segment is a disabled placeholder
+    (`SideBar.qml` `segments[3].enabled = false` → `PlaceholderList` in
+    `Home.qml`), the queue cannot be saved, and CACHE-5's playlist rule plus
+    Q-8's optional MPRIS interface both wait on an index. P-4 collected the
+    Subsonic research; this ARC is the build plan and adds the second source
+    the app should own: **local M3U files**, indexed into the same disposable
+    cache, so `/` and the Alt verbs work identically over both.
+    *Correction to P-4:* `api.rs` no longer wraps the five playlist endpoints
+    — ARC-7 trimmed the file to the 14 live calls, so the wrappers
+    (`getPlaylists`, `getPlaylist`, `createPlaylist`, `updatePlaylist`,
+    `deletePlaylist`) must be re-added (typed structs + fixture tests) rather
+    than just consumed.
+  - **Sources (one DB, `source` discriminator):**
+    - **subsonic** — P-4's protocol research is canonical: `getPlaylists`
+      (never the `username` filter — Navidrome ignores it), ordered
+      `getPlaylist` entries (duplicates allowed, positions preserved, never
+      dedupe), `createPlaylist` (replace semantics = reorder foundation),
+      `updatePlaylist` (append/remove-by-index only), `deletePlaylist`;
+      refresh on login, after a successful library sync, on `r`, and when the
+      segment opens with a stale/empty index; contents fetch lazily when
+      `changed` outruns the cached row and after every edit (optimistic +
+      revert + refetch, server-authoritative); purge rows for playlists that
+      left the server, never inside the library `replace` transaction
+      (ARC-25).
+    - **m3u** — the app owns a folder: `config_dir()/playlists/*.m3u`
+      (`MUSIKA_PLAYLISTS_DIR` env override, matching the per-DB env pattern).
+      Parser rules: `#EXTM3U` tolerated but not required; `#EXTINF:<secs>,
+      <artist> - <title>` feeds the denormalized row; other `#` lines and
+      blanks skipped; each entry either an absolute path or a path relative
+      to the m3u's own directory; classic ANSI/UTF-8 with BOM tolerated.
+      Matching to `library.db` by `songs.path` exact first, then by
+      basename; unmatched entries are kept (rendered dimmed, skipped on play
+      with a summary) so an m3u referencing a not-yet-synced file is honest.
+      Re-scanned when the file's mtime/size changes (and on every playlists
+      refresh); the DB rows are disposable — the files stay the source of
+      truth. v1 is read-only in-app (edit the file, press `r`); exporting an
+      app playlist to m3u is a later increment.
+  - **DB (`playlist.db`, the DB8/lyrics pattern):**
+    - `migrations_playlist/` + `build.rs` rerun list + `Dbs.playlists` +
+      `migrate()` + a wipe scope;
+    - `playlist(id PK, source, name, comment, owner, public, song_count,
+      duration, created, changed, cover_art, path, mtime, fetched_at)`
+      (`path`/`mtime` are the m3u file identity; server rows leave them
+      NULL);
+    - `playlist_song(playlist_id, position, song_id NULL, title, artist,
+      album, duration, cover_art, PRIMARY KEY(playlist_id, position))`, FK
+      cascade — denormalized so the page renders when a song left the
+      library; `song_id` NULL = unmatched m3u entry;
+    - `playlist_meta(key, value)` mirrors `library_meta`.
+  - **Backend (`qml.rs`):** slots `requestPlaylists`, `requestPlaylist(id)`,
+    `refreshPlaylists`, `playPlaylist(id, start)` (queue builder: ordered
+    entries → the `playerLoad` path, missing songs skipped; covers ride the
+    existing `refresh_cover_urls`/queue-cover pipeline); channels
+    `playlists`, `playlist`. Mutations in the mutation milestone:
+    `createPlaylist(name, songIds)`, `renamePlaylist`, `deletePlaylist`,
+    `addSongToPlaylist`, `removeSongFromPlaylist` — optimistic + revert +
+    refetch, and every one also an IPC command (`playlists_refresh`,
+    `playlist_open <id>`, `playlist_play <id>`, `playlist_add <id>
+    <song-id>`, `playlist_remove <id> <index>`, `playlist_create <name>`) so
+    scripts and the README grammar stay single-sourced.
+  - **Sync (`index.rs`):** a `playlists` stage in the full pass — m3u rescan
+    + `getPlaylists` list refresh (+ staleness purge) — reported in
+    `SyncReport.playlists`; the ARC-8 `spawn_sync` pipeline carries it
+    unchanged.
+  - **QML:** `SideBar.qml` enables `segments[3]`;
+    `PlaylistList.qml` — the `MediaList` shape (title, `N songs · owner`
+    subtitle, `duration · source` meta; `Enter` open, `Space` play all,
+    adaptive rows and `/` paint come free through `ScrollContent` +
+    `SearchText`); `PlaylistEntry.qml` — the album-page shape (square header
+    with the first entry's art or a small local mosaic via `CoverImage`,
+    owner/public/comment/count/duration; ordered rows with the position as
+    the track column; `Enter` plays from that position, `Space` all, `d d`
+    removes the cursor entry on server lists only); `QuickActions`
+    `playlist(item)` verb set (Play all / Add to Queue); the generic `v`/`V`
+    selection + batch queue/favorite already apply; `Home` routing swaps the
+    `PlaceholderList` component for `PlaylistList`; a later `Prompt.qml`
+    text overlay + `PlaylistPicker.qml` for create/rename/append.
+  - **Milestones (each shippable):**
+    - **M0 — DB + M3U + segment:** migration, `Dbs.playlists`, m3u parser +
+      path matching (`src/playlists.rs`), scan on startup/sync,
+      `requestPlaylists` → `PlaylistList`; the segment lists real m3u names
+      offline. *Accept: restart keeps them; unmatched entries render dimmed;
+      `cargo test` covers the parser (EXTINF, relative paths, BOM).*
+    - **M1 — Subsonic list + contents:** re-add the five `api.rs` wrappers
+      (+ fixture tests), refresh policy + purge, lazy `getPlaylist`;
+      `PlaylistEntry` renders with positions; duplicate songs keep their
+      slots. *Accept: offline restart shows cached contents; a server-side
+      rename appears after `r`.*
+    - **M2 — play + reach:** `playPlaylist` (missing songs skipped with a
+      toast), `Space`/Enter semantics, `/` finds playlist rows and their
+      entries (viewport-scoped), Alt verbs arming on playlist rows and song
+      rows. *Accept: queue covers resolve; search jumps land; no dead verbs.*
+    - **M3 — mutations:** create/rename/delete + add/remove with the
+      optimistic/revert contract, `Prompt.qml` + `PlaylistPicker.qml`,
+      IPC parity commands, `a p`/`a n` binds. *Accept: every mutation
+      reverts visibly on a forced failure; IPC commands drive the same
+      paths.*
+    - **M4 — polish:** cover mosaic, reorder via `createPlaylist` replace,
+      CACHE-5 playlist rule hook, MPRIS playlist interface (Q-8 M5),
+      m3u export.
+  - **Verify:** the M0–M4 acceptance lines plus a matrix: offline restart
+    (both sources), m3u with relative + absolute paths and a missing file,
+    duplicate songs, stale `changed`, m3u mtime rescan, wipe scope clears
+    both sources, `SyncReport.playlists` counts, `/` viewport behavior over
+    playlists, and playlist rows surviving a library wipe (denormalized).
+  - **Modules:** `api.rs` (five wrappers + tests), `src/playlists.rs` +
+    `migrations_playlist/` (new), `db.rs` (pool/path/migrate/wipe),
+    `index.rs` (stage + purge hooks), `qml.rs` (slots/channels/queue),
+    `PlaylistList/PlaylistEntry` (+ later `Prompt/PlaylistPicker`), `SideBar`,
+    `Home`, `keybind.rs`, `ipc.rs`, `build.rs`, README grammar.
+  - **Now:** planning only — no code yet; P-4's research is canonical for the
+    Subsonic half.
 
 - [ ] **P-5 · Radio** — P2 · (M6, roadmap)
   - **Why:** sidebar segment is a placeholder; Subsonic radio endpoints exist.

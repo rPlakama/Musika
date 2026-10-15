@@ -672,16 +672,20 @@ Rectangle {
                     }
 
                     // Transport cluster (skip / pause / next) in its own
-                    // rectangle: centred in the space left of the volume box
-                    // while it fits, sliding left (x = 0) as the column
-                    // narrows — the transport yields, the volume stays put.
+                    // rectangle: centred in the whole bar while there is room,
+                    // and pushed left only as far as needed once the volume
+                    // box would touch it — the transport yields, the volume
+                    // stays put.
                     Rectangle {
                         id: transportBox
                         anchors.verticalCenter: parent.verticalCenter
                         width: transportRow.implicitWidth
                         height: parent.height
                         color: "transparent"
-                        x: Math.max(0, (transportBar.width - volumeBox.width - width) / 2)
+                        x: Math.max(0, Math.min(
+                            (transportBar.width - width) / 2,
+                            transportBar.width - volumeBox.width
+                                - root.width * 0.012 - width))
 
                         RowLayout {
                             id: transportRow

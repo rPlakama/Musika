@@ -1775,7 +1775,7 @@ Small, bounded, high-value changes.
 > **Easiest batch** — moved from Should have on 2026-10-14 (the smallest
 > remaining work): UI-35, S-6, UI-42, CACHE-3, CACHE-4, P-1.
 
-- [ ] **UI-58 · Adaptive rows — cut a row past a 30% squeeze** — P1 · **top priority** · (design; window-height responsive; last design before the next release)
+- [x] **UI-58 · Adaptive rows — cut a row past a 30% squeeze** — P1 · **top priority** · (design; window-height responsive; last design before the next release)
   - **Why:** every scroll list sizes its rows as a fraction of the live
     viewport, so shrinking the window squeezes the rows endlessly until the
     list is unreadable. The design rule instead: a row may lose at most 30%
@@ -1798,10 +1798,11 @@ Small, bounded, high-value changes.
   - **Now:** implemented — `Theme.adaptiveRow`, `ScrollContent` baseline
     capture + `rowRatio`/`adaptiveRowHeight` (`ScrollPanel` forwards;
     MediaList 0.105, fullscreen queue 0.16), host-level baselines for
-    AlbumEntry/SearchColumn/QueueDrawer; harness case + PTY smoke green.
-    Uncommitted.
+    AlbumEntry/SearchColumn/QueueDrawer; harness case + PTY smoke green;
+    the band edge sits at 0.82 (ARC-UI-3, 40% sooner). Landed (`42e4a6a`,
+    `5a4cc4f`).
 
-- [ ] **UI-59 · Transport cluster: one horizontal row, squeeze-proof** — P1 · (design QuickWin; user-found while squeezing the bars)
+- [x] **UI-59 · Transport cluster: one horizontal row, squeeze-proof** — P1 · (design QuickWin; user-found while squeezing the bars)
   - **Why:** previous/pause/next must always read as one horizontal line. Today
     the play button carries a larger preferred size (InferiorBar 0.56 vs 0.46
     of the bar height; fullscreen 0.058 vs 0.05) and the cluster lives between
@@ -1820,7 +1821,13 @@ Small, bounded, high-value changes.
   - **Verify:** squeeze both bars down through `compact` → `narrow` — the
     three stay on one line with steady relative sizes and the pause centred;
     no overlap with the time/volume clusters at any width.
-  - **Now:** planning only (waiting on the favourite-toggle test pass).
+  - **Now:** landed (`9841d14`) — `TransportControls.qml` is the one
+    previous/play/next row: common centre line, play at 1.22× the skips and
+    the row centre, minimum == preferred so a tight bar clips around the
+    cluster; the skip/play press feedback moved inside so both hosts dropped
+    their copies. The player bar and the fullscreen transport instantiate it
+    (unit 0.46× / 0.05× bar height). Open: the manual squeeze pass compact →
+    narrow.
 
 - [x] **UI-56 · Microdesign: favorites lead with a heart before their meta** — P3 · **top priority** · (design microtask; P-2, ARC-42)
   - **Why:** every album, song and artist row shows its `<track amount>` /
@@ -1982,10 +1989,11 @@ Small, bounded, high-value changes.
   - **Now (partial):** the lyrics list rides the shared scroll body in
     `glideToCenter` mode — a harness probe showed the highlight-band follow
     snaps one-line moves instantly (ApplyRange enforces the band), so the
-    body now animates the viewport itself to the active delegate's centre
-    over `followMs: 1000` (variable heights measured, instant `Center` only
-    for unrealised lines, `followSnapRows: 0`, drags stop it via
-    `movementStarted`). j/k, drag and wheel pause it (`holdLyrics`), and a
+     body now animates the viewport itself to the active delegate's centre
+     over `followMs: 600` (the pane fade shares the value; variable heights
+     measured, instant `Center` only for unrealised lines,
+     `followSnapRows: 0`, drags stop it via `movementStarted`). j/k, drag
+     and wheel pause it (`holdLyrics`), and a
     single-shot `lyricResume` timer re-centres the active phrase after the
     idle window — `Theme.lyricsResume` 5 s while the lyrics pane is focused,
     `Theme.lyricsResumeUnfocused` 2 s otherwise, re-armed when pane focus
@@ -3346,9 +3354,9 @@ Kept for rationale; the tree already carries these.
 |--------|------|--------|
 | Must have | 6 | 2 |
 | Should have | 57 | 16 |
-| Quick wins | 35 | 59 |
+| Quick wins | 33 | 61 |
 | Solved (reference) | — | 40 |
-| **Total** | **98** | **117** |
+| **Total** | **96** | **119** |
 
 ### Coverage by area
 

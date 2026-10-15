@@ -160,6 +160,9 @@ Rectangle {
     property alias searchCurrentRow: content.searchCurrentRow
     /// UI-58: adaptive rows forward too (see `ScrollContent`).
     property alias rowRatio: content.rowRatio
+    /// Neovim 'scrolloff' (see `ScrollContent`): 0.5 keeps the cursor
+    /// centred, 0 lets it reach the edges.
+    property alias scrolloff: content.scrolloff
     readonly property alias adaptiveRowHeight: content.adaptiveRowHeight
     /// ARC-UI-3: layout modes forward to the shared content (a single-entry
     /// `layouts` keeps the surface list-only).

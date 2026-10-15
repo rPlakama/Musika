@@ -162,11 +162,29 @@ Item {
     }
     readonly property int count: root.view ? root.view.count : 0
 
-    /// UI-41: the view-owned follow speed (px/s) and the preferred band the
-    /// cursor is kept in (fractions of the viewport). `reduceMotion` snaps.
+    /// UI-41: the view-owned follow speed (px/s). `reduceMotion` snaps.
     property real followVelocity: 1400
-    property real followBegin: 0.15
-    property real followEnd: 0.85
+    /// Neovim `'scrolloff'` (options.txt): the fraction of the viewport kept
+    /// above and below the cursor. 0 lets the cursor reach the edges; a very
+    /// large value (here 0.5) keeps the cursor in the middle of the window
+    /// — the window moves, the cursor stays put — **except at the start or
+    /// end** where there is not enough content to fill the limits. The Qt
+    /// band's `ApplyRange` clamps exactly there (its docs: the highlight
+    /// "can move outside of the range at the ends of the view").
+    property real scrolloff: 0.5
+    readonly property real followBegin: root.scrolloff > 0
+        ? Math.min(root.scrolloff, 0.5 - 0.0005) : 0
+    readonly property real followEnd: 1.0 - root.followBegin
+    /// The band is expressed on the highlight's 1×1 origin (the item's top
+    /// edge), so it shifts up by half a row to centre the *item*.
+    readonly property real _halfRow: {
+        var h = root.adaptiveRowHeight;
+        if (!(h > 0) && root.layout === "grid")
+            h = root.cellHeight > 0 ? root.cellHeight : root.cellWidth;
+        if (!(h > 0) && root.view && root.view.currentItem)
+            h = root.view.currentItem.height;
+        return Math.max(0, h) / 2;
+    }
     /// Optional soothing follow: when >= 0 the highlight rides this fixed
     /// duration (ms) instead of the constant-velocity walk — the lyrics
     /// pane wants a paced ~300 ms glide per phrase, not a flick. In
@@ -543,8 +561,8 @@ Item {
             highlightMoveVelocity: root.followVelocity
             highlightMoveDuration: (root._instantFollow || Theme.reduceMotion) ? 0
                 : (root.followMs >= 0 ? root.followMs : -1)
-            preferredHighlightBegin: height * root.followBegin
-            preferredHighlightEnd: height * root.followEnd
+            preferredHighlightBegin: height * root.followBegin - root._halfRow
+            preferredHighlightEnd: height * root.followEnd - root._halfRow
             highlightRangeMode: root.glideToCenter
                 ? ListView.NoHighlightRange : ListView.ApplyRange
         }
@@ -568,8 +586,8 @@ Item {
             // the duration token is the nearest documented follow.
             highlightMoveDuration: (root._instantFollow || Theme.reduceMotion) ? 0
                 : (root.followMs >= 0 ? root.followMs : Theme.motion.standard)
-            preferredHighlightBegin: height * root.followBegin
-            preferredHighlightEnd: height * root.followEnd
+            preferredHighlightBegin: height * root.followBegin - root._halfRow
+            preferredHighlightEnd: height * root.followEnd - root._halfRow
             highlightRangeMode: root.glideToCenter
                 ? GridView.NoHighlightRange : GridView.ApplyRange
         }

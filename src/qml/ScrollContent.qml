@@ -18,51 +18,43 @@ import QtQuick
 import QtQuick.Layouts
 import "Theme.js" as Theme
 
-// The shared scroll body every cursor list reuses (Albums/Songs/Artists via
-// `ScrollPanel`, the search columns, the fullscreen queue, the drawer and the
-// album page). It owns the one seam that was copied everywhere:
+// The shared scroll body — SCROLLMODELANALYSIS.md is the spec.
 //
-//   - the UI-48 overflow stage: the list bleeds `bleed` into the gutters so a
-//     row highlight can go full-bleed while rows still clip vertically;
-//   - the cursor (`currentIndex`), the view-owned follow (UI-41) and the
-//     scroll memory (UI-54) through a single `ListScroll`.
+// Ownership (§1): the host owns the cursor *semantics* through
+// `currentIndex`; this body owns the viewer (the active ListView/GridView,
+// the view-owned follow, the memory hooks, the VI-4 selection, the `/`
+// search fields and the adaptive row height); `ScrollMemory` is the only
+// persistent state, shared per `memoryKey`.
 //
-// The follow is the view's own highlight machinery (SCROLLCONTENTSTUDY.md):
-// an invisible 1x1 highlight is the follow target, `highlightMoveVelocity`
-// gives a constant-speed SmoothedAnimation that retargets without re-easing
-// and respects flick velocity, and the preferred range keeps the cursor in
-// view with a margin. No `contentY` animation exists to fight
-// `positionViewAtIndex` jumps (gg/G, recall, select-all) or user input.
+// Follow (§3): the view scrolls itself through an invisible 1×1
+// `highlight` (`highlightMoveVelocity` on the list; GridView has no
+// velocity property, so it rides `highlightMoveDuration`) inside the
+// 15%…85% preferred band. Semantic jumps (`gg`/`G`, search, restores, the
+// filter reset) land instantly through `ensureVisible`/`edgeJump` so the
+// highlight never walks; a landing farther than `followSnapRows` outside
+// the visible band snaps even when the host moved the index directly.
 //
-// ARC-UI-3 (SCROLLGRIDSTUDY.md): the body can also paint a cover grid. One
-// view is active at a time (`layout`), both share the stage, band, memory,
-// selection, search contract and adaptive sizing; GridView has no
-// `highlightMoveVelocity`, so the grid follow rides `highlightMoveDuration`
-// instead. `Shift-C` (`Action::LayoutToggle`) flips `layouts` where the host
-// declares more than one, and the choice is remembered per `memoryKey`.
+// Guards (§4): the view is a follower, never a source — its own refill and
+// clamp transients (a fresh GridView resets its index to 0 when the model
+// lands) are overwritten with the body's cursor; a filter/order swap
+// raises `resetView()` and the payload consumes it as a top landing; an
+// empty view defers the carried cursor until `onCountChanged`.
 //
-// Drop it inside any parent Rectangle/Item: with a Layout parent it fills the
-// cell (the attached fills below), with an anchor parent the caller anchors it
-// (`anchors.fill: parent`); the view itself always fills the component.
+// ARC-UI-3 (SCROLLGRIDSTUDY.md): `layout` picks the active view; both share
+// the stage, band, memory, selection, search contract and adaptive sizing.
+// Drop it inside any parent Rectangle/Item: with a Layout parent it fills
+// the cell; with an anchor parent the caller anchors it.
 Item {
     id: root
 
+    // ── Model & roles ────────────────────────────────────────────────────
+
+    property var model: null
     /// Gutter bleed on each side (UI-48); 0 clips at the list edge.
     property real bleed: 0
-    property var model: null
     property Component rowDelegate: null
     /// ARC-UI-3: the grid cell delegate (cover + caption, like ArtistEntry).
     property Component cellDelegate: null
-    /// ARC-UI-3: supported layouts in toggle order ("list", "grid"); a single
-    /// entry means the surface never toggles.
-    property var layouts: ["list"]
-    /// The active body. The host sets its default; the saved layout (below)
-    /// can override it on open.
-    property string layout: "list"
-    /// Grid geometry: columns per row and the cell height (0 = square).
-    property int columns: 1
-    property real cellHeight: 0
-    readonly property real cellWidth: Math.max(1, root.width / Math.max(1, root.columns))
 
     /// ARC-UI-2 M1: the model roles `/` searches, in paint order (the
     /// selectable-text contract, SEARCHACTIONSTUDY §3). Hosts override;
@@ -74,35 +66,18 @@ Item {
     property string searchQuery: ""
     property int searchCurrentRow: -1
 
-    /// UI-58: the host's nominal row fraction of this viewport (0 = the
-    /// delegates own their heights and nothing adapts).
-    property real rowRatio: 0
-    /// The row baseline captured on the first real measure — the default
-    /// window geometry (Main starts at `Screen.height * 0.72`).
-    property real _rowBase: 0
-    /// UI-58: the row height to paint — scales with the viewport inside the
-    /// 18% band (0.82, 40% sooner than the original), cuts whole rows past
-    /// it (see `Theme.adaptiveRow`).
-    readonly property real adaptiveRowHeight: Theme.adaptiveRow(height, root.rowRatio, root._rowBase)
+    // ── Layout (list ⇄ grid) ─────────────────────────────────────────────
 
-    Component.onCompleted: {
-        captureRowBase();
-        applySavedLayout();
-    }
-    onHeightChanged: captureRowBase()
-    onMemoryKeyChanged: applySavedLayout()
-
-    function captureRowBase() {
-        if (root._rowBase <= 0 && root.rowRatio > 0 && root.height > 0)
-            root._rowBase = root.height * root.rowRatio;
-    }
-
-    /// ARC-UI-3: reopen the body the user left (per `memoryKey`).
-    function applySavedLayout() {
-        var saved = scroll.savedLayout(root.memoryKey);
-        if (saved.length > 0 && root.layouts.indexOf(saved) >= 0)
-            root.layout = saved;
-    }
+    /// ARC-UI-3: supported layouts in toggle order ("list", "grid"); a single
+    /// entry means the surface never toggles.
+    property var layouts: ["list"]
+    /// The active body. The host sets its default; the saved layout (below)
+    /// can override it on open.
+    property string layout: "list"
+    /// Grid geometry: columns per row and the cell height (0 = square).
+    property int columns: 1
+    property real cellHeight: 0
+    readonly property real cellWidth: Math.max(1, root.width / Math.max(1, root.columns))
 
     /// ARC-UI-3: `Shift-C` on a host that declares both layouts.
     function toggleLayout() {
@@ -112,40 +87,26 @@ Item {
         root.layout = root.layouts[(i + 1) % root.layouts.length];
     }
 
-    /// UI-41: the view-owned follow speed (px/s) and the preferred band the
-    /// cursor is kept in (fractions of the viewport). `reduceMotion` snaps.
-    property real followVelocity: 1400
-    property real followBegin: 0.15
-    property real followEnd: 0.85
-    /// A cursor landing farther than this many rows outside the visible band
-    /// catches instantly — the highlight walk over dozens of rows reads as
-    /// lag (and blanks the viewport while it travels).
-    property int followSnapRows: 15
-    /// VI-4: `v`/`V` row selection. The model owns the state; hosts gate it
-    /// (e.g. only when the Alt verb kind exists) and keep their own cursor.
-    property bool selectable: false
-    /// UI-54: remember/restore cursor + offset under this key ("" = off).
-    property string memoryKey: ""
-    property int memoryScope: -1
+    /// ARC-UI-3: reopen the body the user left (per `memoryKey`).
+    function applySavedLayout() {
+        var saved = scroll.savedLayout(root.memoryKey);
+        if (saved.length > 0 && root.layouts.indexOf(saved) >= 0)
+            root.layout = saved;
+    }
 
-    // Auto-fill inside Layout parents; anchor callers size it themselves.
-    Layout.fillWidth: true
-    Layout.fillHeight: true
+    // ── Cursor & follow ──────────────────────────────────────────────────
 
-    /// The cursor. A plain property (an alias cannot follow the active view):
-    /// it is the single source of truth — hosts write it, the live view
-    /// mirrors it, and a view's own refill/clamp transients (GridView resets
-    /// its index when a model lands) are overwritten, never adopted.
+    /// The cursor: the single source of truth (§1). Hosts write it; the
+    /// live view mirrors it (an alias cannot follow the active view).
     property int currentIndex: -1
     onCurrentIndexChanged: {
         var v = root.view;
         if (v && v.count > 0 && v.currentIndex !== root.currentIndex)
             v.currentIndex = root.currentIndex;
     }
+
     /// The active view (itemAtIndex, positionViewAtIndex, …).
     readonly property var view: root.layout === "grid" ? grid : list
-    /// A swapped-in view binds its model a beat later; land the cursor once
-    /// it can hold one.
     onViewChanged: Qt.callLater(root._applyCursor)
     onLayoutChanged: {
         // Only the layout field — a restore flips the layout before the
@@ -154,6 +115,16 @@ Item {
             scroll.rememberLayout(root.memoryKey, root.layout);
     }
     readonly property int count: root.view ? root.view.count : 0
+
+    /// UI-41: the view-owned follow speed (px/s) and the preferred band the
+    /// cursor is kept in (fractions of the viewport). `reduceMotion` snaps.
+    property real followVelocity: 1400
+    property real followBegin: 0.15
+    property real followEnd: 0.85
+    /// A landing farther than this many rows outside the visible band
+    /// catches instantly — the highlight walk over dozens of rows reads as
+    /// lag (and blanks the viewport while it travels).
+    property int followSnapRows: 15
 
     /// Mirror the body's cursor onto the active view (`position` also
     /// teleports the viewport — swaps and recalls, not payload reloads).
@@ -167,94 +138,26 @@ Item {
             v.positionViewAtIndex(root.currentIndex, ListView.Contain);
     }
 
-    signal itemActivated(int index)
-
-    ListScroll {
-        id: scroll
-    }
-
-    // VI-4: anchored visual selection over the cursor range.
-    Selection {
-        id: sel
-    }
-
-    readonly property bool hasSelection: sel.hasSelection
-    readonly property int selectionCount: sel.count(root.currentIndex)
-
-    /// `v`: start a selection on the cursor row, or end the current one.
-    function toggleSelection() {
-        if (!root.selectable || root.count === 0 || root.currentIndex < 0)
+    /// §3: a far landing is a jump, not a step. Called on every view-side
+    /// index change, after the cursor mirror above.
+    function _snapIfFar(v) {
+        if (!v || root.currentIndex < 0 || root.followSnapRows <= 0)
             return;
-        if (sel.hasSelection)
-            sel.clear();
-        else
-            sel.start(root.currentIndex);
+        var middle = v.contentX + v.width * 0.5;
+        var top = v.indexAt(middle, v.contentY);
+        var bottom = v.indexAt(middle, v.contentY + Math.max(0, v.height - 1));
+        if (top < 0)
+            top = 0;
+        if (bottom < 0)
+            bottom = v.count - 1;
+        if (root.currentIndex < top - root.followSnapRows
+                || root.currentIndex > bottom + root.followSnapRows)
+            v.positionViewAtIndex(root.currentIndex, ListView.Contain);
     }
 
-    /// `V`: the whole list. The host moves the cursor (it owns the column's
-    /// `cursor` property), so this only widens the anchor.
-    function selectAllRows() {
-        if (!root.selectable || root.count === 0)
-            return;
-        sel.all();
-    }
-
-    function clearSelection() {
-        sel.clear();
-    }
-
-    function selected(index) {
-        return sel.selected(root.currentIndex, index);
-    }
-
-    /// Ids of the selected rows ("" when there is no selection).
-    function selectionIds(field) {
-        return sel.ids(root.model, list.currentIndex, field);
-    }
-
-    /// The selected rows' `starred` flags, aligned with `selectionIds`.
-    function selectionStarred(field) {
-        return sel.starred(root.model, list.currentIndex, field);
-    }
-
-    /// UI-10: a filter/order swap rebuilds the rows under the same indices,
-    /// so the next payload must land on row 0 with the offset at the top —
-    /// the hosts raise this before reloading and the payload consumes it.
-    property bool resetPending: false
-
-    function resetView() {
-        root.resetPending = true;
-    }
-
-    /// The landing itself: row 0, top, and the memory agrees (so the next
-    /// restore cannot recall the old spot). The cursor edge is the VI-11
-    /// instant snap — setting the index first would arm the view's highlight
-    /// follow and make it walk the whole list back to the top (slow, and the
-    /// viewport blanks while it travels).
-    function resetViewNow() {
-        if (list.count > 0)
-            Theme.cursorEdge(list, false, ListView.Beginning);
-        if (root.memoryKey)
-            scroll.remember(root.memoryKey, root.view, root.memoryScope, undefined, 0);
-    }
-
-    /// ARC-I-4: write the favourite state back into the model in place — the
-    /// cursor row, or the whole selected range while a selection is live — so
-    /// the affected rows' hearts track the Alt verb with no reload.
-    function markStarred(on) {
-        if (!root.model || !root.model.setProperty || list.currentIndex < 0)
-            return;
-        var first = root.hasSelection
-            ? Math.min(sel.anchor, list.currentIndex) : list.currentIndex;
-        var last = root.hasSelection
-            ? Math.max(sel.anchor, list.currentIndex) : list.currentIndex;
-        for (var i = first; i <= last; ++i)
-            root.model.setProperty(i, "starred", on === true);
-    }
-
-    /// Instant `Contain` for semantic jumps (toolbar reset, select-all,
-    /// reorder centring). Cursor moves rely on the view's follow; with no
-    /// custom animation left there is nothing this teleport can fight.
+    /// Instant `Contain` for semantic jumps (gg/G, search, select-all,
+    /// restores). Cursor moves rely on the view's follow; there is no
+    /// custom animation left for a same-tick teleport to fight.
     function ensureVisible(index) {
         var i = index === undefined ? root.currentIndex : index;
         if (i >= 0 && root.view)
@@ -308,13 +211,129 @@ Item {
             root.itemActivated(root.currentIndex);
     }
 
-    /// ARC-UI-2 M1: the cells of the rows the user can actually *see* —
-    /// matching is viewport-scoped, so a match scrolled out of the viewport
-    /// comes back as an empty placeholder (never matches) and `/` can never
-    /// afford a jump the eye cannot verify without scrolling. The prompt
-    /// snapshots this band once, when it opens. ARC-UI-3: probing both
-    /// corners keeps the whole last row of a grid inside the band (a single
-    /// mid-x line under-reports its right-hand cells).
+    signal itemActivated(int index)
+
+    // ── Memory (UI-54) ───────────────────────────────────────────────────
+
+    /// Remember/restore cursor + offset under this key ("" = off).
+    property string memoryKey: ""
+    property int memoryScope: -1
+
+    /// Restore the remembered cursor + offset (false when none). The saved
+    /// layout is applied first so the right view holds the offset; an empty
+    /// view lands the cursor on the next count change.
+    function restore() {
+        applySavedLayout();
+        var index = scroll.savedIndex(root.memoryKey);
+        if (index < 0)
+            return false;
+        root.currentIndex = index;
+        scroll.recall(root.memoryKey, root.view);
+        return true;
+    }
+
+    function remember(scope) {
+        if (root.memoryKey)
+            scroll.remember(root.memoryKey, root.view,
+                scope === undefined ? root.memoryScope : scope, root.layout,
+                root.currentIndex);
+    }
+
+    /// §4.3: a filter/order swap rebuilds the rows under the same indices,
+    /// so the next payload must land on row 0 with the offset at the top.
+    /// Hosts raise this before reloading; the payload consumes it.
+    property bool resetPending: false
+
+    function resetView() {
+        root.resetPending = true;
+    }
+
+    /// The landing itself: row 0, top, and the memory agrees (so the next
+    /// restore cannot recall the old spot). Cursor and position land in the
+    /// same tick, or the follow would walk the whole list back (§4.2).
+    function resetViewNow() {
+        if (root.count === 0)
+            return;
+        root.currentIndex = 0;
+        root.view.positionViewAtBeginning();
+        if (root.memoryKey)
+            scroll.remember(root.memoryKey, root.view, root.memoryScope,
+                root.layout, 0);
+    }
+
+    // ── Selection (VI-4) ─────────────────────────────────────────────────
+
+    // The model owns the state; hosts gate it (e.g. only when the Alt verb
+    // kind exists) and keep their own cursor.
+    property bool selectable: false
+
+    Selection {
+        id: sel
+    }
+
+    readonly property bool hasSelection: sel.hasSelection
+    readonly property int selectionCount: sel.count(root.currentIndex)
+
+    /// `v`: start a selection on the cursor row, or end the current one.
+    function toggleSelection() {
+        if (!root.selectable || root.count === 0 || root.currentIndex < 0)
+            return;
+        if (sel.hasSelection)
+            sel.clear();
+        else
+            sel.start(root.currentIndex);
+    }
+
+    /// `V`: the whole list — the host moves the cursor first, this only
+    /// widens the anchor.
+    function selectAllRows() {
+        if (!root.selectable || root.count === 0)
+            return;
+        sel.all();
+    }
+
+    function clearSelection() {
+        sel.clear();
+    }
+
+    function selected(index) {
+        return sel.selected(root.currentIndex, index);
+    }
+
+    /// Ids of the selected rows ("" when there is no selection).
+    function selectionIds(field) {
+        return sel.ids(root.model, root.currentIndex, field);
+    }
+
+    /// The selected rows' `starred` flags, aligned with `selectionIds`.
+    function selectionStarred(field) {
+        return sel.starred(root.model, root.currentIndex, field);
+    }
+
+    /// ARC-I-4: write the favourite state back into the model in place —
+    /// the cursor row, or the whole selected range while a selection is
+    /// live — so the affected rows' hearts track the Alt verb with no
+    /// reload.
+    function markStarred(on) {
+        if (!root.model || !root.model.setProperty || root.currentIndex < 0)
+            return;
+        var first = root.hasSelection
+            ? Math.min(sel.anchor, root.currentIndex) : root.currentIndex;
+        var last = root.hasSelection
+            ? Math.max(sel.anchor, root.currentIndex) : root.currentIndex;
+        for (var i = first; i <= last; ++i)
+            root.model.setProperty(i, "starred", on === true);
+    }
+
+    // ── Search (ARC-UI-2) ────────────────────────────────────────────────
+
+    /// The cells of the rows the user can actually *see* — matching is
+    /// viewport-scoped, so a match scrolled out of the viewport comes back
+    /// as an empty placeholder (never matches) and `/` can never afford a
+    /// jump the eye cannot verify. The prompt snapshots this band once,
+    /// when it opens. Probing both corners keeps the whole last row of a
+    /// grid inside the band (a single mid-x line under-reports its
+    /// right-hand cells).
     function searchRows() {
         var out = [];
         if (!root.model || !root.model.get || !root.view)
@@ -343,8 +362,8 @@ Item {
         return out;
     }
 
-    /// ARC-UI-2 M1: land the view cursor on a matching row; the view-owned
-    /// follow keeps it visible (the same path `gg`/`G` take).
+    /// Land the view cursor on a matching row; the instant `Contain` keeps
+    /// the jump from walking (the same path `gg`/`G` take).
     function searchJump(row) {
         if (row < 0 || row >= root.count)
             return;
@@ -352,26 +371,40 @@ Item {
         ensureVisible(row);
     }
 
-    /// UI-54: restore the remembered cursor + offset (false when empty).
-    /// ARC-UI-3: the saved layout is applied first so the right view holds
-    /// the offset.
-    function restore() {
+    // ── Rows (UI-58) ─────────────────────────────────────────────────────
+
+    /// The host's nominal row fraction of this viewport (0 = the delegates
+    /// own their heights and nothing adapts).
+    property real rowRatio: 0
+    /// The row baseline captured on the first real measure — the default
+    /// window geometry (Main starts at `Screen.height * 0.72`).
+    property real _rowBase: 0
+    /// The row height to paint — scales with the viewport inside the 18%
+    /// band (0.82, 40% sooner than the original), cuts whole rows past it
+    /// (see `Theme.adaptiveRow`). Delegates must size from this, never from
+    /// raw viewport fractions (§5).
+    readonly property real adaptiveRowHeight: Theme.adaptiveRow(height, root.rowRatio, root._rowBase)
+
+    Component.onCompleted: {
+        captureRowBase();
         applySavedLayout();
-        var index = scroll.savedIndex(root.memoryKey);
-        if (index < 0)
-            return false;
-        // The cursor is the body's; the view follows (an empty view lands it
-        // on the next count change), and `recall` restores the offset.
-        root.currentIndex = index;
-        scroll.recall(root.memoryKey, root.view);
-        return true;
+    }
+    onHeightChanged: captureRowBase()
+    onMemoryKeyChanged: applySavedLayout()
+
+    function captureRowBase() {
+        if (root._rowBase <= 0 && root.rowRatio > 0 && root.height > 0)
+            root._rowBase = root.height * root.rowRatio;
     }
 
-    function remember(scope) {
-        if (root.memoryKey)
-            scroll.remember(root.memoryKey, root.view,
-                scope === undefined ? root.memoryScope : scope, root.layout,
-                root.currentIndex);
+    // Auto-fill inside Layout parents; anchor callers size it themselves.
+    Layout.fillWidth: true
+    Layout.fillHeight: true
+
+    // ── The views ────────────────────────────────────────────────────────
+
+    ListScroll {
+        id: scroll
     }
 
     // One invisible follow target shared by both views (the visible row
@@ -439,36 +472,20 @@ Item {
         }
     }
 
+    // The view side of the cursor contract (§4.1/§4.2): the active view is
+    // a follower; its refill/clamp transients are never adopted.
     Connections {
         target: root.view
         function onContentYChanged() {
             if (root.memoryKey)
                 root.remember();
         }
-        // The view is the follower: its own refill/clamp transients (a fresh
-        // GridView resets its index to 0 when the model lands) are
-        // overwritten with the body's cursor, never adopted.
         function onCurrentIndexChanged() {
             if (target.count === 0)
                 return;
             if (root.currentIndex >= 0 && target.currentIndex !== root.currentIndex)
                 target.currentIndex = root.currentIndex;
-            // UI-41: a cursor landing more than `followSnapRows` outside the
-            // visible band skips the walk and catches instantly (far jumps
-            // are searches/semantic moves, not steps).
-            if (root.currentIndex >= 0 && root.followSnapRows > 0) {
-                var middle = target.contentX + target.width * 0.5;
-                var top = target.indexAt(middle, target.contentY);
-                var bottom = target.indexAt(middle,
-                    target.contentY + Math.max(0, target.height - 1));
-                if (top < 0)
-                    top = 0;
-                if (bottom < 0)
-                    bottom = target.count - 1;
-                if (root.currentIndex < top - root.followSnapRows
-                        || root.currentIndex > bottom + root.followSnapRows)
-                    target.positionViewAtIndex(root.currentIndex, ListView.Contain);
-            }
+            root._snapIfFar(target);
             if (root.memoryKey)
                 root.remember();
         }

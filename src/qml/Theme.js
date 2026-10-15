@@ -45,6 +45,8 @@ var motion = {
     flash: 30,         // fullscreen enter/leave highlight fade
     micro: 80,         // hover/press layers, region focus border
     quick: 120,        // toasts in, row cursor, column switch
+    selection: 300,    // the cursor/hover stage bloom (UI-45); softer now
+                       // that scrolloff parks the cursor mid-pane
     standard: 160,     // view push/pop/replace, overlay in/out
     emphasized: 240,   // fullscreen player, first paint of a context
     lazy: 320,         // toast out, nothing keyboard-critical

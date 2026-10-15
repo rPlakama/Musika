@@ -226,7 +226,7 @@ ScrollPanel {
                 scale: (row.emphasized && !Theme.reduceMotion) ? Theme.selectionEmphasis : 1.0
 
                 Behavior on scale {
-                    NumberAnimation { duration: Theme.motion.quick; easing.type: Easing.Bezier; easing.bezierCurve: Theme.ease.standard }
+                    NumberAnimation { duration: Theme.motion.selection; easing.type: Easing.Bezier; easing.bezierCurve: Theme.ease.standard }
                 }
 
                 CoverImage {
@@ -266,7 +266,7 @@ ScrollPanel {
                         : 1.0
 
                     Behavior on scale {
-                        NumberAnimation { duration: Theme.motion.quick; easing.type: Easing.Bezier; easing.bezierCurve: Theme.ease.standard }
+                        NumberAnimation { duration: Theme.motion.selection; easing.type: Easing.Bezier; easing.bezierCurve: Theme.ease.standard }
                     }
                 }
                 SearchText {
@@ -376,7 +376,7 @@ ScrollPanel {
                 scale: cell.emphasized ? Theme.selectionEmphasis : 1.0
 
                 Behavior on scale {
-                    NumberAnimation { duration: Theme.motion.quick; easing.type: Easing.Bezier; easing.bezierCurve: Theme.ease.standard }
+                    NumberAnimation { duration: Theme.motion.selection; easing.type: Easing.Bezier; easing.bezierCurve: Theme.ease.standard }
                 }
 
                 CoverImage {
@@ -423,7 +423,7 @@ ScrollPanel {
                         : 1.0
 
                     Behavior on scale {
-                        NumberAnimation { duration: Theme.motion.quick; easing.type: Easing.Bezier; easing.bezierCurve: Theme.ease.standard }
+                        NumberAnimation { duration: Theme.motion.selection; easing.type: Easing.Bezier; easing.bezierCurve: Theme.ease.standard }
                     }
                 }
 

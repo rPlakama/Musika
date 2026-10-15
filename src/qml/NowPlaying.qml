@@ -385,15 +385,6 @@ Rectangle {
                 Backend.requestLyrics();
             }
         }
-        function onTrackSkipped(forward) {
-            if (forward)
-                nextButton.press();
-            else
-                previousButton.press();
-        }
-        function onPlayToggled() {
-            playButton.press();
-        }
         // LYR-8: a seek (keys, seek bar, MPRIS) must not wait out the manual-
         // scroll resume window — drop the hold and re-centre at once, so the
         // lyrics land with the progress jump instead of 3/5 s later.
@@ -703,36 +694,12 @@ Rectangle {
                             transportBar.width - volumeBox.width
                                 - root.width * 0.012 - width))
 
-                        RowLayout {
+                        // UI-59: the shared transport cluster (same one as
+                        // the player bar).
+                        TransportControls {
                             id: transportRow
                             anchors.centerIn: parent
-                            spacing: root.width * 0.012
-
-                            IconButton {
-                                id: previousButton
-                                Layout.preferredWidth: root.height * 0.05
-                                Layout.preferredHeight: root.height * 0.05
-                                iconSource: "qrc:/app/icons/skip-previous-solid-svgrepo-com.svg"
-                                symbolRatio: 0.9
-                                onClicked: Backend.playerPrevious()
-                            }
-                            IconButton {
-                                id: playButton
-                                Layout.preferredWidth: root.height * 0.058
-                                Layout.preferredHeight: root.height * 0.058
-                                symbolRatio: 0.6
-                                iconSource: Backend.playbackState === "playing" ? "qrc:/app/icons/pause-svgrepo-com.svg" : "qrc:/app/icons/play-1001-svgrepo-com.svg"
-                                symbolColor: Theme.iconStrong
-                                onClicked: Backend.playerToggle()
-                            }
-                            IconButton {
-                                id: nextButton
-                                Layout.preferredWidth: root.height * 0.05
-                                Layout.preferredHeight: root.height * 0.05
-                                iconSource: "qrc:/app/icons/skip-next-circle-solid-svgrepo-com.svg"
-                                symbolRatio: 0.9
-                                onClicked: Backend.playerNext()
-                            }
+                            unit: root.height * 0.05
                         }
                     }
                 }
@@ -831,11 +798,11 @@ Rectangle {
                                 model: lyricModel
                                 rowSpacing: root.lyricSize * 0.9
                                 // LYR-8: the soothing lyrics follow — a fixed
-                                // ~1000 ms viewport glide that centres the
-                                // phrase itself (band enforcement lands small
-                                // moves instantly, so the body's own walk is
-                                // off here).
-                                followMs: 1000
+                                // 600 ms viewport glide that centres the phrase
+                                // itself (band enforcement lands small moves
+                                // instantly, so the body's own walk is off
+                                // here). The pane's fade rides the same value.
+                                followMs: 600
                                 followSnapRows: 0
                                 glideToCenter: true
 
@@ -846,11 +813,14 @@ Rectangle {
                                     function onMovementStarted() { root.holdLyrics(); }
                                 }
 
+                                // LYR-8: the fade in/out shares the follow's
+                                // transition value, so a new song arrives and
+                                // settles as one motion.
                                 Behavior on opacity {
                                     NumberAnimation {
-                                        duration: Theme.motion.quick
+                                        duration: lyricsView.followMs
                                         easing.type: Easing.Bezier
-                                        easing.bezierCurve: Theme.ease.standard
+                                        easing.bezierCurve: Theme.ease.decelerate
                                     }
                                 }
 

@@ -185,38 +185,10 @@ Rectangle {
                 }
             }
 
-            // Centre zone: transport rectangles (previous, pause/play, skip).
-            RowLayout {
+            // Centre zone: the shared transport cluster (UI-59).
+            TransportControls {
                 Layout.alignment: Qt.AlignVCenter
-                spacing: root.height * 0.05
-
-                IconButton {
-                    id: previousButton
-                    Layout.preferredWidth: root.height * 0.46
-                    Layout.preferredHeight: root.height * 0.46
-                    iconSource: "qrc:/app/icons/skip-previous-solid-svgrepo-com.svg"
-                    symbolRatio: 0.9
-                    onClicked: Backend.playerPrevious()
-                }
-                IconButton {
-                    id: playButton
-                    Layout.preferredWidth: root.height * 0.56
-                    Layout.preferredHeight: root.height * 0.56
-                    symbolRatio: 0.6
-                    iconSource: Backend.playbackState === "playing"
-                        ? "qrc:/app/icons/pause-svgrepo-com.svg"
-                        : "qrc:/app/icons/play-1001-svgrepo-com.svg"
-                    symbolColor: Theme.iconStrong
-                    onClicked: Backend.playerToggle()
-                }
-                IconButton {
-                    id: nextButton
-                    Layout.preferredWidth: root.height * 0.46
-                    Layout.preferredHeight: root.height * 0.46
-                    iconSource: "qrc:/app/icons/skip-next-circle-solid-svgrepo-com.svg"
-                    symbolRatio: 0.9
-                    onClicked: Backend.playerNext()
-                }
+                unit: root.height * 0.46
             }
 
             // Right zone: elapsed/duration + volume, right-aligned; the time
@@ -277,18 +249,5 @@ Rectangle {
             }
         }
 
-        // Skip/play feedback: fires for keyboard, mouse and IPC alike.
-        Connections {
-            target: Backend
-            function onTrackSkipped(forward) {
-                if (forward)
-                    nextButton.press();
-                else
-                    previousButton.press();
-            }
-            function onPlayToggled() {
-                playButton.press();
-            }
-        }
     }
 }

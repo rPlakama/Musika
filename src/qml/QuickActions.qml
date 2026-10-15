@@ -71,9 +71,10 @@ QtObject {
         };
     }
 
-    /// VI-4: with a visual selection active only Add to Queue applies to the
-    /// whole range; the go-to/favourite verbs stay visible but disabled
-    /// (gray), because they act on a single row.
+    /// VI-4: with a visual selection active the range verbs apply to the
+    /// whole selection — Add to Queue and Favorite (one backend call per id;
+    /// they are cheap, idempotent toggles); the go-to verbs stay visible but
+    /// disabled (gray), because they act on a single row.
     function forSelection(kind, ids) {
         return {
             north: {
@@ -84,7 +85,10 @@ QtObject {
             south: {
                 label: "Favorite",
                 icon: "qrc:/app/icons/baseline-favorite.svg",
-                disabled: true
+                invoke: function() {
+                    for (var i = 0; i < ids.length; ++i)
+                        Backend.altFavorite(kind, ids[i]);
+                }
             },
             west: {
                 label: "Go to Artist",

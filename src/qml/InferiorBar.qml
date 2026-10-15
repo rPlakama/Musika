@@ -153,11 +153,9 @@ Rectangle {
                             text: Backend.currentTitle.length > 0 ? Backend.currentTitle : "Nothing playing"
                             color: Palette.onSurface
                             font.pixelSize: root.titlePixelSize
-                            // The empty state centers in its parent rectangle
-                            // (no art to align under); a real title keeps the
-                            // left rail, both vertically centered.
-                            horizontalAlignment: Backend.currentTitle.length > 0
-                                ? Text.AlignLeft : Text.AlignHCenter
+                            // LeftCenter in its parent rectangle: the left
+                            // rail always, the centre is the vertical one.
+                            horizontalAlignment: Text.AlignLeft
                             verticalAlignment: Text.AlignVCenter
                             elide: Text.ElideRight
                             animated: false

@@ -108,14 +108,19 @@ Item {
         }
     }
 
-    // LYR-8: the centred viewport glide (see `glideToCenter`).
+    // LYR-8: the centred viewport glide (see `glideToCenter`). It settles
+    // with a small OutBack overshoot — a spring at the stop instead of the
+    // abrupt decelerate landing — capped tight so a one-row step barely
+    // breathes past the line and retargets mid-flight stay stable.
     NumberAnimation {
         id: centerGlide
         target: root.view
         property: "contentY"
         duration: root.followMs >= 0 ? root.followMs : Theme.motion.standard
-        easing.type: Easing.Bezier
-        easing.bezierCurve: Theme.ease.decelerate
+        easing.type: Easing.OutBack
+        easing.overshoot: 1.7
+        // The clamp at the content ends eats the overshoot there (the
+        // scrolloff edge rule), so the spring is a mid-list effect.
     }
 
     /// Centre the cursor over `followMs` — the delegate itself is the target

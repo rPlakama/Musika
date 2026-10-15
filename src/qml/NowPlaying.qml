@@ -122,7 +122,7 @@ Rectangle {
 
     function holdLyrics() {
         root._lyricsHeld = true;
-        lyricsView.stopFollow();
+        lyricsView.stopGlide();
         lyricResume.interval = root.pane === 1 ? Theme.lyricsResume : Theme.lyricsResumeUnfocused;
         lyricResume.restart();
     }
@@ -164,7 +164,7 @@ Rectangle {
         queueCursor = queueItems.count - 1;
         queueContent.currentIndex = queueCursor;
         queueContent.selectAllRows();
-        queueContent.ensureVisible(queueCursor);
+        queueContent.goto(queueCursor);
     }
 
     function clearSelection() {
@@ -209,7 +209,7 @@ Rectangle {
             root._recallQueue = false;
             queueCursor = Math.max(0, Math.min(queueItems.count - 1, queueCursor));
             queueContent.currentIndex = queueCursor;
-            queueContent.view.positionViewAtIndex(queueCursor, ListView.Contain);
+            queueContent.goto(queueCursor);
         } else if (root._recallQueue && queueContent.restore()) {
             // UI-54: re-entry restores the queue highlight where it stopped.
             root._recallQueue = false;
@@ -218,7 +218,7 @@ Rectangle {
             root._recallQueue = false;
             queueCursor = Math.max(0, Math.min(data.index, Math.max(0, queueItems.count - 1)));
             queueContent.currentIndex = queueCursor;
-            queueContent.view.positionViewAtIndex(queueCursor, ListView.Contain);
+            queueContent.goto(queueCursor);
         }
         Qt.callLater(function () {
             queueContent.opacity = 1;
@@ -250,9 +250,9 @@ Rectangle {
         lyricResume.stop();
         // A new song carries no cursor: clear it, top the body, then let the
         // first `followLyric` glide to the opening phrase.
-        lyricsView.stopFollow();
+        lyricsView.stopGlide();
         lyricsView.currentIndex = -1;
-        lyricsView.view.positionViewAtBeginning();
+        lyricsView.resetTop();
         root._lyricsHeld = false;
         Qt.callLater(function () {
             lyricsView.opacity = 1;
@@ -797,14 +797,11 @@ Rectangle {
                                 visible: root.lyricsAvailable
                                 model: lyricModel
                                 rowSpacing: root.lyricSize * 0.9
-                                // LYR-8: the soothing lyrics follow — a fixed
-                                // 300 ms viewport glide that centres the phrase
-                                // itself (band enforcement lands small moves
-                                // instantly, so the body's own walk is off
-                                // here). The pane's fade rides the same value.
+                                // LYR-8: the soothing lyrics follow — the
+                                // shared glide at 300 ms that centres the
+                                // phrase with the OutBack spring. The pane's
+                                // fade rides the same value.
                                 followMs: 300
-                                followSnapRows: 0
-                                glideToCenter: true
 
                                 // A hand on the pane owns it until the next
                                 // track.

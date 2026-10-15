@@ -73,7 +73,7 @@ Item {
             return;
         root.cursor = model.count - 1;
         content.selectAllRows();
-        content.ensureVisible(root.cursor);
+        content.goto(root.cursor);
     }
 
     function clearSelection() {
@@ -84,7 +84,7 @@ Item {
     /// `Theme.cursorEdge`, so the view-owned follow has nothing left to
     /// animate once the target is already on screen.
     function snapToCursor() {
-        content.ensureVisible(root.cursor);
+        content.goto(root.cursor);
     }
 
     /// ARC-UI-2 M1: the search contract (see `ScrollContent`).
@@ -99,7 +99,7 @@ Item {
         if (row < 0 || row >= model.count)
             return;
         root.cursor = row;
-        content.ensureVisible(row);
+        content.goto(row);
     }
 
     /// ARC-I: Alt armed the gesture — anchor on the cursor row; a visual

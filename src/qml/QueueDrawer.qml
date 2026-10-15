@@ -63,7 +63,7 @@ Item {
     function centerPlaying(index) {
         cursor = Math.max(0, Math.min(items.count - 1, index));
         content.currentIndex = cursor;
-        content.view.positionViewAtIndex(cursor, ListView.Contain);
+        content.goto(cursor);
     }
 
     /// ARC-UI-2 M1: the search contract (see `ScrollContent`).

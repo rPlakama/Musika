@@ -22,16 +22,11 @@ import "ScrollMemory.js" as Memory
 // them for a list that was just created or reopened. The fullscreen queue,
 // drawer, Main segments and both entry pages all use it.
 //
-// `ensureVisible` is the instant jump for semantic teleports only. Cursor
-// follow is the view's own highlight machinery (SCROLLCONTENTSTUDY.md), so
-// there is no `contentY` animation here to fight teleports or user input.
+// The cursor follow lives in `ScrollContent` (the glide); this object only
+// persists cursor + offset (UI-54), so there is no `contentY` animation
+// here to fight teleports or user input.
 QtObject {
     id: root
-
-    function ensureVisible(view, index) {
-        if (view && index >= 0)
-            view.positionViewAtIndex(index, ListView.Contain);
-    }
 
     /// Saves `view`'s cursor and offset under `key`; `scope` is the focused
     /// pane/column that owned the highlight, where the surface has one.

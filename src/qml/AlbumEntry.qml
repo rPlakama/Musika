@@ -103,7 +103,7 @@ Rectangle {
         root.onToolbar = false;
         content.currentIndex = songs.count - 1;
         content.selectAllRows();
-        content.ensureVisible();
+        content.goto();
     }
 
     function clearSelection() {

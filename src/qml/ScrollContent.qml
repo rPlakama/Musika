@@ -20,30 +20,32 @@ import "Theme.js" as Theme
 
 // The shared scroll body — SCROLLMODELANALYSIS.md is the spec.
 //
-// Ownership (§1): the host owns the cursor *semantics* through
-// `currentIndex`; this body owns the viewer (the active ListView/GridView,
-// the view-owned follow, the memory hooks, the VI-4 selection, the `/`
-// search fields and the adaptive row height); `ScrollMemory` is the only
-// persistent state, shared per `memoryKey`.
+// Ownership: the host owns the cursor *semantics* through `currentIndex`;
+// this body owns the viewer (the active ListView/GridView, the follow, the
+// memory hooks, the VI-4 selection, the `/` search fields and the adaptive
+// row height); `ScrollMemory` is the only persistent state.
 //
-// Follow (§3): the view scrolls itself through an invisible 1×1
-// `highlight` (`highlightMoveVelocity` on the list; GridView has no
-// velocity property, so it rides `highlightMoveDuration`) inside the
-// 15%…85% preferred band. Semantic jumps (`gg`/`G`, search, restores, the
-// filter reset) land instantly through `ensureVisible`/`edgeJump` so the
-// highlight never walks; a landing farther than `followSnapRows` outside
-// the visible band snaps even when the host moved the index directly.
+// Follow: the viewport *is* animated to the cursor's centre — the glide
+// (`followMs`, `Theme.motion.scroll`) with a small OutBack spring, clamped
+// at the content ends (Neovim `'scrolloff': 0.5` semantics, no padding).
+// This is the only follow: the highlight-band/velocity era is gone —
+// `ApplyRange` enforced the band *instantly*, so a one-row move snapped
+// even with a 300 ms move duration (probed; CRITIQUESCROLL SC-1).
 //
-// Guards (§4): the view is a follower, never a source — its own refill and
-// clamp transients (a fresh GridView resets its index to 0 when the model
-// lands) are overwritten with the body's cursor; a filter/order swap
+// Landings: `goto(row)` (centre; the host-facing one) and `land(row)`
+// (instant `Contain`, the semantic jumps: `gg`/`G`, search, restores,
+// reset). **Hosts never touch `view.contentY`/`positionViewAtIndex`** —
+// the body is the only writer, and `_instantFollow` shields a landing
+// from the root index handler's glide.
+//
+// Guards: the view is a follower, never a source — its own refill/clamp
+// transients are overwritten with the body's cursor; a filter/order swap
 // raises `resetView()` and the payload consumes it as a top landing; an
 // empty view defers the carried cursor until `onCountChanged`.
 //
-// ARC-UI-3 (SCROLLGRIDSTUDY.md): `layout` picks the active view; both share
-// the stage, band, memory, selection, search contract and adaptive sizing.
-// Drop it inside any parent Rectangle/Item: with a Layout parent it fills
-// the cell; with an anchor parent the caller anchors it.
+// ARC-UI-3: `layout` picks the active view; both share the stage, memory,
+// selection, search contract and adaptive sizing. Drop it inside any
+// parent Rectangle/Item (Layout or anchors).
 Item {
     id: root
 
@@ -108,26 +110,23 @@ Item {
         var v = root.view;
         if (v && v.count > 0 && v.currentIndex !== root.currentIndex) {
             v.currentIndex = root.currentIndex;
-            if (root.glideToCenter)
-                root._glideTo(v, root.currentIndex);
+            root._glideTo(v, root.currentIndex);
         }
     }
 
-    // LYR-8: the centred viewport glide (see `glideToCenter`). It settles
-    // with a small OutBack overshoot — a spring at the stop instead of the
-    // abrupt decelerate landing — capped tight so a one-row step barely
-    // breathes past the line and retargets mid-flight stay stable.
+    // LYR-8: the centred viewport glide — the one follow. It settles with
+    // a small OutBack overshoot (a spring at the stop) capped tight so a
+    // one-row step barely breathes past the line and retargets mid-flight
+    // stay stable. The content-end clamp eats the overshoot there (the
+    // scrolloff edge rule), so the spring is a mid-list effect; the
+    // `onFinished` settle covers `contentHeight` estimate growth.
     NumberAnimation {
         id: centerGlide
         target: root.view
         property: "contentY"
-        duration: root.followMs >= 0 ? root.followMs : Theme.motion.standard
+        duration: root.followMs
         easing.type: Easing.OutBack
         easing.overshoot: 1.7
-        // The clamp at the content ends eats the overshoot there (the
-        // scrolloff edge rule), so the spring is a mid-list effect.
-        // The content estimate can grow while the glide runs (bottom
-        // delegates realise late), so the last few rows get a settle pass.
         onFinished: root._settleGlide()
     }
 
@@ -150,7 +149,7 @@ Item {
                 ? Math.round(index / (v.count - 1) * limit) : 0;
             v.contentY = Math.max(0, Math.min(limit, approx));
             Qt.callLater(function () {
-                if (root.glideToCenter && root.currentIndex === index)
+                if (root.currentIndex === index)
                     root._glideTo(root.view, index);
             });
             return;
@@ -172,7 +171,7 @@ Item {
 
     /// Stop the glide (a manual scroll owns the viewport until the host
     /// re-follows).
-    function stopFollow() {
+    function stopGlide() {
         centerGlide.stop();
     }
 
@@ -203,68 +202,23 @@ Item {
     }
     readonly property int count: root.view ? root.view.count : 0
 
-    /// UI-41: the view-owned follow speed (px/s). `reduceMotion` snaps.
-    property real followVelocity: 1400
-    /// Neovim `'scrolloff'` (options.txt): the fraction of the viewport kept
-    /// above and below the cursor. 0 lets the cursor reach the edges; a very
-    /// large value (here 0.5) keeps the cursor in the middle of the window
-    /// — the window moves, the cursor stays put — **except at the start or
-    /// end** where there is not enough content to fill the limits. Applies
-    /// to the band follow (`glideToCenter: false`); the default glide
-    /// centres with the same edge clamp built into its target.
-    property real scrolloff: 0.5
-    readonly property real followBegin: root.scrolloff > 0
-        ? Math.min(root.scrolloff, 0.5 - 0.0005) : 0
-    readonly property real followEnd: 1.0 - root.followBegin
-    /// The band is expressed on the highlight's 1×1 origin (the item's top
-    /// edge), so it shifts up by half a row to centre the *item*.
-    readonly property real _halfRow: {
-        var h = root.adaptiveRowHeight;
-        if (!(h > 0) && root.layout === "grid")
-            h = root.cellHeight > 0 ? root.cellHeight : root.cellWidth;
-        if (!(h > 0) && root.view && root.view.currentItem)
-            h = root.view.currentItem.height;
-        return Math.max(0, h) / 2;
-    }
-    /// The follow duration (ms): the rows drift up/down softly as the cursor
-    /// steps through the centered band — a fixed `Theme.motion.scroll`
-    /// (300 ms) instead of the old constant-velocity walk, which snapped a
-    /// one-row move. In `glideToCenter` mode it is the viewport animation's
-    /// duration. Set `-1` to ride `followVelocity` instead.
+    /// The follow duration (ms): the rows drift up/down softly as the
+    /// cursor steps, and the pane fade binds to the same value. 0 snaps
+    /// (`reduceMotion` also snaps, in `_glideTo`).
     property int followMs: Theme.motion.scroll
     /// Extra spacing between list rows (0 = the delegate owns it); grid
     /// cells are placed by `cellHeight`.
     property real rowSpacing: 0
-    /// The follow mode, default on: animate the viewport itself to the
-    /// cursor's centre over `followMs` — the rows drift up/down softly on
-    /// every step. The alternative (false) is the highlight band, whose
-    /// `ApplyRange` enforces *instantly* (probed: a one-row move jumps in
-    /// one frame even with a 300 ms move duration), snapping small moves.
-    /// Both clamp at the content ends; a drag stops the glide and the
-    /// host's manual scroll just writes `contentY`.
-    property bool glideToCenter: true
-    /// A landing farther than this many rows outside the visible band
-    /// catches instantly — the highlight walk over dozens of rows reads as
-    /// lag (and blanks the viewport while it travels).
-    property int followSnapRows: 15
 
-    /// True while a landing runs: the highlight move bindings collapse to
-    /// duration 0, so no walk can start (or survive — a running highlight
-    /// animation lives in content space, so teleporting the viewport alone
-    /// does not stop it).
+    /// True while a landing runs: the root index handler must not start a
+    /// glide the landing is already positioning (`land` owns the view).
     property bool _instantFollow: false
 
-    /// Kill any highlight walk in flight: clearing the index and re-arming
-    /// it under `_instantFollow` places the follow at the new row now.
-    function _rearmHighlight(v, index) {
-        v.currentIndex = -1;
-        v.currentIndex = index;
-    }
-
-    /// The one landing primitive: cursor, viewport and highlight land
-    /// together with no walk (restores, `gg`/`G`, search, the filter reset
-    /// and any far snap). An empty view carries the cursor and lands it on
-    /// the next count change.
+    /// The instant landing (semantic jumps: `gg`/`G`, search, restores, the
+    /// filter reset). Positions and mirrors the cursor itself; the running
+    /// glide is killed first, and the `Contain` result is repaired when Qt
+    /// leaves a negative contentY on a scrolled list (probed). An empty
+    /// view carries the cursor and lands it on the next count change.
     function land(index) {
         if (index < 0)
             return;
@@ -273,10 +227,8 @@ Item {
         root.currentIndex = index;
         var v = root.view;
         if (v && v.count > 0) {
-            root._rearmHighlight(v, index);
+            v.currentIndex = index;
             v.positionViewAtIndex(index, ListView.Contain);
-            // Repair the same negative-contentY quirk (`Contain` after a
-            // scrolled list can leave one on the target's side).
             var limit = Math.max(0, v.contentHeight - v.height);
             if (v.contentY < 0 || v.contentY > limit)
                 v.contentY = Math.max(0, Math.min(limit, v.contentY));
@@ -292,55 +244,30 @@ Item {
             root.land(root.currentIndex);
     }
 
-    /// §3: a far landing is a jump, not a step. Called on every view-side
-    /// index change, after the cursor mirror.
-    function _snapIfFar(v) {
-        // Glide mode owns the motion (far or near): no separate snap.
-        if (!v || root.currentIndex < 0 || root.followSnapRows <= 0
-                || root._instantFollow || root.glideToCenter)
-            return;
-        var middle = v.contentX + Math.max(1, v.width * 0.5);
-        var top = v.indexAt(middle, v.contentY);
-        var bottom = v.indexAt(middle, v.contentY + Math.max(0, v.height - 1));
-        if (top < 0 || bottom < 0) {
-            // Nothing realised at the probe (a view that just returned):
-            // read the band from the content offset and the row unit.
-            var unit = root.layout === "grid"
-                ? Math.max(1, root.cellHeight)
-                : Math.max(1, root.adaptiveRowHeight > 0 ? root.adaptiveRowHeight
-                    : v.height * root.rowRatio);
-            if (unit <= 0)
-                return;
-            var cols = root.layout === "grid" ? Math.max(1, root.columns) : 1;
-            var firstRow = Math.floor(v.contentY / unit);
-            var rows = Math.max(1, Math.ceil(v.height / unit));
-            top = firstRow * cols;
-            bottom = Math.min(v.count - 1, (firstRow + rows) * cols - 1);
-        }
-        if (root.currentIndex < top - root.followSnapRows
-                || root.currentIndex > bottom + root.followSnapRows)
-            root.land(root.currentIndex);
-    }
-
-    /// Instant `Contain` for semantic jumps (gg/G, search, select-all,
-    /// restores). Cursor moves rely on the view's follow; there is no
-    /// custom animation left for a same-tick teleport to fight.
-    function ensureVisible(index) {
+    /// The host-facing landing: `goto(row)` lands exactly (`Contain`) and
+    /// then glides the row to the pane centre on the next tick, once the
+    /// layout is true. Use `land(row)` for semantic jumps that must stay
+    /// instant. **Hosts never touch `view.contentY`/`positionViewAtIndex`**
+    /// — the running glide would override the teleport (CRITIQUESCROLL
+    /// SC-2: the queue's current track ended up below the viewport that
+    /// way).
+    function goto(index) {
         var i = index === undefined ? root.currentIndex : index;
         if (i < 0 || !root.view)
             return;
-        // A semantic jump owns the landing: the running glide would
-        // otherwise override this `Contain` with its (possibly estimated)
-        // target — the queue's current track ended up below the viewport
-        // that way. Land exactly, then re-centre on the next tick once the
-        // layout is true.
         centerGlide.stop();
         root.view.positionViewAtIndex(i, ListView.Contain);
-        if (root.glideToCenter)
-            Qt.callLater(function () {
-                if (root.glideToCenter && root.currentIndex === i)
-                    root._glideTo(root.view, i);
-            });
+        Qt.callLater(function () {
+            if (root.currentIndex === i)
+                root._glideTo(root.view, i);
+        });
+    }
+
+    /// Top the viewport without touching the cursor (a fresh payload).
+    function resetTop() {
+        centerGlide.stop();
+        if (root.view)
+            root.view.positionViewAtBeginning();
     }
 
     /// `gg`/`G`: instant edge landing — the follow band has nothing to
@@ -586,19 +513,6 @@ Item {
         id: scroll
     }
 
-    // One invisible follow target shared by both views (the visible row
-    // highlight is the delegate's). Duration stays -1 in list mode so the
-    // velocity drives the move; the grid has no velocity property, so it
-    // rides a duration token instead. `reduceMotion` collapses both.
-    Component {
-        id: followHighlight
-        Rectangle {
-            width: 1
-            height: 1
-            color: "transparent"
-        }
-    }
-
     Item {
         id: stage
         x: -root.bleed
@@ -618,16 +532,6 @@ Item {
             delegate: root.rowDelegate
             spacing: root.rowSpacing
             boundsBehavior: Flickable.StopAtBounds
-
-            highlight: followHighlight
-            highlightFollowsCurrentItem: !root.glideToCenter
-            highlightMoveVelocity: root.followVelocity
-            highlightMoveDuration: (root._instantFollow || Theme.reduceMotion) ? 0
-                : (root.followMs >= 0 ? root.followMs : -1)
-            preferredHighlightBegin: height * root.followBegin - root._halfRow
-            preferredHighlightEnd: height * root.followEnd - root._halfRow
-            highlightRangeMode: root.glideToCenter
-                ? ListView.NoHighlightRange : ListView.ApplyRange
         }
 
         GridView {
@@ -642,17 +546,6 @@ Item {
             cellWidth: root.cellWidth
             cellHeight: root.cellHeight > 0 ? root.cellHeight : root.cellWidth
             boundsBehavior: Flickable.StopAtBounds
-
-            highlight: followHighlight
-            highlightFollowsCurrentItem: !root.glideToCenter
-            // SCROLLGRIDSTUDY §3: GridView has no `highlightMoveVelocity`;
-            // the duration token is the nearest documented follow.
-            highlightMoveDuration: (root._instantFollow || Theme.reduceMotion) ? 0
-                : (root.followMs >= 0 ? root.followMs : Theme.motion.standard)
-            preferredHighlightBegin: height * root.followBegin - root._halfRow
-            preferredHighlightEnd: height * root.followEnd - root._halfRow
-            highlightRangeMode: root.glideToCenter
-                ? GridView.NoHighlightRange : GridView.ApplyRange
         }
     }
 
@@ -666,17 +559,14 @@ Item {
         }
         // A drag owns the viewport: kill any centre glide in flight.
         function onMovementStarted() {
-            if (root.glideToCenter)
-                root.stopFollow();
+            root.stopGlide();
         }
         function onCurrentIndexChanged() {
-            // A landing owns the view while it runs (its re-arm would
-            // otherwise re-enter this handler).
+            // A landing owns the view while it runs.
             if (target.count === 0 || root._instantFollow)
                 return;
             if (root.currentIndex >= 0 && target.currentIndex !== root.currentIndex)
                 target.currentIndex = root.currentIndex;
-            root._snapIfFar(target);
             if (root.memoryKey)
                 root.remember();
         }

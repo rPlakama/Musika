@@ -36,7 +36,7 @@ strict=0
 # Multicolor / packaging assets: not glyphs, so exempt from the white bake and
 # from the referenced rule (musika.svg is installed by PKG-1, P.svg is its
 # brand source, the provider logos are kept for the server badge).
-brand="musika.svg P.svg subsonic_94696.svg navidrome.svg"
+brand="musika.svg SpinlogoMusika.svg P.svg subsonic_94696.svg navidrome.svg"
 
 fail=0
 warn=0

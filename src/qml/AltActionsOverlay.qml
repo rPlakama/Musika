@@ -14,21 +14,26 @@
 // You should have received a copy of the GNU General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
+// ARC-UI-1: the option boxes are an inline component whose geometry binds to
+// the enclosing `board` id; Bound makes those enclosing ids resolvable.
+pragma ComponentBehavior: Bound
+
 import QtQuick
+import QtQuick.Window
 import musika
 import "Theme.js" as Theme
 
-// ARC-43: Alt-hold quick actions, keyboard gesture. Holding Alt overlays
-// four quadrants around the current item; `h`/`j`/`k`/`l` (or the arrow keys)
-// aim west/south/north/east and releasing Alt is Enter (it fires the aimed
-// action). The center is the neutral aim: releasing there fires nothing, Esc
-// dismisses for the rest of the hold, and aiming toward the opposite quadrant
-// first passes through neutral (north + `j` = neutral, `j` again = south).
-// The host arms it with the current item and a `{north,south,east,west}`
-// config of `{label, invoke}` slots (null = open, drawn as "—"), so the
-// contextual Go to Album / Go to Artist swap is config, not branches. The
-// option tiles are acrylic panels (blurred backdrop, like the search
-// overlay).
+// ARC-43/ARC-UI-1: Alt-hold quick actions, keyboard gesture. Holding Alt
+// overlays four fixed verbs around the current item; `h`/`j`/`k`/`l` (or the
+// arrow keys) aim west/south/north/east and releasing Alt is Enter (it fires
+// the aimed action). The center is the neutral aim: releasing there fires
+// nothing, Esc dismisses for the rest of the hold, and aiming toward the
+// opposite quadrant first passes through neutral (north + `j` = neutral, `j`
+// again = south). The host arms it with the current item and a
+// `{north,south,east,west}` config of `{label, invoke}` slots (null = open,
+// drawn as "—"); one `board` rectangle owns the margin and scale and the
+// tiles anchor to its edges. The option tiles are acrylic panels (blurred
+// backdrop, like the search overlay).
 Item {
     id: root
 
@@ -47,13 +52,20 @@ Item {
     readonly property point anchor: (targetItem && targetItem.visible && targetItem.width > 0)
         ? targetItem.mapToItem(root, targetItem.width / 2, targetItem.height / 2)
         : Qt.point(-1000, -1000)
-    readonly property real gap: Math.max(10, height * 0.02)
-    /// Option tiles run 70% larger than the first pass (ARC-43 review).
-    readonly property real optionScale: 1.7
-    readonly property real boxFont: Math.max(11, height * 0.018) * optionScale
-    readonly property real boxPadding: Math.max(6, height * 0.008) * optionScale
     readonly property real targetWidth: targetItem ? targetItem.width : 0
     readonly property real targetHeight: targetItem ? targetItem.height : 0
+
+    /// ARC-UI-1: the window's content rectangle in this item's coordinates;
+    /// the board clamps to it so no tile is cut by the window edge. Falls back
+    /// to the item's own bounds before the window exists.
+    readonly property rect windowRect: {
+        var win = Window.window;
+        if (!win || !win.contentItem)
+            return Qt.rect(0, 0, root.width, root.height);
+        var tl = win.contentItem.mapToItem(root, 0, 0);
+        var br = win.contentItem.mapToItem(root, win.contentItem.width, win.contentItem.height);
+        return Qt.rect(tl.x, tl.y, br.x - tl.x, br.y - tl.y);
+    }
 
     opacity: armed ? 1 : 0
     visible: opacity > 0
@@ -144,57 +156,107 @@ Item {
         enabled: root.armed
     }
 
-    // Center mark: the neutral aim. Grows while neutral so the state reads.
+    // ARC-UI-1: one parent rectangle owns the cluster — the margin between the
+    // target and each tile, and the option scale. The tiles anchor to its
+    // edges (up/down horizontally centred, left/right vertically centred) and
+    // the neutral mark sits at its centre; the rectangle sizes itself around
+    // the target plus the opposing tiles.
     Rectangle {
-        readonly property point at: root.anchor
-        visible: root.armed
-        x: at.x - width / 2
-        y: at.y - height / 2
-        width: Math.max(5, root.height * 0.008) * (root.aimed === "" ? 1.6 : 1.0)
-        height: width
-        radius: width / 2
-        color: Palette.primary
+        id: board
 
-        Behavior on width {
-            NumberAnimation { duration: Theme.motion.micro }
+        /// ARC-UI-1 scale ramp: the old fixed 1.7 is the pre-ramp value; the
+        /// ramp caps at 20% less and eases down with the room the window
+        /// leaves around the target (the bio-font idea on the whole tile).
+        readonly property real maxOptionScale: 1.7 * 0.8
+        readonly property real minOptionScale: 0.5
+
+        /// Scale-independent tile metrics. `unitBoxSide` is the largest of
+        /// the four labels at the 1.0 scale (the minimum tile side too).
+        readonly property real unitFont: Math.max(11, root.height * 0.018)
+        readonly property real unitPadding: Math.max(6, root.height * 0.008)
+        readonly property real unitBoxSide: Math.max(
+            northBox.unitSide, southBox.unitSide, westBox.unitSide, eastBox.unitSide,
+            root.height * 0.09)
+        readonly property real maxBoxSide: unitBoxSide * maxOptionScale
+
+        /// The target↔tile gap, grown so UP/DOWN and LEFT/RIGHT squares
+        /// always clear each other (the old fixed margin let them overlap).
+        readonly property real baseMargin: root.height * 0.02
+        readonly property real margin: Math.max(baseMargin, maxBoxSide * 0.25,
+            (maxBoxSide - Math.max(root.targetWidth, root.targetHeight)) / 2 + baseMargin)
+
+        /// The no-cut range: the clamp starts 10 px before the window walls.
+        readonly property real wallGap: 10
+        readonly property rect safeRect: Qt.rect(
+            root.windowRect.x + wallGap,
+            root.windowRect.y + wallGap,
+            Math.max(1, root.windowRect.width - 2 * wallGap),
+            Math.max(1, root.windowRect.height - 2 * wallGap))
+
+        /// The scale ramp: up to `maxOptionScale` when the window has room,
+        /// easing down as the space around the target shrinks.
+        readonly property real optionScale: {
+            var room = Math.min(safeRect.width - root.targetWidth,
+                                safeRect.height - root.targetHeight) / 2 - margin;
+            return Theme.clamp(room / Math.max(1, unitBoxSide),
+                minOptionScale, maxOptionScale);
         }
-    }
 
-    Repeater {
-        model: ["north", "south", "east", "west"]
+        /// The four tiles are squares of one side, so the margin between the
+        /// target and each tile reads the same UP/DOWN and LEFT/RIGHT.
+        readonly property real boxFont: unitFont * optionScale
+        readonly property real boxPadding: unitPadding * optionScale
+        readonly property real boxSide: unitBoxSide * optionScale
 
-        delegate: AcrylicPanel {
+        /// Fit: the board shrinks only when moving cannot keep it whole (it
+        /// is wider or taller than the safe rect), so both edges can be seen.
+        readonly property real fitScale: Math.min(1,
+            safeRect.width / Math.max(1, width),
+            safeRect.height / Math.max(1, height))
+        readonly property real drawnWidth: width * fitScale
+        readonly property real drawnHeight: height * fitScale
+
+        width: root.targetWidth + 2 * margin + 2 * boxSide
+        height: root.targetHeight + 2 * margin + 2 * boxSide
+        color: "transparent"
+        transformOrigin: Item.TopLeft
+        scale: fitScale
+        // Centred on the target, then nudged back inside the 10 px safe rect:
+        // cut by the right edge moves left, by the left moves right; when both
+        // are exceeded the fit scale shrinks the whole cluster instead.
+        x: Math.max(safeRect.x,
+            Math.min(safeRect.x + safeRect.width - drawnWidth,
+                     root.anchor.x - drawnWidth / 2))
+        y: Math.max(safeRect.y,
+            Math.min(safeRect.y + safeRect.height - drawnHeight,
+                     root.anchor.y - drawnHeight / 2))
+
+        component OptionBox: AcrylicPanel {
             id: box
-            required property string modelData
+            required property string direction
 
-            readonly property var slot: root.config ? root.config[box.modelData] : null
-            readonly property bool isAimed: root.aimed === box.modelData
+            readonly property var slot: root.config ? root.config[box.direction] : null
+            readonly property string labelText: box.slot && box.slot.label ? box.slot.label : "—"
+            readonly property bool isAimed: root.aimed === box.direction
 
-            width: Math.max(boxLabel.implicitWidth + root.boxPadding * 2,
-                            root.height * 0.09 * root.optionScale)
-            height: boxLabel.implicitHeight + root.boxPadding * 2
+            /// Scale-independent side: measured at the unit font so the board
+            /// can ramp without reading a scaled label (no binding loop).
+            FontMetrics {
+                id: unitMetrics
+                font.family: "monospace"
+                font.pixelSize: board.unitFont
+            }
+            readonly property real unitSide: Math.max(
+                unitMetrics.advanceWidth(box.labelText), unitMetrics.height)
+                + board.unitPadding * 2
+
+            width: board.boxSide
+            height: board.boxSide
             radius: 0
             backdrop: root.backdrop
             tint: box.isAimed ? Palette.primaryContainer : Palette.surfaceContainerHigh
-            border.width: 1
-            border.color: box.isAimed ? Palette.primary : Palette.outline
             opacity: !root.aimed || box.isAimed ? 1 : 0.55
             scale: box.isAimed ? 1.05 : 1.0
-
-            x: {
-                if (box.modelData === "east")
-                    return root.anchor.x + root.targetWidth / 2 + root.gap;
-                if (box.modelData === "west")
-                    return root.anchor.x - root.targetWidth / 2 - root.gap - box.width;
-                return root.anchor.x - box.width / 2;
-            }
-            y: {
-                if (box.modelData === "south")
-                    return root.anchor.y + root.targetHeight / 2 + root.gap;
-                if (box.modelData === "north")
-                    return root.anchor.y - root.targetHeight / 2 - root.gap - box.height;
-                return root.anchor.y - box.height / 2;
-            }
 
             Behavior on tint {
                 ColorAnimation {
@@ -217,10 +279,51 @@ Item {
             Text {
                 id: boxLabel
                 anchors.centerIn: parent
-                text: box.slot && box.slot.label ? box.slot.label : "—"
+                text: box.labelText
                 color: box.isAimed ? Palette.onPrimaryContainer : Palette.onSurfaceVariant
                 font.family: "monospace"
-                font.pixelSize: root.boxFont
+                font.pixelSize: board.boxFont
+            }
+        }
+
+        OptionBox {
+            id: northBox
+            direction: "north"
+            anchors.top: parent.top
+            anchors.horizontalCenter: parent.horizontalCenter
+        }
+
+        OptionBox {
+            id: southBox
+            direction: "south"
+            anchors.bottom: parent.bottom
+            anchors.horizontalCenter: parent.horizontalCenter
+        }
+
+        OptionBox {
+            id: westBox
+            direction: "west"
+            anchors.left: parent.left
+            anchors.verticalCenter: parent.verticalCenter
+        }
+
+        OptionBox {
+            id: eastBox
+            direction: "east"
+            anchors.right: parent.right
+            anchors.verticalCenter: parent.verticalCenter
+        }
+
+        // Center mark: the neutral aim. Grows while neutral so the state reads.
+        Rectangle {
+            anchors.centerIn: parent
+            width: Math.max(5, root.height * 0.008) * (root.aimed === "" ? 1.6 : 1.0)
+            height: width
+            radius: width / 2
+            color: Palette.primary
+
+            Behavior on width {
+                NumberAnimation { duration: Theme.motion.micro }
             }
         }
     }

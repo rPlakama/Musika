@@ -1166,8 +1166,18 @@ The product is incomplete without these.
   - **Now:** landed — `song_rows_json` emits `album_id` (locked by a Rust
     test) so the Songs list can feed the existing `altGoToArtist`; `SongList`
     shows all four verbs, `AlbumList`/`ArtistEntry` put Go to Artist on W
-    with the open "—" on E. `cargo test` 114 pass; QML parses clean under
-    `qmllint`. Open: the manual acceptance pass on hardware.
+    with the open "—" on E. The overlay draws from one `board` rectangle
+    (margin + option scale) with equal square tiles anchored to its edges
+    (up/down horizontally centred, west/east vertically centred) and the
+    neutral mark `centerIn` it — an inline `OptionBox` plus `pragma
+    ComponentBehavior: Bound`. The board also tracks `Window.window` and
+    clamps itself to the content rect inset by a 10 px no-cut margin: it
+    shifts off a touched edge (right → left and vice versa) and scales down
+    only when it cannot fit between both. The tile scale ramps with the
+    window's room (cap 20% under the old 1.7, floor 0.5) and the
+    target↔tile margin grows so the four squares never overlap. `cargo test`
+    114 pass; QML parses clean under `qmllint`. Open: the manual acceptance
+    pass on hardware.
 
 - [x] **CACHE-1 · DB4 `media.db` + `media/` blobs** — P2 · (roadmap Media cache; MEDIACACHESTUDY.md §3/§5)
   - **Why:** audio is never stored; playback dies without network. Research

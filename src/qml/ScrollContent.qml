@@ -169,7 +169,7 @@ Item {
     property real followEnd: 0.85
     /// Optional soothing follow: when >= 0 the highlight rides this fixed
     /// duration (ms) instead of the constant-velocity walk — the lyrics
-    /// pane wants a paced ~1000 ms glide per phrase, not a flick. In
+    /// pane wants a paced ~300 ms glide per phrase, not a flick. In
     /// `glideToCenter` mode it is the viewport animation's duration.
     property int followMs: -1
     /// Extra spacing between list rows (0 = the delegate owns it); grid

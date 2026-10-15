@@ -1989,11 +1989,11 @@ Small, bounded, high-value changes.
   - **Now (partial):** the lyrics list rides the shared scroll body in
     `glideToCenter` mode — a harness probe showed the highlight-band follow
     snaps one-line moves instantly (ApplyRange enforces the band), so the
-     body now animates the viewport itself to the active delegate's centre
-     over `followMs: 600` (the pane fade shares the value; variable heights
-     measured, instant `Center` only for unrealised lines,
-     `followSnapRows: 0`, drags stop it via `movementStarted`). j/k, drag
-     and wheel pause it (`holdLyrics`), and a
+    body now animates the viewport itself to the active delegate's centre
+    over `followMs: 300` (the pane fade shares the value and the
+    decelerate bezier; variable heights measured, instant `Center` only for
+    unrealised lines, `followSnapRows: 0`, drags stop it via
+    `movementStarted`). j/k, drag and wheel pause it (`holdLyrics`), and a
     single-shot `lyricResume` timer re-centres the active phrase after the
     idle window — `Theme.lyricsResume` 5 s while the lyrics pane is focused,
     `Theme.lyricsResumeUnfocused` 2 s otherwise, re-armed when pane focus

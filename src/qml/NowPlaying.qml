@@ -798,11 +798,11 @@ Rectangle {
                                 model: lyricModel
                                 rowSpacing: root.lyricSize * 0.9
                                 // LYR-8: the soothing lyrics follow — a fixed
-                                // 600 ms viewport glide that centres the phrase
+                                // 300 ms viewport glide that centres the phrase
                                 // itself (band enforcement lands small moves
                                 // instantly, so the body's own walk is off
                                 // here). The pane's fade rides the same value.
-                                followMs: 600
+                                followMs: 300
                                 followSnapRows: 0
                                 glideToCenter: true
 

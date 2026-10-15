@@ -24,7 +24,7 @@ import musika
 MediaList {
     id: root
 
-    signal albumActivated(string albumId, string title, string artist, string year, string tracks, string cover)
+    signal albumActivated(string albumId, string title, string artist, string year, string tracks, string cover, bool starred)
 
     property string artistFilter: ""
 
@@ -60,7 +60,7 @@ MediaList {
         root.loading = false;
     }
 
-    onActivated: (item) => root.albumActivated(item.albumId, item.title, item.artist, item.year, item.tracks, item.cover)
+    onActivated: (item) => root.albumActivated(item.albumId, item.title, item.artist, item.year, item.tracks, item.cover, item.starred === true)
 
     // ARC-UI-1: album rows keep three verbs live and the Go to Album slot
     // open (Enter already opens the album).

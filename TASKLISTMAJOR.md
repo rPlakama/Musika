@@ -1233,7 +1233,7 @@ The product is incomplete without these.
     `cargo test` 114 pass; `scripts/check-icons.sh` ok; QML parses clean under
     `qmllint`. Open: the manual acceptance pass on hardware.
 
-- [ ] **ARC-I-2 · Alt menu in `AlbumEntry` tracks + the album's favourite mark** — P3 · (ARC-I follow-up)
+- [x] **ARC-I-2 · Alt menu in `AlbumEntry` tracks + the album's favourite mark** — P3 · (ARC-I follow-up)
   - **Why:** the album page's song list is the last track surface without the
     Alt menu, and the album's own favourite state is invisible there even
     though the fixed verbs can star it (`altFavorite("album")`).
@@ -1252,6 +1252,17 @@ The product is incomplete without these.
   - **Verify:** Alt on an album-page track arms the overlay on that row with
     all four verbs; the header heart matches the server album flag and flips
     with the Alt Favorite verb; the toolbar case is a no-op.
+  - **Now:** landed — `AlbumEntry` arms on its song cursor (`songs.get` +
+    `songList.itemAtIndex`; toolbar/empty no-op) with the `quickAction` relay
+    wired into Home's `albumEntryComponent`, and its rows carry
+    `songId`/`albumId`. The header heart rides `albumStarred`, threaded from
+    every opener (`AlbumList`/`ArtistEntry`/`SearchOverlay` `albumActivated`,
+    the ARC-43 `open_album` payload and the restored-session album all carry
+    `starred`; `queue_album_json` emits it). ArtistEntry cards moved their
+    favourite mark inside the cover's bottom-right corner, side derived from
+    the cover (~30% over the old meta-line mark). `cargo test` 115 pass;
+    `scripts/check-icons.sh` ok; qmllint clean. Open: optimistic toggle parity
+    with `altFavorite`/P-2 and the manual pass.
 
 - [ ] **ARC-I-3 · `ArtistEntry` action chips on keybinds** — P3 · (P-8 B–D, UI-44, ARC-42)
   - **Why:** `<stars> <download> <shuffle> <favorite>` are the only way to
@@ -1762,8 +1773,9 @@ Small, bounded, high-value changes.
     (`library::song_starred_ids`); the white `baseline-favorite` heart
     (`Theme.iconStrong`) leads the meta in `MediaList` (Albums/Songs/
     Artists), `SearchColumn` (artists via the count subtitle), `AlbumEntry`
-    songs, `ArtistEntry` cards and the fullscreen queue — no hitbox, no gap
-    when unstarred. `cargo test` 115 pass (row-JSON flag test);
+    songs and the fullscreen queue — and sits inside the bottom-right corner
+    of `ArtistEntry`'s covers (cover-derived side) — no hitbox, no gap when
+    unstarred. `cargo test` 115 pass (row-JSON flag test);
     `scripts/check-icons.sh` ok; QML parses clean under `qmllint`. Open:
     optimistic toggle parity with `altFavorite`/P-2 and the manual pass.
 
@@ -2873,10 +2885,10 @@ Kept for rationale; the tree already carries these.
 | Bucket | Open | Solved |
 |--------|------|--------|
 | Must have | 7 | 2 |
-| Should have | 84 | 15 |
+| Should have | 83 | 16 |
 | Quick wins | 6 | 58 |
 | Solved (reference) | — | 36 |
-| **Total** | **97** | **111** |
+| **Total** | **96** | **112** |
 
 ### Coverage by area
 
@@ -2889,7 +2901,7 @@ Kept for rationale; the tree already carries these.
 | Search | 2 | 6 |
 | UI microdesigns | 19 | 31 |
 | Alt action menu (ARC-UI) | 0 | 1 |
-| Incremental (ARC-I) | 2 | 1 |
+| Incremental (ARC-I) | 1 | 2 |
 | Dynamic color | 1 | 5 |
 | Architecture & robustness | 23 | 19 |
 | Recycling | 27 | 0 |

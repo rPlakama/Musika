@@ -40,7 +40,7 @@ Item {
     property string _zeroQuery: ""
 
     signal songActivated(string id)
-    signal albumActivated(string albumId, string title, string artist, string year, string tracks, string cover)
+    signal albumActivated(string albumId, string title, string artist, string year, string tracks, string cover, bool starred)
     signal artistActivated(string artistId, string artistName, string artistCover)
     /// ARC-I: Alt-hold quick actions armed on the active column's cursor row;
     /// Home routes it to the shared overlay.
@@ -233,7 +233,7 @@ Item {
         if (activeColumn === 0)
             root.songActivated(hit.id);
         else if (activeColumn === 1)
-            root.albumActivated(hit.id, hit.title, hit.artist, hit.year, hit.tracks, hit.cover);
+            root.albumActivated(hit.id, hit.title, hit.artist, hit.year, hit.tracks, hit.cover, hit.starred === true);
         else
             root.artistActivated(hit.id, hit.title, hit.cover);
         close();

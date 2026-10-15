@@ -150,6 +150,8 @@ fn queue_album_json(
         "year": album.year,
         "tracks": album.song_count,
         "cover": cover,
+        // UI-56/ARC-I-2: the album page header's favourite mark.
+        "starred": album.starred.is_some(),
     })
 }
 

@@ -31,6 +31,9 @@ Rectangle {
     id: root
 
     signal back
+    /// ARC-I-2: Alt-hold quick actions on the song row under the cursor;
+    /// Home routes it to the shared overlay.
+    signal quickAction(var target, var actions)
 
     property string albumId: ""
     property bool onToolbar: false
@@ -38,6 +41,9 @@ Rectangle {
     property string albumTitle: ""
     property string albumArtist: ""
     property string albumMeta: ""
+    /// ARC-I-2: the album's favourite state (header heart); fed by the
+    /// opener from the album row and the ARC-43 page payload.
+    property bool albumStarred: false
     property string albumNotes: ""
     // UI-14: album notes clamp to three lines until clicked.
     property bool notesExpanded: false
@@ -63,6 +69,22 @@ Rectangle {
 
     ListModel {
         id: songs
+    }
+
+    // ARC-I-2: the recycled Alt verb set; album songs are tracks.
+    QuickActions {
+        id: verbs
+    }
+
+    /// ARC-I-2: Alt armed the gesture — anchor on the song row under the
+    /// cursor (the toolbar is a no-op, like an empty list).
+    function armQuickActions() {
+        if (root.onToolbar || songs.count === 0 || songList.currentIndex < 0)
+            return;
+        var item = songs.get(songList.currentIndex);
+        var row = songList.itemAtIndex(songList.currentIndex);
+        if (item && row)
+            quickAction(row, verbs.song(item));
     }
 
     // UI-41/UI-54: shared eased-scroll + scroll-memory mechanism.
@@ -92,7 +114,9 @@ Rectangle {
                 track: song.track ? String(song.track) : String(i + 1),
                 title: song.title,
                 duration: Theme.formatTime(song.duration),
-                starred: song.starred === true
+                starred: song.starred === true,
+                songId: song.id,
+                albumId: song.album_id ? song.album_id : ""
             });
         }
         root.loading = false;
@@ -256,12 +280,27 @@ Rectangle {
                     font.pixelSize: root.height * 0.024
                     elide: Text.ElideRight
                 }
-                FadeText {
+                RowLayout {
                     Layout.fillWidth: true
-                    text: root.albumMeta
-                    color: Palette.onSurfaceVariant
-                    font.pixelSize: root.height * 0.02
-                    elide: Text.ElideRight
+                    spacing: root.height * 0.008
+
+                    // ARC-I-2: the album's favourite leads the header meta.
+                    Icon {
+                        visible: root.albumStarred
+                        Layout.alignment: Qt.AlignVCenter
+                        Layout.preferredWidth: root.height * 0.016
+                        Layout.preferredHeight: width
+                        name: "baseline-favorite"
+                        symbolColor: Theme.iconStrong
+                    }
+
+                    FadeText {
+                        Layout.fillWidth: true
+                        text: root.albumMeta
+                        color: Palette.onSurfaceVariant
+                        font.pixelSize: root.height * 0.02
+                        elide: Text.ElideRight
+                    }
                 }
                 FadeText {
                     id: notesText

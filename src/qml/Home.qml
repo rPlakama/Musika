@@ -141,8 +141,8 @@ Item {
 
     // Single album-page push used by the album list, the artist entry and the
     // search overlay, so every surface lands in the same page with the same
-    // header payload.
-    function openAlbum(albumId, title, artist, year, tracks, cover) {
+    // header payload (`starred` feeds the ARC-I-2 header heart).
+    function openAlbum(albumId, title, artist, year, tracks, cover, starred) {
         // P-6 S2: the last opened album page is what a restart reopens.
         Backend.rememberAlbum(albumId);
         var meta = [];
@@ -155,7 +155,8 @@ Item {
             albumTitle: title,
             albumArtist: artist,
             albumCover: cover,
-            albumMeta: meta.join("   ·   ")
+            albumMeta: meta.join("   ·   "),
+            albumStarred: starred === true
         });
     }
 
@@ -446,8 +447,8 @@ Item {
                     Component {
                         id: albumListComponent
                         AlbumList {
-                            onAlbumActivated: (albumId, title, artist, year, tracks, cover) =>
-                                root.openAlbum(albumId, title, artist, year, tracks, cover)
+                            onAlbumActivated: (albumId, title, artist, year, tracks, cover, starred) =>
+                                root.openAlbum(albumId, title, artist, year, tracks, cover, starred)
                             onQuickAction: (target, actions) =>
                                 root.armQuickActions(target, actions)
                         }
@@ -477,8 +478,8 @@ Item {
                         id: artistEntryComponent
                         ArtistEntry {
                             onBack: root.leaveArtistEntry()
-                            onAlbumActivated: (albumId, title, artist, year, tracks, cover) =>
-                                root.openAlbum(albumId, title, artist, year, tracks, cover)
+                            onAlbumActivated: (albumId, title, artist, year, tracks, cover, starred) =>
+                                root.openAlbum(albumId, title, artist, year, tracks, cover, starred)
                             onQuickAction: (target, actions) =>
                                 root.armQuickActions(target, actions)
                         }
@@ -504,6 +505,10 @@ Item {
                         id: albumEntryComponent
                         AlbumEntry {
                             onBack: contentStack.pop()
+                            // ARC-I-2: the page arms the shared Alt overlay on
+                            // its song rows.
+                            onQuickAction: (target, actions) =>
+                                root.armQuickActions(target, actions)
                         }
                     }
                 }
@@ -599,8 +604,8 @@ Item {
         // A search song hit goes through the same command pump as external
         // IPC, so the flow stays scriptable and single-sourced.
         onSongActivated: (id) => Backend.handleCommand("play_song_in_album " + id)
-        onAlbumActivated: (albumId, title, artist, year, tracks, cover) =>
-            root.openAlbum(albumId, title, artist, year, tracks, cover)
+        onAlbumActivated: (albumId, title, artist, year, tracks, cover, starred) =>
+            root.openAlbum(albumId, title, artist, year, tracks, cover, starred)
         onArtistActivated: (artistId, artistName, artistCover) =>
             contentStack.push(artistEntryComponent, {
                 artistId: artistId,
@@ -646,7 +651,8 @@ Item {
                                    data.album.artist ? data.album.artist : "",
                                    data.album.year ? String(data.album.year) : "",
                                    String(data.album.tracks),
-                                   data.album.cover ? data.album.cover : "");
+                                   data.album.cover ? data.album.cover : "",
+                                   data.album.starred === true);
             });
         }
         // Single pumped event from `playSongInAlbum`: the queue + album
@@ -688,7 +694,8 @@ Item {
                         searchOverlay.close();
                     root.openAlbum(page.id, page.title, page.artist ? page.artist : "",
                                    page.year ? String(page.year) : "",
-                                   String(page.tracks), page.cover ? page.cover : "");
+                                   String(page.tracks), page.cover ? page.cover : "",
+                                   page.starred === true);
                 });
                 return;
             }

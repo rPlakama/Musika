@@ -28,7 +28,7 @@ Rectangle {
     id: root
 
     signal back
-    signal albumActivated(string albumId, string title, string artist, string year, string tracks, string cover)
+    signal albumActivated(string albumId, string title, string artist, string year, string tracks, string cover, bool starred)
 
     // ARC-43/ARC-UI-1: Alt-hold quick actions for an album card — four fixed
     // verbs, minus Go to Album (Enter already opens it): that slot stays the
@@ -272,7 +272,7 @@ Rectangle {
     function activateCurrent() {
         var album = albums.get(grid.currentIndex);
         if (album)
-            root.albumActivated(album.albumId, album.title, album.artist, album.year, album.tracks, album.cover);
+            root.albumActivated(album.albumId, album.title, album.artist, album.year, album.tracks, album.cover, album.starred === true);
     }
 
     Component.onCompleted: reload()
@@ -718,6 +718,21 @@ Rectangle {
                             // ARC-40: ×2 headroom for the UI-50 hover scale.
                             sizeFactor: 2
                         }
+
+                        // UI-56/ARC-I-2: a favourited album carries its mark
+                        // inside the cover's bottom-right corner; the side is
+                        // derived from the cover itself (≈30% over the old
+                        // meta-line mark).
+                        Icon {
+                            visible: cell.starred
+                            anchors.right: parent.right
+                            anchors.bottom: parent.bottom
+                            anchors.margins: parent.width * 0.06
+                            width: parent.width * 0.065
+                            height: width
+                            name: "baseline-favorite"
+                            symbolColor: Theme.iconStrong
+                        }
                     }
 
                     FadeText {
@@ -754,18 +769,6 @@ Rectangle {
                         elide: Text.ElideRight
                         font.pixelSize: Math.max(9, cell.height * 0.04)
                             animated: false
-                    }
-
-                    // UI-56: the favourite heart leads the card's meta line.
-                    Icon {
-                        visible: cell.starred
-                        anchors.right: metaText.left
-                        anchors.rightMargin: cell.height * 0.02
-                        anchors.verticalCenter: metaText.verticalCenter
-                        width: metaText.font.pixelSize * 0.8
-                        height: width
-                        name: "baseline-favorite"
-                        symbolColor: Theme.iconStrong
                     }
 
                     HoverHandler {

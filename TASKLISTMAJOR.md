@@ -1284,6 +1284,29 @@ The product is incomplete without these.
     to other regions/`Backend.keyPending`/Alt aiming, and the chips still
     work by mouse.
 
+- [ ] **ARC-I-4 · Favourite toggle: UI ↔ db ↔ server in one verb** — P2 · (UI-56, P-2, ARC-42)
+  - **Why:** the UI-56 hearts reflect the last sync — `altFavorite` stars on
+    the server without writing the local flag, and a second Favorite on an
+    already-favourited row can't unstar, so the mark never tracks the user's
+    action and the db drifts from the server.
+  - **Details:**
+    - db: on a successful star/unstar, write the local flag (`songs`/`albums`
+      `starred` = now/NULL, or a small `library` helper); artist favourites
+      keep their `artist_user` flow (ARC-42) and only need the toggle;
+    - toggle: Favorite on a favourited song/album calls `client.unstar`
+      (api.rs already wraps it) and clears the flag — songs, albums and
+      artists (artist ids for the API, `artist_user` locally);
+    - UI: flip the row's `starred` optimistically and reconcile on the
+      payload (re-emit the affected list or update in place) so every region
+      — Main lists, album page, search columns, ArtistEntry covers and the
+      fullscreen queue (whose `player::Track.favorite` must follow) — shows
+      the same state without a manual sync; revert on failure with the toast;
+    - P-2's `s`/`*` binding reuses this one verb instead of a second path.
+  - **Verify:** favouriting a song/album lights the mark immediately in every
+    region and survives a restart (db); a second Favorite unstars on the
+    server and db and the mark clears; a failed call reverts with the error
+    toast; artists keep the chip/`artist_user` flow intact.
+
 - [x] **CACHE-1 · DB4 `media.db` + `media/` blobs** — P2 · (roadmap Media cache; MEDIACACHESTUDY.md §3/§5)
   - **Why:** audio is never stored; playback dies without network. Research
     picked an independent reqwest fetch (`download` original / `stream` with
@@ -2885,10 +2908,10 @@ Kept for rationale; the tree already carries these.
 | Bucket | Open | Solved |
 |--------|------|--------|
 | Must have | 7 | 2 |
-| Should have | 83 | 16 |
+| Should have | 84 | 16 |
 | Quick wins | 6 | 58 |
 | Solved (reference) | — | 36 |
-| **Total** | **96** | **112** |
+| **Total** | **97** | **112** |
 
 ### Coverage by area
 
@@ -2901,7 +2924,7 @@ Kept for rationale; the tree already carries these.
 | Search | 2 | 6 |
 | UI microdesigns | 19 | 31 |
 | Alt action menu (ARC-UI) | 0 | 1 |
-| Incremental (ARC-I) | 1 | 2 |
+| Incremental (ARC-I) | 2 | 2 |
 | Dynamic color | 1 | 5 |
 | Architecture & robustness | 23 | 19 |
 | Recycling | 27 | 0 |

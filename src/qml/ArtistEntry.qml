@@ -721,14 +721,13 @@ Rectangle {
 
                         // UI-56/ARC-I-2: a favourited album carries its mark
                         // inside the cover's bottom-right corner; the side is
-                        // derived from the cover itself (≈30% over the old
-                        // meta-line mark).
+                        // derived from the cover itself (previous pass +30%).
                         Icon {
                             visible: cell.starred
                             anchors.right: parent.right
                             anchors.bottom: parent.bottom
                             anchors.margins: parent.width * 0.06
-                            width: parent.width * 0.065
+                            width: parent.width * 0.085
                             height: width
                             name: "baseline-favorite"
                             symbolColor: Theme.iconStrong

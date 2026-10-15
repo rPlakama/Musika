@@ -2217,8 +2217,12 @@ impl Backend {
             crate::mpris::publish(state);
             return;
         }
-        if self.player.poll_end() {
-            self.player.next();
+        let index = self.player.index();
+        if let Some(message) = self.player.pump() {
+            self.error_raised("playback".to_string(), message);
+        }
+        if self.player.index() != index {
+            self.emit_queue();
         }
         self.sync_player();
         self.maybe_save_position();

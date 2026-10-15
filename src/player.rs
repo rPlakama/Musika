@@ -20,14 +20,23 @@
 //! mpv decodes with FFmpeg and exposes real `time-pos`/`duration`/`pause`
 //! state, plus seeking, so the UI gets an accurate progress bar. Unlike the
 //! previous `ffplay` approach there is no wall-clock guessing and no
-//! SIGSTOP hack: mpv runs in `--idle` mode for the whole session and files are
-//! swapped with `loadfile`.
+//! SIGSTOP hack: mpv runs in `--idle` mode for the whole session.
+//!
+//! Q-5 window model (`PLAYBACKSTUDY.md`): the current track is played as an
+//! mpv *playlist* — the current entry plus the next one appended once the
+//! current reports `file-loaded` — so mpv advances gap-free with
+//! `--prefetch-playlist=yes` and `--gapless-audio=yes`. A load failure has no
+//! next entry to auto-advance to, so it can be retried in place with
+//! `playlist-play-index` before the queue moves on. The Rust queue stays the
+//! source of truth; `playlist-pos` maps back into it
+//! (`index = window_base + pos`).
 //!
 //! A small reader thread owns the read half of the socket and mirrors mpv's
-//! observed properties into a shared [`Shared`] snapshot that the Qt thread
-//! reads during `tick`. Stale `end-file` events from replaced files are
-//! dropped while a load is pending, so fast skips never depend on network
-//! timing (the queue advances on keypress, not on the stream).
+//! observed properties and events into a shared [`Shared`] snapshot that the
+//! Qt thread reads during [`Player::pump`]. Stale `end-file` events from
+//! replaced files are dropped while a load is pending, so fast skips never
+//! depend on network timing (the queue advances on keypress, not on the
+//! stream).
 
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::UnixStream;
@@ -77,19 +86,40 @@ impl State {
     }
 }
 
+/// A failed `end-file` for the UI thread to act on (Q-5).
+#[derive(Debug, Clone)]
+struct ErrorInfo {
+    /// mpv's `file_error` string ("loading failed", …).
+    message: String,
+    /// `true` when the file had already produced media (`position > 0`):
+    /// mid-track failures advance, load failures retry.
+    played: bool,
+}
+
 /// Snapshot of mpv state, written by the reader thread and read by the UI.
 #[derive(Debug, Default)]
 struct Shared {
     position: f64,
     duration: f64,
     paused: bool,
-    eof: bool,
-    error: bool,
-    /// `true` between issuing a `loadfile` and mpv reporting `start-file`.
+    /// The current entry's file loaded successfully (`file-loaded`).
+    loaded: bool,
+    /// mpv playlist index of the playing entry (`-1`/`None` when idle).
+    playlist_pos: Option<i64>,
+    /// mpv entered idle mode (end of the window).
+    idle: bool,
+    /// Set once per failed `end-file`, consumed by [`Player::pump`].
+    error: Option<ErrorInfo>,
+    /// `true` between issuing a load and mpv reporting `start-file`.
     /// While set, `end-file` events belong to the file we deliberately
     /// replaced and must not advance the queue (fast skip/previous races).
     pending_load: bool,
 }
+
+/// `playlist-play-index` attempts after a failed load before advancing (Q-5).
+const MAX_RETRIES: u32 = 2;
+/// Backoff before a retry (the first retry is immediate).
+const RETRY_BACKOFF: Duration = Duration::from_secs(1);
 
 /// Playback queue plus the running `mpv` process and its IPC connection.
 pub struct Player {
@@ -104,6 +134,15 @@ pub struct Player {
     fallback_duration: f64,
     volume: f64,
     muted: bool,
+    /// Queue index of mpv playlist entry 0; `index - window_base` is the
+    /// current entry's playlist position. Fixed between rebuilds.
+    window_base: usize,
+    /// Entries currently in the mpv playlist.
+    window_len: usize,
+    /// Retries already spent on the current load (Q-5).
+    retries: u32,
+    /// When the next retry is due (backoff between attempts).
+    retry_at: Option<Instant>,
 }
 
 impl Default for Player {
@@ -126,6 +165,10 @@ impl Player {
             fallback_duration: 0.0,
             volume: crate::consts::DEFAULT_VOLUME,
             muted: false,
+            window_base: 0,
+            window_len: 0,
+            retries: 0,
+            retry_at: None,
         }
     }
 
@@ -202,9 +245,38 @@ impl Player {
             self.state = State::Stopped;
             return;
         }
+        self.rebuild();
+    }
 
-        let track = &self.queue[self.index];
-        let url = track.url.clone();
+    /// Loads the current track as a fresh one-entry playlist window. A
+    /// `loadfile … replace` clears whatever was queued (`PLAYBACKSTUDY.md`
+    /// §4); the tail entry is appended by [`Self::refill`] once this one is
+    /// loaded, so a load failure has nothing to auto-advance to.
+    fn rebuild(&mut self) {
+        let track = self.queue[self.index].clone();
+        {
+            let mut shared = self.shared.lock().unwrap();
+            *shared = Shared {
+                duration: track.duration,
+                pending_load: true,
+                ..Shared::default()
+            };
+        }
+        self.fallback_duration = track.duration;
+        self.window_base = self.index;
+        self.window_len = 1;
+        self.retries = 0;
+        self.retry_at = None;
+
+        self.command(vec![json!("loadfile"), json!(track.url.clone()), json!("replace")]);
+        self.push_metadata(&track);
+        self.command(vec![json!("set_property"), json!("pause"), json!(false)]);
+        self.state = State::Playing;
+    }
+
+    /// `mpris:artUrl` / `metadata` feed mpv's MPRIS (when the plugin is
+    /// loaded); position and pause state follow automatically.
+    fn push_metadata(&mut self, track: &Track) {
         let metadata = json!({
             "title": track.title,
             "artist": track.artist,
@@ -212,26 +284,7 @@ impl Player {
             "artUrl": track.cover_url,
             "mpris:artUrl": track.cover_url,
         });
-        self.fallback_duration = track.duration;
-
-        {
-            let mut shared = self.shared.lock().unwrap();
-            *shared = Shared {
-                position: 0.0,
-                duration: track.duration,
-                paused: false,
-                eof: false,
-                error: false,
-                pending_load: true,
-            };
-        }
-
-        // `mpris:artUrl` / `metadata` feed mpv's MPRIS (when the plugin is
-        // loaded); position and pause state follow automatically.
-        self.command(vec![json!("loadfile"), json!(url), json!("replace")]);
         self.command(vec![json!("set_property"), json!("metadata"), metadata]);
-        self.command(vec![json!("set_property"), json!("pause"), json!(false)]);
-        self.state = State::Playing;
     }
 
     pub fn toggle(&mut self) {
@@ -267,9 +320,14 @@ impl Player {
         {
             let mut shared = self.shared.lock().unwrap();
             shared.position = 0.0;
-            shared.eof = false;
-            shared.error = false;
+            shared.error = None;
+            shared.idle = false;
+            shared.playlist_pos = None;
         }
+        self.window_base = self.index;
+        self.window_len = 0;
+        self.retries = 0;
+        self.retry_at = None;
         self.state = State::Stopped;
     }
 
@@ -277,7 +335,18 @@ impl Player {
         if self.queue.is_empty() {
             return;
         }
-        if self.index + 1 < self.queue.len() {
+        self.forget_error();
+        let local = self.index - self.window_base;
+        if local + 1 < self.window_len {
+            // The next entry is already in the mpv playlist: it advances
+            // natively (and was prefetched), so the skip stays gapless.
+            self.index += 1;
+            self.command(vec![json!("playlist-next")]);
+            self.command(vec![json!("set_property"), json!("pause"), json!(false)]);
+            self.state = State::Playing;
+            let track = self.queue[self.index].clone();
+            self.push_metadata(&track);
+        } else if self.index + 1 < self.queue.len() {
             self.index += 1;
             self.play_current();
         } else {
@@ -289,8 +358,20 @@ impl Player {
         if self.queue.is_empty() {
             return;
         }
-        self.index = self.index.saturating_sub(1);
-        self.play_current();
+        self.forget_error();
+        let target = self.index.saturating_sub(1);
+        self.index = target;
+        if target >= self.window_base && target - self.window_base < self.window_len {
+            // The previous entry is still in the window: replay it in place.
+            let local = target - self.window_base;
+            self.command(vec![json!("playlist-play-index"), json!(local)]);
+            self.command(vec![json!("set_property"), json!("pause"), json!(false)]);
+            self.state = State::Playing;
+            let track = self.queue[target].clone();
+            self.push_metadata(&track);
+        } else {
+            self.play_current();
+        }
     }
 
     /// The current queue, in order.
@@ -318,17 +399,34 @@ impl Player {
             self.stop();
             return;
         }
-        if index < self.index {
-            self.index -= 1;
-        } else if was_current {
+        if was_current {
             if self.index >= self.queue.len() {
                 self.index = self.queue.len() - 1;
             }
             self.play_current();
+            return;
+        }
+        if index < self.index {
+            self.index -= 1;
+        }
+        if index >= self.window_base {
+            // In the mpv playlist (current or ahead): drop it there too.
+            let local = index - self.window_base;
+            if local < self.window_len {
+                self.command(vec![json!("playlist-remove"), json!(local)]);
+                self.window_len -= 1;
+            }
+        } else {
+            // Before the window: entry 0 shifts down one queue index.
+            self.window_base -= 1;
         }
     }
 
     /// Moves the track at `from` to position `to`.
+    ///
+    /// Reordering re-anchors the window when the move touches it (or the
+    /// current entry) and seeks back to the playhead; a move that cannot
+    /// reorder the mpv playlist is left to Rust alone.
     pub fn move_item(&mut self, from: usize, to: usize) {
         if from >= self.queue.len() || to >= self.queue.len() || from == to {
             return;
@@ -345,6 +443,25 @@ impl Player {
             if to <= self.index {
                 self.index += 1;
             }
+        }
+
+        if self.state == State::Stopped {
+            return;
+        }
+        let end = self.window_base + self.window_len;
+        let crosses = (from < self.window_base) != (to < self.window_base);
+        let touched = crosses
+            || [from, to]
+                .iter()
+                .any(|&i| i >= self.window_base && i < end);
+        if touched {
+            let position = self.position();
+            let paused = self.state == State::Paused;
+            self.play_current();
+            if paused {
+                self.pause();
+            }
+            self.seek(position);
         }
     }
 
@@ -379,21 +496,148 @@ impl Player {
         self.set_muted(!self.muted);
     }
 
-    /// Advances end-of-track detection. Returns `true` when a track ended
-    /// naturally and the caller should move on.
-    pub fn poll_end(&mut self) -> bool {
+    /// Q-5 pump: mirrors mpv's native playlist advances into `index`, drains
+    /// failed loads (retry in place, then advance) and keeps the window's
+    /// one-entry lookahead. Returns a user-facing toast when a track failed.
+    pub fn pump(&mut self) -> Option<String> {
         if self.state == State::Stopped {
-            return false;
+            return None;
         }
-        let mut shared = self.shared.lock().unwrap();
-        if !shared.eof {
-            return false;
+
+        if let Some(at) = self.retry_at {
+            if Instant::now() >= at && !self.pending_load() {
+                self.retry_at = None;
+                self.reload_current();
+            }
         }
-        shared.eof = false;
-        !shared.error
+
+        let (pending, pos, loaded, idle, error) = {
+            let mut shared = self.shared.lock().unwrap();
+            (
+                shared.pending_load,
+                shared.playlist_pos,
+                shared.loaded,
+                shared.idle,
+                shared.error.take(),
+            )
+        };
+        if pending {
+            return None;
+        }
+
+        let mut toast = None;
+        let mut advanced = false;
+        let mut retried = false;
+
+        // A native mpv advance (`--prefetch-playlist`) moves `playlist-pos`;
+        // map it back onto the queue.
+        if let Some(p) = pos {
+            if p >= 0 && (p as usize) < self.window_len {
+                let mapped = self.window_base + p as usize;
+                if mapped != self.index && mapped < self.queue.len() {
+                    self.index = mapped;
+                    self.retries = 0;
+                    self.retry_at = None;
+                    advanced = true;
+                }
+            }
+        }
+
+        if let Some(err) = error {
+            let title = self.current().map(|t| t.title.clone()).unwrap_or_default();
+            if err.played || advanced {
+                // Mid-track failure, or mpv already skipped the entry.
+                if !advanced {
+                    self.advance_after_error();
+                    advanced = true;
+                }
+                toast = Some(format!("{title}: {}", err.message));
+            } else if self.retries < MAX_RETRIES {
+                self.retries += 1;
+                if self.retries == 1 {
+                    self.reload_current();
+                    retried = true;
+                } else {
+                    self.retry_at = Some(Instant::now() + RETRY_BACKOFF);
+                }
+                toast = Some(format!(
+                    "{title}: {} (retry {}/{MAX_RETRIES})",
+                    err.message, self.retries
+                ));
+            } else {
+                self.advance_after_error();
+                advanced = true;
+                toast = Some(format!("{title}: {}", err.message));
+            }
+        }
+
+        if advanced && self.state != State::Stopped {
+            let track = self.queue[self.index].clone();
+            self.push_metadata(&track);
+        }
+        if idle && !advanced && !retried && self.retry_at.is_none() {
+            // The window drained without an error: short track that outran
+            // its lookahead, or the queue ended. Advance or stop.
+            if self.index + 1 < self.queue.len() {
+                self.index += 1;
+                self.play_current();
+            } else {
+                self.state = State::Stopped;
+            }
+        } else if loaded && !advanced {
+            self.refill();
+        }
+        toast
     }
 
     // -- internals ---------------------------------------------------------
+
+    /// Keeps exactly one entry after the current one in the mpv playlist,
+    /// once the current file is loaded: a load failure then has nothing to
+    /// auto-advance to, so [`Self::reload_current`] can retry it in place.
+    fn refill(&mut self) {
+        let next_local = self.index - self.window_base + 1;
+        if next_local >= self.window_len && self.window_base + next_local < self.queue.len() {
+            let url = self.queue[self.window_base + next_local].url.clone();
+            self.command(vec![json!("loadfile"), json!(url), json!("append")]);
+            self.window_len += 1;
+        }
+    }
+
+    /// Replays the current playlist entry (Q-5 retry); `playlist-play-index`
+    /// reloads it without touching the rest of the playlist.
+    fn reload_current(&mut self) {
+        let local = self.index - self.window_base;
+        {
+            let mut shared = self.shared.lock().unwrap();
+            shared.loaded = false;
+            shared.idle = false;
+            shared.position = 0.0;
+        }
+        self.command(vec![json!("playlist-play-index"), json!(local)]);
+    }
+
+    /// Moves on after an unrecoverable failure: the next queue track, or stop
+    /// at the end.
+    fn advance_after_error(&mut self) {
+        if self.index + 1 < self.queue.len() {
+            self.index += 1;
+            self.play_current();
+        } else {
+            self.stop();
+        }
+    }
+
+    fn pending_load(&self) -> bool {
+        self.shared.lock().unwrap().pending_load
+    }
+
+    /// Explicit user moves supersede any recorded failure.
+    fn forget_error(&mut self) {
+        self.retries = 0;
+        self.retry_at = None;
+        self.shared.lock().unwrap().error = None;
+    }
 
     fn ensure_ready(&mut self) -> bool {
         if self.ipc.is_some() {
@@ -416,6 +660,11 @@ impl Player {
             .arg("--idle=yes")
             .arg("--no-terminal")
             .arg("--really-quiet")
+            // Q-5: gap-free playlist transitions and HTTP drop recovery
+            // (`PLAYBACKSTUDY.md` §2/§4).
+            .arg("--gapless-audio=yes")
+            .arg("--prefetch-playlist=yes")
+            .arg("--stream-lavf-o=reconnect=1,reconnect_streamed=1,reconnect_delay_max=5")
             .arg(&socket_arg);
         if let Ok(script) = std::env::var("MUSIKA_MPRIS_SCRIPT") {
             if !script.is_empty() {
@@ -465,6 +714,7 @@ impl Player {
         self.command(vec![json!("observe_property"), json!(1), json!("time-pos")]);
         self.command(vec![json!("observe_property"), json!(2), json!("duration")]);
         self.command(vec![json!("observe_property"), json!(3), json!("pause")]);
+        self.command(vec![json!("observe_property"), json!(4), json!("playlist-pos")]);
         self.set_volume(self.volume);
         self.set_muted(self.muted);
         true
@@ -543,7 +793,9 @@ fn spawn_reader(stream: UnixStream, shared: Arc<Mutex<Shared>>) {
 /// pending guard and drops the stale position/duration of the replaced file.
 /// `end-file` events are ignored while a load is pending, because they belong
 /// to the file that load replaced — this is what keeps fast skips/previous
-/// from bouncing back into a track the user already moved away from.
+/// from bouncing back into a track the user already moved away from. A
+/// `file_error` is kept for [`Player::pump`] instead of acted on here;
+/// `stop` (our own skip) is ignored, mpv's playlist moves on by itself.
 fn apply_event(shared: &mut Shared, value: &Value) {
     match value.get("event").and_then(Value::as_str) {
         Some("property-change") => {
@@ -566,24 +818,39 @@ fn apply_event(shared: &mut Shared, value: &Value) {
                         shared.paused = paused;
                     }
                 }
+                Some("playlist-pos") => {
+                    shared.playlist_pos = data.and_then(Value::as_i64);
+                }
                 _ => {}
             }
         }
         Some("start-file") => {
             shared.pending_load = false;
-            shared.eof = false;
-            shared.error = false;
+            shared.loaded = false;
+            shared.idle = false;
             shared.position = 0.0;
             shared.duration = 0.0;
+        }
+        Some("file-loaded") => {
+            shared.loaded = true;
         }
         Some("end-file") => {
             if shared.pending_load {
                 return;
             }
-            let reason = value.get("reason").and_then(Value::as_str).unwrap_or("");
-            shared.eof = true;
-            shared.error = reason == "error";
-            shared.paused = true;
+            if value.get("reason").and_then(Value::as_str) == Some("error") {
+                shared.error = Some(ErrorInfo {
+                    message: value
+                        .get("file_error")
+                        .and_then(Value::as_str)
+                        .unwrap_or("playback failed")
+                        .to_string(),
+                    played: shared.position > 0.0,
+                });
+            }
+        }
+        Some("idle") => {
+            shared.idle = true;
         }
         _ => {}
     }
@@ -594,7 +861,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn stale_end_file_does_not_advance_while_a_load_is_pending() {
+    fn stale_end_file_does_not_record_an_error_while_a_load_is_pending() {
         let mut shared = Shared {
             pending_load: true,
             ..Shared::default()
@@ -603,49 +870,80 @@ mod tests {
             &mut shared,
             &serde_json::json!({ "event": "end-file", "reason": "stop" }),
         );
-        assert!(!shared.eof);
-        assert!(!shared.error);
-    }
-
-    #[test]
-    fn end_file_advances_once_the_requested_load_has_started() {
-        let mut shared = Shared::default();
-        apply_event(&mut shared, &serde_json::json!({ "event": "start-file" }));
         apply_event(
             &mut shared,
-            &serde_json::json!({ "event": "end-file", "reason": "eof" }),
+            &serde_json::json!({ "event": "end-file", "reason": "error", "file_error": "loading failed" }),
         );
-        assert!(shared.eof);
-        assert!(!shared.error);
+        assert!(shared.error.is_none());
     }
 
     #[test]
-    fn start_file_resets_stale_position_and_duration() {
+    fn start_file_clears_pending_and_the_stale_position() {
         let mut shared = Shared {
             position: 42.0,
             duration: 200.0,
             paused: true,
-            eof: true,
-            error: false,
+            loaded: true,
+            idle: true,
             pending_load: true,
+            ..Shared::default()
         };
         apply_event(&mut shared, &serde_json::json!({ "event": "start-file" }));
         assert_eq!(shared.position, 0.0);
         assert_eq!(shared.duration, 0.0);
-        assert!(!shared.eof);
+        assert!(!shared.loaded);
+        assert!(!shared.idle);
         assert!(!shared.pending_load);
     }
 
     #[test]
-    fn error_end_file_stalls_instead_of_advancing() {
+    fn stop_never_records_an_error_but_a_failure_does() {
         let mut shared = Shared::default();
         apply_event(&mut shared, &serde_json::json!({ "event": "start-file" }));
         apply_event(
             &mut shared,
-            &serde_json::json!({ "event": "end-file", "reason": "error" }),
+            &serde_json::json!({ "event": "end-file", "reason": "stop" }),
         );
-        assert!(shared.eof);
-        assert!(shared.error);
+        assert!(shared.error.is_none());
+
+        apply_event(&mut shared, &serde_json::json!({ "event": "start-file" }));
+        apply_event(
+            &mut shared,
+            &serde_json::json!({ "event": "end-file", "reason": "error", "file_error": "loading failed" }),
+        );
+        let error = shared.error.take().expect("error recorded");
+        assert_eq!(error.message, "loading failed");
+        assert!(!error.played, "a failed load never produced media");
+    }
+
+    #[test]
+    fn an_error_after_playback_is_marked_as_played() {
+        let mut shared = Shared::default();
+        apply_event(&mut shared, &serde_json::json!({ "event": "start-file" }));
+        apply_event(
+            &mut shared,
+            &serde_json::json!({ "event": "property-change", "name": "time-pos", "data": 7.5 }),
+        );
+        apply_event(
+            &mut shared,
+            &serde_json::json!({ "event": "end-file", "reason": "error", "file_error": "I/O error" }),
+        );
+        let error = shared.error.take().expect("error recorded");
+        assert!(error.played);
+    }
+
+    #[test]
+    fn playlist_pos_and_idle_are_mirrored() {
+        let mut shared = Shared::default();
+        apply_event(
+            &mut shared,
+            &serde_json::json!({ "event": "property-change", "name": "playlist-pos", "data": 1 }),
+        );
+        assert_eq!(shared.playlist_pos, Some(1));
+        apply_event(&mut shared, &serde_json::json!({ "event": "file-loaded" }));
+        assert!(shared.loaded);
+        apply_event(&mut shared, &serde_json::json!({ "event": "idle" }));
+        assert!(shared.idle);
     }
 
     fn track(id: &str) -> Track {

@@ -83,9 +83,6 @@ The app is unsafe or misleading without these.
     the helper is runtime-tested against a real `ListView` (QtQuickTest) and
     the tree is qmllint clean.
 
-- [ ] **Q-5 · Gapless + stream-error retry/auto-advance** — P1 · (M8)
-  - **Why:** end-of-track errors currently stop the session silently.
-
 - [ ] **UI-22 · Empty/error states polish** — P0 · (U8)
   - **Why:** album-with-no-songs, failed sync, failed playback need real states.
   - **Now:** error toasts landed; loading screen landed for startup ping.
@@ -2648,6 +2645,30 @@ Kept for rationale; the tree already carries these.
     (`IconButton` layers) and the volume SVGs are translated to a shared
     speaker baseline, so tiers swap without moving. `]v`/`[v` left to VI-8.
 
+- [x] **Q-5 · Gapless + stream-error retry/auto-advance** — P1 · (M8, PLAYBACKSTUDY.md)
+  - **Why:** end-of-track errors stopped the session silently, and every track
+    change paid the tick-poll + stream-open gap.
+  - **Details:** the current track plays as a small mpv *playlist* — the next
+    queue entry is appended once the current reports `file-loaded` — with
+    `--gapless-audio=yes`, `--prefetch-playlist=yes` and
+    `--stream-lavf-o=reconnect=1,reconnect_streamed=1,reconnect_delay_max=5`;
+    `playlist-pos` maps native advances back to `index`, `idle` advances the
+    window or stops at the queue end. A failed load has no next entry to
+    auto-advance to, so it is retried in place with `playlist-play-index`
+    (2 attempts, 1 s backoff); a mid-track failure advances directly;
+    `file_error` surfaces through the playback toast (manual retry button
+    intact). `next()` uses the prefetched `playlist-next`, `previous()` replays
+    the window entry, queue `remove` mirrors `playlist-remove`, and reorders
+    re-anchor the window and seek back. Backend verdict: stay on the mpv
+    subprocess (GStreamer only if Q-6 crossfade becomes a hard requirement).
+  - **Now:** window engine + `pump()` in `player.rs` (replaces `poll_end`;
+    `qml.rs::tick` emits the queue on an advance and raises the failure toast);
+    `apply_event` records `playlist-pos`/`file-loaded`/`idle` and keeps
+    `file_error`; unit tests cover the new event mapping. Measured with the
+    local IPC harness (`PLAYBACKSTUDY.md` §3): transition 1.51 s → 1.01 s
+    (playlist) → 0.003 s (prefetch); `playlist-play-index` reloads a failed
+    entry in place. Real-server manual pass still pending.
+
 - [x] **Q-7 · MPRIS/D-Bus metadata** — P2 · (M7)
   - **Now:** mpv MPRIS script + metadata via IPC (`mpris:artUrl`).
 
@@ -2907,18 +2928,18 @@ Kept for rationale; the tree already carries these.
 
 | Bucket | Open | Solved |
 |--------|------|--------|
-| Must have | 7 | 2 |
+| Must have | 6 | 2 |
 | Should have | 84 | 16 |
 | Quick wins | 6 | 58 |
-| Solved (reference) | — | 36 |
-| **Total** | **97** | **112** |
+| Solved (reference) | — | 37 |
+| **Total** | **96** | **113** |
 
 ### Coverage by area
 
 | Area | Open | Solved |
 |------|------|--------|
 | Vi modal engine | 11 | 10 |
-| Queue & playback grammar | 3 | 7 |
+| Queue & playback grammar | 2 | 8 |
 | Player & media features | 5 | 2 |
 | Lyrics pipeline | 2 | 7 |
 | Search | 2 | 6 |

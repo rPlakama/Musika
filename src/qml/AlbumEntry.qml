@@ -165,6 +165,9 @@ Rectangle {
     Component.onCompleted: reload()
 
     /// ARC-UI-2 M1: the search contract (see `ScrollContent`).
+    property alias searchQuery: content.searchQuery
+    property alias searchCurrentRow: content.searchCurrentRow
+
     function searchRows() {
         return content.searchRows();
     }
@@ -492,7 +495,7 @@ Rectangle {
                     }
                 }
 
-                FadeText {
+                SearchText {
                     anchors.verticalCenter: parent.verticalCenter
                     anchors.left: parent.left
                     width: songRow.height * 0.6
@@ -501,8 +504,10 @@ Rectangle {
                     font.pixelSize: songRow.height * 0.32
                     horizontalAlignment: Text.AlignRight
                     animated: false
+                    query: content.searchQuery
+                    currentMatch: songRow.index === content.searchCurrentRow
                 }
-                FadeText {
+                SearchText {
                     anchors.verticalCenter: parent.verticalCenter
                     anchors.left: parent.left
                     anchors.leftMargin: songRow.height * 0.8
@@ -513,8 +518,10 @@ Rectangle {
                     font.pixelSize: songRow.height * 0.36
                     elide: Text.ElideRight
                     animated: false
+                    query: content.searchQuery
+                    currentMatch: songRow.index === content.searchCurrentRow
                 }
-                FadeText {
+                SearchText {
                     id: songDuration
                     anchors.verticalCenter: parent.verticalCenter
                     anchors.right: parent.right
@@ -523,6 +530,8 @@ Rectangle {
                     color: Palette.onSurfaceVariant
                     font.pixelSize: songRow.height * 0.32
                     animated: false
+                    query: content.searchQuery
+                    currentMatch: songRow.index === content.searchCurrentRow
                 }
 
                 // UI-56: the favourite heart leads the duration.

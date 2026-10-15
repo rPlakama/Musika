@@ -48,6 +48,11 @@ Item {
     /// selectable-text contract, SEARCHACTIONSTUDY §3). Hosts override;
     /// cells for absent roles come back empty. Chrome never matches.
     property var searchFields: ["title"]
+    /// ARC-UI-2 M2: the live `/` session — the query the row cells paint
+    /// their blocks for, and the current candidate row (for `CurSearch`).
+    /// Held by whoever owns the session (`LineSearch` pushes it down).
+    property string searchQuery: ""
+    property int searchCurrentRow: -1
     /// UI-41: the view-owned follow speed (px/s) and the preferred band the
     /// cursor is kept in (fractions of the viewport). `reduceMotion` snaps.
     property real followVelocity: 1400
@@ -128,12 +133,27 @@ Item {
             root.itemActivated(list.currentIndex);
     }
 
-    /// ARC-UI-2 M1: every row's rendered cells — the surface's search side.
+    /// ARC-UI-2 M1: the cells of the rows the user can actually *see* —
+    /// matching is viewport-scoped, so a match scrolled out of the viewport
+    /// comes back as an empty placeholder (never matches) and `/` can never
+    /// afford a jump the eye cannot verify without scrolling. The prompt
+    /// snapshots this band once, when it opens.
     function searchRows() {
         var out = [];
         if (!root.model || !root.model.get)
             return out;
+        var first = list.indexAt(list.contentX + list.width * 0.5, list.contentY);
+        var last = list.indexAt(list.contentX + list.width * 0.5,
+            list.contentY + Math.max(0, list.height - 1));
+        if (first < 0)
+            first = 0;
+        if (last < 0)
+            last = root.model.count - 1;
         for (var i = 0; i < root.model.count; ++i) {
+            if (i < first || i > last) {
+                out.push([""]);
+                continue;
+            }
             var item = root.model.get(i);
             var cells = [];
             for (var f = 0; f < root.searchFields.length; ++f) {

@@ -214,7 +214,7 @@ ScrollPanel {
                 anchors.rightMargin: row.viewWidth * 0.04
                 spacing: row.height * 0.05
 
-                FadeText {
+                SearchText {
                     id: titleText
                     width: parent.width
                     text: row.title
@@ -222,6 +222,9 @@ ScrollPanel {
                     font.pixelSize: row.height * 0.26
                     elide: Text.ElideRight
                     animated: false
+                    // ARC-UI-2 M2: hlsearch blocks from the live `/` session.
+                    query: root.searchQuery
+                    currentMatch: row.index === root.searchCurrentRow
                     transformOrigin: Item.Left
                     // UI-45 selection stage: the cursor/hover row leads its
                     // neighbours (transform only, no reflow), capped to the
@@ -234,17 +237,19 @@ ScrollPanel {
                         NumberAnimation { duration: Theme.motion.quick; easing.type: Easing.Bezier; easing.bezierCurve: Theme.ease.standard }
                     }
                 }
-                FadeText {
+                SearchText {
                     width: parent.width
                     text: row.subtitle
                     color: Palette.onSurfaceVariant
                     font.pixelSize: row.height * 0.19
                     elide: Text.ElideRight
                     animated: false
+                    query: root.searchQuery
+                    currentMatch: row.index === root.searchCurrentRow
                 }
             }
 
-            FadeText {
+            SearchText {
                 id: metaLabel
                 anchors.verticalCenter: parent.verticalCenter
                 anchors.right: parent.right
@@ -253,6 +258,8 @@ ScrollPanel {
                 color: Palette.onSurfaceVariant
                 font.pixelSize: row.height * 0.19
                 animated: false
+                query: root.searchQuery
+                currentMatch: row.index === root.searchCurrentRow
             }
 
             // UI-56: the favourite heart leads the meta text — a state mark

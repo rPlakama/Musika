@@ -1221,7 +1221,14 @@ The product is incomplete without these.
     because Qt 6.11's Controls ships its own `SearchField`, which shadowed
     ours) and both
     pop-ups ride the one spawn FX (`PopFx`, lifted from the Alt overlay).
-    M2 (in-row block highlights) is next.
+    Now the whole window is the buffer (status region + sidebar + main at
+    once; the modal's surface when one owns the context) and matching is
+    **viewport-scoped** — scrolled-out rows never match, so `/` cannot
+    afford a jump the eye cannot verify. M2 landed: `SearchText.qml` paints
+    Neovim-style blocks (`FontMetrics` rects, elide-safe; `Search`
+    primaryContainer, `CurSearch` primary on the current candidate) over
+    every row surface's cells; `SearchMatch.js` gained `spans()` (tested).
+    Open next: `n`/`N` repeat + Up/Down history + `?` backward (M3/M4).
 
 ### Incremental (ARC-I)
 

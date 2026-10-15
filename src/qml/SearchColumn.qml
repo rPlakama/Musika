@@ -76,6 +76,9 @@ Item {
     }
 
     /// ARC-UI-2 M1: the search contract (see `ScrollContent`).
+    property alias searchQuery: content.searchQuery
+    property alias searchCurrentRow: content.searchCurrentRow
+
     function searchRows() {
         return content.searchRows();
     }
@@ -265,7 +268,7 @@ Item {
                             anchors.verticalCenter: parent.verticalCenter
                             spacing: row.height * 0.04
 
-                            FadeText {
+                            SearchText {
                                 id: titleText
                                 width: parent.width
                                 text: row.title
@@ -273,6 +276,8 @@ Item {
                                 font.pixelSize: Theme.clamp(row.height * 0.3, 12, 18)
                                 elide: Text.ElideRight
                                 animated: false
+                                query: content.searchQuery
+                                currentMatch: row.index === content.searchCurrentRow
                                 transformOrigin: Item.Left
                                 scale: (row.emphasized && !Theme.reduceMotion)
                                     ? Theme.fitScale(titleText.width, titleText.paintedWidth, Theme.selectionEmphasis)
@@ -300,7 +305,7 @@ Item {
                                     symbolColor: Theme.iconStrong
                                 }
 
-                                FadeText {
+                                SearchText {
                                     id: subtitleLabel
                                     width: Math.max(0, parent.width
                                         - (subtitleHeart.visible
@@ -310,6 +315,8 @@ Item {
                                     font.pixelSize: Theme.clamp(row.height * 0.24, 10, 14)
                                     elide: Text.ElideRight
                                     animated: false
+                                    query: content.searchQuery
+                                    currentMatch: row.index === content.searchCurrentRow
                                 }
                             }
                         }
@@ -327,7 +334,7 @@ Item {
                             symbolColor: Theme.iconStrong
                         }
 
-                        FadeText {
+                        SearchText {
                             id: metaLabel
                             anchors.right: parent.right
                             anchors.rightMargin: row.height * 0.18
@@ -336,6 +343,8 @@ Item {
                             color: (row.current && root.active) || row.selectedRow ? Palette.onSecondaryContainer : Palette.onSurfaceVariant
                             font.pixelSize: Theme.clamp(row.height * 0.26, 10, 14)
                             animated: false
+                            query: content.searchQuery
+                            currentMatch: row.index === content.searchCurrentRow
                         }
 
                         // Hover only signals clickability (S-5); the cursor moves

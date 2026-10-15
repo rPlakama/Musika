@@ -20,8 +20,8 @@ import "Theme.js" as Theme
 // ARC-UI-2: the shared spawn FX, lifted from the Alt overlay's board. `value`
 // rides 0 → 1 on the OutBack spring (one overshoot and settle) and collapses
 // back on the plain ease-in; hosts read it for a Scale transform around their
-// own pivot (the Alt board's anchor, the prompt's edge) and keep
-// `visible: value > 0.001` so the collapse plays out.
+// own pivot (the Alt board's anchor) and keep `visible: value > 0.001` so the
+// collapse plays out.
 //
 // Qt clamps `Easing.Bezier` y > 1, so the CSS spring
 // cubic-bezier(.63,.12,.84,1.72) is carried by OutBack instead: the default

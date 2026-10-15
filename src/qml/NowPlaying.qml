@@ -197,6 +197,9 @@ Rectangle {
     /// ARC-UI-2 M1: the search contract (see `ScrollContent`) — the
     /// fullscreen surface is its queue pane, so a jump focuses it and the
     /// context-Enter that follows lands on the matched row.
+    property alias searchQuery: queueContent.searchQuery
+    property alias searchCurrentRow: queueContent.searchCurrentRow
+
     function searchRows() {
         return queueContent.searchRows();
     }
@@ -1056,7 +1059,7 @@ Rectangle {
                                             overflow: queueContent.bleed
                                         }
 
-                                        FadeText {
+                                        SearchText {
                                             id: titleText
                                             anchors.left: parent.left
                                             anchors.leftMargin: ListView.view.width * 0.01
@@ -1068,6 +1071,8 @@ Rectangle {
                                             font.pixelSize: Theme.fontSize("body", root.height)
                                             elide: Text.ElideRight
                                             animated: false
+                                            query: queueContent.searchQuery
+                                            currentMatch: index === queueContent.searchCurrentRow
                                             transformOrigin: Item.Left
                                             // UI-45: the cursor/hover row leads, capped to its box.
                                             scale: (row.emphasized && !Theme.reduceMotion) ? Theme.fitScale(titleText.width, titleText.paintedWidth, Theme.selectionEmphasis) : 1.0
@@ -1081,7 +1086,7 @@ Rectangle {
                                             }
                                         }
 
-                                        FadeText {
+                                        SearchText {
                                             id: durationLabel
                                             anchors.right: parent.right
                                             anchors.verticalCenter: parent.verticalCenter
@@ -1089,6 +1094,8 @@ Rectangle {
                                             color: Palette.onSurfaceVariant
                                             font.pixelSize: Theme.fontSize("mono", root.height)
                                             animated: false
+                                            query: queueContent.searchQuery
+                                            currentMatch: index === queueContent.searchCurrentRow
                                         }
 
                                         // UI-56: the favourite heart leads the

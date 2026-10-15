@@ -67,6 +67,9 @@ Item {
     }
 
     /// ARC-UI-2 M1: the search contract (see `ScrollContent`).
+    property alias searchQuery: content.searchQuery
+    property alias searchCurrentRow: content.searchCurrentRow
+
     function searchRows() {
         return content.searchRows();
     }
@@ -230,7 +233,7 @@ Item {
                         }
                     }
 
-                    FadeText {
+                    SearchText {
                         id: titleText
                         anchors.left: thumb.right
                         anchors.leftMargin: row.height * 0.16
@@ -241,6 +244,8 @@ Item {
                         color: index === root.cursor ? Palette.onSecondaryContainer : Palette.onSurface
                         font.pixelSize: row.height * 0.34
                         elide: Text.ElideRight
+                        query: content.searchQuery
+                        currentMatch: index === content.searchCurrentRow
                         transformOrigin: Item.Left
                         // UI-45: the cursor/hover row leads, capped to its box.
                         scale: (row.emphasized && !Theme.reduceMotion)
@@ -252,7 +257,7 @@ Item {
                         }
                     }
 
-                    FadeText {
+                    SearchText {
                         id: durationLabel
                         anchors.right: parent.right
                         anchors.rightMargin: row.height * 0.1
@@ -260,6 +265,8 @@ Item {
                         text: row.duration
                         color: Palette.onSurfaceVariant
                         font.pixelSize: row.height * 0.28
+                        query: content.searchQuery
+                        currentMatch: index === content.searchCurrentRow
                     }
 
                     HoverHandler {

@@ -66,11 +66,27 @@ Rectangle {
         sel.clear();
     }
 
+    /// ARC-UI-2 M2: the live `/` session, painted by the card text.
+    property string searchQuery: ""
+    property int searchCurrentRow: -1
+
     /// ARC-UI-2 M1: the search contract (see `ScrollContent`); the grid
-    /// paints the title and the meta line.
+    /// paints the title and the meta line. Matching is viewport-scoped: cards
+    /// scrolled out of the viewport come back empty and never match.
     function searchRows() {
         var out = [];
+        var first = grid.indexAt(grid.contentX + 1, grid.contentY + 1);
+        var last = grid.indexAt(grid.contentX + Math.max(1, grid.width - 1),
+            grid.contentY + Math.max(1, grid.height - 1));
+        if (first < 0)
+            first = 0;
+        if (last < 0)
+            last = albums.count - 1;
         for (var i = 0; i < albums.count; ++i) {
+            if (i < first || i > last) {
+                out.push([""]);
+                continue;
+            }
             var item = albums.get(i);
             out.push([String(item.title), String(item.meta)]);
         }
@@ -853,7 +869,7 @@ Rectangle {
                         }
                     }
 
-                    FadeText {
+                    SearchText {
                         id: titleText
                         anchors.top: coverBox.bottom
                         anchors.topMargin: cell.height * 0.025
@@ -862,6 +878,8 @@ Rectangle {
                         text: cell.title
                         color: Palette.onSurface
                         horizontalAlignment: Text.AlignHCenter
+                        query: root.searchQuery
+                        currentMatch: cell.index === root.searchCurrentRow
                     elide: Text.ElideRight
                     font.pixelSize: Math.max(10, cell.height * 0.0525)
                     animated: false
@@ -875,7 +893,7 @@ Rectangle {
                     }
                 }
 
-                    FadeText {
+                    SearchText {
                         id: metaText
                         anchors.top: titleText.bottom
                         anchors.topMargin: cell.height * 0.015
@@ -886,7 +904,9 @@ Rectangle {
                         horizontalAlignment: Text.AlignHCenter
                         elide: Text.ElideRight
                         font.pixelSize: Math.max(9, cell.height * 0.04)
-                            animated: false
+                        animated: false
+                        query: root.searchQuery
+                        currentMatch: cell.index === root.searchCurrentRow
                     }
 
                     HoverHandler {

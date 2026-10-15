@@ -221,22 +221,56 @@ Item {
         id: verbs
     }
 
-    // ARC-UI-2 M1: the surface `/` searches — the topmost row surface,
-    // mirroring the modal priority inside `handleAction`.
-    function lineSearchTarget() {
-        if (searchOverlay.opened)
-            return searchOverlay.searchSurface();
-        if (queueDrawer.opened)
-            return queueDrawer;
-        if (nowPlayingExpanded)
-            return nowPlaying;
-        // Truly global: every region's surface answers, so long as its rows
-        // are interactable and carry text.
-        if (activeRegion === 0)
-            return sideBar;
-        if (activeRegion === 2)
-            return topBar;
-        return contentStack.currentItem;
+    // ARC-UI-2: `/` treats the whole window as the buffer. In the plain
+    // context every visible row surface answers at once — status region,
+    // sidebar, the main list — in window order; when a modal owns the
+    // context (the FTS overlay, fullscreen, the drawer) only it answers, as
+    // its routing owns Enter. Each entry is a tiny proxy so a jump can also
+    // move the region cursor that the following context-Enter (VI-16)
+    // routes to.
+    function lineSearchTargets() {
+        function wrap(surface, focus) {
+            if (!surface || !surface.searchRows)
+                return null;
+            return {
+                searchRows: function () { return surface.searchRows(); },
+                searchJump: function (row) {
+                    focus();
+                    surface.searchJump(row);
+                },
+                setQuery: function (q, row) {
+                    try {
+                        surface.searchQuery = q;
+                        surface.searchCurrentRow = row;
+                    } catch (e) {
+                        // Surfaces without row text (none today) ignore it.
+                    }
+                }
+            };
+        }
+        function add(list, surface, focus) {
+            var entry = wrap(surface, focus);
+            if (entry)
+                list.push(entry);
+        }
+        function noFocus() {}
+        var out = [];
+        if (searchOverlay.opened) {
+            add(out, searchOverlay, noFocus);
+            return out;
+        }
+        if (nowPlayingExpanded) {
+            add(out, nowPlaying, noFocus);
+            return out;
+        }
+        if (queueDrawer.opened) {
+            add(out, queueDrawer, noFocus);
+            return out;
+        }
+        add(out, topBar, function () { root.activeRegion = 2; });
+        add(out, sideBar, function () { root.activeRegion = 0; });
+        add(out, contentStack.currentItem, function () { root.activeRegion = 1; });
+        return out;
     }
 
     // Actions dispatched from the global key handler, scoped to the active
@@ -299,11 +333,8 @@ Item {
             return;
         }
         if (action === "search_action") {
-            var surface = lineSearchTarget();
-            if (surface && surface.searchRows) {
-                clearMainSelection();
-                lineSearch.open(surface);
-            }
+            clearMainSelection();
+            lineSearch.open(root.lineSearchTargets());
             return;
         }
         // The floating search is modal: while open, all keys go to it.

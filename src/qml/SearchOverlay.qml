@@ -83,7 +83,6 @@ Item {
     /// place before choosing a result.
     function openWith(text) {
         opened = true;
-        pop.play();
         // Scope-switching keys (Ctrl-W) are unavailable while search is open.
         Backend.setSearchOpen(true);
         clearResults();
@@ -102,7 +101,6 @@ Item {
     function close() {
         opened = false;
         typing = false;
-        pop.collapse();
         // VI-4: leaving the overlay clears every column's visual selection.
         songsColumn.clearSelection();
         albumsColumn.clearSelection();
@@ -132,10 +130,7 @@ Item {
         field.selectAll();
     }
 
-    // ARC-UI-2: the shared spawn FX (see `PopFx`).
-    PopFx {
-        id: pop
-    }
+
 
     // Search normal mode: hjkl navigates, Enter opens/plays, i types again.
     function handleAction(action) {
@@ -183,10 +178,61 @@ Item {
         return artistsColumn;
     }
 
-    /// ARC-UI-2 M1: the surface `/` searches while the overlay is open — the
-    /// active column.
-    function searchSurface() {
-        return columnFor(activeColumn);
+    /// ARC-UI-2: the overlay as one `/` surface — all three result columns,
+    /// in column order; a jump also activates the column it lands in, and
+    /// the session highlights follow the candidate's column.
+    function _searchColumns() {
+        return [songsColumn, albumsColumn, artistsColumn];
+    }
+
+    readonly property var searchCounts: [
+        songsColumn.model ? songsColumn.model.count : 0,
+        albumsColumn.model ? albumsColumn.model.count : 0,
+        artistsColumn.model ? artistsColumn.model.count : 0
+    ]
+
+    property string searchQuery: ""
+    property int searchCurrentRow: -1
+
+    onSearchQueryChanged: _applySearch()
+    onSearchCurrentRowChanged: _applySearch()
+    onSearchCountsChanged: _applySearch()
+
+    function searchRows() {
+        var out = [];
+        var cols = _searchColumns();
+        for (var c = 0; c < cols.length; ++c) {
+            var rows = cols[c].searchRows();
+            for (var i = 0; i < rows.length; ++i)
+                out.push(rows[i]);
+        }
+        return out;
+    }
+
+    function searchJump(row) {
+        var counts = root.searchCounts;
+        var cols = _searchColumns();
+        for (var c = 0; c < counts.length; ++c) {
+            if (row < counts[c]) {
+                root.activeColumn = c;
+                cols[c].searchJump(row);
+                return;
+            }
+            row -= counts[c];
+        }
+    }
+
+    function _applySearch() {
+        var counts = root.searchCounts;
+        var cols = _searchColumns();
+        var run = 0;
+        for (var c = 0; c < cols.length; ++c) {
+            var here = root.searchCurrentRow >= run
+                && root.searchCurrentRow < run + counts[c];
+            cols[c].searchQuery = root.searchQuery;
+            cols[c].searchCurrentRow = here ? root.searchCurrentRow - run : -1;
+            run += counts[c];
+        }
     }
 
     /// ARC-I: Alt armed — the active column anchors the overlay on its cursor
@@ -405,7 +451,8 @@ Item {
         width: root.width * 0.84
         height: root.height * 0.78
         x: (root.width - width) / 2
-        y: (root.height - height) / 2
+        // Slides up into place, back down on close (motion §3.1).
+        y: (root.height - height) / 2 + (root.opened ? 0 : height * 0.04)
         // UI-55: the panel is the acrylic surface (Palette.surface tint over
         // the blurred backdrop); the field and chips keep the higher
         // container tones for contrast.
@@ -416,18 +463,18 @@ Item {
         border.width: Math.max(1, root.height * Theme.hairlineRatio)
         opacity: root.opened ? 1 : 0
 
-        // ARC-UI-2: the shared spawn FX (the Alt overlay's spring) instead of
-        // the old rise: the panel pops out of its own centre.
-        transform: Scale {
-            xScale: pop.value
-            yScale: pop.value
-        }
-
         Behavior on opacity {
             NumberAnimation {
                 duration: Theme.motion.standard
                 easing.type: Easing.Bezier
-                easing.bezierCurve: Theme.ease.decelerate
+                easing.bezierCurve: root.opened ? Theme.ease.decelerate : Theme.ease.accelerate
+            }
+        }
+        Behavior on y {
+            NumberAnimation {
+                duration: Theme.motion.standard
+                easing.type: Easing.Bezier
+                easing.bezierCurve: root.opened ? Theme.ease.decelerate : Theme.ease.accelerate
             }
         }
 

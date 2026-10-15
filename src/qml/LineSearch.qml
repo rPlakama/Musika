@@ -21,23 +21,29 @@ import musika
 import "Theme.js" as Theme
 import "SearchMatch.js" as Match
 
-// ARC-UI-2 M1: the `/` in-surface search command line — a flat, full-width
-// bar anchored to the bottom edge over a 50% black scrim (no blur). It
-// matches the top surface's rendered row text (literal, smartcase), Tab /
+// ARC-UI-2 M1/M2: the `/` in-surface search command line — a flat, full-width
+// bar anchored to the bottom edge over a 50% black scrim (no blur). The whole
+// window is the buffer: every visible row surface answers at once, matching
+// is literal smartcase over the rows the user can actually see, and the
+// matched substrings paint their hlsearch blocks (SearchText) live. Tab /
 // Shift-Tab cycle the matching rows (the cursor previews each in place) and
-// Enter commits: the prompt closes and the surface's own context-Enter runs
-// on the match — open, play, jump, whatever the row's enter action is. Esc
-// abandons; a non-empty query with no matches flashes the denied cue and
-// never moves the cursor (M2 adds the in-row block highlights).
+// Enter commits: the prompt closes and the owning surface's own context-Enter
+// runs on the match — open, play, jump, whatever the row's enter action is.
+// Esc abandons; a non-empty query with no matches flashes the denied cue and
+// never moves the cursor.
 Item {
     id: root
 
     property bool opened: false
-    /// The surface being searched (`searchRows()`/`searchJump(row)`).
-    property var target: null
-    /// Every row's rendered cells, captured when the prompt opens.
+    /// The surfaces being searched, in window order — the whole window is
+    /// the buffer: each entry is a proxy (`searchRows()`/`searchJump(row)`/
+    /// `setQuery(q, row)`) built by Home.
+    property var targets: []
+    /// Every row's rendered cells, concatenated in target order.
     property var _rows: []
-    /// Row indices whose cells contain the query, in surface order.
+    /// Cumulative row counts per target (offsets into `_rows`).
+    property var _offsets: []
+    /// Candidate row indices (global), in buffer order.
     property var _candidates: []
     property int _index: -1
     /// UI-49: the last zero query that already got the denied cue, so one
@@ -51,14 +57,20 @@ Item {
 
     signal entered()
 
-    function open(t) {
+    function open(list) {
         opened = true;
-        target = t;
-        pop.play();
+        targets = list || [];
         // The global keymap dies while the command line types (see
         // `Backend::key_event`).
         Backend.setLineSearchOpen(true);
-        _rows = (t && t.searchRows) ? t.searchRows() : [];
+        _rows = [];
+        _offsets = [];
+        for (var i = 0; i < targets.length; ++i) {
+            var rows = targets[i].searchRows();
+            for (var r = 0; r < rows.length; ++r)
+                _rows.push(rows[r]);
+            _offsets.push(_rows.length);
+        }
         _candidates = [];
         _index = -1;
         _zeroQuery = "";
@@ -67,8 +79,9 @@ Item {
     }
 
     function close() {
+        for (var i = 0; i < targets.length; ++i)
+            targets[i].setQuery("", -1);
         opened = false;
-        pop.collapse();
         Backend.setLineSearchOpen(false);
         Backend.releaseFocus();
     }
@@ -94,12 +107,31 @@ Item {
             _zeroQuery = q;
             denied();
         }
+        publish();
     }
 
     function jump() {
-        if (_index < 0 || !target || !target.searchJump)
+        if (_index < 0 || _candidates.length === 0)
             return;
-        target.searchJump(_candidates[_index]);
+        var g = _candidates[_index];
+        var t = 0;
+        while (t < _offsets.length && g >= _offsets[t])
+            t++;
+        if (t >= targets.length)
+            return;
+        var start = t === 0 ? 0 : _offsets[t - 1];
+        targets[t].searchJump(g - start);
+    }
+
+    /// Push the session down to every surface: the query everywhere (the row
+    /// blocks paint), the candidate row only where it lives (`CurSearch`).
+    function publish() {
+        var g = (_index >= 0 && _candidates.length > 0) ? _candidates[_index] : -1;
+        for (var i = 0; i < targets.length; ++i) {
+            var start = i === 0 ? 0 : _offsets[i - 1];
+            var here = g >= start && g < _offsets[i];
+            targets[i].setQuery(field.text, here ? g - start : -1);
+        }
     }
 
     /// Cycle the candidate ring; Tab forward, Shift-Tab back, wrapping.
@@ -108,6 +140,7 @@ Item {
             return;
         _index = (_index + delta + _candidates.length) % _candidates.length;
         jump();
+        publish();
     }
 
     /// Enter: commit on the current match — close, then let Home dispatch the
@@ -140,11 +173,6 @@ Item {
 
     visible: opened || bar.opacity > 0
     z: Theme.zCommand
-
-    // ARC-UI-2: the shared spawn FX (see `PopFx`).
-    PopFx {
-        id: pop
-    }
 
     SequentialAnimation {
         id: deniedFlash
@@ -184,20 +212,20 @@ Item {
         id: bar
         width: root.width
         height: root.height * 0.07
-        y: root.height - height
+        // Slides up from below the bottom edge on open, and back down on
+        // close (decelerate in / accelerate out, motion §3.1).
+        y: root.height - height + (root.opened ? 0 : height)
         color: Palette.surface
         opacity: root.opened ? 1 : 0
         clip: true
 
-        // ARC-UI-2: the shared spawn FX (the Alt overlay's spring) instead
-        // of the old rise: the command line pops out of its bottom edge.
-        transform: Scale {
-            origin.x: bar.width / 2
-            origin.y: bar.height
-            xScale: pop.value
-            yScale: pop.value
+        Behavior on y {
+            NumberAnimation {
+                duration: Theme.motion.standard
+                easing.type: Easing.Bezier
+                easing.bezierCurve: root.opened ? Theme.ease.decelerate : Theme.ease.accelerate
+            }
         }
-
         Behavior on opacity {
             NumberAnimation {
                 duration: Theme.motion.standard

@@ -135,6 +135,8 @@ Rectangle {
 
     /// ARC-UI-2 M1: the search contract forwards to the shared content.
     property alias searchFields: content.searchFields
+    property alias searchQuery: content.searchQuery
+    property alias searchCurrentRow: content.searchCurrentRow
 
     function searchRows() {
         return content.searchRows();

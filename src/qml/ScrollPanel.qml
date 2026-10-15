@@ -72,9 +72,10 @@ Rectangle {
 
     // --- Cursor / memory -----------------------------------------------------
     property alias currentIndex: content.currentIndex
-    property alias count: content.count
-    /// Escape hatch for surfaces that need the ListView itself (lyrics follow).
-    property alias view: content.view
+    readonly property alias count: content.count
+    /// Escape hatch for surfaces that need the view itself (lyrics follow).
+    /// ARC-UI-3: the body can swap list ⇄ grid, so the alias is read-only.
+    readonly property alias view: content.view
     /// VI-4: the selection lives in `ScrollContent`; the panel only forwards
     /// it (the wrappers call these inherited members directly).
     property alias selectable: content.selectable
@@ -140,6 +141,14 @@ Rectangle {
     /// UI-58: adaptive rows forward too (see `ScrollContent`).
     property alias rowRatio: content.rowRatio
     readonly property alias adaptiveRowHeight: content.adaptiveRowHeight
+    /// ARC-UI-3: layout modes forward to the shared content (a single-entry
+    /// `layouts` keeps the surface list-only).
+    property alias layouts: content.layouts
+    property alias layout: content.layout
+    property alias columns: content.columns
+    property alias cellHeight: content.cellHeight
+    property alias cellDelegate: content.cellDelegate
+    readonly property alias cellWidth: content.cellWidth
 
     function searchRows() {
         return content.searchRows();
@@ -149,11 +158,21 @@ Rectangle {
         content.searchJump(row);
     }
 
+    function toggleLayout() {
+        content.toggleLayout();
+    }
+
     // Shared cursor grammar: j/k, gg/G, Enter; unknown actions go to
     // `actionHandler` (search columns, queue reorder, …). Cursor moves are
     // followed by the view itself (ScrollContent highlight machinery); gg/G
-    // snap instantly via `cursorEdge`.
+    // snap instantly via `edgeJump`.
     function handleAction(action) {
+        // ARC-UI-3: the layout toggle arms on an empty list too (the view
+        // swap is independent of the payload).
+        if (action === "layout_toggle") {
+            root.toggleLayout();
+            return;
+        }
         if (count === 0)
             return;
         if (action === "move_up")
@@ -161,7 +180,7 @@ Rectangle {
         else if (action === "move_down")
             currentIndex = Math.min(count - 1, currentIndex + 1);
         else if (action === "top" || action === "bottom")
-            Theme.cursorEdge(content.view, action === "bottom", ListView.Contain);
+            content.edgeJump(action === "bottom");
         else if (action === "enter")
             root.activate();
         else if (root.actionHandler)

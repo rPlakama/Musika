@@ -35,9 +35,33 @@ QtObject {
 
     /// Saves `view`'s cursor and offset under `key`; `scope` is the focused
     /// pane/column that owned the highlight, where the surface has one.
-    function remember(key, view, scope) {
-        if (key && view)
-            Memory.saveScroll(key, view.currentIndex, view.contentY, scope);
+    /// ARC-UI-3: `layout` optionally carries the active body ("list"/"grid")
+    /// and `index` lets the caller save its own cursor (the body's property
+    /// is the source of truth while a view swap settles).
+    function remember(key, view, scope, layout, index) {
+        var i = index === undefined ? (view ? view.currentIndex : -1) : index;
+        // A cursor of -1 is "no memory" (restore treats it that way), so a
+        // teardown transient never erases a real saved position.
+        if (key && view && i >= 0)
+            Memory.saveScroll(key, i, view.contentY, scope, layout);
+    }
+
+    /// ARC-UI-3: the remembered layout under `key` ("" when none was saved).
+    function savedLayout(key) {
+        var saved = Memory.loadScroll(key);
+        return saved && saved.layout !== undefined ? saved.layout : "";
+    }
+
+    /// The remembered cursor index under `key` (-1 when none was saved).
+    function savedIndex(key) {
+        var saved = Memory.loadScroll(key);
+        return saved && saved.index !== undefined ? saved.index : -1;
+    }
+
+    /// ARC-UI-3: persist only the active layout (see `Memory.saveLayout`).
+    function rememberLayout(key, layout) {
+        if (key)
+            Memory.saveLayout(key, layout);
     }
 
     /// Restores a saved cursor + offset into `view` (clamped to its current

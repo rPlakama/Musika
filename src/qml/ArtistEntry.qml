@@ -35,72 +35,46 @@ Rectangle {
     // open "—".
     signal quickAction(var target, var actions)
 
-    /// VI-4: anchored visual selection over the album cards.
-    Selection {
-        id: sel
-    }
-
-    readonly property bool hasSelection: sel.hasSelection
-    readonly property int selectionCount: sel.count(grid.currentIndex)
+    /// ARC-UI-3: the album wall is the shared scroll body in grid mode
+    /// (SCROLLGRIDSTUDY.md); `Shift-C` swaps it to a compact list. Selection,
+    /// cursor, memory, search and the follow all live in `content` below.
+    readonly property bool hasSelection: content.hasSelection
+    readonly property int selectionCount: content.selectionCount
 
     /// VI-4: `v` toggles visual mode on the cursor card.
     function toggleSelection() {
-        if (albums.count === 0 || grid.currentIndex < 0)
-            return;
-        if (sel.hasSelection)
-            sel.clear();
-        else
-            sel.start(grid.currentIndex);
+        content.toggleSelection();
     }
 
     /// VI-4: `V` selects every card.
     function selectAll() {
         if (albums.count === 0)
             return;
-        sel.all();
-        grid.currentIndex = albums.count - 1;
-        scroll.ensureVisible(grid, grid.currentIndex);
+        content.currentIndex = albums.count - 1;
+        content.selectAllRows();
+        content.ensureVisible(content.currentIndex);
     }
 
     function clearSelection() {
-        sel.clear();
+        content.clearSelection();
     }
 
-    /// ARC-UI-2 M2: the live `/` session, painted by the card text.
-    property string searchQuery: ""
-    property int searchCurrentRow: -1
-    /// The grid cursor, exposed so Home's up-edge can hand it to the status
+    /// ARC-UI-2 M2: the live `/` session, painted by the card/row text.
+    property alias searchQuery: content.searchQuery
+    property alias searchCurrentRow: content.searchCurrentRow
+    /// The view cursor, exposed so Home's up-edge can hand it to the status
     /// region at the first card (the other surfaces alias `currentIndex`).
-    readonly property alias currentIndex: grid.currentIndex
+    readonly property alias currentIndex: content.currentIndex
 
     /// ARC-UI-2 M1: the search contract (see `ScrollContent`); the grid
     /// paints the title and the meta line. Matching is viewport-scoped: cards
     /// scrolled out of the viewport come back empty and never match.
     function searchRows() {
-        var out = [];
-        var first = grid.indexAt(grid.contentX + 1, grid.contentY + 1);
-        var last = grid.indexAt(grid.contentX + Math.max(1, grid.width - 1),
-            grid.contentY + Math.max(1, grid.height - 1));
-        if (first < 0)
-            first = 0;
-        if (last < 0)
-            last = albums.count - 1;
-        for (var i = 0; i < albums.count; ++i) {
-            if (i < first || i > last) {
-                out.push([""]);
-                continue;
-            }
-            var item = albums.get(i);
-            out.push([String(item.title), String(item.meta)]);
-        }
-        return out;
+        return content.searchRows();
     }
 
     function searchJump(row) {
-        if (row < 0 || row >= albums.count)
-            return;
-        grid.currentIndex = row;
-        scroll.ensureVisible(grid, row);
+        content.searchJump(row);
     }
 
     /// ARC-I-4 (decoration only): the Favorite verb stars on the server and
@@ -120,17 +94,17 @@ Rectangle {
     /// card with the recycled album verb set; a visual selection swaps in the
     /// batch verb set (VI-4).
     function armQuickActions() {
-        if (albums.count === 0 || grid.currentIndex < 0)
+        if (albums.count === 0 || content.currentIndex < 0)
             return;
-        var cell = grid.itemAtIndex(grid.currentIndex);
+        var cell = content.view.itemAtIndex(content.currentIndex);
         if (!cell)
             return;
-        var ids = sel.hasSelection
-            ? sel.ids(albums, grid.currentIndex, "albumId")
-            : [albums.get(grid.currentIndex).albumId];
-        var actions = sel.hasSelection
+        var ids = content.hasSelection
+            ? content.selectionIds("albumId")
+            : [albums.get(content.currentIndex).albumId];
+        var actions = content.hasSelection
             ? verbs.forSelection("album", ids)
-            : verbs.album(albums.get(grid.currentIndex));
+            : verbs.album(albums.get(content.currentIndex));
         // ARC-I-4: the decoration rides the verb so the mark tracks the
         // action immediately; the server call inside `star` is unchanged.
         var star = actions.south.invoke;
@@ -175,11 +149,9 @@ Rectangle {
     // back to the Artists segment or a search result.
     readonly property bool exitsToMain: true
 
+    // ARC-UI-3: the grid columns; the scroll body derives the cell size.
     readonly property int columns: 4
     readonly property real avatarSide: Math.max(96, Math.min(height * 0.22, 256))
-    readonly property real cellWidth: width / columns
-    readonly property real coverSide: cellWidth * 0.78
-    readonly property real cellHeight: coverSide + height * 0.085
 
     // Study §2 "name+server tag": host only, never the full URL.
     readonly property string serverTag: {
@@ -284,11 +256,6 @@ Rectangle {
         id: verbs
     }
 
-    // UI-41/UI-54: shared eased-scroll + scroll-memory mechanism.
-    ListScroll {
-        id: scroll
-    }
-
     function reload() {
         if (root.artistId === "")
             return;
@@ -328,7 +295,7 @@ Rectangle {
 
     function apply(payload) {
         // VI-4: a reload invalidates the selected range.
-        sel.clear();
+        content.clearSelection();
         var artist = JSON.parse(payload);
         if (artist.name && artist.name.length > 0)
             root.artistName = artist.name;
@@ -356,18 +323,18 @@ Rectangle {
                 starred: album.starred === true
             });
         }
-        if (albums.count > 0 && (grid.currentIndex < 0 || grid.currentIndex >= albums.count))
-            grid.currentIndex = 0;
-        // UI-54: reopening the entry restores the grid cursor + offset; later
-        // reloads keep the live state.
+        if (albums.count > 0 && (content.currentIndex < 0 || content.currentIndex >= albums.count))
+            content.currentIndex = 0;
+        // UI-54: reopening the entry restores the cursor + offset (and the
+        // ARC-UI-3 layout); later reloads keep the live state.
         if (!root._restored) {
             root._restored = true;
-            scroll.recall(root.memoryKey, grid);
+            content.restore();
         }
     }
 
     function activateCurrent() {
-        var album = albums.get(grid.currentIndex);
+        var album = albums.get(content.currentIndex);
         if (album)
             root.albumActivated(album.albumId, album.title, album.artist, album.year, album.tracks, album.cover, album.starred === true);
     }
@@ -398,47 +365,54 @@ Rectangle {
 
     Component.onCompleted: reload()
 
-    // Edge-aware grid movement: no row wrap-around (GridView's own
-    // moveCurrentIndex* crosses rows, which feels wrong in a cover wall).
-    // Returns false when the grid cannot move that way, so Home can hand `h`
-    // to the sidebar only from the leftmost column.
+    // Edge-aware movement for both layouts: in grid mode the cursor walks the
+    // cover wall (no wrap-around — GridView's own moveCurrentIndex* crosses
+    // rows, which feels wrong); in list mode it is a plain up/down. Returns
+    // false when the surface cannot move that way, so Home can hand `h` to
+    // the sidebar only from the leftmost column.
     function moveWithinGrid(action) {
         if (albums.count === 0)
             return false;
-        var column = grid.currentIndex % root.columns;
-        var target = grid.currentIndex;
+        var cols = content.layout === "grid" ? root.columns : 1;
+        var column = content.currentIndex % cols;
+        var target = content.currentIndex;
         if (action === "move_left") {
             if (column === 0)
                 return false;
             target -= 1;
         } else if (action === "move_right") {
-            if (column === root.columns - 1 || grid.currentIndex + 1 >= albums.count)
+            if (column === cols - 1 || content.currentIndex + 1 >= albums.count)
                 return false;
             target += 1;
         } else if (action === "move_up") {
-            if (grid.currentIndex - root.columns < 0)
+            if (content.currentIndex - cols < 0)
                 return false;
-            target -= root.columns;
+            target -= cols;
         } else if (action === "move_down") {
-            if (grid.currentIndex + root.columns >= albums.count)
+            if (content.currentIndex + cols >= albums.count)
                 return false;
-            target += root.columns;
+            target += cols;
         } else {
             return false;
         }
-        grid.currentIndex = target;
-        scroll.ensureVisible(grid, target);
-        // Moving the grid ends the header chip scope (Enter opens albums).
+        // The view-owned follow animates the move (SCROLLGRIDSTUDY §2).
+        content.currentIndex = target;
+        // Moving the wall ends the header chip scope (Enter opens albums).
         root.chipScope = -1;
         return true;
     }
 
-    // Movement and Enter belong to the cover grid; `Esc` is handled by Home
+    // Movement and Enter belong to the album wall; `Esc` is handled by Home
     // (leaves the entry for Main regardless of where it was opened from).
     function handleAction(action) {
         if (action === "pane_cycle") {
             // Tab cycles the header chips (Download → Shuffle → Favorite).
             root.chipScope = (root.chipScope + 1) % 3;
+            return;
+        }
+        if (action === "layout_toggle") {
+            // ARC-UI-3: grid ⇄ list for the wall.
+            content.toggleLayout();
             return;
         }
         if (action === "enter") {
@@ -447,7 +421,7 @@ Rectangle {
                 return;
             }
             // VI-4: opening an album ends the visual selection.
-            sel.clear();
+            root.clearSelection();
             activateCurrent();
         } else {
             moveWithinGrid(action);
@@ -789,12 +763,16 @@ Rectangle {
             color: Palette.outlineVariant
         }
 
-        // Albums: four covers per row, title and year/count underneath.
+        // Albums: the shared scroll body (ARC-UI-3, SCROLLGRIDSTUDY.md) —
+        // grid mode by default, four covers per row with the title and
+        // year/count underneath; Shift-C swaps it to a compact list. The body
+        // owns cursor, follow, memory, selection and the `/` contract; the
+        // host supplies both delegates.
         Item {
             Layout.fillWidth: true
             Layout.fillHeight: true
 
-            // VI-4: the selection count pill over the grid corner.
+            // VI-4: the selection count pill over the wall corner.
             SelectionBadge {
                 anchors.top: parent.top
                 anchors.right: parent.right
@@ -804,47 +782,177 @@ Rectangle {
                 z: 2
             }
 
-            GridView {
-                id: grid
+            ScrollContent {
+                id: content
                 anchors.fill: parent
-                clip: true
                 model: albums
-                cellWidth: width / root.columns
-                cellHeight: root.cellHeight
-                boundsBehavior: Flickable.StopAtBounds
+                layouts: ["grid", "list"]
+                layout: "grid"
+                columns: root.columns
+                cellHeight: content.cellWidth * 0.78 + content.height * 0.085
+                selectable: true
+                memoryKey: root.memoryKey
+                searchFields: ["title", "meta"]
 
-                delegate: Rectangle {
-                    id: cell
-                    required property int index
-                    required property string albumId
-                    required property string title
-                    required property string artist
-                    required property string year
-                    required property string tracks
-                    required property string meta
-                    required property string cover
-                    required property bool starred
-
-                    readonly property bool current: GridView.isCurrentItem
-                    // UI-50: cursor or hover expands the cover + title, the
-                    // same selection stage the lists and search use.
-                    readonly property bool emphasized: (cell.current || cellHover.hovered) && !Theme.reduceMotion
-
-                    width: GridView.view.cellWidth
-                    height: GridView.view.cellHeight
-                    color: "transparent"
-
-                    // VI-4: a card inside the visual selection wears the
-                    // cursor fill.
-                    readonly property bool selectedCard: sel.selected(grid.currentIndex, cell.index)
-
+                cellDelegate: Component {
                     Rectangle {
-                        anchors.fill: parent
-                        anchors.margins: cell.width * 0.03
-                        radius: Theme.radius
-                        color: (cell.current || cell.selectedCard)
+                        id: cell
+                        required property int index
+                        required property string albumId
+                        required property string title
+                        required property string artist
+                        required property string year
+                        required property string tracks
+                        required property string meta
+                        required property string cover
+                        required property bool starred
+
+                        readonly property bool current: GridView.isCurrentItem
+                        // UI-50: cursor or hover expands the cover + title,
+                        // the same selection stage the lists and search use.
+                        readonly property bool emphasized: (cell.current || cellHover.hovered) && !Theme.reduceMotion
+
+                        width: GridView.view.cellWidth
+                        height: GridView.view.cellHeight
+                        color: "transparent"
+
+                        // VI-4: a card inside the visual selection wears the
+                        // cursor fill.
+                        readonly property bool selectedCard: content.selected(cell.index)
+
+                        Rectangle {
+                            anchors.fill: parent
+                            anchors.margins: cell.width * 0.03
+                            radius: Theme.radius
+                            color: (cell.current || cell.selectedCard)
+                                ? Palette.secondaryContainer
+                                : (cellHover.hovered ? Palette.surfaceContainerHigh : "transparent")
+
+                            Behavior on color {
+                                ColorAnimation {
+                                    duration: Theme.motion.quick
+                                    easing.type: Easing.Bezier
+                                    easing.bezierCurve: Theme.ease.standard
+                                }
+                            }
+                        }
+
+                        Rectangle {
+                            id: coverBox
+                            width: cell.width * 0.78
+                            height: width
+                            anchors.horizontalCenter: parent.horizontalCenter
+                            anchors.top: parent.top
+                            anchors.topMargin: cell.height * 0.05
+                            radius: Theme.radius
+                            color: Palette.surfaceContainerLowest
+                            border.color: cell.current ? Palette.primary : "transparent"
+                            border.width: Math.max(1, cell.height * Theme.hairlineRatio)
+                            clip: true
+
+                            transformOrigin: Item.Center
+                            scale: cell.emphasized ? Theme.selectionEmphasis : 1.0
+
+                            Behavior on scale {
+                                NumberAnimation { duration: Theme.motion.quick; easing.type: Easing.Bezier; easing.bezierCurve: Theme.ease.standard }
+                            }
+
+                            CoverImage {
+                                anchors.fill: parent
+                                source: cell.cover
+                                // ARC-40: ×2 headroom for the UI-50 hover scale.
+                                sizeFactor: 2
+                            }
+
+                            // UI-56/ARC-I-2: a favourited album carries its
+                            // mark inside the cover's bottom-right corner.
+                            Icon {
+                                visible: cell.starred
+                                anchors.right: parent.right
+                                anchors.bottom: parent.bottom
+                                anchors.margins: parent.width * 0.06
+                                width: parent.width * 0.085
+                                height: width
+                                name: "baseline-favorite"
+                                symbolColor: Theme.iconStrong
+                            }
+                        }
+
+                        SearchText {
+                            id: titleText
+                            anchors.top: coverBox.bottom
+                            anchors.topMargin: cell.height * 0.025
+                            anchors.horizontalCenter: parent.horizontalCenter
+                            width: parent.width * 0.86
+                            text: cell.title
+                            color: Palette.onSurface
+                            horizontalAlignment: Text.AlignHCenter
+                            query: content.searchQuery
+                            currentMatch: cell.index === content.searchCurrentRow
+                            elide: Text.ElideRight
+                            font.pixelSize: Math.max(10, cell.height * 0.0525)
+                            animated: false
+                            transformOrigin: Item.Center
+                            scale: cell.emphasized
+                                ? Theme.fitScale(titleText.width, titleText.paintedWidth, Theme.selectionEmphasis)
+                                : 1.0
+
+                            Behavior on scale {
+                                NumberAnimation { duration: Theme.motion.quick; easing.type: Easing.Bezier; easing.bezierCurve: Theme.ease.standard }
+                            }
+                        }
+
+                        SearchText {
+                            id: metaText
+                            anchors.top: titleText.bottom
+                            anchors.topMargin: cell.height * 0.015
+                            anchors.horizontalCenter: parent.horizontalCenter
+                            width: parent.width * 0.86
+                            text: cell.meta
+                            color: Palette.onSurfaceVariant
+                            horizontalAlignment: Text.AlignHCenter
+                            elide: Text.ElideRight
+                            font.pixelSize: Math.max(9, cell.height * 0.04)
+                            animated: false
+                            query: content.searchQuery
+                            currentMatch: cell.index === content.searchCurrentRow
+                        }
+
+                        HoverHandler {
+                            id: cellHover
+                            cursorShape: Qt.PointingHandCursor
+                        }
+
+                        TapHandler {
+                            onTapped: {
+                                content.currentIndex = cell.index;
+                                root.activateCurrent();
+                            }
+                        }
+                    }
+                }
+
+                rowDelegate: Component {
+                    Rectangle {
+                        id: row
+                        required property int index
+                        required property string albumId
+                        required property string title
+                        required property string artist
+                        required property string year
+                        required property string tracks
+                        required property string meta
+                        required property string cover
+                        required property bool starred
+
+                        readonly property bool current: ListView.isCurrentItem
+                        readonly property bool selectedRow: content.selected(row.index)
+
+                        width: ListView.view.width
+                        height: Math.max(48, root.height * 0.09)
+                        color: (row.current || row.selectedRow)
                             ? Palette.secondaryContainer
-                            : (cellHover.hovered ? Palette.surfaceContainerHigh : "transparent")
+                            : (rowHover.hovered ? Palette.surfaceContainerHigh : "transparent")
 
                         Behavior on color {
                             ColorAnimation {
@@ -853,99 +961,79 @@ Rectangle {
                                 easing.bezierCurve: Theme.ease.standard
                             }
                         }
-                    }
 
-                    Rectangle {
-                        id: coverBox
-                        width: root.coverSide
-                        height: width
-                        anchors.horizontalCenter: parent.horizontalCenter
-                        anchors.top: parent.top
-                        anchors.topMargin: cell.height * 0.05
-                        radius: Theme.radius
-                        color: Palette.surfaceContainerLowest
-                        border.color: cell.current ? Palette.primary : "transparent"
-                        border.width: Math.max(1, cell.height * Theme.hairlineRatio)
-                        clip: true
-
-                        transformOrigin: Item.Center
-                        scale: cell.emphasized ? Theme.selectionEmphasis : 1.0
-
-                        Behavior on scale {
-                            NumberAnimation { duration: Theme.motion.quick; easing.type: Easing.Bezier; easing.bezierCurve: Theme.ease.standard }
-                        }
-
-                        CoverImage {
-                            anchors.fill: parent
-                            source: cell.cover
-                            // ARC-40: ×2 headroom for the UI-50 hover scale.
-                            sizeFactor: 2
-                        }
-
-                        // UI-56/ARC-I-2: a favourited album carries its mark
-                        // inside the cover's bottom-right corner; the side is
-                        // derived from the cover itself (previous pass +30%).
-                        Icon {
-                            visible: cell.starred
-                            anchors.right: parent.right
-                            anchors.bottom: parent.bottom
-                            anchors.margins: parent.width * 0.06
-                            width: parent.width * 0.085
+                        // ARC-I-4: the favourited mark rides the cover corner
+                        // in both layouts (the grid heart's list twin).
+                        Rectangle {
+                            id: rowCover
+                            anchors.left: parent.left
+                            anchors.leftMargin: row.width * 0.02
+                            anchors.verticalCenter: parent.verticalCenter
+                            width: row.height * 0.78
                             height: width
-                            name: "baseline-favorite"
-                            symbolColor: Theme.iconStrong
+                            radius: Theme.radius
+                            color: Palette.surfaceContainerLowest
+                            clip: true
+
+                            CoverImage {
+                                anchors.fill: parent
+                                source: row.cover
+                                sizeFactor: 2
+                            }
+
+                            Icon {
+                                visible: row.starred
+                                anchors.right: parent.right
+                                anchors.bottom: parent.bottom
+                                anchors.margins: parent.width * 0.06
+                                width: parent.width * 0.085
+                                height: width
+                                name: "baseline-favorite"
+                                symbolColor: Theme.iconStrong
+                            }
                         }
-                    }
 
-                    SearchText {
-                        id: titleText
-                        anchors.top: coverBox.bottom
-                        anchors.topMargin: cell.height * 0.025
-                        anchors.horizontalCenter: parent.horizontalCenter
-                        width: parent.width * 0.86
-                        text: cell.title
-                        color: Palette.onSurface
-                        horizontalAlignment: Text.AlignHCenter
-                        query: root.searchQuery
-                        currentMatch: cell.index === root.searchCurrentRow
-                    elide: Text.ElideRight
-                    font.pixelSize: Math.max(10, cell.height * 0.0525)
-                    animated: false
-                    transformOrigin: Item.Center
-                    scale: cell.emphasized
-                        ? Theme.fitScale(titleText.width, titleText.paintedWidth, Theme.selectionEmphasis)
-                        : 1.0
+                        Column {
+                            anchors.left: rowCover.right
+                            anchors.leftMargin: row.width * 0.02
+                            anchors.right: parent.right
+                            anchors.rightMargin: row.width * 0.02
+                            anchors.verticalCenter: parent.verticalCenter
+                            spacing: row.height * 0.04
 
-                    Behavior on scale {
-                        NumberAnimation { duration: Theme.motion.quick; easing.type: Easing.Bezier; easing.bezierCurve: Theme.ease.standard }
-                    }
-                }
+                            SearchText {
+                                width: parent.width
+                                text: row.title
+                                color: Palette.onSurface
+                                elide: Text.ElideRight
+                                font.pixelSize: Theme.clamp(row.height * 0.26, 12, 18)
+                                animated: false
+                                query: content.searchQuery
+                                currentMatch: row.index === content.searchCurrentRow
+                            }
 
-                    SearchText {
-                        id: metaText
-                        anchors.top: titleText.bottom
-                        anchors.topMargin: cell.height * 0.015
-                        anchors.horizontalCenter: parent.horizontalCenter
-                        width: parent.width * 0.86
-                        text: cell.meta
-                        color: Palette.onSurfaceVariant
-                        horizontalAlignment: Text.AlignHCenter
-                        elide: Text.ElideRight
-                        font.pixelSize: Math.max(9, cell.height * 0.04)
-                        animated: false
-                        query: root.searchQuery
-                        currentMatch: cell.index === root.searchCurrentRow
-                    }
+                            SearchText {
+                                width: parent.width
+                                text: row.meta
+                                color: Palette.onSurfaceVariant
+                                elide: Text.ElideRight
+                                font.pixelSize: Theme.clamp(row.height * 0.19, 10, 14)
+                                animated: false
+                                query: content.searchQuery
+                                currentMatch: row.index === content.searchCurrentRow
+                            }
+                        }
 
-                    HoverHandler {
-                        id: cellHover
-                        cursorShape: Qt.PointingHandCursor
-                    }
+                        HoverHandler {
+                            id: rowHover
+                            cursorShape: Qt.PointingHandCursor
+                        }
 
-                    TapHandler {
-                        onTapped: {
-                            grid.currentIndex = cell.index;
-                            root.activateCurrent();
+                        TapHandler {
+                            onTapped: {
+                                content.currentIndex = row.index;
+                                root.activateCurrent();
+                            }
                         }
                     }
                 }
@@ -958,19 +1046,6 @@ Rectangle {
                 color: Palette.onSurfaceVariant
                 font.pixelSize: Theme.fontSize("body", root.height)
             }
-        }
-    }
-
-    // UI-54: keep the album-grid viewport in memory while the page lives.
-    Connections {
-        target: grid
-        function onContentYChanged() {
-            if (root.artistId.length > 0)
-                scroll.remember(root.memoryKey, grid);
-        }
-        function onCurrentIndexChanged() {
-            if (root.artistId.length > 0)
-                scroll.remember(root.memoryKey, grid);
         }
     }
 }

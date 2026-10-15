@@ -47,6 +47,7 @@ pub enum Action {
     VolumeDown,
     OrderPrev,
     OrderNext,
+    LayoutToggle,
     InsertMode,
     NextTrack,
     PrevTrack,
@@ -84,6 +85,7 @@ impl Action {
             Self::VolumeDown => "volume_down",
             Self::OrderPrev => "order_prev",
             Self::OrderNext => "order_next",
+            Self::LayoutToggle => "layout_toggle",
             Self::InsertMode => "insert_mode",
             Self::NextTrack => "next_track",
             Self::PrevTrack => "prev_track",
@@ -143,6 +145,7 @@ fn defaults() -> Vec<(&'static str, Action)> {
         ("+", Action::VolumeUp),
         ("shift-h", Action::OrderPrev),
         ("shift-l", Action::OrderNext),
+        ("shift-c", Action::LayoutToggle),
         ("shift-space f", Action::Search),
         ("shift-space shift-f", Action::Search),
         ("/", Action::SearchAction),
@@ -521,5 +524,12 @@ mod tests {
         let mut keymap = Keymap::new();
         assert_eq!(keymap.feed("shift-l"), Outcome::Action(Action::OrderNext));
         assert_eq!(keymap.feed("shift-h"), Outcome::Action(Action::OrderPrev));
+    }
+
+    #[test]
+    fn layout_toggle_keys() {
+        let mut keymap = Keymap::new();
+        assert_eq!(keymap.feed("shift-c"), Outcome::Action(Action::LayoutToggle));
+        assert_eq!(token_from_qt(0x43, QT_SHIFT).as_deref(), Some("shift-c"));
     }
 }

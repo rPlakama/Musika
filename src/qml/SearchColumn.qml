@@ -44,8 +44,20 @@ Item {
         id: verbs
     }
 
+    /// ARC-UI-3: the column owns its cursor; the body mirrors it both ways
+    /// (it cannot be an alias — the body's view swaps list ⇄ grid).
+    onCursorChanged: if (content.currentIndex !== cursor) content.currentIndex = cursor
+
+    Connections {
+        target: content
+        function onCurrentIndexChanged() {
+            if (root.cursor !== content.currentIndex)
+                root.cursor = content.currentIndex;
+        }
+    }
+
     /// VI-4: the selection state lives in `ScrollContent` below; the column
-    /// owns only its cursor (bound into the list) and the id field.
+    /// owns only its cursor and the id field.
     readonly property bool hasSelection: content.hasSelection
     readonly property int selectionCount: content.selectionCount
 
@@ -198,7 +210,6 @@ Item {
                 id: content
                 anchors.fill: parent
                 bleed: root.overflow
-                currentIndex: root.cursor
                 model: root.model
                 selectable: quickActionKind !== ""
                 // ARC-UI-2 M1: the columns paint the same three cells.

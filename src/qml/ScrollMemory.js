@@ -20,16 +20,30 @@
 // here continuously (while alive), so the values are current the moment the
 // page is destroyed, and restore them on the first payload after reopening.
 // `scope` optionally carries the focused pane/column the highlight was in.
+// ARC-UI-3: `layout` carries the surface's active view ("list"/"grid"), so a
+// reopen restores the same body the user left.
 var scrollPositions = ({})
 
-function saveScroll(key, index, y, scope) {
+function saveScroll(key, index, y, scope, layout) {
     if (!key)
         return
     scrollPositions[key] = {
         index: index,
         y: y,
-        scope: scope === undefined ? -1 : scope
+        scope: scope === undefined ? -1 : scope,
+        layout: layout === undefined ? "" : layout
     }
+}
+
+// ARC-UI-3: update only the layout field — a body restore flips the layout
+// before the cursor is back, and must not rewrite the saved index/offset.
+function saveLayout(key, layout) {
+    if (!key)
+        return
+    if (scrollPositions[key] === undefined)
+        scrollPositions[key] = { index: -1, y: 0, scope: -1, layout: layout }
+    else
+        scrollPositions[key].layout = layout
 }
 
 function loadScroll(key) {

@@ -188,7 +188,7 @@ Rectangle {
             if (songs.count === 0)
                 return;
             root.onToolbar = false;
-            Theme.cursorEdge(content.view, action === "bottom", ListView.Contain);
+            content.edgeJump(action === "bottom");
             return;
         }
 

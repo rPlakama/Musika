@@ -1391,6 +1391,20 @@ The product is incomplete without these.
     without losing the cursor or viewport; queues never show a grid;
     `cargo test` + QML parse clean, existing QtQuickTest scroll/selection
     checks still pass.
+  - **Now (partial):** M0–M2 landed (SCROLLGRIDSTUDY.md) — `ScrollContent`
+    gained `layout`/`columns`/`cellDelegate` (`layouts` order + `toggleLayout`)
+    with one shared stage, band, memory, selection, search contract and
+    adaptive sizing; `ArtistEntry` is now a grid body with a compact list
+    fallback and its `GridView`/`ListScroll`/`Selection` copies are gone; the
+    grid grind is fixed by the view-owned follow (`highlightMoveDuration`,
+    since GridView has **no** `highlightMoveVelocity`); `Shift-C`
+    (`Action::LayoutToggle`) swaps live and `ScrollMemory` carries the layout
+    beside cursor + offset; the body's `currentIndex` is the single source of
+    truth (view refill transients are overwritten, never adopted; `edgeJump`
+    replaced direct `Theme.cursorEdge` writes). A QtQuickTest harness covers
+    list/grid sync, the swap carry, search rows and the memory round-trip;
+    `cargo test` 121 pass, QML parses clean. Open: M3 (UI-58 adaptive cells
+    for the grid), extending the toggle to Search/Album, the hardware pass.
 
 ### Incremental (ARC-I)
 

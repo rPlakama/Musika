@@ -129,7 +129,7 @@ Item {
         else if (action === "move_down")
             cursor = Math.min(items.count - 1, cursor + 1);
         else if ((action === "top" || action === "bottom") && items.count > 0) {
-            Theme.cursorEdge(content.view, action === "bottom", ListView.Contain);
+            content.edgeJump(action === "bottom");
             cursor = content.currentIndex;
         } else if (action === "enter")
             Backend.queueJump(cursor);
@@ -144,7 +144,7 @@ Item {
         } else if (action === "queue_remove")
             Backend.queueRemove(cursor);
 
-        // The view follows cursor changes itself; gg/G snap via cursorEdge.
+        // The view follows cursor changes itself; gg/G snap via edgeJump.
         content.currentIndex = cursor;
     }
 

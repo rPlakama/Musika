@@ -66,6 +66,24 @@ Rectangle {
         sel.clear();
     }
 
+    /// ARC-UI-2 M1: the search contract (see `ScrollContent`); the grid
+    /// paints the title and the meta line.
+    function searchRows() {
+        var out = [];
+        for (var i = 0; i < albums.count; ++i) {
+            var item = albums.get(i);
+            out.push([String(item.title), String(item.meta)]);
+        }
+        return out;
+    }
+
+    function searchJump(row) {
+        if (row < 0 || row >= albums.count)
+            return;
+        grid.currentIndex = row;
+        scroll.ensureVisible(grid, row);
+    }
+
     /// ARC-43/ARC-UI-1: Alt armed the gesture — anchor on the keyboard cursor
     /// card with the recycled album verb set; a visual selection swaps in the
     /// batch verb set (VI-4).

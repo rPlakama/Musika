@@ -194,6 +194,19 @@ Rectangle {
         queueContent.clearSelection();
     }
 
+    /// ARC-UI-2 M1: the search contract (see `ScrollContent`) — the
+    /// fullscreen surface is its queue pane, so a jump focuses it and the
+    /// context-Enter that follows lands on the matched row.
+    function searchRows() {
+        return queueContent.searchRows();
+    }
+
+    function searchJump(row) {
+        pane = 2;
+        queueContent.searchJump(row);
+        queueCursor = queueContent.currentIndex;
+    }
+
     function applyQueue(payload) {
         var data = JSON.parse(payload);
         // UI-41: payload swaps fade in quickly; a reorder keeps the list live.
@@ -1003,6 +1016,9 @@ Rectangle {
                                 model: queueItems
                                 selectable: true
                                 memoryKey: "fullscreen"
+                                // ARC-UI-2 M1: the queue rows paint title
+                                // and duration.
+                                searchFields: ["title", "duration"]
                                 // The fullscreen memory also stores the focused
                                 // pane; without this the continuous remembers
                                 // clobbered it to the default scope.

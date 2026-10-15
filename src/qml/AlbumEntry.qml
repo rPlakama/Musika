@@ -164,6 +164,15 @@ Rectangle {
 
     Component.onCompleted: reload()
 
+    /// ARC-UI-2 M1: the search contract (see `ScrollContent`).
+    function searchRows() {
+        return content.searchRows();
+    }
+
+    function searchJump(row) {
+        content.searchJump(row);
+    }
+
     function handleAction(action) {
         // VI-11: `gg`/`G` leave the toolbar for the first/last song; the
         // toolbar stays a `k`-from-row-0 affordance only.
@@ -454,6 +463,8 @@ Rectangle {
             selectable: true
             memoryKey: root.memoryKey
             visible: !(root.loading && songs.count === 0)
+            // ARC-UI-2 M1: the rows paint track, title and duration.
+            searchFields: ["track", "title", "duration"]
 
             rowDelegate: Component {
                 Rectangle {

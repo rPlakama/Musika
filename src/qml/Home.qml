@@ -221,6 +221,20 @@ Item {
         id: verbs
     }
 
+    // ARC-UI-2 M1: the surface `/` searches — the topmost row surface,
+    // mirroring the modal priority inside `handleAction`.
+    function lineSearchTarget() {
+        if (searchOverlay.opened)
+            return searchOverlay.searchSurface();
+        if (queueDrawer.opened)
+            return queueDrawer;
+        if (nowPlayingExpanded)
+            return nowPlaying;
+        if (activeRegion !== 1)
+            return null;
+        return contentStack.currentItem;
+    }
+
     // Actions dispatched from the global key handler, scoped to the active
     // region: movement only ever affects the region the cursor is in.
     function handleAction(action) {
@@ -281,8 +295,11 @@ Item {
             return;
         }
         if (action === "search_action") {
-            clearMainSelection();
-            lineSearch.open();
+            var surface = lineSearchTarget();
+            if (surface && surface.searchRows) {
+                clearMainSelection();
+                lineSearch.open(surface);
+            }
             return;
         }
         // The floating search is modal: while open, all keys go to it.
@@ -733,14 +750,14 @@ Item {
     }
 
     // ARC-UI-2 M0: the `/` in-surface search command line. `zCommand` rides
-    // over every overlay; the strip sits above the player bar (or the bottom
-    // edge when fullscreen is up).
+    // over every overlay; the flat bar sits at the very bottom over its own
+    // 50% black scrim.
     LineSearch {
         id: lineSearch
         anchors.fill: parent
-        bottomOffset: root.nowPlayingExpanded
-            ? root.height * 0.04
-            : root.playH + root.height * 0.015
+        // The commit closes the prompt, then the matched row's own
+        // context-Enter runs through the normal action router (VI-16).
+        onEntered: root.handleAction("enter")
     }
 
     Connections {

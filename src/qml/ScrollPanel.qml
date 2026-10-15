@@ -133,6 +133,17 @@ Rectangle {
         content.activate();
     }
 
+    /// ARC-UI-2 M1: the search contract forwards to the shared content.
+    property alias searchFields: content.searchFields
+
+    function searchRows() {
+        return content.searchRows();
+    }
+
+    function searchJump(row) {
+        content.searchJump(row);
+    }
+
     // Shared cursor grammar: j/k, gg/G, Enter; unknown actions go to
     // `actionHandler` (search columns, queue reorder, …). Cursor moves are
     // followed by the view itself (ScrollContent highlight machinery); gg/G

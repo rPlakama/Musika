@@ -1205,11 +1205,16 @@ The product is incomplete without these.
   - **Verify:** the 14-case matrix in SEARCHACTIONSTUDY.md §8 (chrome never
     matches, drawer-over-main scoping, typing parity, abandon vs `:noh`,
     elided-title paint, live palette, held-key + palette churn).
-  - **Now:** M0 landed (2d63e28) — `/` token + `Action::SearchAction`,
-    `LineSearch.qml` command strip at `zCommand` (open/close, Esc abandons,
-    Enter commits), Home routing ahead of the FTS/drawer branches, Alt-arm
-    gates, `setLineSearchOpen` keymap lock; M1 (surface contract + matcher +
-    counter) is next.
+  - **Now:** M0–M1 landed (650a4dd) — `/` opens a flat, full-width command bar
+    at the bottom edge over a 50% black scrim (no blur); matching is literal
+    smartcase over the top surface's rendered cells (`searchRows()`/
+    `searchJump()` on `ScrollContent` + the six row surfaces,
+    `SearchMatch.js` unit-tested); Tab / Shift-Tab cycle the matches with a
+    live cursor preview, `[i/N]` counts, and 0 matches flash the red-underline
+    E486 cue with the cursor untouched. Per user rule, Enter commits the
+    row's own context-Enter (VI-16) on the match — this overrides the study's
+    cursor-only Enter; `n`/`N` repeat is still open. M2 (in-row block
+    highlights) is next.
 
 ### Incremental (ARC-I)
 

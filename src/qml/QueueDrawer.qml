@@ -66,6 +66,16 @@ Item {
         content.view.positionViewAtIndex(cursor, ListView.Contain);
     }
 
+    /// ARC-UI-2 M1: the search contract (see `ScrollContent`).
+    function searchRows() {
+        return content.searchRows();
+    }
+
+    function searchJump(row) {
+        content.searchJump(row);
+        cursor = content.currentIndex;
+    }
+
     function apply(payload) {
         var data = JSON.parse(payload);
         // UI-41: a payload swap fades in quickly instead of flashing; a
@@ -170,6 +180,9 @@ Item {
                 Layout.fillHeight: true
                 model: items
                 memoryKey: "queue"
+                // ARC-UI-2 M1: the rendered cells (the `subtitle` role is
+                // never painted, so it never matches).
+                searchFields: ["title", "duration"]
 
                 Behavior on opacity {
                     NumberAnimation { duration: Theme.motion.quick; easing.type: Easing.Bezier; easing.bezierCurve: Theme.ease.standard }

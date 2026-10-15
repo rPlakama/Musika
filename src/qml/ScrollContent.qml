@@ -44,6 +44,10 @@ Item {
     property real bleed: 0
     property var model: null
     property Component rowDelegate: null
+    /// ARC-UI-2 M1: the model roles `/` searches, in paint order (the
+    /// selectable-text contract, SEARCHACTIONSTUDY §3). Hosts override;
+    /// cells for absent roles come back empty. Chrome never matches.
+    property var searchFields: ["title"]
     /// UI-41: the view-owned follow speed (px/s) and the preferred band the
     /// cursor is kept in (fractions of the viewport). `reduceMotion` snaps.
     property real followVelocity: 1400
@@ -122,6 +126,32 @@ Item {
     function activate() {
         if (list.currentIndex >= 0)
             root.itemActivated(list.currentIndex);
+    }
+
+    /// ARC-UI-2 M1: every row's rendered cells — the surface's search side.
+    function searchRows() {
+        var out = [];
+        if (!root.model || !root.model.get)
+            return out;
+        for (var i = 0; i < root.model.count; ++i) {
+            var item = root.model.get(i);
+            var cells = [];
+            for (var f = 0; f < root.searchFields.length; ++f) {
+                var v = item[root.searchFields[f]];
+                cells.push(v === undefined || v === null ? "" : String(v));
+            }
+            out.push(cells);
+        }
+        return out;
+    }
+
+    /// ARC-UI-2 M1: land the view cursor on a matching row; the view-owned
+    /// follow keeps it visible (the same path `gg`/`G` take).
+    function searchJump(row) {
+        if (row < 0 || row >= list.count)
+            return;
+        list.currentIndex = row;
+        ensureVisible(row);
     }
 
     /// UI-54: restore the remembered cursor + offset (false when empty).

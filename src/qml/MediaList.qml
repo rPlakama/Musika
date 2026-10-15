@@ -77,6 +77,8 @@ ScrollPanel {
     }
 
     model: mediaRows
+    // ARC-UI-2 M1: the rows paint title, subtitle and meta; nothing else.
+    searchFields: ["title", "subtitle", "meta"]
 
     function setRows(rows) {
         // VI-4: a reload invalidates the selected range.

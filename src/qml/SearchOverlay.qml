@@ -190,6 +190,12 @@ Item {
         return artistsColumn;
     }
 
+    /// ARC-UI-2 M1: the surface `/` searches while the overlay is open — the
+    /// active column.
+    function searchSurface() {
+        return columnFor(activeColumn);
+    }
+
     /// ARC-I: Alt armed — the active column anchors the overlay on its cursor
     /// row with the recycled verb set for its kind (song/album/artist).
     function armQuickActions() {

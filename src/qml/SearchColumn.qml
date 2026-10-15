@@ -75,6 +75,18 @@ Item {
         content.ensureVisible(root.cursor);
     }
 
+    /// ARC-UI-2 M1: the search contract (see `ScrollContent`).
+    function searchRows() {
+        return content.searchRows();
+    }
+
+    function searchJump(row) {
+        if (row < 0 || row >= model.count)
+            return;
+        root.cursor = row;
+        content.ensureVisible(row);
+    }
+
     /// ARC-I: Alt armed the gesture — anchor on the cursor row; a visual
     /// selection swaps in the batch verb set (VI-4).
     function armQuickActions() {
@@ -181,6 +193,8 @@ Item {
                 currentIndex: root.cursor
                 model: root.model
                 selectable: quickActionKind !== ""
+                // ARC-UI-2 M1: the columns paint the same three cells.
+                searchFields: ["title", "subtitle", "meta"]
 
                 rowDelegate: Component {
                     Rectangle {

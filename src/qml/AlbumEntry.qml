@@ -60,7 +60,7 @@ Rectangle {
     readonly property real coverSide: Math.max(160, Math.min(height * 0.42, 512))
     readonly property bool sideBySide: width >= Theme.breakpoints.compact
 
-    // The compact flip reflows the header: restart the cover's blink-and-fade
+    // The compact flip reflows the header: restart the cover's dip-and-blur
     // (below) so the reflow does not read as a flick.
     onSideBySideChanged: {
         if (!Theme.reduceMotion)
@@ -289,26 +289,53 @@ Rectangle {
                 color: Palette.primaryContainer
                 clip: true
 
-                // Crossing the compact breakpoint reflows the hero — and
-                // re-decodes the art at its new box — so the cover blinks
-                // out over the flash tier and fades back in over the
-                // emphasized one (a hard reset to 0 read as a flick).
+                // The reflow FX: the offscreen layer only exists while the
+                // blur is up.
+                layer.enabled: coverBlur.blur > 0.001
+                layer.effect: MultiEffect {
+                    id: coverBlur
+                    blurEnabled: true
+                    blur: 0
+                    blurMax: 48
+                    autoPaddingEnabled: false
+                }
+
+                // Crossing the compact breakpoint reflows the hero: dim it to
+                // 70% and blur it in over 200 ms, then restore both over the
+                // emphasized tier — the reflow hides under the dip.
                 SequentialAnimation {
                     id: coverAppear
-                    NumberAnimation {
-                        target: coverBox
-                        property: "opacity"
-                        to: 0
-                        duration: Theme.motion.flash
+                    ParallelAnimation {
+                        NumberAnimation {
+                            target: coverBox
+                            property: "opacity"
+                            to: 0.7
+                            duration: 200
+                        }
+                        NumberAnimation {
+                            target: coverBlur
+                            property: "blur"
+                            to: 0.5
+                            duration: 200
+                        }
                     }
-                    NumberAnimation {
-                        target: coverBox
-                        property: "opacity"
-                        from: 0
-                        to: 1
-                        duration: Theme.motion.emphasized
-                        easing.type: Easing.Bezier
-                        easing.bezierCurve: Theme.ease.decelerate
+                    ParallelAnimation {
+                        NumberAnimation {
+                            target: coverBox
+                            property: "opacity"
+                            to: 1
+                            duration: Theme.motion.emphasized
+                            easing.type: Easing.Bezier
+                            easing.bezierCurve: Theme.ease.decelerate
+                        }
+                        NumberAnimation {
+                            target: coverBlur
+                            property: "blur"
+                            to: 0
+                            duration: Theme.motion.emphasized
+                            easing.type: Easing.Bezier
+                            easing.bezierCurve: Theme.ease.decelerate
+                        }
                     }
                 }
 

@@ -27,9 +27,11 @@ import "Theme.js" as Theme
 // overlays four fixed verbs around the current item; `h`/`j`/`k`/`l` (or the
 // arrow keys) aim west/south/north/east and releasing Alt is Enter (it fires
 // the aimed action). The center is the neutral aim: releasing there fires
-// nothing, Esc dismisses for the rest of the hold, and aiming toward the
-// opposite quadrant first passes through neutral (north + `j` = neutral, `j`
-// again = south). The host arms it with the current item and a
+// nothing — that IS the cancel, Esc is not involved (it is swallowed while
+// Alt is held) — and aiming toward the opposite quadrant first passes through
+// neutral (north + `j` = neutral, `j` again = south). Sticky menus (a mouse
+// click arms them) use the same board: clicks on a tile fire it and a click
+// outside the board cancels. The host arms it with the current item and a
 // `{north,south,east,west}` config of `{label, icon, invoke}` slots (null =
 // open, drawn as "—"; the verb is its SVG glyph); one `board` rectangle owns
 // the margin and scale and the tiles anchor to its edges. The option tiles
@@ -136,7 +138,7 @@ Item {
             spawnOut.restart();
     }
 
-    /// Esc: cancel and keep the overlay down for the rest of this Alt hold.
+    /// IPC `quick_cancel`: retire the overlay for the rest of this Alt hold.
     function dismiss() {
         dismissed = true;
         cancel();
@@ -197,11 +199,14 @@ Item {
     }
 
     // While armed, swallow clicks so an errant press cannot activate the row
-    // underneath mid-gesture; hover passes through (no hoverEnabled).
+    // underneath mid-gesture; a click that no tile claims cancels the menu
+    // (the mouse equivalent of releasing over neutral). Hover passes through
+    // (no hoverEnabled).
     MouseArea {
         anchors.fill: parent
         acceptedButtons: Qt.LeftButton
         enabled: root.armed
+        onClicked: root.cancel()
     }
 
     // ARC-UI-1: one parent rectangle owns the cluster — the margin between the
@@ -349,6 +354,15 @@ Item {
                     : (box.isAimed ? Palette.onPrimaryContainer : Palette.onSurfaceVariant)
                 font.family: "monospace"
                 font.pixelSize: board.boxFont
+            }
+
+            // Mouse path: clicking a tile aims and fires it in one step.
+            TapHandler {
+                enabled: !box.isDisabled
+                onTapped: {
+                    root.aimed = box.direction;
+                    root.confirm();
+                }
             }
         }
 

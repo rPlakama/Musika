@@ -203,16 +203,17 @@ Item {
     }
 
     /// Destructive maintenance menu (the SuperiorBar trashcan — a click, Alt
-    /// while it is scoped, or the `wipe_databases` IPC command): the shared
-    /// overlay arms in sticky mode on the trashcan — the four quadrants wipe,
-    /// Enter fires the aim, Esc cancels.
-    function armWipeMenu(target) {
+    /// while it is scoped, or the `wipe_databases` IPC command). The Alt path
+    /// is not sticky: releasing over a quadrant fires it, releasing over the
+    /// neutral centre cancels. Click/IPC opens are sticky (no Alt release to
+    /// fire them) and cancel by clicking outside or Enter on neutral.
+    function armWipeMenu(target, sticky) {
         if (Backend.librarySyncing) {
             toast.show("sync", "Wait for the sync to finish before wiping.");
             return;
         }
         if (target)
-            quickActions.arm(target, verbs.wipe());
+            quickActions.arm(target, verbs.wipe(sticky));
     }
 
     QuickActions {
@@ -248,7 +249,8 @@ Item {
         }
 
         // Sticky quadrant menu (the wipe chooser): h/j/k/l or arrows aim,
-        // Enter fires the aimed wipe, Esc closes — no Alt hold involved.
+        // Enter fires the aimed wipe (at neutral it just closes). Esc is not
+        // a cancel here either — a click outside the board closes it.
         if (quickActions.armed && quickActions.sticky) {
             if (action === "move_up")
                 quickActions.aim("north");
@@ -260,15 +262,13 @@ Item {
                 quickActions.aim("east");
             else if (action === "enter")
                 quickActions.confirm();
-            else if (action === "back")
-                quickActions.cancel();
             return;
         }
 
         // IPC command parity: `wipe_databases` opens the wipe menu anchored
         // on the trashcan (the keyboard path is Alt while it is scoped).
         if (action === "wipe_databases") {
-            root.armWipeMenu(topBar.wipeAnchor);
+            root.armWipeMenu(topBar.wipeAnchor, true);
             return;
         }
 
@@ -505,7 +505,7 @@ Item {
             Layout.fillWidth: true
             Layout.preferredHeight: root.barH
             active: root.activeRegion === 2
-            onWipeRequested: (target) => root.armWipeMenu(target)
+            onWipeRequested: (target, sticky) => root.armWipeMenu(target, sticky)
         }
 
         RowLayout {

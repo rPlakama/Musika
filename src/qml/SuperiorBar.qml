@@ -36,7 +36,9 @@ Rectangle {
     /// scoped, asks Home to arm it).
     readonly property Item wipeAnchor: wipeButton
 
-    signal wipeRequested(var target)
+    /// `sticky` = the menu stays armed after the trigger (mouse click path);
+    /// the Alt-hold path passes false so release-over-neutral cancels.
+    signal wipeRequested(var target, bool sticky)
 
     color: Palette.surfaceContainerLow
 
@@ -87,7 +89,7 @@ Rectangle {
         if (root.scope === 0)
             Backend.syncLibrary();
         else
-            root.wipeRequested(wipeButton);
+            root.wipeRequested(wipeButton, true);
     }
 
     /// Alt-menu availability: the reusable conditional hosts check before
@@ -100,7 +102,7 @@ Rectangle {
     function armQuickActions() {
         if (!root.altActionsAvailable)
             return;
-        root.wipeRequested(wipeButton);
+        root.wipeRequested(wipeButton, false);
     }
 
     // UI-49 bounce-back: on unhover without a tap, the same shake as the
@@ -108,23 +110,6 @@ Rectangle {
     ShakeFx {
         id: syncFx
         target: syncIcon
-    }
-
-    // Tab scope ring: one reusable hairline frame. It lives on the stationary
-    // button rectangle (the parent), never on the spinning glyph.
-    component ScopeRing: Rectangle {
-        required property bool shown
-
-        anchors.fill: parent
-        radius: Theme.radius
-        color: "transparent"
-        border.width: Math.max(1, root.height * Theme.hairlineRatio * 1.5)
-        border.color: Palette.primary
-        opacity: shown ? 1 : 0
-
-        Behavior on opacity {
-            NumberAnimation { duration: Theme.motion.micro; easing.type: Easing.Bezier; easing.bezierCurve: Theme.ease.standard }
-        }
     }
 
     // Bottom divider.
@@ -400,7 +385,7 @@ Rectangle {
                         enabled: !Backend.librarySyncing
                         onTapped: {
                             root.scope = 1;
-                            root.wipeRequested(wipeButton);
+                            root.wipeRequested(wipeButton, true);
                         }
                     }
                 }

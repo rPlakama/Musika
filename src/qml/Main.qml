@@ -220,10 +220,11 @@ ApplicationWindow {
                     dispatch("quick_aim " + aim);
                     return;
                 }
-                if (event.key === Qt.Key_Escape) {
-                    dispatch("quick_cancel");
+                // Esc is not the Alt gesture's cancel: releasing over the
+                // neutral centre is. While Alt is held, Esc is swallowed so
+                // it can neither cancel the menu nor leak into the keymap.
+                if (event.key === Qt.Key_Escape)
                     return;
-                }
             }
             var action = Backend.keyEvent(event.key, event.modifiers);
             if (action === "PENDING") {

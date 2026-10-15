@@ -99,12 +99,13 @@ QtObject {
         };
     }
 
-    /// Destructive maintenance verbs (the SuperiorBar trashcan / `Del`): the
-    /// quadrant picks what to wipe. `sticky` keeps the overlay open until
-    /// Enter fires the aim or Esc cancels (no Alt-hold gesture).
-    function wipe() {
+    /// Destructive maintenance verbs (the SuperiorBar trashcan): the quadrant
+    /// picks what to wipe. `sticky` keeps the overlay armed after a mouse
+    /// click; the Alt-hold path passes false so releasing over neutral
+    /// cancels and releasing over a quadrant fires it.
+    function wipe(sticky) {
         return {
-            sticky: true,
+            sticky: sticky === true,
             north: {
                 label: "Wipe all!",
                 icon: "qrc:/app/icons/delete-outline.svg",

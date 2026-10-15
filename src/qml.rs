@@ -493,6 +493,7 @@ impl Backend {
                     qtbridge::invoke_method!(invoker, "noteServerType", info.kind.clone());
                     invoker.invoke_method("noteOnline");
                     invoker.invoke_method("login_succeeded");
+                    eprintln!("login: online mode — server available");
                     spawn_sync(
                         sync_finish,
                         sync_progress,
@@ -585,6 +586,7 @@ impl Backend {
                         Ok(info) => {
                             qtbridge::invoke_method!(invoker, "noteServerType", info.kind);
                             invoker.invoke_method("noteOnline");
+                            eprintln!("login: online mode — server available");
                             spawn_sync(
                                 sync_finish,
                                 sync_progress,

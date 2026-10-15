@@ -185,6 +185,14 @@ impl Player {
         self.queue.get(self.index)
     }
 
+    /// Re-resolves every queued track's cover URL from a fresh map: a wipe or
+    /// a cover sync invalidates the snapshot taken when the queue was built.
+    pub fn refresh_cover_urls(&mut self, covers: &std::collections::HashMap<String, String>) {
+        for track in &mut self.queue {
+            track.cover_url = covers.get(&track.cover_art).cloned().unwrap_or_default();
+        }
+    }
+
     /// Ids of the next `count` tracks after the current one (LYR-5 prefetch).
     pub fn upcoming(&self, count: usize) -> Vec<String> {
         self.queue

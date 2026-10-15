@@ -1122,6 +1122,7 @@ impl Backend {
         if scope == "all" {
             self.player.stop();
             self.sync_player();
+            self.reset_colors();
             self.offline = false;
             self.offline_changed();
             self.logged_in = false;
@@ -1132,12 +1133,51 @@ impl Backend {
             self.login_required();
             return;
         }
+        // Every wipe invalidates cached UI state: the counts and list/page
+        // payloads reload through `library_sync_finished`, and the queue +
+        // palette are re-emitted here so nothing keeps rendering wiped data.
         self.library_sync_finished(match scope.as_str() {
             "library" => "Library metadata wiped — run a sync to refetch.".to_string(),
             "indexes" => "Search indexes wiped — rebuilt on the next sync.".to_string(),
             "covers" => "Cover cache wiped — art refetches on demand.".to_string(),
             other => format!("Wiped {other}."),
         });
+        // Re-resolve the queue's cover URLs against the (possibly empty)
+        // covers index, then republish the queue and the palette.
+        let invoker = self.get_qml_method_invoker();
+        if let Some(dbs) = crate::dbs().cloned() {
+            crate::runtime().spawn(async move {
+                let covers = crate::covers::url_map(&dbs.covers).await.unwrap_or_default();
+                let json = serde_json::to_string(&covers).unwrap_or_default();
+                qtbridge::invoke_method!(invoker, "applyQueueCovers", json);
+            });
+        }
+        self.request_colors();
+    }
+
+    /// Applies re-resolved queue cover URLs (the wipe reload path).
+    #[qslot(qml_name = "applyQueueCovers")]
+    fn apply_queue_covers(&mut self, covers_json: String) {
+        let covers: std::collections::HashMap<String, String> =
+            serde_json::from_str(&covers_json).unwrap_or_default();
+        self.player.refresh_cover_urls(&covers);
+        self.sync_player();
+        self.emit_queue();
+    }
+
+    /// Re-emits the current palette slot as `dark: null` so Main.qml falls
+    /// back to the static palette (used when a wipe removed the colors).
+    fn reset_colors(&mut self) {
+        let payload = serde_json::json!({
+            "cover_art": self.current_cover_art.clone(),
+            "cover_hash": "",
+            "scheme": "",
+            "seed": 0,
+            "role_hash": "",
+            "dark": serde_json::Value::Null,
+        })
+        .to_string();
+        self.data_ready("colors".to_string(), payload);
     }
 
     // -----------------------------------------------------------------------

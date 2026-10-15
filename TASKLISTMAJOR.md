@@ -1233,6 +1233,46 @@ The product is incomplete without these.
     `cargo test` 114 pass; `scripts/check-icons.sh` ok; QML parses clean under
     `qmllint`. Open: the manual acceptance pass on hardware.
 
+- [ ] **ARC-I-2 · Alt menu in `AlbumEntry` tracks + the album's favourite mark** — P3 · (ARC-I follow-up)
+  - **Why:** the album page's song list is the last track surface without the
+    Alt menu, and the album's own favourite state is invisible there even
+    though the fixed verbs can star it (`altFavorite("album")`).
+  - **Details:**
+    - `AlbumEntry` gets `armQuickActions()` on the song cursor —
+      `songs.get(songList.currentIndex)` + `songList.itemAtIndex(...)`, with a
+      `quickAction` signal and the `QuickActions.song` set; its rows need
+      `songId`/`albumId` mapped from the payload (`load_album_songs_json`
+      already emits them) and Home's `albumEntryComponent` relays
+      `onQuickAction` like the other stack views; the toolbar cursor
+      (`onToolbar`) is a no-op, empty lists too;
+    - the header shows the album's favourite with the same white
+      `baseline-favorite` leading the header meta; `queue_album_json` (the
+      page payload: ARC-43 shape) must carry the album row's `starred`, and
+      the Alt Favorite verb lights it optimistically (P-2 parity).
+  - **Verify:** Alt on an album-page track arms the overlay on that row with
+    all four verbs; the header heart matches the server album flag and flips
+    with the Alt Favorite verb; the toolbar case is a no-op.
+
+- [ ] **ARC-I-3 · `ArtistEntry` action chips on keybinds** — P3 · (P-8 B–D, UI-44, ARC-42)
+  - **Why:** `<stars> <download> <shuffle> <favorite>` are the only way to
+    rate, cache or favourite an artist, and the product is keyboard-first —
+    the chips must never require the mouse (the shuffle chip is inert today).
+  - **Details:** keys follow the existing mnemonics/action-name scheme
+    (`keybind.rs` `Action` + `Action::name()` consumed by
+    `ArtistEntry.handleAction`, region-scoped like the list actions):
+    - `s` toggles favorite (`starArtist`, the chip's optimistic flow);
+    - `1`…`5` set the rating (`rateArtist`), `0` clears;
+    - `c` toggles the cache rule (`downloadArtist`);
+    - `z` shuffles the artist (queue every indexed track shuffled and start
+      it — mpd/ncmpcpp's random key; `shift-s` is the fallback if `z` is
+      claimed) and wires the inert shuffle chip;
+    - each binding gets its insight/hint per UI-44 (footer or which-key), so
+      no keybind ships without its visible counterpart.
+  - **Verify:** from the artist page each key does exactly what its chip
+    does (hover/press state reacts), `0` clears the rating, no binding leaks
+    to other regions/`Backend.keyPending`/Alt aiming, and the chips still
+    work by mouse.
+
 - [x] **CACHE-1 · DB4 `media.db` + `media/` blobs** — P2 · (roadmap Media cache; MEDIACACHESTUDY.md §3/§5)
   - **Why:** audio is never stored; playback dies without network. Research
     picked an independent reqwest fetch (`download` original / `stream` with
@@ -2833,10 +2873,10 @@ Kept for rationale; the tree already carries these.
 | Bucket | Open | Solved |
 |--------|------|--------|
 | Must have | 7 | 2 |
-| Should have | 82 | 15 |
+| Should have | 84 | 15 |
 | Quick wins | 6 | 58 |
 | Solved (reference) | — | 36 |
-| **Total** | **95** | **111** |
+| **Total** | **97** | **111** |
 
 ### Coverage by area
 
@@ -2849,7 +2889,7 @@ Kept for rationale; the tree already carries these.
 | Search | 2 | 6 |
 | UI microdesigns | 19 | 31 |
 | Alt action menu (ARC-UI) | 0 | 1 |
-| Incremental (ARC-I) | 0 | 1 |
+| Incremental (ARC-I) | 2 | 1 |
 | Dynamic color | 1 | 5 |
 | Architecture & robustness | 23 | 19 |
 | Recycling | 27 | 0 |

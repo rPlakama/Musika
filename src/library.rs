@@ -142,6 +142,15 @@ pub async fn set_song_starred(pool: &SqlitePool, id: &str, on: bool) -> Result<(
     Ok(())
 }
 
+/// Song ids carrying a favourite flag — the queue payload's heart truth
+/// (the in-memory player track's flag goes stale after `altFavorite`).
+pub async fn starred_song_ids(pool: &SqlitePool) -> Result<Vec<String>> {
+    let ids = sqlx::query_scalar("SELECT id FROM songs WHERE starred IS NOT NULL")
+        .fetch_all(pool)
+        .await?;
+    Ok(ids)
+}
+
 /// The album's favourite flag (the fullscreen keybar heart).
 pub async fn album_starred(pool: &SqlitePool, id: &str) -> Result<bool> {
     let starred: Option<String> = sqlx::query_scalar("SELECT starred FROM albums WHERE id = ?1")

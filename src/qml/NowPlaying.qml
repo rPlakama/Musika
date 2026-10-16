@@ -174,6 +174,20 @@ Rectangle {
             : null;
     }
 
+    // ── Row download marks: the global ledger property --------------------
+    // `Backend.downloadedIds` (download.db's finished songs) is the single
+    // truth every row binds to by song id — the download twin of the hearts'
+    // library read. Refreshed on entry and after container changes.
+
+    /// The favourite heart of every row holding this song (optimistic; the
+    /// queue payloads reconcile).
+    function markRowStarred(songId, on) {
+        for (var i = 0; i < queueItems.count; i++) {
+            if (queueItems.get(i).songId === songId)
+                queueItems.setProperty(i, "starred", on);
+        }
+    }
+
     /// The keybar chips arm the shared Alt overlay instead of firing: two
     /// options, left = track scope (note) and right = album scope, so the
     /// user directs whether the verb lands on the track or the whole album.
@@ -196,8 +210,10 @@ Rectangle {
                 icon: "qrc:/app/icons/track-svgrepo-com.svg",
                 favorite: !starred,
                 invoke: function() {
-                    if (songId.length > 0)
+                    if (songId.length > 0) {
                         Backend.altFavorite("song", songId, !starred);
+                        root.markRowStarred(songId, !starred);
+                    }
                 }
             };
             actions.east = {
@@ -316,8 +332,7 @@ Rectangle {
         for (var s = 0; s < data.items.length; s++) {
             var sig = data.items[s];
             signature += sig.id + "|" + sig.title + "|" + sig.duration
-                + "|" + (sig.starred === true ? 1 : 0)
-                + "|" + (sig.downloaded === true ? 1 : 0) + ";";
+                + "|" + (sig.starred === true ? 1 : 0) + ";";
         }
         if (signature !== root._queueSignature) {
             root._queueSignature = signature;
@@ -332,8 +347,7 @@ Rectangle {
                     duration: Theme.formatTime(track.duration),
                     songId: track.id,
                     albumId: track.album_id ? track.album_id : "",
-                    starred: track.starred === true,
-                    downloaded: track.downloaded === true
+                    starred: track.starred === true
                 });
             }
             Qt.callLater(function () {
@@ -538,6 +552,8 @@ Rectangle {
             }
             // The keybar's album actions reconcile on entry too.
             root.requestAlbumActions();
+            // The row download marks read download.db's set globally.
+            Backend.requestDownloads();
         } else if (queueItems.count > 0) {
             queueContent.remember(pane);
             // VI-4: leaving fullscreen ends the queue selection.
@@ -562,6 +578,14 @@ Rectangle {
                     root.albumDownloading = cache.active === true;
                     root.albumCovered = cache.covered === true;
                 }
+                // A settled container pass: the backend re-reads the ledger
+                // set for the exact final marks.
+                if (!cache.active)
+                    Backend.requestDownloads();
+            } else if (channel === "artist_cache") {
+                // Artist passes settle outside the keybar: re-read the set.
+                if (!JSON.parse(payload).active)
+                    Backend.requestDownloads();
             } else if (channel === "album_state") {
                 var state = JSON.parse(payload);
                 if (state.id === Backend.currentAlbumId)
@@ -1243,6 +1267,7 @@ Rectangle {
                                         required property int index
                                         required property string title
                                         required property string duration
+                                        required property string songId
                                         required property bool starred
 
                                         readonly property bool emphasized: index === root.queueCursor || rowHover.hovered
@@ -1308,34 +1333,55 @@ Rectangle {
                                             currentMatch: index === queueContent.searchCurrentRow
                                         }
 
-                                        // UI-56: the favourite heart leads the
-                                        // duration (state mark, no hitbox).
-                                        Icon {
-                                            id: starMark
-                                            visible: row.starred
+                                        // UI-56: the state marks (download,
+                                        // then the favourite heart) each live
+                                        // in their own box — the widths are
+                                        // dynamic (the glyph size, which
+                                        // follows the type ramp), and the
+                                        // group flows whichever marks show.
+                                        Row {
+                                            id: stateMarks
                                             anchors.verticalCenter: parent.verticalCenter
                                             anchors.right: durationLabel.left
-                                            anchors.rightMargin: row.width * 0.01
-                                            width: durationLabel.font.pixelSize * 0.8
-                                            height: width
-                                            name: "baseline-favorite"
-                                            symbolColor: Theme.iconStrong
-                                        }
+                                            // 10% more air than the row gutter.
+                                            anchors.rightMargin: row.width * 0.011
+                                            spacing: row.width * 0.008
 
-                                        // The same download glyph the keybar
-                                        // uses, at the heart's side: the
-                                        // track's cache state (filled = the
-                                        // blob is in the ledger).
-                                        Icon {
-                                            visible: row.downloaded === true
-                                            anchors.verticalCenter: parent.verticalCenter
-                                            anchors.right: row.starred
-                                                ? starMark.left : durationLabel.left
-                                            anchors.rightMargin: row.width * 0.01
-                                            width: durationLabel.font.pixelSize * 0.8
-                                            height: width
-                                            name: "baseline-download"
-                                            symbolColor: Palette.tertiary
+                                            Rectangle {
+                                                // The same filled download
+                                                // glyph the keybar uses; shown
+                                                // iff the song id is in the
+                                                // global download.db set. A
+                                                // 1.2× box makes it read equal
+                                                // to the heart's ink.
+                                                visible: Backend.downloadedIds.indexOf(row.songId) !== -1
+                                                width: durationLabel.font.pixelSize * 0.96
+                                                height: width
+                                                color: "transparent"
+
+                                                Icon {
+                                                    anchors.centerIn: parent
+                                                    width: parent.width
+                                                    height: width
+                                                    name: "baseline-download"
+                                                    symbolColor: Palette.tertiary
+                                                }
+                                            }
+
+                                            Rectangle {
+                                                visible: row.starred
+                                                width: durationLabel.font.pixelSize * 0.8
+                                                height: width
+                                                color: "transparent"
+
+                                                Icon {
+                                                    anchors.centerIn: parent
+                                                    width: parent.width
+                                                    height: width
+                                                    name: "baseline-favorite"
+                                                    symbolColor: Theme.iconStrong
+                                                }
+                                            }
                                         }
 
                                         HoverHandler {

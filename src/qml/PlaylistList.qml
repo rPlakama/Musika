@@ -51,6 +51,7 @@ MediaList {
                 meta: list.duration > 0 ? Theme.formatTime(list.duration) : "",
                 cover: "",
                 playlistId: list.id,
+                songId: "",
                 starred: false
             });
         }

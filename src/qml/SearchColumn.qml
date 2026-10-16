@@ -235,6 +235,7 @@ Item {
                         required property string subtitle
                         required property string meta
                         required property string cover
+                        required property string songId
                         required property bool starred
 
                         readonly property bool current: index === root.cursor
@@ -349,17 +350,45 @@ Item {
                             }
                         }
 
-                        // UI-56: the favourite heart leads the meta text (a
-                        // state mark, no hitbox); unstarred rows draw none.
-                        Icon {
-                            visible: row.starred && row.meta.length > 0
+                        // UI-56: the state marks lead the meta text — the
+                        // download glyph (the global ledger set) then the
+                        // favourite heart; none draws when absent.
+                        Row {
+                            id: metaMarks
                             anchors.verticalCenter: parent.verticalCenter
                             anchors.right: metaLabel.left
                             anchors.rightMargin: row.height * 0.06
-                            width: metaLabel.font.pixelSize * 0.8
-                            height: width
-                            name: "baseline-favorite"
-                            symbolColor: Theme.iconStrong
+                            spacing: row.height * 0.05
+
+                            Rectangle {
+                                visible: Backend.downloadedIds.indexOf(row.songId) !== -1
+                                width: metaLabel.font.pixelSize * 0.96
+                                height: width
+                                color: "transparent"
+
+                                Icon {
+                                    anchors.centerIn: parent
+                                    width: parent.width
+                                    height: width
+                                    name: "baseline-download"
+                                    symbolColor: Palette.tertiary
+                                }
+                            }
+
+                            Rectangle {
+                                visible: row.starred && row.meta.length > 0
+                                width: metaLabel.font.pixelSize * 0.8
+                                height: width
+                                color: "transparent"
+
+                                Icon {
+                                    anchors.centerIn: parent
+                                    width: parent.width
+                                    height: width
+                                    name: "baseline-favorite"
+                                    symbolColor: Theme.iconStrong
+                                }
+                            }
                         }
 
                         SearchText {

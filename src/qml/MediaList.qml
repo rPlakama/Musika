@@ -44,6 +44,10 @@ ScrollPanel {
         id: verbs
     }
 
+    // The row download marks read the global ledger set; make sure it is
+    // loaded even when the fullscreen player was never opened.
+    Component.onCompleted: Backend.requestDownloads()
+
     /// VI-4: the selection state lives in `ScrollContent` and is forwarded by
     /// `ScrollPanel` (`toggleSelection`/`selectAll`/`clearSelection`/…); the
     /// list only gates it on the Alt verb kind and names the id field batch
@@ -184,6 +188,7 @@ ScrollPanel {
             required property string subtitle
             required property string meta
             required property string cover
+            required property string songId
             required property bool starred
 
             readonly property real viewWidth: ListView.view ? ListView.view.width : 0
@@ -294,17 +299,45 @@ ScrollPanel {
                 currentMatch: row.index === root.searchCurrentRow
             }
 
-            // UI-56: the favourite heart leads the meta text — a state mark
-            // (no hitbox); unstarred rows draw nothing and leave no gap.
-            Icon {
-                visible: row.starred
+            // UI-56: the state marks lead the meta text — download (the
+            // global ledger set) then the favourite heart; none draws
+            // anything when absent, so no gaps appear.
+            Row {
+                id: stateMarks
                 anchors.verticalCenter: parent.verticalCenter
                 anchors.right: metaLabel.left
                 anchors.rightMargin: row.viewWidth * 0.015
-                width: metaLabel.font.pixelSize * 0.8
-                height: width
-                name: "baseline-favorite"
-                symbolColor: Theme.iconStrong
+                spacing: row.viewWidth * 0.008
+
+                Rectangle {
+                    visible: Backend.downloadedIds.indexOf(row.songId) !== -1
+                    width: metaLabel.font.pixelSize * 0.96
+                    height: width
+                    color: "transparent"
+
+                    Icon {
+                        anchors.centerIn: parent
+                        width: parent.width
+                        height: width
+                        name: "baseline-download"
+                        symbolColor: Palette.tertiary
+                    }
+                }
+
+                Rectangle {
+                    visible: row.starred
+                    width: metaLabel.font.pixelSize * 0.8
+                    height: width
+                    color: "transparent"
+
+                    Icon {
+                        anchors.centerIn: parent
+                        width: parent.width
+                        height: width
+                        name: "baseline-favorite"
+                        symbolColor: Theme.iconStrong
+                    }
+                }
             }
 
             HoverHandler {
@@ -331,6 +364,7 @@ ScrollPanel {
             required property string subtitle
             required property string meta
             required property string cover
+            required property string songId
             required property bool starred
 
             readonly property bool current: GridView.isCurrentItem
@@ -386,7 +420,9 @@ ScrollPanel {
                     sizeFactor: 2
                 }
 
-                // UI-56: the favourite mark rides the cover corner.
+                // UI-56: the favourite mark rides the cover corner; the
+                // download mark (the global ledger set) mirrors it on the
+                // other corner.
                 Icon {
                     visible: cell.starred
                     anchors.right: parent.right
@@ -396,6 +432,17 @@ ScrollPanel {
                     height: width
                     name: "baseline-favorite"
                     symbolColor: Theme.iconStrong
+                }
+
+                Icon {
+                    visible: Backend.downloadedIds.indexOf(cell.songId) !== -1
+                    anchors.left: parent.left
+                    anchors.bottom: parent.bottom
+                    anchors.margins: parent.width * 0.06
+                    width: parent.width * 0.085 * 1.2
+                    height: width
+                    name: "baseline-download"
+                    symbolColor: Palette.tertiary
                 }
             }
 

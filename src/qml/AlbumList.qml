@@ -53,6 +53,7 @@ MediaList {
                 artist: artist,
                 year: year,
                 tracks: String(album.song_count),
+                songId: "",
                 starred: album.starred === true
             });
         }

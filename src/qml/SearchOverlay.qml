@@ -345,6 +345,7 @@ Item {
                 year: album.year ? String(album.year) : "",
                 tracks: String(album.song_count),
                 albumId: album.id,
+                songId: "",
                 starred: album.starred === true
             });
         }
@@ -359,6 +360,7 @@ Item {
                 meta: "",
                 cover: artist.cover,
                 artistId: artist.id,
+                songId: "",
                 starred: artist.starred === true
             });
         }

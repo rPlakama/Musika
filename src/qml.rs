@@ -74,23 +74,44 @@ fn album_state_payload(album_id: &str, starred: bool) -> String {
     serde_json::json!({ "id": album_id, "starred": starred }).to_string()
 }
 
+/// Reads the download ledger and applies the finished-song set to the
+/// backend's `downloadedIds` property (through the invoker, so the write
+/// lands on the main thread). One log line per read; the row marks re-derive
+/// from the property, nowhere else.
+async fn apply_ledger(dbs: &crate::db::Dbs, invoker: qtbridge::QmlMethodInvoker) {
+    let ids = crate::download::done_ids(&dbs.download)
+        .await
+        .unwrap_or_default();
+    eprintln!("downloads: {} songs in the ledger", ids.len());
+    let json = serde_json::to_string(&ids).unwrap_or_else(|_| "[]".to_string());
+    qtbridge::invoke_method!(invoker, "applyDownloadedIds", json);
+}
+
 /// CACHE-5/8: fetch every song of a container pass with bounded concurrency;
 /// the ledger row per song carries its own state, a failure is logged and
-/// the rest of the pass continues.
-async fn fetch_marked(dbs: &crate::db::Dbs, songs: &[String]) {
+/// the rest of the pass continues. The ledger set is applied once at the end
+/// (the container's terminal payload triggers the QML re-read too).
+async fn fetch_marked(
+    dbs: &crate::db::Dbs,
+    songs: &[String],
+    invoker: qtbridge::QmlMethodInvoker,
+) {
     for chunk in songs.chunks(crate::consts::FETCH_CONCURRENCY) {
         let mut set = tokio::task::JoinSet::new();
         for song in chunk {
             let dbs = dbs.clone();
             let song = song.clone();
-            set.spawn(async move { download_one(&dbs, &song).await });
+            set.spawn(async move {
+                let result = download_one(&dbs, &song).await;
+                (song, result)
+            });
         }
         while let Some(joined) = set.join_next().await {
-            if let Ok(Err(err)) = joined {
-                eprintln!("media: container download failed: {err:#}");
-            }
+            // `download_one` already logged the per-song outcome.
+            let _ = joined;
         }
     }
+    apply_ledger(dbs, invoker).await;
 }
 
 /// Fetches one song into the media cache unless it is already available or a
@@ -104,11 +125,13 @@ async fn download_one(dbs: &crate::db::Dbs, song_id: &str) -> anyhow::Result<&'s
         .await?
         .is_some()
     {
+        eprintln!("download: {song_id} already cached");
         crate::download::set_state(&dbs.download, song_id, crate::download::DONE, None).await?;
         return Ok(crate::download::DONE);
     }
     if let Some(row) = crate::download::get(&dbs.download, song_id).await? {
         if row.state == crate::download::ACTIVE {
+            eprintln!("download: {song_id} fetch already in flight");
             return Ok(crate::download::ACTIVE);
         }
     }
@@ -149,10 +172,12 @@ async fn download_one(dbs: &crate::db::Dbs, song_id: &str) -> anyhow::Result<&'s
     match fetched {
         Ok(()) => {
             crate::download::set_state(&dbs.download, song_id, crate::download::DONE, None).await?;
+            eprintln!("download: {song_id} finished");
             Ok(crate::download::DONE)
         }
         Err(err) => {
             let message = format!("{err:#}");
+            eprintln!("download: {song_id} failed: {message}");
             let _ = crate::download::set_state(
                 &dbs.download,
                 song_id,
@@ -207,6 +232,10 @@ pub struct Backend {
     /// The playing track's album id — the fullscreen favourite/download
     /// buttons act in album scope.
     current_album_id: String,
+    /// The download ledger's finished-song ids, read from download.db. The
+    /// global row-mark truth: every row shows its download glyph iff its
+    /// song id is in here.
+    downloaded_ids: Vec<String>,
     playback_state: String,
     position: f64,
     duration: f64,
@@ -330,6 +359,11 @@ impl Backend {
         Notify = current_album_id_changed
     );
     qproperty!(
+        "downloadedIds",
+        Member = downloaded_ids,
+        Notify = downloaded_ids_changed
+    );
+    qproperty!(
         "playbackState",
         Member = playback_state,
         Notify = playback_state_changed
@@ -440,6 +474,8 @@ impl Backend {
     fn current_song_id_changed(&mut self);
     #[qsignal]
     fn current_album_id_changed(&mut self);
+    #[qsignal]
+    fn downloaded_ids_changed(&mut self);
     #[qsignal(qml_name = "dataReady")]
     fn data_ready(&mut self, channel: String, payload: String);
     #[qsignal(qml_name = "errorRaised")]
@@ -1646,22 +1682,16 @@ impl Backend {
             return;
         };
         crate::runtime().spawn(async move {
-            match download_one(&dbs, &song_id).await {
-                Ok(state) => {
-                    let json = download_payload(&song_id, state);
-                    qtbridge::invoke_method!(invoker, "emitData", "download".to_string(), json);
-                }
-                Err(err) => {
-                    let json = download_payload(&song_id, crate::download::ERROR);
-                    qtbridge::invoke_method!(invoker, "emitData", "download".to_string(), json);
-                    qtbridge::invoke_method!(
-                        error_invoker,
-                        "errorRaised",
-                        "error".to_string(),
-                        format!("Download failed: {err:#}")
-                    );
-                }
+            if let Err(err) = download_one(&dbs, &song_id).await {
+                qtbridge::invoke_method!(
+                    error_invoker,
+                    "errorRaised",
+                    "error".to_string(),
+                    format!("Download failed: {err:#}")
+                );
             }
+            // The ledger set is the row-mark truth: re-read it either way.
+            apply_ledger(&dbs, invoker).await;
         });
     }
 
@@ -1690,6 +1720,7 @@ impl Backend {
     #[qslot(qml_name = "downloadArtist")]
     fn download_artist(&mut self, artist_id: String, on: bool) {
         let invoker = self.get_qml_method_invoker();
+        let fetch_invoker = self.get_qml_method_invoker();
         let error_invoker = self.get_qml_method_invoker();
         let Some(dbs) = crate::dbs().cloned() else {
             return;
@@ -1722,10 +1753,15 @@ impl Backend {
                         eprintln!("media: could not mark {song}: {err:#}");
                     }
                 }
+                eprintln!(
+                    "download: artist {artist_id} pass started ({} songs)",
+                    songs.len()
+                );
                 // The pass is now in flight: the chip shows its loading loop.
                 let json = artist_cache_payload(&artist_id, true, true);
                 qtbridge::invoke_method!(invoker, "emitData", "artist_cache".to_string(), json);
-                fetch_marked(&dbs, &songs).await;
+                fetch_marked(&dbs, &songs, fetch_invoker).await;
+                eprintln!("download: artist {artist_id} pass finished");
                 let json = artist_cache_payload(&artist_id, true, false);
                 qtbridge::invoke_method!(invoker, "emitData", "artist_cache".to_string(), json);
             } else {
@@ -1747,8 +1783,11 @@ impl Backend {
                         eprintln!("media: could not remove the artist blobs: {err:#}");
                     }
                 }
+                eprintln!("download: artist {artist_id} removed from the cache");
                 let json = artist_cache_payload(&artist_id, false, false);
                 qtbridge::invoke_method!(invoker, "emitData", "artist_cache".to_string(), json);
+                // The marks lose the artist's songs: re-read the ledger.
+                apply_ledger(&dbs, fetch_invoker).await;
             }
         });
     }
@@ -1804,6 +1843,7 @@ impl Backend {
     #[qslot(qml_name = "downloadAlbum")]
     fn download_album(&mut self, album_id: String, on: bool) {
         let invoker = self.get_qml_method_invoker();
+        let fetch_invoker = self.get_qml_method_invoker();
         let error_invoker = self.get_qml_method_invoker();
         let Some(dbs) = crate::dbs().cloned() else {
             return;
@@ -1820,6 +1860,9 @@ impl Backend {
                     };
                 if artist_covered {
                     // Redundant: the artist container already owns these songs.
+                    eprintln!(
+                        "download: album {album_id} already covered by the artist container; skipping"
+                    );
                     let json = album_cache_payload(&album_id, true, false, true);
                     qtbridge::invoke_method!(invoker, "emitData", "album_cache".to_string(), json);
                     return;
@@ -1850,10 +1893,15 @@ impl Backend {
                         eprintln!("media: could not mark {song}: {err:#}");
                     }
                 }
+                eprintln!(
+                    "download: album {album_id} pass started ({} songs)",
+                    songs.len()
+                );
                 // The pass is now in flight: the chip shows its loading loop.
                 let json = album_cache_payload(&album_id, true, true, false);
                 qtbridge::invoke_method!(invoker, "emitData", "album_cache".to_string(), json);
-                fetch_marked(&dbs, &songs).await;
+                fetch_marked(&dbs, &songs, fetch_invoker).await;
+                eprintln!("download: album {album_id} pass finished");
                 let json = album_cache_payload(&album_id, true, false, false);
                 qtbridge::invoke_method!(invoker, "emitData", "album_cache".to_string(), json);
             } else {
@@ -1875,8 +1923,11 @@ impl Backend {
                         eprintln!("media: could not remove the album blobs: {err:#}");
                     }
                 }
+                eprintln!("download: album {album_id} removed from the cache");
                 let json = album_cache_payload(&album_id, false, false, false);
                 qtbridge::invoke_method!(invoker, "emitData", "album_cache".to_string(), json);
+                // The marks lose the album's songs: re-read the ledger.
+                apply_ledger(&dbs, fetch_invoker).await;
             }
         });
     }
@@ -2131,10 +2182,11 @@ impl Backend {
     // Queue (drawer)
     // -----------------------------------------------------------------------
 
-    /// Publishes the current queue to QML. Each row carries its download
-    /// ledger state (`downloaded`) for the row mark beside the favourite
-    /// heart; the ledger lives in another database, so the emit hops through
-    /// the runtime — a generation ticket keeps the payloads in order.
+    /// Publishes the current queue to QML. The heart's truth is read from
+    /// `library.db` here (the in-memory track's flag goes stale after
+    /// `altFavorite`); the download ledger is NOT folded in — it has its own
+    /// channel ([`Self::request_downloads`]), so a row mark is a direct
+    /// database read, never a payload variable.
     fn emit_queue(&mut self) {
         let invoker = self.get_qml_method_invoker();
         let Some(dbs) = crate::dbs().cloned() else {
@@ -2144,11 +2196,12 @@ impl Backend {
         let index = self.player.index();
         let generation = QUEUE_EMIT_GEN.fetch_add(1, Ordering::Relaxed) + 1;
         crate::runtime().spawn(async move {
-            let done: std::collections::HashSet<String> = crate::download::done_ids(&dbs.download)
-                .await
-                .unwrap_or_default()
-                .into_iter()
-                .collect();
+            let starred: std::collections::HashSet<String> =
+                crate::library::starred_song_ids(&dbs.library)
+                    .await
+                    .unwrap_or_default()
+                    .into_iter()
+                    .collect();
             let items: Vec<serde_json::Value> = queue
                 .iter()
                 .map(|track| {
@@ -2158,10 +2211,9 @@ impl Backend {
                         "artist": track.artist,
                         "album": track.album,
                         "album_id": track.album_id,
-                        "starred": track.favorite,
+                        "starred": starred.contains(&track.id),
                         "duration": track.duration,
                         "cover": track.cover_url,
-                        "downloaded": done.contains(&track.id),
                     })
                 })
                 .collect();
@@ -2169,9 +2221,32 @@ impl Backend {
             if QUEUE_EMIT_GEN.load(Ordering::Relaxed) != generation {
                 return;
             }
+            eprintln!("queue: published {} rows", items.len());
             let json = serde_json::json!({ "index": index, "items": items }).to_string();
             qtbridge::invoke_method!(invoker, "emitData", "queue".to_string(), json);
         });
+    }
+
+    /// Re-reads the download ledger into the `downloadedIds` property — the
+    /// row marks' global truth (the download twin of the hearts' library
+    /// read). Called on list/player entry and after container changes.
+    #[qslot(qml_name = "requestDownloads")]
+    fn request_downloads(&mut self) {
+        let invoker = self.get_qml_method_invoker();
+        let Some(dbs) = crate::dbs().cloned() else {
+            return;
+        };
+        crate::runtime().spawn(async move {
+            apply_ledger(&dbs, invoker).await;
+        });
+    }
+
+    /// Applies the ledger set on the main thread (the async reader's landing
+    /// pad, invoked through the QML method invoker like `applyStatus`).
+    #[qslot(qml_name = "applyDownloadedIds")]
+    fn apply_downloaded_ids(&mut self, ids_json: String) {
+        self.downloaded_ids = serde_json::from_str(&ids_json).unwrap_or_default();
+        self.downloaded_ids_changed();
     }
 
     #[qslot(qml_name = "requestQueue")]

@@ -243,6 +243,32 @@ Rectangle {
         // UI-54: reopening the entry restores the cursor + offset (and the
         // ARC-UI-3 layout); later reloads keep the live state.
         wall.restore();
+        root.requestMarkWindow();
+    }
+
+    /// The state marks (favourite hearts, download glyphs) render only
+    /// inside the wall cursor's ±15-row window — same rule as the segments.
+    function markVisible(index) {
+        return Math.abs(index - wall.currentIndex) <= 15;
+    }
+
+    /// Ask the backend for the download state of that window only: album
+    /// cards are cached when every track of them is finished.
+    function requestMarkWindow() {
+        var albumsWindow = [];
+        var lo = Math.max(0, wall.currentIndex - 15);
+        var hi = Math.min(albums.count - 1, wall.currentIndex + 15);
+        for (var i = lo; i <= hi; ++i) {
+            var album = albums.get(i);
+            if (album && album.albumId)
+                albumsWindow.push(album.albumId);
+        }
+        Backend.requestDownloads("[]", JSON.stringify(albumsWindow));
+    }
+
+    Connections {
+        target: wall
+        function onCurrentIndexChanged() { root.requestMarkWindow(); }
     }
 
     function activateCurrent() {
@@ -753,9 +779,12 @@ Rectangle {
                             }
 
                             // UI-56/ARC-I-2: a favourited album carries its
-                            // mark inside the cover's bottom-right corner.
+                            // mark inside the cover's bottom-right corner;
+                            // the download glyph (every track cached)
+                            // mirrors it on the other corner — the same
+                            // state marks the segments show.
                             Icon {
-                                visible: cell.starred
+                                visible: root.markVisible(cell.index) && cell.starred
                                 anchors.right: parent.right
                                 anchors.bottom: parent.bottom
                                 anchors.margins: parent.width * 0.06
@@ -763,6 +792,18 @@ Rectangle {
                                 height: width
                                 name: "baseline-favorite"
                                 symbolColor: Theme.iconStrong
+                            }
+
+                            Icon {
+                                visible: root.markVisible(cell.index)
+                                    && Backend.cachedAlbumIds.indexOf(cell.albumId) !== -1
+                                anchors.left: parent.left
+                                anchors.bottom: parent.bottom
+                                anchors.margins: parent.width * 0.06
+                                width: parent.width * 0.085 * 1.2
+                                height: width
+                                name: "baseline-download"
+                                symbolColor: Palette.tertiary
                             }
                         }
 
@@ -850,8 +891,6 @@ Rectangle {
                             }
                         }
 
-                        // ARC-I-4: the favourited mark rides the cover corner
-                        // in both layouts (the grid heart's list twin).
                         Rectangle {
                             id: rowCover
                             anchors.left: parent.left
@@ -868,16 +907,47 @@ Rectangle {
                                 source: row.cover
                                 sizeFactor: 2
                             }
+                        }
 
-                            Icon {
-                                visible: row.starred
-                                anchors.right: parent.right
-                                anchors.bottom: parent.bottom
-                                anchors.margins: parent.width * 0.06
-                                width: parent.width * 0.085
+                        // The list grammar keeps the marks on the right rail
+                        // (download then heart, like every other list row);
+                        // only the grid cards ride the cover corners.
+                        Row {
+                            id: rowMarks
+                            anchors.verticalCenter: parent.verticalCenter
+                            anchors.right: parent.right
+                            anchors.rightMargin: row.width * 0.02
+                            spacing: row.width * 0.008
+
+                            Rectangle {
+                                visible: root.markVisible(row.index)
+                                    && Backend.cachedAlbumIds.indexOf(row.albumId) !== -1
+                                width: row.height * 0.18
                                 height: width
-                                name: "baseline-favorite"
-                                symbolColor: Theme.iconStrong
+                                color: "transparent"
+
+                                Icon {
+                                    anchors.centerIn: parent
+                                    width: parent.width
+                                    height: width
+                                    name: "baseline-download"
+                                    symbolColor: Palette.tertiary
+                                }
+                            }
+
+                            Rectangle {
+                                visible: root.markVisible(row.index) && row.starred
+                                width: row.height * 0.15
+                                height: width
+                                color: "transparent"
+
+                                Icon {
+                                    anchors.centerIn: parent
+                                    width: parent.width
+                                    height: width
+                                    name: "baseline-favorite"
+                                    symbolColor: Theme.iconStrong
+                                }
                             }
                         }
 
@@ -885,7 +955,10 @@ Rectangle {
                             anchors.left: rowCover.right
                             anchors.leftMargin: row.width * 0.02
                             anchors.right: parent.right
-                            anchors.rightMargin: row.width * 0.02
+                            // The marks own the right rail; the text elides
+                            // before them (0 width when nothing is marked).
+                            anchors.rightMargin: row.width * 0.02 + rowMarks.width
+                                + (rowMarks.width > 0 ? row.width * 0.01 : 0)
                             anchors.verticalCenter: parent.verticalCenter
                             spacing: row.height * 0.04
 

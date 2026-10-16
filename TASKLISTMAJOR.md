@@ -170,6 +170,19 @@ The app is unsafe or misleading without these.
 
 The product is incomplete without these.
 
+- [ ] **REC-UI-1 · One row mechanism, everywhere** — P1 · (reported)
+  - **Why:** "Fix Scroll/Row mechanism incosistencies; All rows present
+    should use the same modal, to be reused, recicled, and highly
+    consumable."
+  - **Details:** rows grew per-surface grammars — state marks over the cover
+    in one layout, on the right rail in another; per-list reload / cursor
+    reset / trigger paths. Extract **one row contract** (state marks +
+    `markVisible`/mark window + payload reload + cursor-position reset +
+    `TriggerRowReload`) that every list consumes (MediaList, ArtistEntry,
+    AlbumEntry, SearchColumn, the queue); grid cells keep the cover-corner
+    marks as a layout *parameterisation* of the same contract, never a
+    second grammar. Pairs with RECICLEISLOVE (RowSync) for the model half.
+
 - [ ] **VI-2 · Global mode state machine** — P1 · (N4, CRITIQUE Ph1.1, MY3 §4.1)
   - **Why:** modes exist only locally in the search overlay; the rest of the app
     has no explicit fallback state, so future features would guess.

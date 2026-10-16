@@ -909,46 +909,18 @@ Rectangle {
                             }
                         }
 
-                        // The list grammar keeps the marks on the right rail
-                        // (download then heart, like every other list row);
-                        // only the grid cards ride the cover corners.
-                        Row {
+                        // REC-UI-1: the shared state-mark block on the right
+                        // rail (only the grid cards keep cover corners).
+                        RowMarks {
                             id: rowMarks
                             anchors.verticalCenter: parent.verticalCenter
                             anchors.right: parent.right
                             anchors.rightMargin: row.width * 0.02
-                            spacing: row.width * 0.008
-
-                            Rectangle {
-                                visible: root.markVisible(row.index)
-                                    && Backend.cachedAlbumIds.indexOf(row.albumId) !== -1
-                                width: row.height * 0.18
-                                height: width
-                                color: "transparent"
-
-                                Icon {
-                                    anchors.centerIn: parent
-                                    width: parent.width
-                                    height: width
-                                    name: "baseline-download"
-                                    symbolColor: Palette.tertiary
-                                }
-                            }
-
-                            Rectangle {
-                                visible: root.markVisible(row.index) && row.starred
-                                width: row.height * 0.15
-                                height: width
-                                color: "transparent"
-
-                                Icon {
-                                    anchors.centerIn: parent
-                                    width: parent.width
-                                    height: width
-                                    name: "baseline-favorite"
-                                    symbolColor: Theme.iconStrong
-                                }
-                            }
+                            cursor: wall.currentIndex
+                            index: row.index
+                            albumId: row.albumId
+                            starred: row.starred
+                            base: row.height * 0.15
                         }
 
                         Column {

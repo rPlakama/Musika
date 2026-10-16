@@ -347,45 +347,17 @@ ScrollPanel {
                 currentMatch: row.index === root.searchCurrentRow
             }
 
-            // UI-56: the state marks lead the meta text — download (the
-            // global ledger set) then the favourite heart; none draws
-            // anything when absent, so no gaps appear.
-            Row {
-                id: stateMarks
+            // REC-UI-1: the shared state-mark block (download then heart).
+            RowMarks {
                 anchors.verticalCenter: parent.verticalCenter
                 anchors.right: metaLabel.left
                 anchors.rightMargin: row.viewWidth * 0.015
-                spacing: row.viewWidth * 0.008
-
-                Rectangle {
-                    visible: root.markVisible(row.index) && root.markCached(row.songId, row.albumId)
-                    width: metaLabel.font.pixelSize * 0.96
-                    height: width
-                    color: "transparent"
-
-                    Icon {
-                        anchors.centerIn: parent
-                        width: parent.width
-                        height: width
-                        name: "baseline-download"
-                        symbolColor: Palette.tertiary
-                    }
-                }
-
-                Rectangle {
-                    visible: root.markVisible(row.index) && row.starred
-                    width: metaLabel.font.pixelSize * 0.8
-                    height: width
-                    color: "transparent"
-
-                    Icon {
-                        anchors.centerIn: parent
-                        width: parent.width
-                        height: width
-                        name: "baseline-favorite"
-                        symbolColor: Theme.iconStrong
-                    }
-                }
+                cursor: root.currentIndex
+                index: row.index
+                songId: row.songId
+                albumId: row.albumId
+                starred: row.starred
+                base: metaLabel.font.pixelSize * 0.8
             }
 
             HoverHandler {

@@ -585,44 +585,16 @@ Rectangle {
                     currentMatch: songRow.index === content.searchCurrentRow
                 }
 
-                // UI-56: the state marks lead the duration — download (the
-                // global ledger set) then the favourite heart.
-                Row {
-                    id: songMarks
+                // REC-UI-1: the shared state-mark block.
+                RowMarks {
                     anchors.verticalCenter: parent.verticalCenter
                     anchors.right: songDuration.left
                     anchors.rightMargin: songRow.height * 0.12
-                    spacing: songRow.height * 0.08
-
-                    Rectangle {
-                        visible: root.markVisible(songRow.index) && Backend.downloadedIds.indexOf(songRow.songId) !== -1
-                        width: songDuration.font.pixelSize * 0.96
-                        height: width
-                        color: "transparent"
-
-                        Icon {
-                            anchors.centerIn: parent
-                            width: parent.width
-                            height: width
-                            name: "baseline-download"
-                            symbolColor: Palette.tertiary
-                        }
-                    }
-
-                    Rectangle {
-                        visible: root.markVisible(songRow.index) && songRow.starred
-                        width: songDuration.font.pixelSize * 0.8
-                        height: width
-                        color: "transparent"
-
-                        Icon {
-                            anchors.centerIn: parent
-                            width: parent.width
-                            height: width
-                            name: "baseline-favorite"
-                            symbolColor: Theme.iconStrong
-                        }
-                    }
+                    cursor: content.currentIndex
+                    index: songRow.index
+                    songId: songRow.songId
+                    starred: songRow.starred
+                    base: songDuration.font.pixelSize * 0.8
                 }
 
                 HoverHandler {

@@ -1355,55 +1355,18 @@ Rectangle {
                                             currentMatch: index === queueContent.searchCurrentRow
                                         }
 
-                                        // UI-56: the state marks (download,
-                                        // then the favourite heart) each live
-                                        // in their own box — the widths are
-                                        // dynamic (the glyph size, which
-                                        // follows the type ramp), and the
-                                        // group flows whichever marks show.
-                                        Row {
-                                            id: stateMarks
+                                        // REC-UI-1: the shared state-mark
+                                        // block (download then heart).
+                                        RowMarks {
                                             anchors.verticalCenter: parent.verticalCenter
                                             anchors.right: durationLabel.left
                                             // 10% more air than the row gutter.
                                             anchors.rightMargin: row.width * 0.011
-                                            spacing: row.width * 0.008
-
-                                            Rectangle {
-                                                // The same filled download
-                                                // glyph the keybar uses; shown
-                                                // iff the song id is in the
-                                                // global download.db set. A
-                                                // 1.2× box makes it read equal
-                                                // to the heart's ink.
-                                                visible: root.markVisible(row.index) && Backend.downloadedIds.indexOf(row.songId) !== -1
-                                                width: durationLabel.font.pixelSize * 0.96
-                                                height: width
-                                                color: "transparent"
-
-                                                Icon {
-                                                    anchors.centerIn: parent
-                                                    width: parent.width
-                                                    height: width
-                                                    name: "baseline-download"
-                                                    symbolColor: Palette.tertiary
-                                                }
-                                            }
-
-                                            Rectangle {
-                                                visible: root.markVisible(row.index) && row.starred
-                                                width: durationLabel.font.pixelSize * 0.8
-                                                height: width
-                                                color: "transparent"
-
-                                                Icon {
-                                                    anchors.centerIn: parent
-                                                    width: parent.width
-                                                    height: width
-                                                    name: "baseline-favorite"
-                                                    symbolColor: Theme.iconStrong
-                                                }
-                                            }
+                                            cursor: root.queueCursor
+                                            index: row.index
+                                            songId: row.songId
+                                            starred: row.starred
+                                            base: durationLabel.font.pixelSize * 0.8
                                         }
 
                                         HoverHandler {

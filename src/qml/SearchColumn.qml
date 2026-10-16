@@ -111,13 +111,6 @@ Item {
         Backend.requestDownloads(JSON.stringify(songs), JSON.stringify(albums));
     }
 
-    /// A row's download mark: its song is cached, or it is an album row
-    /// whose every track is.
-    function markCached(songId, albumId) {
-        return (songId.length > 0 && Backend.downloadedIds.indexOf(songId) !== -1)
-            || (albumId.length > 0 && Backend.cachedAlbumIds.indexOf(albumId) !== -1);
-    }
-
     /// Instant snap for far jumps (`gg`/`G`): the lists do the same through
     /// `Theme.cursorEdge`, so the view-owned follow has nothing left to
     /// animate once the target is already on screen.
@@ -391,45 +384,18 @@ Item {
                             }
                         }
 
-                        // UI-56: the state marks lead the meta text — the
-                        // download glyph (the global ledger set) then the
-                        // favourite heart; none draws when absent.
-                        Row {
-                            id: metaMarks
+                        // REC-UI-1: the shared state-mark block (download
+                        // then heart).
+                        RowMarks {
                             anchors.verticalCenter: parent.verticalCenter
                             anchors.right: metaLabel.left
                             anchors.rightMargin: row.height * 0.06
-                            spacing: row.height * 0.05
-
-                            Rectangle {
-                                visible: root.markVisible(row.index) && root.markCached(row.songId, row.albumId)
-                                width: metaLabel.font.pixelSize * 0.96
-                                height: width
-                                color: "transparent"
-
-                                Icon {
-                                    anchors.centerIn: parent
-                                    width: parent.width
-                                    height: width
-                                    name: "baseline-download"
-                                    symbolColor: Palette.tertiary
-                                }
-                            }
-
-                            Rectangle {
-                                visible: root.markVisible(row.index) && row.starred && row.meta.length > 0
-                                width: metaLabel.font.pixelSize * 0.8
-                                height: width
-                                color: "transparent"
-
-                                Icon {
-                                    anchors.centerIn: parent
-                                    width: parent.width
-                                    height: width
-                                    name: "baseline-favorite"
-                                    symbolColor: Theme.iconStrong
-                                }
-                            }
+                            cursor: root.cursor
+                            index: row.index
+                            songId: row.songId
+                            albumId: row.albumId
+                            starred: row.starred && row.meta.length > 0
+                            base: metaLabel.font.pixelSize * 0.8
                         }
 
                         SearchText {

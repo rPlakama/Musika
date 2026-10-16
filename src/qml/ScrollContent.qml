@@ -553,16 +553,26 @@ Item {
             if (root.memoryKey)
                 root.remember();
         }
-        // A payload (re)load: an index past the new end clamps, and a view
-        // that was empty a beat ago lands the carried cursor — both land
-        // instantly, a reload must not walk the viewport.
+        // A payload (re)load: a fresh list lands on row 0 (no memory, the
+        // cursor was never set), an index past the new end clamps, and a
+        // view that was empty a beat ago lands the carried cursor — all
+        // instantly, a reload must not walk the viewport. The row-0 case is
+        // the cursor-as-property replacement for the old alias accident
+        // (the view defaulted to 0 and the alias silently adopted it).
         function onCountChanged() {
             if (target.count === 0)
                 return;
-            if (root.currentIndex > target.count - 1)
+            if (root.currentIndex < 0) {
+                // A fresh list lands on row 0 — unless a memory exists, in
+                // which case the host's `restore()` owns the first landing
+                // (and the guarded remember below never erases it with -1).
+                if (scroll.savedIndex(root.memoryKey) < 0)
+                    root.land(0);
+            } else if (root.currentIndex > target.count - 1) {
                 root.land(target.count - 1);
-            else if (root.currentIndex >= 0 && target.currentIndex !== root.currentIndex)
+            } else if (target.currentIndex !== root.currentIndex) {
                 root.land(root.currentIndex);
+            }
             if (root.memoryKey)
                 root.remember();
         }

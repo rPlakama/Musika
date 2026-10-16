@@ -528,11 +528,11 @@ Rectangle {
                 color: "transparent"
                 visible: !Theme.isNarrow(root.width)
 
-                // 11 px metrics: the capacity reference for the size ramp.
+                // 12 px metrics: the capacity reference for the size ramp.
                 FontMetrics {
                     id: bioMetrics
                     font.family: Theme.fonts.body
-                    font.pixelSize: 11
+                    font.pixelSize: 12
                 }
 
                 FadeText {
@@ -540,14 +540,14 @@ Rectangle {
                     anchors.fill: parent
                     anchors.leftMargin: root.width * 0.015
 
-                    // UI-52/UI-53: font size ramps 11..14 by how much of this
+                    // UI-52/UI-53: font size ramps 12..14 by how much of this
                     // rectangle the text fills — `capacity` is how many
-                    // characters fit at the 11 px floor (font metrics × the
+                    // characters fit at the 12 px floor (font metrics × the
                     // lines that fit at that floor); a short biography grows
-                    // toward 14, one that exactly fills the box sits at 11,
-                    // overflow stays 11 and elides.
+                    // toward 14, one that exactly fills the box sits at 12,
+                    // overflow stays 12 and elides.
                     readonly property int lines: Math.max(1,
-                        Math.floor(height / (11 * 1.3)))
+                        Math.floor(height / (12 * 1.3)))
                     readonly property real charsPerLine: Math.max(1,
                         Math.floor(width / bioMetrics.averageCharacterWidth))
                     readonly property real capacity: charsPerLine * lines
@@ -555,7 +555,7 @@ Rectangle {
                     text: root.descriptionText
                     color: Palette.onSurfaceVariant
                     font.pixelSize: Theme.clamp(
-                        11 + (1 - text.length / capacity) * 3, 11, 14)
+                        12 + (1 - text.length / capacity) * 2, 12, 14)
                     wrapMode: Text.WordWrap
                     maximumLineCount: lines
                     elide: Text.ElideRight
@@ -745,7 +745,7 @@ Rectangle {
                 headerRatio: 0
                 model: albums
                 layouts: ["grid", "list"]
-                layout: "grid"
+                layout: "list"
                 columns: root.columns
                 cellHeight: wall.cellWidth * 0.78 + wall.height * 0.085
                 selectable: true

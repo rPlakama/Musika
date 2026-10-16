@@ -282,6 +282,11 @@ pub struct Backend {
     /// The ids the UI last asked about (the mark window).
     download_window_songs: Vec<String>,
     download_window_albums: Vec<String>,
+    /// The most recent window results (`songs-done`, `albums-done`), newest
+    /// last, capped. The exposed sets are their union: one surface's window
+    /// read must never wipe another's marks (the session-return album page
+    /// kept losing them to the segments' later reads).
+    recent_mark_windows: std::collections::VecDeque<(Vec<String>, Vec<String>)>,
     playback_state: String,
     position: f64,
     duration: f64,
@@ -1848,8 +1853,9 @@ impl Backend {
                 eprintln!("download: artist {artist_id} removed from the cache");
                 let json = artist_cache_payload(&artist_id, false, false);
                 qtbridge::invoke_method!(invoker, "emitData", "artist_cache".to_string(), json);
-                // The marks lose the artist's songs: re-read the window.
-                qtbridge::invoke_method!(fetch_invoker, "TriggerRowReload");
+                // The marks lose the artist's songs: hard reset + re-read
+                // (the union must not keep the gone ids).
+                qtbridge::invoke_method!(fetch_invoker, "ResetRowMarks");
             }
         });
     }
@@ -1988,8 +1994,8 @@ impl Backend {
                 eprintln!("download: album {album_id} removed from the cache");
                 let json = album_cache_payload(&album_id, false, false, false);
                 qtbridge::invoke_method!(invoker, "emitData", "album_cache".to_string(), json);
-                // The marks lose the album's songs: re-read the window.
-                qtbridge::invoke_method!(fetch_invoker, "TriggerRowReload");
+                // The marks lose the album's songs: hard reset + re-read.
+                qtbridge::invoke_method!(fetch_invoker, "ResetRowMarks");
             }
         });
     }
@@ -2337,10 +2343,39 @@ impl Backend {
     #[qslot(qml_name = "applyDownloadedIds")]
     fn apply_downloaded_ids(&mut self, ids_json: String) {
         let value: serde_json::Value = serde_json::from_str(&ids_json).unwrap_or_default();
-        self.downloaded_ids = serde_json::from_value(value["songs"].clone()).unwrap_or_default();
-        self.cached_album_ids = serde_json::from_value(value["albums"].clone()).unwrap_or_default();
+        let songs: Vec<String> = serde_json::from_value(value["songs"].clone()).unwrap_or_default();
+        let albums: Vec<String> =
+            serde_json::from_value(value["albums"].clone()).unwrap_or_default();
+        // Keep the recent windows and expose their union: surfaces ask for
+        // their own ±15 window at their own pace, and no read may evict
+        // another surface's marks.
+        const RECENT_WINDOWS: usize = 12;
+        self.recent_mark_windows.push_back((songs, albums));
+        while self.recent_mark_windows.len() > RECENT_WINDOWS {
+            self.recent_mark_windows.pop_front();
+        }
+        let mut done: Vec<&String> = Vec::new();
+        let mut cached: Vec<&String> = Vec::new();
+        for (songs, albums) in &self.recent_mark_windows {
+            done.extend(songs);
+            cached.extend(albums);
+        }
+        done.sort();
+        done.dedup();
+        cached.sort();
+        cached.dedup();
+        self.downloaded_ids = done.into_iter().cloned().collect();
+        self.cached_album_ids = cached.into_iter().cloned().collect();
         self.downloaded_ids_changed();
         self.cached_album_ids_changed();
+    }
+
+    /// Hard reset + re-read (a download was removed: the union must not keep
+    /// the gone ids). Wired to every container-OFF path.
+    #[qslot(qml_name = "ResetRowMarks")]
+    fn reset_row_marks(&mut self) {
+        self.recent_mark_windows.clear();
+        self.refresh_download_window();
     }
 
     /// The row-status refresh hook: favourite actions and finished download

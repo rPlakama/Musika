@@ -601,13 +601,24 @@ Rectangle {
                     root.albumCovered = cache.covered === true;
                 }
                 // A settled container pass: the shared row hook reconciles
-                // the marks (and the pass itself already called it).
-                if (!cache.active)
-                    Backend.TriggerRowReload();
+                // the marks (and the pass itself already called it); an
+                // unselect must hard-reset the accumulated windows.
+                if (!cache.active) {
+                    if (cache.on === true)
+                        Backend.TriggerRowReload();
+                    else
+                        Backend.ResetRowMarks();
+                }
             } else if (channel === "artist_cache") {
-                // Artist passes settle outside the keybar: same hook.
-                if (!JSON.parse(payload).active)
-                    Backend.TriggerRowReload();
+                // Artist passes settle outside the keybar: same hook; an
+                // unselect hard-resets the windows.
+                var artistCache = JSON.parse(payload);
+                if (!artistCache.active) {
+                    if (artistCache.on === true)
+                        Backend.TriggerRowReload();
+                    else
+                        Backend.ResetRowMarks();
+                }
             } else if (channel === "album_state") {
                 var state = JSON.parse(payload);
                 if (state.id === Backend.currentAlbumId)

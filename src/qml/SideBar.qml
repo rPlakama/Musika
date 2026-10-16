@@ -24,6 +24,7 @@ import "Theme.js" as Theme
 // breakpoint it collapses to an icon strip (UI-32 R2): same segments, same
 // cursor, labels and stats out of the way.
 Rectangle {
+    radius: Theme.radius
     id: root
 
     signal segmentActivated(int index)
@@ -92,6 +93,7 @@ Rectangle {
     // at any width. The square side preserves aspect (never squashed); the
     // width cap keeps it clear of the pane walls.
     Rectangle {
+        radius: Theme.radius
         id: brand
         anchors.top: parent.top
         anchors.left: parent.left
@@ -149,6 +151,7 @@ Rectangle {
 
                 // Accent bar on the selected segment.
                 Rectangle {
+                    radius: Theme.radius
                     anchors.left: parent.left
                     anchors.top: parent.top
                     anchors.bottom: parent.bottom
@@ -210,6 +213,7 @@ Rectangle {
         visible: !root.narrow
 
         Rectangle {
+            radius: Theme.radius
             Layout.fillWidth: true
             Layout.preferredHeight: Math.max(1, root.height * Theme.hairlineRatio)
             color: Palette.outlineVariant

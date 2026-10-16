@@ -260,6 +260,7 @@ ScrollPanel {
     // Body (B): one row per payload item.
     rowDelegate: Component {
         Rectangle {
+            radius: Theme.radius
             id: row
             required property int index
             required property string title
@@ -370,6 +371,7 @@ ScrollPanel {
             // timecode, so its box reserves the widest one and the marks
             // never move as the seconds grow; counts/years hug their text.
             Rectangle {
+                radius: Theme.radius
                 id: metaBox
                 anchors.verticalCenter: parent.verticalCenter
                 anchors.right: parent.right
@@ -431,6 +433,7 @@ ScrollPanel {
     // (cover with the favourite mark in the corner, title + mixed meta line).
     cellDelegate: Component {
         Rectangle {
+            radius: Theme.radius
             id: cell
             required property int index
             required property string title

@@ -1062,6 +1062,7 @@ Item {
         model: 3
 
         delegate: Rectangle {
+            radius: Theme.radius
             id: regionBox
             required property int index
 

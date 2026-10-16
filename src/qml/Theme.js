@@ -26,11 +26,11 @@
 // See materialyou3idea.md for the rationale behind the token sets.
 
 // ---------------------------------------------------------------------------
-// Shape (R3): binary + one. Square is the default; soft only for interactive
-// surfaces; full-circle only for artist avatars.
+// Shape (R3): one soft corner everywhere. Every Rectangle carries
+// `Theme.radius` (the fullscreen queue/lyrics panes' corner); the only other
+// shape is the disc (`shapeFull`) for artist avatars/art and icon badges.
 // ---------------------------------------------------------------------------
 var radius = 3 // Global soft corner roundness.
-var shapeSquare = 0
 
 function shapeFull(size) {
     return size * 0.5

@@ -26,6 +26,7 @@ import "Theme.js" as Theme
 // `backdrop` at the item the panel overlays. `Theme.acrylic.enabled: false`
 // (or no backdrop) paints the plain role fill — the MS fallback to solid.
 Rectangle {
+    radius: Theme.radius
     id: root
 
     /// The item behind the panel whose pixels feed the acrylic pass.

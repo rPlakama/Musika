@@ -25,6 +25,7 @@ import "Theme.js" as Theme
 // report (right 1) split the leftover space, while the controls (right 2:
 // progress track, sync, trashcan, action hint) size themselves.
 Rectangle {
+    radius: Theme.radius
     id: root
 
     // True while the status region owns the cursor (VI-17).
@@ -132,6 +133,7 @@ Rectangle {
 
     // Bottom divider.
     Rectangle {
+        radius: Theme.radius
         anchors.left: parent.left
         anchors.right: parent.right
         anchors.bottom: parent.bottom
@@ -149,6 +151,7 @@ Rectangle {
         // Left pane: identity. Takes half the leftover width.
         // -------------------------------------------------------------------
         Rectangle {
+            radius: Theme.radius
             id: identityPane
             Layout.fillWidth: true
             Layout.fillHeight: true
@@ -175,6 +178,7 @@ Rectangle {
         // sits beside the controls.
         // -------------------------------------------------------------------
         Rectangle {
+            radius: Theme.radius
             id: reportPane
             Layout.fillWidth: true
             Layout.fillHeight: true
@@ -204,6 +208,7 @@ Rectangle {
         // it clear of the buttons.
         // -------------------------------------------------------------------
         Rectangle {
+            radius: Theme.radius
             id: hintPane
             visible: root.active
             Layout.preferredWidth: root.active ? hintText.implicitWidth : 0
@@ -228,6 +233,7 @@ Rectangle {
         // Right 2: the controls, sized by their own contents.
         // -------------------------------------------------------------------
         Rectangle {
+            radius: Theme.radius
             id: controlPane
             Layout.preferredWidth: controls.implicitWidth
             Layout.fillHeight: true
@@ -244,6 +250,7 @@ Rectangle {
                 // Collapsed to a 2px tick when idle, expanding while a sync
                 // runs.
                 Rectangle {
+                    radius: Theme.radius
                     id: track
                     Layout.preferredWidth: Backend.librarySyncing ? root.width * 0.12 : 2
                     Layout.preferredHeight: Math.max(2, root.height * 0.16)
@@ -255,6 +262,7 @@ Rectangle {
                     }
 
                     Rectangle {
+                        radius: Theme.radius
                         width: track.width * Math.max(0, Math.min(1, Backend.syncProgress))
                         height: parent.height
                         color: Backend.librarySyncing ? Palette.tertiary : Palette.primary

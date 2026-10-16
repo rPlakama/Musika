@@ -29,6 +29,7 @@ import "Theme.js" as Theme
 //            lyrics/queue).
 // Esc (or q) leaves fullscreen; Space stays the global play/pause.
 Rectangle {
+    radius: Theme.radius
     id: root
 
     color: Palette.background
@@ -635,6 +636,17 @@ Rectangle {
         function onRowReload() {
             root.requestMarkWindow(true);
         }
+        // A favourite landed (per row, no payload): patch every matching
+        // queue row in place. The cursor stays where the user left it — a
+        // heart write must never re-follow the playing track.
+        function onFavoriteChanged(kind, id, on) {
+            if (kind !== "song")
+                return;
+            for (var i = 0; i < queueItems.count; ++i) {
+                if (queueItems.get(i).songId === id)
+                    queueItems.setProperty(i, "starred", on === true);
+            }
+        }
         // A skip/advance is deduped backend-side (the rows are already
         // published): the index property carries the move — adopt it and
         // follow exactly like a fresh payload would.
@@ -691,6 +703,7 @@ Rectangle {
         }
 
         Rectangle {
+            radius: Theme.radius
             anchors.fill: parent
             visible: coverBackdrop.visible
             gradient: Gradient {
@@ -829,6 +842,7 @@ Rectangle {
                     // box's left edge — the seek row's first mark lines up
                     // with the title and the artist above it.
                     Rectangle {
+                        radius: Theme.radius
                         Layout.preferredWidth: timeMetrics.advanceWidth("00:00:00")
                         Layout.preferredHeight: elapsedText.implicitHeight
                         Layout.alignment: Qt.AlignVCenter
@@ -877,6 +891,7 @@ Rectangle {
                     }
 
                     Rectangle {
+                        radius: Theme.radius
                         Layout.preferredWidth: timeMetrics.advanceWidth("00:00:00")
                         Layout.preferredHeight: durationText.implicitHeight
                         Layout.alignment: Qt.AlignVCenter
@@ -912,6 +927,7 @@ Rectangle {
                     // The bar is the elastic part; the box clamps to whatever
                     // the transport is not using.
                     Rectangle {
+                        radius: Theme.radius
                         id: volumeBox
                         anchors.right: parent.right
                         anchors.verticalCenter: parent.verticalCenter
@@ -979,6 +995,7 @@ Rectangle {
                     // box would touch it — the transport yields, the volume
                     // stays put.
                     Rectangle {
+                        radius: Theme.radius
                         id: transportBox
                         anchors.verticalCenter: parent.verticalCenter
                         width: transportRow.implicitWidth
@@ -1069,6 +1086,7 @@ Rectangle {
                         }
 
                         Rectangle {
+                            radius: Theme.radius
                             Layout.fillWidth: true
                             Layout.preferredHeight: Math.max(1, root.height * Theme.hairlineRatio)
                             color: root.pane === 1 ? Palette.primary : Palette.outlineVariant
@@ -1080,6 +1098,7 @@ Rectangle {
                         // the grown line never reaches these walls; `clip` is
                         // the last-resort containment.
                         Rectangle {
+                            radius: Theme.radius
                             id: lyricsStage
                             Layout.fillWidth: true
                             Layout.fillHeight: true
@@ -1270,6 +1289,7 @@ Rectangle {
                         }
 
                         Rectangle {
+                            radius: Theme.radius
                             Layout.fillWidth: true
                             Layout.preferredHeight: Math.max(1, root.height * Theme.hairlineRatio)
                             color: root.pane === 2 ? Palette.primary : Palette.outlineVariant
@@ -1311,6 +1331,7 @@ Rectangle {
 
                                 rowDelegate: Component {
                                     Rectangle {
+                                        radius: Theme.radius
                                         id: row
                                         required property int index
                                         required property string title
@@ -1377,6 +1398,7 @@ Rectangle {
                                         // marks' place) never moves as the
                                         // seconds grow.
                                         Rectangle {
+                                            radius: Theme.radius
                                             id: durationBox
                                             anchors.right: parent.right
                                             anchors.verticalCenter: parent.verticalCenter

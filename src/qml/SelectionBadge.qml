@@ -48,6 +48,7 @@ Item {
 
     // The invisible anchor the pill grows into; only its width changes.
     Rectangle {
+        radius: Theme.radius
         id: frame
         visible: false
         anchors.right: parent.right

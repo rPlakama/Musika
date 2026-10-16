@@ -192,6 +192,7 @@ Item {
 
     // The dim, not a blur: everything under the prompt drops to half light.
     Rectangle {
+        radius: Theme.radius
         id: scrim
         anchors.fill: parent
         color: "black"
@@ -206,9 +207,11 @@ Item {
         }
     }
 
-    // The command line itself: full width, no radius, no border highlight —
-    // one vertically centred line of prompt (Neovim's last row, reskinned).
+    // The command line itself: full width, the shared soft radius, no border
+    // highlight — one vertically centred line of prompt (Neovim's last row,
+    // reskinned).
     Rectangle {
+        radius: Theme.radius
         id: bar
         width: root.width
         height: root.height * 0.07
@@ -303,6 +306,7 @@ Item {
 
         // UI-49: the denied cue — a red underline flash on the bar's edge.
         Rectangle {
+            radius: Theme.radius
             id: deniedLine
             anchors.left: parent.left
             anchors.right: parent.right

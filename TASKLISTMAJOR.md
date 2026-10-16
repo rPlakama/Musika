@@ -62,6 +62,23 @@ The app is unsafe or misleading without these.
     `order_changed` handlers). The `G` case stays covered by
     `tst_bottomup`.
 
+- [x] **#bug 3 · Favouriting in the queue steals the cursor** — P1 · (reported)
+  - **Why:** favouriting a row in the fullscreen queue made the cursor jump
+    to the currently playing track instead of staying on the highlighted
+    row ("the favorite action is triggering UI-Reload Function, instead
+    per-row reload").
+  - **Details:** the verb's success path fired the full `TriggerRowReload`
+    (`altFavorite` → `trigger_row_reload`): a queue-payload re-emit that
+    `applyQueue` applies by re-following the playing index
+    (`recallQueueCursor`) — and the `starred` signature change rebuilt both
+    queue models besides. A heart write must never move the cursor.
+  - **Now:** favourites land as the per-row signal `favoriteChanged(kind,
+    id, on)`; `NowPlaying` patches every matching queue row in place
+    (duplicates included) and the initiating surface keeps its optimistic
+    patch. No payload, no rebuild, no cursor move; `album_state` still
+    reconciles the keybar heart and the download-mark windows are no longer
+    touched by a favourite.
+
 - [ ] **#Patch · `gg`/`G` differ between Albums and Songs (Albums buggy)** — P1 · (reported)
   - **Why:** the same motions misbehave on Albums while Songs is fine —
     "Is there a major difference (in albums its buggy)".

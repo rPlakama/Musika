@@ -246,6 +246,7 @@ Item {
             }
 
             Rectangle {
+                radius: Theme.radius
                 anchors.left: parent.left
                 anchors.right: parent.right
                 anchors.bottom: parent.bottom
@@ -272,6 +273,7 @@ Item {
 
                 rowDelegate: Component {
                     Rectangle {
+                        radius: Theme.radius
                         id: row
                         required property int index
                         required property string title

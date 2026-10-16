@@ -21,6 +21,7 @@ import "Theme.js" as Theme
 
 // Inferior bar: the playback controls, driven by the ffplay engine.
 Rectangle {
+    radius: Theme.radius
     id: root
 
     color: Palette.surfaceContainer
@@ -57,6 +58,7 @@ Rectangle {
 
     // Seek line across the top edge.
     Rectangle {
+        radius: Theme.radius
         anchors.top: parent.top
         anchors.left: parent.left
         anchors.right: parent.right
@@ -64,6 +66,7 @@ Rectangle {
         color: Palette.outlineVariant
 
         Rectangle {
+            radius: Theme.radius
             width: parent.width * (Backend.duration > 0
                 ? Math.min(1, Backend.position / Backend.duration)
                 : 0)
@@ -143,6 +146,7 @@ Rectangle {
                     spacing: root.height * 0.03
 
                     Rectangle {
+                        radius: Theme.radius
                         Layout.fillWidth: true
                         Layout.preferredHeight: titleText.implicitHeight
                         color: "transparent"
@@ -163,6 +167,7 @@ Rectangle {
                     }
 
                     Rectangle {
+                        radius: Theme.radius
                         Layout.fillWidth: true
                         Layout.preferredHeight: artistText.implicitHeight
                         color: "transparent"

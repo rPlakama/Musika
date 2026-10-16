@@ -36,6 +36,7 @@ import "Theme.js" as Theme
 // forwards) and never touch `view.contentY`/`positionViewAtIndex`
 // themselves; the forwarding members are the contract, not duplication.
 Rectangle {
+    radius: Theme.radius
     id: root
 
     // --- Main rectangle ------------------------------------------------------
@@ -246,6 +247,7 @@ Rectangle {
     // A: title band (20% of the panel by default; less while compressed,
     // UI-57).
     Rectangle {
+        radius: Theme.radius
         id: header
         anchors.top: parent.top
         anchors.horizontalCenter: parent.horizontalCenter
@@ -268,6 +270,7 @@ Rectangle {
 
     // B: the scroll body (the rest), bottom-anchored.
     Rectangle {
+        radius: Theme.radius
         id: body
         anchors.top: header.bottom
         anchors.bottom: parent.bottom

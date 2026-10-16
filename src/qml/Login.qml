@@ -23,6 +23,7 @@ Item {
     id: root
 
     Rectangle {
+        radius: Theme.radius
         anchors.fill: parent
         color: Palette.background
     }

@@ -28,6 +28,7 @@ import "Theme.js" as Theme
 // queues the album at that track. The descriptive fields are still placeholders
 // until album metadata is passed in.
 Rectangle {
+    radius: Theme.radius
     id: root
 
     signal back
@@ -324,6 +325,7 @@ Rectangle {
     }
 
     Rectangle {
+        radius: Theme.radius
         anchors.fill: parent
         visible: coverBackdrop.visible
         gradient: Gradient {
@@ -513,6 +515,7 @@ Rectangle {
         }
 
         Rectangle {
+            radius: Theme.radius
             Layout.fillWidth: true
             Layout.preferredHeight: Math.max(1, root.height * Theme.hairlineRatio)
             color: Palette.outlineVariant
@@ -556,6 +559,7 @@ Rectangle {
 
             rowDelegate: Component {
                 Rectangle {
+                    radius: Theme.radius
                     id: songRow
                 required property int index
                 required property string track
@@ -612,6 +616,7 @@ Rectangle {
                 // — the length box reserves the widest timecode, the marks
                 // beside it never move as the seconds grow.
                 Rectangle {
+                    radius: Theme.radius
                     id: songDurationBox
                     anchors.verticalCenter: parent.verticalCenter
                     anchors.right: parent.right

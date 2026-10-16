@@ -71,6 +71,7 @@ Text {
         model: root.spans
 
         delegate: Rectangle {
+            radius: Theme.radius
             required property var modelData
 
             x: root._originX + fm.advanceWidth(root.text.substring(0, modelData.start))

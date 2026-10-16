@@ -139,6 +139,7 @@ Rectangle {
     // resizes, and the glyph is centred inside it, so swapping icons (volume
     // tiers, ▶/⏸) only changes the drawing — never the icon's position.
     Rectangle {
+        radius: Theme.radius
         id: glyphA
         anchors.centerIn: parent
         width: Math.min(root.width, root.height)
@@ -172,6 +173,7 @@ Rectangle {
     }
 
     Rectangle {
+        radius: Theme.radius
         id: glyphB
         anchors.centerIn: parent
         width: Math.min(root.width, root.height)

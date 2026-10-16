@@ -30,6 +30,7 @@ import "Theme.js" as Theme
 // a dim accent tick instead of the fill. Behaviour is colour-only with the
 // shared `quick` fade, so nothing shifts layout.
 Rectangle {
+    radius: Theme.radius
     id: root
 
     /// The row owns the cursor.
@@ -59,6 +60,7 @@ Rectangle {
 
     // Inactive-column cue: a dim accent tick on the block.
     Rectangle {
+        radius: Theme.radius
         visible: root.current && !root.active
         anchors.left: parent.left
         anchors.top: parent.top

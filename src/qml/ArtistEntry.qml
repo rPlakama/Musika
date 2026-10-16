@@ -25,6 +25,7 @@ import "Theme.js" as Theme
 // from here always returns to Main (see Home.leaveArtistEntry). Favorite,
 // stars, biography and the cache rule land in milestones B-D.
 Rectangle {
+    radius: Theme.radius
     id: root
 
     signal back
@@ -384,6 +385,7 @@ Rectangle {
     }
 
     Rectangle {
+        radius: Theme.radius
         anchors.fill: parent
         visible: coverBackdrop.visible
         gradient: Gradient {
@@ -429,12 +431,14 @@ Rectangle {
         // the biography over 30% for the action row. Fixed anchors, so a long
         // biography can never squeeze the identity or grow the header.
         Rectangle {
+            radius: Theme.radius
             id: header
             Layout.fillWidth: true
             Layout.preferredHeight: root.avatarSide
             color: "transparent"
 
             Rectangle {
+                radius: Theme.radius
                 id: identityBox
                 anchors.left: parent.left
                 anchors.top: parent.top
@@ -489,6 +493,7 @@ Rectangle {
             }
 
             Rectangle {
+                radius: Theme.radius
                 id: descriptionBox
                 anchors.left: identityBox.right
                 anchors.right: parent.right
@@ -532,6 +537,7 @@ Rectangle {
             }
 
             Rectangle {
+                radius: Theme.radius
                 id: actionsBox
                 anchors.left: identityBox.right
                 anchors.right: parent.right
@@ -684,6 +690,7 @@ Rectangle {
         }
 
         Rectangle {
+            radius: Theme.radius
             Layout.fillWidth: true
             Layout.preferredHeight: Math.max(1, root.height * Theme.hairlineRatio)
             color: Palette.outlineVariant
@@ -727,6 +734,7 @@ Rectangle {
 
                 cellDelegate: Component {
                     Rectangle {
+                        radius: Theme.radius
                         id: cell
                         required property int index
                         required property string albumId
@@ -880,6 +888,7 @@ Rectangle {
 
                 rowDelegate: Component {
                     Rectangle {
+                        radius: Theme.radius
                         id: row
                         required property int index
                         required property string albumId

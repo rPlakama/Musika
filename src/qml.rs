@@ -647,9 +647,10 @@ pub struct Backend {
     /// O(N) clone/DB/serialize work — a skip or an advance moved only the
     /// index, which the `queueIndex` property carries.
     queue_revision: Option<u64>,
-    /// A row change outside the player (the heart write) must publish even
-    /// when the revision matches; `TriggerRowReload` raises it, `emit_queue`
-    /// consumes it.
+    /// A row change outside the player (library syncs, wipe reloads) must
+    /// publish even when the revision matches; `TriggerRowReload` raises it,
+    /// `emit_queue` consumes it. Favourites no longer ride this — they land
+    /// per row (`favoriteChanged`) and never touch the queue payload.
     queue_rows_dirty: bool,
     /// The shuffle's generation: tasks captured before a toggle must not
     /// write into the new world.
@@ -927,6 +928,12 @@ impl Backend {
     /// its own current mark window (the request half of the row update).
     #[qsignal(qml_name = "rowReload")]
     fn row_reload(&mut self);
+    /// A favourite landed: surfaces patch the matching rows in place — the
+    /// per-row twin of `rowReload`. A queue payload here would rebuild the
+    /// models and re-follow the playing index (the cursor must not move for
+    /// a heart write).
+    #[qsignal(qml_name = "favoriteChanged")]
+    fn favorite_changed(&mut self, kind: String, id: String, on: bool);
     #[qsignal(qml_name = "dataReady")]
     fn data_ready(&mut self, channel: String, payload: String);
     #[qsignal(qml_name = "errorRaised")]
@@ -2860,7 +2867,8 @@ impl Backend {
     /// QUEUEROWSTUDY QR-1: the player revision is checked *before* the
     /// clone/DB/serialize work — an unchanged revision (only the index
     /// moved) returns here. `queue_rows_dirty` is the bypass for row
-    /// changes outside the player (the heart write in `TriggerRowReload`).
+    /// changes outside the player (`TriggerRowReload`: syncs, wipe reloads,
+    /// download settles).
     fn emit_queue(&mut self, force: bool) {
         let revision = self.player.revision();
         if !force && !self.queue_rows_dirty && self.queue_revision == Some(revision) {
@@ -3165,15 +3173,17 @@ impl Backend {
         self.rebuild_mark_sets();
     }
 
-    /// The row-status refresh hook: favourite actions and finished download
-    /// passes trigger it (the "download: … pass finished" path), and any
-    /// surface may call it when its rows need reconciling. Re-reads the
-    /// download window (marks) and re-emits the queue (the heart truth).
+    /// The row-status refresh hook: finished download passes trigger it (the
+    /// "download: … pass finished" path), and any surface may call it when
+    /// its rows need reconciling. Re-reads the download window (marks) and
+    /// re-emits the queue (row content changed outside the player) —
+    /// favourites do not come through here anymore.
     #[qslot(qml_name = "TriggerRowReload")]
     fn trigger_row_reload(&mut self) {
         self.refresh_download_window();
-        // The heart's truth changed outside the player (QR-1): the revision
-        // gate must not swallow this publish.
+        // Row content changed outside the player (syncs, wipe reloads,
+        // download settles): the revision gate must not swallow this
+        // publish. Favourites take the per-row `favoriteChanged` path.
         self.queue_rows_dirty = true;
         self.emit_queue(false);
         // Every visible surface re-reads its *own* current window: a fetch
@@ -3419,9 +3429,17 @@ impl Backend {
                         json
                     );
                 }
-                // The favourite lands on rows everywhere: the shared hook
-                // reconciles the marks and the queue hearts.
-                qtbridge::invoke_method!(state_invoker, "TriggerRowReload");
+                // Per-row reconcile: the queue patches every matching row in
+                // place. The old full `TriggerRowReload` re-emitted the queue
+                // payload, whose apply rebuilt the models and re-followed the
+                // playing index — favouriting stole the cursor.
+                qtbridge::invoke_method!(
+                    state_invoker,
+                    "favoriteChanged",
+                    kind.clone(),
+                    id.clone(),
+                    on
+                );
             }
             if let Err(err) = result {
                 eprintln!("alt actions: could not update favourite {kind} {id}: {err:#}");

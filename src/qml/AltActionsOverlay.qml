@@ -189,6 +189,7 @@ Item {
     // equidistant from the neutral centre and h/j/k/l travel the same
     // distance; the neutral mark sits at its centre.
     Rectangle {
+        radius: Theme.radius
         id: board
 
         /// ARC-UI-1 scale ramp: 1.7 was the pre-ramp value; each review pass
@@ -282,7 +283,7 @@ Item {
 
             width: board.boxSide
             height: board.boxSide
-            radius: 0
+            radius: Theme.radius
             backdrop: root.backdrop
             tint: box.isDisabled ? Theme.stateDisabledContainer
                 : (box.isAimed ? Palette.primaryContainer : Palette.surfaceContainerHigh)

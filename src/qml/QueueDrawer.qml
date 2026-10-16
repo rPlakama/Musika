@@ -169,6 +169,7 @@ Item {
     // UI-35: the drawer owns the context while open — the shared scrim dims
     // whatever is behind, and a click outside closes (search-overlay parity).
     Rectangle {
+        radius: Theme.radius
         anchors.fill: parent
         color: Palette.scrim
         opacity: root.opened ? Theme.scrimOpacity : 0
@@ -236,6 +237,7 @@ Item {
 
                 rowDelegate: Component {
                     Rectangle {
+                        radius: Theme.radius
                         id: row
                     required property int index
                     required property string title

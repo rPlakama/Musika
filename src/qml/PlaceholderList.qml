@@ -22,6 +22,7 @@ import "Theme.js" as Theme
 // Simple empty-state view used by libraries that are not indexed yet
 // (Playlists, Radio).
 Rectangle {
+    radius: Theme.radius
     id: root
 
     property string title: ""

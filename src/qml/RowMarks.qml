@@ -72,6 +72,7 @@ Row {
                 && Backend.cachedAlbumIds.indexOf(root.albumId) !== -1))
 
     Rectangle {
+        radius: Theme.radius
         visible: root.active || root.cached
         width: root.box * 1.2
         height: width
@@ -88,6 +89,7 @@ Row {
     }
 
     Rectangle {
+        radius: Theme.radius
         visible: root.windowed && root.starred
         width: root.box * 1.2
         height: width

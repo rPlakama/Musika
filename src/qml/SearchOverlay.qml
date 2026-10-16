@@ -433,6 +433,7 @@ Item {
 
     // Dim backdrop (the one sanctioned scrim); click outside to dismiss.
     Rectangle {
+        radius: Theme.radius
         anchors.fill: parent
         color: Palette.scrim
         opacity: root.opened ? Theme.scrimOpacity : 0
@@ -491,6 +492,7 @@ Item {
             // The search bar, full width: the old mode chip is gone — the
             // bar's own focus highlight is the INSERT cue.
             Rectangle {
+                radius: Theme.radius
                 id: searchRow
                 Layout.fillWidth: true
                 implicitHeight: panel.height * 0.06
@@ -589,6 +591,7 @@ Item {
                 // instead of bleeding into its neighbour. UI-47: above the
                 // next column's covers, which otherwise paint over it.
                 Rectangle {
+                    radius: Theme.radius
                     Layout.fillHeight: true
                     Layout.preferredWidth: Math.max(1, panel.height * Theme.hairlineRatio)
                     color: Palette.outlineVariant
@@ -620,6 +623,7 @@ Item {
                 }
 
                 Rectangle {
+                    radius: Theme.radius
                     Layout.fillHeight: true
                     Layout.preferredWidth: Math.max(1, panel.height * Theme.hairlineRatio)
                     color: Palette.outlineVariant
@@ -654,6 +658,7 @@ Item {
 
             // Footer rule: separates the keybinds from the snapped row area.
             Rectangle {
+                radius: Theme.radius
                 Layout.fillWidth: true
                 Layout.preferredHeight: Math.max(1, root.height * Theme.hairlineRatio)
                 color: Palette.outlineVariant

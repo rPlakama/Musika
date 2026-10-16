@@ -603,6 +603,9 @@ Item {
             header: root.unlimitedScrolloff ? edgeSpacer : null
             footer: root.unlimitedScrolloff ? edgeSpacer : null
             boundsBehavior: Flickable.StopAtBounds
+            // QR-9: the delegates are stateless (every visual derives from
+            // model roles), so the view may pool and recycle them.
+            reuseItems: true
         }
 
         GridView {
@@ -617,6 +620,8 @@ Item {
             cellWidth: root.cellWidth
             cellHeight: root.cellHeight > 0 ? root.cellHeight : root.cellWidth
             boundsBehavior: Flickable.StopAtBounds
+            // QR-9: same contract as the list above.
+            reuseItems: true
         }
     }
 

@@ -103,7 +103,6 @@ Item {
             var track = data.items[i];
             items.append({
                 title: track.title,
-                subtitle: (track.artist ? track.artist : "") + (track.album ? " · " + track.album : ""),
                 duration: Theme.formatTime(track.duration),
                 cover: track.cover
             });
@@ -228,8 +227,7 @@ Item {
                 Layout.fillHeight: true
                 model: items
                 memoryKey: "queue"
-                // ARC-UI-2 M1: the rendered cells (the `subtitle` role is
-                // never painted, so it never matches).
+                // ARC-UI-2 M1: the rendered cells.
                 searchFields: ["title", "duration"]
 
                 Behavior on opacity {
@@ -241,7 +239,6 @@ Item {
                         id: row
                     required property int index
                     required property string title
-                    required property string subtitle
                     required property string duration
                     required property string cover
 

@@ -18,10 +18,11 @@ import QtQuick
 import musika
 import "Theme.js" as Theme
 
-// The reusable shuffle toggle (VI-7's sibling): a press starts a time-seeded
-// rotation of the tab's source into the playback queue (rolling, thirty
-// tracks ahead); a second press disables it. The tint tracks the backend's
-// state, so the chip is a faithful read of "shuffling this source".
+// The reusable shuffle toggle (VI-7's sibling): a press Fisher–Yates
+// shuffles the tab's whole source into the playback queue in one load
+// (nothing appends mid-session, so the queue rows never republish); a second
+// press disables it. The tint tracks the backend's state, so the chip is a
+// faithful read of "shuffling this source".
 //
 //     ShuffleChip { kind: "songs" }   // or "albums"; "" hides the chip
 Item {

@@ -297,6 +297,30 @@ pub async fn remove_rule_media(pool: &SqlitePool, rule_id: &str) -> Result<usize
     Ok(rows.len())
 }
 
+/// Removes the config-tier blobs of the given songs, whatever rule id the
+/// row carries — the rule-removal net for blobs stored before the fetch
+/// recorded rule ownership (the ledger still names the rule then). The
+/// cache tiers (playback/rolling) are not the rule's; they keep their own
+/// purge.
+pub async fn remove_songs_media(pool: &SqlitePool, song_ids: &[String]) -> Result<usize> {
+    let mut removed = 0;
+    for song_id in song_ids {
+        let Some(row) = get(pool, song_id).await? else {
+            continue;
+        };
+        if tier_for(&row.kind) != Tier::Config {
+            continue;
+        }
+        remove_blob(&row);
+        sqlx::query("DELETE FROM media WHERE song_id = ?1")
+            .bind(song_id)
+            .execute(pool)
+            .await?;
+        removed += 1;
+    }
+    Ok(removed)
+}
+
 /// Reconciles rule-owned blobs against the selected containers: a downloaded
 /// song must still fall inside a live artist/album rule — anything else (the
 /// scope changed, the rule ref is stale) is removed. Explicit downloads
@@ -628,6 +652,51 @@ mod tests {
 
         delete_rule(&pool, &id).await.unwrap();
         assert!(rule_for(&pool, "artist", "a1").await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn remove_songs_media_drops_config_tier_blobs_only() {
+        let pool = media_pool().await;
+        // s1: stored before rule ownership was recorded (the ledger names
+        // the rule); s2: an explicit download outside the rule's songs;
+        // s3: a playback-tier copy, which keeps its own purge.
+        for (song, kind) in [
+            ("s1", KIND_PERMANENT),
+            ("s2", KIND_PERMANENT),
+            ("s3", KIND_PLAYBACK),
+        ] {
+            record(
+                &pool,
+                song,
+                kind,
+                &format!("{song}.mp3"),
+                1,
+                "original",
+                "fp",
+                None,
+            )
+            .await
+            .unwrap();
+        }
+
+        assert_eq!(
+            remove_songs_media(&pool, &["s1".to_string(), "s3".to_string()])
+                .await
+                .unwrap(),
+            1
+        );
+        let mut left: Vec<(String, String)> = sqlx::query_as("SELECT song_id, kind FROM media")
+            .fetch_all(&pool)
+            .await
+            .unwrap();
+        left.sort();
+        assert_eq!(
+            left,
+            vec![
+                ("s2".to_string(), KIND_PERMANENT.to_string()),
+                ("s3".to_string(), KIND_PLAYBACK.to_string()),
+            ]
+        );
     }
 
     #[tokio::test]

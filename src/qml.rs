@@ -37,25 +37,6 @@ static STATUS_WRITE_GEN: AtomicU64 = AtomicU64::new(0);
 /// queue back to a stale index).
 static QUEUE_EMIT_GEN: AtomicU64 = AtomicU64::new(0);
 
-/// The playback shuffle (VI-7's sibling): passes of a tab's source, each a
-/// time-seeded rotation resolved in a window so nothing resolves thousands
-/// of URLs up front.
-struct Shuffle {
-    /// "songs" (units are song ids) or "albums" (units are album ids, each
-    /// expanding to its tracklist).
-    kind: String,
-    /// The tab's full source (a permutation of its ids): every pass is a
-    /// fresh rotation of it.
-    source: Vec<String>,
-    /// The units the previous pass queued — excluded from the next pass so
-    /// consecutive passes never repeat a unit.
-    previous: Vec<String>,
-}
-
-/// The rolling window: one pass queues this many tracks; the next pass rolls
-/// when the queue is down to its last track.
-const SHUFFLE_WINDOW: usize = 30;
-
 /// One id's download mark (the `mark_states` map's values).
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum MarkState {
@@ -297,25 +278,34 @@ async fn album_container_on(dbs: &crate::db::Dbs, album_id: &str) -> anyhow::Res
     Ok(songs)
 }
 
-/// Drops an album container: its rule, marks and rule-owned blobs.
+/// Drops a container rule: its marks and every config-tier blob its songs
+/// own — the rule-owned rows and the rows stored before the fetch recorded
+/// the ownership (the ledger still names the rule then). One helper for the
+/// album, artist and legacy OFF paths.
+async fn rule_off(dbs: &crate::db::Dbs, rule_id: &str) {
+    let songs = crate::download::rule_song_ids(&dbs.download, rule_id)
+        .await
+        .unwrap_or_default();
+    if let Err(err) = crate::download::unmark_rule(&dbs.download, rule_id).await {
+        eprintln!("media: could not clear the rule's marks: {err:#}");
+    }
+    if let Err(err) = crate::media::remove_rule_media(&dbs.media, rule_id).await {
+        eprintln!("media: could not remove the rule-owned blobs: {err:#}");
+    }
+    if let Err(err) = crate::media::remove_songs_media(&dbs.media, &songs).await {
+        eprintln!("media: could not remove the rule's blobs: {err:#}");
+    }
+    if let Err(err) = crate::media::delete_rule(&dbs.media, rule_id).await {
+        eprintln!("media: could not drop the rule: {err:#}");
+    }
+}
+
+/// Drops an album container: its rule, marks and blobs.
 async fn album_container_off(dbs: &crate::db::Dbs, album_id: &str) {
-    let rule = match crate::media::rule_for(&dbs.media, "album", album_id).await {
-        Ok(rule) => rule,
-        Err(err) => {
-            eprintln!("media: could not read the album rule: {err:#}");
-            return;
-        }
-    };
-    if let Some(rule) = rule {
-        if let Err(err) = crate::media::delete_rule(&dbs.media, &rule.id).await {
-            eprintln!("media: could not drop the album rule: {err:#}");
-        }
-        if let Err(err) = crate::download::unmark_rule(&dbs.download, &rule.id).await {
-            eprintln!("media: could not clear the album marks: {err:#}");
-        }
-        if let Err(err) = crate::media::remove_rule_media(&dbs.media, &rule.id).await {
-            eprintln!("media: could not remove the album blobs: {err:#}");
-        }
+    match crate::media::rule_for(&dbs.media, "album", album_id).await {
+        Ok(Some(rule)) => rule_off(dbs, &rule.id).await,
+        Ok(None) => {}
+        Err(err) => eprintln!("media: could not read the album rule: {err:#}"),
     }
 }
 
@@ -359,12 +349,19 @@ async fn download_one(dbs: &crate::db::Dbs, song_id: &str) -> anyhow::Result<&'s
         crate::download::set_state(&dbs.download, song_id, crate::download::DONE, None).await?;
         return Ok(crate::download::DONE);
     }
-    if let Some(row) = crate::download::get(&dbs.download, song_id).await? {
-        if row.state == crate::download::ACTIVE {
-            eprintln!("download: {song_id} fetch already in flight");
-            return Ok(crate::download::ACTIVE);
-        }
+    // The blob's owner: the container rule whose mark selected this song
+    // (the ledger's rule id), or none for an explicit download. A
+    // rule-owned blob leaves with its rule — the media row must carry the
+    // ownership, or removing the target leaves the file behind (CACHE-5).
+    let mark = crate::download::get(&dbs.download, song_id).await?;
+    if mark
+        .as_ref()
+        .is_some_and(|row| row.state == crate::download::ACTIVE)
+    {
+        eprintln!("download: {song_id} fetch already in flight");
+        return Ok(crate::download::ACTIVE);
     }
+    let rule_of_mark = mark.and_then(|row| row.rule_id);
 
     crate::download::mark_queued(&dbs.download, song_id, None).await?;
     crate::download::set_state(&dbs.download, song_id, crate::download::ACTIVE, None).await?;
@@ -382,17 +379,22 @@ async fn download_one(dbs: &crate::db::Dbs, song_id: &str) -> anyhow::Result<&'s
             .as_deref()
             .filter(|suffix| !suffix.is_empty())
             .unwrap_or("bin");
-        // An explicit download is `permanent`: it persists until the user
-        // removes it (pins/rolling tiers are CACHE-3/4).
+        // A rule-marked song is `rule`-owned (the rule's removal deletes the
+        // blob); an explicit download is `permanent`: it persists until the
+        // user removes it (pins/rolling tiers are CACHE-3/4).
+        let (kind, rule) = match rule_of_mark.as_deref() {
+            Some(rule) => (crate::media::KIND_RULE, Some(rule)),
+            None => (crate::media::KIND_PERMANENT, None),
+        };
         crate::media::store(
             &dbs.media,
             song_id,
             &bytes,
-            crate::media::KIND_PERMANENT,
+            kind,
             quality,
             &fingerprint,
             extension,
-            None,
+            rule,
         )
         .await?;
         Ok::<(), anyhow::Error>(())
@@ -499,15 +501,18 @@ pub struct Backend {
     volume: f64,
     muted: bool,
     queue_index: i64,
-    /// The playback shuffle's state (None = off) and its generation: tasks
-    /// captured before a toggle must not write into the new world.
-    shuffle: Option<Shuffle>,
+    /// The queue rows' player revision at the last publish (QUEUEROWSTUDY
+    /// QR-1): a non-forced emit whose revision matches returns before the
+    /// O(N) clone/DB/serialize work — a skip or an advance moved only the
+    /// index, which the `queueIndex` property carries.
+    queue_revision: Option<u64>,
+    /// A row change outside the player (the heart write) must publish even
+    /// when the revision matches; `TriggerRowReload` raises it, `emit_queue`
+    /// consumes it.
+    queue_rows_dirty: bool,
+    /// The shuffle's generation: tasks captured before a toggle must not
+    /// write into the new world.
     shuffle_gen: u64,
-    /// A window resolve is in flight (one at a time).
-    shuffle_extending: bool,
-    /// The in-flight pass's units: `appendShuffle` records the consumed
-    /// slice as the next pass's exclusion set.
-    shuffle_units: Vec<String>,
     /// The chip's state: on/off and which source is shuffled.
     shuffling: bool,
     shuffle_kind: String,
@@ -2188,9 +2193,7 @@ impl Backend {
                 if let Ok(Some(rule)) =
                     crate::media::rule_for(&dbs.media, "artist", &artist_id).await
                 {
-                    let _ = crate::media::delete_rule(&dbs.media, &rule.id).await;
-                    let _ = crate::download::unmark_rule(&dbs.download, &rule.id).await;
-                    let _ = crate::media::remove_rule_media(&dbs.media, &rule.id).await;
+                    rule_off(&dbs, &rule.id).await;
                 }
                 eprintln!("download: artist {artist_id} removed from the cache");
                 let json = artist_cache_payload(&artist_id, false, false);
@@ -2303,24 +2306,7 @@ impl Backend {
                 let json = album_cache_payload(&album_id, true, false, false);
                 qtbridge::invoke_method!(invoker, "emitData", "album_cache".to_string(), json);
             } else {
-                let rule = match crate::media::rule_for(&dbs.media, "album", &album_id).await {
-                    Ok(rule) => rule,
-                    Err(err) => {
-                        eprintln!("media: could not read the album rule: {err:#}");
-                        return;
-                    }
-                };
-                if let Some(rule) = rule {
-                    if let Err(err) = crate::media::delete_rule(&dbs.media, &rule.id).await {
-                        eprintln!("media: could not drop the album rule: {err:#}");
-                    }
-                    if let Err(err) = crate::download::unmark_rule(&dbs.download, &rule.id).await {
-                        eprintln!("media: could not clear the album marks: {err:#}");
-                    }
-                    if let Err(err) = crate::media::remove_rule_media(&dbs.media, &rule.id).await {
-                        eprintln!("media: could not remove the album blobs: {err:#}");
-                    }
-                }
+                album_container_off(&dbs, &album_id).await;
                 eprintln!("download: album {album_id} removed from the cache");
                 let json = album_cache_payload(&album_id, false, false, false);
                 qtbridge::invoke_method!(invoker, "emitData", "album_cache".to_string(), json);
@@ -2421,15 +2407,14 @@ impl Backend {
     /// Plays a song inside the Songs segment's queue: the whole library in
     /// list order, starting on the clicked row (tracks before it included);
     /// The reusable shuffle toggle (Album/Songs tabs first; the fullscreen
-    /// queue follows the same shape). ON: a time-seeded rotation of the
-    /// tab's source — `songs` = the library's songs in the active order,
-    /// `albums` = the library's albums, each expanding to its tracklist —
-    /// queued as a rolling window and played from its head. A second press
-    /// disables the shuffle (the queue keeps playing what is in it).
+    /// queue follows the same shape). ON: the tab's source — `songs` = the
+    /// library's songs in the active order, `albums` = the library's
+    /// albums, each expanding to its tracklist — Fisher–Yates shuffled,
+    /// queued in full and played from its head. A second press disables the
+    /// shuffle (the queue keeps playing what is in it).
     #[qslot(qml_name = "toggleShuffle")]
     fn toggle_shuffle(&mut self, kind: String) {
         if self.shuffling {
-            self.shuffle = None;
             self.shuffle_gen = self.shuffle_gen.wrapping_add(1);
             self.set_shuffling(false, String::new());
             eprintln!("shuffle: off");
@@ -2449,7 +2434,7 @@ impl Backend {
         self.shuffle_gen = self.shuffle_gen.wrapping_add(1);
         let generation = self.shuffle_gen;
         // Optimistic: the chip lights on the press, the state lands with
-        // the units (`installShuffle`) or clears on failure.
+        // the whole queue or clears on failure.
         self.set_shuffling(true, kind.clone());
         crate::runtime().spawn(async move {
             let units = if kind == "albums" {
@@ -2483,39 +2468,21 @@ impl Backend {
                 .duration_since(std::time::UNIX_EPOCH)
                 .map(|elapsed| elapsed.as_nanos())
                 .unwrap_or(0);
-            let unit_count = units.len();
-            units.rotate_left(crate::queue::seeded_start(unit_count, seed));
-            match crate::queue::shuffle_window_json(
-                &dbs,
-                &kind,
-                &units,
-                0,
-                SHUFFLE_WINDOW,
-                offline,
-            )
-            .await
-            {
-                Ok((tracks_json, used)) => {
+            crate::queue::shuffle_units(&mut units, seed);
+            match crate::queue::shuffle_queue_json(&dbs, &kind, &units, offline).await {
+                Ok(tracks_json) => {
                     let tracks = serde_json::from_str::<serde_json::Value>(&tracks_json)
                         .ok()
                         .and_then(|value| value.as_array().map(Vec::len))
                         .unwrap_or(0);
-                    eprintln!("shuffle: {kind} starting — {tracks} tracks");
-                    let units_json = serde_json::to_string(&units).unwrap_or_default();
-                    let previous = units[..used.min(units.len())].to_vec();
-                    let previous_json = serde_json::to_string(&previous).unwrap_or_default();
-                    qtbridge::invoke_method!(
-                        invoker,
-                        "installShuffle",
-                        kind,
-                        units_json,
-                        previous_json,
-                        generation as i64
+                    eprintln!(
+                        "shuffle: {kind} starting — {tracks} tracks ({} units)",
+                        units.len()
                     );
                     qtbridge::invoke_method!(invoker, "playerLoad", tracks_json, 0_i64);
                 }
                 Err(err) => {
-                    eprintln!("shuffle: could not resolve the first window: {err:#}");
+                    eprintln!("shuffle: could not resolve the queue: {err:#}");
                     qtbridge::invoke_method!(
                         invoker,
                         "shuffleFailed",
@@ -2527,71 +2494,6 @@ impl Backend {
         });
     }
 
-    /// Stores the resolved shuffle (the full source and the first pass's
-    /// units); a superseded generation is dropped.
-    #[qslot(qml_name = "installShuffle")]
-    fn install_shuffle(
-        &mut self,
-        kind: String,
-        source_json: String,
-        previous_json: String,
-        generation: i64,
-    ) {
-        if generation.max(0) as u64 != self.shuffle_gen {
-            return;
-        }
-        let source: Vec<String> = serde_json::from_str(&source_json).unwrap_or_default();
-        if source.is_empty() {
-            return;
-        }
-        let previous: Vec<String> = serde_json::from_str(&previous_json).unwrap_or_default();
-        eprintln!("shuffle: {kind} ready — {} units", source.len());
-        self.shuffle = Some(Shuffle {
-            kind,
-            source,
-            previous,
-        });
-    }
-
-    /// The rolling window's landing pad: append the resolved tracks and
-    /// record the pass's exclusion set (generation-guarded).
-    #[qslot(qml_name = "appendShuffle")]
-    fn append_shuffle(&mut self, tracks_json: String, used: i64, generation: i64) {
-        self.shuffle_extending = false;
-        if generation.max(0) as u64 != self.shuffle_gen {
-            return;
-        }
-        let units = std::mem::take(&mut self.shuffle_units);
-        if let Some(shuffle) = self.shuffle.as_mut() {
-            // The next pass must not repeat what this one queued.
-            shuffle.previous = units.into_iter().take(used.max(0) as usize).collect();
-        }
-        match serde_json::from_str::<Vec<crate::player::Track>>(&tracks_json) {
-            Ok(tracks) => {
-                if tracks.is_empty() {
-                    return;
-                }
-                eprintln!("shuffle: appended {} rolling tracks", tracks.len());
-                let resume = self.player.state() == State::Stopped;
-                self.player.append(tracks);
-                if resume {
-                    // The queue ran dry mid-resolve (fast skips): the new
-                    // pass takes over with its first track.
-                    self.player.next();
-                }
-                self.sync_player();
-                self.emit_queue(false);
-            }
-            Err(err) => eprintln!("shuffle: bad append payload: {err:#}"),
-        }
-    }
-
-    /// A window resolve failed or was superseded: release the in-flight flag.
-    #[qslot(qml_name = "shuffleExtendDone")]
-    fn shuffle_extend_done(&mut self) {
-        self.shuffle_extending = false;
-    }
-
     /// The shuffle could not start (generation-guarded): clear the chip and
     /// surface the reason.
     #[qslot(qml_name = "shuffleFailed")]
@@ -2599,77 +2501,8 @@ impl Backend {
         if generation.max(0) as u64 != self.shuffle_gen {
             return;
         }
-        self.shuffle = None;
         self.set_shuffling(false, String::new());
         self.error_raised("playback".to_string(), message);
-    }
-
-    /// Rolls the next pass when the queued chunk is down to its last track:
-    /// a fresh time-seeded rotation of the source minus the previous pass's
-    /// units, resolved in one window and appended (one resolve at a time).
-    fn extend_shuffle(&mut self) {
-        let Some(shuffle) = self.shuffle.as_ref() else {
-            return;
-        };
-        if self.shuffle_extending || self.player.len() == 0 {
-            return;
-        }
-        let pending = self
-            .player
-            .len()
-            .saturating_sub(self.player.index() as usize + 1);
-        if pending > 1 {
-            return;
-        }
-        let seed = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|elapsed| elapsed.as_nanos())
-            .unwrap_or(0);
-        let excluded = shuffle.previous.len();
-        let kind = shuffle.kind.clone();
-        let pool = crate::queue::next_shuffle_pool(&shuffle.source, &shuffle.previous, seed);
-        eprintln!(
-            "shuffle: next pass — {} units ({excluded} excluded)",
-            pool.len()
-        );
-        if pool.is_empty() {
-            return;
-        }
-        self.shuffle_extending = true;
-        self.shuffle_units = pool.clone();
-        let invoker = self.get_qml_method_invoker();
-        let Some(dbs) = crate::dbs().cloned() else {
-            self.shuffle_extending = false;
-            return;
-        };
-        let offline = self.offline;
-        let generation = self.shuffle_gen;
-        crate::runtime().spawn(async move {
-            match crate::queue::shuffle_window_json(
-                &dbs,
-                &kind,
-                &pool,
-                0,
-                SHUFFLE_WINDOW,
-                offline,
-            )
-            .await
-            {
-                Ok((tracks_json, used)) => {
-                    qtbridge::invoke_method!(
-                        invoker,
-                        "appendShuffle",
-                        tracks_json,
-                        used as i64,
-                        generation as i64
-                    );
-                }
-                Err(err) => {
-                    eprintln!("shuffle: could not resolve the next window: {err:#}");
-                    qtbridge::invoke_method!(invoker, "shuffleExtendDone");
-                }
-            }
-        });
     }
 
     fn set_shuffling(&mut self, active: bool, kind: String) {
@@ -2683,10 +2516,9 @@ impl Backend {
         }
     }
 
-    /// The artist page's shuffle chip: a time-seeded rotation of the
-    /// artist's albums (the 2-D array albums → songs), queued in full and
-    /// played from the chosen album's head — one album after another until
-    /// the array ends.
+    /// The artist page's shuffle chip: the artist's albums (the 2-D array
+    /// albums → songs) Fisher–Yates shuffled, queued in full and played
+    /// from the order's head — one album after another until it ends.
     #[qslot(qml_name = "shuffleArtist")]
     fn shuffle_artist(&mut self, artist_id: String) {
         let invoker = self.get_qml_method_invoker();
@@ -2883,11 +2715,24 @@ impl Backend {
     /// tick) dedupes on the rows — "RowAlreadyPublished" — and lets the
     /// `queueIndex` property carry the move instead, so a skip costs one
     /// property notify, not a payload, a parse and a model pass.
+    ///
+    /// QUEUEROWSTUDY QR-1: the player revision is checked *before* the
+    /// clone/DB/serialize work — an unchanged revision (only the index
+    /// moved) returns here. `queue_rows_dirty` is the bypass for row
+    /// changes outside the player (the heart write in `TriggerRowReload`).
     fn emit_queue(&mut self, force: bool) {
+        let revision = self.player.revision();
+        if !force && !self.queue_rows_dirty && self.queue_revision == Some(revision) {
+            return;
+        }
         let invoker = self.get_qml_method_invoker();
         let Some(dbs) = crate::dbs().cloned() else {
             return;
         };
+        // Record the revision only once the emit is actually going out: a
+        // missing DB must leave the next call free to retry.
+        self.queue_revision = Some(revision);
+        self.queue_rows_dirty = false;
         let queue: Vec<crate::player::Track> = self.player.queue().to_vec();
         let index = self.player.index();
         let generation = QUEUE_EMIT_GEN.fetch_add(1, Ordering::Relaxed) + 1;
@@ -2901,11 +2746,12 @@ impl Backend {
             let items: Vec<serde_json::Value> = queue
                 .iter()
                 .map(|track| {
+                    // QR-4: only the roles the queue delegates paint —
+                    // `artist`/`album` fed the drawer's never-painted
+                    // `subtitle` and are gone.
                     serde_json::json!({
                         "id": track.id,
                         "title": track.title,
-                        "artist": track.artist,
-                        "album": track.album,
                         "album_id": track.album_id,
                         "starred": starred.contains(&track.id),
                         "duration": track.duration,
@@ -2924,7 +2770,11 @@ impl Backend {
             let mut hasher = std::collections::hash_map::DefaultHasher::new();
             std::hash::Hash::hash(&rows_json, &mut hasher);
             let rows_hash = std::hash::Hasher::finish(&hasher);
-            if !force && QUEUE_ROWS_HASH.swap(rows_hash, Ordering::Relaxed) == rows_hash {
+            // QR-3: swap unconditionally — a forced publish must store its
+            // hash too, or the next automatic emit of the same rows
+            // republishes against a stale value.
+            let previous = QUEUE_ROWS_HASH.swap(rows_hash, Ordering::Relaxed);
+            if !force && previous == rows_hash {
                 return;
             }
             eprintln!("queue: published {} rows", items.len());
@@ -3181,6 +3031,9 @@ impl Backend {
     #[qslot(qml_name = "TriggerRowReload")]
     fn trigger_row_reload(&mut self) {
         self.refresh_download_window();
+        // The heart's truth changed outside the player (QR-1): the revision
+        // gate must not swallow this publish.
+        self.queue_rows_dirty = true;
         self.emit_queue(false);
         // Every visible surface re-reads its *own* current window: a fetch
         // that finished must update the rows that show it, whatever the
@@ -3659,9 +3512,6 @@ impl Backend {
             self.command_issued(command);
         }
         if self.player.state() == State::Stopped {
-            // Fast skips can drain the pass before a tick catches it: the
-            // shuffle rolls the next one (and resumes) instead of dying.
-            self.extend_shuffle();
             let mut state = self.mpris_snapshot();
             state.playback_status = "Stopped".to_string();
             crate::mpris::publish(state);
@@ -3673,7 +3523,6 @@ impl Backend {
         }
         if self.player.index() != index {
             self.emit_queue(false);
-            self.extend_shuffle();
         }
         self.sync_player();
         self.maybe_save_position();

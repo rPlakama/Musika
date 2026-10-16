@@ -204,13 +204,13 @@ Rectangle {
     // truth every row binds to by song id — the download twin of the hearts'
     // library read. Refreshed on entry and after container changes.
 
-    /// The favourite heart of every row holding this song (optimistic; the
-    /// queue payloads reconcile).
+    /// The favourite heart, patched in place on the acted row (the playing
+    /// track the keybar verbs target). QR-8: no whole-model scan — duplicate
+    /// rows reconcile on the next queue payload.
     function markRowStarred(songId, on) {
-        for (var i = 0; i < queueItems.count; i++) {
-            if (queueItems.get(i).songId === songId)
-                queueItems.setProperty(i, "starred", on);
-        }
+        var i = root.queueIndex;
+        if (i >= 0 && i < queueItems.count && queueItems.get(i).songId === songId)
+            queueItems.setProperty(i, "starred", on === true);
     }
 
     /// The keybar chips arm the shared Alt overlay instead of firing: two
@@ -1380,15 +1380,12 @@ Rectangle {
                                             id: durationBox
                                             anchors.right: parent.right
                                             anchors.verticalCenter: parent.verticalCenter
-                                            width: durationMetrics.advanceWidth("00:00:00")
+                                            // QR-7: the pane's shared metric (the
+                                            // same font as the label) instead
+                                            // of a FontMetrics per row.
+                                            width: timeMetrics.advanceWidth("00:00:00")
                                             height: durationLabel.implicitHeight
                                             color: "transparent"
-
-                                            FontMetrics {
-                                                id: durationMetrics
-                                                font.family: Theme.fonts.body
-                                                font.pixelSize: durationLabel.font.pixelSize
-                                            }
 
                                             SearchText {
                                                 id: durationLabel

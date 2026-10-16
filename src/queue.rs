@@ -87,17 +87,16 @@ pub async fn album_tracks_json(
     tracks_json(dbs, songs).await
 }
 
-/// The artist's shuffle queue: every album of the artist (the albums table's
-/// mapping, the 2-D shape albums → songs), rotated to a time-seeded start —
-/// `now()` modulo the album count picks the first album, the rest follow one
-/// after another until the array ends, wrapping around. The queue holds the
-/// songs of that rotation, header first.
+/// The artist's shuffle queue: the artist's albums (the albums table's
+/// mapping) Fisher–Yates shuffled, each expanding to its tracklist — one
+/// album after another until the array ends. The queue holds the songs of
+/// that order, header first.
 pub async fn artist_shuffle_json(
     dbs: &crate::db::Dbs,
     artist_id: &str,
     offline: bool,
 ) -> anyhow::Result<String> {
-    let albums = crate::library::artist_album_ids(&dbs.library, artist_id).await?;
+    let mut albums = crate::library::artist_album_ids(&dbs.library, artist_id).await?;
     if albums.is_empty() {
         return Err(anyhow::anyhow!("this artist has no albums to shuffle"));
     }
@@ -105,72 +104,70 @@ pub async fn artist_shuffle_json(
         .duration_since(std::time::UNIX_EPOCH)
         .map(|elapsed| elapsed.as_nanos())
         .unwrap_or(0);
-    let start = seeded_start(albums.len(), seed);
+    shuffle_units(&mut albums, seed);
     let mut songs: Vec<crate::library::SongRow> = Vec::new();
-    for offset in 0..albums.len() {
-        let album = &albums[(start + offset) % albums.len()];
+    for album in &albums {
         songs.extend(crate::library::album_songs(&dbs.library, album).await?);
     }
     filter_offline(dbs, offline, &mut songs).await?;
     tracks_json(dbs, songs).await
 }
 
-/// The time-seeded rotation offset (`now()` modulo the length).
-pub fn seeded_start(len: usize, seed: u128) -> usize {
-    if len == 0 {
-        return 0;
+/// A seeded SplitMix64 — the shuffle's only randomness source. Deterministic
+/// for a given seed (tests), statistically independent across clock seeds.
+struct SplitMix64(u64);
+
+impl SplitMix64 {
+    fn next(&mut self) -> u64 {
+        self.0 = self.0.wrapping_add(0x9E37_79B9_7F4A_7C15);
+        let mut z = self.0;
+        z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+        z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+        z ^ (z >> 31)
     }
-    (seed % len as u128) as usize
+
+    /// Lemire's multiply-shift: a near-uniform index in `0..len` (the
+    /// modulo bias is below `len / 2^64`, irrelevant at these sizes).
+    fn below(&mut self, len: usize) -> usize {
+        ((self.next() as u128 * len as u128) >> 64) as usize
+    }
 }
 
-/// The shuffle's next pass: a time-seeded rotation of the source with the
-/// previous pass's units excluded, so consecutive passes never queue the
-/// same unit. A source that is all exclusion (a tiny library) restarts from
-/// the full set instead of starving.
-pub fn next_shuffle_pool(source: &[String], previous: &[String], seed: u128) -> Vec<String> {
-    let excluded: std::collections::HashSet<&str> =
-        previous.iter().map(String::as_str).collect();
-    let mut pool: Vec<String> = source
-        .iter()
-        .filter(|unit| !excluded.contains(unit.as_str()))
-        .cloned()
-        .collect();
-    if pool.is_empty() {
-        pool = source.to_vec();
+/// A proper array shuffle: Fisher–Yates (Knuth), in place. Every index is
+/// drawn exactly once, so the result is an unbiased permutation — the
+/// library order is not preserved, nor is the previous cycle's. `seed` is
+/// the clock; the caller passes `now()`.
+pub fn shuffle_units(units: &mut [String], seed: u128) {
+    let mut rng = SplitMix64((seed as u64) ^ ((seed >> 64) as u64));
+    for i in (1..units.len()).rev() {
+        units.swap(i, rng.below(i + 1));
     }
-    let len = pool.len();
-    if len > 0 {
-        pool.rotate_left(seeded_start(len, seed));
-    }
-    pool
 }
 
-/// One shuffle window: resolve `units` (album ids when `kind` is "albums",
-/// song ids otherwise) from `position` until `window` tracks are gathered or
-/// the array ends. Returns the tracks JSON and how many units were consumed
-/// — the caller advances its position by that and appends; the rolling
-/// window keeps the player from resolving thousands of URLs up front.
-pub async fn shuffle_window_json(
+/// The whole shuffle queue: every unit of the shuffled source (album ids
+/// when `kind` is "albums", song ids otherwise) resolves in one pass. The
+/// queue loads complete — nothing appends mid-session, so the models never
+/// republish rows while playing (a rolling window's republish was the
+/// queue-follow flicker).
+pub async fn shuffle_queue_json(
     dbs: &crate::db::Dbs,
     kind: &str,
     units: &[String],
-    position: usize,
-    window: usize,
     offline: bool,
-) -> anyhow::Result<(String, usize)> {
-    let mut songs: Vec<crate::library::SongRow> = Vec::new();
-    let mut used = 0;
-    while position + used < units.len() && songs.len() < window {
-        let unit = &units[position + used];
-        used += 1;
-        if kind == "albums" {
-            songs.extend(crate::library::album_songs(&dbs.library, unit).await?);
-        } else {
-            songs.extend(crate::library::songs_by_ids(&dbs.library, std::slice::from_ref(unit)).await?);
+) -> anyhow::Result<String> {
+    let mut songs = if kind == "albums" {
+        let mut songs: Vec<crate::library::SongRow> = Vec::new();
+        for album in units {
+            songs.extend(crate::library::album_songs(&dbs.library, album).await?);
         }
-    }
+        songs
+    } else {
+        // One bulk query, in the shuffled order (`songs_by_ids` preserves the
+        // input order), never a query per unit.
+        crate::library::songs_by_ids(&dbs.library, units).await?
+    };
     filter_offline(dbs, offline, &mut songs).await?;
-    Ok((tracks_json(dbs, songs).await?, used))
+    tracks_json(dbs, songs).await
 }
 
 /// 0-based start row for the Songs-segment queue: the clicked song must exist
@@ -779,7 +776,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn shuffle_window_rolls_units_until_the_window_fills() {
+    async fn shuffle_queue_resolves_every_unit_in_order() {
         let dbs = test_dbs().await;
         for (id, album) in [("s1", "al1"), ("s2", "al1"), ("s3", "al2"), ("s4", "al2")] {
             sqlx::query(
@@ -797,63 +794,83 @@ mod tests {
             .await
             .unwrap();
 
-        // A song window stops at two tracks and consumes two units.
-        let units: Vec<String> = ["s1", "s2", "s3", "s4"].map(String::from).to_vec();
-        let (json, used) = shuffle_window_json(&dbs, "songs", &units, 1, 2, false)
+        // Songs resolve one track per unit, in the given order.
+        let units: Vec<String> = ["s3", "s1", "s4", "s2"].map(String::from).to_vec();
+        let json = shuffle_queue_json(&dbs, "songs", &units, false)
             .await
             .unwrap();
-        assert_eq!(used, 2);
         let value: serde_json::Value = serde_json::from_str(&json).unwrap();
-        assert_eq!(value.as_array().unwrap().len(), 2);
+        let ids: Vec<&str> = value
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|track| track["id"].as_str().unwrap())
+            .collect();
+        assert_eq!(ids, ["s3", "s1", "s4", "s2"]);
 
-        // An album window consumes whole albums, stopping once full.
-        let albums: Vec<String> = ["al1", "al2"].map(String::from).to_vec();
-        let (json, used) = shuffle_window_json(&dbs, "albums", &albums, 0, 3, false)
+        // Albums expand whole, in the given order: al2's songs lead.
+        let albums: Vec<String> = ["al2", "al1"].map(String::from).to_vec();
+        let json = shuffle_queue_json(&dbs, "albums", &albums, false)
             .await
             .unwrap();
-        assert_eq!(used, 2, "both albums together hold the four songs");
         let value: serde_json::Value = serde_json::from_str(&json).unwrap();
-        assert_eq!(value.as_array().unwrap().len(), 4);
-
-        // The array's end: the window takes what remains.
-        let (json, used) = shuffle_window_json(&dbs, "songs", &units, 3, 30, false)
-            .await
-            .unwrap();
-        assert_eq!(used, 1);
-        let value: serde_json::Value = serde_json::from_str(&json).unwrap();
-        assert_eq!(value.as_array().unwrap().len(), 1);
+        let ids: Vec<&str> = value
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|track| track["id"].as_str().unwrap())
+            .collect();
+        assert_eq!(ids.len(), 4);
+        assert!(ids[..2].contains(&"s3") && ids[..2].contains(&"s4"));
+        assert!(ids[2..].contains(&"s1") && ids[2..].contains(&"s2"));
     }
 
     #[test]
-    fn shuffle_pool_excludes_the_previous_pass() {
-        let source: Vec<String> = ["a", "b", "c", "d"].map(String::from).to_vec();
-        let previous: Vec<String> = ["a", "b"].map(String::from).to_vec();
-        // Every seed: the pool never contains a previously queued unit.
-        for seed in 0..16u128 {
-            let pool = next_shuffle_pool(&source, &previous, seed);
-            assert_eq!(pool.len(), 2);
-            assert!(!pool.contains(&"a".to_string()));
-            assert!(!pool.contains(&"b".to_string()));
+    fn shuffle_is_a_permutation_for_any_seed() {
+        let source: Vec<String> = (0..64).map(|i| i.to_string()).collect();
+        let mut expected = source.clone();
+        expected.sort();
+        for seed in [
+            0_u128,
+            1,
+            2,
+            7,
+            42,
+            99,
+            12_345_678_901_234_567_890,
+            u128::MAX,
+        ] {
+            let mut units = source.clone();
+            shuffle_units(&mut units, seed);
+            let mut sorted = units.clone();
+            sorted.sort();
+            assert_eq!(sorted, expected, "every unit survives exactly once");
         }
-        // The rotation honours the seed: 0 keeps the pool's own order.
-        let pool = next_shuffle_pool(&source, &previous, 0);
-        assert_eq!(pool, ["c".to_string(), "d".to_string()]);
-        let pool = next_shuffle_pool(&source, &previous, 1);
-        assert_eq!(pool, ["d".to_string(), "c".to_string()]);
-        // A source that is all exclusion restarts from the full set.
-        let pool = next_shuffle_pool(&source, &source, 3);
-        assert_eq!(pool.len(), 4);
     }
 
     #[test]
-    fn shuffle_seed_rotates_within_the_array() {
-        // The album pick is `now() % len`: any seed folds into range and the
-        // walk wraps (the caller's `(start + offset) % len`).
-        for seed in [0_u128, 1, 4, 6, 7, 1000] {
-            let start = seeded_start(3, seed);
-            assert!(start < 3);
-            assert_eq!(start, (seed % 3) as usize);
-        }
-        assert_eq!(seeded_start(0, 42), 0);
+    fn shuffle_is_deterministic_and_seed_dependent() {
+        let source: Vec<String> = ["a", "b", "c", "d", "e", "f", "g", "h"]
+            .map(String::from)
+            .to_vec();
+        let mut a = source.clone();
+        shuffle_units(&mut a, 1);
+        let mut b = source.clone();
+        shuffle_units(&mut b, 1);
+        assert_eq!(a, b, "same seed, same order");
+        let mut c = source.clone();
+        shuffle_units(&mut c, 2);
+        assert_ne!(a, c, "a different seed walks a different order");
+        assert_ne!(a, source, "a shuffle is not the identity (8! odds)");
+    }
+
+    #[test]
+    fn shuffle_handles_empty_and_singleton() {
+        let mut empty: Vec<String> = Vec::new();
+        shuffle_units(&mut empty, 7);
+        assert!(empty.is_empty());
+        let mut one = vec!["only".to_string()];
+        shuffle_units(&mut one, 7);
+        assert_eq!(one, ["only"]);
     }
 }

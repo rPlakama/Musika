@@ -143,6 +143,10 @@ pub struct Player {
     retries: u32,
     /// When the next retry is due (backoff between attempts).
     retry_at: Option<Instant>,
+    /// Row revision (QUEUEROWSTUDY QR-1): bumped by every mutation of the
+    /// queue's rows, so `emit_queue` can skip its O(N) clone/read/serialize
+    /// when only the index moved (a skip or an advance).
+    revision: u64,
 }
 
 impl Default for Player {
@@ -169,6 +173,7 @@ impl Player {
             window_len: 0,
             retries: 0,
             retry_at: None,
+            revision: 0,
         }
     }
 
@@ -185,12 +190,18 @@ impl Player {
         self.queue.get(self.index)
     }
 
+    /// The queue rows' revision (bumped by every row mutation).
+    pub fn revision(&self) -> u64 {
+        self.revision
+    }
+
     /// Re-resolves every queued track's cover URL from a fresh map: a wipe or
     /// a cover sync invalidates the snapshot taken when the queue was built.
     pub fn refresh_cover_urls(&mut self, covers: &std::collections::HashMap<String, String>) {
         for track in &mut self.queue {
             track.cover_url = covers.get(&track.cover_art).cloned().unwrap_or_default();
         }
+        self.revision += 1;
     }
 
     /// Ids of the next `count` tracks after the current one (LYR-5 prefetch).
@@ -227,6 +238,7 @@ impl Player {
     pub fn load(&mut self, tracks: Vec<Track>, start: usize) {
         self.queue = tracks;
         self.index = start.min(self.queue.len().saturating_sub(1));
+        self.revision += 1;
         self.play_current();
     }
 
@@ -240,7 +252,11 @@ impl Player {
     /// Appends tracks to the end of the queue (ARC-43 "Add to Queue"): nothing
     /// starts playing, and an empty queue starts on the next [`Self::toggle`].
     pub fn append(&mut self, tracks: Vec<Track>) {
+        if tracks.is_empty() {
+            return;
+        }
         self.queue.extend(tracks);
+        self.revision += 1;
     }
 
     /// (Re)starts the current track from the beginning.
@@ -403,6 +419,7 @@ impl Player {
         }
         let was_current = index == self.index;
         self.queue.remove(index);
+        self.revision += 1;
         if self.queue.is_empty() {
             self.stop();
             return;
@@ -441,6 +458,7 @@ impl Player {
         }
         let track = self.queue.remove(from);
         self.queue.insert(to, track);
+        self.revision += 1;
         // Track the current index across the reorder.
         if self.index == from {
             self.index = to;

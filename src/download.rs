@@ -208,6 +208,17 @@ pub async fn unmark(pool: &SqlitePool, song_id: &str) -> Result<()> {
     Ok(())
 }
 
+/// The songs a rule's marks cover (rule removal, CACHE-5): the ledger's
+/// ownership is what identifies a pre-rule blob that must leave with the
+/// rule too.
+pub async fn rule_song_ids(pool: &SqlitePool, rule_id: &str) -> Result<Vec<String>> {
+    let rows: Vec<String> = sqlx::query_scalar("SELECT song_id FROM download WHERE rule_id = ?1")
+        .bind(rule_id)
+        .fetch_all(pool)
+        .await?;
+    Ok(rows)
+}
+
 /// Drops every row a rule requested (rule removal, CACHE-5). Removing the
 /// rule also removes its blobs, so pending *and* done marks go together;
 /// explicit downloads carry no rule id and are never touched.
@@ -312,6 +323,13 @@ mod tests {
                 total: 3
             }
         );
+
+        // The rule's songs are readable before the marks go: the removal
+        // path uses them to catch blobs stored without the rule id.
+        let mut rule_songs = rule_song_ids(&pool, "r1").await.unwrap();
+        rule_songs.sort();
+        assert_eq!(rule_songs, ["s1", "s2"]);
+        assert!(rule_song_ids(&pool, "nope").await.unwrap().is_empty());
 
         // Rule removal drops its pending *and* finished rows (the blobs go
         // with the rule); explicit downloads have no rule id and survive.

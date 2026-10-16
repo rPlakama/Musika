@@ -226,6 +226,70 @@ Item {
         return out;
     }
 
+    // Tab's small-action walk: the main list's Shuffle chip, then the
+    // status bar's Sync → Wipe scope, then back to the list — the controls
+    // stay reachable without leaving region 1 for the top bar. Shift+Tab
+    // walks the same circle backwards (list → wipe → sync → chip → list).
+    // Surfaces with their own Tab stops (ArtistEntry's chips, the fullscreen
+    // player's panes) keep them.
+    function tabWalk(action) {
+        var back = action === "pane_cycle_back";
+        // The stack's head is the segment host; the live list is its
+        // `activeView` (a pushed page has none and is the view itself).
+        var host = contentStack.currentItem;
+        var view = host && host.activeView !== undefined ? host.activeView : host;
+        var listy = view && view.hasHeaderChip !== undefined;
+
+        if (activeRegion === 1 && !listy) {
+            // Surfaces with their own Tab stops keep them (ArtistEntry's
+            // chips); a plain page steps straight into the status bar.
+            if (view && view.chipScope !== undefined) {
+                host.handleAction(action);
+                return;
+            }
+            activeRegion = 2;
+            topBar.scope = back ? 1 : 0;
+            return;
+        }
+
+        if (activeRegion === 1) {
+            var chipped = view.hasHeaderChip === true;
+            var onChip = chipped && view.headerScope === 0;
+            if (back) {
+                if (onChip) {
+                    view.handleAction("pane_cycle");      // chip → list
+                    return;
+                }
+                activeRegion = 2;                         // list → wipe
+                topBar.scope = 1;
+                return;
+            }
+            if (chipped && !onChip) {
+                view.handleAction("pane_cycle");          // list → chip
+                return;
+            }
+            if (onChip)
+                view.handleAction("pane_cycle");          // chip → list
+            activeRegion = 2;                             // …then sync
+            topBar.scope = 0;
+            return;
+        }
+
+        if (activeRegion === 2) {
+            if (back ? topBar.scope === 0 : topBar.scope === 1) {
+                activeRegion = 1;                         // …back to the list
+                if (back && view && view.hasHeaderChip === true)
+                    view.handleAction("pane_cycle");      // …and ring the chip
+                return;
+            }
+            topBar.scope = back ? 0 : 1;                  // sync ↔ wipe
+            return;
+        }
+
+        // The sidebar: Tab passes through as before.
+        sideBar.handleAction(action);
+    }
+
     // Actions dispatched from the global key handler, scoped to the active
     // region: movement only ever affects the region the cursor is in.
     function handleAction(action) {
@@ -427,6 +491,13 @@ Item {
         // the player view while it is open (Esc, Space and ,/. stay global).
         if (nowPlayingExpanded) {
             nowPlaying.handleAction(action);
+            return;
+        }
+
+        // Tab walks the shell's small actions across surfaces (Shuffle →
+        // Sync → Wipe).
+        if (action === "pane_cycle" || action === "pane_cycle_back") {
+            tabWalk(action);
             return;
         }
 

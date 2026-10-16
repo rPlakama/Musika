@@ -1135,6 +1135,28 @@ The product is incomplete without these.
   - **Verify:** socket integration test (temp `MUSIKA_IPC_SOCKET`) drives
     seek/volume/queue_move and reads replies; README IPC examples updated.
 
+- [ ] **ARC-REV · IPC coverage review — does `ipc.rs` cover all the calls it needs** — P2 · (feeds ARC-37)
+  - **Why:** the socket reaches whatever happens to flow through
+    `keyHandler.dispatch` and misses the rest: `toggleShuffle` (the tab
+    chips — probe-verified unreachable), `shuffleArtist`, `downloadAlbum`,
+    `altFavorite`, `requestDownloads`, the row-reload triggers. Worse, a
+    command can look right and be silently dropped: keymap *tokens* are not
+    *action names* — Escape's token is `escape` but the action is `back`,
+    `shift-tab` resolves to `pane_cycle_back`, and the socket takes action
+    names only.
+  - **Details:** one table over every `#[qslot]` on `Backend`, every `Action`
+    name and every `command_issued` consumer; each row gets a verdict —
+    command spelling (ARC-37 registry when it lands, action strings
+    meanwhile), pump-reachable action string, or an explicit "not
+    scriptable: reason"; token-vs-name traps and argument shapes
+    (`shuffle_toggle <kind>`) are called out.
+  - **Fix options:** land ARC-37's Rust registry and route every `#[qslot]`
+    through it, or freeze the action-string pump and alias the differences
+    (`escape` → `back`, add `shuffle_toggle`).
+  - **Verify:** socket integration test (temp `MUSIKA_IPC_SOCKET`) walks the
+    table and asserts every row runs; a new `#[qslot]` or `Action` without a
+    table row fails the audit test.
+
 - [x] **ARC-38 · `Icon.qml` facade: source + role + badge + fallback** — P2 · (SVGSTUDY.md; CACHE-7)
   - **Why:** icon URLs and palette roles repeat at every call site (`SideBar`,
     `InferiorBar`, `NowPlaying`, `ExitChip`, `SearchOverlay`, `SuperiorBar`,

@@ -64,39 +64,26 @@ Row {
                 && Backend.downloadingIds.indexOf(root.songId) !== -1)
             || (root.albumId.length > 0
                 && Backend.downloadingIds.indexOf(root.albumId) !== -1))
+    /// The card's cache state, or the track's own.
+    readonly property bool cached: root.windowed
+        && ((root.songId.length > 0
+                && Backend.downloadedIds.indexOf(root.songId) !== -1)
+            || (root.albumId.length > 0
+                && Backend.cachedAlbumIds.indexOf(root.albumId) !== -1))
 
     Rectangle {
-        // The card's cache state, or the track's own; while the fetch runs
-        // the loading loop spins in place (the same glyph ArtistEntry's
-        // chip uses).
-        visible: root.active
-            || (root.windowed
-                && ((root.songId.length > 0
-                        && Backend.downloadedIds.indexOf(root.songId) !== -1)
-                    || (root.albumId.length > 0
-                        && Backend.cachedAlbumIds.indexOf(root.albumId) !== -1)))
+        visible: root.active || root.cached
         width: root.box * 1.2
         height: width
         color: "transparent"
 
-        Icon {
-            id: downloadIcon
+        // ARC-UI-6: the shared download visual (loading while fetching,
+        // filled when cached, spin settling upright).
+        DownloadButton {
             anchors.centerIn: parent
-            width: parent.width
-            height: width
-            name: root.active ? "loading-loop" : "baseline-download"
-            symbolColor: root.active ? Palette.onSurfaceVariant : Palette.tertiary
-            transformOrigin: Item.Center
-
-            NumberAnimation {
-                target: downloadIcon
-                property: "rotation"
-                from: 0
-                to: 360
-                duration: Theme.motion.spin
-                loops: Animation.Infinite
-                running: root.active && !Theme.reduceMotion
-            }
+            base: parent.width
+            fetching: root.active
+            done: root.cached
         }
     }
 

@@ -184,6 +184,19 @@ The app is unsafe or misleading without these.
 
 The product is incomplete without these.
 
+- [ ] **ARC-UI-6 · One DownloadButton for every download surface** — P1 · (reported)
+  - **Why:** download visuals are duplicated per surface (ArtistEntry's
+    chip, the row marks, the fullscreen keybar chip), each with its own
+    state wiring; and in both the chip and the rows the loading glyph,
+    when it stops, keeps a half-spin angle — "returns it to a rolled
+    animation (a few degrees) instead of the proper orientation".
+  - **Details:** one reusable `DownloadButton` factoring the states —
+    optional idle (outline), `fetching` (loading-loop, spinning),
+    `done` (filled glyph) — with the spin **settling to the nearest full
+    turn** on stop (the sync button's pattern) so the glyph lands upright.
+    Reused wherever a download function exists: `RowMarks`, ArtistEntry's
+    download chip, the fullscreen keybar's download chip.
+
 - [ ] **REC-UI-1 · One row mechanism, everywhere** — P1 · (reported)
   - **Why:** "Fix Scroll/Row mechanism incosistencies; All rows present
     should use the same modal, to be reused, recicled, and highly

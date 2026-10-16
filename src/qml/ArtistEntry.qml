@@ -619,22 +619,20 @@ Rectangle {
                         // marks and fetches every song of the artist, OFF
                         // drops the rule, its marks and its rule-owned blobs;
                         // the `artist_cache` payload reconciles (including
-                        // `active`). Glyph states: outline = not selected,
-                        // loading loop (spinning) = fetch pass in flight,
-                        // filled `baseline-download.svg` in the MY3 accent =
-                        // selected and finished. Counts label is CACHE-7.
-                        icon: root.artistDownloading
-                            ? "qrc:/app/icons/loading-loop.svg"
-                            : (root.artistCacheOn
-                                ? "qrc:/app/icons/baseline-download.svg"
-                                : "qrc:/app/icons/outline-download.svg")
-                        iconColor: root.artistCacheOn && !root.artistDownloading
-                            ? Palette.tertiary
-                            : Palette.onSurfaceVariant
-                        spinning: root.artistDownloading
+                        // `active`). The visual is the shared
+                        // ARC-UI-6 DownloadButton. Counts label is CACHE-7.
+                        icon: ""
                         onClicked: {
                             root.chipScope = 0;
                             root.toggleCache();
+                        }
+
+                        DownloadButton {
+                            anchors.centerIn: parent
+                            base: parent.height * 0.42
+                            fetching: root.artistDownloading
+                            done: root.artistCacheOn
+                            showIdle: true
                         }
 
                         ScopeRing {

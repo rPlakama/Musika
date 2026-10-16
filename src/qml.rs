@@ -37,6 +37,17 @@ static STATUS_WRITE_GEN: AtomicU64 = AtomicU64::new(0);
 /// queue back to a stale index).
 static QUEUE_EMIT_GEN: AtomicU64 = AtomicU64::new(0);
 
+/// One id's download mark (the `mark_states` map's values).
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum MarkState {
+    /// The song's blob is in the ledger.
+    SongDone,
+    /// Every track of the album is in the ledger.
+    AlbumCached,
+    /// The song's fetch is queued/active.
+    SongInFlight,
+}
+
 /// The hash of the last published queue rows ("RowAlreadyPublished"): the
 /// automatic emits dedupe on it so skips don't republish the same rows.
 static QUEUE_ROWS_HASH: AtomicU64 = AtomicU64::new(0);
@@ -133,6 +144,10 @@ async fn apply_window(
         "songs": songs_done,
         "albums": albums_done,
         "downloading": songs_pending,
+        // The window's queried ids: their states get rewritten, everything
+        // else keeps its own (reads never clobber other surfaces).
+        "queried_songs": all,
+        "queried_albums": albums,
     })
     .to_string();
     qtbridge::invoke_method!(invoker, "applyDownloadedIds", json);
@@ -363,6 +378,12 @@ pub struct Backend {
     while_download_request: bool,
     /// The hold's deadline for the running request burst.
     download_request_until: Option<std::time::Instant>,
+    /// The mark truth: id -> state (done song / cached album / in-flight
+    /// song). Window reads and per-id patches both write it, and the
+    /// exposed sets re-derive from it — nothing can clobber anything (a
+    /// favourite's reload used to hide a finished download exactly that
+    /// way).
+    mark_states: std::collections::HashMap<String, MarkState>,
     /// The ids the UI last asked about (the mark window).
     download_window_songs: Vec<String>,
     download_window_albums: Vec<String>,
@@ -371,11 +392,6 @@ pub struct Backend {
     /// albums (a songs surface), which is why a finished album never
     /// re-evaluated until a reload re-requested its row's window.
     recent_mark_requests: std::collections::VecDeque<(Vec<String>, Vec<String>)>,
-    /// The most recent window results (`songs-done`, `albums-done`,
-    /// `downloading`), newest last, capped. The exposed sets are their union: one surface's window
-    /// read must never wipe another's marks (the session-return album page
-    /// kept losing them to the segments' later reads).
-    recent_mark_windows: std::collections::VecDeque<(Vec<String>, Vec<String>, Vec<String>)>,
     playback_state: String,
     position: f64,
     duration: f64,
@@ -2497,8 +2513,12 @@ impl Backend {
         self.refresh_window(songs, albums);
     }
 
-    /// Applies the ledger sets on the main thread (the async reader's landing
-    /// pad, invoked through the QML method invoker like `applyStatus`).
+    /// Applies a window read on the main thread (the async reader's landing
+    /// pad, invoked through the QML method invoker like `applyStatus`). The
+    /// window's *queried* ids get their states rewritten; ids outside it are
+    /// untouched — one surface's read can never erase another surface's
+    /// marks, nor a per-id patch (the old union was clobbered by exactly
+    /// that, e.g. a favourite's reload hiding a finished download).
     #[qslot(qml_name = "applyDownloadedIds")]
     fn apply_downloaded_ids(&mut self, ids_json: String) {
         let value: serde_json::Value = serde_json::from_str(&ids_json).unwrap_or_default();
@@ -2507,42 +2527,81 @@ impl Backend {
             serde_json::from_value(value["albums"].clone()).unwrap_or_default();
         let downloading: Vec<String> =
             serde_json::from_value(value["downloading"].clone()).unwrap_or_default();
-        // Keep the recent windows and expose their union: surfaces ask for
-        // their own ±15 window at their own pace, and no read may evict
-        // another surface's marks.
-        const RECENT_WINDOWS: usize = 12;
-        self.recent_mark_windows.push_back((songs, albums, downloading));
-        while self.recent_mark_windows.len() > RECENT_WINDOWS {
-            self.recent_mark_windows.pop_front();
+        let queried_songs: Vec<String> =
+            serde_json::from_value(value["queried_songs"].clone()).unwrap_or_default();
+        let queried_albums: Vec<String> =
+            serde_json::from_value(value["queried_albums"].clone()).unwrap_or_default();
+        let songs: std::collections::HashSet<String> = songs.into_iter().collect();
+        let downloading: std::collections::HashSet<String> = downloading.into_iter().collect();
+        let albums: std::collections::HashSet<String> = albums.into_iter().collect();
+        for id in queried_songs {
+            let state = if songs.contains(&id) {
+                Some(MarkState::SongDone)
+            } else if downloading.contains(&id) {
+                Some(MarkState::SongInFlight)
+            } else {
+                None
+            };
+            self.set_mark_state(&id, state);
         }
-        let mut done: Vec<&String> = Vec::new();
-        let mut cached: Vec<&String> = Vec::new();
-        let mut pending: Vec<&String> = Vec::new();
-        for (songs, albums, downloading) in &self.recent_mark_windows {
-            done.extend(songs);
-            cached.extend(albums);
-            pending.extend(downloading);
+        for id in queried_albums {
+            let state = albums
+                .contains(&id)
+                .then_some(MarkState::AlbumCached);
+            self.set_mark_state(&id, state);
         }
-        done.sort();
-        done.dedup();
-        cached.sort();
-        cached.dedup();
-        pending.sort();
-        pending.dedup();
-        self.downloaded_ids = done.into_iter().cloned().collect();
-        self.cached_album_ids = cached.into_iter().cloned().collect();
-        self.downloading_ids = pending.into_iter().cloned().collect();
-        self.downloaded_ids_changed();
-        self.cached_album_ids_changed();
-        self.downloading_ids_changed();
-        eprintln!("cachedAlbums: {}", self.cached_album_ids.join(","));
+        self.rebuild_mark_sets();
     }
 
-    /// Hard reset + re-read (a download was removed: the union must not keep
-    /// the gone ids). Wired to every container-OFF path.
+    /// Writes one id's state (None removes it).
+    fn set_mark_state(&mut self, id: &str, state: Option<MarkState>) {
+        match state {
+            Some(state) => {
+                self.mark_states.insert(id.to_string(), state);
+            }
+            None => {
+                self.mark_states.remove(id);
+            }
+        }
+    }
+
+    /// Re-derives the three exposed sets from the state map (sorted,
+    /// notify-on-change).
+    fn rebuild_mark_sets(&mut self) {
+        let mut done: Vec<String> = Vec::new();
+        let mut cached: Vec<String> = Vec::new();
+        let mut pending: Vec<String> = Vec::new();
+        for (id, state) in &self.mark_states {
+            match state {
+                MarkState::SongDone => done.push(id.clone()),
+                MarkState::AlbumCached => cached.push(id.clone()),
+                MarkState::SongInFlight => pending.push(id.clone()),
+            }
+        }
+        done.sort();
+        cached.sort();
+        pending.sort();
+        if done != self.downloaded_ids {
+            self.downloaded_ids = done;
+            self.downloaded_ids_changed();
+        }
+        if cached != self.cached_album_ids {
+            self.cached_album_ids = cached;
+            self.cached_album_ids_changed();
+        }
+        if pending != self.downloading_ids {
+            self.downloading_ids = pending;
+            self.downloading_ids_changed();
+        }
+    }
+
+    /// Hard reset + re-read (a download was removed: the gone ids must not
+    /// linger). Wired to every container-OFF path; the surfaces repopulate
+    /// from the `rowReload` that follows.
     #[qslot(qml_name = "ResetRowMarks")]
     fn reset_row_marks(&mut self) {
-        self.recent_mark_windows.clear();
+        self.mark_states.clear();
+        self.rebuild_mark_sets();
         self.refresh_download_window();
         self.row_reload();
     }
@@ -2556,17 +2615,15 @@ impl Backend {
             state == crate::download::QUEUED || state == crate::download::ACTIVE;
         if in_flight {
             self.hold_download_request();
-            if !self.downloading_ids.contains(&song_id) {
-                self.downloading_ids.push(song_id);
-                self.downloading_ids_changed();
-            }
+            self.set_mark_state(&song_id, Some(MarkState::SongInFlight));
+            self.rebuild_mark_sets();
             return;
         }
         // The fetch settled: the row keeps its loading glyph until the hold
         // expires (a cached fetch must still be *seen*), then flips.
-        if state == crate::download::DONE && !self.downloaded_ids.contains(&song_id) {
-            self.downloaded_ids.push(song_id.clone());
-            self.downloaded_ids_changed();
+        if state == crate::download::DONE {
+            self.set_mark_state(&song_id, Some(MarkState::SongDone));
+            self.rebuild_mark_sets();
         }
         self.settle_download_request(song_id);
     }
@@ -2580,16 +2637,10 @@ impl Backend {
             return;
         }
         self.hold_download_request();
-        let mut changed = false;
         for id in ids {
-            if !self.downloading_ids.contains(&id) {
-                self.downloading_ids.push(id);
-                changed = true;
-            }
+            self.set_mark_state(&id, Some(MarkState::SongInFlight));
         }
-        if changed {
-            self.downloading_ids_changed();
-        }
+        self.rebuild_mark_sets();
     }
 
     /// Starts (or extends) the request hold: `WhileDownloadRequest` stays
@@ -2630,10 +2681,15 @@ impl Backend {
     }
 
     fn apply_download_settle(&mut self, song_id: String) {
-        let touched = self.downloading_ids.contains(&song_id);
+        let touched = self
+            .mark_states
+            .get(&song_id)
+            .is_some_and(|state| *state == MarkState::SongInFlight);
         if touched {
-            self.downloading_ids.retain(|id| id != &song_id);
-            self.downloading_ids_changed();
+            // The completion already wrote SongDone for finished fetches;
+            // only a still-in-flight mark falls away here.
+            self.set_mark_state(&song_id, None);
+            self.rebuild_mark_sets();
         }
         if self.downloading_ids.is_empty() && self.while_download_request {
             self.while_download_request = false;
@@ -2644,11 +2700,11 @@ impl Backend {
     /// A finished song completed its album: that album's row flips, alone.
     #[qslot(qml_name = "markAlbumCached")]
     fn mark_album_cached(&mut self, album_id: String) {
-        if album_id.is_empty() || self.cached_album_ids.contains(&album_id) {
+        if album_id.is_empty() {
             return;
         }
-        self.cached_album_ids.push(album_id);
-        self.cached_album_ids_changed();
+        self.set_mark_state(&album_id, Some(MarkState::AlbumCached));
+        self.rebuild_mark_sets();
     }
 
     /// The row-status refresh hook: favourite actions and finished download

@@ -21,8 +21,8 @@ import "Theme.js" as Theme
 // UI-52: the one reusable action chip — the artist header's download /
 // shuffle / favourite cluster and the fullscreen keybar's album actions.
 // `unit` is the chip's square side; the host sizes it from its own geometry
-// (the artist header's page height, the keybar's bar height). `spinning`
-// turns the glyph into the shared loading loop (CACHE-5 fetch in flight).
+// (the artist header's page height, the keybar's bar height). Download
+// visuals are the shared ARC-UI-6 DownloadButton, placed by the host.
 Rectangle {
     id: chip
 
@@ -30,7 +30,6 @@ Rectangle {
     property string label: ""
     property url icon: ""
     property color iconColor: Palette.onSurfaceVariant
-    property bool spinning: false
 
     signal clicked()
 
@@ -60,26 +59,12 @@ Rectangle {
         spacing: chip.height * 0.18
 
         SymbolIcon {
-            id: chipGlyph
             anchors.verticalCenter: parent.verticalCenter
             visible: chip.icon.toString().length > 0
             source: chip.icon
             symbolColor: chip.iconColor
             width: chip.height * 0.42
             height: width
-            transformOrigin: Item.Center
-
-            // The same one-revolution loop the sync button spins with;
-            // `reduceMotion` keeps the glyph (the icon swap still reads).
-            NumberAnimation {
-                target: chipGlyph
-                property: "rotation"
-                from: 0
-                to: 360
-                duration: Theme.motion.spin
-                loops: Animation.Infinite
-                running: chip.spinning && !Theme.reduceMotion
-            }
         }
 
         FadeText {

@@ -1487,22 +1487,22 @@ Rectangle {
 
                 ActionChip {
                     id: downloadChip
-                    // The download options (the shared Alt overlay): the
-                    // glyph reads the album container's state; an artist
-                    // container that already covers the album wins the skip.
+                    // The download options (the shared Alt overlay); the
+                    // visual is the shared ARC-UI-6 DownloadButton reading
+                    // the album container's state.
                     unit: keybar.height * 0.72
-                    icon: root.albumDownloading
-                        ? "qrc:/app/icons/loading-loop.svg"
-                        : (root.albumCacheOn
-                            ? "qrc:/app/icons/baseline-download.svg"
-                            : "qrc:/app/icons/outline-download.svg")
-                    iconColor: root.albumCacheOn && !root.albumDownloading
-                        ? Palette.tertiary
-                        : Palette.onSurfaceVariant
-                    spinning: root.albumDownloading
+                    icon: ""
                     onClicked: {
                         root.actionScope = 1;
                         root.armAlbumActions("download");
+                    }
+
+                    DownloadButton {
+                        anchors.centerIn: parent
+                        base: parent.height * 0.42
+                        fetching: root.albumDownloading
+                        done: root.albumCacheOn
+                        showIdle: true
                     }
 
                     ScopeRing {

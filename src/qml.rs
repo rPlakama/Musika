@@ -37,6 +37,10 @@ static STATUS_WRITE_GEN: AtomicU64 = AtomicU64::new(0);
 /// queue back to a stale index).
 static QUEUE_EMIT_GEN: AtomicU64 = AtomicU64::new(0);
 
+/// The hash of the last published queue rows ("RowAlreadyPublished"): the
+/// automatic emits dedupe on it so skips don't republish the same rows.
+static QUEUE_ROWS_HASH: AtomicU64 = AtomicU64::new(0);
+
 /// Builds a client from the saved credentials for the ad-hoc slots (ARC-42
 /// and friends); the sync path keeps its own explicit copy.
 async fn client(dbs: &crate::db::Dbs) -> anyhow::Result<SubsonicClient> {
@@ -1327,7 +1331,7 @@ impl Backend {
             serde_json::from_str(&covers_json).unwrap_or_default();
         self.player.refresh_cover_urls(&covers);
         self.sync_player();
-        self.emit_queue();
+        self.emit_queue(false);
     }
 
     /// Re-emits the current palette slot as `dark: null` so Main.qml falls
@@ -2164,7 +2168,7 @@ impl Backend {
                     self.player.seek(position);
                 }
                 self.sync_player();
-                self.emit_queue();
+                self.emit_queue(false);
             }
             Err(err) => {
                 eprintln!("player: bad queue payload: {err}");
@@ -2185,7 +2189,7 @@ impl Backend {
             Ok(tracks) => {
                 self.player.load(tracks, start.max(0) as usize);
                 self.sync_player();
-                self.emit_queue();
+                self.emit_queue(false);
                 if announce {
                     self.playback_started();
                 }
@@ -2208,7 +2212,7 @@ impl Backend {
     fn player_next(&mut self) {
         self.player.next();
         self.sync_player();
-        self.emit_queue();
+        self.emit_queue(false);
         self.track_skipped(true);
     }
 
@@ -2216,7 +2220,7 @@ impl Backend {
     fn player_previous(&mut self) {
         self.player.previous();
         self.sync_player();
-        self.emit_queue();
+        self.emit_queue(false);
         self.track_skipped(false);
     }
 
@@ -2242,7 +2246,13 @@ impl Backend {
     /// `altFavorite`); the download ledger is NOT folded in — it has its own
     /// channel ([`Self::request_downloads`]), so a row mark is a direct
     /// database read, never a payload variable.
-    fn emit_queue(&mut self) {
+    ///
+    /// `force` publishes even when the rows are already out (the explicit
+    /// `requestQueue`); the automatic path (skips, advances, the 500 ms
+    /// tick) dedupes on the rows — "RowAlreadyPublished" — and lets the
+    /// `queueIndex` property carry the move instead, so a skip costs one
+    /// property notify, not a payload, a parse and a model pass.
+    fn emit_queue(&mut self, force: bool) {
         let invoker = self.get_qml_method_invoker();
         let Some(dbs) = crate::dbs().cloned() else {
             return;
@@ -2274,6 +2284,16 @@ impl Backend {
                 .collect();
             // A newer emit already went out: this one is stale.
             if QUEUE_EMIT_GEN.load(Ordering::Relaxed) != generation {
+                return;
+            }
+            // RowAlreadyPublished: the same row set is already out — a skip
+            // or an advance only moved the index, and the `queueIndex`
+            // property carries that. No payload, no parse, no model pass.
+            let rows_json = serde_json::to_string(&items).unwrap_or_default();
+            let mut hasher = std::collections::hash_map::DefaultHasher::new();
+            std::hash::Hash::hash(&rows_json, &mut hasher);
+            let rows_hash = std::hash::Hasher::finish(&hasher);
+            if !force && QUEUE_ROWS_HASH.swap(rows_hash, Ordering::Relaxed) == rows_hash {
                 return;
             }
             eprintln!("queue: published {} rows", items.len());
@@ -2327,7 +2347,7 @@ impl Backend {
     #[qslot(qml_name = "TriggerRowReload")]
     fn trigger_row_reload(&mut self) {
         self.refresh_download_window();
-        self.emit_queue();
+        self.emit_queue(false);
     }
 
     /// Re-reads the stored window (after a download changed the ledger).
@@ -2348,28 +2368,30 @@ impl Backend {
 
     #[qslot(qml_name = "requestQueue")]
     fn request_queue(&mut self) {
-        self.emit_queue();
+        // The explicit request always publishes (the drawer/entry may have
+        // missed the automatic stream).
+        self.emit_queue(true);
     }
 
     #[qslot(qml_name = "queueJump")]
     fn queue_jump(&mut self, index: i64) {
         self.player.jump(index.max(0) as usize);
         self.sync_player();
-        self.emit_queue();
+        self.emit_queue(false);
     }
 
     #[qslot(qml_name = "queueRemove")]
     fn queue_remove(&mut self, index: i64) {
         self.player.remove(index.max(0) as usize);
         self.sync_player();
-        self.emit_queue();
+        self.emit_queue(false);
     }
 
     #[qslot(qml_name = "queueMove")]
     fn queue_move(&mut self, from: i64, to: i64) {
         self.player
             .move_item(from.max(0) as usize, to.max(0) as usize);
-        self.emit_queue();
+        self.emit_queue(false);
     }
 
     // -----------------------------------------------------------------------
@@ -2384,7 +2406,7 @@ impl Backend {
             Ok(tracks) => {
                 self.player.append(tracks);
                 self.sync_player();
-                self.emit_queue();
+                self.emit_queue(false);
                 self.queue_status_save();
             }
             Err(err) => {
@@ -2792,7 +2814,7 @@ impl Backend {
             self.error_raised("playback".to_string(), message);
         }
         if self.player.index() != index {
-            self.emit_queue();
+            self.emit_queue(false);
         }
         self.sync_player();
         self.maybe_save_position();

@@ -618,6 +618,15 @@ Rectangle {
             if (root.visible)
                 root.requestAlbumActions();
         }
+        // A skip/advance is deduped backend-side (the rows are already
+        // published): the index property carries the move — adopt it and
+        // follow exactly like a fresh payload would.
+        function onQueue_index_changed() {
+            if (root.queueIndex === Backend.queueIndex)
+                return;
+            root.queueIndex = Backend.queueIndex;
+            root.recallQueueCursor();
+        }
         function onCurrent_song_id_changed() {
             if (root.visible) {
                 root.lyricsLoading = true;

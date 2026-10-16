@@ -158,6 +158,11 @@ Item {
             if (channel === "queue" && root.opened)
                 root.apply(payload);
         }
+        // Skips dedupe the payload backend-side; the playing marker follows
+        // the property instead (no cursor move — parity with later payloads).
+        function onQueue_index_changed() {
+            root.nowPlaying = Backend.queueIndex;
+        }
     }
 
     // UI-35: the drawer owns the context while open — the shared scrim dims

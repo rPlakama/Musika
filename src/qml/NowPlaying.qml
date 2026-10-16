@@ -47,8 +47,16 @@ Rectangle {
         return Theme.clamp(full * root.widthScale, 18, full);
     }
 
-    // Keyboard pane: 1 = lyrics, 2 = queue. Transport is never a pane.
+    // Keyboard pane: 1 = lyrics, 2 = queue, 3 = keybar actions. Transport is
+    // never a pane.
     property int pane: 1
+    // Keybar actions (album scope): the focused chip (0 = favourite,
+    // 1 = download) and the states the backend reconciles.
+    property int actionScope: 0
+    property bool albumStarred: false
+    property bool albumCacheOn: false
+    property bool albumDownloading: false
+    property bool albumCovered: false
     property int queueCursor: 0
     property int queueIndex: -1
     // One queue payload after a reorder keeps the moved cursor instead of
@@ -128,7 +136,93 @@ Rectangle {
     function keyHints() {
         if (pane === 1)
             return "j/k scroll   ·   ,/. seek   ·   Ctrl-N/P track   ·   Tab queue   ·   Esc exit";
+        if (pane === 3)
+            return "j/k select   ·   Enter options   ·   Tab lyrics   ·   Esc exit";
         return "j/k select   ·   Shift-J/K move   ·   Enter jump   ·   ,/. seek   ·   Ctrl-N/P track   ·   Tab lyrics   ·   Esc exit";
+    }
+
+    /// The keybar's album-scope state (favourite + container download) for
+    /// the playing track's album.
+    function requestAlbumActions() {
+        if (Backend.currentAlbumId.length === 0)
+            return;
+        Backend.requestAlbumCache(Backend.currentAlbumId);
+        Backend.requestAlbumState(Backend.currentAlbumId);
+    }
+
+    function toggleAlbumFavorite() {
+        if (Backend.currentAlbumId.length === 0)
+            return;
+        // Optimistic; the `album_state` payload reconciles (also on failure).
+        root.albumStarred = !root.albumStarred;
+        Backend.altFavorite("album", Backend.currentAlbumId, root.albumStarred);
+    }
+
+    function toggleAlbumDownload() {
+        // An artist container already owns the album ("if the artist is
+        // already in download scope, don't").
+        if (Backend.currentAlbumId.length === 0 || root.albumCovered)
+            return;
+        Backend.downloadAlbum(Backend.currentAlbumId, !root.albumCacheOn);
+    }
+
+    /// The playing track's row in the queue model (song id + favourite flag
+    /// for the overlay's track-scoped options).
+    function currentTrack() {
+        return root.queueIndex >= 0 && root.queueIndex < queueItems.count
+            ? queueItems.get(root.queueIndex)
+            : null;
+    }
+
+    /// The keybar chips arm the shared Alt overlay instead of firing: two
+    /// options, left = track scope (note) and right = album scope, so the
+    /// user directs whether the verb lands on the track or the whole album.
+    function armAlbumActions(kind) {
+        var track = root.currentTrack();
+        var songId = track ? track.songId : Backend.currentSongId;
+        var actions = {
+            north: null,
+            south: null,
+            west: null,
+            east: null,
+            // A click/Enter arms with no Alt to release: sticky, like the
+            // trashcan's wipe chooser.
+            sticky: true
+        };
+        if (kind === "favorite") {
+            var starred = track ? track.starred === true : false;
+            actions.west = {
+                label: "Track",
+                icon: "qrc:/app/icons/track-svgrepo-com.svg",
+                favorite: !starred,
+                invoke: function() {
+                    if (songId.length > 0)
+                        Backend.altFavorite("song", songId, !starred);
+                }
+            };
+            actions.east = {
+                label: "Album",
+                icon: "qrc:/app/icons/album.svg",
+                favorite: !root.albumStarred,
+                invoke: function() { root.toggleAlbumFavorite() }
+            };
+            root.quickAction(favoriteChip, actions);
+        } else {
+            actions.west = {
+                label: "Track",
+                icon: "qrc:/app/icons/track-svgrepo-com.svg",
+                invoke: function() {
+                    if (songId.length > 0)
+                        Backend.downloadSong(songId);
+                }
+            };
+            actions.east = {
+                label: "Album",
+                icon: "qrc:/app/icons/album.svg",
+                invoke: function() { root.toggleAlbumDownload() }
+            };
+            root.quickAction(downloadChip, actions);
+        }
     }
 
     function scrollLyrics(delta) {
@@ -222,7 +316,8 @@ Rectangle {
         for (var s = 0; s < data.items.length; s++) {
             var sig = data.items[s];
             signature += sig.id + "|" + sig.title + "|" + sig.duration
-                + "|" + (sig.starred === true ? 1 : 0) + ";";
+                + "|" + (sig.starred === true ? 1 : 0)
+                + "|" + (sig.downloaded === true ? 1 : 0) + ";";
         }
         if (signature !== root._queueSignature) {
             root._queueSignature = signature;
@@ -237,7 +332,8 @@ Rectangle {
                     duration: Theme.formatTime(track.duration),
                     songId: track.id,
                     albumId: track.album_id ? track.album_id : "",
-                    starred: track.starred === true
+                    starred: track.starred === true,
+                    downloaded: track.downloaded === true
                 });
             }
             Qt.callLater(function () {
@@ -354,7 +450,7 @@ Rectangle {
     // Fullscreen keys, scoped to the focused pane. Esc/back stays with Home.
     function handleAction(action) {
         if (action === "pane_cycle") {
-            pane = pane === 1 ? 2 : 1;
+            pane = pane === 1 ? 2 : (pane === 2 ? 3 : 1);
             return;
         }
         if (action === "next_track") {
@@ -373,6 +469,20 @@ Rectangle {
                 scrollLyrics(lyricsView.height * 0.3);
             else if (action === "move_left" || action === "move_right")
                 pane = 2;
+            return;
+        }
+
+        if (pane === 3) {
+            if (action === "move_left" || action === "move_up")
+                actionScope = 0;
+            else if (action === "move_right" || action === "move_down")
+                actionScope = 1;
+            else if (action === "enter") {
+                if (root.actionScope === 0)
+                    root.armAlbumActions("favorite");
+                else
+                    root.armAlbumActions("download");
+            }
             return;
         }
 
@@ -426,6 +536,8 @@ Rectangle {
                 lyricsLoading = true;
                 Backend.requestLyrics();
             }
+            // The keybar's album actions reconcile on entry too.
+            root.requestAlbumActions();
         } else if (queueItems.count > 0) {
             queueContent.remember(pane);
             // VI-4: leaving fullscreen ends the queue selection.
@@ -443,6 +555,22 @@ Rectangle {
                 root.applyQueue(payload);
             else if (channel === "lyrics" && root.visible)
                 root.applyLyrics(payload);
+            else if (channel === "album_cache") {
+                var cache = JSON.parse(payload);
+                if (cache.id === Backend.currentAlbumId) {
+                    root.albumCacheOn = cache.on === true;
+                    root.albumDownloading = cache.active === true;
+                    root.albumCovered = cache.covered === true;
+                }
+            } else if (channel === "album_state") {
+                var state = JSON.parse(payload);
+                if (state.id === Backend.currentAlbumId)
+                    root.albumStarred = state.starred === true;
+            }
+        }
+        function onCurrent_album_id_changed() {
+            if (root.visible)
+                root.requestAlbumActions();
         }
         function onCurrent_song_id_changed() {
             if (root.visible) {
@@ -625,7 +753,9 @@ Rectangle {
                     // The SuperiorBar trick: the timecode sits in its own
                     // fixed-width rectangle (reserved for the widest string),
                     // so the ticking position repaints inside it and the bar
-                    // next to it keeps a steady length.
+                    // next to it keeps a steady length. The digits hug the
+                    // box's left edge — the seek row's first mark lines up
+                    // with the title and the artist above it.
                     Rectangle {
                         Layout.preferredWidth: timeMetrics.advanceWidth("00:00:00")
                         Layout.preferredHeight: elapsedText.implicitHeight
@@ -638,7 +768,7 @@ Rectangle {
                             text: Theme.formatTime(Backend.position)
                             color: Palette.onSurfaceVariant
                             font.pixelSize: Theme.fontSize("mono", root.height)
-                            horizontalAlignment: Text.AlignRight
+                            horizontalAlignment: Text.AlignLeft
                             animated: false
                         }
                     }
@@ -1181,6 +1311,7 @@ Rectangle {
                                         // UI-56: the favourite heart leads the
                                         // duration (state mark, no hitbox).
                                         Icon {
+                                            id: starMark
                                             visible: row.starred
                                             anchors.verticalCenter: parent.verticalCenter
                                             anchors.right: durationLabel.left
@@ -1189,6 +1320,22 @@ Rectangle {
                                             height: width
                                             name: "baseline-favorite"
                                             symbolColor: Theme.iconStrong
+                                        }
+
+                                        // The same download glyph the keybar
+                                        // uses, at the heart's side: the
+                                        // track's cache state (filled = the
+                                        // blob is in the ledger).
+                                        Icon {
+                                            visible: row.downloaded === true
+                                            anchors.verticalCenter: parent.verticalCenter
+                                            anchors.right: row.starred
+                                                ? starMark.left : durationLabel.left
+                                            anchors.rightMargin: row.width * 0.01
+                                            width: durationLabel.font.pixelSize * 0.8
+                                            height: width
+                                            name: "baseline-download"
+                                            symbolColor: Palette.tertiary
                                         }
 
                                         HoverHandler {
@@ -1222,24 +1369,74 @@ Rectangle {
             }
         }
 
-        // Context-aware keybar.
+        // Context-aware keybar: the key hints on the left; the free space on
+        // the right carries the album-scope actions — Tab cycles into them
+        // (pane 3), j/k (or h/l) picks the chip, Enter fires it.
         Rectangle {
+            id: keybar
             Layout.fillWidth: true
             Layout.preferredHeight: root.height * 0.055
             color: Palette.surfaceContainer
             radius: Theme.radius
 
-            FadeText {
-                anchors.verticalCenter: parent.verticalCenter
-                anchors.left: parent.left
-                anchors.right: parent.right
+            RowLayout {
+                anchors.fill: parent
                 anchors.leftMargin: parent.height * 0.4
-                anchors.rightMargin: parent.height * 0.4
-                text: root.keyHints()
-                color: Palette.onSurfaceVariant
-                font.pixelSize: Theme.fontSize("label", root.height)
-                elide: Text.ElideRight
-                animated: false
+                anchors.rightMargin: parent.height * 0.2
+                spacing: root.width * 0.008
+
+                FadeText {
+                    Layout.fillWidth: true
+                    Layout.alignment: Qt.AlignVCenter
+                    text: root.keyHints()
+                    color: Palette.onSurfaceVariant
+                    font.pixelSize: Theme.fontSize("label", root.height)
+                    elide: Text.ElideRight
+                    animated: false
+                }
+
+                ActionChip {
+                    id: favoriteChip
+                    // The favourite options (the shared Alt overlay): the
+                    // star reads the album's state, the overlay then picks
+                    // the scope — track (note) or album.
+                    unit: keybar.height * 0.72
+                    icon: "qrc:/app/icons/star.svg"
+                    iconColor: root.albumStarred ? Theme.favoriteStar : Palette.onSurfaceVariant
+                    onClicked: {
+                        root.actionScope = 0;
+                        root.armAlbumActions("favorite");
+                    }
+
+                    ScopeRing {
+                        shown: root.pane === 3 && root.actionScope === 0
+                    }
+                }
+
+                ActionChip {
+                    id: downloadChip
+                    // The download options (the shared Alt overlay): the
+                    // glyph reads the album container's state; an artist
+                    // container that already covers the album wins the skip.
+                    unit: keybar.height * 0.72
+                    icon: root.albumDownloading
+                        ? "qrc:/app/icons/loading-loop.svg"
+                        : (root.albumCacheOn
+                            ? "qrc:/app/icons/baseline-download.svg"
+                            : "qrc:/app/icons/outline-download.svg")
+                    iconColor: root.albumCacheOn && !root.albumDownloading
+                        ? Palette.tertiary
+                        : Palette.onSurfaceVariant
+                    spinning: root.albumDownloading
+                    onClicked: {
+                        root.actionScope = 1;
+                        root.armAlbumActions("download");
+                    }
+
+                    ScopeRing {
+                        shown: root.pane === 3 && root.actionScope === 1
+                    }
+                }
             }
         }
     }

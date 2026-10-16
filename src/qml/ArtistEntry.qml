@@ -161,83 +161,6 @@ Rectangle {
         return Qt.rgba(color.r, color.g, color.b, alpha);
     }
 
-    // UI-52: one reusable action chip for the identity strip; ARC-42 wires
-    // star/rating/cache/shuffle behind the same frame. `spinning` turns the
-    // glyph into the shared loading loop (CACHE-5 fetch in flight).
-    component ActionChip: Rectangle {
-        id: chip
-
-        property string label: ""
-        property url icon: ""
-        property color iconColor: Palette.onSurfaceVariant
-        property bool spinning: false
-
-        signal clicked()
-
-        height: root.height * 0.06
-        // Icon-only chips are square; a label adds the text + side padding
-        // (ARC-42 brings `Cached · <bytes>` back).
-        width: chip.label.length > 0 ? content.implicitWidth + height * 0.8 : height
-        radius: Theme.radius
-        color: chipHover.hovered ? Palette.secondaryContainer : Palette.surfaceContainerHigh
-        border.color: Palette.outlineVariant
-        border.width: Math.max(1, root.height * Theme.hairlineRatio)
-
-        Behavior on color {
-            ColorAnimation {
-                duration: Theme.motion.quick
-                easing.type: Easing.Bezier
-                easing.bezierCurve: Theme.ease.standard
-            }
-        }
-
-        Row {
-            id: content
-            anchors.centerIn: parent
-            spacing: chip.height * 0.18
-
-            SymbolIcon {
-                id: chipGlyph
-                anchors.verticalCenter: parent.verticalCenter
-                visible: chip.icon.toString().length > 0
-                source: chip.icon
-                symbolColor: chip.iconColor
-                width: chip.height * 0.42
-                height: width
-                transformOrigin: Item.Center
-
-                // The same one-revolution loop the sync button spins with;
-                // `reduceMotion` keeps the glyph (the icon swap still reads).
-                NumberAnimation {
-                    target: chipGlyph
-                    property: "rotation"
-                    from: 0
-                    to: 360
-                    duration: Theme.motion.spin
-                    loops: Animation.Infinite
-                    running: chip.spinning && !Theme.reduceMotion
-                }
-            }
-
-            FadeText {
-                id: chipLabel
-                anchors.verticalCenter: parent.verticalCenter
-                text: chip.label
-                color: Palette.onSurface
-                font.pixelSize: root.height * 0.016
-                animated: false
-            }
-        }
-
-        HoverHandler {
-            id: chipHover
-            cursorShape: Qt.PointingHandCursor
-        }
-
-        TapHandler {
-            onTapped: chip.clicked()
-        }
-    }
 
     ListModel {
         id: albums
@@ -656,6 +579,7 @@ Rectangle {
                     spacing: root.height * 0.010
 
                     ActionChip {
+                        unit: root.height * 0.06
                         // CACHE-5/8: artist container download toggle. ON
                         // marks and fetches every song of the artist, OFF
                         // drops the rule, its marks and its rule-owned blobs;
@@ -684,6 +608,7 @@ Rectangle {
                     }
 
                     ActionChip {
+                        unit: root.height * 0.06
                         icon: "qrc:/app/icons/outline-shuffle.svg"
                         onClicked: root.chipScope = 1
 
@@ -693,6 +618,7 @@ Rectangle {
                     }
 
                     ActionChip {
+                        unit: root.height * 0.06
                         // ARC-42: filled star, gray while not favourited and
                         // the Material yellow when it is. Clicks toggle
                         // optimistically; the backend reconciles through the

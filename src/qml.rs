@@ -32,6 +32,11 @@ use crate::queue::{album_tracks_json, library_queue_payload, song_album_payload}
 /// captured generation is still the latest (P-6 / roadmap "Session status").
 static STATUS_WRITE_GEN: AtomicU64 = AtomicU64::new(0);
 
+/// Bumped by every queue emit; the async ledger lookup only delivers when its
+/// captured generation is still the latest (out-of-order emits would flip the
+/// queue back to a stale index).
+static QUEUE_EMIT_GEN: AtomicU64 = AtomicU64::new(0);
+
 /// Builds a client from the saved credentials for the ad-hoc slots (ARC-42
 /// and friends); the sync path keeps its own explicit copy.
 async fn client(dbs: &crate::db::Dbs) -> anyhow::Result<SubsonicClient> {
@@ -54,6 +59,38 @@ fn download_payload(song_id: &str, state: &str) -> String {
 /// `active` marks a fetch pass in flight for the chip's loading loop.
 fn artist_cache_payload(artist_id: &str, on: bool, active: bool) -> String {
     serde_json::json!({ "id": artist_id, "on": on, "active": active }).to_string()
+}
+
+/// The album container state for the fullscreen keybar's Download button:
+/// `on` = selected (an album rule, or an artist rule that covers the album),
+/// `active` = a fetch pass is in flight, `covered` = the artist owns it.
+fn album_cache_payload(album_id: &str, on: bool, active: bool, covered: bool) -> String {
+    serde_json::json!({ "id": album_id, "on": on, "active": active, "covered": covered })
+        .to_string()
+}
+
+/// The album favourite flag for the fullscreen keybar's heart.
+fn album_state_payload(album_id: &str, starred: bool) -> String {
+    serde_json::json!({ "id": album_id, "starred": starred }).to_string()
+}
+
+/// CACHE-5/8: fetch every song of a container pass with bounded concurrency;
+/// the ledger row per song carries its own state, a failure is logged and
+/// the rest of the pass continues.
+async fn fetch_marked(dbs: &crate::db::Dbs, songs: &[String]) {
+    for chunk in songs.chunks(crate::consts::FETCH_CONCURRENCY) {
+        let mut set = tokio::task::JoinSet::new();
+        for song in chunk {
+            let dbs = dbs.clone();
+            let song = song.clone();
+            set.spawn(async move { download_one(&dbs, &song).await });
+        }
+        while let Some(joined) = set.join_next().await {
+            if let Ok(Err(err)) = joined {
+                eprintln!("media: container download failed: {err:#}");
+            }
+        }
+    }
 }
 
 /// Fetches one song into the media cache unless it is already available or a
@@ -167,6 +204,9 @@ pub struct Backend {
     current_cover_art: String,
     current_cover_url: String,
     current_song_id: String,
+    /// The playing track's album id — the fullscreen favourite/download
+    /// buttons act in album scope.
+    current_album_id: String,
     playback_state: String,
     position: f64,
     duration: f64,
@@ -285,6 +325,11 @@ impl Backend {
         Notify = current_song_id_changed
     );
     qproperty!(
+        "currentAlbumId",
+        Member = current_album_id,
+        Notify = current_album_id_changed
+    );
+    qproperty!(
         "playbackState",
         Member = playback_state,
         Notify = playback_state_changed
@@ -393,6 +438,8 @@ impl Backend {
     fn current_cover_url_changed(&mut self);
     #[qsignal]
     fn current_song_id_changed(&mut self);
+    #[qsignal]
+    fn current_album_id_changed(&mut self);
     #[qsignal(qml_name = "dataReady")]
     fn data_ready(&mut self, channel: String, payload: String);
     #[qsignal(qml_name = "errorRaised")]
@@ -1678,19 +1725,7 @@ impl Backend {
                 // The pass is now in flight: the chip shows its loading loop.
                 let json = artist_cache_payload(&artist_id, true, true);
                 qtbridge::invoke_method!(invoker, "emitData", "artist_cache".to_string(), json);
-                for chunk in songs.chunks(crate::consts::FETCH_CONCURRENCY) {
-                    let mut set = tokio::task::JoinSet::new();
-                    for song in chunk {
-                        let dbs = dbs.clone();
-                        let song = song.clone();
-                        set.spawn(async move { download_one(&dbs, &song).await });
-                    }
-                    while let Some(joined) = set.join_next().await {
-                        if let Ok(Err(err)) = joined {
-                            eprintln!("media: artist download failed: {err:#}");
-                        }
-                    }
-                }
+                fetch_marked(&dbs, &songs).await;
                 let json = artist_cache_payload(&artist_id, true, false);
                 qtbridge::invoke_method!(invoker, "emitData", "artist_cache".to_string(), json);
             } else {
@@ -1714,6 +1749,134 @@ impl Backend {
                 }
                 let json = artist_cache_payload(&artist_id, false, false);
                 qtbridge::invoke_method!(invoker, "emitData", "artist_cache".to_string(), json);
+            }
+        });
+    }
+
+    /// The album container state for the fullscreen keybar's Download button
+    /// (`album_cache`): an album rule, or an artist rule covering the album.
+    #[qslot(qml_name = "requestAlbumCache")]
+    fn request_album_cache(&mut self, album_id: String) {
+        let invoker = self.get_qml_method_invoker();
+        let Some(dbs) = crate::dbs().cloned() else {
+            return;
+        };
+        crate::runtime().spawn(async move {
+            let album_rule = matches!(
+                crate::media::rule_for(&dbs.media, "album", &album_id).await,
+                Ok(Some(_))
+            );
+            let artist_covered = match crate::library::album_artist_id(&dbs.library, &album_id).await
+            {
+                Ok(Some(artist_id)) => matches!(
+                    crate::media::rule_for(&dbs.media, "artist", &artist_id).await,
+                    Ok(Some(_))
+                ),
+                _ => false,
+            };
+            let json =
+                album_cache_payload(&album_id, album_rule || artist_covered, false, artist_covered);
+            qtbridge::invoke_method!(invoker, "emitData", "album_cache".to_string(), json);
+        });
+    }
+
+    /// The album favourite flag for the fullscreen keybar's heart.
+    #[qslot(qml_name = "requestAlbumState")]
+    fn request_album_state(&mut self, album_id: String) {
+        let invoker = self.get_qml_method_invoker();
+        let Some(dbs) = crate::dbs().cloned() else {
+            return;
+        };
+        crate::runtime().spawn(async move {
+            let starred = crate::library::album_starred(&dbs.library, &album_id)
+                .await
+                .unwrap_or(false);
+            let json = album_state_payload(&album_id, starred);
+            qtbridge::invoke_method!(invoker, "emitData", "album_state".to_string(), json);
+        });
+    }
+
+    /// The album twin of [`downloadArtist`] — the keybar's Download button:
+    /// ON marks and fetches the album's songs, unless an artist rule already
+    /// covers them (then the request is skipped — "if the artist is already
+    /// in download scope, don't"); OFF drops the rule, its marks and its
+    /// rule-owned blobs. Emits `album_cache` throughout.
+    #[qslot(qml_name = "downloadAlbum")]
+    fn download_album(&mut self, album_id: String, on: bool) {
+        let invoker = self.get_qml_method_invoker();
+        let error_invoker = self.get_qml_method_invoker();
+        let Some(dbs) = crate::dbs().cloned() else {
+            return;
+        };
+        crate::runtime().spawn(async move {
+            if on {
+                let artist_covered =
+                    match crate::library::album_artist_id(&dbs.library, &album_id).await {
+                        Ok(Some(artist_id)) => matches!(
+                            crate::media::rule_for(&dbs.media, "artist", &artist_id).await,
+                            Ok(Some(_))
+                        ),
+                        _ => false,
+                    };
+                if artist_covered {
+                    // Redundant: the artist container already owns these songs.
+                    let json = album_cache_payload(&album_id, true, false, true);
+                    qtbridge::invoke_method!(invoker, "emitData", "album_cache".to_string(), json);
+                    return;
+                }
+                let rule_id = match crate::media::set_rule(&dbs.media, "album", &album_id).await {
+                    Ok(rule_id) => rule_id,
+                    Err(err) => {
+                        qtbridge::invoke_method!(
+                            error_invoker,
+                            "errorRaised",
+                            "error".to_string(),
+                            format!("Could not select the album for download: {err:#}")
+                        );
+                        return;
+                    }
+                };
+                let songs = match crate::library::album_song_ids(&dbs.library, &album_id).await {
+                    Ok(songs) => songs,
+                    Err(err) => {
+                        eprintln!("media: could not list the album's songs: {err:#}");
+                        return;
+                    }
+                };
+                for song in &songs {
+                    if let Err(err) =
+                        crate::download::mark_queued(&dbs.download, song, Some(&rule_id)).await
+                    {
+                        eprintln!("media: could not mark {song}: {err:#}");
+                    }
+                }
+                // The pass is now in flight: the chip shows its loading loop.
+                let json = album_cache_payload(&album_id, true, true, false);
+                qtbridge::invoke_method!(invoker, "emitData", "album_cache".to_string(), json);
+                fetch_marked(&dbs, &songs).await;
+                let json = album_cache_payload(&album_id, true, false, false);
+                qtbridge::invoke_method!(invoker, "emitData", "album_cache".to_string(), json);
+            } else {
+                let rule = match crate::media::rule_for(&dbs.media, "album", &album_id).await {
+                    Ok(rule) => rule,
+                    Err(err) => {
+                        eprintln!("media: could not read the album rule: {err:#}");
+                        return;
+                    }
+                };
+                if let Some(rule) = rule {
+                    if let Err(err) = crate::media::delete_rule(&dbs.media, &rule.id).await {
+                        eprintln!("media: could not drop the album rule: {err:#}");
+                    }
+                    if let Err(err) = crate::download::unmark_rule(&dbs.download, &rule.id).await {
+                        eprintln!("media: could not clear the album marks: {err:#}");
+                    }
+                    if let Err(err) = crate::media::remove_rule_media(&dbs.media, &rule.id).await {
+                        eprintln!("media: could not remove the album blobs: {err:#}");
+                    }
+                }
+                let json = album_cache_payload(&album_id, false, false, false);
+                qtbridge::invoke_method!(invoker, "emitData", "album_cache".to_string(), json);
             }
         });
     }
@@ -1968,31 +2131,47 @@ impl Backend {
     // Queue (drawer)
     // -----------------------------------------------------------------------
 
-    /// Publishes the current queue to QML.
+    /// Publishes the current queue to QML. Each row carries its download
+    /// ledger state (`downloaded`) for the row mark beside the favourite
+    /// heart; the ledger lives in another database, so the emit hops through
+    /// the runtime — a generation ticket keeps the payloads in order.
     fn emit_queue(&mut self) {
-        let items: Vec<serde_json::Value> = self
-            .player
-            .queue()
-            .iter()
-            .map(|track| {
-                serde_json::json!({
-                    "id": track.id,
-                    "title": track.title,
-                    "artist": track.artist,
-                    "album": track.album,
-                    "album_id": track.album_id,
-                    "starred": track.favorite,
-                    "duration": track.duration,
-                    "cover": track.cover_url,
+        let invoker = self.get_qml_method_invoker();
+        let Some(dbs) = crate::dbs().cloned() else {
+            return;
+        };
+        let queue: Vec<crate::player::Track> = self.player.queue().to_vec();
+        let index = self.player.index();
+        let generation = QUEUE_EMIT_GEN.fetch_add(1, Ordering::Relaxed) + 1;
+        crate::runtime().spawn(async move {
+            let done: std::collections::HashSet<String> = crate::download::done_ids(&dbs.download)
+                .await
+                .unwrap_or_default()
+                .into_iter()
+                .collect();
+            let items: Vec<serde_json::Value> = queue
+                .iter()
+                .map(|track| {
+                    serde_json::json!({
+                        "id": track.id,
+                        "title": track.title,
+                        "artist": track.artist,
+                        "album": track.album,
+                        "album_id": track.album_id,
+                        "starred": track.favorite,
+                        "duration": track.duration,
+                        "cover": track.cover_url,
+                        "downloaded": done.contains(&track.id),
+                    })
                 })
-            })
-            .collect();
-        let json = serde_json::json!({
-            "index": self.player.index(),
-            "items": items,
-        })
-        .to_string();
-        self.data_ready("queue".to_string(), json);
+                .collect();
+            // A newer emit already went out: this one is stale.
+            if QUEUE_EMIT_GEN.load(Ordering::Relaxed) != generation {
+                return;
+            }
+            let json = serde_json::json!({ "index": index, "items": items }).to_string();
+            qtbridge::invoke_method!(invoker, "emitData", "queue".to_string(), json);
+        });
     }
 
     #[qslot(qml_name = "requestQueue")]
@@ -2113,6 +2292,7 @@ impl Backend {
     #[qslot(qml_name = "altFavorite")]
     fn alt_favorite(&mut self, kind: String, id: String, on: bool) {
         let error_invoker = self.get_qml_method_invoker();
+        let state_invoker = self.get_qml_method_invoker();
         let Some(dbs) = crate::dbs().cloned() else {
             return;
         };
@@ -2143,6 +2323,16 @@ impl Backend {
                 }
             }
             .await;
+            if result.is_ok() && kind == "album" {
+                // The fullscreen keybar heart reconciles through this.
+                let json = album_state_payload(&id, on);
+                qtbridge::invoke_method!(
+                    state_invoker,
+                    "emitData",
+                    "album_state".to_string(),
+                    json
+                );
+            }
             if let Err(err) = result {
                 eprintln!("alt actions: could not update favourite {kind} {id}: {err:#}");
                 qtbridge::invoke_method!(
@@ -2444,6 +2634,7 @@ impl Backend {
             album_changed,
             art_changed,
             url_changed,
+            album_id_changed,
         ) = match self.player.current() {
             Some(track) => (
                 true,
@@ -2453,14 +2644,19 @@ impl Backend {
                 self.current_album != track.album,
                 self.current_cover_art != track.cover_art,
                 self.current_cover_url != track.cover_url,
+                self.current_album_id != track.album_id,
             ),
-            None => (false, false, false, false, false, false, false),
+            None => (false, false, false, false, false, false, false, false),
         };
 
         if !present {
             if !self.current_song_id.is_empty() {
                 self.current_song_id.clear();
                 self.current_song_id_changed();
+            }
+            if !self.current_album_id.is_empty() {
+                self.current_album_id.clear();
+                self.current_album_id_changed();
             }
             if !self.current_title.is_empty() {
                 self.current_title.clear();
@@ -2494,6 +2690,14 @@ impl Backend {
                 // song"; clearing the track keeps the previous one.
                 let song_id = self.current_song_id.clone();
                 self.remember_song(&song_id);
+            }
+            if album_id_changed {
+                self.current_album_id = self
+                    .player
+                    .current()
+                    .map(|track| track.album_id.clone())
+                    .unwrap_or_default();
+                self.current_album_id_changed();
             }
             if title_changed {
                 self.current_title = self

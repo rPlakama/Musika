@@ -142,6 +142,25 @@ pub async fn set_song_starred(pool: &SqlitePool, id: &str, on: bool) -> Result<(
     Ok(())
 }
 
+/// The album's favourite flag (the fullscreen keybar heart).
+pub async fn album_starred(pool: &SqlitePool, id: &str) -> Result<bool> {
+    let starred: Option<String> = sqlx::query_scalar("SELECT starred FROM albums WHERE id = ?1")
+        .bind(id)
+        .fetch_optional(pool)
+        .await?
+        .flatten();
+    Ok(starred.is_some())
+}
+
+/// Album twin of [`artist_song_ids`] — the container's ledger set.
+pub async fn album_song_ids(pool: &SqlitePool, album_id: &str) -> Result<Vec<String>> {
+    let ids = sqlx::query_scalar("SELECT id FROM songs WHERE album_id = ?1")
+        .bind(album_id)
+        .fetch_all(pool)
+        .await?;
+    Ok(ids)
+}
+
 /// Album twin of [`set_song_starred`].
 pub async fn set_album_starred(pool: &SqlitePool, id: &str, on: bool) -> Result<()> {
     sqlx::query(

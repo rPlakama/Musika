@@ -26,15 +26,9 @@ the reference section at the bottom.
 
 Order = trust/correctness > unblocking > user value > effort.
 
-1. **UI-56** — favourited rows lead with a heart before their meta (top
-   priority: favourites are invisible in every list, and the flag is already
-   cached in `library.db`).
 2. **S-8** — Songs column follows a single album match (top priority:
    album-scoped search reads in track order).
 3. **ARC-25** — partial-fetch guard before the destructive purge (data loss).
-4. **ARC-5** — errors to toasts instead of `eprintln!`.
-5. **VI-11** — `gg`/`G` in every list (high priority: already-bound motions that
-   dead-end).
 6. **UI-17 + Q-3** — shuffle is the last inert control; wire it + repeat.
 7. **UI-22** — empty/error states (P0, half-landed).
 8. **VI-2** — mode machine; unblocks VI-3/4/7/12/13/14/15.

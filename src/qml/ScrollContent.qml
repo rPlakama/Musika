@@ -288,16 +288,34 @@ Item {
     /// — the running glide would override the teleport (CRITIQUESCROLL
     /// SC-2: the queue's current track ended up below the viewport that
     /// way).
+    /// A payload rebuild (the queue's clear + refill) leaves the view empty
+    /// for a beat: the follow parks in `_pendingFollow` and the next count
+    /// finishes it — a skip into a not-yet-realised row must never be
+    /// swallowed by the rebuild (SC-5: the double-payload skip parked the
+    /// target unrealised at the clamped end, and nothing retried).
     function goto(index) {
         var i = index === undefined ? root.currentIndex : index;
         if (i < 0)
             return;
+        root._pendingFollow = i;
         root.land(i);
         Qt.callLater(function () {
-            if (root.currentIndex === i && root.view && root.view.count > 0)
-                root._glideTo(root.view, i);
+            if (root.currentIndex !== i) {
+                if (root._pendingFollow === i)
+                    root._pendingFollow = -1; // another landing owns it now
+                return;
+            }
+            var v = root.view;
+            if (!v || v.count === 0)
+                return; // `onCountChanged` finishes the follow
+            root._pendingFollow = -1;
+            root._glideTo(root.view, i);
         });
     }
+
+    /// The `goto` intent that hit an empty view (see `goto`); consumed by
+    /// `onCountChanged` once the payload is in.
+    property int _pendingFollow: -1
 
     /// Top the viewport without touching the cursor (a fresh payload).
     function resetTop() {
@@ -608,6 +626,19 @@ Item {
             }
             if (root.memoryKey)
                 root.remember();
+            // A `goto` that met the empty view: the payload is in, finish
+            // the follow (after the landing's `_instantFollow` release, so
+            // the glide is not shielded).
+            if (root._pendingFollow >= 0
+                    && root._pendingFollow === root.currentIndex
+                    && target.count > root._pendingFollow) {
+                var i = root._pendingFollow;
+                root._pendingFollow = -1;
+                Qt.callLater(function () {
+                    if (root.currentIndex === i && root.view && root.view.count > 0)
+                        root._glideTo(root.view, i);
+                });
+            }
         }
     }
 }

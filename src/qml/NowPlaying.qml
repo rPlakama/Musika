@@ -54,6 +54,9 @@ Rectangle {
     // One queue payload after a reorder keeps the moved cursor instead of
     // snapping back to the playing track (Q-9).
     property bool _reordering: false
+    // The rows the queue model currently holds: a payload with the same
+    // signature is a skip/advance, not a queue change — no rebuild.
+    property string _queueSignature: ""
     // UI-54: first queue payload after entering restores the saved highlight.
     property bool _recallQueue: false
 
@@ -208,20 +211,40 @@ Rectangle {
 
     function applyQueue(payload) {
         var data = JSON.parse(payload);
-        // UI-41: payload swaps fade in quickly; a reorder keeps the list live.
-        if (!root._reordering)
-            queueContent.opacity = 0;
-        queueItems.clear();
-        for (var i = 0; i < data.items.length; i++) {
-            var track = data.items[i];
-            queueItems.append({
-                title: track.title,
-                duration: Theme.formatTime(track.duration),
-                songId: track.id,
-                albumId: track.album_id ? track.album_id : "",
-                starred: track.starred === true
+
+        // A skip or an auto-advance re-delivers the exact same rows with a
+        // new playing index. Rebuilding the model for that flicked the pane
+        // (clear + fade) and, when the follow raced the refill, corrupted
+        // the view's layout (realised rows stopped at the old window and
+        // later jumps inflated the item offsets — SC-5). So: rebuild only
+        // when the rows really changed; a pure move just follows the index.
+        var signature = "";
+        for (var s = 0; s < data.items.length; s++) {
+            var sig = data.items[s];
+            signature += sig.id + "|" + sig.title + "|" + sig.duration
+                + "|" + (sig.starred === true ? 1 : 0) + ";";
+        }
+        if (signature !== root._queueSignature) {
+            root._queueSignature = signature;
+            // UI-41: payload swaps fade in quickly; a reorder keeps the list live.
+            if (!root._reordering)
+                queueContent.opacity = 0;
+            queueItems.clear();
+            for (var i = 0; i < data.items.length; i++) {
+                var track = data.items[i];
+                queueItems.append({
+                    title: track.title,
+                    duration: Theme.formatTime(track.duration),
+                    songId: track.id,
+                    albumId: track.album_id ? track.album_id : "",
+                    starred: track.starred === true
+                });
+            }
+            Qt.callLater(function () {
+                queueContent.opacity = 1;
             });
         }
+
         queueIndex = data.index;
         if (root._reordering) {
             root._reordering = false;
@@ -232,9 +255,6 @@ Rectangle {
         } else {
             root.recallQueueCursor();
         }
-        Qt.callLater(function () {
-            queueContent.opacity = 1;
-        });
     }
 
     /// The queue cursor for a fresh payload (UI-54 re-entry remembers; a
@@ -1117,9 +1137,14 @@ Rectangle {
                                         SearchText {
                                             id: titleText
                                             anchors.left: parent.left
-                                            anchors.leftMargin: ListView.view.width * 0.01
+                                            // The delegate's own width, never
+                                            // `ListView.view`: teardown
+                                            // detaches the view before the
+                                            // anchors re-run, and the direct
+                                            // read spams "width of null".
+                                            anchors.leftMargin: row.width * 0.01
                                             anchors.right: durationLabel.left
-                                            anchors.rightMargin: ListView.view.width * 0.01
+                                            anchors.rightMargin: row.width * 0.01
                                             anchors.verticalCenter: parent.verticalCenter
                                             text: row.title
                                             color: index === root.queueCursor ? Palette.onSecondaryContainer : Palette.onSurface
@@ -1159,7 +1184,7 @@ Rectangle {
                                             visible: row.starred
                                             anchors.verticalCenter: parent.verticalCenter
                                             anchors.right: durationLabel.left
-                                            anchors.rightMargin: ListView.view.width * 0.01
+                                            anchors.rightMargin: row.width * 0.01
                                             width: durationLabel.font.pixelSize * 0.8
                                             height: width
                                             name: "baseline-favorite"

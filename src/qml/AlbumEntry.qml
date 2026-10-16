@@ -324,12 +324,14 @@ Rectangle {
                 clip: true
 
                 // The reflow FX: the offscreen layer only exists while the
-                // blur is up.
-                layer.enabled: coverBlur.blur > 0.001
+                // blur is up. `layer.effect` is a Component — nothing inside
+                // it can carry a reachable id — so the blur value lives on
+                // the cover and the effect binds to it.
+                property real heroBlur: 0
+                layer.enabled: heroBlur > 0.001
                 layer.effect: MultiEffect {
-                    id: coverBlur
                     blurEnabled: true
-                    blur: 0
+                    blur: coverBox.heroBlur
                     blurMax: 48
                     autoPaddingEnabled: false
                 }
@@ -347,8 +349,8 @@ Rectangle {
                             duration: 200
                         }
                         NumberAnimation {
-                            target: coverBlur
-                            property: "blur"
+                            target: coverBox
+                            property: "heroBlur"
                             to: 0.5
                             duration: 200
                         }
@@ -363,8 +365,8 @@ Rectangle {
                             easing.bezierCurve: Theme.ease.decelerate
                         }
                         NumberAnimation {
-                            target: coverBlur
-                            property: "blur"
+                            target: coverBox
+                            property: "heroBlur"
                             to: 0
                             duration: Theme.motion.emphasized
                             easing.type: Easing.Bezier

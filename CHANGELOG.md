@@ -3,6 +3,14 @@
 All notable changes to Musika, newest first. `TASKLISTMAJOR.md` tracks the
 open work; this file is the release history.
 
+## 0.2.1 — _Scary downloads (and Super Corrections)_
+
+All commits since `v0.2.0`:
+
+- `8ffdf62` README: features, databases, sections, contributions, installation
+- `83b22e8` Theme.radius everywhere; favourite lands per row (#bug 3)
+- `a10145e` Selection download toggle; wipe all media; bigger biography
+
 ## 0.2.0 — _Woah, its pretty usable now! From Garbage to Trash_
 
 All commits since `v0.1.9`:

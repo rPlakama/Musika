@@ -147,9 +147,12 @@ async fn fetch_marked(
     songs: &[String],
     invoker: qtbridge::QmlMethodInvoker,
 ) {
-    // The caller marked every song queued/active before this pass: kick the
-    // row marks so the loading glyphs spin while the fetch runs.
-    qtbridge::invoke_method!(invoker, "TriggerRowReload");
+    // Per-id updates only: the batch flips the rows' loading glyphs on, and
+    // each finished song flips its own row (plus its album's, when the
+    // tracklist is now complete). No window reloads, no effect on other
+    // rows.
+    let batch = serde_json::to_string(songs).unwrap_or_else(|_| "[]".to_string());
+    qtbridge::invoke_method!(invoker, "noteDownloadStates", batch);
     for chunk in songs.chunks(crate::consts::FETCH_CONCURRENCY) {
         let mut set = tokio::task::JoinSet::new();
         for song in chunk {
@@ -162,11 +165,51 @@ async fn fetch_marked(
         }
         while let Some(joined) = set.join_next().await {
             // `download_one` already logged the per-song outcome.
-            let _ = joined;
+            let Ok((song, result)) = joined else {
+                continue;
+            };
+            let state = match result {
+                Ok(state) => state,
+                Err(_) => crate::download::ERROR,
+            };
+            qtbridge::invoke_method!(
+                invoker,
+                "noteDownloadState",
+                song.clone(),
+                state.to_string()
+            );
+            if state == crate::download::DONE {
+                if let Some(album) = completed_album(dbs, &song).await {
+                    qtbridge::invoke_method!(invoker, "markAlbumCached", album);
+                }
+            }
         }
     }
-    // The pass is done: the row-status hook reconciles the marks.
-    qtbridge::invoke_method!(invoker, "TriggerRowReload");
+}
+
+/// The song's album, when its tracklist is now completely cached — the
+/// album-side of a targeted completion (the caller flips that row).
+async fn completed_album(dbs: &crate::db::Dbs, song_id: &str) -> Option<String> {
+    let scopes = crate::library::song_scopes(&dbs.library, &[song_id.to_string()])
+        .await
+        .unwrap_or_default();
+    let album = scopes
+        .get(song_id)
+        .and_then(|(_, album)| album.clone())
+        .unwrap_or_default();
+    if album.is_empty() {
+        return None;
+    }
+    let tracklist = crate::library::album_song_ids(&dbs.library, &album)
+        .await
+        .unwrap_or_default();
+    if tracklist.is_empty() {
+        return None;
+    }
+    let done = crate::download::done_ids_of(&dbs.download, &tracklist)
+        .await
+        .unwrap_or_default();
+    (done.len() == tracklist.len()).then_some(album)
 }
 
 /// Fetches one song into the media cache unless it is already available or a
@@ -1778,30 +1821,44 @@ impl Backend {
     /// with the reason). Emits the `download` state and an error toast.
     #[qslot(qml_name = "downloadSong")]
     fn download_song(&mut self, song_id: String) {
+        // Optimistic and targeted: the row's loading glyph spins from the
+        // first frame, the completion flips that row (and its album's) only.
+        self.note_download_state(song_id.clone(), crate::download::ACTIVE.to_string());
         let invoker = self.get_qml_method_invoker();
         let error_invoker = self.get_qml_method_invoker();
-        let kick_invoker = self.get_qml_method_invoker();
         let Some(dbs) = crate::dbs().cloned() else {
             return;
         };
-        // A single song has no pass-level kick: one glance lands after the
-        // ledger flips to `active`, so the row's loading glyph spins while
-        // the fetch runs (the completion re-read follows either way).
         crate::runtime().spawn(async move {
-            tokio::time::sleep(std::time::Duration::from_millis(300)).await;
-            qtbridge::invoke_method!(kick_invoker, "TriggerRowReload");
-        });
-        crate::runtime().spawn(async move {
-            if let Err(err) = download_one(&dbs, &song_id).await {
-                qtbridge::invoke_method!(
-                    error_invoker,
-                    "errorRaised",
-                    "error".to_string(),
-                    format!("Download failed: {err:#}")
-                );
+            match download_one(&dbs, &song_id).await {
+                Ok(state) => {
+                    qtbridge::invoke_method!(
+                        invoker,
+                        "noteDownloadState",
+                        song_id.clone(),
+                        state.to_string()
+                    );
+                    if state == crate::download::DONE {
+                        if let Some(album) = completed_album(&dbs, &song_id).await {
+                            qtbridge::invoke_method!(invoker, "markAlbumCached", album);
+                        }
+                    }
+                }
+                Err(err) => {
+                    qtbridge::invoke_method!(
+                        invoker,
+                        "noteDownloadState",
+                        song_id.clone(),
+                        crate::download::ERROR.to_string()
+                    );
+                    qtbridge::invoke_method!(
+                        error_invoker,
+                        "errorRaised",
+                        "error".to_string(),
+                        format!("Download failed: {err:#}")
+                    );
+                }
             }
-            // The mark window is the row-mark truth: re-read it either way.
-            qtbridge::invoke_method!(invoker, "TriggerRowReload");
         });
     }
 
@@ -2449,6 +2506,58 @@ impl Backend {
         self.recent_mark_windows.clear();
         self.refresh_download_window();
         self.row_reload();
+    }
+
+    /// One row's fetch transition (targeted): the loading glyph on for
+    /// queued/active, the filled mark on done, cleared on error. Only the
+    /// affected row's bindings re-evaluate — no window reloads.
+    #[qslot(qml_name = "noteDownloadState")]
+    fn note_download_state(&mut self, song_id: String, state: String) {
+        let in_flight =
+            state == crate::download::QUEUED || state == crate::download::ACTIVE;
+        let mut touched = false;
+        if self.downloading_ids.contains(&song_id) != in_flight {
+            if in_flight {
+                self.downloading_ids.push(song_id.clone());
+            } else {
+                self.downloading_ids.retain(|id| id != &song_id);
+            }
+            touched = true;
+        }
+        if touched {
+            self.downloading_ids_changed();
+        }
+        if state == crate::download::DONE && !self.downloaded_ids.contains(&song_id) {
+            self.downloaded_ids.push(song_id);
+            self.downloaded_ids_changed();
+        }
+    }
+
+    /// The batch kick at a container pass' start: every marked song's row
+    /// spins its loading glyph; per-song completions follow.
+    #[qslot(qml_name = "noteDownloadStates")]
+    fn note_download_states(&mut self, ids_json: String) {
+        let ids: Vec<String> = serde_json::from_str(&ids_json).unwrap_or_default();
+        let mut changed = false;
+        for id in ids {
+            if !self.downloading_ids.contains(&id) {
+                self.downloading_ids.push(id);
+                changed = true;
+            }
+        }
+        if changed {
+            self.downloading_ids_changed();
+        }
+    }
+
+    /// A finished song completed its album: that album's row flips, alone.
+    #[qslot(qml_name = "markAlbumCached")]
+    fn mark_album_cached(&mut self, album_id: String) {
+        if album_id.is_empty() || self.cached_album_ids.contains(&album_id) {
+            return;
+        }
+        self.cached_album_ids.push(album_id);
+        self.cached_album_ids_changed();
     }
 
     /// The row-status refresh hook: favourite actions and finished download

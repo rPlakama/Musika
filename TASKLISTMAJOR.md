@@ -79,20 +79,6 @@ The app is unsafe or misleading without these.
     reconciles the keybar heart and the download-mark windows are no longer
     touched by a favourite.
 
-- [ ] **#Patch · `gg`/`G` differ between Albums and Songs (Albums buggy)** — P1 · (reported)
-  - **Why:** the same motions misbehave on Albums while Songs is fine —
-    "Is there a major difference (in albums its buggy)".
-  - **Details:** both segments are the same `MediaList`/ScrollPanel; the
-    visible difference is the *active layout* — the Albums key is commonly
-    held in its grid wall while Songs stays a list (`layouts:
-    ["list","grid"]`, the layout remembered per key). A harness probe of
-    the isolated grid edges passes (last cell fully revealed, `gg` tops at
-    row 0 — `tst_gridedges`), so the bug is host-level: suspects are the
-    segment's grid landing with the adaptive `cellHeight`, the toolbar
-    interplay on the album page, and `edgeJump` racing the payload settle.
-  - **Verify:** hold Albums in grid, `gg`/`G`, compare against Songs in
-    list; then the same pair on the album page (toolbar up vs down).
-
 - [x] **VI-11 · `gg`/`G` (Top/Bottom) in every list** — P1 · **high priority** · (N8a, MY3 §4.2)
   - **Why:** `g g` and `G` are already bound (`keybind.rs:122-123` →
     `top`/`bottom`) but no QML handler consumes them, so the motions dead-end
@@ -127,15 +113,18 @@ The app is unsafe or misleading without these.
     the helper is runtime-tested against a real `ListView` (QtQuickTest) and
     the tree is qmllint clean.
 
-- [ ] **UI-22 · Empty/error states polish** — P0 · (U8)
+- [x] **UI-22 · Empty/error states polish** — P0 · (U8)
   - **Why:** album-with-no-songs, failed sync, failed playback need real states.
   - **Now:** error toasts landed; loading screen landed for startup ping.
     Loading skeletons landed as the shared `SkeletonList` (extracted from the
     search columns) and wired into `SearchColumn`, `MediaList` (Albums/Songs/
     Artists via a `loading` flag the wrappers toggle) and the album page's
     songs; the album page also gets a real "No songs in this album" state.
-    Open: failed sync state (status/toast wording), failed playback state,
-    login Enter-submit + busy fields, playlist/radio placeholders.
+    The listed opens all landed since: sync failure surfaces as the status
+    message + `Sync failed: …` toast, playback failure rides the Q-5 toast
+    with the manual retry, Login is Enter-submit with busy fields
+    ("Logging in…"), and the shared placeholder covers the unindexed
+    segments.
 
 - [ ] **ARC-3 · Cancellable sync + HTTP retry/backoff/timeouts** — P1 · (A5, O5)
   - **Why:** a hung request blocks the sync pipeline; `reqwest` has no timeout.
@@ -201,7 +190,7 @@ The app is unsafe or misleading without these.
 
 The product is incomplete without these.
 
-- [ ] **ARC-UI-6 · One DownloadButton for every download surface** — P1 · (reported)
+- [x] **ARC-UI-6 · One DownloadButton for every download surface** — P1 · (reported)
   - **Why:** download visuals are duplicated per surface (ArtistEntry's
     chip, the row marks, the fullscreen keybar chip), each with its own
     state wiring; and in both the chip and the rows the loading glyph,
@@ -213,8 +202,13 @@ The product is incomplete without these.
     turn** on stop (the sync button's pattern) so the glyph lands upright.
     Reused wherever a download function exists: `RowMarks`, ArtistEntry's
     download chip, the fullscreen keybar's download chip.
+  - **Now:** landed — `DownloadButton.qml` is the one visual (idle outline /
+    fetching loop / filled done, the spin settling to the nearest full turn
+    so the glyph lands upright; `c7549cc` fixes the glyph paint); consumers:
+    `RowMarks`, ArtistEntry's chip, the fullscreen keybar chip and the Alt
+    overlay tiles.
 
-- [ ] **REC-UI-1 · One row mechanism, everywhere** — P1 · (reported)
+- [x] **REC-UI-1 · One row mechanism, everywhere** — P1 · (reported)
   - **Why:** "Fix Scroll/Row mechanism incosistencies; All rows present
     should use the same modal, to be reused, recicled, and highly
     consumable."
@@ -226,6 +220,14 @@ The product is incomplete without these.
     AlbumEntry, SearchColumn, the queue); grid cells keep the cover-corner
     marks as a layout *parameterisation* of the same contract, never a
     second grammar. Pairs with RECICLEISLOVE (RowSync) for the model half.
+  - **Now:** landed — one `RowMarks` block backs every rail (MediaList rows
+    and grid cells, SearchColumn, AlbumEntry, ArtistEntry cards, the
+    fullscreen queue) drawing only inside the host cursor's ±15 window
+    (`markVisible`), fed by the ledger sets through the shared
+    `ResetRowMarks` / `rowReload` / `TriggerRowReload` seams; `RowState`
+    owns selection + in-place writes, `SearchContract` the viewport
+    snapshot. The model half (RowSync L1b) stays tracked under
+    RECICLEISLOVE.
 
 - [ ] **VI-2 · Global mode state machine** — P1 · (N4, CRITIQUE Ph1.1, MY3 §4.1)
   - **Why:** modes exist only locally in the search overlay; the rest of the app
@@ -736,15 +738,15 @@ The product is incomplete without these.
     AlbumEntry/NowPlaying/PlaybackNode; `sourceSize` and the error glyph are
     still open.
 
-- [ ] **UI-38 · Loading/empty states for the three main lists** — P2 · (POLISHAUDIT §5, UI-22)
+- [x] **UI-38 · Loading/empty states for the three main lists** — P2 · (POLISHAUDIT §5, UI-22)
   - **Why:** Album/Song/Artist lists render nothing until the first payload
     and have no empty state.
   - **Details:** reuse the SearchColumn skeleton pattern and add centred
     empty messages ("Nothing indexed yet — run a sync").
-  - **Now (partial):** the empty state landed on Album/Song/Artist lists, and
-    the loading skeletons landed with the shared `SkeletonList` (UI-22): the
+  - **Now:** both landed — the empty state covers Album/Song/Artist lists, and
+    the loading skeletons ride the shared `SkeletonList` (UI-22): the
     wrappers raise `MediaList.loading` while a payload is in flight and the
-    skeleton covers the list area below the header.
+    skeleton covers the list area below the header. No open items.
 
 - [x] **UI-39 · Motion token sweep + reduced motion** — P2 · (POLISHAUDIT §6, UI-19)
   - **Why:** legacy `Theme.duration`/`Theme.easeOut` (100 ms) still drive
@@ -1305,7 +1307,7 @@ The product is incomplete without these.
     Open: capability gate for ratings (needs UI-42's ping fields), QML wiring
     (UI-52), artist-scoped shuffle (Q-3), In-cache aggregation (CACHE-1/5).
 
-- [ ] **ARC-43 · Alt-hold quick actions — radial quadrant overlay** — P3 · (roadmap Alt-hold quick actions; UI-52, ARC-42)
+- [x] **ARC-43 · Alt-hold quick actions — radial quadrant overlay** — P3 · (roadmap Alt-hold quick actions; UI-52, ARC-42)
   - **Why:** per-item actions are keyboard-only today (queue moves,
     activation, navigation) and there is no context menu; exposing them as a
     transient Alt-hold menu keeps the vi grammar readable instead of hiding
@@ -1350,9 +1352,11 @@ The product is incomplete without these.
     was updated. Tests:
     `player::append_extends_the_queue_without_moving_the_cursor`,
     `queue::quick_actions_resolve_songs_albums_and_pages`, plus the keymap's
-    `alt-j`/`alt-k`-unbound assertion (114 total). Open: the manual
-    acceptance run on hardware, and mouse/arrow-key aiming (roadmap
-    X2/open questions).
+    `alt-j`/`alt-k`-unbound assertion (114 total). The follow-up ARC-UI-1
+    filled the menu (four fixed verbs, recycled `QuickActions.qml`) and the
+    overlay gained mouse taps (`TapHandler` on the tiles) plus arrow-key
+    aiming beside `h/j/k/l`. Open: only the manual acceptance pass on
+    hardware (the same caveat ARC-UI-1 carries).
 
 ### Alt action menu (ARC-UI-1)
 

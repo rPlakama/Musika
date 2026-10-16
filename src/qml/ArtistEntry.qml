@@ -96,7 +96,8 @@ Rectangle {
             : [albums.get(wall.currentIndex).albumId];
         var actions = wall.hasSelection
             ? verbs.forSelection("album", ids, wall.selectedStarred("albumId"))
-            : verbs.album(albums.get(wall.currentIndex));
+            : verbs.album(albums.get(wall.currentIndex),
+                Backend.cachedAlbumIds.indexOf(albums.get(wall.currentIndex).albumId) !== -1);
         // ARC-I-4: the decoration rides the verb so the mark tracks the
         // action immediately — `south.favorite` is the state the verb leaves
         // every selected row in (the server call itself is unchanged).

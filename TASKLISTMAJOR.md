@@ -43,18 +43,24 @@ Order = trust/correctness > unblocking > user value > effort.
 
 The app is unsafe or misleading without these.
 
-- [x] **#bug 2 · Scrolling to top flickers the last three rows** — P0 · (reported)
-  - **Why:** returning to the top made the first rows (the top three) visibly
-    flicker.
+- [x] **#bug 2 · Order (type) swaps flicker the top rows** — P0 · (reported)
+  - **Why:** changing the list order/type made the first rows (the top
+    three) visibly flicker.
   - **Details:** traced to the instant-land settle added with the `G` bottom
     fix (`ScrollContent.land` schedules `_settleGlide` after releasing
-    `_instantFollow`): the settle is a Qt `Contain`, it ran on *every*
-    landing, and near the top it nudged the viewport (Qt's `Contain` parks
-    async offsets on a scrolled list — probed `-4`, `-96`, `-920`).
-  - **Now:** the settle is scoped to the bottom row only
-    (`index === count - 1` — the only landing that can be short under an
-    estimated `contentHeight`); the top path is untouched again. The `G`
-    case stays covered by `tst_bottomup`.
+    `_instantFollow`): the settle is a Qt `Contain`, and during an order
+    swap's rebuild the count climbs row by row — every intermediate end is
+    momentarily "the last row", so the settle ran mid-refill and nudged the
+    viewport (Qt's `Contain` parks async offsets on a scrolled list — probed
+    `-4`, `-96`, `-920`).
+  - **Now:** rebuild churn lands are quiet (`_land(index, false)` — the
+    `onCountChanged` branches), only host landings settle, and only for the
+    true last row (`index === count - 1`; the only one that can be short
+    under an estimated `contentHeight`). The cursor-position reset also
+    rides the shared reload now (`MediaList.resetRowReload()` =
+    `resetView` + `reload` + `TriggerRowReload`, used by the three
+    `order_changed` handlers). The `G` case stays covered by
+    `tst_bottomup`.
 
 - [x] **VI-11 · `gg`/`G` (Top/Bottom) in every list** — P1 · **high priority** · (N8a, MY3 §4.2)
   - **Why:** `g g` and `G` are already bound (`keybind.rs:122-123` →

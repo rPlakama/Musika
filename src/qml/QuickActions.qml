@@ -20,8 +20,9 @@ import musika
 // ARC-UI-1: the four fixed Alt-hold verbs, one recycled module for every
 // surface (Songs/Albums lists, ArtistEntry cards and the fullscreen queue).
 // Hosts map their row item with `song(item)` — track rows carry `songId` and
-// `albumId` — or `album(item)` — album rows/cards carry `albumId`; on an
-// album the Go to Album slot stays open ("—"), since Enter already opens it.
+// `albumId` — or `album(item, cached)` — album rows/cards carry `albumId`;
+// on an album the Go to Album slot is free (Enter already opens it), so it
+// carries the container Download instead.
 QtObject {
     /// Track row: all four verbs live. The heart reads the row's own state —
     /// already favourited shows heart-minus (the verb unstars), otherwise
@@ -55,8 +56,12 @@ QtObject {
         };
     }
 
-    /// Album row/card: Go to Album is the page Enter already opens.
-    function album(item) {
+    /// Album row/card: Go to Album is the page Enter already opens, so the
+    /// east quadrant carries the container download instead. `cached` comes
+    /// from the caller's mark window (`Backend.cachedAlbumIds`): a fully
+    /// cached album shows the inert "Downloaded" state; anything else fires
+    /// `downloadAlbum` (idempotent when a pass already covers it).
+    function album(item, cached) {
         var fav = item.starred === true;
         return {
             north: {
@@ -77,7 +82,15 @@ QtObject {
                 icon: "qrc:/app/icons/person-walking-svgrepo-com.svg",
                 invoke: function() { Backend.altGoToArtist(item.albumId) }
             },
-            east: null
+            east: cached === true ? {
+                label: "Downloaded",
+                icon: "qrc:/app/icons/baseline-download.svg",
+                disabled: true
+            } : {
+                label: "Download",
+                icon: "qrc:/app/icons/outline-download.svg",
+                invoke: function() { Backend.downloadAlbum(item.albumId, true) }
+            }
         };
     }
 

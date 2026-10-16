@@ -154,7 +154,9 @@ Item {
             var item = model.get(cursor);
             actions = item
                 ? (quickActionKind === "artist" ? verbs.artist(item)
-                    : quickActionKind === "album" ? verbs.album(item) : verbs.song(item))
+                    : quickActionKind === "album"
+                        ? verbs.album(item, Backend.cachedAlbumIds.indexOf(item.albumId) !== -1)
+                        : verbs.song(item))
                 : null;
         }
         if (!actions)

@@ -258,6 +258,17 @@ Item {
     /// leaves a negative contentY on a scrolled list (probed). An empty
     /// view carries the cursor and lands it on the next count change.
     function land(index) {
+        root._land(index, true);
+    }
+
+    /// The landing core. `withSettle` arms the bottom-row settle: the
+    /// instant path has no glide to settle it, so the *last* row can stay
+    /// cut below an under-measured contentHeight (`G` with variable
+    /// heights). The payload churn (a rebuild's count climbing row by row,
+    /// each intermediate end momentarily "the last row") calls this with
+    /// `false` — settling every step nudged the viewport mid-refill, which
+    /// was the order/type-swap flicker (#bug 2).
+    function _land(index, withSettle) {
         if (index < 0)
             return;
         centerGlide.stop();
@@ -272,12 +283,7 @@ Item {
                 root._landUnrealised(v, index);
             root._clampY(v);
         }
-        // The instant path has no glide to settle it, so the *last* row can
-        // stay cut below an under-measured contentHeight (`G` with variable
-        // heights). Scoped to that row on purpose (#bug 2): the settle is a
-        // `Contain`, and near the top it nudged the viewport (flicker); the
-        // top rows are always inside, only the bottom can be short.
-        var settle = v && v.count > 0 && index === v.count - 1;
+        var settle = withSettle && v && v.count > 0 && index === v.count - 1;
         Qt.callLater(function () {
             root._instantFollow = false;
             if (settle)
@@ -625,16 +631,20 @@ Item {
         function onCountChanged() {
             if (target.count === 0)
                 return;
+            // Churn lands carry no settle: during a rebuild the count climbs
+            // row by row and each intermediate end is momentarily the last
+            // row — settling those steps nudged the viewport mid-refill
+            // (the order/type-swap flicker, #bug 2).
             if (root.currentIndex < 0) {
                 // A fresh list lands on row 0 — unless a memory exists, in
                 // which case the host's `restore()` owns the first landing
                 // (and the guarded remember below never erases it with -1).
                 if (scroll.savedIndex(root.memoryKey) < 0)
-                    root.land(0);
+                    root._land(0, false);
             } else if (root.currentIndex > target.count - 1) {
-                root.land(target.count - 1);
+                root._land(target.count - 1, false);
             } else if (target.currentIndex !== root.currentIndex) {
-                root.land(root.currentIndex);
+                root._land(root.currentIndex, false);
             }
             if (root.memoryKey)
                 root.remember();

@@ -79,6 +79,16 @@ ScrollPanel {
             || (albumId.length > 0 && Backend.cachedAlbumIds.indexOf(albumId) !== -1);
     }
 
+    /// An order/type swap reload: UI-10's cursor-position reset rides the
+    /// shared row reload — reset first (the same indices hold different
+    /// rows now), re-request the payload, then the global row hook
+    /// (marks, hearts, download window) in one entry point.
+    function resetRowReload() {
+        root.resetView();
+        root.reload();
+        Backend.TriggerRowReload();
+    }
+
     Component.onCompleted: root.requestMarkWindow()
     onCurrentIndexChanged: root.requestMarkWindow()
 
@@ -102,7 +112,9 @@ ScrollPanel {
         } else {
             var item = mediaRows.get(currentIndex);
             actions = item
-                ? (quickActionKind === "album" ? verbs.album(item) : verbs.song(item))
+                ? (quickActionKind === "album"
+                    ? verbs.album(item, Backend.cachedAlbumIds.indexOf(item.albumId) !== -1)
+                    : verbs.song(item))
                 : null;
         }
         if (!actions)

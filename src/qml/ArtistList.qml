@@ -73,9 +73,8 @@ MediaList {
             root.reload();
         }
         function onArtist_order_changed() {
-            // UI-10: the same indices now hold different rows — reset first.
-            root.resetView();
-            root.reload();
+            // The cursor-position reset rides the shared row reload.
+            root.resetRowReload();
         }
     }
 }

@@ -3,6 +3,15 @@
 All notable changes to Musika, newest first. `TASKLISTMAJOR.md` tracks the
 open work; this file is the release history.
 
+## 0.2.0 — _Woah, its pretty usable now! From Garbage to Trash_
+
+All commits since `v0.1.9`:
+
+- `99c7d3d` Queue revision gate; rule-owned downloads; whole-queue shuffle
+- `f07aa5f` Tab walks the shell's small actions; ARC-REV filed
+- `5e22614` Tab stop for the shuffle chip; endless passes of 30
+- `b834c61` VI-7 count register; reusable tab shuffle (rolling 30)
+
 ## 0.1.8 — _Push push push!_
 
 All commits since `v0.1.7`:

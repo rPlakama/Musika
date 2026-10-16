@@ -1178,8 +1178,12 @@ impl Backend {
         });
     }
 
+    /// `changed` = the server reported new material this run (`updated` in
+    /// the sync report). A no-op sync finishes quietly: the list/page
+    /// reloads hang off `library_changed`, and every reload is a ScrollSystem
+    /// payload swap — never tear the UI down for nothing (RECICLEISLOVE).
     #[qslot(qml_name = "librarySyncFinished")]
-    fn library_sync_finished(&mut self, message: String) {
+    fn library_sync_finished(&mut self, message: String, changed: bool) {
         self.library_syncing = false;
         self.library_syncing_changed();
         self.sync_progress = 1.0;
@@ -1187,7 +1191,9 @@ impl Backend {
         self.sync_message = message;
         self.sync_message_changed();
         self.refresh_library_status();
-        self.library_changed();
+        if changed {
+            self.library_changed();
+        }
     }
 
     /// Destructive maintenance (the SuperiorBar trashcan's quadrant menu —
@@ -1248,19 +1254,22 @@ impl Backend {
             self.logged_in_changed();
             self.status_message = "Databases wiped — sign in again.".to_string();
             self.status_message_changed();
-            self.library_sync_finished("Databases wiped — sign in again.".to_string());
+            self.library_sync_finished("Databases wiped — sign in again.".to_string(), true);
             self.login_required();
             return;
         }
         // Every wipe invalidates cached UI state: the counts and list/page
         // payloads reload through `library_sync_finished`, and the queue +
         // palette are re-emitted here so nothing keeps rendering wiped data.
-        self.library_sync_finished(match scope.as_str() {
-            "library" => "Library metadata wiped — run a sync to refetch.".to_string(),
-            "indexes" => "Search indexes wiped — rebuilt on the next sync.".to_string(),
-            "covers" => "Cover cache wiped — art refetches on demand.".to_string(),
-            other => format!("Wiped {other}."),
-        });
+        self.library_sync_finished(
+            match scope.as_str() {
+                "library" => "Library metadata wiped — run a sync to refetch.".to_string(),
+                "indexes" => "Search indexes wiped — rebuilt on the next sync.".to_string(),
+                "covers" => "Cover cache wiped — art refetches on demand.".to_string(),
+                other => format!("Wiped {other}."),
+            },
+            true,
+        );
         // Re-resolve the queue's cover URLs against the (possibly empty)
         // covers index, then republish the queue and the palette.
         let invoker = self.get_qml_method_invoker();
@@ -2982,10 +2991,13 @@ fn spawn_sync(
                 );
                 // CACHE-9: a successful sync means the server is back.
                 qtbridge::invoke_method!(finish_invoker, "noteOnline");
+                // The reload gate: a no-op sync (updated = false) finishes
+                // without tearing the lists down.
                 qtbridge::invoke_method!(
                     finish_invoker,
                     "librarySyncFinished",
-                    sync_summary(&report)
+                    sync_summary(&report),
+                    report.updated
                 );
             }
             Err(err) => {

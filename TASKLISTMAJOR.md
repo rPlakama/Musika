@@ -79,6 +79,25 @@ The app is unsafe or misleading without these.
     reconciles the keybar heart and the download-mark windows are no longer
     touched by a favourite.
 
+- [x] **#bug 4 · Order-type swaps desync the cursor tracking near the top** — P1 · (reported)
+  - **Why:** cycling the order (Shift-H/L) on the Albums/Songs tabs left the
+    viewport and the cursor unsynchronised — flicker in the scrolloff range
+    (the first rows, where the follow cannot centre the cursor), repaired
+    only by forcing a fresh position (`G`). "Changing the order type should
+    force a true UI reload of the ScrollModal".
+  - **Details:** the swap raised `resetPending` but left the cursor live
+    through the payload rebuild (`clear()` + N appends): every intermediate
+    `onCountChanged` re-landed the cursor with `positionViewAtIndex(Contain)`
+    against a half-filled model, and at the scrolloff edge the follow's
+    centre target is clamped (`target == contentY` early-returns), so
+    nothing repaired the realised window afterwards — the `G` settle did.
+  - **Now:** `ScrollContent.resetView()` is a true pre-payload reset: the
+    glide stops, `_pendingFollow` clears, the cursor parks at -1 (the churn
+    runs as a fresh list, no per-append landings), the active view tops
+    itself, and the memory zeroes; `resetViewNow()` still finishes the
+    landing on the payload. Every order/filter swap (`resetRowReload`, the
+    artist filter) rides it.
+
 - [x] **VI-11 · `gg`/`G` (Top/Bottom) in every list** — P1 · **high priority** · (N8a, MY3 §4.2)
   - **Why:** `g g` and `G` are already bound (`keybind.rs:122-123` →
     `top`/`bottom`) but no QML handler consumes them, so the motions dead-end

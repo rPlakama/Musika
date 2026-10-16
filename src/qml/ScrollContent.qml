@@ -442,8 +442,25 @@ Item {
     /// Hosts raise this before reloading; the payload consumes it.
     property bool resetPending: false
 
+    /// The pre-payload half of a structural swap: a true reset of the body's
+    /// state *before* the model churns. The live cursor parks at -1, so the
+    /// count-climb runs as a fresh list — no per-append `Contain` landing can
+    /// realise stale rows (the race that left the view's window desynced from
+    /// the cursor near the scrolloff edge, repaired only by a fresh `G`);
+    /// the running glide and any parked follow die; the memory zeroes so no
+    /// restore can chase the old spot. `resetViewNow` finishes on the payload.
     function resetView() {
         root.resetPending = true;
+        centerGlide.stop();
+        root._pendingFollow = -1;
+        root.currentIndex = -1;
+        if (root.view) {
+            root.view.currentIndex = -1;
+            root.view.positionViewAtBeginning();
+        }
+        if (root.memoryKey)
+            scroll.remember(root.memoryKey, root.view, root.memoryScope,
+                root.layout, 0);
     }
 
     /// The landing itself: row 0, top, and the memory agrees (so the next

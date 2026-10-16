@@ -165,8 +165,9 @@ fn remove_dir(dir: &Path) -> Result<()> {
 }
 
 /// The full reset: the pools close, **every entry under the config
-/// directory** goes (databases, WAL/SHM sidecars, covers, media, playback,
-/// the `index.txt` mirror — the running IPC socket stays), and the caller
+/// directory** goes (databases, WAL/SHM sidecars, covers, media, the
+/// `index.txt` mirror — the running IPC socket stays), the cache-tier media
+/// (`playback_dir`, outside the config tree) goes with it, and the caller
 /// re-initialises the databases with fresh files and schemas. An old or
 /// foreign schema cannot survive this.
 pub async fn wipe_files(dbs: &Dbs) -> Result<()> {
@@ -203,6 +204,15 @@ pub async fn wipe_files(dbs: &Dbs) -> Result<()> {
         };
         if let Err(err) = result {
             eprintln!("wipe: could not remove {}: {err}", path.display());
+        }
+    }
+    // Media is explicitly wiped wherever it lives: the config-tier dir is a
+    // config-tree entry above (env overrides can point it elsewhere), and
+    // the playback/rolling tier sits under the XDG cache, outside the config
+    // dir — "wipe everything" leaves no media behind anywhere.
+    for dir in [media_dir(), playback_dir()] {
+        if let Ok(dir) = dir {
+            remove_dir(&dir)?;
         }
     }
     Ok(())

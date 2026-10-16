@@ -309,6 +309,147 @@ async fn album_container_off(dbs: &crate::db::Dbs, album_id: &str) {
     }
 }
 
+/// The Alt selection's Download toggle (VI-4), converged like the Favorite
+/// verb: when every target already holds its content the selection is
+/// removed (blob/rule), otherwise only the targets still missing are queued
+/// and fetched. Containers follow the ArtistEntry chip's rule-state
+/// semantics; songs follow the config-tier blob (`media::downloaded`).
+async fn selection_toggle(
+    dbs: &crate::db::Dbs,
+    kind: &str,
+    ids: &[String],
+    invoker: qtbridge::QmlMethodInvoker,
+    error_invoker: qtbridge::QmlMethodInvoker,
+) -> anyhow::Result<()> {
+    match kind {
+        "song" => {
+            let mut missing: Vec<String> = Vec::new();
+            for id in ids {
+                if !crate::media::downloaded(&dbs.media, id).await? {
+                    missing.push(id.clone());
+                }
+            }
+            if missing.is_empty() {
+                for id in ids {
+                    if let Err(err) = crate::download::unmark(&dbs.download, id).await {
+                        eprintln!("download: could not clear {id}'s mark: {err:#}");
+                    }
+                }
+                let removed = crate::media::remove_songs_media(&dbs.media, ids).await?;
+                eprintln!("download: selection (song) — removed {removed} blobs");
+                qtbridge::invoke_method!(invoker, "ResetRowMarks");
+            } else {
+                fetch_marked(dbs, &missing, "", invoker).await;
+            }
+        }
+        "album" => {
+            let mut missing: Vec<String> = Vec::new();
+            for id in ids {
+                let cached = matches!(
+                    crate::media::rule_for(&dbs.media, "album", id).await,
+                    Ok(Some(_))
+                );
+                if !cached {
+                    missing.push(id.clone());
+                }
+            }
+            if missing.is_empty() {
+                for id in ids {
+                    album_container_off(dbs, id).await;
+                }
+                eprintln!(
+                    "download: selection (album) — removed {} targets",
+                    ids.len()
+                );
+                qtbridge::invoke_method!(invoker, "ResetRowMarks");
+            } else {
+                let mut songs: Vec<String> = Vec::new();
+                for id in &missing {
+                    match album_container_on(dbs, id).await {
+                        Ok(list) => songs.extend(list),
+                        Err(err) => {
+                            eprintln!("download: could not select the album container: {err:#}")
+                        }
+                    }
+                }
+                if songs.is_empty() {
+                    qtbridge::invoke_method!(
+                        error_invoker,
+                        "errorRaised",
+                        "error".to_string(),
+                        "Nothing to download here.".to_string()
+                    );
+                    return Ok(());
+                }
+                fetch_marked(dbs, &songs, "", invoker).await;
+            }
+        }
+        "artist" => {
+            // The artist is "on" when every album of it holds a rule (the
+            // `requestArtistCache` state); a mixed selection converges to on.
+            let mut all_on = !ids.is_empty();
+            let mut albums_of: Vec<(String, Vec<String>)> = Vec::new();
+            for id in ids {
+                let albums = crate::library::artist_album_ids(&dbs.library, id).await?;
+                let mut on = !albums.is_empty();
+                for album in &albums {
+                    if !matches!(
+                        crate::media::rule_for(&dbs.media, "album", album).await,
+                        Ok(Some(_))
+                    ) {
+                        on = false;
+                        break;
+                    }
+                }
+                all_on = all_on && on;
+                albums_of.push((id.clone(), albums));
+            }
+            if all_on {
+                for (artist, albums) in &albums_of {
+                    for album in albums {
+                        album_container_off(dbs, album).await;
+                    }
+                    // Legacy cleanup: the pre-album design kept an artist rule.
+                    if let Ok(Some(rule)) =
+                        crate::media::rule_for(&dbs.media, "artist", artist).await
+                    {
+                        rule_off(dbs, &rule.id).await;
+                    }
+                }
+                eprintln!(
+                    "download: selection (artist) — removed {} targets",
+                    ids.len()
+                );
+                qtbridge::invoke_method!(invoker, "ResetRowMarks");
+            } else {
+                let mut songs: Vec<String> = Vec::new();
+                for (_artist, albums) in &albums_of {
+                    for album in albums {
+                        match album_container_on(dbs, album).await {
+                            Ok(list) => songs.extend(list),
+                            Err(err) => {
+                                eprintln!("download: could not select the album container: {err:#}")
+                            }
+                        }
+                    }
+                }
+                if songs.is_empty() {
+                    qtbridge::invoke_method!(
+                        error_invoker,
+                        "errorRaised",
+                        "error".to_string(),
+                        "Nothing to download here.".to_string()
+                    );
+                    return Ok(());
+                }
+                fetch_marked(dbs, &songs, "", invoker).await;
+            }
+        }
+        other => return Err(anyhow::anyhow!("unknown download kind: {other}")),
+    }
+    Ok(())
+}
+
 /// The song's album, when its tracklist is now completely cached — the
 /// album-side of a targeted completion (the caller flips that row).
 async fn completed_album(dbs: &crate::db::Dbs, song_id: &str) -> Option<String> {
@@ -3186,6 +3327,48 @@ impl Backend {
                         format!("Could not add to queue: {err:#}")
                     );
                 }
+            }
+        });
+    }
+
+    /// The Alt overlay's Download verb under a visual selection (VI-4):
+    /// a toggle like the ArtistEntry chip — a selection whose targets all
+    /// hold their content is removed, anything missing downloads (songs
+    /// explicitly; albums/artists as rule containers) through the shared
+    /// fetch pass with the per-id row feedback.
+    #[qslot(qml_name = "downloadSelection")]
+    fn download_selection(&mut self, kind: String, ids_json: String) {
+        let ids: Vec<String> = match serde_json::from_str(&ids_json) {
+            Ok(ids) => ids,
+            Err(err) => {
+                eprintln!("alt actions: bad download selection payload: {err}");
+                self.error_raised(
+                    "playback".to_string(),
+                    format!("Bad selection payload: {err}"),
+                );
+                return;
+            }
+        };
+        if ids.is_empty() {
+            return;
+        }
+        let invoker = self.get_qml_method_invoker();
+        let error_invoker = self.get_qml_method_invoker();
+        let outer_invoker = self.get_qml_method_invoker();
+        let Some(dbs) = crate::dbs().cloned() else {
+            return;
+        };
+        crate::runtime().spawn(async move {
+            if let Err(err) = selection_toggle(&dbs, &kind, &ids, invoker, error_invoker).await {
+                eprintln!("download: selection ({kind}) failed: {err:#}");
+                qtbridge::invoke_method!(
+                    outer_invoker,
+                    "errorRaised",
+                    "error".to_string(),
+                    format!("Could not download the selection: {err:#}")
+                );
+            } else {
+                eprintln!("download: selection ({kind}) done");
             }
         });
     }

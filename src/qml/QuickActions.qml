@@ -57,10 +57,11 @@ QtObject {
     }
 
     /// Album row/card: Go to Album is the page Enter already opens, so the
-    /// east quadrant carries the container download instead. `cached` comes
-    /// from the caller's mark window (`Backend.cachedAlbumIds`): a fully
-    /// cached album shows the inert "Downloaded" state; anything else fires
-    /// `downloadAlbum` (idempotent when a pass already covers it).
+    /// east quadrant carries the container download toggle instead. `cached`
+    /// comes from the caller's mark window (`Backend.cachedAlbumIds`): an
+    /// album already holding its content removes it on the call (the
+    /// ArtistEntry chip's toggle); anything else fires `downloadAlbum`
+    /// (idempotent when a pass already covers it).
     function album(item, cached) {
         var fav = item.starred === true;
         return {
@@ -83,9 +84,9 @@ QtObject {
                 invoke: function() { Backend.altGoToArtist(item.albumId) }
             },
             east: cached === true ? {
-                label: "Downloaded",
+                label: "Remove Download",
                 icon: "qrc:/app/icons/baseline-download.svg",
-                disabled: true
+                invoke: function() { Backend.downloadAlbum(item.albumId, false) }
             } : {
                 label: "Download",
                 icon: "qrc:/app/icons/outline-download.svg",
@@ -100,7 +101,10 @@ QtObject {
     /// favourited the heart wears heart-minus and unstars the range, otherwise
     /// it wears heart-add-fill and favourites only the rows that are not —
     /// mixed selections converge, never flip backwards (ARC-I-4). The go-to
-    /// verbs stay single-row disabled.
+    /// verbs stay single-row disabled; the free east quadrant carries the
+    /// selection Download toggle (`downloadSelection`: songs explicit,
+    /// albums — and every album of a selected artist — by container rule;
+    /// a selection already holding its content removes instead).
     function forSelection(kind, ids, starred) {
         var all = ids.length > 0;
         for (var i = 0; i < ids.length; ++i)
@@ -130,9 +134,9 @@ QtObject {
                 disabled: true
             },
             east: {
-                label: "Go to Album",
-                icon: "qrc:/app/icons/album.svg",
-                disabled: true
+                label: "Download",
+                icon: "qrc:/app/icons/outline-download.svg",
+                invoke: function() { Backend.downloadSelection(kind, JSON.stringify(ids)) }
             }
         };
     }

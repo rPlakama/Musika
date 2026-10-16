@@ -188,6 +188,15 @@ pub async fn store(
     Ok(final_path)
 }
 
+/// Whether the song holds a config-tier download (permanent/rule row) — the
+/// Download toggle's state. Distinct from [`cached_path`], which also counts
+/// the purgeable playback tier a play may have left behind.
+pub async fn downloaded(pool: &SqlitePool, song_id: &str) -> Result<bool> {
+    Ok(get(pool, song_id)
+        .await?
+        .is_some_and(|row| tier_for(&row.kind) == Tier::Config))
+}
+
 /// Absolute path to the cached copy, when the row and the file both exist.
 pub async fn cached_path(pool: &SqlitePool, song_id: &str) -> Result<Option<PathBuf>> {
     let Some(row) = get(pool, song_id).await? else {
@@ -652,6 +661,39 @@ mod tests {
 
         delete_rule(&pool, &id).await.unwrap();
         assert!(rule_for(&pool, "artist", "a1").await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn downloaded_counts_config_tier_content_only() {
+        let pool = media_pool().await;
+        record(
+            &pool,
+            "s1",
+            KIND_RULE,
+            "s1.mp3",
+            1,
+            "original",
+            "fp",
+            Some("r1"),
+        )
+        .await
+        .unwrap();
+        record(
+            &pool,
+            "s2",
+            KIND_PLAYBACK,
+            "s2.mp3",
+            1,
+            "original",
+            "fp",
+            None,
+        )
+        .await
+        .unwrap();
+
+        assert!(downloaded(&pool, "s1").await.unwrap());
+        assert!(!downloaded(&pool, "s2").await.unwrap());
+        assert!(!downloaded(&pool, "nope").await.unwrap());
     }
 
     #[tokio::test]

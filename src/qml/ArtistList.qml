@@ -51,6 +51,7 @@ MediaList {
                 artistName: artist.name,
                 artistCover: artist.cover ? artist.cover : "",
                 songId: "",
+                albumId: "",
                 starred: artist.starred === true
             });
         }

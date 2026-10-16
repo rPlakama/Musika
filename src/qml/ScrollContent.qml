@@ -183,9 +183,11 @@ Item {
     }
 
     /// The end-of-list settle: `ListView.contentHeight` is an estimate until
-    /// the bottom delegates exist, so a glide toward the last rows can stop
-    /// short with the cursor under the viewport's end. Qt's own `Contain`
-    /// uses the true content; it only moves the shortfall.
+    /// the bottom delegates exist, so a glide *or an instant landing* toward
+    /// the last rows can stop short with the cursor under the viewport's end
+    /// (`G` with variable heights left the last row cut below the fold —
+    /// probed: y=1520, row bottom 1912, viewport bottom 1840). Qt's own
+    /// `Contain` uses the true item geometry; it only moves the shortfall.
     function _settleGlide() {
         var v = root.view;
         if (!v || root.currentIndex < 0)
@@ -270,7 +272,12 @@ Item {
                 root._landUnrealised(v, index);
             root._clampY(v);
         }
-        Qt.callLater(function () { root._instantFollow = false; });
+        Qt.callLater(function () {
+            root._instantFollow = false;
+            // The instant path has no glide to settle it: a landing that met
+            // an under-measured contentHeight must reveal its row.
+            root._settleGlide();
+        });
     }
 
     /// A surface returning to screen (segment switch, page pop) calls this:

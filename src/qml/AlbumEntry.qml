@@ -105,7 +105,7 @@ Rectangle {
             if (row && row.songId)
                 ids.push(row.songId);
         }
-        Backend.requestDownloads(JSON.stringify(ids));
+        Backend.requestDownloads(JSON.stringify(ids), "[]");
     }
 
     function toggleSelection() {

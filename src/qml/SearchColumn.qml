@@ -90,19 +90,32 @@ Item {
         return Math.abs(index - root.cursor) <= 15;
     }
 
-    /// Ask the backend for the download state of that window only.
+    /// Ask the backend for the download state of that window only (album
+    /// rows included: cached = every track finished).
     function requestMarkWindow() {
         if (root.model === null)
             return;
-        var ids = [];
+        var songs = [];
+        var albums = [];
         var lo = Math.max(0, root.cursor - 15);
         var hi = Math.min(root.model.count - 1, root.cursor + 15);
         for (var i = lo; i <= hi; ++i) {
             var row = root.model.get(i);
-            if (row && row.songId)
-                ids.push(row.songId);
+            if (!row)
+                continue;
+            if (row.songId)
+                songs.push(row.songId);
+            else if (row.albumId)
+                albums.push(row.albumId);
         }
-        Backend.requestDownloads(JSON.stringify(ids));
+        Backend.requestDownloads(JSON.stringify(songs), JSON.stringify(albums));
+    }
+
+    /// A row's download mark: its song is cached, or it is an album row
+    /// whose every track is.
+    function markCached(songId, albumId) {
+        return (songId.length > 0 && Backend.downloadedIds.indexOf(songId) !== -1)
+            || (albumId.length > 0 && Backend.cachedAlbumIds.indexOf(albumId) !== -1);
     }
 
     /// Instant snap for far jumps (`gg`/`G`): the lists do the same through
@@ -261,6 +274,7 @@ Item {
                         required property string meta
                         required property string cover
                         required property string songId
+                        required property string albumId
                         required property bool starred
 
                         readonly property bool current: index === root.cursor
@@ -386,7 +400,7 @@ Item {
                             spacing: row.height * 0.05
 
                             Rectangle {
-                                visible: root.markVisible(row.index) && Backend.downloadedIds.indexOf(row.songId) !== -1
+                                visible: root.markVisible(row.index) && root.markCached(row.songId, row.albumId)
                                 width: metaLabel.font.pixelSize * 0.96
                                 height: width
                                 color: "transparent"

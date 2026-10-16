@@ -361,6 +361,7 @@ Item {
                 cover: artist.cover,
                 artistId: artist.id,
                 songId: "",
+                albumId: "",
                 starred: artist.starred === true
             });
         }

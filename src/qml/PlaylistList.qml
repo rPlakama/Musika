@@ -52,6 +52,7 @@ MediaList {
                 cover: "",
                 playlistId: list.id,
                 songId: "",
+                albumId: "",
                 starred: false
             });
         }

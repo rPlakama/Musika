@@ -132,6 +132,24 @@ pub async fn done_ids(pool: &SqlitePool) -> Result<Vec<String>> {
     Ok(ids)
 }
 
+/// The finished subset of `ids` — the row marks' window read. One batched
+/// query; an empty window costs nothing.
+pub async fn done_ids_of(pool: &SqlitePool, ids: &[String]) -> Result<Vec<String>> {
+    if ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    let mut builder = sqlx::QueryBuilder::new(
+        "SELECT song_id FROM download WHERE state = 'done' AND song_id IN (",
+    );
+    let mut separated = builder.separated(", ");
+    for id in ids {
+        separated.push_bind(id.clone());
+    }
+    separated.push_unseparated(")");
+    let rows = builder.build_query_scalar::<String>().fetch_all(pool).await?;
+    Ok(rows)
+}
+
 /// Per-state counts for the status UI (`CACHE-7`): queued / active / done /
 /// error / total.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize)]

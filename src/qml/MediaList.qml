@@ -52,17 +52,31 @@ ScrollPanel {
     }
 
     /// Ask the backend for the download state of the visible window only —
-    /// ±15 rows around the selector, never the whole ledger.
+    /// ±15 rows around the selector, never the whole ledger. Album rows ride
+    /// the same call: the backend reports an album as cached when every
+    /// track of it is finished.
     function requestMarkWindow() {
-        var ids = [];
+        var songs = [];
+        var albums = [];
         var lo = Math.max(0, root.currentIndex - 15);
         var hi = Math.min(mediaRows.count - 1, root.currentIndex + 15);
         for (var i = lo; i <= hi; ++i) {
             var row = mediaRows.get(i);
-            if (row && row.songId)
-                ids.push(row.songId);
+            if (!row)
+                continue;
+            if (row.songId)
+                songs.push(row.songId);
+            else if (row.albumId)
+                albums.push(row.albumId);
         }
-        Backend.requestDownloads(JSON.stringify(ids));
+        Backend.requestDownloads(JSON.stringify(songs), JSON.stringify(albums));
+    }
+
+    /// A row's download mark: its song is cached, or it is an album row
+    /// whose every track is.
+    function markCached(songId, albumId) {
+        return (songId.length > 0 && Backend.downloadedIds.indexOf(songId) !== -1)
+            || (albumId.length > 0 && Backend.cachedAlbumIds.indexOf(albumId) !== -1);
     }
 
     Component.onCompleted: root.requestMarkWindow()
@@ -210,6 +224,7 @@ ScrollPanel {
             required property string meta
             required property string cover
             required property string songId
+            required property string albumId
             required property bool starred
 
             readonly property real viewWidth: ListView.view ? ListView.view.width : 0
@@ -331,7 +346,7 @@ ScrollPanel {
                 spacing: row.viewWidth * 0.008
 
                 Rectangle {
-                    visible: root.markVisible(row.index) && Backend.downloadedIds.indexOf(row.songId) !== -1
+                    visible: root.markVisible(row.index) && root.markCached(row.songId, row.albumId)
                     width: metaLabel.font.pixelSize * 0.96
                     height: width
                     color: "transparent"
@@ -386,6 +401,7 @@ ScrollPanel {
             required property string meta
             required property string cover
             required property string songId
+            required property string albumId
             required property bool starred
 
             readonly property bool current: GridView.isCurrentItem
@@ -456,7 +472,7 @@ ScrollPanel {
                 }
 
                 Icon {
-                    visible: root.markVisible(cell.index) && Backend.downloadedIds.indexOf(cell.songId) !== -1
+                    visible: root.markVisible(cell.index) && root.markCached(cell.songId, cell.albumId)
                     anchors.left: parent.left
                     anchors.bottom: parent.bottom
                     anchors.margins: parent.width * 0.06

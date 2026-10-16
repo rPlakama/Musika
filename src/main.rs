@@ -46,11 +46,23 @@ mod search;
 mod sqlite;
 mod status;
 
-static DBS: OnceLock<db::Dbs> = OnceLock::new();
+static DBS: OnceLock<std::sync::Mutex<&'static db::Dbs>> = OnceLock::new();
 
 /// The five databases opened at start-up.
 pub fn dbs() -> Option<&'static db::Dbs> {
-    DBS.get()
+    DBS.get().map(|slot| *slot.lock().expect("dbs lock"))
+}
+
+/// Swaps in a freshly initialised set (the full wipe deletes the files and
+/// re-inits; the old handle leaks, which is once-per-wipe).
+pub fn set_dbs(dbs: db::Dbs) {
+    let leaked: &'static db::Dbs = Box::leak(Box::new(dbs));
+    match DBS.get() {
+        Some(slot) => *slot.lock().expect("dbs lock") = leaked,
+        None => {
+            let _ = DBS.set(std::sync::Mutex::new(leaked));
+        }
+    }
 }
 
 /// Convenience accessor for the credentials database.
@@ -69,10 +81,7 @@ fn main() {
     let dbs = runtime()
         .block_on(db::init())
         .expect("failed to initialise the databases");
-
-    if DBS.set(dbs).is_err() {
-        eprintln!("databases were already initialised");
-    }
+    set_dbs(dbs);
 
     let mut app = QApp::new();
     qtbridge::include_bytes_qml!("qml", "app");

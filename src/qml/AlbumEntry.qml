@@ -304,7 +304,7 @@ Rectangle {
                 root.applyInfo(payload);
         }
         // A fetch finished: re-read this page's own window (forced).
-        function onRow_reload() {
+        function onRowReload() {
             root.requestMarkWindow(true);
         }
         function onLibrary_changed() {

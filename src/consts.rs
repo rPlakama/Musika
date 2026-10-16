@@ -19,6 +19,10 @@
 /// Bounded concurrency for network fetch fan-outs (index, covers, lyrics).
 pub const FETCH_CONCURRENCY: usize = 8;
 
+/// Bounded concurrency for download passes — at most this many song fetches
+/// in flight at once (the shared pool stays polite to the server).
+pub const DOWNLOAD_CONCURRENCY: usize = 3;
+
 /// Default player volume before mpv/UI overrides.
 pub const DEFAULT_VOLUME: f64 = 70.0;
 

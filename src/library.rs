@@ -838,6 +838,16 @@ pub async fn song_file_info(
     Ok(row)
 }
 
+/// The artist's album ids (paint order) — the artist batch reuses the album
+/// download per entry, so this is its loop's source.
+pub async fn artist_album_ids(pool: &SqlitePool, artist_id: &str) -> Result<Vec<String>> {
+    let ids = sqlx::query_scalar("SELECT id FROM albums WHERE artist_id = ?1 ORDER BY name")
+        .bind(artist_id)
+        .fetch_all(pool)
+        .await?;
+    Ok(ids)
+}
+
 /// Every song id of one artist (CACHE-5 rule materialization).
 pub async fn artist_song_ids(pool: &SqlitePool, artist_id: &str) -> Result<Vec<String>> {
     let ids = sqlx::query_scalar("SELECT id FROM songs WHERE artist_id = ?1")

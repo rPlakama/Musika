@@ -625,7 +625,7 @@ Rectangle {
                 root.requestAlbumActions();
         }
         // A fetch finished: re-read the queue's own window (forced).
-        function onRow_reload() {
+        function onRowReload() {
             root.requestMarkWindow(true);
         }
         // A skip/advance is deduped backend-side (the rows are already

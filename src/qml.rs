@@ -153,28 +153,38 @@ async fn apply_window(
     qtbridge::invoke_method!(invoker, "applyDownloadedIds", json);
 }
 
-/// CACHE-5/8: fetch every song of a container pass with bounded concurrency;
-/// the ledger row per song carries its own state, a failure is logged and
-/// the rest of the pass continues. The ledger set is applied once at the end
-/// (the container's terminal payload triggers the QML re-read too).
+/// CACHE-5/8: the pass, three songs at a time, in order (the 2-D shape: the
+/// caller's list arrives album-major, so a chunk usually *is* one album's
+/// head). The loading glyph is **existence-based, not queue-based**: a
+/// chunk's songs and the albums owning them are marked in-flight only while
+/// that chunk runs, then settle — a row spins while one of its tracks is
+/// actually fetching, never while it waits in line. Each finished song
+/// flips its own row (and its album's, when the tracklist completes); the
+/// container id stays held for the whole pass.
 async fn fetch_marked(
     dbs: &crate::db::Dbs,
     songs: &[String],
     container_id: &str,
     invoker: qtbridge::QmlMethodInvoker,
 ) {
-    // Per-id updates only: the batch flips the rows' loading glyphs on, and
-    // each finished song flips its own row (plus its album's, when the
-    // tracklist is now complete). The container id rides along, so the
-    // album/artist row itself spins while its pass runs. No window reloads,
-    // no effect on other rows.
-    let mut batch_ids: Vec<String> = songs.to_vec();
-    if !container_id.is_empty() {
-        batch_ids.push(container_id.to_string());
-    }
-    let batch = serde_json::to_string(&batch_ids).unwrap_or_else(|_| "[]".to_string());
-    qtbridge::invoke_method!(invoker, "noteDownloadStates", batch);
-    for chunk in songs.chunks(crate::consts::FETCH_CONCURRENCY) {
+    for chunk in songs.chunks(crate::consts::DOWNLOAD_CONCURRENCY) {
+        // The chunk's albums: their rows light up alongside its songs.
+        let scopes = crate::library::song_scopes(&dbs.library, chunk)
+            .await
+            .unwrap_or_default();
+        let mut chunk_albums: Vec<String> = Vec::new();
+        for song in chunk {
+            if let Some((_, Some(album))) = scopes.get(song) {
+                if !chunk_albums.contains(album) {
+                    chunk_albums.push(album.clone());
+                }
+            }
+        }
+        let mut batch_ids: Vec<String> = chunk.to_vec();
+        batch_ids.extend(chunk_albums.iter().cloned());
+        let batch = serde_json::to_string(&batch_ids).unwrap_or_else(|_| "[]".to_string());
+        qtbridge::invoke_method!(invoker, "noteDownloadStates", batch);
+
         let mut set = tokio::task::JoinSet::new();
         for song in chunk {
             let dbs = dbs.clone();
@@ -205,6 +215,14 @@ async fn fetch_marked(
                 }
             }
         }
+        // The chunk is over: its albums stop loading unless later chunks
+        // hold their tracks (the container id stays held all pass).
+        for album in &chunk_albums {
+            if album == container_id {
+                continue;
+            }
+            qtbridge::invoke_method!(invoker, "settleDownloadRequest", album.clone());
+        }
     }
     // The pass is over: the container row's loading glyph settles (the hold
     // keeps it visible long enough either way).
@@ -215,6 +233,70 @@ async fn fetch_marked(
             container_id.to_string(),
             crate::download::DONE.to_string()
         );
+    }
+}
+
+/// True when an artist rule truly owns the whole album: the rule exists
+/// **and** its song set contains every track of the album. An album's
+/// `artist_id` can disagree with its songs' `artist_id` (server metadata —
+/// compilations, stale libraries), so bare rule existence must never skip
+/// the album request: that skip left albums marked "covered" while none of
+/// their tracks were downloaded (Pablo Honey, 0/12 — probed).
+async fn artist_covers_album(dbs: &crate::db::Dbs, artist_id: &str, album_id: &str) -> bool {
+    if !matches!(
+        crate::media::rule_for(&dbs.media, "artist", artist_id).await,
+        Ok(Some(_))
+    ) {
+        return false;
+    }
+    let album_songs = crate::library::album_song_ids(&dbs.library, album_id)
+        .await
+        .unwrap_or_default();
+    if album_songs.is_empty() {
+        return false;
+    }
+    let artist_songs: std::collections::HashSet<String> =
+        crate::library::artist_song_ids(&dbs.library, artist_id)
+            .await
+            .unwrap_or_default()
+            .into_iter()
+            .collect();
+    album_songs.iter().all(|song| artist_songs.contains(song))
+}
+
+/// Selects an album container: the rule and its song marks, returning the
+/// marked songs (the caller runs the fetch pass). Shared by the album
+/// download and the artist batch's per-album loop.
+async fn album_container_on(dbs: &crate::db::Dbs, album_id: &str) -> anyhow::Result<Vec<String>> {
+    let rule_id = crate::media::set_rule(&dbs.media, "album", album_id).await?;
+    let songs = crate::library::album_song_ids(&dbs.library, album_id).await?;
+    for song in &songs {
+        if let Err(err) = crate::download::mark_queued(&dbs.download, song, Some(&rule_id)).await {
+            eprintln!("media: could not mark {song}: {err:#}");
+        }
+    }
+    Ok(songs)
+}
+
+/// Drops an album container: its rule, marks and rule-owned blobs.
+async fn album_container_off(dbs: &crate::db::Dbs, album_id: &str) {
+    let rule = match crate::media::rule_for(&dbs.media, "album", album_id).await {
+        Ok(rule) => rule,
+        Err(err) => {
+            eprintln!("media: could not read the album rule: {err:#}");
+            return;
+        }
+    };
+    if let Some(rule) = rule {
+        if let Err(err) = crate::media::delete_rule(&dbs.media, &rule.id).await {
+            eprintln!("media: could not drop the album rule: {err:#}");
+        }
+        if let Err(err) = crate::download::unmark_rule(&dbs.download, &rule.id).await {
+            eprintln!("media: could not clear the album marks: {err:#}");
+        }
+        if let Err(err) = crate::media::remove_rule_media(&dbs.media, &rule.id).await {
+            eprintln!("media: could not remove the album blobs: {err:#}");
+        }
     }
 }
 
@@ -1388,7 +1470,22 @@ impl Backend {
                 "library" => crate::db::wipe_library(&dbs).await,
                 "indexes" => crate::db::wipe_indexes(&dbs).await,
                 "covers" => crate::db::wipe_covers(&dbs).await,
-                _ => crate::db::wipe(&dbs).await,
+                _ => {
+                    // The full reset wipes the config directory itself (the
+                    // scheme is what "all" always promised); the databases
+                    // come back as fresh files holding the current schema —
+                    // an old-version schema cannot survive.
+                    match crate::db::wipe_files(&dbs).await {
+                        Ok(()) => match crate::db::init().await {
+                            Ok(fresh) => {
+                                crate::set_dbs(fresh);
+                                Ok(())
+                            }
+                            Err(err) => Err(err),
+                        },
+                        Err(err) => Err(err),
+                    }
+                }
             };
             match result {
                 Ok(()) => {
@@ -1915,19 +2012,32 @@ impl Backend {
             return;
         };
         crate::runtime().spawn(async move {
-            let on = matches!(
-                crate::media::rule_for(&dbs.media, "artist", &artist_id).await,
-                Ok(Some(_))
-            );
+            // The artist is "on" when every album of it holds an album rule
+            // (the batch is per album now; a legacy artist rule has no role).
+            let albums = crate::library::artist_album_ids(&dbs.library, &artist_id)
+                .await
+                .unwrap_or_default();
+            let mut on = !albums.is_empty();
+            for album in &albums {
+                if !matches!(
+                    crate::media::rule_for(&dbs.media, "album", album).await,
+                    Ok(Some(_))
+                ) {
+                    on = false;
+                    break;
+                }
+            }
             let json = artist_cache_payload(&artist_id, on, false);
             qtbridge::invoke_method!(invoker, "emitData", "artist_cache".to_string(), json);
         });
     }
 
-    /// CACHE-5 first slice: select or clear an artist container for download.
-    /// ON inserts the rule, marks every song of the artist in the ledger and
-    /// fetches the missing ones (bounded concurrency, ledger per song); OFF
-    /// removes the rule, its marks and its rule-owned blobs. Emits
+    /// The artist batch, reusable-style: it lists the artist's albums (the
+    /// albums table owns that mapping) and runs the *album* container flow
+    /// per album — selection, ledger marks, one shared fetch pass. No
+    /// artist-kind rule exists anymore: an album whose `artist_id` disagrees
+    /// with its songs' `artist_id` (server metadata) is still covered by its
+    /// own album rule, which the old artist rule could never reach. Emits
     /// `artist_cache` for the ArtistEntry toggle.
     #[qslot(qml_name = "downloadArtist")]
     fn download_artist(&mut self, artist_id: String, on: bool) {
@@ -1943,68 +2053,77 @@ impl Backend {
             return;
         };
         crate::runtime().spawn(async move {
+            let albums = match crate::library::artist_album_ids(&dbs.library, &artist_id).await {
+                Ok(albums) => albums,
+                Err(err) => {
+                    eprintln!("media: could not list the artist's albums: {err:#}");
+                    return;
+                }
+            };
             if on {
-                let rule_id = match crate::media::set_rule(&dbs.media, "artist", &artist_id).await {
-                    Ok(rule_id) => rule_id,
-                    Err(err) => {
-                        qtbridge::invoke_method!(
-                            error_invoker,
-                            "errorRaised",
-                            "error".to_string(),
-                            format!("Could not select the artist for download: {err:#}")
-                        );
-                        return;
-                    }
-                };
-                let songs = match crate::library::artist_song_ids(&dbs.library, &artist_id).await {
-                    Ok(songs) => songs,
-                    Err(err) => {
-                        eprintln!("media: could not list the artist's songs: {err:#}");
-                        return;
-                    }
-                };
-                for song in &songs {
-                    if let Err(err) =
-                        crate::download::mark_queued(&dbs.download, song, Some(&rule_id)).await
-                    {
-                        eprintln!("media: could not mark {song}: {err:#}");
+                let mut songs: Vec<String> = Vec::new();
+                let mut queued_albums: Vec<String> = Vec::new();
+                for album in &albums {
+                    match album_container_on(&dbs, album).await {
+                        Ok(album_songs) => {
+                            eprintln!(
+                                "download: artist {artist_id} album {album} queued ({} songs)",
+                                album_songs.len()
+                            );
+                            songs.extend(album_songs);
+                            queued_albums.push(album.clone());
+                        }
+                        Err(err) => {
+                            qtbridge::invoke_method!(
+                                error_invoker,
+                                "errorRaised",
+                                "error".to_string(),
+                                format!("Could not select the album for download: {err:#}")
+                            );
+                        }
                     }
                 }
+                // No bulk in-flight batch: the fetch pass lights each chunk
+                // (three songs) and their albums as it reaches them — a
+                // row's loading glyph means its track is fetching *now*.
                 eprintln!(
-                    "download: artist {artist_id} pass started ({} songs)",
+                    "download: artist {artist_id} pass started ({} albums, {} songs)",
+                    queued_albums.len(),
                     songs.len()
                 );
                 // The pass is now in flight: the chip shows its loading loop.
                 let json = artist_cache_payload(&artist_id, true, true);
                 qtbridge::invoke_method!(invoker, "emitData", "artist_cache".to_string(), json);
                 fetch_marked(&dbs, &songs, &artist_id, fetch_invoker).await;
+                // The albums that had nothing to fetch never emitted a
+                // completion: settle their rows here.
+                for album in &queued_albums {
+                    qtbridge::invoke_method!(
+                        invoker,
+                        "settleDownloadRequest",
+                        album.clone()
+                    );
+                }
                 eprintln!("download: artist {artist_id} pass finished");
                 let json = artist_cache_payload(&artist_id, true, false);
                 qtbridge::invoke_method!(invoker, "emitData", "artist_cache".to_string(), json);
             } else {
-                let rule = match crate::media::rule_for(&dbs.media, "artist", &artist_id).await {
-                    Ok(rule) => rule,
-                    Err(err) => {
-                        eprintln!("media: could not read the artist rule: {err:#}");
-                        return;
-                    }
-                };
-                if let Some(rule) = rule {
-                    if let Err(err) = crate::media::delete_rule(&dbs.media, &rule.id).await {
-                        eprintln!("media: could not drop the artist rule: {err:#}");
-                    }
-                    if let Err(err) = crate::download::unmark_rule(&dbs.download, &rule.id).await {
-                        eprintln!("media: could not clear the artist marks: {err:#}");
-                    }
-                    if let Err(err) = crate::media::remove_rule_media(&dbs.media, &rule.id).await {
-                        eprintln!("media: could not remove the artist blobs: {err:#}");
-                    }
+                for album in &albums {
+                    album_container_off(&dbs, album).await;
+                }
+                // Legacy cleanup: the pre-album design kept an artist-kind
+                // rule; it has no role anymore.
+                if let Ok(Some(rule)) =
+                    crate::media::rule_for(&dbs.media, "artist", &artist_id).await
+                {
+                    let _ = crate::media::delete_rule(&dbs.media, &rule.id).await;
+                    let _ = crate::download::unmark_rule(&dbs.download, &rule.id).await;
+                    let _ = crate::media::remove_rule_media(&dbs.media, &rule.id).await;
                 }
                 eprintln!("download: artist {artist_id} removed from the cache");
                 let json = artist_cache_payload(&artist_id, false, false);
                 qtbridge::invoke_method!(invoker, "emitData", "artist_cache".to_string(), json);
-                // The marks lose the artist's songs: hard reset + re-read
-                // (the union must not keep the gone ids).
+                // The marks lose the artist's songs: hard reset + re-read.
                 qtbridge::invoke_method!(fetch_invoker, "ResetRowMarks");
             }
         });
@@ -2025,10 +2144,9 @@ impl Backend {
             );
             let artist_covered = match crate::library::album_artist_id(&dbs.library, &album_id).await
             {
-                Ok(Some(artist_id)) => matches!(
-                    crate::media::rule_for(&dbs.media, "artist", &artist_id).await,
-                    Ok(Some(_))
-                ),
+                Ok(Some(artist_id)) => {
+                    artist_covers_album(&dbs, &artist_id, &album_id).await
+                }
                 _ => false,
             };
             let json =
@@ -2075,10 +2193,9 @@ impl Backend {
             if on {
                 let artist_covered =
                     match crate::library::album_artist_id(&dbs.library, &album_id).await {
-                        Ok(Some(artist_id)) => matches!(
-                            crate::media::rule_for(&dbs.media, "artist", &artist_id).await,
-                            Ok(Some(_))
-                        ),
+                        Ok(Some(artist_id)) => {
+                            artist_covers_album(&dbs, &artist_id, &album_id).await
+                        }
                         _ => false,
                     };
                 if artist_covered {
@@ -2090,8 +2207,8 @@ impl Backend {
                     qtbridge::invoke_method!(invoker, "emitData", "album_cache".to_string(), json);
                     return;
                 }
-                let rule_id = match crate::media::set_rule(&dbs.media, "album", &album_id).await {
-                    Ok(rule_id) => rule_id,
+                let songs = match album_container_on(&dbs, &album_id).await {
+                    Ok(songs) => songs,
                     Err(err) => {
                         qtbridge::invoke_method!(
                             error_invoker,
@@ -2102,20 +2219,6 @@ impl Backend {
                         return;
                     }
                 };
-                let songs = match crate::library::album_song_ids(&dbs.library, &album_id).await {
-                    Ok(songs) => songs,
-                    Err(err) => {
-                        eprintln!("media: could not list the album's songs: {err:#}");
-                        return;
-                    }
-                };
-                for song in &songs {
-                    if let Err(err) =
-                        crate::download::mark_queued(&dbs.download, song, Some(&rule_id)).await
-                    {
-                        eprintln!("media: could not mark {song}: {err:#}");
-                    }
-                }
                 eprintln!(
                     "download: album {album_id} pass started ({} songs)",
                     songs.len()

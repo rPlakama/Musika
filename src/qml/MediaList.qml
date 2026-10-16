@@ -81,7 +81,7 @@ ScrollPanel {
     // dedupe must not swallow the update).
     Connections {
         target: Backend
-        function onRow_reload() { root.requestMarkWindow(true); }
+        function onRowReload() { root.requestMarkWindow(true); }
     }
 
     /// A row's download mark: its song is cached, or it is an album row

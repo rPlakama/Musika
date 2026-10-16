@@ -164,6 +164,50 @@ fn remove_dir(dir: &Path) -> Result<()> {
     }
 }
 
+/// The full reset: the pools close, **every entry under the config
+/// directory** goes (databases, WAL/SHM sidecars, covers, media, playback,
+/// the `index.txt` mirror — the running IPC socket stays), and the caller
+/// re-initialises the databases with fresh files and schemas. An old or
+/// foreign schema cannot survive this.
+pub async fn wipe_files(dbs: &Dbs) -> Result<()> {
+    // Close first: an open pool keeps the deleted inodes alive and the next
+    // login would write into unlinked files.
+    for pool in [
+        &dbs.credentials,
+        &dbs.library,
+        &dbs.search,
+        &dbs.covers,
+        &dbs.media,
+        &dbs.lyrics,
+        &dbs.colors,
+        &dbs.status,
+        &dbs.artist_user,
+        &dbs.download,
+        &dbs.playlist,
+    ] {
+        pool.clone().close().await;
+    }
+    let dir = config_dir()?;
+    let socket = crate::ipc::socket_path();
+    let entries = std::fs::read_dir(&dir)
+        .with_context(|| format!("failed to list {}", dir.display()))?;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path == socket {
+            continue;
+        }
+        let result = if path.is_dir() {
+            std::fs::remove_dir_all(&path)
+        } else {
+            std::fs::remove_file(&path)
+        };
+        if let Err(err) = result {
+            eprintln!("wipe: could not remove {}: {err}", path.display());
+        }
+    }
+    Ok(())
+}
+
 /// Destructive recovery: every database is stripped to an empty schema and
 /// re-migrated, and the derived blobs (covers/media) and the `index.txt`
 /// mirror are removed. Credentials go too, so the caller must return to the

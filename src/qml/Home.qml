@@ -685,12 +685,14 @@ Item {
                     Component {
                         id: artistListComponent
                         ArtistList {
-                            onArtistActivated: (artistId, artistName, artistCover) =>
+                            onArtistActivated: (artistId, artistName, artistCover) => {
+                                root.nowPlayingExpanded = false;
                                 contentStack.push(artistEntryComponent, {
                                     artistId: artistId,
                                     artistName: artistName,
                                     artistCover: artistCover
-                                })
+                                });
+                            }
                         }
                     }
 
@@ -814,12 +816,14 @@ Item {
         onSongActivated: (id) => Backend.handleCommand("play_song_in_album " + id)
         onAlbumActivated: (albumId, title, artist, year, tracks, cover, starred) =>
             root.openAlbum(albumId, title, artist, year, tracks, cover, starred)
-        onArtistActivated: (artistId, artistName, artistCover) =>
+        onArtistActivated: (artistId, artistName, artistCover) => {
+            root.nowPlayingExpanded = false;
             contentStack.push(artistEntryComponent, {
                 artistId: artistId,
                 artistName: artistName,
                 artistCover: artistCover
-            })
+            });
+        }
     }
 
     QueueDrawer {
@@ -930,6 +934,10 @@ Item {
                 Qt.callLater(function() {
                     if (searchOverlay.opened)
                         searchOverlay.close();
+                    // The artist page is a shell surface: leaving the
+                    // fullscreen is part of arriving (the queue's Alt "Go
+                    // to Artist" must actually show the page).
+                    root.nowPlayingExpanded = false;
                     contentStack.push(artistEntryComponent, {
                         artistId: artist.id,
                         artistName: artist.name,

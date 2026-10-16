@@ -120,7 +120,7 @@ Rectangle {
     /// What the strip actually draws (placeholder when no biography yet).
     readonly property string descriptionText: artistDescription.length > 0
         ? artistDescription
-        : "Artist biography will appear here once the server metadata is wired."
+        : "Artist biography will appear here once the server metadata is wired. Or Such artist doesn't contain a biography at all;"
     // UI-52: current artist rating, 0..5 (Subsonic `setRating` domain);
     // 0 = unrated. ARC-42 fetches and toggles it.
     property int artistRating: 0
@@ -147,7 +147,7 @@ Rectangle {
 
     // Study §2 "name+server tag": host only, never the full URL.
     readonly property string serverTag: {
-        var url = Backend.serverUrl;
+        var url = Backend.serverURL;
         var mark = url.indexOf("://");
         var rest = mark >= 0 ? url.substring(mark + 3) : url;
         var slash = rest.indexOf("/");
@@ -351,7 +351,7 @@ Rectangle {
                 root.applyCache(payload);
         }
         // A fetch finished: re-read this wall's own window (forced).
-        function onRow_reload() {
+        function onRowReload() {
             root.requestMarkWindow(true);
         }
         function onLibrary_changed() {

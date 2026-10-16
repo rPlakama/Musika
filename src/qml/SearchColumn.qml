@@ -118,7 +118,7 @@ Item {
     // A fetch finished: re-read this column's own window (forced).
     Connections {
         target: Backend
-        function onRow_reload() { root.requestMarkWindow(true); }
+        function onRowReload() { root.requestMarkWindow(true); }
     }
 
     /// Instant snap for far jumps (`gg`/`G`): the lists do the same through

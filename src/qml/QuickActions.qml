@@ -145,7 +145,7 @@ QtObject {
         return {
             sticky: sticky === true,
             north: {
-                label: "Wipe all!",
+                label: "Wipe everything!",
                 icon: "qrc:/app/icons/delete-outline.svg",
                 invoke: function() { Backend.wipeDatabases("all") }
             },

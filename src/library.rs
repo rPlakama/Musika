@@ -170,6 +170,30 @@ pub async fn album_song_ids(pool: &SqlitePool, album_id: &str) -> Result<Vec<Str
     Ok(ids)
 }
 
+/// The tracklists of many albums in one query — the mark window's album
+/// coverage read (never one roundtrip per album).
+pub async fn album_song_ids_of(
+    pool: &SqlitePool,
+    album_ids: &[String],
+) -> Result<std::collections::HashMap<String, Vec<String>>> {
+    if album_ids.is_empty() {
+        return Ok(std::collections::HashMap::new());
+    }
+    let mut builder = sqlx::QueryBuilder::new("SELECT album_id, id FROM songs WHERE album_id IN (");
+    let mut separated = builder.separated(", ");
+    for id in album_ids {
+        separated.push_bind(id.clone());
+    }
+    separated.push_unseparated(")");
+    let rows: Vec<(String, String)> = builder.build_query_as().fetch_all(pool).await?;
+    let mut grouped: std::collections::HashMap<String, Vec<String>> =
+        std::collections::HashMap::new();
+    for (album_id, song_id) in rows {
+        grouped.entry(album_id).or_default().push(song_id);
+    }
+    Ok(grouped)
+}
+
 /// Album twin of [`set_song_starred`].
 pub async fn set_album_starred(pool: &SqlitePool, id: &str, on: bool) -> Result<()> {
     sqlx::query(

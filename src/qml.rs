@@ -85,16 +85,15 @@ async fn apply_window(
     albums: &[String],
     invoker: qtbridge::QmlMethodInvoker,
 ) {
-    // One batched ledger read over the window songs plus every song of the
-    // window albums (album coverage needs the full tracklists).
+    // Two batched queries, never point-by-point: one library read for every
+    // window album's tracklist, one ledger read over the window songs plus
+    // those tracklists (album coverage needs them all).
+    let tracklists = crate::library::album_song_ids_of(&dbs.library, albums)
+        .await
+        .unwrap_or_default();
     let mut all = songs.to_vec();
-    let mut album_songs: Vec<(String, Vec<String>)> = Vec::new();
-    for album in albums {
-        let ids = crate::library::album_song_ids(&dbs.library, album)
-            .await
-            .unwrap_or_default();
+    for ids in tracklists.values() {
         all.extend(ids.iter().cloned());
-        album_songs.push((album.clone(), ids));
     }
     let done: std::collections::HashSet<String> = crate::download::done_ids_of(&dbs.download, &all)
         .await
@@ -106,10 +105,14 @@ async fn apply_window(
         .filter(|song| done.contains(*song))
         .cloned()
         .collect();
-    let albums_done: Vec<String> = album_songs
+    let albums_done: Vec<String> = albums
         .iter()
-        .filter(|(_, ids)| !ids.is_empty() && ids.iter().all(|song| done.contains(song)))
-        .map(|(album, _)| album.clone())
+        .filter(|album| {
+            tracklists
+                .get(*album)
+                .is_some_and(|ids| !ids.is_empty() && ids.iter().all(|song| done.contains(song)))
+        })
+        .cloned()
         .collect();
     eprintln!(
         "downloads: {} of {} visible songs cached; {} of {} albums fully cached",

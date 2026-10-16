@@ -872,6 +872,13 @@ Item {
                                    String(data.album.tracks),
                                    data.album.cover ? data.album.cover : "",
                                    data.album.starred === true);
+                // Session return: the restored album's rows must render
+                // their state marks on arrival — the page only installs its
+                // mark window when its payload lands, and without this the
+                // marks waited for the first cursor move (a row
+                // interaction). One tick later the window is up; the shared
+                // reload re-reads it and notifies every mark.
+                Qt.callLater(function() { Backend.TriggerRowReload(); });
             });
         }
         // Single pumped event from `playSongInAlbum`: the queue + album

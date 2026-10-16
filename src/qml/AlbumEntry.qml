@@ -188,22 +188,50 @@ Rectangle {
         // reloads (library change, resync) keep the live state.
         if (!root._restored) {
             root._restored = true;
-            // A remembered cursor lands via `restore()`; a fresh page lands
-            // on row 0 immediately — otherwise the first `j` only reaches
-            // row 0 and a second press is needed to move (the "second J"
-            // bug).
-            if (!content.restore() && songs.count > 0)
+            // The playing album opens on the playing track (the page is a
+            // performance surface for it); otherwise a remembered cursor
+            // lands via `restore()` and a fresh page lands on row 0
+            // immediately — otherwise the first `j` only reaches row 0 and a
+            // second press is needed to move (the "second J" bug).
+            if (!root.followCurrentTrack(false) && !content.restore() && songs.count > 0)
                 content.land(0);
         }
         root.requestMarkWindow();
     }
 
+    /// Place the cursor on the playing track when this page's album is the
+    /// one playing (`currentAlbumId` matches and the row's id is the playing
+    /// song). `glide` = the shared centre glide (a live advance) versus the
+    /// instant landing (page open). Returns true when the page owns the
+    /// playing track.
+    function followCurrentTrack(glide) {
+        if (Backend.currentAlbumId.length === 0 || Backend.currentAlbumId !== root.albumId)
+            return false;
+        for (var i = 0; i < songs.count; ++i) {
+            if (songs.get(i).songId !== Backend.currentSongId)
+                continue;
+            if (content.currentIndex !== i) {
+                if (glide)
+                    content.goto(i);
+                else
+                    content.land(i);
+            }
+            return true;
+        }
+        return false;
+    }
+
     Component.onCompleted: reload()
 
-    // The mark window follows the song cursor.
+    // The mark window follows the song cursor; the cursor follows the
+    // playing track while this album is the one playing.
     Connections {
         target: content
         function onCurrentIndexChanged() { root.requestMarkWindow(); }
+    }
+    Connections {
+        target: Backend
+        function onCurrent_song_id_changed() { root.followCurrentTrack(true); }
     }
 
     /// ARC-UI-2 M1: the search contract (see `ScrollContent`).

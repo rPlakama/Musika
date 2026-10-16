@@ -43,8 +43,6 @@ Rectangle {
     color: (root.highlighted || chipHover.hovered)
         ? Palette.secondaryContainer
         : Palette.surfaceContainerHigh
-    border.color: root.highlighted ? Palette.primary : Palette.outlineVariant
-    border.width: Math.max(1, root.host.height * Theme.hairlineRatio)
 
     Behavior on color {
         ColorAnimation {

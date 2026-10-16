@@ -28,6 +28,10 @@ import "Theme.js" as Theme
 // Follow: the viewport *is* animated to the cursor's centre — the glide
 // (`followMs`, `Theme.motion.scroll`) with a small OutBack spring, clamped
 // at the content ends (Neovim `'scrolloff': 0.5` semantics, no padding).
+// `unlimitedScrolloff` opts out of the edge rule: half a viewport of empty
+// space is reserved above the first row and below the last, so *every* row
+// can reach the centre (the lyrics pane: the active phrase is always
+// centred, even the opening and closing lines).
 // This is the only follow: the highlight-band/velocity era is gone —
 // `ApplyRange` enforced the band *instantly*, so a one-row move snapped
 // even with a 300 ms move duration (probed; CRITIQUESCROLL SC-1).
@@ -152,8 +156,13 @@ Item {
             });
             return;
         }
-        var limit = Math.max(0, v.contentHeight - v.height);
-        var target = Math.max(0, Math.min(limit,
+        // The centre target in the same bounds `_clampY` uses. Only the
+        // lyrics scrolloff (opt-in, lyrics pane only) opens the range below
+        // 0, so row 0 and the last row can reach the centre; other hosts
+        // keep the old clamped-to-content behaviour.
+        var lo = root.unlimitedScrolloff ? Math.min(0, v.originY) : 0;
+        var limit = Math.max(lo, lo + v.contentHeight - v.height);
+        var target = Math.max(lo, Math.min(limit,
             item.y + item.height * 0.5 - v.height * 0.5));
         if (Math.abs(target - v.contentY) < 1)
             return;
@@ -207,17 +216,27 @@ Item {
     /// Extra spacing between list rows (0 = the delegate owns it); grid
     /// cells are placed by `cellHeight`.
     property real rowSpacing: 0
+    /// Unlimited scrolloff: no edge rule — the view reserves half a
+    /// viewport of empty space above the first row and below the last, so
+    /// the follow can centre *any* row, first and last included. List mode
+    /// only (GridView has no margins); the lyrics pane sets it.
+    property bool unlimitedScrolloff: false
+    readonly property real _edgeMargin: root.unlimitedScrolloff ? root.height * 0.5 : 0
 
     /// True while a landing runs: the root index handler must not start a
     /// glide the landing is already positioning (`land` owns the view).
     property bool _instantFollow: false
 
     /// Keep `contentY` inside the content bounds (Qt's async `Contain`
-    /// layouts can park it outside; probed).
+    /// layouts can park it outside; probed). The lyrics scrolloff is the
+    /// only case with a negative lower bound (`originY` drops below 0 when
+    /// its spacer header sits above row 0); every other host keeps the
+    /// plain [0, contentHeight - height] range.
     function _clampY(v) {
-        var limit = Math.max(0, v.contentHeight - v.height);
-        if (v.contentY < 0 || v.contentY > limit)
-            v.contentY = Math.max(0, Math.min(limit, v.contentY));
+        var lo = root.unlimitedScrolloff ? Math.min(0, v.originY) : 0;
+        var limit = Math.max(lo, lo + v.contentHeight - v.height);
+        if (v.contentY < lo || v.contentY > limit)
+            v.contentY = Math.max(lo, Math.min(limit, v.contentY));
     }
 
     /// Bring an unrealised row into view without Qt's `Contain`/`Center`
@@ -496,6 +515,18 @@ Item {
         id: scroll
     }
 
+    // Unlimited scrolloff carriers: half a viewport of empty space above the
+    // first row and below the last (a ListView header/footer; margins are a
+    // Flickable property the list layout ignores). With them the follow can
+    // centre row 0 and the final row like any other.
+    Component {
+        id: edgeSpacer
+        Item {
+            width: root.width
+            height: root._edgeMargin
+        }
+    }
+
     Item {
         id: stage
         x: -root.bleed
@@ -514,6 +545,8 @@ Item {
             model: root.layout === "grid" ? null : root.model
             delegate: root.rowDelegate
             spacing: root.rowSpacing
+            header: root.unlimitedScrolloff ? edgeSpacer : null
+            footer: root.unlimitedScrolloff ? edgeSpacer : null
             boundsBehavior: Flickable.StopAtBounds
         }
 

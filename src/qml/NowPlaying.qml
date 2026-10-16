@@ -75,6 +75,16 @@ Rectangle {
         }
     }
 
+    // The seek row's timecode metric: the widest timecode the labels can
+    // render ("00:00:00"), measured in the exact font the labels use. The
+    // boxes below reserve that room, so digits ticking and tracks changing
+    // never resize them (and never move the seek bar).
+    FontMetrics {
+        id: timeMetrics
+        font.family: Theme.fonts.body
+        font.pixelSize: Theme.fontSize("mono", root.height)
+    }
+
     // Lyrics (override → cache → server; see src/lyrics.rs).
     property bool lyricsSynced: false
     property bool lyricsAvailable: false
@@ -82,6 +92,11 @@ Rectangle {
     property string lyricsSource: ""
     property string lyricsLang: ""
     property int lyricsOffset: 0
+    // Keep-alive: the song whose lyrics the model currently holds. Leaving
+    // fullscreen keeps the lines, cursor and follow state; re-entry only
+    // re-requests when the track changed while the player was closed (no
+    // reload, no "Loading lyrics…" flash, no re-centring flick).
+    property string _lyricsSongId: ""
 
     // Lyrics type is sized from the pane itself (parent rectangle), never the
     // window, so lines can't outgrow the pane's walls; the stage caps the
@@ -116,8 +131,12 @@ Rectangle {
     function scrollLyrics(delta) {
         root.holdLyrics();
         var view = lyricsView.view;
-        var limit = Math.max(0, view.contentHeight - view.height);
-        view.contentY = Math.max(0, Math.min(limit, view.contentY + delta));
+        // Origin-aware range: the unlimited-scrolloff spacers sit above and
+        // below the lines, so the manual scroll reaches them too (originY is
+        // negative with the top spacer).
+        var lo = Math.min(0, view.originY);
+        var limit = Math.max(lo, lo + view.contentHeight - view.height);
+        view.contentY = Math.max(lo, Math.min(limit, view.contentY + delta));
     }
 
     function holdLyrics() {
@@ -210,19 +229,27 @@ Rectangle {
             queueCursor = Math.max(0, Math.min(queueItems.count - 1, queueCursor));
             queueContent.currentIndex = queueCursor;
             queueContent.goto(queueCursor);
-        } else if (root._recallQueue && queueContent.restore()) {
-            // UI-54: re-entry restores the queue highlight where it stopped.
-            root._recallQueue = false;
-            queueCursor = queueContent.currentIndex;
         } else {
-            root._recallQueue = false;
-            queueCursor = Math.max(0, Math.min(data.index, Math.max(0, queueItems.count - 1)));
-            queueContent.currentIndex = queueCursor;
-            queueContent.goto(queueCursor);
+            root.recallQueueCursor();
         }
         Qt.callLater(function () {
             queueContent.opacity = 1;
         });
+    }
+
+    /// The queue cursor for a fresh payload (UI-54 re-entry remembers; a
+    /// live payload follows the playing track). Shared by `applyQueue` and
+    /// the keep-alive re-entry in `onVisibleChanged`.
+    function recallQueueCursor() {
+        if (root._recallQueue && queueContent.restore()) {
+            root._recallQueue = false;
+            queueCursor = queueContent.currentIndex;
+            return;
+        }
+        root._recallQueue = false;
+        queueCursor = Math.max(0, Math.min(queueIndex, Math.max(0, queueItems.count - 1)));
+        queueContent.currentIndex = queueCursor;
+        queueContent.goto(queueCursor);
     }
 
     function applyLyrics(payload) {
@@ -230,6 +257,7 @@ Rectangle {
         if (data.song_id !== Backend.currentSongId)
             return; // stale response for a track we already left
 
+        root._lyricsSongId = data.song_id;
         lyricsSource = data.source;
         lyricsSynced = data.synced;
         lyricsLang = data.lang ? data.lang : "";
@@ -248,11 +276,13 @@ Rectangle {
         lyricsAvailable = lyricModel.count > 0 && data.source !== "none";
 
         lyricResume.stop();
-        // A new song carries no cursor: clear it, top the body, then let the
-        // first `followLyric` glide to the opening phrase.
+        // A new song carries no cursor: clear it, then centre the opening
+        // line right away — with unlimited scrolloff even row 0 sits at the
+        // pane centre (empty space above it) — and let the first
+        // `followLyric` glide take over once the active phrase moves.
         lyricsView.stopGlide();
         lyricsView.currentIndex = -1;
-        lyricsView.resetTop();
+        lyricsView.goto(0);
         root._lyricsHeld = false;
         Qt.callLater(function () {
             lyricsView.opacity = 1;
@@ -361,9 +391,21 @@ Rectangle {
             var saved = Memory.loadScroll("fullscreen");
             pane = saved && saved.scope >= 1 ? saved.scope : 1;
             root._recallQueue = true;
-            lyricsLoading = true;
-            Backend.requestQueue();
-            Backend.requestLyrics();
+            // Queue and lyrics stay alive while the player is closed: the
+            // queue model (fed by the hidden payloads) only needs the first
+            // ever fetch, and the highlight is recalled from the live model.
+            // No re-request, no rebuild, no fade on every enter.
+            if (queueItems.count === 0)
+                Backend.requestQueue();
+            else
+                root.recallQueueCursor();
+            // Lyrics are the same: fetch only when the track changed behind
+            // the curtain, otherwise the lines stay exactly where they were
+            // (no reload, no flick).
+            if (root._lyricsSongId !== Backend.currentSongId) {
+                lyricsLoading = true;
+                Backend.requestLyrics();
+            }
         } else if (queueItems.count > 0) {
             queueContent.remember(pane);
             // VI-4: leaving fullscreen ends the queue selection.
@@ -374,7 +416,10 @@ Rectangle {
     Connections {
         target: Backend
         function onDataReady(channel, payload) {
-            if (channel === "queue" && root.visible)
+            // The queue applies even while hidden: the backend emits on every
+            // mutation and track advance, so the model is already current
+            // when the player reopens (no reload on entry).
+            if (channel === "queue")
                 root.applyQueue(payload);
             else if (channel === "lyrics" && root.visible)
                 root.applyLyrics(payload);
@@ -549,16 +594,36 @@ Rectangle {
                     visible: text.length > 0
                 }
 
-                // Seek row: elapsed, bar, duration.
+                // Seek row: elapsed, bar, duration — kept to the same room
+                // the transport lives in (left of the volume cluster) and on
+                // the same centre axis, so the numbers, the bar and the
+                // transport read as one centred block (equilibrium of
+                // vision), never stretching under the volume cluster.
                 RowLayout {
-                    Layout.fillWidth: true
+                    Layout.fillWidth: false
+                    Layout.preferredWidth: transportBar.room
+                    Layout.alignment: Qt.AlignLeft
                     spacing: root.width * 0.008
 
-                    FadeText {
-                        text: Theme.formatTime(Backend.position)
-                        color: Palette.onSurfaceVariant
-                        font.pixelSize: Theme.fontSize("mono", root.height)
-                        animated: false
+                    // The SuperiorBar trick: the timecode sits in its own
+                    // fixed-width rectangle (reserved for the widest string),
+                    // so the ticking position repaints inside it and the bar
+                    // next to it keeps a steady length.
+                    Rectangle {
+                        Layout.preferredWidth: timeMetrics.advanceWidth("00:00:00")
+                        Layout.preferredHeight: elapsedText.implicitHeight
+                        Layout.alignment: Qt.AlignVCenter
+                        color: "transparent"
+
+                        FadeText {
+                            id: elapsedText
+                            anchors.fill: parent
+                            text: Theme.formatTime(Backend.position)
+                            color: Palette.onSurfaceVariant
+                            font.pixelSize: Theme.fontSize("mono", root.height)
+                            horizontalAlignment: Text.AlignRight
+                            animated: false
+                        }
                     }
 
                     Rectangle {
@@ -592,11 +657,21 @@ Rectangle {
                         }
                     }
 
-                    FadeText {
-                        text: Theme.formatTime(Backend.duration)
-                        color: Palette.onSurfaceVariant
-                        font.pixelSize: Theme.fontSize("mono", root.height)
-                        animated: false
+                    Rectangle {
+                        Layout.preferredWidth: timeMetrics.advanceWidth("00:00:00")
+                        Layout.preferredHeight: durationText.implicitHeight
+                        Layout.alignment: Qt.AlignVCenter
+                        color: "transparent"
+
+                        FadeText {
+                            id: durationText
+                            anchors.fill: parent
+                            text: Theme.formatTime(Backend.duration)
+                            color: Palette.onSurfaceVariant
+                            font.pixelSize: Theme.fontSize("mono", root.height)
+                            horizontalAlignment: Text.AlignLeft
+                            animated: false
+                        }
                     }
                 }
 
@@ -605,13 +680,19 @@ Rectangle {
                 // owns both clusters as their own rectangles: the volume box
                 // (right) yields its bar width first, and the transport box
                 // centres in the room left of it, sliding left as the column
-                // narrows — the two can never collide.
+                // narrows — the two can never collide. The seek row above
+                // shares `room`, so both rows sit on one centre axis.
                 Rectangle {
                     id: transportBar
                     Layout.fillWidth: true
                     Layout.preferredHeight: root.height * 0.07
                     color: "transparent"
                     radius: Theme.radius
+
+                    /// The room left of the volume cluster (minus the gap):
+                    /// the zone the transport centres in and the seek row
+                    /// spans.
+                    readonly property real room: width - volumeBox.width - root.width * 0.012
 
                     // Volume cluster (P-7): tiered icon (click = mute) + bar.
                     // The bar is the elastic part; the box clamps to whatever
@@ -679,9 +760,9 @@ Rectangle {
                     }
 
                     // Transport cluster (skip / pause / next) in its own
-                    // rectangle: centred in the whole bar while there is room,
-                    // and pushed left only as far as needed once the volume
-                    // box would touch it — the transport yields, the volume
+                    // rectangle: centred in the room left of the volume box
+                    // (the same axis as the seek row), sliding left as the
+                    // column narrows — the transport yields, the volume
                     // stays put.
                     Rectangle {
                         id: transportBox
@@ -689,10 +770,7 @@ Rectangle {
                         width: transportRow.implicitWidth
                         height: parent.height
                         color: "transparent"
-                        x: Math.max(0, Math.min(
-                            (transportBar.width - width) / 2,
-                            transportBar.width - volumeBox.width
-                                - root.width * 0.012 - width))
+                        x: Math.max(0, (transportBar.room - width) / 2)
 
                         // UI-59: the shared transport cluster (same one as
                         // the player bar).
@@ -797,6 +875,11 @@ Rectangle {
                                 visible: root.lyricsAvailable
                                 model: lyricModel
                                 rowSpacing: root.lyricSize * 0.9
+                                // Unlimited scrolloff: the active phrase is
+                                // always centred, the opening and closing
+                                // lines included — half a pane of empty
+                                // space sits above row 0 and below the last.
+                                unlimitedScrolloff: true
                                 // LYR-8: the soothing lyrics follow — the
                                 // shared glide at 300 ms that centres the
                                 // phrase with the OutBack spring. The pane's

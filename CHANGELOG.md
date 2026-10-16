@@ -3,6 +3,14 @@
 All notable changes to Musika, newest first. `TASKLISTMAJOR.md` tracks the
 open work; this file is the release history.
 
+## 0.2.2 — _Small fixes and patches_
+
+All commits since `v0.2.1`:
+
+- `a7d4bda` Order swaps force a true ScrollContent reset (#bug 4)
+- `b99d55a` security build path
+- `6373988` tracking
+
 ## 0.2.1 — _Scary downloads (and Super Corrections)_
 
 All commits since `v0.2.0`:

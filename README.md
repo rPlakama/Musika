@@ -1,382 +1,72 @@
 # Musika
 
-A keyboard-driven Subsonic/Navidrome client for Linux — native Rust core, Qt 6/QML
-interface, and **vi muscle memory everywhere**. Built for people who browse a
-music library the way they browse a buffer.
+<p align="center">
+  <img src="src/icons/musika.svg" alt="Musika" width="144">
+</p>
 
-> Space plays. `hjkl` moves. `:` is coming. Strawberry is better than this; but, this one is for
-> living inside the keyboard.
+Musika is a Keyboard driven Navidrome/Subsonic Client made with AI assistance. Written in Rust and QT. It contains many functionalities, such as _vi motions_, _cache & download system_, an indexed db based search, caching in covers, and other performance extras. Everything is thoroughly tested by me. The development is mainly driven by specs -- review by me, and coding itself by AI.
 
-## At a glance
+# Features
 
-| Layer | What it is |
-|---|---|
-| **Core** | Rust 2024 (`qtbridge` registers the QML backend) |
-| **Shell** | Qt 6.11 / QML — one `ApplicationWindow`, vi focus regions |
-| **Playback** | `mpv` subprocess + JSON IPC (position, duration, pause, volume, mute) |
-| **Source** | Subsonic API 1.16.1 + OpenSubsonic extensions (`songLyrics`) |
-| **Storage** | Ten SQLite databases under `~/.config/musika/`, WAL, one writer domain each |
-| **Theme** | Cover-seeded Material You (matugen-style, `material-colors` crate) |
-| **Distribution** | Nix flake (wrapped binary: Qt env + `mpv` on `PATH`) |
+1 - Alt-Menu -- A multipoint(Alt) call for Tracks, Albums. Which is capable of transporting through other sections, or executing context-driven actions (like bulk-download, favoriting, etc;). Four quadrants: Add to Queue (N), Favorite (S), Go to Artist (W), Go to Album (E — on an album row the east slot carries the download toggle instead), aimed with `h/j/k/l` or the arrows (mouse works too), fired on Alt release, cancelled by Esc or a neutral aim. With a visual selection up (`v`/`V`) the verbs apply to the whole range, including a bulk **Download** that toggles: a selection already cached is removed instead.
 
-## Structure
+2 - Download System -- Local-first, two databases and two tiers: `media.db` owns the artifacts (the blobs + the container *rules*), `download.db` owns the intent and progress (queued → active → done/error). An explicit song download is `permanent`; selecting an album or an artist writes a rule, downloads every existing track and keeps catching new ones on sync — toggling it off removes the rule and its files. Permanent/rule blobs live under `~/.config/musika/media`, the purgeable playback tier under `~/.cache/musika/media`. Row glyphs show the state (outline → spinning loop → filled), and offline mode serves the downloaded catalog only.
 
-```
-src/
-├── main.rs         QApp bootstrap; embeds QML + SVG resources (include_bytes_qml!)
-├── qml.rs          Backend singleton — every QML property/slot lives here
-├── player.rs       mpv subprocess, queue, IPC reader, volume/mute
-├── api.rs          Subsonic/OpenSubsonic endpoints and response types
-├── http_client.rs  one blocking client behind the async runtime
-├── index.rs        sync orchestration: library → search → covers → lyrics
-├── library.rs      library.db (artists/albums/songs) + browse queries
-├── search.rs       search.db — FTS5 over song metadata
-├── covers.rs       covers.db + covers/ blobs (etag/hash revalidation)
-├── lyrics.rs       lyrics.db — override → cache → getLyricsBySongId → legacy
-├── colors/         palette engine (seed → spec → roles) + colors.db
-├── palette.rs      Palette singleton — QML reads live role colors
-├── keybind.rs      sequence-aware keymap + Qt key tokens
-├── ipc.rs          Unix-socket command pump (`~/.config/musika/ipc.sock`)
-├── db.rs           the six pools, paths, WAL/busy-timeout/FK setup
-├── crypto.rs       AES-256-GCM for stored credentials
-└── qml/            QML components (Theme.js, NowPlaying, SearchOverlay, …)
-```
+3 - Search -- `/` searches the surface in front of you (literal, smartcase, viewport-scoped) with in-place match blocks and `[i/N]` counts; Enter jumps, Esc abandons. The global overlay searches the whole indexed library through `search.db`'s FTS with per-column scoping.
 
-Modules are one-per-domain: a new feature is a new file (or QML component) —
-the QML directory is embedded at build time, and QML components are drop-in.
+4 - Playback -- MPV runs as the backend subprocess: gapless with prefetch, stream-error retry + auto-advance, native MPRIS, seek/volume, and synced lyrics (OpenSubsonic) that ride the shared scroll body.
 
-## Databases (disposable by design)
+5 - Covers, lyrics and palettes are each cached in their own DB and purged on sync — nothing derived is fetched twice.
+
+# Installation
+
+Currently, it's a nix flake based installation; However, I plan in the future to provide another packaging schemes for MUSIKA. The flake installation follows as below:
+
+in yer flake inputs.
 
 ```
-DB1  credentials.db   encrypted account — the only data worth backing up
-DB2a library.db       artists / albums / songs, rebuilt from the server
-DB2b search.db        FTS5 index, rebuilt from library.db
-DB3  covers.db        cover-art index; blobs in covers/
-DB4  media.db         offline audio cache: index + `media/` blobs
-DB5  lyrics.db        lyrics + line timings, TTL + purge-on-sync
-DB6  colors.db        cover-seeded schemes, revalidated by cover hash
-DB7  statussave.db    last session row, restored on login
-DB8  artist_user.db   per-artist favourite + rating user state
-DB9  download.db      per-song download intent/progress ledger
-```
-
-Every cache is independent: separate pool, separate WAL, separate purge domain.
-Delete any of them and the app rebuilds it; reads never wait on the sync writer.
-Purging only ever happens **after a fully successful sync** (a failed fetch
-cancels the destructive phase — ARC-25).
-
-## Sync
+musika.url = "github:rPlakama/musika";
 
 ```
-getIndexes(ifModifiedSince) ─► library.db (single transaction)
-          │
-          ├─► search.db   full FTS reconstruction
-          ├─► covers.db   conditional revalidation + orphan purge
-          ├─► lyrics.db   bounded backfill (misses cached with a TTL)
-          └─► colors.db   schemes for vanished covers purged
-```
 
-All caches also revalidate lazily: covers by etag/hash, plain lyrics after a
-TTL, color schemes against the cover hash + generator tag.
-
-## Search
-
-Two indexes answer one query:
-
-- **Songs** come from `search.db` — an FTS5 table with its own pool and WAL,
-  rebuilt wholesale after each successful library sync. Input is tokenised on
-  whitespace and every token is quoted and prefix-matched (`"radio"*`), so FTS
-  operators typed by accident stay literal and partial words match while
-  typing; results come back `ORDER BY rank`.
-- **Artists and albums** come from `library.db` with an escaped `LIKE` over
-  `name` (albums also match `artist`), so they need no second index.
-
-`Backend.requestSearch()` runs all three reads plus cover resolution in one
-worker task and publishes `dataReady("search", {artists, albums, songs})`
-(20 per category). The UI is the floating overlay (`SearchOverlay` +
-`SearchColumn`): 120 ms debounce, three weighted columns (Songs | Albums |
-Artists), skeleton while in flight, and a Songs-first lookup priority
-(Songs → Albums → Artists) for the initial cursor.
-
-Activating a song goes through the same command pump as external IPC
-(`play_song_in_album <id>`): the backend queues the album starting at that
-song and emits the album metadata, and Home opens the album page while
-playback continues through the album.
-
-## Sort
-
-Album order is a small closed set instead of free-form SQL:
-
-```rust
-library::ALBUM_ORDERS = ["Artist", "Name", "Year"]
-```
-
-Each label maps to static `ORDER BY` clauses selected by a `match` on
-`(filter?, order)` in `library::albums()` — no string interpolation, so the
-allowlist is enforced at the type level (`Year` sorts `DESC, name` for ties).
-`Shift-L` / `Shift-H` call `cycle_album_order()` on the Backend, which
-publishes the `albumOrder` property (with notify) and re-requests the list;
-the live label is rendered in the order hint. The artist filter is the same
-query with `WHERE artist = ?1`.
-
-## API
-
-`http_client.rs` is the only transport: one `reqwest` client behind the async
-runtime, with every call built through `endpoint_url()` so the Subsonic auth
-parameters are uniform:
+then as a user/system package.
 
 ```
-u=username  t=md5(password + salt)  s=salt  v=1.16.1  c=musika  f=json
+inputs.musika.packages.${pkgs.system}.default
 ```
 
-The password itself never crosses the wire, and a fresh salt/token is generated
-per request. Responses are parsed as `subsonic-response` envelopes whose
-`status`/`error` flatten into the typed body, so server error messages surface
-as `Err` instead of an empty struct.
+# Technical Information
 
-`api.rs` layers the typed surface on top — `getIndexes(ifModifiedSince)` and
-ID3 `getArtist`/`getAlbum` for sync, `stream` for playback, `getCoverArt`,
-`star`/`scrobble`, `getLyrics`/`getLyricsBySongId`,
-`getOpenSubsonicExtensions`, and more. Serde structs use `camelCase` renames
-plus a `one_or_many` helper, because Subsonic servers return a bare object
-where an array is expected when a result set has a single entry.
+It works with a multi-db system:
 
-Three details are load-bearing:
+- `credentials.db` -- the server and account
+- `library.db` -- artists, albums, songs, artist biographies
+- `search.db` -- the FTS index
+- `covers.db` -- cover URLs + cached art
+- `media.db` -- download blobs + container rules
+- `download.db` -- the download ledger
+- `lyrics.db` -- cached lyrics
+- `colors.db` -- cover-derived color schemes
+- `artist_user.db` -- artist stars and ratings
+- `playlist.db` -- playlists
+- `statussave.db` -- session resume
 
-- **Streaming**: `stream_url()` is handed to `mpv` over its own JSON IPC
-  socket, never as a process argument — credentials stay out of `ps`/`/proc`.
-- **Cover art**: `get_cover_art()` sends `If-None-Match`/`If-Modified-Since`
-  and short-circuits on `304`, which is what keeps revalidation cheap.
-- **Capabilities**: OpenSubsonic support is probed once via
-  `getOpenSubsonicExtensions`; the `songLyrics` extension decides whether
-  `getLyricsBySongId` is attempted before the legacy `getLyrics` fallback.
+# Sections
 
-## Lyrics
+- Sidebar segments: Albums, Songs, Artists, Playlists (Radio is a placeholder for now).
+- Fullscreen player (Enter on a song): transport, seek, volume, and the queue + lyrics panes.
+- Queue drawer (`Ctrl-Q`): `j/k`, Enter jumps, `J/K` reorder, `dd` removes.
+- Search overlay: the global FTS browser over the indexed library.
 
-Resolution order: local override (`~/.config/musika/lyrics/<song_id>.lrc`) →
-DB5 cache → OpenSubsonic `getLyricsBySongId` → legacy `getLyrics` (raw `.lrc`
-text is parsed, not dumped). Synced documents drive a centred stage —
-active line scaled/bright, neighbours dimmed by distance, auto-follow paused
-while you scroll.
+# Building
 
-## Colors
-
-The playing cover seeds a Material You dark scheme (112 px quantise → score →
-`DynamicScheme`), cached per cover. Specs `2021`, `2025` and `dms` parity are
-selectable; source modes are `dominant`, `colorful` and a `#rrggbb` override.
-`Palette` applies the roles live to the whole UI. Generation is play-scoped:
-browsing never paints a palette.
-
-## Keymap
-
-| Scope | Keys |
-|---|---|
-| Movement | `h j k l`, `g g` top, `G` bottom |
-| Navigate | `Ctrl-W` scope overlay, `Enter`, `Esc`/`q`/`Ctrl-[` back |
-| Playback | `Space` play/pause, `n`/`p` or `Ctrl-N`/`Ctrl-P` next/prev, `,`/`.` seek ±5 s, `m` mute, `-`/`+` volume |
-| Library | `r` sync now, `Shift-H`/`Shift-L` list order (Artist → Name → Year): albums, or songs in the Songs segment |
-| Clipboard | `y` yank the playing track, `Shift-P`/`Ctrl-V` paste into search |
-| Queue | `Ctrl-Q` drawer, `Shift-J`/`Shift-K` reorder, `d d` remove, `Enter` jump |
-| Item actions | hold `Alt` on the cursor item: `h`/`j`/`k`/`l` or arrows aim (toward the opposite side passes through neutral), release Alt fires; neutral release fires nothing, Esc cancels |
-| Search | `Shift Space F` floating search, or `i` to start typing (Songs | Albums | Artists) |
-
-Fullscreen (`Shift-Enter`) adds a lyrics/queue split; `Tab` cycles the two
-panes, which carry their own keybar (the transport bar stays mouse-only).
-Playing a row in the Songs segment stays in the list and queues the whole
-library in list order, starting on that row, so the tracks before it stay
-reachable too (no windowing — the queue is the local index). Search hits and
-album pages open fullscreen instead.
-
-## IPC
-
-Every key action is also a command on the Unix socket — scripts and desktop
-shells (niri, Noctalia, …) drive the player with the same vocabulary:
-
-```sh
-echo queue_toggle | socat - UNIX-CONNECT:~/.config/musika/ipc.sock
-echo "play_song_in_album 5LEeV6Y9AG6XLqvuYwIL7d" | socat - "$SOCK"
-echo colors_refresh | socat - "$SOCK"
+```
+nix run .       # build + launch
+nix develop     # dev shell (Rust + Qt)
 ```
 
-## MPRIS
+# Contributions
 
-The player owns `org.mpris.MediaPlayer2.musika` on the session bus (zbus, tokio
-task; nothing on the Qt thread), so panels, media keys, lock screens and
-`playerctl` work on a stock desktop. Transport, Volume, Metadata
-(`mpris:trackid`, `mpris:length`, `mpris:artUrl`, `xesam:*`) and a rate-limited
-`PropertiesChanged` are exposed; MPRIS controls re-enter through the same
-dispatcher as keys and IPC. Without `DBUS_SESSION_BUS_ADDRESS` the service logs
-once and no-ops; setting `MUSIKA_MPRIS_SCRIPT` disables it in favour of the
-`mpv-mpris` script (single node either way).
+Pull Requests are welcome if properly tested. I have no issues with AI -- since it would be hypocritical. Besides that, the development is nix-first, as my favorite development tool. Besides that, many core tools, which are present in other players, still missing from here, and bugs that I haven't caught yet. Opening an issue for any problem is also very welcome.
 
-```sh
-playerctl -p musika status          # Playing / Paused / Stopped
-playerctl -p musika metadata        # title, artist, length, artUrl
-playerctl -p musika play-pause
-```
-
-## Running
-
-```sh
-nix develop     # Rust, Qt 6, mpv, sqlite, rust-analyzer
-cargo run       # development build (QML embedded at compile time)
-
-nix build       # wrapped release binary
-nix run .       # same, straight from the flake
-```
-
-`mpv` is required at runtime; the Nix wrapper puts the right Qt environment and
-`mpv` on `PATH`. First launch shows the login screen; credentials are encrypted
-with a key at `~/.config/musika/key` (AES-256-GCM).
-
-### Environment overrides
-
-| Variable | Effect |
-|---|---|
-| `MUSIKA_{CREDENTIALS,LIBRARY,SEARCH,COVERS,LYRICS,COLORS,STATUS}_FILE` | database paths |
-| `MUSIKA_COVERS_DIR` | cover blob directory |
-| `MUSIKA_IPC_SOCKET` | command socket path |
-| `MUSIKA_KEY_FILE` | credential encryption key |
-| `MUSIKA_MPRIS_SCRIPT` | opt-in `mpv-mpris` fallback; disables the native MPRIS service |
-| `MUSIKA_COLOR_{VARIANT,CONTRAST,SOURCE,SPEC}` | palette knobs |
-
-## Installing (Nix / NixOS)
-
-The flake exposes `packages.default` — the wrapped binary with the Qt
-environment, `mpv`, the app-scoped display font, the `.desktop` entry and the
-hicolor icon ladder. Replace `github:rPlakama/musika` with your fork or a
-`path:/home/you/Projects/musika` checkout if you have one.
-
-### Try it without installing
-
-```sh
-nix run github:rPlakama/musika     # or: nix run .   inside a checkout
-```
-
-Builds and launches the wrapped binary; no launcher entry is registered.
-
-### Build and run the output directly
-
-```sh
-nix build                          # ./result/bin/musika
-./result/bin/musika
-```
-
-### Install into your user profile
-
-```sh
-nix profile install github:rPlakama/musika   # or: nix profile install .
-```
-
-- The desktop entry and icons land in `~/.nix-profile/share/…`, which is on
-  `XDG_DATA_DIRS`; GNOME/KDE launchers pick up **Musika** on next login (or
-  when the launcher rescans).
-- Everything runtime is in the wrapper: Qt plugins/QML, `mpv`, the display
-  font (`XDG_DATA_DIRS`), TLS certs. Nothing else to install.
-- Update with `nix profile upgrade musika`, remove with
-  `nix profile remove musika`.
-
-### Declarative (NixOS or home-manager)
-
-Add the flake as an input and install the package:
-
-```nix
-# flake.nix
-inputs.musika.url = "github:rPlakama/musika"; # or path:/home/you/Projects/musika
-```
-
-```nix
-# NixOS configuration.nix
-environment.systemPackages = [
-  inputs.musika.packages.${pkgs.system}.default
-];
-
-# home-manager home.nix
-home.packages = [ inputs.musika.packages.${pkgs.system}.default ];
-```
-
-(`inputs` must be in scope — pass it through `specialArgs = { inherit inputs; };`
-from your system flake, or reference the package by its store path if you
-prefer not to wire the input.)
-
-NixOS's default `xdg.menus` / `xdg.icons` / `xdg.mime` modules link
-`share/applications`, `share/icons/hicolor` and `share/pixmaps` into
-`/run/current-system/sw`, install `hicolor-icon-theme` and refresh
-`update-desktop-database` — so after `nixos-rebuild switch` the launcher entry
-and icon appear with **no extra configuration**. (See `DESKTOPICONSTUDY.md`
-for the spec details.) On non-NixOS hosts the same files come from the
-profile/share prefix.
-
-### First run
-
-1. Launch **Musika** from your launcher (or run `musika`).
-2. Enter the server URL (e.g. `https://music.example.com`), username and
-   password; `Log in`.
-3. Credentials are encrypted (AES-256-GCM) into
-   `~/.config/musika/credentials.db` with the key at `~/.config/musika/key`;
-   the library indexes into the other databases in the same directory.
-4. Optional MPRIS: put `mpv-mpris`'s `mpris.so`/`mpris.lua` in
-   `~/.config/mpv/scripts` (or set `MUSIKA_MPRIS_SCRIPT=/nix/store/...`), so
-   media keys and desktop panels control playback. A native MPRIS service is
-   planned (`Q-8`).
-
-Updating a flake-pinned install: `nix flake update musika &&
-nixos-rebuild switch`, or `nix profile upgrade musika`.
-
-## Modules cross-talk
-
-```mermaid
-flowchart LR
-    subgraph Qt["Qt 6 · QML"]
-        UI["Home · NowPlaying · SearchOverlay"]
-        Palette["Palette singleton"]
-    end
-
-    subgraph Core["Rust core"]
-        Backend["Backend (qml.rs)"]
-        Player["player.rs"]
-        Sync["index.rs"]
-        Keymap["keybind.rs"]
-    end
-
-    MPV["mpv (JSON IPC)"]
-    Server["Subsonic / Navidrome"]
-
-    subgraph Data["~/.config/musika"]
-        C1[(credentials.db)]
-        C2[(library.db)]
-        C3[(search.db)]
-        C4[(covers.db + covers/)]
-        C5[(lyrics.db)]
-        C6[(colors.db)]
-    end
-
-    Keymap -->|actions| Backend
-    UI -->|properties / slots| Backend
-    Backend -->|dataReady payloads| UI
-    Backend --> Player --> MPV
-    Backend <-->|snapshot / mpris_* commands| Mpris["mpris.rs (zbus)"]
-    Backend --> Palette
-    Backend -.->|reqwest| Server
-    Sync -.->|getIndexes / fetch| Server
-    Sync --> C2 --> C3
-    Sync --> C4
-    Sync --> C5
-    Sync --> C6
-    Backend --> C1
-    Backend --> C2
-    Backend --> C4
-    Backend --> C5
-    Backend --> C6
-```
-
-## Docs
-
-`TASKLISTMAJOR.md` is the master task list (priorities, coverage, solved
-evidence). Design rationale lives in the local notes (`roadmap.md`,
-`materialyou3idea.md`, `POLISHAUDIT.md`, `DB*.md`) — kept intentionally out of
-git; only the major list is tracked.
-
-## License
-
-GPL-2.0-or-later. Every source file carries the FSF copyright/warranty notice.
+GPL-2.0-or-later.

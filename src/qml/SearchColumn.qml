@@ -87,18 +87,19 @@ Item {
 
     /// The state marks render only inside the cursor's ±15-row window.
     function markVisible(index) {
-        return Math.abs(index - root.cursor) <= 15;
+        return Math.abs(index - Math.max(0, root.cursor)) <= 15;
     }
 
     /// Ask the backend for the download state of that window only (album
     /// rows included: cached = every track finished).
-    function requestMarkWindow() {
+    function requestMarkWindow(force) {
         if (root.model === null)
             return;
         var songs = [];
         var albums = [];
-        var lo = Math.max(0, root.cursor - 15);
-        var hi = Math.min(root.model.count - 1, root.cursor + 15);
+        var at = Math.max(0, root.cursor);
+        var lo = Math.max(0, at - 15);
+        var hi = Math.min(root.model.count - 1, at + 15);
         for (var i = lo; i <= hi; ++i) {
             var row = root.model.get(i);
             if (!row)
@@ -108,7 +109,16 @@ Item {
             else if (row.albumId)
                 albums.push(row.albumId);
         }
-        Backend.requestDownloads(JSON.stringify(songs), JSON.stringify(albums));
+        if (force)
+            Backend.refreshDownloads(JSON.stringify(songs), JSON.stringify(albums));
+        else
+            Backend.requestDownloads(JSON.stringify(songs), JSON.stringify(albums));
+    }
+
+    // A fetch finished: re-read this column's own window (forced).
+    Connections {
+        target: Backend
+        function onRow_reload() { root.requestMarkWindow(true); }
     }
 
     /// Instant snap for far jumps (`gg`/`G`): the lists do the same through

@@ -53,24 +53,43 @@ Row {
     spacing: root.box * 0.05
 
     readonly property bool windowed: Math.abs(root.index - root.cursor) <= 15
+    /// The song's fetch is running (queued/active in the ledger): the row
+    /// shows the shared loading loop, spinning, instead of the filled mark.
+    readonly property bool active: root.windowed && root.songId.length > 0
+        && Backend.downloadingIds.indexOf(root.songId) !== -1
 
     Rectangle {
-        // The card's cache state, or the track's own.
-        visible: root.windowed
-            && ((root.songId.length > 0
-                    && Backend.downloadedIds.indexOf(root.songId) !== -1)
-                || (root.albumId.length > 0
-                    && Backend.cachedAlbumIds.indexOf(root.albumId) !== -1))
+        // The card's cache state, or the track's own; while the fetch runs
+        // the loading loop spins in place (the same glyph ArtistEntry's
+        // chip uses).
+        visible: root.active
+            || (root.windowed
+                && ((root.songId.length > 0
+                        && Backend.downloadedIds.indexOf(root.songId) !== -1)
+                    || (root.albumId.length > 0
+                        && Backend.cachedAlbumIds.indexOf(root.albumId) !== -1)))
         width: root.box * 1.2
         height: width
         color: "transparent"
 
         Icon {
+            id: downloadIcon
             anchors.centerIn: parent
             width: parent.width
             height: width
-            name: "baseline-download"
-            symbolColor: Palette.tertiary
+            name: root.active ? "loading-loop" : "baseline-download"
+            symbolColor: root.active ? Palette.onSurfaceVariant : Palette.tertiary
+            transformOrigin: Item.Center
+
+            NumberAnimation {
+                target: downloadIcon
+                property: "rotation"
+                from: 0
+                to: 360
+                duration: Theme.motion.spin
+                loops: Animation.Infinite
+                running: root.active && !Theme.reduceMotion
+            }
         }
     }
 

@@ -150,6 +150,24 @@ pub async fn done_ids_of(pool: &SqlitePool, ids: &[String]) -> Result<Vec<String
     Ok(rows)
 }
 
+/// The in-flight subset of `ids` (`queued`/`active`) — the row marks show
+/// the loading glyph for these while the fetch runs.
+pub async fn pending_ids_of(pool: &SqlitePool, ids: &[String]) -> Result<Vec<String>> {
+    if ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    let mut builder = sqlx::QueryBuilder::new(
+        "SELECT song_id FROM download WHERE state IN ('queued', 'active') AND song_id IN (",
+    );
+    let mut separated = builder.separated(", ");
+    for id in ids {
+        separated.push_bind(id.clone());
+    }
+    separated.push_unseparated(")");
+    let rows = builder.build_query_scalar::<String>().fetch_all(pool).await?;
+    Ok(rows)
+}
+
 /// Per-state counts for the status UI (`CACHE-7`): queued / active / done /
 /// error / total.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize)]
@@ -302,5 +320,21 @@ mod tests {
 
         unmark(&pool, "s3").await.unwrap();
         assert_eq!(counts(&pool).await.unwrap().total, 0);
+    }
+
+    #[tokio::test]
+    async fn window_sets_split_done_from_in_flight() {
+        let pool = memory_pool().await;
+        mark_queued(&pool, "a", None).await.unwrap();
+        set_state(&pool, "a", ACTIVE, None).await.unwrap();
+        mark_queued(&pool, "b", None).await.unwrap();
+        set_state(&pool, "b", DONE, None).await.unwrap();
+        mark_queued(&pool, "c", None).await.unwrap();
+        set_state(&pool, "c", ERROR, Some("nope")).await.unwrap();
+
+        let ids = vec!["a".to_string(), "b".to_string(), "c".to_string()];
+        assert_eq!(done_ids_of(&pool, &ids).await.unwrap(), vec!["b"]);
+        assert_eq!(pending_ids_of(&pool, &ids).await.unwrap(), vec!["a"]);
+        assert!(pending_ids_of(&pool, &[]).await.unwrap().is_empty());
     }
 }

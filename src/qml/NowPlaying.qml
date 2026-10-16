@@ -169,20 +169,24 @@ Rectangle {
     /// The state marks render only inside the queue cursor's ±15-row
     /// window — long queues keep the bindings cheap.
     function markVisible(index) {
-        return Math.abs(index - root.queueCursor) <= 15;
+        return Math.abs(index - Math.max(0, root.queueCursor)) <= 15;
     }
 
     /// Ask the backend for the download state of that window only.
-    function requestMarkWindow() {
+    function requestMarkWindow(force) {
         var ids = [];
-        var lo = Math.max(0, root.queueCursor - 15);
-        var hi = Math.min(queueItems.count - 1, root.queueCursor + 15);
+        var at = Math.max(0, root.queueCursor);
+        var lo = Math.max(0, at - 15);
+        var hi = Math.min(queueItems.count - 1, at + 15);
         for (var i = lo; i <= hi; ++i) {
             var row = queueItems.get(i);
             if (row && row.songId)
                 ids.push(row.songId);
         }
-        Backend.requestDownloads(JSON.stringify(ids), "[]");
+        if (force)
+            Backend.refreshDownloads(JSON.stringify(ids), "[]");
+        else
+            Backend.requestDownloads(JSON.stringify(ids), "[]");
     }
 
     onQueueCursorChanged: root.requestMarkWindow()
@@ -628,6 +632,10 @@ Rectangle {
         function onCurrent_album_id_changed() {
             if (root.visible)
                 root.requestAlbumActions();
+        }
+        // A fetch finished: re-read the queue's own window (forced).
+        function onRow_reload() {
+            root.requestMarkWindow(true);
         }
         // A skip/advance is deduped backend-side (the rows are already
         // published): the index property carries the move — adopt it and

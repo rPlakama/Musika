@@ -95,11 +95,13 @@ async fn apply_window(
     for ids in tracklists.values() {
         all.extend(ids.iter().cloned());
     }
-    let done: std::collections::HashSet<String> = crate::download::done_ids_of(&dbs.download, &all)
-        .await
-        .unwrap_or_default()
-        .into_iter()
-        .collect();
+    let (done, pending) = tokio::join!(
+        crate::download::done_ids_of(&dbs.download, &all),
+        crate::download::pending_ids_of(&dbs.download, &all),
+    );
+    let done: std::collections::HashSet<String> = done.unwrap_or_default().into_iter().collect();
+    let pending: std::collections::HashSet<String> =
+        pending.unwrap_or_default().into_iter().collect();
     let songs_done: Vec<String> = songs
         .iter()
         .filter(|song| done.contains(*song))
@@ -114,14 +116,25 @@ async fn apply_window(
         })
         .cloned()
         .collect();
+    let songs_pending: Vec<String> = songs
+        .iter()
+        .filter(|song| pending.contains(*song))
+        .cloned()
+        .collect();
     eprintln!(
-        "downloads: {} of {} visible songs cached; {} of {} albums fully cached",
+        "downloads: {} of {} visible songs cached; {} of {} albums fully cached; {} in flight",
         songs_done.len(),
         songs.len(),
         albums_done.len(),
-        albums.len()
+        albums.len(),
+        songs_pending.len()
     );
-    let json = serde_json::json!({ "songs": songs_done, "albums": albums_done }).to_string();
+    let json = serde_json::json!({
+        "songs": songs_done,
+        "albums": albums_done,
+        "downloading": songs_pending,
+    })
+    .to_string();
     qtbridge::invoke_method!(invoker, "applyDownloadedIds", json);
 }
 
@@ -134,6 +147,9 @@ async fn fetch_marked(
     songs: &[String],
     invoker: qtbridge::QmlMethodInvoker,
 ) {
+    // The caller marked every song queued/active before this pass: kick the
+    // row marks so the loading glyphs spin while the fetch runs.
+    qtbridge::invoke_method!(invoker, "TriggerRowReload");
     for chunk in songs.chunks(crate::consts::FETCH_CONCURRENCY) {
         let mut set = tokio::task::JoinSet::new();
         for song in chunk {
@@ -279,14 +295,22 @@ pub struct Backend {
     /// The window's album ids whose *every* track is finished — album rows
     /// wear the same glyph through this set.
     cached_album_ids: Vec<String>,
+    /// The window's in-flight song ids (queued/active): the row marks show
+    /// the loading glyph, spinning, for these.
+    downloading_ids: Vec<String>,
     /// The ids the UI last asked about (the mark window).
     download_window_songs: Vec<String>,
     download_window_albums: Vec<String>,
-    /// The most recent window results (`songs-done`, `albums-done`), newest
-    /// last, capped. The exposed sets are their union: one surface's window
+    /// The recent window *requests*, newest last, capped. A download's
+    /// refresh re-reads their union — the last request alone may carry no
+    /// albums (a songs surface), which is why a finished album never
+    /// re-evaluated until a reload re-requested its row's window.
+    recent_mark_requests: std::collections::VecDeque<(Vec<String>, Vec<String>)>,
+    /// The most recent window results (`songs-done`, `albums-done`,
+    /// `downloading`), newest last, capped. The exposed sets are their union: one surface's window
     /// read must never wipe another's marks (the session-return album page
     /// kept losing them to the segments' later reads).
-    recent_mark_windows: std::collections::VecDeque<(Vec<String>, Vec<String>)>,
+    recent_mark_windows: std::collections::VecDeque<(Vec<String>, Vec<String>, Vec<String>)>,
     playback_state: String,
     position: f64,
     duration: f64,
@@ -420,6 +444,11 @@ impl Backend {
         Notify = cached_album_ids_changed
     );
     qproperty!(
+        "downloadingIds",
+        Member = downloading_ids,
+        Notify = downloading_ids_changed
+    );
+    qproperty!(
         "playbackState",
         Member = playback_state,
         Notify = playback_state_changed
@@ -534,6 +563,12 @@ impl Backend {
     fn downloaded_ids_changed(&mut self);
     #[qsignal]
     fn cached_album_ids_changed(&mut self);
+    #[qsignal]
+    fn downloading_ids_changed(&mut self);
+    /// A fetch/reload changed the row state: every visible surface re-reads
+    /// its own current mark window (the request half of the row update).
+    #[qsignal(qml_name = "rowReload")]
+    fn row_reload(&mut self);
     #[qsignal(qml_name = "dataReady")]
     fn data_ready(&mut self, channel: String, payload: String);
     #[qsignal(qml_name = "errorRaised")]
@@ -1745,9 +1780,17 @@ impl Backend {
     fn download_song(&mut self, song_id: String) {
         let invoker = self.get_qml_method_invoker();
         let error_invoker = self.get_qml_method_invoker();
+        let kick_invoker = self.get_qml_method_invoker();
         let Some(dbs) = crate::dbs().cloned() else {
             return;
         };
+        // A single song has no pass-level kick: one glance lands after the
+        // ledger flips to `active`, so the row's loading glyph spins while
+        // the fetch runs (the completion re-read follows either way).
+        crate::runtime().spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+            qtbridge::invoke_method!(kick_invoker, "TriggerRowReload");
+        });
         crate::runtime().spawn(async move {
             if let Err(err) = download_one(&dbs, &song_id).await {
                 qtbridge::invoke_method!(
@@ -2325,17 +2368,37 @@ impl Backend {
         if songs == self.download_window_songs && albums == self.download_window_albums {
             return;
         }
-        self.download_window_songs = songs;
-        self.download_window_albums = albums;
-        let invoker = self.get_qml_method_invoker();
-        let Some(dbs) = crate::dbs().cloned() else {
-            return;
-        };
-        let songs = self.download_window_songs.clone();
-        let albums = self.download_window_albums.clone();
-        crate::runtime().spawn(async move {
-            apply_window(&dbs, &songs, &albums, invoker).await;
-        });
+        self.store_and_refresh(songs, albums);
+    }
+
+    /// The forced re-request (the `rowReload` half): a surface re-reads its
+    /// own window after a fetch, even when the window itself is unchanged —
+    /// the dedupe must not swallow the update.
+    #[qslot(qml_name = "refreshDownloads")]
+    fn refresh_downloads(&mut self, songs: String, albums: String) {
+        let songs: Vec<String> = serde_json::from_str(&songs).unwrap_or_default();
+        let albums: Vec<String> = serde_json::from_str(&albums).unwrap_or_default();
+        self.store_and_refresh(songs, albums);
+    }
+
+    /// Stores the window (and its request, for the union refreshes) and
+    /// starts the read.
+    fn store_and_refresh(&mut self, songs: Vec<String>, albums: Vec<String>) {
+        self.download_window_songs = songs.clone();
+        self.download_window_albums = albums.clone();
+        const RECENT_REQUESTS: usize = 12;
+        // An identical re-sent window must not flood the union.
+        if self
+            .recent_mark_requests
+            .back()
+            .is_none_or(|(s, a)| *s != songs || *a != albums)
+        {
+            self.recent_mark_requests.push_back((songs.clone(), albums.clone()));
+            while self.recent_mark_requests.len() > RECENT_REQUESTS {
+                self.recent_mark_requests.pop_front();
+            }
+        }
+        self.refresh_window(songs, albums);
     }
 
     /// Applies the ledger sets on the main thread (the async reader's landing
@@ -2346,28 +2409,37 @@ impl Backend {
         let songs: Vec<String> = serde_json::from_value(value["songs"].clone()).unwrap_or_default();
         let albums: Vec<String> =
             serde_json::from_value(value["albums"].clone()).unwrap_or_default();
+        let downloading: Vec<String> =
+            serde_json::from_value(value["downloading"].clone()).unwrap_or_default();
         // Keep the recent windows and expose their union: surfaces ask for
         // their own ±15 window at their own pace, and no read may evict
         // another surface's marks.
         const RECENT_WINDOWS: usize = 12;
-        self.recent_mark_windows.push_back((songs, albums));
+        self.recent_mark_windows.push_back((songs, albums, downloading));
         while self.recent_mark_windows.len() > RECENT_WINDOWS {
             self.recent_mark_windows.pop_front();
         }
         let mut done: Vec<&String> = Vec::new();
         let mut cached: Vec<&String> = Vec::new();
-        for (songs, albums) in &self.recent_mark_windows {
+        let mut pending: Vec<&String> = Vec::new();
+        for (songs, albums, downloading) in &self.recent_mark_windows {
             done.extend(songs);
             cached.extend(albums);
+            pending.extend(downloading);
         }
         done.sort();
         done.dedup();
         cached.sort();
         cached.dedup();
+        pending.sort();
+        pending.dedup();
         self.downloaded_ids = done.into_iter().cloned().collect();
         self.cached_album_ids = cached.into_iter().cloned().collect();
+        self.downloading_ids = pending.into_iter().cloned().collect();
         self.downloaded_ids_changed();
         self.cached_album_ids_changed();
+        self.downloading_ids_changed();
+        eprintln!("cachedAlbums: {}", self.cached_album_ids.join(","));
     }
 
     /// Hard reset + re-read (a download was removed: the union must not keep
@@ -2376,6 +2448,7 @@ impl Backend {
     fn reset_row_marks(&mut self) {
         self.recent_mark_windows.clear();
         self.refresh_download_window();
+        self.row_reload();
     }
 
     /// The row-status refresh hook: favourite actions and finished download
@@ -2386,19 +2459,40 @@ impl Backend {
     fn trigger_row_reload(&mut self) {
         self.refresh_download_window();
         self.emit_queue(false);
+        // Every visible surface re-reads its *own* current window: a fetch
+        // that finished must update the rows that show it, whatever the
+        // request-dedupe or window unions say (the success side of the
+        // fetch → row-update loop).
+        self.row_reload();
     }
 
     /// Re-reads the stored window (after a download changed the ledger).
     fn refresh_download_window(&mut self) {
-        if self.download_window_songs.is_empty() && self.download_window_albums.is_empty() {
+        // Re-read over the union of the recent requests: a download's
+        // success must re-evaluate every surface that is showing rows —
+        // album ids included, even when the last request was a songs one.
+        if self.recent_mark_requests.is_empty() {
             return;
         }
+        let songs: Vec<String> = self
+            .recent_mark_requests
+            .iter()
+            .flat_map(|(songs, _)| songs.iter().cloned())
+            .collect();
+        let albums: Vec<String> = self
+            .recent_mark_requests
+            .iter()
+            .flat_map(|(_, albums)| albums.iter().cloned())
+            .collect();
+        self.refresh_window(songs, albums);
+    }
+
+    /// One refresh read over explicit windows.
+    fn refresh_window(&mut self, songs: Vec<String>, albums: Vec<String>) {
         let invoker = self.get_qml_method_invoker();
         let Some(dbs) = crate::dbs().cloned() else {
             return;
         };
-        let songs = self.download_window_songs.clone();
-        let albums = self.download_window_albums.clone();
         crate::runtime().spawn(async move {
             apply_window(&dbs, &songs, &albums, invoker).await;
         });

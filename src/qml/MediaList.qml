@@ -48,18 +48,19 @@ ScrollPanel {
     /// ±15-row window — long lists keep the bindings cheap, the selector
     /// stays the reference.
     function markVisible(index) {
-        return Math.abs(index - root.currentIndex) <= 15;
+        return Math.abs(index - Math.max(0, root.currentIndex)) <= 15;
     }
 
     /// Ask the backend for the download state of the visible window only —
     /// ±15 rows around the selector, never the whole ledger. Album rows ride
     /// the same call: the backend reports an album as cached when every
     /// track of it is finished.
-    function requestMarkWindow() {
+    function requestMarkWindow(force) {
         var songs = [];
         var albums = [];
-        var lo = Math.max(0, root.currentIndex - 15);
-        var hi = Math.min(mediaRows.count - 1, root.currentIndex + 15);
+        var at = Math.max(0, root.currentIndex);
+        var lo = Math.max(0, at - 15);
+        var hi = Math.min(mediaRows.count - 1, at + 15);
         for (var i = lo; i <= hi; ++i) {
             var row = mediaRows.get(i);
             if (!row)
@@ -69,7 +70,18 @@ ScrollPanel {
             else if (row.albumId)
                 albums.push(row.albumId);
         }
-        Backend.requestDownloads(JSON.stringify(songs), JSON.stringify(albums));
+        console.log("MRW count", mediaRows.count, "cur", root.currentIndex, "hi", Math.min(mediaRows.count - 1, Math.max(0, root.currentIndex) + 15), "albums", albums.length);
+        if (force)
+            Backend.refreshDownloads(JSON.stringify(songs), JSON.stringify(albums));
+        else
+            Backend.requestDownloads(JSON.stringify(songs), JSON.stringify(albums));
+    }
+
+    // A fetch finished: re-read this surface's own window (forced — the
+    // dedupe must not swallow the update).
+    Connections {
+        target: Backend
+        function onRow_reload() { root.requestMarkWindow(true); }
     }
 
     /// A row's download mark: its song is cached, or it is an album row

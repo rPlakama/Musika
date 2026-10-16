@@ -249,21 +249,25 @@ Rectangle {
     /// The state marks (favourite hearts, download glyphs) render only
     /// inside the wall cursor's ±15-row window — same rule as the segments.
     function markVisible(index) {
-        return Math.abs(index - wall.currentIndex) <= 15;
+        return Math.abs(index - Math.max(0, wall.currentIndex)) <= 15;
     }
 
     /// Ask the backend for the download state of that window only: album
     /// cards are cached when every track of them is finished.
-    function requestMarkWindow() {
+    function requestMarkWindow(force) {
         var albumsWindow = [];
-        var lo = Math.max(0, wall.currentIndex - 15);
-        var hi = Math.min(albums.count - 1, wall.currentIndex + 15);
+        var at = Math.max(0, wall.currentIndex);
+        var lo = Math.max(0, at - 15);
+        var hi = Math.min(albums.count - 1, at + 15);
         for (var i = lo; i <= hi; ++i) {
             var album = albums.get(i);
             if (album && album.albumId)
                 albumsWindow.push(album.albumId);
         }
-        Backend.requestDownloads("[]", JSON.stringify(albumsWindow));
+        if (force)
+            Backend.refreshDownloads("[]", JSON.stringify(albumsWindow));
+        else
+            Backend.requestDownloads("[]", JSON.stringify(albumsWindow));
     }
 
     Connections {
@@ -345,6 +349,10 @@ Rectangle {
                 root.applyInfo(payload);
             else if (channel === "artist_cache")
                 root.applyCache(payload);
+        }
+        // A fetch finished: re-read this wall's own window (forced).
+        function onRow_reload() {
+            root.requestMarkWindow(true);
         }
         function onLibrary_changed() {
             root.reload();

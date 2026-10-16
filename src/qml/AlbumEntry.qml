@@ -92,20 +92,24 @@ Rectangle {
     /// selection).
     /// The state marks render only inside the song cursor's ±15-row window.
     function markVisible(songIndex) {
-        return Math.abs(songIndex - content.currentIndex) <= 15;
+        return Math.abs(songIndex - Math.max(0, content.currentIndex)) <= 15;
     }
 
     /// Ask the backend for the download state of that window only.
-    function requestMarkWindow() {
+    function requestMarkWindow(force) {
         var ids = [];
-        var lo = Math.max(0, content.currentIndex - 15);
-        var hi = Math.min(songs.count - 1, content.currentIndex + 15);
+        var at = Math.max(0, content.currentIndex);
+        var lo = Math.max(0, at - 15);
+        var hi = Math.min(songs.count - 1, at + 15);
         for (var i = lo; i <= hi; ++i) {
             var row = songs.get(i);
             if (row && row.songId)
                 ids.push(row.songId);
         }
-        Backend.requestDownloads(JSON.stringify(ids), "[]");
+        if (force)
+            Backend.refreshDownloads(JSON.stringify(ids), "[]");
+        else
+            Backend.requestDownloads(JSON.stringify(ids), "[]");
     }
 
     function toggleSelection() {
@@ -298,6 +302,10 @@ Rectangle {
                 root.apply(payload);
             else if (channel === "album_info")
                 root.applyInfo(payload);
+        }
+        // A fetch finished: re-read this page's own window (forced).
+        function onRow_reload() {
+            root.requestMarkWindow(true);
         }
         function onLibrary_changed() {
             root.reload();

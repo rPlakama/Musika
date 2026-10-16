@@ -52,11 +52,18 @@ Row {
 
     spacing: root.box * 0.05
 
-    readonly property bool windowed: Math.abs(root.index - root.cursor) <= 15
-    /// The song's fetch is running (queued/active in the ledger): the row
+    // The window's reference is the selector; a not-yet-landed cursor
+    // clamps to 0 (the same rule the hosts' request windows use).
+    readonly property bool windowed: Math.abs(root.index - Math.max(0, root.cursor)) <= 15
+    /// The row's fetch is running (queued/active in the ledger): the row
     /// shows the shared loading loop, spinning, instead of the filled mark.
-    readonly property bool active: root.windowed && root.songId.length > 0
-        && Backend.downloadingIds.indexOf(root.songId) !== -1
+    /// Album rows ride the same set through their own id — a container pass
+    /// also lights the album's row.
+    readonly property bool active: root.windowed
+        && ((root.songId.length > 0
+                && Backend.downloadingIds.indexOf(root.songId) !== -1)
+            || (root.albumId.length > 0
+                && Backend.downloadingIds.indexOf(root.albumId) !== -1))
 
     Rectangle {
         // The card's cache state, or the track's own; while the fetch runs

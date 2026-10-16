@@ -145,13 +145,19 @@ async fn apply_window(
 async fn fetch_marked(
     dbs: &crate::db::Dbs,
     songs: &[String],
+    container_id: &str,
     invoker: qtbridge::QmlMethodInvoker,
 ) {
     // Per-id updates only: the batch flips the rows' loading glyphs on, and
     // each finished song flips its own row (plus its album's, when the
-    // tracklist is now complete). No window reloads, no effect on other
-    // rows.
-    let batch = serde_json::to_string(songs).unwrap_or_else(|_| "[]".to_string());
+    // tracklist is now complete). The container id rides along, so the
+    // album/artist row itself spins while its pass runs. No window reloads,
+    // no effect on other rows.
+    let mut batch_ids: Vec<String> = songs.to_vec();
+    if !container_id.is_empty() {
+        batch_ids.push(container_id.to_string());
+    }
+    let batch = serde_json::to_string(&batch_ids).unwrap_or_else(|_| "[]".to_string());
     qtbridge::invoke_method!(invoker, "noteDownloadStates", batch);
     for chunk in songs.chunks(crate::consts::FETCH_CONCURRENCY) {
         let mut set = tokio::task::JoinSet::new();
@@ -184,6 +190,16 @@ async fn fetch_marked(
                 }
             }
         }
+    }
+    // The pass is over: the container row's loading glyph settles (the hold
+    // keeps it visible long enough either way).
+    if !container_id.is_empty() {
+        qtbridge::invoke_method!(
+            invoker,
+            "noteDownloadState",
+            container_id.to_string(),
+            crate::download::DONE.to_string()
+        );
     }
 }
 
@@ -341,6 +357,12 @@ pub struct Backend {
     /// The window's in-flight song ids (queued/active): the row marks show
     /// the loading glyph, spinning, for these.
     downloading_ids: Vec<String>,
+    /// `WhileDownloadRequest`: any download request is in flight (it stays
+    /// true for a minimum hold so the loading glyph is actually seen, even
+    /// when a cached fetch settles instantly).
+    while_download_request: bool,
+    /// The hold's deadline for the running request burst.
+    download_request_until: Option<std::time::Instant>,
     /// The ids the UI last asked about (the mark window).
     download_window_songs: Vec<String>,
     download_window_albums: Vec<String>,
@@ -492,6 +514,11 @@ impl Backend {
         Notify = downloading_ids_changed
     );
     qproperty!(
+        "whileDownloadRequest",
+        Member = while_download_request,
+        Notify = while_download_request_changed
+    );
+    qproperty!(
         "playbackState",
         Member = playback_state,
         Notify = playback_state_changed
@@ -608,6 +635,8 @@ impl Backend {
     fn cached_album_ids_changed(&mut self);
     #[qsignal]
     fn downloading_ids_changed(&mut self);
+    #[qsignal]
+    fn while_download_request_changed(&mut self);
     /// A fetch/reload changed the row state: every visible surface re-reads
     /// its own current mark window (the request half of the row update).
     #[qsignal(qml_name = "rowReload")]
@@ -1886,6 +1915,11 @@ impl Backend {
     /// `artist_cache` for the ArtistEntry toggle.
     #[qslot(qml_name = "downloadArtist")]
     fn download_artist(&mut self, artist_id: String, on: bool) {
+        // The request is initiated now: the row's loading glyph lights the
+        // same frame (the pass' batch and completions follow per id).
+        if on {
+            self.note_download_states(serde_json::json!([artist_id]).to_string());
+        }
         let invoker = self.get_qml_method_invoker();
         let fetch_invoker = self.get_qml_method_invoker();
         let error_invoker = self.get_qml_method_invoker();
@@ -1927,7 +1961,7 @@ impl Backend {
                 // The pass is now in flight: the chip shows its loading loop.
                 let json = artist_cache_payload(&artist_id, true, true);
                 qtbridge::invoke_method!(invoker, "emitData", "artist_cache".to_string(), json);
-                fetch_marked(&dbs, &songs, fetch_invoker).await;
+                fetch_marked(&dbs, &songs, &artist_id, fetch_invoker).await;
                 eprintln!("download: artist {artist_id} pass finished");
                 let json = artist_cache_payload(&artist_id, true, false);
                 qtbridge::invoke_method!(invoker, "emitData", "artist_cache".to_string(), json);
@@ -2010,6 +2044,11 @@ impl Backend {
     /// rule-owned blobs. Emits `album_cache` throughout.
     #[qslot(qml_name = "downloadAlbum")]
     fn download_album(&mut self, album_id: String, on: bool) {
+        // The request is initiated now: the row's loading glyph lights the
+        // same frame (the pass' batch and completions follow per id).
+        if on {
+            self.note_download_states(serde_json::json!([album_id]).to_string());
+        }
         let invoker = self.get_qml_method_invoker();
         let fetch_invoker = self.get_qml_method_invoker();
         let error_invoker = self.get_qml_method_invoker();
@@ -2068,7 +2107,7 @@ impl Backend {
                 // The pass is now in flight: the chip shows its loading loop.
                 let json = album_cache_payload(&album_id, true, true, false);
                 qtbridge::invoke_method!(invoker, "emitData", "album_cache".to_string(), json);
-                fetch_marked(&dbs, &songs, fetch_invoker).await;
+                fetch_marked(&dbs, &songs, &album_id, fetch_invoker).await;
                 eprintln!("download: album {album_id} pass finished");
                 let json = album_cache_payload(&album_id, true, false, false);
                 qtbridge::invoke_method!(invoker, "emitData", "album_cache".to_string(), json);
@@ -2515,22 +2554,21 @@ impl Backend {
     fn note_download_state(&mut self, song_id: String, state: String) {
         let in_flight =
             state == crate::download::QUEUED || state == crate::download::ACTIVE;
-        let mut touched = false;
-        if self.downloading_ids.contains(&song_id) != in_flight {
-            if in_flight {
-                self.downloading_ids.push(song_id.clone());
-            } else {
-                self.downloading_ids.retain(|id| id != &song_id);
+        if in_flight {
+            self.hold_download_request();
+            if !self.downloading_ids.contains(&song_id) {
+                self.downloading_ids.push(song_id);
+                self.downloading_ids_changed();
             }
-            touched = true;
+            return;
         }
-        if touched {
-            self.downloading_ids_changed();
-        }
+        // The fetch settled: the row keeps its loading glyph until the hold
+        // expires (a cached fetch must still be *seen*), then flips.
         if state == crate::download::DONE && !self.downloaded_ids.contains(&song_id) {
-            self.downloaded_ids.push(song_id);
+            self.downloaded_ids.push(song_id.clone());
             self.downloaded_ids_changed();
         }
+        self.settle_download_request(song_id);
     }
 
     /// The batch kick at a container pass' start: every marked song's row
@@ -2538,6 +2576,10 @@ impl Backend {
     #[qslot(qml_name = "noteDownloadStates")]
     fn note_download_states(&mut self, ids_json: String) {
         let ids: Vec<String> = serde_json::from_str(&ids_json).unwrap_or_default();
+        if ids.is_empty() {
+            return;
+        }
+        self.hold_download_request();
         let mut changed = false;
         for id in ids {
             if !self.downloading_ids.contains(&id) {
@@ -2547,6 +2589,55 @@ impl Backend {
         }
         if changed {
             self.downloading_ids_changed();
+        }
+    }
+
+    /// Starts (or extends) the request hold: `WhileDownloadRequest` stays
+    /// true for `DOWNLOAD_HOLD` so the loading glyph is visible even when
+    /// the fetch itself takes no time.
+    fn hold_download_request(&mut self) {
+        const DOWNLOAD_HOLD: std::time::Duration = std::time::Duration::from_millis(800);
+        self.download_request_until = Some(std::time::Instant::now() + DOWNLOAD_HOLD);
+        if !self.while_download_request {
+            self.while_download_request = true;
+            self.while_download_request_changed();
+        }
+    }
+
+    /// Ends one song's request: immediately when the hold has passed, else
+    /// after the remaining hold (through the runtime + invoker, so the write
+    /// lands on the main thread).
+    fn settle_download_request(&mut self, song_id: String) {
+        let delay = self
+            .download_request_until
+            .map(|until| until.saturating_duration_since(std::time::Instant::now()))
+            .unwrap_or_default();
+        if delay.is_zero() {
+            self.apply_download_settle(song_id);
+            return;
+        }
+        let invoker = self.get_qml_method_invoker();
+        crate::runtime().spawn(async move {
+            tokio::time::sleep(delay).await;
+            qtbridge::invoke_method!(invoker, "settleDownloadRequest", song_id);
+        });
+    }
+
+    /// The hold-expired landing pad (also the immediate path).
+    #[qslot(qml_name = "settleDownloadRequest")]
+    fn settle_download_request_now(&mut self, song_id: String) {
+        self.apply_download_settle(song_id);
+    }
+
+    fn apply_download_settle(&mut self, song_id: String) {
+        let touched = self.downloading_ids.contains(&song_id);
+        if touched {
+            self.downloading_ids.retain(|id| id != &song_id);
+            self.downloading_ids_changed();
+        }
+        if self.downloading_ids.is_empty() && self.while_download_request {
+            self.while_download_request = false;
+            self.while_download_request_changed();
         }
     }
 

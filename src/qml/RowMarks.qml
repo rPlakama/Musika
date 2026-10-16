@@ -45,10 +45,12 @@ Row {
     property string songId: ""
     property string albumId: ""
     property bool starred: false
-    /// The heart's box; the download glyph uses 1.2× of it.
+    /// The heart's box; the download glyph uses 1.2× of it. The block
+    /// scales the host's base once, here (+8%).
     required property real base
+    readonly property real box: root.base * 1.08
 
-    spacing: root.base * 0.05
+    spacing: root.box * 0.05
 
     readonly property bool windowed: Math.abs(root.index - root.cursor) <= 15
 
@@ -59,7 +61,7 @@ Row {
                     && Backend.downloadedIds.indexOf(root.songId) !== -1)
                 || (root.albumId.length > 0
                     && Backend.cachedAlbumIds.indexOf(root.albumId) !== -1))
-        width: root.base * 1.2
+        width: root.box * 1.2
         height: width
         color: "transparent"
 
@@ -74,13 +76,13 @@ Row {
 
     Rectangle {
         visible: root.windowed && root.starred
-        width: root.base * 1.2
+        width: root.box * 1.2
         height: width
         color: "transparent"
 
         Icon {
             anchors.centerIn: parent
-            width: root.base
+            width: root.box
             height: width
             name: "baseline-favorite"
             symbolColor: Theme.iconStrong

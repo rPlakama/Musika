@@ -62,6 +62,20 @@ The app is unsafe or misleading without these.
     `order_changed` handlers). The `G` case stays covered by
     `tst_bottomup`.
 
+- [ ] **#Patch · `gg`/`G` differ between Albums and Songs (Albums buggy)** — P1 · (reported)
+  - **Why:** the same motions misbehave on Albums while Songs is fine —
+    "Is there a major difference (in albums its buggy)".
+  - **Details:** both segments are the same `MediaList`/ScrollPanel; the
+    visible difference is the *active layout* — the Albums key is commonly
+    held in its grid wall while Songs stays a list (`layouts:
+    ["list","grid"]`, the layout remembered per key). A harness probe of
+    the isolated grid edges passes (last cell fully revealed, `gg` tops at
+    row 0 — `tst_gridedges`), so the bug is host-level: suspects are the
+    segment's grid landing with the adaptive `cellHeight`, the toolbar
+    interplay on the album page, and `edgeJump` racing the payload settle.
+  - **Verify:** hold Albums in grid, `gg`/`G`, compare against Songs in
+    list; then the same pair on the album page (toolbar up vs down).
+
 - [x] **VI-11 · `gg`/`G` (Top/Bottom) in every list** — P1 · **high priority** · (N8a, MY3 §4.2)
   - **Why:** `g g` and `G` are already bound (`keybind.rs:122-123` →
     `top`/`bottom`) but no QML handler consumes them, so the motions dead-end

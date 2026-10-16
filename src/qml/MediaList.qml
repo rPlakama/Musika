@@ -295,7 +295,7 @@ ScrollPanel {
                 anchors.verticalCenter: parent.verticalCenter
                 anchors.left: cover.right
                 anchors.leftMargin: row.viewWidth * 0.04
-                anchors.right: metaLabel.left
+                anchors.right: metaBox.left
                 anchors.rightMargin: row.viewWidth * 0.04
                 spacing: row.height * 0.05
 
@@ -334,24 +334,46 @@ ScrollPanel {
                 }
             }
 
-            SearchText {
-                id: metaLabel
+            // REC-UI-1: the right rail is two right-anchored rectangles —
+            // the meta box then the symbols beside it. A song's meta is a
+            // timecode, so its box reserves the widest one and the marks
+            // never move as the seconds grow; counts/years hug their text.
+            Rectangle {
+                id: metaBox
                 anchors.verticalCenter: parent.verticalCenter
                 anchors.right: parent.right
                 anchors.rightMargin: row.viewWidth * 0.04
-                text: row.meta
-                color: Palette.onSurfaceVariant
-                font.pixelSize: row.height * 0.19
-                animated: false
-                query: root.searchQuery
-                currentMatch: row.index === root.searchCurrentRow
+                width: root.quickActionKind === "song"
+                    ? metaMetrics.advanceWidth("00:00:00")
+                    : metaLabel.implicitWidth
+                height: metaLabel.implicitHeight
+                color: "transparent"
+
+                FontMetrics {
+                    id: metaMetrics
+                    font.family: Theme.fonts.body
+                    font.pixelSize: metaLabel.font.pixelSize
+                }
+
+                SearchText {
+                    id: metaLabel
+                    anchors.fill: parent
+                    text: row.meta
+                    color: Palette.onSurfaceVariant
+                    font.pixelSize: row.height * 0.19
+                    horizontalAlignment: root.quickActionKind === "song"
+                        ? Text.AlignRight : Text.AlignLeft
+                    animated: false
+                    query: root.searchQuery
+                    currentMatch: row.index === root.searchCurrentRow
+                }
             }
 
             // REC-UI-1: the shared state-mark block (download then heart).
             RowMarks {
                 anchors.verticalCenter: parent.verticalCenter
-                anchors.right: metaLabel.left
-                anchors.rightMargin: row.viewWidth * 0.015
+                anchors.right: metaBox.left
+                anchors.rightMargin: row.viewWidth * 0.01275
                 cursor: root.currentIndex
                 index: row.index
                 songId: row.songId

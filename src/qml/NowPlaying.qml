@@ -1340,7 +1340,7 @@ Rectangle {
                                             // anchors re-run, and the direct
                                             // read spams "width of null".
                                             anchors.leftMargin: row.width * 0.01
-                                            anchors.right: durationLabel.left
+                                            anchors.right: durationBox.left
                                             anchors.rightMargin: row.width * 0.01
                                             anchors.verticalCenter: parent.verticalCenter
                                             text: row.title
@@ -1363,25 +1363,47 @@ Rectangle {
                                             }
                                         }
 
-                                        SearchText {
-                                            id: durationLabel
+                                        // REC-UI-1: the right rail is two
+                                        // right-anchored rectangles — the
+                                        // length box reserves the widest
+                                        // timecode, the symbols anchor to its
+                                        // left. The rail's width (and so the
+                                        // marks' place) never moves as the
+                                        // seconds grow.
+                                        Rectangle {
+                                            id: durationBox
                                             anchors.right: parent.right
                                             anchors.verticalCenter: parent.verticalCenter
-                                            text: row.duration
-                                            color: Palette.onSurfaceVariant
-                                            font.pixelSize: Theme.fontSize("mono", root.height)
-                                            animated: false
-                                            query: queueContent.searchQuery
-                                            currentMatch: index === queueContent.searchCurrentRow
+                                            width: durationMetrics.advanceWidth("00:00:00")
+                                            height: durationLabel.implicitHeight
+                                            color: "transparent"
+
+                                            FontMetrics {
+                                                id: durationMetrics
+                                                font.family: Theme.fonts.body
+                                                font.pixelSize: durationLabel.font.pixelSize
+                                            }
+
+                                            SearchText {
+                                                id: durationLabel
+                                                anchors.fill: parent
+                                                text: row.duration
+                                                color: Palette.onSurfaceVariant
+                                                font.pixelSize: Theme.fontSize("mono", root.height)
+                                                horizontalAlignment: Text.AlignRight
+                                                animated: false
+                                                query: queueContent.searchQuery
+                                                currentMatch: index === queueContent.searchCurrentRow
+                                            }
                                         }
 
                                         // REC-UI-1: the shared state-mark
                                         // block (download then heart).
                                         RowMarks {
                                             anchors.verticalCenter: parent.verticalCenter
-                                            anchors.right: durationLabel.left
+                                            anchors.right: durationBox.left
                                             // 10% more air than the row gutter.
-                                            anchors.rightMargin: row.width * 0.011
+                                            anchors.rightMargin: row.width * 0.00935
                                             cursor: root.queueCursor
                                             index: row.index
                                             songId: row.songId

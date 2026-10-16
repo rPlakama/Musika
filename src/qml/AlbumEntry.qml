@@ -600,24 +600,42 @@ Rectangle {
                     query: content.searchQuery
                     currentMatch: songRow.index === content.searchCurrentRow
                 }
-                SearchText {
-                    id: songDuration
+                // REC-UI-1: the right rail is two right-anchored rectangles
+                // — the length box reserves the widest timecode, the marks
+                // beside it never move as the seconds grow.
+                Rectangle {
+                    id: songDurationBox
                     anchors.verticalCenter: parent.verticalCenter
                     anchors.right: parent.right
                     anchors.rightMargin: root.width * 0.02
-                    text: songRow.duration
-                    color: Palette.onSurfaceVariant
-                    font.pixelSize: songRow.height * 0.32
-                    animated: false
-                    query: content.searchQuery
-                    currentMatch: songRow.index === content.searchCurrentRow
+                    width: songDurationMetrics.advanceWidth("00:00:00")
+                    height: songDuration.implicitHeight
+                    color: "transparent"
+
+                    FontMetrics {
+                        id: songDurationMetrics
+                        font.family: Theme.fonts.body
+                        font.pixelSize: songDuration.font.pixelSize
+                    }
+
+                    SearchText {
+                        id: songDuration
+                        anchors.fill: parent
+                        text: songRow.duration
+                        color: Palette.onSurfaceVariant
+                        font.pixelSize: songRow.height * 0.32
+                        horizontalAlignment: Text.AlignRight
+                        animated: false
+                        query: content.searchQuery
+                        currentMatch: songRow.index === content.searchCurrentRow
+                    }
                 }
 
                 // REC-UI-1: the shared state-mark block.
                 RowMarks {
                     anchors.verticalCenter: parent.verticalCenter
-                    anchors.right: songDuration.left
-                    anchors.rightMargin: songRow.height * 0.12
+                    anchors.right: songDurationBox.left
+                    anchors.rightMargin: songRow.height * 0.102
                     cursor: content.currentIndex
                     index: songRow.index
                     songId: songRow.songId

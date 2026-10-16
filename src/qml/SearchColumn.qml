@@ -389,7 +389,7 @@ Item {
                         RowMarks {
                             anchors.verticalCenter: parent.verticalCenter
                             anchors.right: metaLabel.left
-                            anchors.rightMargin: row.height * 0.06
+                            anchors.rightMargin: row.height * 0.051
                             cursor: root.cursor
                             index: row.index
                             songId: row.songId

@@ -915,7 +915,7 @@ Rectangle {
                             id: rowMarks
                             anchors.verticalCenter: parent.verticalCenter
                             anchors.right: parent.right
-                            anchors.rightMargin: row.width * 0.02
+                            anchors.rightMargin: row.width * 0.017
                             cursor: wall.currentIndex
                             index: row.index
                             albumId: row.albumId

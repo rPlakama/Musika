@@ -43,6 +43,19 @@ Order = trust/correctness > unblocking > user value > effort.
 
 The app is unsafe or misleading without these.
 
+- [x] **#bug 2 · Scrolling to top flickers the last three rows** — P0 · (reported)
+  - **Why:** returning to the top made the first rows (the top three) visibly
+    flicker.
+  - **Details:** traced to the instant-land settle added with the `G` bottom
+    fix (`ScrollContent.land` schedules `_settleGlide` after releasing
+    `_instantFollow`): the settle is a Qt `Contain`, it ran on *every*
+    landing, and near the top it nudged the viewport (Qt's `Contain` parks
+    async offsets on a scrolled list — probed `-4`, `-96`, `-920`).
+  - **Now:** the settle is scoped to the bottom row only
+    (`index === count - 1` — the only landing that can be short under an
+    estimated `contentHeight`); the top path is untouched again. The `G`
+    case stays covered by `tst_bottomup`.
+
 - [x] **VI-11 · `gg`/`G` (Top/Bottom) in every list** — P1 · **high priority** · (N8a, MY3 §4.2)
   - **Why:** `g g` and `G` are already bound (`keybind.rs:122-123` →
     `top`/`bottom`) but no QML handler consumes them, so the motions dead-end

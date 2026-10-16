@@ -272,11 +272,16 @@ Item {
                 root._landUnrealised(v, index);
             root._clampY(v);
         }
+        // The instant path has no glide to settle it, so the *last* row can
+        // stay cut below an under-measured contentHeight (`G` with variable
+        // heights). Scoped to that row on purpose (#bug 2): the settle is a
+        // `Contain`, and near the top it nudged the viewport (flicker); the
+        // top rows are always inside, only the bottom can be short.
+        var settle = v && v.count > 0 && index === v.count - 1;
         Qt.callLater(function () {
             root._instantFollow = false;
-            // The instant path has no glide to settle it: a landing that met
-            // an under-measured contentHeight must reveal its row.
-            root._settleGlide();
+            if (settle)
+                root._settleGlide();
         });
     }
 

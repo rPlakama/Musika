@@ -125,8 +125,6 @@ async fn apply_window(
 async fn fetch_marked(
     dbs: &crate::db::Dbs,
     songs: &[String],
-    window_songs: &[String],
-    window_albums: &[String],
     invoker: qtbridge::QmlMethodInvoker,
 ) {
     for chunk in songs.chunks(crate::consts::FETCH_CONCURRENCY) {
@@ -144,7 +142,8 @@ async fn fetch_marked(
             let _ = joined;
         }
     }
-    apply_window(dbs, window_songs, window_albums, invoker).await;
+    // The pass is done: the row-status hook reconciles the marks.
+    qtbridge::invoke_method!(invoker, "TriggerRowReload");
 }
 
 /// Fetches one song into the media cache unless it is already available or a
@@ -1734,8 +1733,6 @@ impl Backend {
     fn download_song(&mut self, song_id: String) {
         let invoker = self.get_qml_method_invoker();
         let error_invoker = self.get_qml_method_invoker();
-        let window_songs = self.download_window_songs.clone();
-        let window_albums = self.download_window_albums.clone();
         let Some(dbs) = crate::dbs().cloned() else {
             return;
         };
@@ -1749,7 +1746,7 @@ impl Backend {
                 );
             }
             // The mark window is the row-mark truth: re-read it either way.
-            apply_window(&dbs, &window_songs, &window_albums, invoker).await;
+            qtbridge::invoke_method!(invoker, "TriggerRowReload");
         });
     }
 
@@ -1780,8 +1777,6 @@ impl Backend {
         let invoker = self.get_qml_method_invoker();
         let fetch_invoker = self.get_qml_method_invoker();
         let error_invoker = self.get_qml_method_invoker();
-        let window_songs = self.download_window_songs.clone();
-        let window_albums = self.download_window_albums.clone();
         let Some(dbs) = crate::dbs().cloned() else {
             return;
         };
@@ -1820,7 +1815,7 @@ impl Backend {
                 // The pass is now in flight: the chip shows its loading loop.
                 let json = artist_cache_payload(&artist_id, true, true);
                 qtbridge::invoke_method!(invoker, "emitData", "artist_cache".to_string(), json);
-                fetch_marked(&dbs, &songs, &window_songs, &window_albums, fetch_invoker).await;
+                fetch_marked(&dbs, &songs, fetch_invoker).await;
                 eprintln!("download: artist {artist_id} pass finished");
                 let json = artist_cache_payload(&artist_id, true, false);
                 qtbridge::invoke_method!(invoker, "emitData", "artist_cache".to_string(), json);
@@ -1847,7 +1842,7 @@ impl Backend {
                 let json = artist_cache_payload(&artist_id, false, false);
                 qtbridge::invoke_method!(invoker, "emitData", "artist_cache".to_string(), json);
                 // The marks lose the artist's songs: re-read the window.
-                apply_window(&dbs, &window_songs, &window_albums, fetch_invoker).await;
+                qtbridge::invoke_method!(fetch_invoker, "TriggerRowReload");
             }
         });
     }
@@ -1905,8 +1900,6 @@ impl Backend {
         let invoker = self.get_qml_method_invoker();
         let fetch_invoker = self.get_qml_method_invoker();
         let error_invoker = self.get_qml_method_invoker();
-        let window_songs = self.download_window_songs.clone();
-        let window_albums = self.download_window_albums.clone();
         let Some(dbs) = crate::dbs().cloned() else {
             return;
         };
@@ -1962,7 +1955,7 @@ impl Backend {
                 // The pass is now in flight: the chip shows its loading loop.
                 let json = album_cache_payload(&album_id, true, true, false);
                 qtbridge::invoke_method!(invoker, "emitData", "album_cache".to_string(), json);
-                fetch_marked(&dbs, &songs, &window_songs, &window_albums, fetch_invoker).await;
+                fetch_marked(&dbs, &songs, fetch_invoker).await;
                 eprintln!("download: album {album_id} pass finished");
                 let json = album_cache_payload(&album_id, true, false, false);
                 qtbridge::invoke_method!(invoker, "emitData", "album_cache".to_string(), json);
@@ -1989,7 +1982,7 @@ impl Backend {
                 let json = album_cache_payload(&album_id, false, false, false);
                 qtbridge::invoke_method!(invoker, "emitData", "album_cache".to_string(), json);
                 // The marks lose the album's songs: re-read the window.
-                apply_window(&dbs, &window_songs, &window_albums, fetch_invoker).await;
+                qtbridge::invoke_method!(fetch_invoker, "TriggerRowReload");
             }
         });
     }
@@ -2327,6 +2320,16 @@ impl Backend {
         self.cached_album_ids_changed();
     }
 
+    /// The row-status refresh hook: favourite actions and finished download
+    /// passes trigger it (the "download: … pass finished" path), and any
+    /// surface may call it when its rows need reconciling. Re-reads the
+    /// download window (marks) and re-emits the queue (the heart truth).
+    #[qslot(qml_name = "TriggerRowReload")]
+    fn trigger_row_reload(&mut self) {
+        self.refresh_download_window();
+        self.emit_queue();
+    }
+
     /// Re-reads the stored window (after a download changed the ledger).
     fn refresh_download_window(&mut self) {
         if self.download_window_songs.is_empty() && self.download_window_albums.is_empty() {
@@ -2492,15 +2495,20 @@ impl Backend {
                 }
             }
             .await;
-            if result.is_ok() && kind == "album" {
-                // The fullscreen keybar heart reconciles through this.
-                let json = album_state_payload(&id, on);
-                qtbridge::invoke_method!(
-                    state_invoker,
-                    "emitData",
-                    "album_state".to_string(),
-                    json
-                );
+            if result.is_ok() {
+                if kind == "album" {
+                    // The fullscreen keybar heart reconciles through this.
+                    let json = album_state_payload(&id, on);
+                    qtbridge::invoke_method!(
+                        state_invoker,
+                        "emitData",
+                        "album_state".to_string(),
+                        json
+                    );
+                }
+                // The favourite lands on rows everywhere: the shared hook
+                // reconciles the marks and the queue hearts.
+                qtbridge::invoke_method!(state_invoker, "TriggerRowReload");
             }
             if let Err(err) = result {
                 eprintln!("alt actions: could not update favourite {kind} {id}: {err:#}");

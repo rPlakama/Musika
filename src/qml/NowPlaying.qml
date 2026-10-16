@@ -503,10 +503,12 @@ Rectangle {
         }
 
         if (pane === 1) {
+            // VI-7: the count scales the lyric scroll.
+            var lyricSteps = Math.max(1, Backend.keyCount);
             if (action === "move_up")
-                scrollLyrics(-lyricsView.height * 0.3);
+                scrollLyrics(-lyricsView.height * 0.3 * lyricSteps);
             else if (action === "move_down")
-                scrollLyrics(lyricsView.height * 0.3);
+                scrollLyrics(lyricsView.height * 0.3 * lyricSteps);
             else if (action === "move_left" || action === "move_right")
                 pane = 2;
             return;
@@ -526,10 +528,12 @@ Rectangle {
             return;
         }
 
+        // VI-7: the count walks the queue cursor by that many rows.
+        var queueSteps = Math.max(1, Backend.keyCount);
         if (action === "move_up")
-            moveQueueCursor(-1);
+            moveQueueCursor(-queueSteps);
         else if (action === "move_down")
-            moveQueueCursor(1);
+            moveQueueCursor(queueSteps);
         else if (action === "queue_up" && queueCursor > 0) {
             root._reordering = true;
             // VI-4: a reorder shifts every anchored row; the range dies.

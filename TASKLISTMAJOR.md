@@ -216,10 +216,19 @@ The product is incomplete without these.
   - **Details:** `Mode` enum (Normal/Visual/Command/Search/Insert) in Rust,
     reflected in QML; Esc invariant targets Normal; mode colors per MY3 §3.3.
 
-- [ ] **VI-7 · Count register (`3j`, `10l`, `5G`)** — P1 · (N2a, CRITIQUE Ph2.2, MY3 §4.2)
+- [x] **VI-7 · Count register (`3j`, `10l`, `5G`)** — P1 · (N2a, CRITIQUE Ph2.2, MY3 §4.2)
   - **Why:** counts turn motions into a grammar; today digits are dropped.
   - **Details:** numeric prefixes in `keybind.rs`; consume in lists (rows) and in
     the player (seek seconds); count chip appears `micro`, clears instantly.
+  - **Now:** the register lives in the `Keymap` (bare digits accumulate, cap
+    999 999, a lone leading `0` stays unbound; the count rides the next fired
+    action and `take_count()` is read once — 4 new keybind tests). Exposed as
+    `Backend.keyCount` (mid-typing it feeds the chip; at fire time the
+    consumers read it). Consumed by every list (`ScrollPanel` moves and
+    `edgeJump` line jumps, the queue drawer, the fullscreen queue cursor and
+    lyric scroll) and the player (`5,`/`5.` seek 5×5 s, `5=`/`5-` volume 25).
+    The chip sits above the player bar, fading in over `micro`, clearing
+    instantly with the register. Grid mode counts too (row-clamped).
 
 - [ ] **VI-8 · Operator grammar (`d`, `y`, `p`, `P`, `.`)** — P2 · (N2b, CRITIQUE Ph2)
   - **Why:** queue editing is the musical equivalent of buffer editing.

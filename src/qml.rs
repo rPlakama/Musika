@@ -37,6 +37,22 @@ static STATUS_WRITE_GEN: AtomicU64 = AtomicU64::new(0);
 /// queue back to a stale index).
 static QUEUE_EMIT_GEN: AtomicU64 = AtomicU64::new(0);
 
+/// The playback shuffle (VI-7's sibling): a time-seeded rotation of a tab's
+/// source, resolved in a rolling window so nothing resolves thousands of
+/// URLs up front.
+struct Shuffle {
+    /// "songs" (units are song ids) or "albums" (units are album ids, each
+    /// expanding to its tracklist).
+    kind: String,
+    /// The rotated units still to queue (no wrap: the array ends, it stops).
+    units: Vec<String>,
+    position: usize,
+}
+
+/// The rolling window: the queue only ever holds this many upcoming
+/// shuffled tracks; playback tops it up.
+const SHUFFLE_WINDOW: usize = 30;
+
 /// One id's download mark (the `mark_states` map's values).
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum MarkState {
@@ -480,6 +496,15 @@ pub struct Backend {
     volume: f64,
     muted: bool,
     queue_index: i64,
+    /// The playback shuffle's state (None = off) and its generation: tasks
+    /// captured before a toggle must not write into the new world.
+    shuffle: Option<Shuffle>,
+    shuffle_gen: u64,
+    /// A window resolve is in flight (one at a time).
+    shuffle_extending: bool,
+    /// The chip's state: on/off and which source is shuffled.
+    shuffling: bool,
+    shuffle_kind: String,
     queue_length: i64,
     album_order: String,
     song_order: String,
@@ -492,6 +517,10 @@ pub struct Backend {
     alt_held: bool,
     /// ARC-43: a half-typed keyboard sequence disarms the overlay.
     key_pending: bool,
+    /// VI-7: the count register — mid-typing (`3` before `j`) it is the
+    /// number being built (the chip's), at fire time it is the count the
+    /// just-dispatched action carries (0 = none).
+    key_count: i64,
     /// Last album page / song the session should return to (P-6).
     status_album: Option<String>,
     status_song: Option<String>,
@@ -661,6 +690,13 @@ impl Backend {
         Member = key_pending,
         Notify = key_pending_changed
     );
+    qproperty!("keyCount", Member = key_count, Notify = key_count_changed);
+    qproperty!("shuffling", Member = shuffling, Notify = shuffling_changed);
+    qproperty!(
+        "shuffleKind",
+        Member = shuffle_kind,
+        Notify = shuffle_kind_changed
+    );
     qproperty!(
         "searchOpen",
         Member = search_open,
@@ -777,6 +813,12 @@ impl Backend {
     fn alt_held_changed(&mut self);
     #[qsignal]
     fn key_pending_changed(&mut self);
+    #[qsignal]
+    fn key_count_changed(&mut self);
+    #[qsignal]
+    fn shuffling_changed(&mut self);
+    #[qsignal]
+    fn shuffle_kind_changed(&mut self);
     #[qsignal]
     fn search_open_changed(&mut self);
     #[qsignal]
@@ -1235,6 +1277,7 @@ impl Backend {
         let Some(token) = crate::keybind::token_from_qt(key, modifiers) else {
             self.keymap.reset();
             self.mark_key_pending(false);
+            self.set_key_count(0);
             return String::new();
         };
 
@@ -1244,20 +1287,28 @@ impl Backend {
         if self.line_search_open {
             self.keymap.reset();
             self.mark_key_pending(false);
+            self.set_key_count(0);
             return String::new();
         }
 
         match self.keymap.feed(&token) {
             Outcome::Action(action) => {
                 self.mark_key_pending(false);
+                // VI-7: the count rides the dispatch (`3j` → move_down ×3).
+                let count = self.keymap.take_count() as i64;
+                self.set_key_count(count);
                 action.name().to_string()
             }
             Outcome::Pending => {
                 self.mark_key_pending(true);
+                // The chip shows the count being built (0 for plain
+                // sequences like `g`).
+                self.set_key_count(self.keymap.count() as i64);
                 "PENDING".to_string()
             }
             Outcome::None => {
                 self.mark_key_pending(false);
+                self.set_key_count(0);
                 String::new()
             }
         }
@@ -1302,8 +1353,15 @@ impl Backend {
     fn key_timeout(&mut self) -> String {
         self.mark_key_pending(false);
         match self.keymap.feed_timeout() {
-            Outcome::Action(action) => action.name().to_string(),
-            Outcome::Pending | Outcome::None => String::new(),
+            Outcome::Action(action) => {
+                let count = self.keymap.take_count() as i64;
+                self.set_key_count(count);
+                action.name().to_string()
+            }
+            Outcome::Pending | Outcome::None => {
+                self.set_key_count(0);
+                String::new()
+            }
         }
     }
 
@@ -1312,6 +1370,14 @@ impl Backend {
         if self.key_pending != pending {
             self.key_pending = pending;
             self.key_pending_changed();
+        }
+    }
+
+    /// VI-7: the count register's QML face (0 = none).
+    fn set_key_count(&mut self, count: i64) {
+        if self.key_count != count {
+            self.key_count = count;
+            self.key_count_changed();
         }
     }
 
@@ -2348,6 +2414,253 @@ impl Backend {
 
     /// Plays a song inside the Songs segment's queue: the whole library in
     /// list order, starting on the clicked row (tracks before it included);
+    /// The reusable shuffle toggle (Album/Songs tabs first; the fullscreen
+    /// queue follows the same shape). ON: a time-seeded rotation of the
+    /// tab's source — `songs` = the library's songs in the active order,
+    /// `albums` = the library's albums, each expanding to its tracklist —
+    /// queued as a rolling window and played from its head. A second press
+    /// disables the shuffle (the queue keeps playing what is in it).
+    #[qslot(qml_name = "toggleShuffle")]
+    fn toggle_shuffle(&mut self, kind: String) {
+        if self.shuffling {
+            self.shuffle = None;
+            self.shuffle_gen = self.shuffle_gen.wrapping_add(1);
+            self.set_shuffling(false, String::new());
+            return;
+        }
+        let invoker = self.get_qml_method_invoker();
+        let Some(dbs) = crate::dbs().cloned() else {
+            return;
+        };
+        let offline = self.offline;
+        let order = if kind == "albums" {
+            self.album_order.clone()
+        } else {
+            self.song_order.clone()
+        };
+        self.shuffle_gen = self.shuffle_gen.wrapping_add(1);
+        let generation = self.shuffle_gen;
+        // Optimistic: the chip lights on the press, the state lands with
+        // the units (`installShuffle`) or clears on failure.
+        self.set_shuffling(true, kind.clone());
+        crate::runtime().spawn(async move {
+            let units = if kind == "albums" {
+                crate::library::albums(&dbs.library, None, &order)
+                    .await
+                    .map(|rows| rows.into_iter().map(|album| album.id).collect::<Vec<_>>())
+            } else {
+                crate::library::all_songs(&dbs.library, &order)
+                    .await
+                    .map(|rows| rows.into_iter().map(|song| song.id).collect::<Vec<_>>())
+            };
+            let Ok(mut units) = units else {
+                qtbridge::invoke_method!(
+                    invoker,
+                    "shuffleFailed",
+                    generation as i64,
+                    "Could not read the shuffle source.".to_string()
+                );
+                return;
+            };
+            if units.is_empty() {
+                qtbridge::invoke_method!(
+                    invoker,
+                    "shuffleFailed",
+                    generation as i64,
+                    "Nothing to shuffle here.".to_string()
+                );
+                return;
+            }
+            let seed = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|elapsed| elapsed.as_nanos())
+                .unwrap_or(0);
+            let unit_count = units.len();
+            units.rotate_left(crate::queue::seeded_start(unit_count, seed));
+            match crate::queue::shuffle_window_json(
+                &dbs,
+                &kind,
+                &units,
+                0,
+                SHUFFLE_WINDOW,
+                offline,
+            )
+            .await
+            {
+                Ok((tracks_json, used)) => {
+                    let units_json = serde_json::to_string(&units).unwrap_or_default();
+                    qtbridge::invoke_method!(
+                        invoker,
+                        "installShuffle",
+                        kind,
+                        units_json,
+                        used as i64,
+                        generation as i64
+                    );
+                    qtbridge::invoke_method!(invoker, "playerLoad", tracks_json, 0_i64);
+                }
+                Err(err) => {
+                    eprintln!("shuffle: could not resolve the first window: {err:#}");
+                    qtbridge::invoke_method!(
+                        invoker,
+                        "shuffleFailed",
+                        generation as i64,
+                        "The shuffle could not start.".to_string()
+                    );
+                }
+            }
+        });
+    }
+
+    /// Stores the resolved shuffle (the units and how many the first window
+    /// consumed); a superseded generation is dropped.
+    #[qslot(qml_name = "installShuffle")]
+    fn install_shuffle(&mut self, kind: String, units_json: String, position: i64, generation: i64) {
+        if generation.max(0) as u64 != self.shuffle_gen {
+            return;
+        }
+        let units: Vec<String> = serde_json::from_str(&units_json).unwrap_or_default();
+        if units.is_empty() {
+            return;
+        }
+        self.shuffle = Some(Shuffle {
+            kind,
+            units,
+            position: position.max(0) as usize,
+        });
+    }
+
+    /// The rolling window's landing pad: append the resolved tracks and
+    /// advance the position (generation-guarded).
+    #[qslot(qml_name = "appendShuffle")]
+    fn append_shuffle(&mut self, tracks_json: String, used: i64, generation: i64) {
+        self.shuffle_extending = false;
+        if generation.max(0) as u64 != self.shuffle_gen {
+            return;
+        }
+        if let Some(shuffle) = self.shuffle.as_mut() {
+            shuffle.position += used.max(0) as usize;
+        }
+        match serde_json::from_str::<Vec<crate::player::Track>>(&tracks_json) {
+            Ok(tracks) => {
+                if tracks.is_empty() {
+                    return;
+                }
+                self.player.append(tracks);
+                self.sync_player();
+                self.emit_queue(false);
+            }
+            Err(err) => eprintln!("shuffle: bad append payload: {err:#}"),
+        }
+    }
+
+    /// A window resolve failed or was superseded: release the in-flight flag.
+    #[qslot(qml_name = "shuffleExtendDone")]
+    fn shuffle_extend_done(&mut self) {
+        self.shuffle_extending = false;
+    }
+
+    /// The shuffle could not start (generation-guarded): clear the chip and
+    /// surface the reason.
+    #[qslot(qml_name = "shuffleFailed")]
+    fn shuffle_failed(&mut self, generation: i64, message: String) {
+        if generation.max(0) as u64 != self.shuffle_gen {
+            return;
+        }
+        self.shuffle = None;
+        self.set_shuffling(false, String::new());
+        self.error_raised("playback".to_string(), message);
+    }
+
+    /// Tops the queue's upcoming shuffled tracks up to `SHUFFLE_WINDOW` when
+    /// playback advances (one resolve at a time).
+    fn extend_shuffle(&mut self) {
+        let Some(shuffle) = self.shuffle.as_ref() else {
+            return;
+        };
+        let pending = self
+            .player
+            .len()
+            .saturating_sub(self.player.index() as usize + 1);
+        if pending >= SHUFFLE_WINDOW || shuffle.position >= shuffle.units.len() {
+            return;
+        }
+        if self.shuffle_extending {
+            return;
+        }
+        self.shuffle_extending = true;
+        let invoker = self.get_qml_method_invoker();
+        let Some(dbs) = crate::dbs().cloned() else {
+            self.shuffle_extending = false;
+            return;
+        };
+        let offline = self.offline;
+        let kind = shuffle.kind.clone();
+        let units = shuffle.units.clone();
+        let position = shuffle.position;
+        let generation = self.shuffle_gen;
+        let window = SHUFFLE_WINDOW - pending;
+        crate::runtime().spawn(async move {
+            match crate::queue::shuffle_window_json(&dbs, &kind, &units, position, window, offline)
+                .await
+            {
+                Ok((tracks_json, used)) => {
+                    qtbridge::invoke_method!(
+                        invoker,
+                        "appendShuffle",
+                        tracks_json,
+                        used as i64,
+                        generation as i64
+                    );
+                }
+                Err(err) => {
+                    eprintln!("shuffle: could not resolve the next window: {err:#}");
+                    qtbridge::invoke_method!(invoker, "shuffleExtendDone");
+                }
+            }
+        });
+    }
+
+    fn set_shuffling(&mut self, active: bool, kind: String) {
+        if self.shuffling != active {
+            self.shuffling = active;
+            self.shuffling_changed();
+        }
+        if self.shuffle_kind != kind {
+            self.shuffle_kind = kind;
+            self.shuffle_kind_changed();
+        }
+    }
+
+    /// The artist page's shuffle chip: a time-seeded rotation of the
+    /// artist's albums (the 2-D array albums → songs), queued in full and
+    /// played from the chosen album's head — one album after another until
+    /// the array ends.
+    #[qslot(qml_name = "shuffleArtist")]
+    fn shuffle_artist(&mut self, artist_id: String) {
+        let invoker = self.get_qml_method_invoker();
+        let Some(dbs) = crate::dbs().cloned() else {
+            return;
+        };
+        let offline = self.offline;
+        crate::runtime().spawn(async move {
+            match crate::queue::artist_shuffle_json(&dbs, &artist_id, offline).await {
+                Ok(json) => {
+                    qtbridge::invoke_method!(invoker, "playerLoad", json, 0_i64);
+                }
+                Err(err) => {
+                    eprintln!("player: could not shuffle the artist: {err:#}");
+                    qtbridge::invoke_method!(
+                        invoker,
+                        "raiseError",
+                        "playback".to_string(),
+                        format!("{err:#}")
+                    );
+                }
+            }
+        });
+    }
+
     /// never opens fullscreen (Q-10 refinement).
     #[qslot(qml_name = "playSong")]
     fn play_song(&mut self, song_id: String) {
@@ -3306,6 +3619,7 @@ impl Backend {
         }
         if self.player.index() != index {
             self.emit_queue(false);
+            self.extend_shuffle();
         }
         self.sync_player();
         self.maybe_save_position();

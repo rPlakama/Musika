@@ -344,41 +344,60 @@ Item {
 
     /// `gg`/`G`: instant edge landing — the follow band has nothing to
     /// animate once the target is already on screen.
-    function edgeJump(last) {
+    /// `gg`/`G`. VI-7: a count turns it into a line jump (`5G`/`5gg` →
+    /// row 5), clamped into the list; a plain press keeps the semantic edge.
+    function edgeJump(last, count) {
         if (root.count === 0)
             return;
+        var n = count === undefined ? 1 : Math.max(1, count);
+        if (n > 1) {
+            root.land(Math.min(n, root.count) - 1);
+            return;
+        }
         root.land(last ? root.count - 1 : 0);
     }
 
     /// Shared cursor step: in grid mode the wall walks by `columns` (no
     /// wrap-around — GridView's own moveCurrentIndex* crosses rows), in list
-    /// mode it is a plain ±1. Returns false when the edge blocks the move,
-    /// so Home can hand `h` to the sidebar from the leftmost column.
-    function moveStep(action) {
+    /// mode it is a plain ±1. VI-7: `count` steps at once, clamped at the
+    /// edges (a plain step keeps returning false at the edge, so Home can
+    /// hand `h` to the sidebar from the leftmost column).
+    function moveStep(action, count) {
         if (root.count === 0)
             return false;
+        var n = count === undefined ? 1 : Math.max(1, count);
         var cols = root.layout === "grid" ? Math.max(1, root.columns) : 1;
         var column = root.currentIndex % cols;
         var target = root.currentIndex;
         if (action === "move_left") {
             if (column === 0)
                 return false;
-            target -= 1;
+            target -= Math.min(n, column);
         } else if (action === "move_right") {
             if (column === cols - 1 || root.currentIndex + 1 >= root.count)
                 return false;
-            target += 1;
+            target += Math.min(n, cols - 1 - column, root.count - 1 - root.currentIndex);
         } else if (action === "move_up") {
-            if (root.currentIndex - cols < 0)
-                return false;
-            target -= cols;
+            if (root.currentIndex - cols * n < 0) {
+                if (n === 1)
+                    return false;
+                target = column; // the first row's same column
+            } else {
+                target -= cols * n;
+            }
         } else if (action === "move_down") {
-            if (root.currentIndex + cols >= root.count)
-                return false;
-            target += cols;
+            if (root.currentIndex + cols * n >= root.count) {
+                if (n === 1)
+                    return false;
+                target = root.count - 1;
+            } else {
+                target += cols * n;
+            }
         } else {
             return false;
         }
+        if (target === root.currentIndex)
+            return false;
         root.currentIndex = target;
         return true;
     }

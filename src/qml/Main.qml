@@ -112,11 +112,11 @@ ApplicationWindow {
                 return;
             }
             if (action === "volume_up") {
-                Backend.playerAdjustVolume(5);
+                Backend.playerAdjustVolume(5 * Math.max(1, Backend.keyCount));
                 return;
             }
             if (action === "volume_down") {
-                Backend.playerAdjustVolume(-5);
+                Backend.playerAdjustVolume(-5 * Math.max(1, Backend.keyCount));
                 return;
             }
 

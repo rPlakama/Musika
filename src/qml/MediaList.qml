@@ -206,8 +206,21 @@ ScrollPanel {
         pixelSize: root.height * 0.021
     }
 
-    // Header (A): the Shift-H / Shift-L order cue, vertically centred.
+    // Header (A): the shuffle toggle (Album/Songs tabs) then the
+    // Shift-H / Shift-L order cue, vertically centred —
+    // <Title> <gap> <Shuffle> <keybind> <order>.
+    ShuffleChip {
+        anchors.verticalCenter: parent.verticalCenter
+        anchors.right: orderRow.left
+        anchors.rightMargin: root.height * 0.014
+        unit: root.height * 0.03
+        kind: root.quickActionKind === "song"
+            ? "songs"
+            : (root.quickActionKind === "album" ? "albums" : "")
+    }
+
     Row {
+        id: orderRow
         visible: root.orderText.length > 0
         anchors.verticalCenter: parent.verticalCenter
         anchors.right: parent.right

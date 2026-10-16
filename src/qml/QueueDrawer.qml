@@ -124,12 +124,14 @@ Item {
             close();
             return;
         }
+        // VI-7: the count register rides the drawer's moves (3j, 10k, 5G).
+        var steps = Math.max(1, Backend.keyCount);
         if (action === "move_up")
-            cursor = Math.max(0, cursor - 1);
+            cursor = Math.max(0, cursor - steps);
         else if (action === "move_down")
-            cursor = Math.min(items.count - 1, cursor + 1);
+            cursor = Math.min(items.count - 1, cursor + steps);
         else if ((action === "top" || action === "bottom") && items.count > 0) {
-            content.edgeJump(action === "bottom");
+            content.edgeJump(action === "bottom", steps);
             cursor = content.currentIndex;
         } else if (action === "enter")
             Backend.queueJump(cursor);

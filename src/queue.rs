@@ -87,6 +87,70 @@ pub async fn album_tracks_json(
     tracks_json(dbs, songs).await
 }
 
+/// The artist's shuffle queue: every album of the artist (the albums table's
+/// mapping, the 2-D shape albums → songs), rotated to a time-seeded start —
+/// `now()` modulo the album count picks the first album, the rest follow one
+/// after another until the array ends, wrapping around. The queue holds the
+/// songs of that rotation, header first.
+pub async fn artist_shuffle_json(
+    dbs: &crate::db::Dbs,
+    artist_id: &str,
+    offline: bool,
+) -> anyhow::Result<String> {
+    let albums = crate::library::artist_album_ids(&dbs.library, artist_id).await?;
+    if albums.is_empty() {
+        return Err(anyhow::anyhow!("this artist has no albums to shuffle"));
+    }
+    let seed = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_nanos())
+        .unwrap_or(0);
+    let start = seeded_start(albums.len(), seed);
+    let mut songs: Vec<crate::library::SongRow> = Vec::new();
+    for offset in 0..albums.len() {
+        let album = &albums[(start + offset) % albums.len()];
+        songs.extend(crate::library::album_songs(&dbs.library, album).await?);
+    }
+    filter_offline(dbs, offline, &mut songs).await?;
+    tracks_json(dbs, songs).await
+}
+
+/// The time-seeded rotation offset (`now()` modulo the length).
+pub fn seeded_start(len: usize, seed: u128) -> usize {
+    if len == 0 {
+        return 0;
+    }
+    (seed % len as u128) as usize
+}
+
+/// One shuffle window: resolve `units` (album ids when `kind` is "albums",
+/// song ids otherwise) from `position` until `window` tracks are gathered or
+/// the array ends. Returns the tracks JSON and how many units were consumed
+/// — the caller advances its position by that and appends; the rolling
+/// window keeps the player from resolving thousands of URLs up front.
+pub async fn shuffle_window_json(
+    dbs: &crate::db::Dbs,
+    kind: &str,
+    units: &[String],
+    position: usize,
+    window: usize,
+    offline: bool,
+) -> anyhow::Result<(String, usize)> {
+    let mut songs: Vec<crate::library::SongRow> = Vec::new();
+    let mut used = 0;
+    while position + used < units.len() && songs.len() < window {
+        let unit = &units[position + used];
+        used += 1;
+        if kind == "albums" {
+            songs.extend(crate::library::album_songs(&dbs.library, unit).await?);
+        } else {
+            songs.extend(crate::library::songs_by_ids(&dbs.library, std::slice::from_ref(unit)).await?);
+        }
+    }
+    filter_offline(dbs, offline, &mut songs).await?;
+    Ok((tracks_json(dbs, songs).await?, used))
+}
+
 /// 0-based start row for the Songs-segment queue: the clicked song must exist
 /// in the index (a stale id is an error, not a silent head fallback).
 fn library_start(songs: &[crate::library::SongRow], song_id: &str) -> anyhow::Result<usize> {
@@ -690,5 +754,63 @@ mod tests {
         assert_eq!(value["id"], "ar1");
         assert_eq!(value["name"], "Radiohead");
         assert!(album_artist_page_json(&dbs, "al2").await.is_err());
+    }
+
+    #[tokio::test]
+    async fn shuffle_window_rolls_units_until_the_window_fills() {
+        let dbs = test_dbs().await;
+        for (id, album) in [("s1", "al1"), ("s2", "al1"), ("s3", "al2"), ("s4", "al2")] {
+            sqlx::query(
+                "INSERT INTO songs (id, title, artist, album, album_id, duration)
+                 VALUES (?1, ?1, 'A', 'X', ?2, 100)",
+            )
+            .bind(id)
+            .bind(album)
+            .execute(&dbs.library)
+            .await
+            .unwrap();
+        }
+        // Credentials exist so `tracks_json` can build stream URLs.
+        crate::sqlite::save_credentials(&dbs.credentials, "u", "p", "http://s", "navidrome")
+            .await
+            .unwrap();
+
+        // A song window stops at two tracks and consumes two units.
+        let units: Vec<String> = ["s1", "s2", "s3", "s4"].map(String::from).to_vec();
+        let (json, used) = shuffle_window_json(&dbs, "songs", &units, 1, 2, false)
+            .await
+            .unwrap();
+        assert_eq!(used, 2);
+        let value: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(value.as_array().unwrap().len(), 2);
+
+        // An album window consumes whole albums, stopping once full.
+        let albums: Vec<String> = ["al1", "al2"].map(String::from).to_vec();
+        let (json, used) = shuffle_window_json(&dbs, "albums", &albums, 0, 3, false)
+            .await
+            .unwrap();
+        assert_eq!(used, 2, "both albums together hold the four songs");
+        let value: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(value.as_array().unwrap().len(), 4);
+
+        // The array's end: the window takes what remains.
+        let (json, used) = shuffle_window_json(&dbs, "songs", &units, 3, 30, false)
+            .await
+            .unwrap();
+        assert_eq!(used, 1);
+        let value: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(value.as_array().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn shuffle_seed_rotates_within_the_array() {
+        // The album pick is `now() % len`: any seed folds into range and the
+        // walk wraps (the caller's `(start + offset) % len`).
+        for seed in [0_u128, 1, 4, 6, 7, 1000] {
+            let start = seeded_start(3, seed);
+            assert!(start < 3);
+            assert_eq!(start, (seed % 3) as usize);
+        }
+        assert_eq!(seeded_start(0, 42), 0);
     }
 }

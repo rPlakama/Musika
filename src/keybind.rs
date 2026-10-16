@@ -176,10 +176,29 @@ fn defaults() -> Vec<(&'static str, Action)> {
     ]
 }
 
+/// VI-7: the count register's ceiling (a held digit cannot overflow it).
+const MAX_COUNT: u32 = 999_999;
+
+/// VI-7: a token that is one bare digit, as its value.
+fn digit_value(token: &str) -> Option<u32> {
+    let bytes = token.as_bytes();
+    if bytes.len() == 1 && bytes[0].is_ascii_digit() {
+        Some((bytes[0] - b'0') as u32)
+    } else {
+        None
+    }
+}
+
 /// A stateful, sequence-aware keymap.
 pub struct Keymap {
     bindings: Vec<(&'static str, Action)>,
     pending: Vec<String>,
+    /// VI-7: the count being typed (`3j`, `10l`, `5G`). It rides the next
+    /// resolved action and clears with it.
+    count: u32,
+    /// The count attached to the last fired action, read once by the
+    /// consumer (`take_count`).
+    fired_count: u32,
 }
 
 impl Default for Keymap {
@@ -193,11 +212,32 @@ impl Keymap {
         Self {
             bindings: defaults(),
             pending: Vec::new(),
+            count: 0,
+            fired_count: 0,
         }
     }
 
     pub fn reset(&mut self) {
         self.pending.clear();
+        self.count = 0;
+        self.fired_count = 0;
+    }
+
+    /// VI-7: the count mid-typing (the chip's number; 0 = none).
+    pub fn count(&self) -> u32 {
+        self.count
+    }
+
+    /// VI-7: the count the last fired action carries; read once (a plain
+    /// action reports 0).
+    pub fn take_count(&mut self) -> u32 {
+        std::mem::take(&mut self.fired_count)
+    }
+
+    /// Captures the typed count onto the firing action.
+    fn fire(&mut self, action: Action) -> Outcome {
+        self.fired_count = std::mem::take(&mut self.count);
+        Outcome::Action(action)
     }
 
     #[allow(dead_code)]
@@ -211,6 +251,17 @@ impl Keymap {
     /// `g` for `g g`), the match is deferred to [`Self::feed_timeout`] rather
     /// than firing immediately.
     pub fn feed(&mut self, token: &str) -> Outcome {
+        // VI-7: bare digits accumulate the count and never join the pending
+        // sequence. A lone leading zero is not a count here (there is no
+        // start-of-line motion to mean).
+        if let Some(digit) = digit_value(token) {
+            if self.count == 0 && digit == 0 && self.pending.is_empty() {
+                return Outcome::None;
+            }
+            self.count = (self.count.saturating_mul(10).saturating_add(digit)).min(MAX_COUNT);
+            return Outcome::Pending;
+        }
+
         self.pending.push(token.to_string());
         let sequence = self.pending.join(" ");
 
@@ -219,7 +270,7 @@ impl Keymap {
         }
         if let Some(action) = self.exact(&sequence) {
             self.pending.clear();
-            return Outcome::Action(action);
+            return self.fire(action);
         }
 
         // The accumulated tokens dead-end: drop them and retry this token on
@@ -230,21 +281,27 @@ impl Keymap {
             return Outcome::Pending;
         }
         if let Some(action) = self.exact(token) {
-            return Outcome::Action(action);
+            return self.fire(action);
         }
+        self.count = 0;
         Outcome::None
     }
 
     /// Resolves a deferred sequence once the inter-key timeout elapses.
     pub fn feed_timeout(&mut self) -> Outcome {
         if self.pending.is_empty() {
+            // A lone count times out silently: the chip clears, no motion.
+            self.count = 0;
             return Outcome::None;
         }
         let sequence = self.pending.join(" ");
         self.pending.clear();
         match self.exact(&sequence) {
-            Some(action) => Outcome::Action(action),
-            None => Outcome::None,
+            Some(action) => self.fire(action),
+            None => {
+                self.count = 0;
+                Outcome::None
+            }
         }
     }
 
@@ -531,5 +588,77 @@ mod tests {
         let mut keymap = Keymap::new();
         assert_eq!(keymap.feed("shift-c"), Outcome::Action(Action::LayoutToggle));
         assert_eq!(token_from_qt(0x43, QT_SHIFT).as_deref(), Some("shift-c"));
+    }
+
+    #[test]
+    fn vi7_counts_accumulate_and_ride_the_action() {
+        // `3 j`.
+        let mut keymap = Keymap::new();
+        assert_eq!(keymap.feed("3"), Outcome::Pending);
+        assert_eq!(keymap.count(), 3);
+        assert_eq!(keymap.feed("j"), Outcome::Action(Action::MoveDown));
+        assert_eq!(keymap.take_count(), 3);
+        assert_eq!(keymap.count(), 0, "the count clears with the action");
+        assert_eq!(keymap.take_count(), 0, "read once");
+
+        // `10 l` — multi-digit.
+        let mut keymap = Keymap::new();
+        assert_eq!(keymap.feed("1"), Outcome::Pending);
+        assert_eq!(keymap.feed("0"), Outcome::Pending);
+        assert_eq!(keymap.count(), 10);
+        assert_eq!(keymap.feed("l"), Outcome::Action(Action::MoveRight));
+        assert_eq!(keymap.take_count(), 10);
+
+        // `5 G` — the count rides a shift binding too.
+        let mut keymap = Keymap::new();
+        assert_eq!(keymap.feed("5"), Outcome::Pending);
+        assert_eq!(keymap.feed("shift-g"), Outcome::Action(Action::Bottom));
+        assert_eq!(keymap.take_count(), 5);
+
+        // A lone leading zero has no motion to mean and starts nothing.
+        let mut keymap = Keymap::new();
+        assert_eq!(keymap.feed("0"), Outcome::None);
+        assert_eq!(keymap.count(), 0);
+
+        // A plain action reports no count.
+        let mut keymap = Keymap::new();
+        assert_eq!(keymap.feed("j"), Outcome::Action(Action::MoveDown));
+        assert_eq!(keymap.take_count(), 0);
+    }
+
+    #[test]
+    fn vi7_counts_clear_on_timeout_and_reset() {
+        // A lone count times out silently.
+        let mut keymap = Keymap::new();
+        assert_eq!(keymap.feed("3"), Outcome::Pending);
+        assert_eq!(keymap.feed_timeout(), Outcome::None);
+        assert_eq!(keymap.count(), 0);
+
+        // Esc: the count dies with the sequence it was waiting on.
+        let mut keymap = Keymap::new();
+        assert_eq!(keymap.feed("3"), Outcome::Pending);
+        assert_eq!(keymap.feed("escape"), Outcome::Action(Action::Back));
+        assert_eq!(keymap.take_count(), 3, "the count rides the fired action");
+        assert_eq!(keymap.count(), 0);
+
+        // reset() drops everything (context switches).
+        let mut keymap = Keymap::new();
+        assert_eq!(keymap.feed("2"), Outcome::Pending);
+        keymap.reset();
+        assert_eq!(keymap.count(), 0);
+        assert_eq!(keymap.take_count(), 0);
+    }
+
+    #[test]
+    fn vi7_digits_do_not_join_sequences() {
+        // `3 g g` works as count + the gg sequence.
+        let mut keymap = Keymap::new();
+        assert_eq!(keymap.feed("3"), Outcome::Pending);
+        assert_eq!(keymap.feed("g"), Outcome::Pending);
+        assert_eq!(keymap.feed("g"), Outcome::Action(Action::Top));
+        assert_eq!(keymap.take_count(), 3);
+
+        // A shifted digit is a symbol, not a count (`#` etc. stay unbound).
+        assert_eq!(token_from_qt(0x31, QT_SHIFT).as_deref(), Some("shift-1"));
     }
 }

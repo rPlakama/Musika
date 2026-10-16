@@ -297,12 +297,21 @@ Rectangle {
         Backend.starArtist(root.artistId, root.artistStarred);
     }
 
-    /// Enter on the scoped chip (shuffle is still inert — ARC-I-3).
+    /// Enter on the scoped chip.
     function activateChip() {
         if (root.chipScope === 0)
             root.toggleCache();
+        else if (root.chipScope === 1)
+            root.shuffle();
         else if (root.chipScope === 2)
             root.toggleFavorite();
+    }
+
+    /// The shuffle chip: a time-seeded album rotation of this artist,
+    /// queued and played from its head (the backend's seeded walk).
+    function shuffle() {
+        if (root.artistId.length > 0)
+            Backend.shuffleArtist(root.artistId);
     }
 
     Component.onCompleted: reload()

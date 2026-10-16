@@ -385,11 +385,11 @@ Item {
             return;
         }
         if (action === "seek_back") {
-            Backend.playerSeek(Math.max(0, Backend.position - 5));
+            Backend.playerSeek(Math.max(0, Backend.position - 5 * Math.max(1, Backend.keyCount)));
             return;
         }
         if (action === "seek_forward") {
-            Backend.playerSeek(Backend.position + 5);
+            Backend.playerSeek(Backend.position + 5 * Math.max(1, Backend.keyCount));
             return;
         }
         // Library sync is global too (`r`): the sync button stays clickable,
@@ -799,6 +799,42 @@ Item {
                 Backend.syncLibrary();
             else
                 Backend.retryPlayback();
+        }
+    }
+
+    // VI-7: the count register's chip — the number being typed (`3` before
+    // `j`). Fades in over `micro`; the clear is instant (the visibility
+    // drops with the register, no fade-out).
+    Rectangle {
+        id: countChip
+        anchors.right: parent.right
+        anchors.rightMargin: root.width * 0.02
+        anchors.bottom: parent.bottom
+        anchors.bottomMargin: root.playH + root.height * 0.02
+        width: Math.max(height, countLabel.implicitWidth + height * 0.6)
+        height: root.height * 0.045
+        radius: Theme.radius
+        color: Palette.surfaceContainerHigh
+        visible: Backend.keyCount > 0
+        opacity: Backend.keyCount > 0 ? 1 : 0
+        z: Theme.zToast
+
+        Behavior on opacity {
+            NumberAnimation {
+                duration: Theme.motion.micro
+                easing.type: Easing.Bezier
+                easing.bezierCurve: Theme.ease.standard
+            }
+        }
+
+        FadeText {
+            id: countLabel
+            anchors.centerIn: parent
+            text: Backend.keyCount > 0 ? String(Backend.keyCount) : ""
+            color: Palette.onSurface
+            font.family: Theme.fonts.body
+            font.pixelSize: root.height * 0.026
+            animated: false
         }
     }
 

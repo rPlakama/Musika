@@ -207,11 +207,13 @@ Rectangle {
         }
         if (count === 0)
             return;
+        // VI-7: the count register rides the movement (`3j`, `10l`, `5G`).
+        var steps = Math.max(1, Backend.keyCount);
         if (action === "move_up" || action === "move_down"
                 || action === "move_left" || action === "move_right")
-            content.moveStep(action);
+            content.moveStep(action, steps);
         else if (action === "top" || action === "bottom")
-            content.edgeJump(action === "bottom");
+            content.edgeJump(action === "bottom", steps);
         else if (action === "enter")
             root.activate();
         else if (root.actionHandler)

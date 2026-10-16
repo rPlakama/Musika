@@ -138,16 +138,14 @@ Item {
             return;
         var item = v.itemAtIndex(index);
         if (!item) {
-            // Unrealised line (a far landing): with the list scrolled, Qt's
-            // `Contain`/`Center` can park a negative contentY that cascades
-            // (probed in both follow modes), so land proportionally inside
-            // the content bounds — exact at both ends — then let the
-            // deferred glide refine once the row exists.
+            // Unrealised row (a far landing): iterative, height-aware reveal
+            // (CRITIQUESCROLL SC-4/P3) — Qt's `Contain` on a scrolled list
+            // parks async offsets (`-4`, `-96`, `-920`; probed) and assumes
+            // fixed heights, so we step toward the row using the observed
+            // local row unit instead, then glide to the centre once the row
+            // exists.
             centerGlide.stop();
-            var limit = Math.max(0, v.contentHeight - v.height);
-            var approx = v.count > 1
-                ? Math.round(index / (v.count - 1) * limit) : 0;
-            v.contentY = Math.max(0, Math.min(limit, approx));
+            root._landUnrealised(v, index);
             Qt.callLater(function () {
                 if (root.currentIndex === index)
                     root._glideTo(root.view, index);
@@ -214,6 +212,25 @@ Item {
     /// glide the landing is already positioning (`land` owns the view).
     property bool _instantFollow: false
 
+    /// Keep `contentY` inside the content bounds (Qt's async `Contain`
+    /// layouts can park it outside; probed).
+    function _clampY(v) {
+        var limit = Math.max(0, v.contentHeight - v.height);
+        if (v.contentY < 0 || v.contentY > limit)
+            v.contentY = Math.max(0, Math.min(limit, v.contentY));
+    }
+
+    /// Bring an unrealised row into view without Qt's `Contain`/`Center`
+    /// (both park async offsets on a scrolled list — `-4`, `-96`, `-920`
+    /// probed): `Beginning` anchors the row at the viewport top, we clamp
+    /// the result into the content bounds, and the caller centres it. No
+    /// index→pixel estimation, so variable row heights are exact
+    /// (CRITIQUESCROLL SC-4/P3).
+    function _landUnrealised(v, index) {
+        v.positionViewAtIndex(index, ListView.Beginning);
+        root._clampY(v);
+    }
+
     /// The instant landing (semantic jumps: `gg`/`G`, search, restores, the
     /// filter reset). Positions and mirrors the cursor itself; the running
     /// glide is killed first, and the `Contain` result is repaired when Qt
@@ -228,10 +245,11 @@ Item {
         var v = root.view;
         if (v && v.count > 0) {
             v.currentIndex = index;
-            v.positionViewAtIndex(index, ListView.Contain);
-            var limit = Math.max(0, v.contentHeight - v.height);
-            if (v.contentY < 0 || v.contentY > limit)
-                v.contentY = Math.max(0, Math.min(limit, v.contentY));
+            if (v.itemAtIndex(index))
+                v.positionViewAtIndex(index, ListView.Contain);
+            else
+                root._landUnrealised(v, index);
+            root._clampY(v);
         }
         Qt.callLater(function () { root._instantFollow = false; });
     }
@@ -253,12 +271,11 @@ Item {
     /// way).
     function goto(index) {
         var i = index === undefined ? root.currentIndex : index;
-        if (i < 0 || !root.view)
+        if (i < 0)
             return;
-        centerGlide.stop();
-        root.view.positionViewAtIndex(i, ListView.Contain);
+        root.land(i);
         Qt.callLater(function () {
-            if (root.currentIndex === i)
+            if (root.currentIndex === i && root.view && root.view.count > 0)
                 root._glideTo(root.view, i);
         });
     }
@@ -368,105 +385,71 @@ Item {
                 root.layout, 0);
     }
 
-    // ── Selection (VI-4) ─────────────────────────────────────────────────
+    // ── Row state (VI-4 / ARC-I-4) ───────────────────────────────────────
 
     // The model owns the state; hosts gate it (e.g. only when the Alt verb
-    // kind exists) and keep their own cursor.
+    // kind exists) and keep their own cursor. The logic lives in `RowState`
+    // (CRITIQUESCROLL SC-7), fed by the body's cursor.
     property bool selectable: false
 
-    Selection {
-        id: sel
+    RowState {
+        id: rowState
+        model: root.model
+        cursor: root.currentIndex
+        selectable: root.selectable
     }
 
-    readonly property bool hasSelection: sel.hasSelection
-    readonly property int selectionCount: sel.count(root.currentIndex)
+    readonly property bool hasSelection: rowState.hasSelection
+    readonly property int selectionCount: rowState.selectionCount
 
     /// `v`: start a selection on the cursor row, or end the current one.
     function toggleSelection() {
-        if (!root.selectable || root.count === 0 || root.currentIndex < 0)
-            return;
-        if (sel.hasSelection)
-            sel.clear();
-        else
-            sel.start(root.currentIndex);
+        rowState.toggle();
     }
 
     /// `V`: the whole list — the host moves the cursor first, this only
     /// widens the anchor.
     function selectAllRows() {
-        if (!root.selectable || root.count === 0)
-            return;
-        sel.all();
+        rowState.selectAllRows();
     }
 
     function clearSelection() {
-        sel.clear();
+        rowState.clear();
     }
 
     function selected(index) {
-        return sel.selected(root.currentIndex, index);
+        return rowState.selected(index);
     }
 
-    /// Ids of the selected rows ("" when there is no selection).
+    /// Ids of the selected rows ([] when there is no selection).
     function selectionIds(field) {
-        return sel.ids(root.model, root.currentIndex, field);
+        return rowState.ids(field);
     }
 
     /// The selected rows' `starred` flags, aligned with `selectionIds`.
     function selectionStarred(field) {
-        return sel.starred(root.model, root.currentIndex, field);
+        return rowState.starred(field);
     }
 
-    /// ARC-I-4: write the favourite state back into the model in place —
-    /// the cursor row, or the whole selected range while a selection is
-    /// live — so the affected rows' hearts track the Alt verb with no
-    /// reload.
+    /// ARC-I-4: the in-place favourite write (see `RowState`).
     function markStarred(on) {
-        if (!root.model || !root.model.setProperty || root.currentIndex < 0)
-            return;
-        var first = root.hasSelection
-            ? Math.min(sel.anchor, root.currentIndex) : root.currentIndex;
-        var last = root.hasSelection
-            ? Math.max(sel.anchor, root.currentIndex) : root.currentIndex;
-        for (var i = first; i <= last; ++i)
-            root.model.setProperty(i, "starred", on === true);
+        rowState.markStarred(on);
     }
 
     // ── Search (ARC-UI-2) ────────────────────────────────────────────────
 
-    /// The cells of the rows the user can actually *see* — matching is
-    /// viewport-scoped, so a match scrolled out of the viewport comes back
-    /// as an empty placeholder (never matches) and `/` can never afford a
-    /// jump the eye cannot verify. The prompt snapshots this band once,
-    /// when it opens. Probing both corners keeps the whole last row of a
-    /// grid inside the band (a single mid-x line under-reports its
-    /// right-hand cells).
+    // The viewport-scoped row snapshot lives in `SearchContract`
+    // (CRITIQUESCROLL SC-7); the session state and the jump stay here.
+    SearchContract {
+        id: searchContract
+        model: root.model
+        view: root.view
+        fields: root.searchFields
+    }
+
+    /// The rendered rows the `/` prompt snapshots (see `SearchContract`).
     function searchRows() {
-        var out = [];
-        if (!root.model || !root.model.get || !root.view)
-            return out;
-        var v = root.view;
-        var first = v.indexAt(v.contentX + Math.max(1, v.width * 0.5), v.contentY);
-        var last = v.indexAt(v.contentX + Math.max(1, v.width - 1),
-            v.contentY + Math.max(0, v.height - 1));
-        if (first < 0)
-            first = 0;
-        if (last < 0)
-            last = root.model.count - 1;
-        for (var i = 0; i < root.model.count; ++i) {
-            if (i < first || i > last) {
-                out.push([""]);
-                continue;
-            }
-            var item = root.model.get(i);
-            var cells = [];
-            for (var f = 0; f < root.searchFields.length; ++f) {
-                var value = item[root.searchFields[f]];
-                cells.push(value === undefined || value === null ? "" : String(value));
-            }
-            out.push(cells);
-        }
-        return out;
+        return searchContract.rows();
     }
 
     /// Land the view cursor on a matching row; the instant landing keeps

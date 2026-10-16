@@ -30,6 +30,11 @@ import "Theme.js" as Theme
 // Callers keep their model, row delegate and payload mapping; the panel owns
 // the list and is the single owner of its `contentY`, so no external
 // animation can fight the user's scroll.
+//
+// Panel role (CRITIQUESCROLL SC-6): this is the *enforced* host surface —
+// hosts address scrolling through `goto` (and the selection/search/adaptive
+// forwards) and never touch `view.contentY`/`positionViewAtIndex`
+// themselves; the forwarding members are the contract, not duplication.
 Rectangle {
     id: root
 

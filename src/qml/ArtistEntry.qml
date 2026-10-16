@@ -333,9 +333,11 @@ Rectangle {
     // `Esc` is handled by Home (leaves the entry for Main regardless of
     // where it was opened from).
     function handleAction(action) {
-        if (action === "pane_cycle") {
-            // Tab cycles the header chips (Download → Shuffle → Favorite).
-            root.chipScope = (root.chipScope + 1) % 3;
+        if (action === "pane_cycle" || action === "pane_cycle_back") {
+            // Tab cycles the header chips (Download → Shuffle → Favorite);
+            // Shift+Tab walks the same circle backwards.
+            var step = action === "pane_cycle" ? 1 : 2;
+            root.chipScope = (root.chipScope + step) % 3;
             return;
         }
         if (action === "enter" && root.chipScope >= 0) {

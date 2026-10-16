@@ -55,6 +55,7 @@ pub enum Action {
     SeekForward,
     Refresh,
     PaneCycle,
+    PaneCycleBack,
     Yank,
     Paste,
     QueueToggle,
@@ -93,6 +94,7 @@ impl Action {
             Self::SeekForward => "seek_forward",
             Self::Refresh => "refresh",
             Self::PaneCycle => "pane_cycle",
+            Self::PaneCycleBack => "pane_cycle_back",
             Self::Yank => "yank",
             Self::Paste => "paste",
             Self::QueueToggle => "queue_toggle",
@@ -163,6 +165,7 @@ fn defaults() -> Vec<(&'static str, Action)> {
         ("n", Action::NextTrack),
         ("p", Action::PrevTrack),
         ("tab", Action::PaneCycle),
+        ("shift-tab", Action::PaneCycleBack),
         ("y", Action::Yank),
         ("shift-p", Action::Paste),
         ("ctrl-v", Action::Paste),
@@ -325,6 +328,7 @@ impl Keymap {
 const QT_KEY_SPACE: i32 = 0x20;
 const QT_KEY_ESCAPE: i32 = 0x0100_0000;
 const QT_KEY_TAB: i32 = 0x0100_0001;
+const QT_KEY_BACKTAB: i32 = 0x0100_0002;
 const QT_KEY_BACKSPACE: i32 = 0x0100_0003;
 const QT_KEY_ENTER: i32 = 0x0100_0004;
 const QT_KEY_HOME: i32 = 0x0100_0010;
@@ -343,10 +347,17 @@ const QT_ALT: i32 = 0x0800_0000;
 /// Converts a Qt key event into a canonical token, or `None` for keys we do
 /// not bind.
 pub fn token_from_qt(key: i32, modifiers: i32) -> Option<String> {
+    // Qt hands Shift+Tab as Backtab (0x01000002), not Tab+shiftmodifier.
+    // Remember it so both shapes canonicalise to "shift-tab".
+    let mut backtab = false;
     let base = match key {
         QT_KEY_SPACE => "space".to_string(),
         QT_KEY_ESCAPE => "escape".to_string(),
         QT_KEY_TAB => "tab".to_string(),
+        QT_KEY_BACKTAB => {
+            backtab = true;
+            "tab".to_string()
+        }
         QT_KEY_BACKSPACE => "backspace".to_string(),
         QT_KEY_ENTER | 0x0100_0005 => "enter".to_string(), // Return or Enter
         QT_KEY_HOME => "home".to_string(),
@@ -374,7 +385,7 @@ pub fn token_from_qt(key: i32, modifiers: i32) -> Option<String> {
         format!("ctrl-{base}")
     } else if modifiers & QT_ALT != 0 {
         format!("alt-{base}")
-    } else if modifiers & QT_SHIFT != 0 {
+    } else if modifiers & QT_SHIFT != 0 || backtab {
         format!("shift-{base}")
     } else {
         base
@@ -515,11 +526,25 @@ mod tests {
     }
 
     #[test]
+    fn backtab_canonicalises_to_shift_tab() {
+        assert_eq!(token_from_qt(0x0100_0002, 0).as_deref(), Some("shift-tab"));
+        assert_eq!(token_from_qt(0x0100_0001, 0).as_deref(), Some("tab"));
+        assert_eq!(
+            token_from_qt(0x0100_0001, QT_SHIFT).as_deref(),
+            Some("shift-tab")
+        );
+    }
+
+    #[test]
     fn transport_and_pane_keys() {
         let mut keymap = Keymap::new();
         assert_eq!(keymap.feed("n"), Outcome::Action(Action::NextTrack));
         assert_eq!(keymap.feed("p"), Outcome::Action(Action::PrevTrack));
         assert_eq!(keymap.feed("tab"), Outcome::Action(Action::PaneCycle));
+        assert_eq!(
+            keymap.feed("shift-tab"),
+            Outcome::Action(Action::PaneCycleBack)
+        );
     }
 
     #[test]

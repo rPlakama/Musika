@@ -44,6 +44,13 @@ ScrollPanel {
         id: verbs
     }
 
+    /// The shuffle source for this tab ("" = no chip, no Tab stop).
+    readonly property string shuffleKind: root.quickActionKind === "song"
+        ? "songs"
+        : (root.quickActionKind === "album" ? "albums" : "")
+    hasHeaderChip: root.shuffleKind.length > 0
+    onHeaderChipActivated: Backend.toggleShuffle(root.shuffleKind)
+
     /// The state marks (heart/download) render only inside the cursor's
     /// ±15-row window — long lists keep the bindings cheap, the selector
     /// stays the reference.
@@ -214,9 +221,8 @@ ScrollPanel {
         anchors.right: orderRow.left
         anchors.rightMargin: root.height * 0.014
         unit: root.height * 0.03
-        kind: root.quickActionKind === "song"
-            ? "songs"
-            : (root.quickActionKind === "album" ? "albums" : "")
+        kind: root.shuffleKind
+        focused: root.headerScope === 0
     }
 
     Row {

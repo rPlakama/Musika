@@ -159,6 +159,14 @@ Rectangle {
         content.activate();
     }
 
+    /// The header-chip Tab stop: a host with a reachable header control sets
+    /// `hasHeaderChip`; Tab focuses it, Shift+Tab cycles back (or Tab again),
+    /// Enter fires `headerChipActivated`, any other grammar drops the scope
+    /// and runs on the list.
+    property bool hasHeaderChip: false
+    property int headerScope: -1
+    signal headerChipActivated()
+
     /// ARC-UI-2 M1: the search contract forwards to the shared content.
     property alias searchFields: content.searchFields
     property alias searchQuery: content.searchQuery
@@ -199,6 +207,21 @@ Rectangle {
     // followed by the view itself (ScrollContent highlight machinery); gg/G
     // snap instantly via `edgeJump`.
     function handleAction(action) {
+        // The header-chip Tab stop: Tab focuses it, Shift+Tab (or Tab again)
+        // returns to the list.
+        if (action === "pane_cycle" || action === "pane_cycle_back") {
+            if (root.hasHeaderChip)
+                root.headerScope = root.headerScope < 0 ? 0 : -1;
+            return;
+        }
+        if (root.headerScope === 0) {
+            if (action === "enter") {
+                root.headerChipActivated();
+                return;
+            }
+            // Any other grammar leaves the chip and runs on the list.
+            root.headerScope = -1;
+        }
         // ARC-UI-3: the layout toggle arms on an empty list too (the view
         // swap is independent of the payload).
         if (action === "layout_toggle") {

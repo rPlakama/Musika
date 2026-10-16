@@ -31,6 +31,8 @@ Item {
     required property string kind
     /// The glyph's box.
     property real unit: 24
+    /// The Tab stop's ring (the panel's header scope).
+    property bool focused: false
 
     visible: root.kind.length > 0
     implicitWidth: root.unit
@@ -38,6 +40,10 @@ Item {
 
     readonly property bool active: Backend.shuffling
         && Backend.shuffleKind === root.kind
+
+    ScopeRing {
+        shown: root.focused
+    }
 
     Icon {
         anchors.centerIn: parent

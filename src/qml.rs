@@ -37,20 +37,23 @@ static STATUS_WRITE_GEN: AtomicU64 = AtomicU64::new(0);
 /// queue back to a stale index).
 static QUEUE_EMIT_GEN: AtomicU64 = AtomicU64::new(0);
 
-/// The playback shuffle (VI-7's sibling): a time-seeded rotation of a tab's
-/// source, resolved in a rolling window so nothing resolves thousands of
-/// URLs up front.
+/// The playback shuffle (VI-7's sibling): passes of a tab's source, each a
+/// time-seeded rotation resolved in a window so nothing resolves thousands
+/// of URLs up front.
 struct Shuffle {
     /// "songs" (units are song ids) or "albums" (units are album ids, each
     /// expanding to its tracklist).
     kind: String,
-    /// The rotated units still to queue (no wrap: the array ends, it stops).
-    units: Vec<String>,
-    position: usize,
+    /// The tab's full source (a permutation of its ids): every pass is a
+    /// fresh rotation of it.
+    source: Vec<String>,
+    /// The units the previous pass queued — excluded from the next pass so
+    /// consecutive passes never repeat a unit.
+    previous: Vec<String>,
 }
 
-/// The rolling window: the queue only ever holds this many upcoming
-/// shuffled tracks; playback tops it up.
+/// The rolling window: one pass queues this many tracks; the next pass rolls
+/// when the queue is down to its last track.
 const SHUFFLE_WINDOW: usize = 30;
 
 /// One id's download mark (the `mark_states` map's values).
@@ -502,6 +505,9 @@ pub struct Backend {
     shuffle_gen: u64,
     /// A window resolve is in flight (one at a time).
     shuffle_extending: bool,
+    /// The in-flight pass's units: `appendShuffle` records the consumed
+    /// slice as the next pass's exclusion set.
+    shuffle_units: Vec<String>,
     /// The chip's state: on/off and which source is shuffled.
     shuffling: bool,
     shuffle_kind: String,
@@ -2426,8 +2432,10 @@ impl Backend {
             self.shuffle = None;
             self.shuffle_gen = self.shuffle_gen.wrapping_add(1);
             self.set_shuffling(false, String::new());
+            eprintln!("shuffle: off");
             return;
         }
+        eprintln!("shuffle: {kind}");
         let invoker = self.get_qml_method_invoker();
         let Some(dbs) = crate::dbs().cloned() else {
             return;
@@ -2488,13 +2496,20 @@ impl Backend {
             .await
             {
                 Ok((tracks_json, used)) => {
+                    let tracks = serde_json::from_str::<serde_json::Value>(&tracks_json)
+                        .ok()
+                        .and_then(|value| value.as_array().map(Vec::len))
+                        .unwrap_or(0);
+                    eprintln!("shuffle: {kind} starting — {tracks} tracks");
                     let units_json = serde_json::to_string(&units).unwrap_or_default();
+                    let previous = units[..used.min(units.len())].to_vec();
+                    let previous_json = serde_json::to_string(&previous).unwrap_or_default();
                     qtbridge::invoke_method!(
                         invoker,
                         "installShuffle",
                         kind,
                         units_json,
-                        used as i64,
+                        previous_json,
                         generation as i64
                     );
                     qtbridge::invoke_method!(invoker, "playerLoad", tracks_json, 0_i64);
@@ -2512,41 +2527,58 @@ impl Backend {
         });
     }
 
-    /// Stores the resolved shuffle (the units and how many the first window
-    /// consumed); a superseded generation is dropped.
+    /// Stores the resolved shuffle (the full source and the first pass's
+    /// units); a superseded generation is dropped.
     #[qslot(qml_name = "installShuffle")]
-    fn install_shuffle(&mut self, kind: String, units_json: String, position: i64, generation: i64) {
+    fn install_shuffle(
+        &mut self,
+        kind: String,
+        source_json: String,
+        previous_json: String,
+        generation: i64,
+    ) {
         if generation.max(0) as u64 != self.shuffle_gen {
             return;
         }
-        let units: Vec<String> = serde_json::from_str(&units_json).unwrap_or_default();
-        if units.is_empty() {
+        let source: Vec<String> = serde_json::from_str(&source_json).unwrap_or_default();
+        if source.is_empty() {
             return;
         }
+        let previous: Vec<String> = serde_json::from_str(&previous_json).unwrap_or_default();
+        eprintln!("shuffle: {kind} ready — {} units", source.len());
         self.shuffle = Some(Shuffle {
             kind,
-            units,
-            position: position.max(0) as usize,
+            source,
+            previous,
         });
     }
 
     /// The rolling window's landing pad: append the resolved tracks and
-    /// advance the position (generation-guarded).
+    /// record the pass's exclusion set (generation-guarded).
     #[qslot(qml_name = "appendShuffle")]
     fn append_shuffle(&mut self, tracks_json: String, used: i64, generation: i64) {
         self.shuffle_extending = false;
         if generation.max(0) as u64 != self.shuffle_gen {
             return;
         }
+        let units = std::mem::take(&mut self.shuffle_units);
         if let Some(shuffle) = self.shuffle.as_mut() {
-            shuffle.position += used.max(0) as usize;
+            // The next pass must not repeat what this one queued.
+            shuffle.previous = units.into_iter().take(used.max(0) as usize).collect();
         }
         match serde_json::from_str::<Vec<crate::player::Track>>(&tracks_json) {
             Ok(tracks) => {
                 if tracks.is_empty() {
                     return;
                 }
+                eprintln!("shuffle: appended {} rolling tracks", tracks.len());
+                let resume = self.player.state() == State::Stopped;
                 self.player.append(tracks);
+                if resume {
+                    // The queue ran dry mid-resolve (fast skips): the new
+                    // pass takes over with its first track.
+                    self.player.next();
+                }
                 self.sync_player();
                 self.emit_queue(false);
             }
@@ -2572,37 +2604,56 @@ impl Backend {
         self.error_raised("playback".to_string(), message);
     }
 
-    /// Tops the queue's upcoming shuffled tracks up to `SHUFFLE_WINDOW` when
-    /// playback advances (one resolve at a time).
+    /// Rolls the next pass when the queued chunk is down to its last track:
+    /// a fresh time-seeded rotation of the source minus the previous pass's
+    /// units, resolved in one window and appended (one resolve at a time).
     fn extend_shuffle(&mut self) {
         let Some(shuffle) = self.shuffle.as_ref() else {
             return;
         };
+        if self.shuffle_extending || self.player.len() == 0 {
+            return;
+        }
         let pending = self
             .player
             .len()
             .saturating_sub(self.player.index() as usize + 1);
-        if pending >= SHUFFLE_WINDOW || shuffle.position >= shuffle.units.len() {
+        if pending > 1 {
             return;
         }
-        if self.shuffle_extending {
+        let seed = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|elapsed| elapsed.as_nanos())
+            .unwrap_or(0);
+        let excluded = shuffle.previous.len();
+        let kind = shuffle.kind.clone();
+        let pool = crate::queue::next_shuffle_pool(&shuffle.source, &shuffle.previous, seed);
+        eprintln!(
+            "shuffle: next pass — {} units ({excluded} excluded)",
+            pool.len()
+        );
+        if pool.is_empty() {
             return;
         }
         self.shuffle_extending = true;
+        self.shuffle_units = pool.clone();
         let invoker = self.get_qml_method_invoker();
         let Some(dbs) = crate::dbs().cloned() else {
             self.shuffle_extending = false;
             return;
         };
         let offline = self.offline;
-        let kind = shuffle.kind.clone();
-        let units = shuffle.units.clone();
-        let position = shuffle.position;
         let generation = self.shuffle_gen;
-        let window = SHUFFLE_WINDOW - pending;
         crate::runtime().spawn(async move {
-            match crate::queue::shuffle_window_json(&dbs, &kind, &units, position, window, offline)
-                .await
+            match crate::queue::shuffle_window_json(
+                &dbs,
+                &kind,
+                &pool,
+                0,
+                SHUFFLE_WINDOW,
+                offline,
+            )
+            .await
             {
                 Ok((tracks_json, used)) => {
                     qtbridge::invoke_method!(
@@ -3608,6 +3659,9 @@ impl Backend {
             self.command_issued(command);
         }
         if self.player.state() == State::Stopped {
+            // Fast skips can drain the pass before a tick catches it: the
+            // shuffle rolls the next one (and resumes) instead of dying.
+            self.extend_shuffle();
             let mut state = self.mpris_snapshot();
             state.playback_status = "Stopped".to_string();
             crate::mpris::publish(state);

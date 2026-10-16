@@ -123,6 +123,28 @@ pub fn seeded_start(len: usize, seed: u128) -> usize {
     (seed % len as u128) as usize
 }
 
+/// The shuffle's next pass: a time-seeded rotation of the source with the
+/// previous pass's units excluded, so consecutive passes never queue the
+/// same unit. A source that is all exclusion (a tiny library) restarts from
+/// the full set instead of starving.
+pub fn next_shuffle_pool(source: &[String], previous: &[String], seed: u128) -> Vec<String> {
+    let excluded: std::collections::HashSet<&str> =
+        previous.iter().map(String::as_str).collect();
+    let mut pool: Vec<String> = source
+        .iter()
+        .filter(|unit| !excluded.contains(unit.as_str()))
+        .cloned()
+        .collect();
+    if pool.is_empty() {
+        pool = source.to_vec();
+    }
+    let len = pool.len();
+    if len > 0 {
+        pool.rotate_left(seeded_start(len, seed));
+    }
+    pool
+}
+
 /// One shuffle window: resolve `units` (album ids when `kind` is "albums",
 /// song ids otherwise) from `position` until `window` tracks are gathered or
 /// the array ends. Returns the tracks JSON and how many units were consumed
@@ -800,6 +822,27 @@ mod tests {
         assert_eq!(used, 1);
         let value: serde_json::Value = serde_json::from_str(&json).unwrap();
         assert_eq!(value.as_array().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn shuffle_pool_excludes_the_previous_pass() {
+        let source: Vec<String> = ["a", "b", "c", "d"].map(String::from).to_vec();
+        let previous: Vec<String> = ["a", "b"].map(String::from).to_vec();
+        // Every seed: the pool never contains a previously queued unit.
+        for seed in 0..16u128 {
+            let pool = next_shuffle_pool(&source, &previous, seed);
+            assert_eq!(pool.len(), 2);
+            assert!(!pool.contains(&"a".to_string()));
+            assert!(!pool.contains(&"b".to_string()));
+        }
+        // The rotation honours the seed: 0 keeps the pool's own order.
+        let pool = next_shuffle_pool(&source, &previous, 0);
+        assert_eq!(pool, ["c".to_string(), "d".to_string()]);
+        let pool = next_shuffle_pool(&source, &previous, 1);
+        assert_eq!(pool, ["d".to_string(), "c".to_string()]);
+        // A source that is all exclusion restarts from the full set.
+        let pool = next_shuffle_pool(&source, &source, 3);
+        assert_eq!(pool.len(), 4);
     }
 
     #[test]

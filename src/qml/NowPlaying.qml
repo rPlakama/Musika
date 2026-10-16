@@ -489,8 +489,11 @@ Rectangle {
 
     // Fullscreen keys, scoped to the focused pane. Esc/back stays with Home.
     function handleAction(action) {
-        if (action === "pane_cycle") {
-            pane = pane === 1 ? 2 : (pane === 2 ? 3 : 1);
+        if (action === "pane_cycle" || action === "pane_cycle_back") {
+            // Tab cycles lyrics → queue → actions; Shift+Tab reverses.
+            pane = action === "pane_cycle"
+                ? (pane === 1 ? 2 : (pane === 2 ? 3 : 1))
+                : (pane === 3 ? 2 : (pane === 2 ? 1 : 3));
             return;
         }
         if (action === "next_track") {

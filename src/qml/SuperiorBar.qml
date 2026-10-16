@@ -83,7 +83,8 @@ Rectangle {
     }
 
     function handleAction(action) {
-        if (action === "pane_cycle") {
+        if (action === "pane_cycle" || action === "pane_cycle_back") {
+            // Two scopes: both directions land on the other one.
             root.scope = (root.scope + 1) % 2;
             return;
         }

@@ -45,8 +45,13 @@ Item {
     }
 
     /// ARC-UI-3: the column owns its cursor; the body mirrors it both ways
-    /// (it cannot be an alias — the body's view swaps list ⇄ grid).
-    onCursorChanged: if (content.currentIndex !== cursor) content.currentIndex = cursor
+    /// (it cannot be an alias — the body's view swaps list ⇄ grid). The
+    /// mark window follows the selector.
+    onCursorChanged: {
+        if (content.currentIndex !== cursor)
+            content.currentIndex = cursor;
+        root.requestMarkWindow();
+    }
 
     Connections {
         target: content
@@ -78,6 +83,26 @@ Item {
 
     function clearSelection() {
         content.clearSelection();
+    }
+
+    /// The state marks render only inside the cursor's ±15-row window.
+    function markVisible(index) {
+        return Math.abs(index - root.cursor) <= 15;
+    }
+
+    /// Ask the backend for the download state of that window only.
+    function requestMarkWindow() {
+        if (root.model === null)
+            return;
+        var ids = [];
+        var lo = Math.max(0, root.cursor - 15);
+        var hi = Math.min(root.model.count - 1, root.cursor + 15);
+        for (var i = lo; i <= hi; ++i) {
+            var row = root.model.get(i);
+            if (row && row.songId)
+                ids.push(row.songId);
+        }
+        Backend.requestDownloads(JSON.stringify(ids));
     }
 
     /// Instant snap for far jumps (`gg`/`G`): the lists do the same through
@@ -326,7 +351,7 @@ Item {
                                 // the heart leads its count subtitle instead.
                                 Icon {
                                     id: subtitleHeart
-                                    visible: row.starred && row.meta.length === 0
+                                    visible: root.markVisible(row.index) && row.starred && row.meta.length === 0
                                     anchors.verticalCenter: parent.verticalCenter
                                     width: subtitleLabel.font.pixelSize * 0.8
                                     height: width
@@ -361,7 +386,7 @@ Item {
                             spacing: row.height * 0.05
 
                             Rectangle {
-                                visible: Backend.downloadedIds.indexOf(row.songId) !== -1
+                                visible: root.markVisible(row.index) && Backend.downloadedIds.indexOf(row.songId) !== -1
                                 width: metaLabel.font.pixelSize * 0.96
                                 height: width
                                 color: "transparent"
@@ -376,7 +401,7 @@ Item {
                             }
 
                             Rectangle {
-                                visible: row.starred && row.meta.length > 0
+                                visible: root.markVisible(row.index) && row.starred && row.meta.length > 0
                                 width: metaLabel.font.pixelSize * 0.8
                                 height: width
                                 color: "transparent"

@@ -368,6 +368,8 @@ Item {
         songsColumn.cursor = songResults.count > 0 ? 0 : -1;
         albumsColumn.cursor = albumResults.count > 0 ? 0 : -1;
         artistsColumn.cursor = artistResults.count > 0 ? 0 : -1;
+        // The mark window follows the fresh result set.
+        songsColumn.requestMarkWindow();
         // Lookup priority picks the column the cursor starts in; the
         // empty-query surface only has the Most-played column.
         activeColumn = data.most_played

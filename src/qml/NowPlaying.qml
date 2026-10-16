@@ -166,6 +166,27 @@ Rectangle {
         Backend.downloadAlbum(Backend.currentAlbumId, !root.albumCacheOn);
     }
 
+    /// The state marks render only inside the queue cursor's ±15-row
+    /// window — long queues keep the bindings cheap.
+    function markVisible(index) {
+        return Math.abs(index - root.queueCursor) <= 15;
+    }
+
+    /// Ask the backend for the download state of that window only.
+    function requestMarkWindow() {
+        var ids = [];
+        var lo = Math.max(0, root.queueCursor - 15);
+        var hi = Math.min(queueItems.count - 1, root.queueCursor + 15);
+        for (var i = lo; i <= hi; ++i) {
+            var row = queueItems.get(i);
+            if (row && row.songId)
+                ids.push(row.songId);
+        }
+        Backend.requestDownloads(JSON.stringify(ids));
+    }
+
+    onQueueCursorChanged: root.requestMarkWindow()
+
     /// The playing track's row in the queue model (song id + favourite flag
     /// for the overlay's track-scoped options).
     function currentTrack() {
@@ -365,6 +386,7 @@ Rectangle {
         } else {
             root.recallQueueCursor();
         }
+        root.requestMarkWindow();
     }
 
     /// The queue cursor for a fresh payload (UI-54 re-entry remembers; a
@@ -552,8 +574,8 @@ Rectangle {
             }
             // The keybar's album actions reconcile on entry too.
             root.requestAlbumActions();
-            // The row download marks read download.db's set globally.
-            Backend.requestDownloads();
+            // The row download marks read only the visible window.
+            root.requestMarkWindow();
         } else if (queueItems.count > 0) {
             queueContent.remember(pane);
             // VI-4: leaving fullscreen ends the queue selection.
@@ -578,14 +600,13 @@ Rectangle {
                     root.albumDownloading = cache.active === true;
                     root.albumCovered = cache.covered === true;
                 }
-                // A settled container pass: the backend re-reads the ledger
-                // set for the exact final marks.
+                // A settled container pass: re-read the visible window.
                 if (!cache.active)
-                    Backend.requestDownloads();
+                    root.requestMarkWindow();
             } else if (channel === "artist_cache") {
-                // Artist passes settle outside the keybar: re-read the set.
+                // Artist passes settle outside the keybar: re-read the window.
                 if (!JSON.parse(payload).active)
-                    Backend.requestDownloads();
+                    root.requestMarkWindow();
             } else if (channel === "album_state") {
                 var state = JSON.parse(payload);
                 if (state.id === Backend.currentAlbumId)
@@ -1354,7 +1375,7 @@ Rectangle {
                                                 // global download.db set. A
                                                 // 1.2× box makes it read equal
                                                 // to the heart's ink.
-                                                visible: Backend.downloadedIds.indexOf(row.songId) !== -1
+                                                visible: root.markVisible(row.index) && Backend.downloadedIds.indexOf(row.songId) !== -1
                                                 width: durationLabel.font.pixelSize * 0.96
                                                 height: width
                                                 color: "transparent"
@@ -1369,7 +1390,7 @@ Rectangle {
                                             }
 
                                             Rectangle {
-                                                visible: row.starred
+                                                visible: root.markVisible(row.index) && row.starred
                                                 width: durationLabel.font.pixelSize * 0.8
                                                 height: width
                                                 color: "transparent"

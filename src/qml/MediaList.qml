@@ -44,9 +44,29 @@ ScrollPanel {
         id: verbs
     }
 
-    // The row download marks read the global ledger set; make sure it is
-    // loaded even when the fullscreen player was never opened.
-    Component.onCompleted: Backend.requestDownloads()
+    /// The state marks (heart/download) render only inside the cursor's
+    /// ±15-row window — long lists keep the bindings cheap, the selector
+    /// stays the reference.
+    function markVisible(index) {
+        return Math.abs(index - root.currentIndex) <= 15;
+    }
+
+    /// Ask the backend for the download state of the visible window only —
+    /// ±15 rows around the selector, never the whole ledger.
+    function requestMarkWindow() {
+        var ids = [];
+        var lo = Math.max(0, root.currentIndex - 15);
+        var hi = Math.min(mediaRows.count - 1, root.currentIndex + 15);
+        for (var i = lo; i <= hi; ++i) {
+            var row = mediaRows.get(i);
+            if (row && row.songId)
+                ids.push(row.songId);
+        }
+        Backend.requestDownloads(JSON.stringify(ids));
+    }
+
+    Component.onCompleted: root.requestMarkWindow()
+    onCurrentIndexChanged: root.requestMarkWindow()
 
     /// VI-4: the selection state lives in `ScrollContent` and is forwarded by
     /// `ScrollPanel` (`toggleSelection`/`selectAll`/`clearSelection`/…); the
@@ -111,6 +131,7 @@ ScrollPanel {
         mediaRows.clear();
         for (var i = 0; i < rows.length; i++)
             mediaRows.append(rows[i]);
+        root.requestMarkWindow();
         // UI-10: a filter/order swap lands on row 0 with the top pinned —
         // the old cursor/offset point at different rows now, so the restore
         // would chase a stale spot.
@@ -310,7 +331,7 @@ ScrollPanel {
                 spacing: row.viewWidth * 0.008
 
                 Rectangle {
-                    visible: Backend.downloadedIds.indexOf(row.songId) !== -1
+                    visible: root.markVisible(row.index) && Backend.downloadedIds.indexOf(row.songId) !== -1
                     width: metaLabel.font.pixelSize * 0.96
                     height: width
                     color: "transparent"
@@ -325,7 +346,7 @@ ScrollPanel {
                 }
 
                 Rectangle {
-                    visible: row.starred
+                    visible: root.markVisible(row.index) && row.starred
                     width: metaLabel.font.pixelSize * 0.8
                     height: width
                     color: "transparent"
@@ -424,7 +445,7 @@ ScrollPanel {
                 // download mark (the global ledger set) mirrors it on the
                 // other corner.
                 Icon {
-                    visible: cell.starred
+                    visible: root.markVisible(cell.index) && cell.starred
                     anchors.right: parent.right
                     anchors.bottom: parent.bottom
                     anchors.margins: parent.width * 0.06
@@ -435,7 +456,7 @@ ScrollPanel {
                 }
 
                 Icon {
-                    visible: Backend.downloadedIds.indexOf(cell.songId) !== -1
+                    visible: root.markVisible(cell.index) && Backend.downloadedIds.indexOf(cell.songId) !== -1
                     anchors.left: parent.left
                     anchors.bottom: parent.bottom
                     anchors.margins: parent.width * 0.06

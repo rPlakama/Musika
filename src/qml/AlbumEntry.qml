@@ -90,6 +90,24 @@ Rectangle {
 
     /// VI-4: `v` toggles visual mode on the cursor row (the toolbar owns no
     /// selection).
+    /// The state marks render only inside the song cursor's ±15-row window.
+    function markVisible(songIndex) {
+        return Math.abs(songIndex - content.currentIndex) <= 15;
+    }
+
+    /// Ask the backend for the download state of that window only.
+    function requestMarkWindow() {
+        var ids = [];
+        var lo = Math.max(0, content.currentIndex - 15);
+        var hi = Math.min(songs.count - 1, content.currentIndex + 15);
+        for (var i = lo; i <= hi; ++i) {
+            var row = songs.get(i);
+            if (row && row.songId)
+                ids.push(row.songId);
+        }
+        Backend.requestDownloads(JSON.stringify(ids));
+    }
+
     function toggleSelection() {
         if (root.onToolbar)
             return;
@@ -177,9 +195,16 @@ Rectangle {
             if (!content.restore() && songs.count > 0)
                 content.land(0);
         }
+        root.requestMarkWindow();
     }
 
     Component.onCompleted: reload()
+
+    // The mark window follows the song cursor.
+    Connections {
+        target: content
+        function onCurrentIndexChanged() { root.requestMarkWindow(); }
+    }
 
     /// ARC-UI-2 M1: the search contract (see `ScrollContent`).
     property alias searchQuery: content.searchQuery
@@ -570,7 +595,7 @@ Rectangle {
                     spacing: songRow.height * 0.08
 
                     Rectangle {
-                        visible: Backend.downloadedIds.indexOf(songRow.songId) !== -1
+                        visible: root.markVisible(songRow.index) && Backend.downloadedIds.indexOf(songRow.songId) !== -1
                         width: songDuration.font.pixelSize * 0.96
                         height: width
                         color: "transparent"
@@ -585,7 +610,7 @@ Rectangle {
                     }
 
                     Rectangle {
-                        visible: songRow.starred
+                        visible: root.markVisible(songRow.index) && songRow.starred
                         width: songDuration.font.pixelSize * 0.8
                         height: width
                         color: "transparent"

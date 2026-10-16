@@ -25,7 +25,7 @@
 //! Q-5 window model (`PLAYBACKSTUDY.md`): the current track is played as an
 //! mpv *playlist* — the current entry plus the next one appended once the
 //! current reports `file-loaded` — so mpv advances gap-free with
-//! `--prefetch-playlist=yes` and `--gapless-audio=yes`. A load failure has no
+//! `--gapless-audio=yes`. A load failure has no
 //! next entry to auto-advance to, so it can be retried in place with
 //! `playlist-play-index` before the queue moves on. The Rust queue stays the
 //! source of truth; `playlist-pos` maps back into it
@@ -363,7 +363,7 @@ impl Player {
         let local = self.index - self.window_base;
         if local + 1 < self.window_len {
             // The next entry is already in the mpv playlist: it advances
-            // natively (and was prefetched), so the skip stays gapless.
+            // natively, so the skip stays gapless.
             self.index += 1;
             self.command(vec![json!("playlist-next")]);
             self.command(vec![json!("set_property"), json!("pause"), json!(false)]);
@@ -555,7 +555,7 @@ impl Player {
         let mut advanced = false;
         let mut retried = false;
 
-        // A native mpv advance (`--prefetch-playlist`) moves `playlist-pos`;
+        // A native mpv advance moves `playlist-pos`;
         // map it back onto the queue.
         if let Some(p) = pos {
             if p >= 0 && (p as usize) < self.window_len {
@@ -689,7 +689,6 @@ impl Player {
             // Q-5: gap-free playlist transitions and HTTP drop recovery
             // (`PLAYBACKSTUDY.md` §2/§4).
             .arg("--gapless-audio=yes")
-            .arg("--prefetch-playlist=yes")
             .arg("--stream-lavf-o=reconnect=1,reconnect_streamed=1,reconnect_delay_max=5")
             .arg(&socket_arg);
         if let Ok(script) = std::env::var("MUSIKA_MPRIS_SCRIPT") {

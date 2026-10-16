@@ -789,7 +789,10 @@ mod tests {
             .await
             .unwrap();
         }
-        // Credentials exist so `tracks_json` can build stream URLs.
+        // Credentials exist so `tracks_json` can build stream URLs; the
+        // pinned test key keeps the encrypt/decrypt round-trip off the config
+        // dir (a sandbox `$HOME` is read-only).
+        crate::crypto::use_test_key();
         crate::sqlite::save_credentials(&dbs.credentials, "u", "p", "http://s", "navidrome")
             .await
             .unwrap();

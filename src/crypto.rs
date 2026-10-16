@@ -121,6 +121,13 @@ impl SecretKey {
 /// Process-wide key: the file is read once per run (ARC-9).
 static SECRET_KEY: std::sync::OnceLock<SecretKey> = std::sync::OnceLock::new();
 
+/// Test seam: pin the process key so credential round-trips never touch the
+/// real config dir (the nix sandbox's `$HOME` is read-only).
+#[cfg(test)]
+pub fn use_test_key() {
+    let _ = SECRET_KEY.set(SecretKey([7u8; KEY_LEN]));
+}
+
 fn secret_key() -> Result<&'static SecretKey> {
     if let Some(key) = SECRET_KEY.get() {
         return Ok(key);

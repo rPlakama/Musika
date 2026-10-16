@@ -594,16 +594,13 @@ Rectangle {
                     visible: text.length > 0
                 }
 
-                // Seek row: elapsed, bar, duration — kept to the same room
-                // the transport lives in (left of the volume cluster) and on
-                // the same centre axis, so the numbers, the bar and the
-                // transport read as one centred block (equilibrium of
-                // vision), never stretching under the volume cluster.
+                // Seek row: elapsed, bar, duration. The row fills whatever
+                // the column offers — the bar freely takes every pixel the
+                // numbers leave (the fixed boxes only hold the shake still,
+                // they never shrink the bar's room).
                 RowLayout {
-                    Layout.fillWidth: false
-                    Layout.preferredWidth: transportBar.room
-                    Layout.alignment: Qt.AlignLeft
-                    spacing: root.width * 0.008
+                    Layout.fillWidth: true
+                    spacing: root.width * 0.004
 
                     // The SuperiorBar trick: the timecode sits in its own
                     // fixed-width rectangle (reserved for the widest string),
@@ -679,20 +676,15 @@ Rectangle {
                 // hairline, Space/n/p/,/. are global). One major rectangle
                 // owns both clusters as their own rectangles: the volume box
                 // (right) yields its bar width first, and the transport box
-                // centres in the room left of it, sliding left as the column
-                // narrows — the two can never collide. The seek row above
-                // shares `room`, so both rows sit on one centre axis.
+                // centres in the whole bar while there is room, sliding left
+                // only as far as needed once the volume box would touch it —
+                // the transport yields, the volume stays put.
                 Rectangle {
                     id: transportBar
                     Layout.fillWidth: true
                     Layout.preferredHeight: root.height * 0.07
                     color: "transparent"
                     radius: Theme.radius
-
-                    /// The room left of the volume cluster (minus the gap):
-                    /// the zone the transport centres in and the seek row
-                    /// spans.
-                    readonly property real room: width - volumeBox.width - root.width * 0.012
 
                     // Volume cluster (P-7): tiered icon (click = mute) + bar.
                     // The bar is the elastic part; the box clamps to whatever
@@ -760,9 +752,9 @@ Rectangle {
                     }
 
                     // Transport cluster (skip / pause / next) in its own
-                    // rectangle: centred in the room left of the volume box
-                    // (the same axis as the seek row), sliding left as the
-                    // column narrows — the transport yields, the volume
+                    // rectangle: centred in the whole bar while there is room,
+                    // and pushed left only as far as needed once the volume
+                    // box would touch it — the transport yields, the volume
                     // stays put.
                     Rectangle {
                         id: transportBox
@@ -770,7 +762,10 @@ Rectangle {
                         width: transportRow.implicitWidth
                         height: parent.height
                         color: "transparent"
-                        x: Math.max(0, (transportBar.room - width) / 2)
+                        x: Math.max(0, Math.min(
+                            (transportBar.width - width) / 2,
+                            transportBar.width - volumeBox.width
+                                - root.width * 0.012 - width))
 
                         // UI-59: the shared transport cluster (same one as
                         // the player bar).

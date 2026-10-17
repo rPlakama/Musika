@@ -3,6 +3,12 @@
 All notable changes to Musika, newest first. `TASKLISTMAJOR.md` tracks the
 open work; this file is the release history.
 
+## 0.3.1 — _Reciclagem eh amor (QML split)_
+
+All commits since `v0.3.0`:
+
+- `bd58920` Split QML backend helpers by purpose
+
 ## 0.3.0 — _Reciclagem eh amor_
 
 All commits since `v0.2.2`:

@@ -217,6 +217,30 @@ pub(crate) fn album_json(
     })
 }
 
+fn song_json(
+    id: &str,
+    title: &str,
+    artist: Option<&str>,
+    album: Option<&str>,
+    album_id: Option<&str>,
+    track: Option<i32>,
+    duration: Option<i32>,
+    cover: String,
+    starred: bool,
+) -> serde_json::Value {
+    serde_json::json!({
+        "id": id,
+        "title": title,
+        "artist": artist,
+        "album": album,
+        "album_id": album_id,
+        "track": track,
+        "duration": duration,
+        "cover": cover,
+        "starred": starred,
+    })
+}
+
 fn song_rows_json(
     songs: &[crate::library::SongRow],
     covers: &HashMap<String, String>,
@@ -224,18 +248,17 @@ fn song_rows_json(
     let rows: Vec<serde_json::Value> = songs
         .iter()
         .map(|song| {
-            let cover = cover_url(song.cover_art.as_deref(), covers);
-            serde_json::json!({
-                "id": song.id,
-                "title": song.title,
-                "artist": song.artist,
-                "album": song.album,
-                "album_id": song.album_id,
-                "track": song.track,
-                "duration": song.duration,
-                "cover": cover,
-                "starred": song.starred.is_some(),
-            })
+            song_json(
+                &song.id,
+                &song.title,
+                song.artist.as_deref(),
+                song.album.as_deref(),
+                song.album_id.as_deref(),
+                song.track,
+                song.duration,
+                cover_url(song.cover_art.as_deref(), covers),
+                song.starred.is_some(),
+            )
         })
         .collect();
     Ok(serde_json::to_string(&rows)?)
@@ -332,18 +355,19 @@ pub async fn search_json(
     let song_rows: Vec<serde_json::Value> = songs
         .iter()
         .map(|song| {
-            let cover = cover_url(song_covers.get(&song.song_id).map(String::as_str), &covers);
-            serde_json::json!({
-                "id": song.song_id,
-                "title": song.title,
-                "artist": song.artist,
-                "album": song.album,
-                "album_id": song_albums.get(&song.song_id),
-                "duration": song.duration,
-                "play_count": song.play_count,
-                "cover": cover,
-                "starred": song_starred.contains(&song.song_id),
-            })
+            let mut value = song_json(
+                &song.song_id,
+                &song.title,
+                song.artist.as_deref(),
+                song.album.as_deref(),
+                song_albums.get(&song.song_id).map(String::as_str),
+                None,
+                song.duration,
+                cover_url(song_covers.get(&song.song_id).map(String::as_str), &covers),
+                song_starred.contains(&song.song_id),
+            );
+            value["play_count"] = serde_json::json!(song.play_count);
+            value
         })
         .collect();
 

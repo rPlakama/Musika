@@ -454,7 +454,26 @@ pub async fn purge(dbs: &crate::db::Dbs) -> Result<usize> {
         .await?;
         removed += 1;
     }
+
+    for kind in [KIND_PERMANENT, KIND_PLAYBACK] {
+        if let Ok(dir) = tier_dir(kind) {
+            remove_temp_files(&dir);
+        }
+    }
     Ok(removed)
+}
+
+fn remove_temp_files(dir: &std::path::Path) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        if name.ends_with(".tmp") || name.ends_with(".part") {
+            let _ = std::fs::remove_file(entry.path());
+        }
+    }
 }
 
 fn md5_hex(bytes: &[u8]) -> String {

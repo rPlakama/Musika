@@ -895,16 +895,24 @@ impl Backend {
         Notify = line_search_open_changed
     );
 
+    fn spawn_task<F, Fut>(&self, task: F)
+    where
+        F: FnOnce(crate::db::Dbs) -> Fut + Send + 'static,
+        Fut: std::future::Future<Output = ()> + Send + 'static,
+    {
+        let Some(dbs) = crate::dbs().cloned() else {
+            return;
+        };
+        crate::runtime().spawn(task(dbs));
+    }
+
     fn spawn_data<F, Fut>(&self, channel: &'static str, load: F)
     where
         F: FnOnce(crate::db::Dbs) -> Fut + Send + 'static,
         Fut: std::future::Future<Output = anyhow::Result<String>> + Send,
     {
         let invoker = self.get_qml_method_invoker();
-        let Some(dbs) = crate::dbs().cloned() else {
-            return;
-        };
-        crate::runtime().spawn(async move {
+        self.spawn_task(move |dbs| async move {
             match load(dbs).await {
                 Ok(json) => emit(&invoker, channel, json),
                 Err(err) => eprintln!("qml: {channel} load failed: {err:#}"),
@@ -1088,14 +1096,12 @@ impl Backend {
                             eprintln!("Failed to persist credentials: {err:#}");
                         }
                     }
-                    qtbridge::invoke_method!(invoker, "noteServerType", info.kind.clone());
-                    invoker.invoke_method("noteOnline");
-                    invoker.invoke_method("login_succeeded");
-                    eprintln!("login: online mode — server available");
-                    spawn_sync(
+                    online_authenticated(
+                        &invoker,
                         sync_finish,
                         sync_progress,
                         SubsonicClient::new(&server_url, &username, &password),
+                        info.kind,
                         true,
                     );
                 }
@@ -1191,10 +1197,8 @@ impl Backend {
                     .await
                     {
                         Ok(info) => {
-                            qtbridge::invoke_method!(invoker, "noteServerType", info.kind);
-                            invoker.invoke_method("noteOnline");
-                            eprintln!("login: online mode — server available");
-                            spawn_sync(
+                            online_authenticated(
+                                &invoker,
                                 sync_finish,
                                 sync_progress,
                                 SubsonicClient::new(
@@ -1202,7 +1206,8 @@ impl Backend {
                                     &credentials.username,
                                     &credentials.password,
                                 ),
-                                true,
+                                info.kind,
+                                false,
                             );
                         }
                         Err(err) => {
@@ -1582,11 +1587,7 @@ impl Backend {
     #[qslot(qml_name = "refreshLibraryStatus")]
     fn refresh_library_status(&mut self) {
         let invoker = self.get_qml_method_invoker();
-        let Some(dbs) = crate::dbs().cloned() else {
-            return;
-        };
-
-        crate::runtime().spawn(async move {
+        self.spawn_task(move |dbs| async move {
             match crate::library::status(&dbs.library).await {
                 Ok(status) => {
                     qtbridge::invoke_method!(
@@ -1994,10 +1995,7 @@ impl Backend {
     fn star_artist(&mut self, artist_id: String, on: bool) {
         let invoker = self.get_qml_method_invoker();
         let error_invoker = self.get_qml_method_invoker();
-        let Some(dbs) = crate::dbs().cloned() else {
-            return;
-        };
-        crate::runtime().spawn(async move {
+        self.spawn_task(move |dbs| async move {
             let result = apply_artist_user(&dbs, &artist_id, ArtistUserAction::Star(on)).await;
             let json = crate::artist_user::payload(&dbs.artist_user, &artist_id).await;
             emit(&invoker, "artist_user", json);
@@ -2025,10 +2023,7 @@ impl Backend {
         };
         let invoker = self.get_qml_method_invoker();
         let error_invoker = self.get_qml_method_invoker();
-        let Some(dbs) = crate::dbs().cloned() else {
-            return;
-        };
-        crate::runtime().spawn(async move {
+        self.spawn_task(move |dbs| async move {
             let result = apply_artist_user(&dbs, &artist_id, ArtistUserAction::Rate(rating)).await;
             let json = crate::artist_user::payload(&dbs.artist_user, &artist_id).await;
             emit(&invoker, "artist_user", json);
@@ -2048,10 +2043,7 @@ impl Backend {
     #[qslot(qml_name = "requestArtistInfo")]
     fn request_artist_info(&mut self, artist_id: String) {
         let invoker = self.get_qml_method_invoker();
-        let Some(dbs) = crate::dbs().cloned() else {
-            return;
-        };
-        crate::runtime().spawn(async move {
+        self.spawn_task(move |dbs| async move {
             let fetched = async {
                 let client = client(&dbs).await?;
                 let (biography, url) =
@@ -2101,10 +2093,7 @@ impl Backend {
         self.note_download_state(song_id.clone(), crate::download::ACTIVE.to_string());
         let invoker = self.get_qml_method_invoker();
         let error_invoker = self.get_qml_method_invoker();
-        let Some(dbs) = crate::dbs().cloned() else {
-            return;
-        };
-        crate::runtime().spawn(async move {
+        self.spawn_task(move |dbs| async move {
             match download_one(&dbs, &song_id).await {
                 Ok(state) => {
                     qtbridge::invoke_method!(
@@ -2136,10 +2125,7 @@ impl Backend {
     #[qslot(qml_name = "requestArtistCache")]
     fn request_artist_cache(&mut self, artist_id: String) {
         let invoker = self.get_qml_method_invoker();
-        let Some(dbs) = crate::dbs().cloned() else {
-            return;
-        };
-        crate::runtime().spawn(async move {
+        self.spawn_task(move |dbs| async move {
             // The artist is "on" when every album of it holds an album rule
             // (the batch is per album now; a legacy artist rule has no role).
             let albums = crate::library::artist_album_ids(&dbs.library, &artist_id)
@@ -2177,10 +2163,7 @@ impl Backend {
         let invoker = self.get_qml_method_invoker();
         let fetch_invoker = self.get_qml_method_invoker();
         let error_invoker = self.get_qml_method_invoker();
-        let Some(dbs) = crate::dbs().cloned() else {
-            return;
-        };
-        crate::runtime().spawn(async move {
+        self.spawn_task(move |dbs| async move {
             let albums = match crate::library::artist_album_ids(&dbs.library, &artist_id).await {
                 Ok(albums) => albums,
                 Err(err) => {
@@ -2299,10 +2282,7 @@ impl Backend {
         let invoker = self.get_qml_method_invoker();
         let fetch_invoker = self.get_qml_method_invoker();
         let error_invoker = self.get_qml_method_invoker();
-        let Some(dbs) = crate::dbs().cloned() else {
-            return;
-        };
-        crate::runtime().spawn(async move {
+        self.spawn_task(move |dbs| async move {
             if on {
                 let artist_covered =
                     match crate::library::album_artist_id(&dbs.library, &album_id).await {
@@ -3049,10 +3029,7 @@ impl Backend {
     /// One refresh read over explicit windows.
     fn refresh_window(&mut self, songs: Vec<String>, albums: Vec<String>) {
         let invoker = self.get_qml_method_invoker();
-        let Some(dbs) = crate::dbs().cloned() else {
-            return;
-        };
-        crate::runtime().spawn(async move {
+        self.spawn_task(move |dbs| async move {
             apply_window(&dbs, &songs, &albums, invoker).await;
         });
     }
@@ -3194,10 +3171,7 @@ impl Backend {
         let invoker = self.get_qml_method_invoker();
         let error_invoker = self.get_qml_method_invoker();
         let outer_invoker = self.get_qml_method_invoker();
-        let Some(dbs) = crate::dbs().cloned() else {
-            return;
-        };
-        crate::runtime().spawn(async move {
+        self.spawn_task(move |dbs| async move {
             if let Err(err) = selection_toggle(&dbs, &kind, &ids, invoker, error_invoker).await {
                 eprintln!("download: selection ({kind}) failed: {err:#}");
                 raise(
@@ -3216,10 +3190,7 @@ impl Backend {
     fn alt_favorite(&mut self, kind: String, id: String, on: bool) {
         let error_invoker = self.get_qml_method_invoker();
         let state_invoker = self.get_qml_method_invoker();
-        let Some(dbs) = crate::dbs().cloned() else {
-            return;
-        };
-        crate::runtime().spawn(async move {
+        self.spawn_task(move |dbs| async move {
             let result = async {
                 let client = client(&dbs).await?;
                 let (songs, albums, artists): (Vec<&str>, Vec<&str>, Vec<&str>) =
@@ -3279,10 +3250,7 @@ impl Backend {
     #[qslot(qml_name = "altGoToAlbum")]
     fn alt_go_to_album(&mut self, song_id: String) {
         let invoker = self.get_qml_method_invoker();
-        let Some(dbs) = crate::dbs().cloned() else {
-            return;
-        };
-        crate::runtime().spawn(async move {
+        self.spawn_task(move |dbs| async move {
             match crate::queue::song_album_page_json(&dbs, &song_id).await {
                 Ok(json) => {
                     emit(&invoker, "open_album", json);
@@ -3298,10 +3266,7 @@ impl Backend {
     #[qslot(qml_name = "altGoToArtist")]
     fn alt_go_to_artist(&mut self, album_id: String) {
         let invoker = self.get_qml_method_invoker();
-        let Some(dbs) = crate::dbs().cloned() else {
-            return;
-        };
-        crate::runtime().spawn(async move {
+        self.spawn_task(move |dbs| async move {
             match crate::queue::album_artist_page_json(&dbs, &album_id).await {
                 Ok(json) => {
                     emit(&invoker, "open_artist", json);
@@ -3546,120 +3511,38 @@ impl Backend {
         // ARC-10: only emit when a value actually changed — the 500 ms tick
         // must not republish every string on every frame. Compare first (no
         // clones), clone only the fields that changed.
-        let (
-            present,
-            id_changed,
-            title_changed,
-            artist_changed,
-            album_changed,
-            art_changed,
-            url_changed,
-            album_id_changed,
-        ) = match self.player.current() {
-            Some(track) => (
-                true,
-                self.current_song_id != track.id,
-                self.current_title != track.title,
-                self.current_artist != track.artist,
-                self.current_album != track.album,
-                self.current_cover_art != track.cover_art,
-                self.current_cover_url != track.cover_url,
-                self.current_album_id != track.album_id,
-            ),
-            None => (false, false, false, false, false, false, false, false),
-        };
-
-        if !present {
-            if !self.current_song_id.is_empty() {
-                self.current_song_id.clear();
-                self.current_song_id_changed();
-            }
-            if !self.current_album_id.is_empty() {
-                self.current_album_id.clear();
-                self.current_album_id_changed();
-            }
-            if !self.current_title.is_empty() {
-                self.current_title.clear();
-                self.current_title_changed();
-            }
-            if !self.current_artist.is_empty() {
-                self.current_artist.clear();
-                self.current_artist_changed();
-            }
-            if !self.current_album.is_empty() {
-                self.current_album.clear();
-                self.current_album_changed();
-            }
-            if !self.current_cover_art.is_empty() {
-                self.current_cover_art.clear();
-                self.current_cover_art_changed();
-            }
-            if !self.current_cover_url.is_empty() {
-                self.current_cover_url.clear();
-                self.current_cover_url_changed();
-            }
-        } else {
-            if id_changed {
-                self.current_song_id = self
+        macro_rules! sync_current {
+            ($field:ident, $signal:ident, $field_name:ident) => {{
+                let value = self
                     .player
                     .current()
-                    .map(|track| track.id.clone())
+                    .map(|track| track.$field_name.as_str())
                     .unwrap_or_default();
-                self.current_song_id_changed();
-                // P-6 S2: starts, skips and auto-advance all count as "last
-                // song"; clearing the track keeps the previous one.
-                let song_id = self.current_song_id.clone();
-                self.remember_song(&song_id);
-            }
-            if album_id_changed {
-                self.current_album_id = self
-                    .player
-                    .current()
-                    .map(|track| track.album_id.clone())
-                    .unwrap_or_default();
-                self.current_album_id_changed();
-            }
-            if title_changed {
-                self.current_title = self
-                    .player
-                    .current()
-                    .map(|track| track.title.clone())
-                    .unwrap_or_default();
-                self.current_title_changed();
-            }
-            if artist_changed {
-                self.current_artist = self
-                    .player
-                    .current()
-                    .map(|track| track.artist.clone())
-                    .unwrap_or_default();
-                self.current_artist_changed();
-            }
-            if album_changed {
-                self.current_album = self
-                    .player
-                    .current()
-                    .map(|track| track.album.clone())
-                    .unwrap_or_default();
-                self.current_album_changed();
-            }
-            if art_changed {
-                self.current_cover_art = self
-                    .player
-                    .current()
-                    .map(|track| track.cover_art.clone())
-                    .unwrap_or_default();
-                self.current_cover_art_changed();
-            }
-            if url_changed {
-                self.current_cover_url = self
-                    .player
-                    .current()
-                    .map(|track| track.cover_url.clone())
-                    .unwrap_or_default();
-                self.current_cover_url_changed();
-            }
+                let changed = self.$field.as_str() != value;
+                if changed {
+                    self.$field = self
+                        .player
+                        .current()
+                        .map(|track| track.$field_name.clone())
+                        .unwrap_or_default();
+                    self.$signal();
+                }
+                changed
+            }};
         }
+
+        if sync_current!(current_song_id, current_song_id_changed, id) {
+            // P-6 S2: starts, skips and auto-advance all count as "last
+            // song"; clearing the track keeps the previous one.
+            let song_id = self.current_song_id.clone();
+            self.remember_song(&song_id);
+        }
+        sync_current!(current_album_id, current_album_id_changed, album_id);
+        sync_current!(current_title, current_title_changed, title);
+        sync_current!(current_artist, current_artist_changed, artist);
+        sync_current!(current_album, current_album_changed, album);
+        sync_current!(current_cover_art, current_cover_art_changed, cover_art);
+        sync_current!(current_cover_url, current_cover_url_changed, cover_url);
 
         macro_rules! sync_field {
             ($field:ident, $signal:ident, $value:expr) => {{
@@ -3723,6 +3606,23 @@ fn sync_summary(report: &crate::index::SyncReport) -> String {
         summary.push_str(&format!(", {} lyrics", report.lyrics));
     }
     summary
+}
+
+fn online_authenticated(
+    invoker: &QmlMethodInvoker,
+    sync_finish: QmlMethodInvoker,
+    sync_progress: QmlMethodInvoker,
+    client: SubsonicClient,
+    kind: String,
+    announce_login: bool,
+) {
+    qtbridge::invoke_method!(invoker, "noteServerType", kind);
+    invoker.invoke_method("noteOnline");
+    if announce_login {
+        invoker.invoke_method("login_succeeded");
+    }
+    eprintln!("login: online mode — server available");
+    spawn_sync(sync_finish, sync_progress, client, true);
 }
 
 /// One background index sync: the single pipeline behind the manual button/

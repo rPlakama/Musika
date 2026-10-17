@@ -362,6 +362,11 @@ Rectangle {
         }
         if (signature !== root._queueSignature) {
             root._queueSignature = signature;
+            // ARC-memory: a different row set is a new queue — drop the old
+            // queue's remembered scroll/prefetch target before it can be
+            // restored.
+            Memory.clearScroll("fullscreen");
+            root._recallQueue = false;
             // UI-41: payload swaps fade in quickly; a reorder keeps the list live.
             if (!root._reordering)
                 queueContent.opacity = 0;

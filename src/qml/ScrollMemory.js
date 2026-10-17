@@ -51,3 +51,8 @@ function loadScroll(key) {
         return null
     return scrollPositions[key]
 }
+
+function clearScroll(key) {
+    if (key)
+        delete scrollPositions[key]
+}

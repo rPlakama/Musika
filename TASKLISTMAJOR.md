@@ -149,7 +149,8 @@ The app is unsafe or misleading without these.
 
   - **Why:** a hung request blocks the sync pipeline; `reqwest` has no timeout.
 
-- [ ] **ARC-memory** Leaving a Queque to start a new one, like initiating a new album, or whatever triggers a new queuque, should unload the memory of previous prefetch;
+- [x] **ARC-memory** Leaving a Queque to start a new one, like initiating a new album, or whatever triggers a new queuque, should unload the memory of previous prefetch;
+  - **Now:** a payload whose row signature differs clears the `fullscreen` scroll memory and drops `_recallQueue` before the model rebuild, so the new queue starts at its playing track instead of restoring the previous queue's position.
 
 - [x] **ARC-IDK** Breaking down Row mechanism into smaller segments for UI Reload calls; Titles, Symbols, Covers -- all they have their own UI call instead of the whole UI recall; Benefits is many, such as lower CPU compromisse in Row reload/reset, and information update. As a example, the Action of Favorite/Removal of Favorite/Download or Removal of Download have their own Rectangle update call, which is not the whole Row; Another segmnet, is the 'expect factor row' which defines a row by a Rectangle without specifically it contents inside, reducing the amount of CPU cicles to render predicted rows (such as in Queuques) or render distance of rows;
   - **Now:** the shared `RowBody.qml` (cover, title/subtitle, meta, `RowMarks`) is consumed by `MediaList` rows and the fullscreen queue; each part is a named property, so a per-row change updates that part without recalling the list. Rows outside the near viewport band keep the cheap shell and load their content lazily through `RowBody.expected` (`ScrollContent.isExpected`), with the queue's scroll extent precalculated.

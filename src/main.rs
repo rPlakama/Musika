@@ -29,6 +29,7 @@ mod covers;
 mod crypto;
 mod db;
 mod download;
+mod fanout;
 mod http_client;
 mod index;
 mod ipc;

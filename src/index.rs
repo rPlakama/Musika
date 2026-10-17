@@ -29,7 +29,6 @@
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
-use tokio::task::JoinSet;
 
 use crate::api::{AlbumID3, AlbumWithSongsID3, ArtistID3, ArtistWithAlbumsID3, Child};
 use crate::covers::CoverReport;
@@ -324,29 +323,21 @@ async fn fetch_artists(
     client: &Arc<SubsonicClient>,
     ids: &[String],
 ) -> Result<Vec<ArtistWithAlbumsID3>> {
+    let client = Arc::clone(client);
+    let results = crate::fanout::map_bounded(ids.to_vec(), move |id| {
+        let client = Arc::clone(&client);
+        async move { client.get_artist(&id).await }
+    })
+    .await;
+
     let mut out = Vec::new();
     let mut failed: Vec<String> = Vec::new();
-    for chunk in ids.chunks(crate::consts::FETCH_CONCURRENCY) {
-        let mut set = JoinSet::new();
-        for id in chunk {
-            let client = Arc::clone(client);
-            let id = id.clone();
-            set.spawn(async move {
-                let result = client.get_artist(&id).await;
-                (id, result)
-            });
-        }
-        while let Some(joined) = set.join_next().await {
-            match joined {
-                Ok((_id, Ok(artist))) => out.push(artist),
-                Ok((id, Err(err))) => {
-                    eprintln!("index: failed to fetch artist {id}: {err:#}");
-                    failed.push(id);
-                }
-                Err(err) => {
-                    eprintln!("index: an artist fetch task failed: {err}");
-                    failed.push("<task>".to_string());
-                }
+    for (id, result) in results {
+        match result {
+            Ok(artist) => out.push(artist),
+            Err(err) => {
+                eprintln!("index: failed to fetch artist {id}: {err:#}");
+                failed.push(id);
             }
         }
     }
@@ -358,29 +349,21 @@ async fn fetch_albums(
     client: &Arc<SubsonicClient>,
     ids: &[String],
 ) -> Result<Vec<AlbumWithSongsID3>> {
+    let client = Arc::clone(client);
+    let results = crate::fanout::map_bounded(ids.to_vec(), move |id| {
+        let client = Arc::clone(&client);
+        async move { client.get_album(&id).await }
+    })
+    .await;
+
     let mut out = Vec::new();
     let mut failed: Vec<String> = Vec::new();
-    for chunk in ids.chunks(crate::consts::FETCH_CONCURRENCY) {
-        let mut set = JoinSet::new();
-        for id in chunk {
-            let client = Arc::clone(client);
-            let id = id.clone();
-            set.spawn(async move {
-                let result = client.get_album(&id).await;
-                (id, result)
-            });
-        }
-        while let Some(joined) = set.join_next().await {
-            match joined {
-                Ok((_id, Ok(album))) => out.push(album),
-                Ok((id, Err(err))) => {
-                    eprintln!("index: failed to fetch album {id}: {err:#}");
-                    failed.push(id);
-                }
-                Err(err) => {
-                    eprintln!("index: an album fetch task failed: {err}");
-                    failed.push("<task>".to_string());
-                }
+    for (id, result) in results {
+        match result {
+            Ok(album) => out.push(album),
+            Err(err) => {
+                eprintln!("index: failed to fetch album {id}: {err:#}");
+                failed.push(id);
             }
         }
     }

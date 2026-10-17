@@ -2917,7 +2917,7 @@ Small, bounded, high-value changes.
 > method or JSON key. REC-24 must reconcile `song_count`/`tracks` with the QML
 > readers **before** extraction.
 
-- [ ] **REC-1 · API envelope helpers (`get_key`/`get_key_opt`/`call_ok`)** — P2 · (RECYCLECRITIQUE §A, phase 1)
+- [x] **REC-1 · API envelope helpers (`get_key`/`get_key_opt`/`call_ok`)** — P2 · (RECYCLECRITIQUE §A, phase 1)
   - **Why:** the `call::<Value>` + `extract` two-step repeats across ~43
     methods (49 `extract` + 2 `extract_opt` pairs) and 24 command endpoints
     end `map(|_| ())` — the single biggest repeat in the tree.
@@ -2925,13 +2925,13 @@ Small, bounded, high-value changes.
     `one_or_many` (`api.rs:38-89`); convert the ~75 call sites; zero call
     semantics change.
 
-- [ ] **REC-2 · `push_all(params, key, values)` for multi-value params** — P3 · (RECYCLECRITIQUE §A, phase 1)
+- [x] **REC-2 · `push_all(params, key, values)` for multi-value params** — P3 · (RECYCLECRITIQUE §A, phase 1)
   - **Why:** `for id in ids { params.push(("id", id.to_string())) }` appears 9×
     (`api.rs:1236,1260,1263,1398,1428,1544,1743,1826-1833`).
   - **Details:** one helper taking `impl IntoIterator<Item = impl ToString>`;
     no call-site behaviour changes.
 
-- [ ] **REC-3 · Bounded fan-out `map_bounded(ids, f)`** — P2 · (RECYCLECRITIQUE §A, phase 1)
+- [x] **REC-3 · Bounded fan-out `map_bounded(ids, f)`** — P2 · (RECYCLECRITIQUE §A, phase 1)
   - **Why:** `index.rs::fetch_artists` (`:310`) and `fetch_albums` (`:344`)
     are 32-line clones differing in one method call; `covers::refresh` and
     `lyrics::backfill` repeat the same chunk/`JoinSet`/`join_next` scaffold

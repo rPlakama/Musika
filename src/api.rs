@@ -61,18 +61,55 @@ fn query(pairs: &[(&'static str, Option<String>)]) -> Vec<(&'static str, String)
         .collect()
 }
 
+/// Adds every value under `key` to `params`, preserving order.
+fn push_all(
+    params: &mut Vec<(&'static str, String)>,
+    key: &'static str,
+    values: impl IntoIterator<Item = impl ToString>,
+) {
+    for value in values {
+        params.push((key, value.to_string()));
+    }
+}
+
 /// Pulls `key` out of a response body and deserializes it, defaulting to an
 /// empty model when the element is absent.
 fn extract<T: DeserializeOwned + Default>(body: Value, key: &str) -> Result<T> {
     Ok(extract_opt(body, key)?.unwrap_or_default())
 }
 
-fn extract_opt<T: DeserializeOwned + Default>(body: Value, key: &str) -> Result<Option<T>> {
+fn extract_opt<T: DeserializeOwned>(body: Value, key: &str) -> Result<Option<T>> {
     match body.get(key) {
         Some(value) if !value.is_null() => serde_json::from_value(value.clone())
             .with_context(|| format!("malformed `{key}` in response"))
             .map(Some),
         _ => Ok(None),
+    }
+}
+
+impl SubsonicClient {
+    async fn get_key<T: DeserializeOwned + Default>(
+        &self,
+        method: &str,
+        params: &[(&str, String)],
+        key: &str,
+    ) -> Result<T> {
+        let body = self.call::<Value>(method, params).await?;
+        extract(body, key)
+    }
+
+    async fn get_key_opt<T: DeserializeOwned>(
+        &self,
+        method: &str,
+        params: &[(&str, String)],
+        key: &str,
+    ) -> Result<Option<T>> {
+        let body = self.call::<Value>(method, params).await?;
+        extract_opt(body, key)
+    }
+
+    async fn call_ok(&self, method: &str, params: &[(&str, String)]) -> Result<()> {
+        self.call::<Value>(method, params).await.map(|_| ())
     }
 }
 
@@ -346,15 +383,16 @@ impl SubsonicClient {
             ("musicFolderId", music_folder_id.map(str::to_string)),
             ("ifModifiedSince", if_modified_since.map(|v| v.to_string())),
         ]);
-        let body = self.call::<Value>("getIndexes", &params).await?;
-        extract(body, "indexes")
+        self.get_key("getIndexes", &params, "indexes").await
     }
 
     /// `getPlaylists` — the playlists the user may play. Never filter by
     /// `username`: Navidrome ignores it (ARC-44/P-4).
     pub async fn get_playlists(&self) -> Result<Vec<PlaylistID3>> {
-        let body = self.call::<Value>("getPlaylists", &[]).await?;
-        let lists: Playlists = extract(body, "playlists")?;
+        let lists: Playlists = self
+            .get_key_opt("getPlaylists", &[], "playlists")
+            .await?
+            .unwrap_or_default();
         Ok(lists.playlist)
     }
 
@@ -364,22 +402,19 @@ impl SubsonicClient {
     #[allow(dead_code)]
     pub async fn get_playlist(&self, id: &str) -> Result<PlaylistWithSongs> {
         let params = query(&[("id", Some(id.to_string()))]);
-        let body = self.call::<Value>("getPlaylist", &params).await?;
-        extract(body, "playlist")
+        self.get_key("getPlaylist", &params, "playlist").await
     }
 
     /// `getArtist` — artist details including albums.
     pub async fn get_artist(&self, id: &str) -> Result<ArtistWithAlbumsID3> {
         let params = query(&[("id", Some(id.to_string()))]);
-        let body = self.call::<Value>("getArtist", &params).await?;
-        extract(body, "artist")
+        self.get_key("getArtist", &params, "artist").await
     }
 
     /// `getAlbum` — album details including songs.
     pub async fn get_album(&self, id: &str) -> Result<AlbumWithSongsID3> {
         let params = query(&[("id", Some(id.to_string()))]);
-        let body = self.call::<Value>("getAlbum", &params).await?;
-        extract(body, "album")
+        self.get_key("getAlbum", &params, "album").await
     }
 
     /// `getArtistInfo` — biography, images and similar artists (last.fm).
@@ -397,8 +432,7 @@ impl SubsonicClient {
                 include_not_present.map(|v| v.to_string()),
             ),
         ]);
-        let body = self.call::<Value>("getArtistInfo", &params).await?;
-        extract(body, "artistInfo")
+        self.get_key("getArtistInfo", &params, "artistInfo").await
     }
 
     /// `getArtistInfo2` — like `getArtistInfo`, organized by ID3 tags.
@@ -416,15 +450,13 @@ impl SubsonicClient {
                 include_not_present.map(|v| v.to_string()),
             ),
         ]);
-        let body = self.call::<Value>("getArtistInfo2", &params).await?;
-        extract(body, "artistInfo2")
+        self.get_key("getArtistInfo2", &params, "artistInfo2").await
     }
 
     /// `getAlbumInfo2` — like `getAlbumInfo`, organized by ID3 tags.
     pub async fn get_album_info2(&self, id: &str) -> Result<AlbumInfo> {
         let params = query(&[("id", Some(id.to_string()))]);
-        let body = self.call::<Value>("getAlbumInfo2", &params).await?;
-        extract(body, "albumInfo")
+        self.get_key("getAlbumInfo2", &params, "albumInfo").await
     }
 
     // -----------------------------------------------------------------------
@@ -442,23 +474,22 @@ impl SubsonicClient {
             ("artist", artist.map(str::to_string)),
             ("title", title.map(str::to_string)),
         ]);
-        let body = self.call::<Value>("getLyrics", &params).await?;
-        extract(body, "lyrics")
+        self.get_key("getLyrics", &params, "lyrics").await
     }
 
     /// `getLyricsBySongId` — OpenSubsonic `songLyrics` extension: per-song and
     /// optionally synced lyrics.
     pub async fn get_lyrics_by_song_id(&self, id: &str) -> Result<LyricsList> {
         let params = [("id", id.to_string())];
-        let body = self.call::<Value>("getLyricsBySongId", &params).await?;
-        extract(body, "lyricsList")
+        self.get_key("getLyricsBySongId", &params, "lyricsList")
+            .await
     }
 
     /// `getOpenSubsonicExtensions` — the extensions this server advertises, used
     /// to decide whether `getLyricsBySongId` is worth calling.
     pub async fn get_open_subsonic_extensions(&self) -> Result<Vec<OpenSubsonicExtension>> {
-        let body = self.call::<Value>("getOpenSubsonicExtensions", &[]).await?;
-        extract(body, "openSubsonicExtensions")
+        self.get_key("getOpenSubsonicExtensions", &[], "openSubsonicExtensions")
+            .await
     }
 
     // -----------------------------------------------------------------------
@@ -467,9 +498,8 @@ impl SubsonicClient {
 
     /// `star` — stars songs, albums and/or artists.
     pub async fn star(&self, ids: &[&str], album_ids: &[&str], artist_ids: &[&str]) -> Result<()> {
-        self.call::<Value>("star", &star_params(ids, album_ids, artist_ids))
+        self.call_ok("star", &star_params(ids, album_ids, artist_ids))
             .await
-            .map(|_| ())
     }
 
     /// `unstar` — removes stars from songs, albums and/or artists.
@@ -479,9 +509,8 @@ impl SubsonicClient {
         album_ids: &[&str],
         artist_ids: &[&str],
     ) -> Result<()> {
-        self.call::<Value>("unstar", &star_params(ids, album_ids, artist_ids))
+        self.call_ok("unstar", &star_params(ids, album_ids, artist_ids))
             .await
-            .map(|_| ())
     }
 
     /// `setRating` — sets a rating (1-5, or 0 to remove).
@@ -490,7 +519,7 @@ impl SubsonicClient {
             ("id", Some(id.to_string())),
             ("rating", Some(rating.to_string())),
         ]);
-        self.call::<Value>("setRating", &params).await.map(|_| ())
+        self.call_ok("setRating", &params).await
     }
 }
 
@@ -500,15 +529,9 @@ fn star_params<'a>(
     artist_ids: &'a [&'a str],
 ) -> Vec<(&'static str, String)> {
     let mut params: Vec<(&'static str, String)> = Vec::new();
-    for id in ids {
-        params.push(("id", (*id).to_string()));
-    }
-    for id in album_ids {
-        params.push(("albumId", (*id).to_string()));
-    }
-    for id in artist_ids {
-        params.push(("artistId", (*id).to_string()));
-    }
+    push_all(&mut params, "id", ids);
+    push_all(&mut params, "albumId", album_ids);
+    push_all(&mut params, "artistId", artist_ids);
     params
 }
 

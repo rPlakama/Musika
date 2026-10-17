@@ -37,7 +37,6 @@ use anyhow::{Context, Result};
 use md5::{Digest, Md5};
 use sqlx::FromRow;
 use sqlx::sqlite::SqlitePool;
-use tokio::task::JoinSet;
 
 use crate::http_client::SubsonicClient;
 
@@ -83,95 +82,95 @@ pub async fn refresh(
         sqlx::query_as("SELECT id, file, hash, etag, last_modified FROM covers")
             .fetch_all(pool)
             .await?;
-    let known: HashMap<String, CoverRow> = existing
-        .into_iter()
-        .map(|row| (row.id.clone(), row))
-        .collect();
+    let known = Arc::new(
+        existing
+            .into_iter()
+            .map(|row| (row.id.clone(), row))
+            .collect::<HashMap<String, CoverRow>>(),
+    );
 
     let ids: Vec<String> = referenced.iter().cloned().collect();
     let mut report = CoverReport::default();
 
-    for chunk in ids.chunks(crate::consts::FETCH_CONCURRENCY) {
-        let mut set = JoinSet::new();
-        for id in chunk {
-            let client = Arc::clone(client);
-            let id = id.clone();
+    let client = Arc::clone(client);
+    let known_for_fetch = Arc::clone(&known);
+    let results = crate::fanout::map_bounded(ids, move |id| {
+        let client = Arc::clone(&client);
+        let known = Arc::clone(&known_for_fetch);
+        async move {
             let (etag, last_modified) = known
                 .get(&id)
                 .map(|row| (row.etag.clone(), row.last_modified.clone()))
                 .unwrap_or((None, None));
-            set.spawn(async move {
-                let result = client
-                    .get_cover_art(
-                        &id,
-                        Some(COVER_SIZE),
-                        etag.as_deref(),
-                        last_modified.as_deref(),
-                    )
-                    .await;
-                (id, result)
-            });
+            client
+                .get_cover_art(
+                    &id,
+                    Some(COVER_SIZE),
+                    etag.as_deref(),
+                    last_modified.as_deref(),
+                )
+                .await
         }
+    })
+    .await;
 
-        while let Some(joined) = set.join_next().await {
-            match joined {
-                Ok((id, Ok(art))) if art.not_modified => {
+    for (id, result) in results {
+        match result {
+            Ok(art) if art.not_modified => {
+                touch(pool, &id).await?;
+                report.unchanged += 1;
+            }
+            Ok(art) => {
+                let Some((bytes, extension, content_type)) =
+                    store_art(art.bytes, art.content_type.as_deref())
+                else {
+                    // Malformed/oversize SVG: never store an undecodable
+                    // blob, the placeholder path owns it (ARC-39).
+                    eprintln!("covers: rejected undecodable SVG cover {id}");
+                    continue;
+                };
+
+                let hash = md5_hex(&bytes);
+                if known.get(&id).and_then(|row| row.hash.as_deref()) == Some(hash.as_str()) {
                     touch(pool, &id).await?;
                     report.unchanged += 1;
+                    continue;
                 }
-                Ok((id, Ok(art))) => {
-                    let Some((bytes, extension, content_type)) =
-                        store_art(art.bytes, art.content_type.as_deref())
-                    else {
-                        // Malformed/oversize SVG: never store an undecodable
-                        // blob, the placeholder path owns it (ARC-39).
-                        eprintln!("covers: rejected undecodable SVG cover {id}");
-                        continue;
-                    };
 
-                    let hash = md5_hex(&bytes);
-                    if known.get(&id).and_then(|row| row.hash.as_deref()) == Some(hash.as_str()) {
-                        touch(pool, &id).await?;
-                        report.unchanged += 1;
-                        continue;
+                let file = format!("{}.{}", md5_hex(id.as_bytes()), extension);
+                let final_path = dir.join(&file);
+                let tmp_path = dir.join(format!("{file}.tmp"));
+
+                std::fs::write(&tmp_path, &bytes)
+                    .with_context(|| format!("failed to write {}", tmp_path.display()))?;
+                std::fs::rename(&tmp_path, &final_path)
+                    .with_context(|| format!("failed to replace {}", final_path.display()))?;
+
+                upsert(
+                    pool,
+                    &id,
+                    &file,
+                    &hash,
+                    content_type.as_deref(),
+                    bytes.len() as i64,
+                    art.etag.as_deref(),
+                    art.last_modified.as_deref(),
+                )
+                .await?;
+
+                if let Some(old) = known.get(&id) {
+                    if old.file != file {
+                        let _ = std::fs::remove_file(dir.join(&old.file));
                     }
-
-                    let file = format!("{}.{}", md5_hex(id.as_bytes()), extension);
-                    let final_path = dir.join(&file);
-                    let tmp_path = dir.join(format!("{file}.tmp"));
-
-                    std::fs::write(&tmp_path, &bytes)
-                        .with_context(|| format!("failed to write {}", tmp_path.display()))?;
-                    std::fs::rename(&tmp_path, &final_path)
-                        .with_context(|| format!("failed to replace {}", final_path.display()))?;
-
-                    upsert(
-                        pool,
-                        &id,
-                        &file,
-                        &hash,
-                        content_type.as_deref(),
-                        bytes.len() as i64,
-                        art.etag.as_deref(),
-                        art.last_modified.as_deref(),
-                    )
-                    .await?;
-
-                    if let Some(old) = known.get(&id) {
-                        if old.file != file {
-                            let _ = std::fs::remove_file(dir.join(&old.file));
-                        }
-                    }
-                    report.downloaded += 1;
                 }
-                Ok((id, Err(err))) => eprintln!("covers: failed to fetch {id}: {err:#}"),
-                Err(err) => eprintln!("covers: a fetch task failed: {err}"),
+                report.downloaded += 1;
             }
+            Err(err) => eprintln!("covers: failed to fetch {id}: {err:#}"),
         }
     }
 
     // Purge entries the library no longer references.
-    for (id, row) in &known {
+    for (id, row) in known.iter() {
         if !referenced.contains(id) {
             let _ = std::fs::remove_file(dir.join(&row.file));
             sqlx::query("DELETE FROM covers WHERE id = ?1")

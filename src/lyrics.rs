@@ -241,30 +241,23 @@ pub async fn backfill(
     let candidates = candidates(&songs, &rows, now_secs(), limit);
     let mut report = BackfillReport { fetched: 0 };
 
-    for chunk in candidates.chunks(crate::consts::FETCH_CONCURRENCY) {
-        let mut set = tokio::task::JoinSet::new();
-        for song_id in chunk {
-            let dbs = dbs.clone();
-            let client = Arc::clone(client);
-            let song_id = song_id.clone();
-            set.spawn(async move {
-                let result = fetch(&dbs, Some(client.as_ref()), &song_id).await;
-                (song_id, result)
-            });
-        }
+    let dbs = dbs.clone();
+    let client = Arc::clone(client);
+    let results = crate::fanout::map_bounded(candidates, move |song_id| {
+        let dbs = dbs.clone();
+        let client = Arc::clone(&client);
+        async move { fetch(&dbs, Some(client.as_ref()), &song_id).await }
+    })
+    .await;
 
-        while let Some(joined) = set.join_next().await {
-            match joined {
-                Ok((_id, Ok(document))) => {
-                    if document.source != "none" {
-                        report.fetched += 1;
-                    }
+    for (id, result) in results {
+        match result {
+            Ok(document) => {
+                if document.source != "none" {
+                    report.fetched += 1;
                 }
-                Ok((id, Err(err))) => {
-                    eprintln!("lyrics: sync backfill failed for {id}: {err:#}");
-                }
-                Err(err) => eprintln!("lyrics: sync backfill task failed: {err}"),
             }
+            Err(err) => eprintln!("lyrics: sync backfill failed for {id}: {err:#}"),
         }
     }
 

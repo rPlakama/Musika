@@ -31,13 +31,6 @@ use std::path::{Path, PathBuf};
 use crate::db::Dbs;
 use crate::http_client::SubsonicClient;
 
-fn unix_now() -> i64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs() as i64)
-        .unwrap_or(0)
-}
-
 /// A parsed m3u entry: the raw path plus whatever `#EXTINF` carried.
 #[derive(Debug, Clone, PartialEq)]
 pub struct M3uEntry {
@@ -75,7 +68,7 @@ pub async fn refresh_subsonic(dbs: &Dbs, client: &SubsonicClient) -> Result<usiz
         .get_playlists()
         .await
         .context("fetching the playlist list")?;
-    let now = unix_now();
+    let now = crate::consts::now_secs();
 
     let mut tx = dbs.playlist.begin().await?;
     let mut seen: Vec<String> = Vec::with_capacity(lists.len());
@@ -343,7 +336,7 @@ async fn store_file(
     matcher: &Matcher,
 ) -> Result<()> {
     let dir = file.parent().unwrap_or(Path::new("."));
-    let now = unix_now();
+    let now = crate::consts::now_secs();
 
     let mut duration_total: i64 = 0;
     let mut resolved: Vec<(i64, Option<&SongRef>, &M3uEntry)> = Vec::new();

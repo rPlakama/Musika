@@ -44,7 +44,7 @@ fn build_track(
         None => client.stream_url(&song.id)?,
     };
     let cover_art = song.cover_art.unwrap_or_default();
-    let cover_url = covers.get(&cover_art).cloned().unwrap_or_default();
+    let cover_url = crate::browse::cover_url(Some(&cover_art), covers);
     Ok(crate::player::Track {
         id: song.id,
         title: song.title,
@@ -95,10 +95,7 @@ pub async fn artist_shuffle_json(
     if albums.is_empty() {
         return Err(anyhow::anyhow!("this artist has no albums to shuffle"));
     }
-    let seed = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|elapsed| elapsed.as_nanos())
-        .unwrap_or(0);
+    let seed = crate::consts::now_nanos();
     shuffle_units(&mut albums, seed);
     let mut songs: Vec<crate::library::SongRow> = Vec::new();
     for album in &albums {
@@ -350,12 +347,7 @@ pub async fn album_artist_page_json(
         .await?
         .ok_or_else(|| anyhow::anyhow!("artist not found in index"))?;
     let covers = crate::covers::url_map(&dbs.covers).await?;
-    let cover = artist
-        .cover_art
-        .as_deref()
-        .and_then(|id| covers.get(id))
-        .cloned()
-        .unwrap_or_default();
+    let cover = crate::browse::cover_url(artist.cover_art.as_deref(), &covers);
     Ok(serde_json::json!({
         "id": artist.id,
         "name": artist.name,

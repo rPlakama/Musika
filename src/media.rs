@@ -29,7 +29,7 @@
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use md5::{Digest, Md5};
 use sqlx::sqlite::SqlitePool;
 
@@ -155,16 +155,10 @@ pub async fn store(
     rule_id: Option<&str>,
 ) -> Result<PathBuf> {
     let dir = tier_dir(kind)?;
-    std::fs::create_dir_all(&dir).with_context(|| format!("failed to create {}", dir.display()))?;
+    crate::db::ensure_dir(&dir)?;
 
     let file = format!("{}.{}", md5_hex(song_id.as_bytes()), extension);
-    let final_path = dir.join(&file);
-    let tmp_path = dir.join(format!("{file}.part"));
-
-    std::fs::write(&tmp_path, bytes)
-        .with_context(|| format!("failed to write {}", tmp_path.display()))?;
-    std::fs::rename(&tmp_path, &final_path)
-        .with_context(|| format!("failed to replace {}", final_path.display()))?;
+    let final_path = crate::cache::write_atomic(&dir, &file, bytes)?;
 
     let previous = get(pool, song_id).await?;
     record(

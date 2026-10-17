@@ -175,11 +175,14 @@ pub async fn migrate(dbs: &Dbs) -> Result<()> {
 /// Wipes only the library metadata (`library.db`): artists, albums, songs,
 /// artist info and the sync bookkeeping. The next sync repopulates it; the
 /// derived `index.txt` mirror goes with it.
+async fn wipe_and_migrate(pool: &SqlitePool, migrations: sqlx::migrate::Migrator) -> Result<()> {
+    wipe_pool(pool).await?;
+    migrations.run(pool).await?;
+    Ok(())
+}
+
 pub async fn wipe_library(dbs: &Dbs) -> Result<()> {
-    wipe_pool(&dbs.library).await?;
-    sqlx::migrate!("./migrations_library")
-        .run(&dbs.library)
-        .await?;
+    wipe_and_migrate(&dbs.library, sqlx::migrate!("./migrations_library")).await?;
     remove_mirror();
     Ok(())
 }
@@ -187,10 +190,7 @@ pub async fn wipe_library(dbs: &Dbs) -> Result<()> {
 /// Wipes the derived text indexes (`search.db` FTS plus the `index.txt`
 /// mirror). Both rebuild from `library.db` on the next sync.
 pub async fn wipe_indexes(dbs: &Dbs) -> Result<()> {
-    wipe_pool(&dbs.search).await?;
-    sqlx::migrate!("./migrations_search")
-        .run(&dbs.search)
-        .await?;
+    wipe_and_migrate(&dbs.search, sqlx::migrate!("./migrations_search")).await?;
     remove_mirror();
     Ok(())
 }
@@ -198,14 +198,8 @@ pub async fn wipe_indexes(dbs: &Dbs) -> Result<()> {
 /// Wipes the cover-art cache: `covers.db`, the blob directory and the
 /// cover-derived color cache (`colors.db`), all refetched on demand.
 pub async fn wipe_covers(dbs: &Dbs) -> Result<()> {
-    wipe_pool(&dbs.covers).await?;
-    sqlx::migrate!("./migrations_covers")
-        .run(&dbs.covers)
-        .await?;
-    wipe_pool(&dbs.colors).await?;
-    sqlx::migrate!("./migrations_colors")
-        .run(&dbs.colors)
-        .await?;
+    wipe_and_migrate(&dbs.covers, sqlx::migrate!("./migrations_covers")).await?;
+    wipe_and_migrate(&dbs.colors, sqlx::migrate!("./migrations_colors")).await?;
     remove_dir(&covers_dir()?)?;
     Ok(())
 }
@@ -343,10 +337,15 @@ pub fn config_socket(name: &str) -> PathBuf {
         .unwrap_or_else(|_| PathBuf::from(format!("/tmp/musika-{name}")))
 }
 
+pub fn ensure_dir(path: &Path) -> Result<()> {
+    std::fs::create_dir_all(path)
+        .with_context(|| format!("failed to create {}", path.display()))?;
+    Ok(())
+}
+
 pub fn ensure_parent_dir(path: &Path) -> Result<()> {
     if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)
-            .with_context(|| format!("failed to create {}", parent.display()))?;
+        ensure_dir(parent)?;
     }
     Ok(())
 }

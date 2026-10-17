@@ -21,10 +21,21 @@
 //! the diff-and-delete scaffold lives here.
 
 use std::collections::HashSet;
+use std::path::{Path, PathBuf};
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use sqlx::AssertSqlSafe;
 use sqlx::sqlite::SqlitePool;
+
+pub fn write_atomic(dir: &Path, file: &str, bytes: &[u8]) -> Result<PathBuf> {
+    let final_path = dir.join(file);
+    let tmp_path = dir.join(format!("{file}.tmp"));
+    std::fs::write(&tmp_path, bytes)
+        .with_context(|| format!("failed to write {}", tmp_path.display()))?;
+    std::fs::rename(&tmp_path, &final_path)
+        .with_context(|| format!("failed to replace {}", final_path.display()))?;
+    Ok(final_path)
+}
 
 /// Deletes rows matched by one static `DELETE` statement and one bound key.
 pub async fn delete_by<'e, E>(executor: E, sql: &'static str, key: &str) -> Result<()>

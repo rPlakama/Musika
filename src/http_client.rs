@@ -295,11 +295,7 @@ fn normalize_base(server_url: &str) -> String {
 }
 
 fn generate_salt() -> String {
-    let nanos = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|duration| duration.as_nanos())
-        .unwrap_or(0);
-    format!("{nanos:x}")
+    format!("{:x}", crate::consts::now_nanos())
 }
 
 fn md5_token(password: &str, salt: &str) -> String {

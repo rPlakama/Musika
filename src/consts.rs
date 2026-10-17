@@ -34,3 +34,10 @@ pub fn now_secs() -> i64 {
         .map(|duration| duration.as_secs() as i64)
         .unwrap_or(0)
 }
+
+pub fn now_nanos() -> u128 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .unwrap_or(0)
+}

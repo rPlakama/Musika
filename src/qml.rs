@@ -1982,13 +1982,8 @@ impl Backend {
     /// Serves the locally indexed artist user state (favourite + rating).
     #[qslot(qml_name = "requestArtistUser")]
     fn request_artist_user(&mut self, artist_id: String) {
-        let invoker = self.get_qml_method_invoker();
-        let Some(dbs) = crate::dbs().cloned() else {
-            return;
-        };
-        crate::runtime().spawn(async move {
-            let json = crate::artist_user::payload(&dbs.artist_user, &artist_id).await;
-            emit(&invoker, "artist_user", json);
+        self.spawn_data("artist_user", move |dbs| async move {
+            Ok(crate::artist_user::payload(&dbs.artist_user, &artist_id).await)
         });
     }
 
@@ -2259,11 +2254,7 @@ impl Backend {
     /// (`album_cache`): an album rule, or an artist rule covering the album.
     #[qslot(qml_name = "requestAlbumCache")]
     fn request_album_cache(&mut self, album_id: String) {
-        let invoker = self.get_qml_method_invoker();
-        let Some(dbs) = crate::dbs().cloned() else {
-            return;
-        };
-        crate::runtime().spawn(async move {
+        self.spawn_data("album_cache", move |dbs| async move {
             let album_rule = matches!(
                 crate::media::rule_for(&dbs.media, "album", &album_id).await,
                 Ok(Some(_))
@@ -2273,29 +2264,23 @@ impl Backend {
                     Ok(Some(artist_id)) => artist_covers_album(&dbs, &artist_id, &album_id).await,
                     _ => false,
                 };
-            let json = album_cache_payload(
+            Ok(album_cache_payload(
                 &album_id,
                 album_rule || artist_covered,
                 false,
                 artist_covered,
-            );
-            emit(&invoker, "album_cache", json);
+            ))
         });
     }
 
     /// The album favourite flag for the fullscreen keybar's heart.
     #[qslot(qml_name = "requestAlbumState")]
     fn request_album_state(&mut self, album_id: String) {
-        let invoker = self.get_qml_method_invoker();
-        let Some(dbs) = crate::dbs().cloned() else {
-            return;
-        };
-        crate::runtime().spawn(async move {
+        self.spawn_data("album_state", move |dbs| async move {
             let starred = crate::library::album_starred(&dbs.library, &album_id)
                 .await
                 .unwrap_or(false);
-            let json = album_state_payload(&album_id, starred);
-            emit(&invoker, "album_state", json);
+            Ok(album_state_payload(&album_id, starred))
         });
     }
 
@@ -2421,12 +2406,7 @@ impl Backend {
                 }
                 Err(err) => {
                     eprintln!("player: could not start playback: {err:#}");
-                    qtbridge::invoke_method!(
-                        invoker,
-                        "raiseError",
-                        "playback".to_string(),
-                        format!("{err:#}")
-                    );
+                    raise(&invoker, "playback", format!("{err:#}"));
                 }
             }
         });
@@ -2492,10 +2472,7 @@ impl Backend {
                 );
                 return;
             }
-            let seed = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|elapsed| elapsed.as_nanos())
-                .unwrap_or(0);
+            let seed = crate::consts::now_nanos();
             crate::queue::shuffle_units(&mut units, seed);
             match crate::queue::shuffle_queue_json(&dbs, &kind, &units, offline).await {
                 Ok(tracks_json) => {
@@ -2561,12 +2538,7 @@ impl Backend {
                 }
                 Err(err) => {
                     eprintln!("player: could not shuffle the artist: {err:#}");
-                    qtbridge::invoke_method!(
-                        invoker,
-                        "raiseError",
-                        "playback".to_string(),
-                        format!("{err:#}")
-                    );
+                    raise(&invoker, "playback", format!("{err:#}"));
                 }
             }
         });
@@ -2589,12 +2561,7 @@ impl Backend {
                 }
                 Err(err) => {
                     eprintln!("player: could not play song: {err:#}");
-                    qtbridge::invoke_method!(
-                        invoker,
-                        "raiseError",
-                        "playback".to_string(),
-                        format!("{err:#}")
-                    );
+                    raise(&invoker, "playback", format!("{err:#}"));
                 }
             }
         });
@@ -2621,12 +2588,7 @@ impl Backend {
                 }
                 Err(err) => {
                     eprintln!("player: could not queue album: {err:#}");
-                    qtbridge::invoke_method!(
-                        invoker,
-                        "raiseError",
-                        "playback".to_string(),
-                        format!("{err:#}")
-                    );
+                    raise(&invoker, "playback", format!("{err:#}"));
                 }
             }
         });
@@ -3826,12 +3788,7 @@ fn spawn_sync(
                     "librarySyncFinished",
                     format!("Sync failed: {err:#}")
                 );
-                qtbridge::invoke_method!(
-                    finish_invoker,
-                    "raiseError",
-                    "sync".to_string(),
-                    format!("{err:#}")
-                );
+                raise(&finish_invoker, "sync", format!("{err:#}"));
             }
         }
     });

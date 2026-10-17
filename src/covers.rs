@@ -33,7 +33,7 @@
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::sync::Arc;
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use md5::{Digest, Md5};
 use sqlx::FromRow;
 use sqlx::sqlite::SqlitePool;
@@ -76,7 +76,7 @@ pub async fn refresh(
     referenced: &BTreeSet<String>,
 ) -> Result<CoverReport> {
     let dir = crate::db::covers_dir()?;
-    std::fs::create_dir_all(&dir).with_context(|| format!("failed to create {}", dir.display()))?;
+    crate::db::ensure_dir(&dir)?;
 
     let existing: Vec<CoverRow> =
         sqlx::query_as("SELECT id, file, hash, etag, last_modified FROM covers")
@@ -138,13 +138,7 @@ pub async fn refresh(
                 }
 
                 let file = format!("{}.{}", md5_hex(id.as_bytes()), extension);
-                let final_path = dir.join(&file);
-                let tmp_path = dir.join(format!("{file}.tmp"));
-
-                std::fs::write(&tmp_path, &bytes)
-                    .with_context(|| format!("failed to write {}", tmp_path.display()))?;
-                std::fs::rename(&tmp_path, &final_path)
-                    .with_context(|| format!("failed to replace {}", final_path.display()))?;
+                crate::cache::write_atomic(&dir, &file, &bytes)?;
 
                 upsert(
                     pool,

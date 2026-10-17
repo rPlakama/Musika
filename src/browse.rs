@@ -255,7 +255,7 @@ pub async fn album_notes(dbs: &crate::db::Dbs, album_id: &str) -> String {
     }
 }
 
-fn cover_url(id: Option<&str>, covers: &HashMap<String, String>) -> String {
+pub(crate) fn cover_url(id: Option<&str>, covers: &HashMap<String, String>) -> String {
     id.and_then(|id| covers.get(id))
         .cloned()
         .unwrap_or_default()
@@ -332,11 +332,7 @@ pub async fn search_json(
     let song_rows: Vec<serde_json::Value> = songs
         .iter()
         .map(|song| {
-            let cover = song_covers
-                .get(&song.song_id)
-                .and_then(|cover_art| covers.get(cover_art))
-                .cloned()
-                .unwrap_or_default();
+            let cover = cover_url(song_covers.get(&song.song_id).map(String::as_str), &covers);
             serde_json::json!({
                 "id": song.song_id,
                 "title": song.title,

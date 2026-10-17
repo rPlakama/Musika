@@ -55,10 +55,7 @@ impl SecretKey {
         let mut key = [0u8; KEY_LEN];
         rand_bytes(&mut key).context("failed to generate a random key")?;
 
-        if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent)
-                .with_context(|| format!("failed to create {}", parent.display()))?;
-        }
+        crate::db::ensure_parent_dir(&path)?;
         write_private(&path, hex::encode(key).as_bytes())?;
 
         Ok(Self(key))

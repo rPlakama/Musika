@@ -602,7 +602,7 @@ Rectangle {
                     anchors.verticalCenter: parent.verticalCenter
                     anchors.left: parent.left
                     anchors.leftMargin: songRow.height * 0.8
-                    anchors.right: songDuration.left
+                    anchors.right: songDurationBox.left
                     anchors.rightMargin: root.width * 0.02
                     text: songRow.title
                     color: Palette.onSurface

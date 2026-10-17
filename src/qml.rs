@@ -3892,11 +3892,7 @@ impl Backend {
     /// Q-8: current player state in MPRIS terms (volume 0.0..=1.0).
     fn mpris_snapshot(&self) -> crate::mpris::Snapshot {
         crate::mpris::Snapshot {
-            playback_status: match self.player.state() {
-                State::Playing => "Playing".to_string(),
-                State::Paused => "Paused".to_string(),
-                State::Stopped => "Stopped".to_string(),
-            },
+            playback_status: self.player.state().mpris_status().to_string(),
             title: self.current_title.clone(),
             artist: self.current_artist.clone(),
             album: self.current_album.clone(),

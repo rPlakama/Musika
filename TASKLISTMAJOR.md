@@ -3003,7 +3003,7 @@ Small, bounded, high-value changes.
     `insert_many(tx, const SQL, rows, bind)`; centralising makes chunking
     consistent.
 
-- [ ] **REC-12 · Test memory pools** — P3 · (RECYCLECRITIQUE §B, phase 0)
+- [x] **REC-12 · Test memory pools** — P3 · (RECYCLECRITIQUE §B, phase 0)
   - **Why:** 8 copies of `SqlitePoolOptions::new().max_connections(1)
     .connect_with("sqlite::memory:")` plus 5–6 `sqlx::migrate!` runs
     (`library.rs:823`, `search.rs:147`, `status.rs:97`, `artist_user.rs:123`,
@@ -3012,7 +3012,7 @@ Small, bounded, high-value changes.
   - **Details:** one `#[cfg(test)] pub(crate) async fn memory_pool(migrations)`
     in `sqlite.rs`; ~50 test-only lines.
 
-- [ ] **REC-13 · Small persistence drifts** — P2 · (RECYCLECRITIQUE §B, phase 0)
+- [x] **REC-13 · Small persistence drifts** — P2 · (RECYCLECRITIQUE §B, phase 0)
   - **Why:** `library.rs:810` `unix_now()` duplicates `consts::now_secs`
     (`consts.rs:27`) with a different return type; `db.rs:112` vs
     `library.rs:786` both do `create_dir_all(parent).with_context(...)`;
@@ -3024,7 +3024,7 @@ Small, bounded, high-value changes.
     `ensure_parent_dir(path)`; `upsert_meta(executor, key, value)`; drop the
     bool casts. Reconcile the drifts before extracting.
 
-- [ ] **REC-14 · `index.rs` volume (`report`/`best_effort`)** — P3 · (RECYCLECRITIQUE §B, phase 0)
+- [x] **REC-14 · `index.rs` volume (`report`/`best_effort`)** — P3 · (RECYCLECRITIQUE §B, phase 0)
   - **Why:** 8 five-line `SyncProgress` literals
     (`index.rs:72,87,123,139,158,181,230,259`, `total` always 100) and 7
     fail-log-continue blocks (`:176-228`).
@@ -3032,14 +3032,14 @@ Small, bounded, high-value changes.
     `best_effort("lyric cache purge", fut)`; ~34 lines and the "always 100"
     assumption lives once.
 
-- [ ] **REC-15 · Socket plumbing (`config_socket`, `spawn_line_reader`)** — P2 · (RECYCLECRITIQUE §C, phase 0)
+- [x] **REC-15 · Socket plumbing (`config_socket`, `spawn_line_reader`)** — P2 · (RECYCLECRITIQUE §C, phase 0)
   - **Why:** `player.rs:487` and `ipc.rs:36` derive the same mpv socket path;
     `player.rs:391,482` and `ipc.rs:53` remove stale sockets; `player.rs:515`
     `spawn_reader` and `ipc.rs:70` `serve` are the same line-reader loop.
   - **Details:** `db::config_socket(name) -> PathBuf` and
     `ipc::spawn_line_reader(stream, on_line)`.
 
-- [ ] **REC-16 · Raw mpv commands** — P3 · (RECYCLECRITIQUE §C, phase 3)
+- [x] **REC-16 · Raw mpv commands** — P3 · (RECYCLECRITIQUE §C, phase 3)
   - **Why:** 9 sites push `json!(["set_property", …])` / `observe_property`
     by hand (`player.rs:219,220,240,248,349,359,452`); 7 sites take
     `self.shared.lock().unwrap()`; 3 sites clear the same `position/eof/error`
@@ -3048,7 +3048,7 @@ Small, bounded, high-value changes.
     `Player::observe(id, name)`, `Shared::reset()`, `Player::shared()`;
     command IDs stay literal — only the envelope dedupes.
 
-- [ ] **REC-17 · MPRIS minors (`put_nonempty`, `submit!`, `mpris_script`)** — P3 · (RECYCLECRITIQUE §C, phase 0)
+- [x] **REC-17 · MPRIS minors (`put_nonempty`, `submit!`, `mpris_script`)** — P3 · (RECYCLECRITIQUE §C, phase 0)
   - **Why:** `mpris.rs:258-289` repeats the
     `if !empty { map.insert(key, owned(Value::from(clone))) }` shape six
     times; `:437-459` six action methods are one `submit("<verb>")` each; the
@@ -3057,12 +3057,12 @@ Small, bounded, high-value changes.
   - **Details:** `put_nonempty(map, key, &str)`, a `submit!`-style macro and
     `mpris_script() -> Option`.
 
-- [ ] **REC-18 · State naming (`State::mpris_status()`)** — P3 · (RECYCLECRITIQUE §C, phase 0)
+- [x] **REC-18 · State naming (`State::mpris_status()`)** — P3 · (RECYCLECRITIQUE §C, phase 0)
   - **Why:** `player.rs:64` `State::name()` and the rematch to
     `"Playing"/"Paused"/"Stopped"` in `qml.rs:2202-2206` are the same table.
   - **Details:** one `State::mpris_status()` so the strings live once.
 
-- [ ] **REC-19 · Palette role application (`apply_roles`)** — P3 · (RECYCLECRITIQUE §D, phase 2)
+- [x] **REC-19 · Palette role application (`apply_roles`)** — P3 · (RECYCLECRITIQUE §D, phase 2)
   - **Why:** `apply_role!` (`palette.rs:107-116`) is invoked 32× in `apply`
     (`:341-498`) and `restore!` (`:506-513`) is a copy of the same macro
     invoked 32× in `reset` (`:515-546`) — the role list exists twice.

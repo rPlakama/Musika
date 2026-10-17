@@ -69,7 +69,7 @@ pub async fn save(pool: &SqlitePool, status: &SessionStatus) -> Result<()> {
     .bind(status.queue_index)
     .bind(status.position)
     .bind(status.volume)
-    .bind(status.muted as i64)
+    .bind(status.muted)
     .bind(status.updated_at)
     .execute(pool)
     .await?;
@@ -90,22 +90,10 @@ pub async fn load(pool: &SqlitePool) -> Result<Option<SessionStatus>> {
 
 #[cfg(test)]
 mod tests {
-    use std::str::FromStr;
-
     use super::*;
 
     async fn memory_pool() -> SqlitePool {
-        let options = sqlx::sqlite::SqliteConnectOptions::from_str("sqlite::memory:").unwrap();
-        let pool = sqlx::sqlite::SqlitePoolOptions::new()
-            .max_connections(1)
-            .connect_with(options)
-            .await
-            .unwrap();
-        sqlx::migrate!("./migrations_status")
-            .run(&pool)
-            .await
-            .unwrap();
-        pool
+        crate::sqlite::memory_pool(sqlx::migrate!("./migrations_status")).await
     }
 
     #[tokio::test]

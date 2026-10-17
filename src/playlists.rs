@@ -455,15 +455,8 @@ pub async fn list_json(dbs: &Dbs) -> Result<String> {
 mod tests {
     use super::*;
 
-    use std::str::FromStr;
-
     async fn memory_pool() -> SqlitePool {
-        let options = sqlx::sqlite::SqliteConnectOptions::from_str("sqlite::memory:").unwrap();
-        sqlx::sqlite::SqlitePoolOptions::new()
-            .max_connections(1)
-            .connect_with(options)
-            .await
-            .unwrap()
+        crate::sqlite::memory_pool(None).await
     }
 
     fn test_dbs(pools: &SqlitePool, playlist: &SqlitePool) -> Dbs {

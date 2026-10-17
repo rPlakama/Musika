@@ -503,10 +503,6 @@ async fn tracks_json(
 
 #[cfg(test)]
 mod tests {
-    use std::str::FromStr;
-
-    use sqlx::sqlite::{SqliteConnectOptions, SqlitePool, SqlitePoolOptions};
-
     use super::*;
 
     fn song_row(id: &str) -> crate::library::SongRow {
@@ -551,49 +547,25 @@ mod tests {
         assert_eq!(snapshot_start(&ids, &rows, 9), 0);
     }
 
-    async fn memory_pool() -> SqlitePool {
-        let options = SqliteConnectOptions::from_str("sqlite::memory:").unwrap();
-        SqlitePoolOptions::new()
-            .max_connections(1)
-            .connect_with(options)
-            .await
-            .unwrap()
-    }
-
     async fn test_dbs() -> crate::db::Dbs {
-        let credentials = memory_pool().await;
-        sqlx::migrate!("./migrations")
-            .set_ignore_missing(true)
-            .run(&credentials)
-            .await
-            .unwrap();
-        let library = memory_pool().await;
-        sqlx::migrate!("./migrations_library")
-            .run(&library)
-            .await
-            .unwrap();
-        let covers = memory_pool().await;
-        sqlx::migrate!("./migrations_covers")
-            .run(&covers)
-            .await
-            .unwrap();
-        let download = memory_pool().await;
-        sqlx::migrate!("./migrations_download")
-            .run(&download)
-            .await
-            .unwrap();
+        let mut credential_migrations = sqlx::migrate!("./migrations");
+        credential_migrations.set_ignore_missing(true);
+        let credentials = crate::sqlite::memory_pool(credential_migrations).await;
+        let library = crate::sqlite::memory_pool(sqlx::migrate!("./migrations_library")).await;
+        let covers = crate::sqlite::memory_pool(sqlx::migrate!("./migrations_covers")).await;
+        let download = crate::sqlite::memory_pool(sqlx::migrate!("./migrations_download")).await;
         crate::db::Dbs {
             credentials,
             library,
-            search: memory_pool().await,
+            search: crate::sqlite::memory_pool(None).await,
             covers,
-            media: memory_pool().await,
-            lyrics: memory_pool().await,
-            colors: memory_pool().await,
-            status: memory_pool().await,
-            artist_user: memory_pool().await,
+            media: crate::sqlite::memory_pool(None).await,
+            lyrics: crate::sqlite::memory_pool(None).await,
+            colors: crate::sqlite::memory_pool(None).await,
+            status: crate::sqlite::memory_pool(None).await,
+            artist_user: crate::sqlite::memory_pool(None).await,
             download,
-            playlist: memory_pool().await,
+            playlist: crate::sqlite::memory_pool(None).await,
         }
     }
 

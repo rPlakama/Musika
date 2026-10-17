@@ -59,6 +59,27 @@ pub struct SyncProgress {
     pub total: usize,
 }
 
+fn report(progress: &mut impl FnMut(SyncProgress), message: impl Into<String>, done: usize) {
+    progress(SyncProgress {
+        message: message.into(),
+        done,
+        total: 100,
+    });
+}
+
+async fn best_effort<T>(
+    label: &str,
+    future: impl std::future::Future<Output = Result<T>>,
+) -> Option<T> {
+    match future.await {
+        Ok(value) => Some(value),
+        Err(err) => {
+            eprintln!("index: {label}: {err:#}");
+            None
+        }
+    }
+}
+
 /// Fetches the library and refreshes the local databases.
 ///
 /// `progress` is called at each stage so the UI can display a status/progress.
@@ -70,11 +91,7 @@ pub async fn sync_library<F>(
 where
     F: FnMut(SyncProgress) + Send,
 {
-    progress(SyncProgress {
-        message: "Checking for changes…".to_string(),
-        done: 0,
-        total: 100,
-    });
+    report(&mut progress, "Checking for changes…", 0);
 
     let last_modified = crate::library::last_modified(&dbs.library).await?;
 
@@ -85,11 +102,7 @@ where
 
     if indexes.index.is_empty() && indexes.shortcut.is_empty() {
         crate::library::touch_last_sync(&dbs.library).await?;
-        progress(SyncProgress {
-            message: "Up to date".to_string(),
-            done: 100,
-            total: 100,
-        });
+        report(&mut progress, "Up to date", 100);
         // S-9: the search schema migration recreates the FTS table, so an
         // unchanged library can still have an empty index. Rebuild it here
         // rather than waiting for the next library change.
@@ -121,11 +134,11 @@ where
     artist_ids.sort();
     artist_ids.dedup();
 
-    progress(SyncProgress {
-        message: format!("Fetching {} artists…", artist_ids.len()),
-        done: 10,
-        total: 100,
-    });
+    report(
+        &mut progress,
+        format!("Fetching {} artists…", artist_ids.len()),
+        10,
+    );
     // ARC-25: abort before any destructive step when a fetch was skipped.
     let fetched_artists = fetch_artists(&client, &artist_ids).await?;
 
@@ -137,11 +150,11 @@ where
     album_ids.sort();
     album_ids.dedup();
 
-    progress(SyncProgress {
-        message: format!("Fetching {} albums…", album_ids.len()),
-        done: 40,
-        total: 100,
-    });
+    report(
+        &mut progress,
+        format!("Fetching {} albums…", album_ids.len()),
+        40,
+    );
     let fetched_albums = fetch_albums(&client, &album_ids).await?;
 
     let artists: Vec<ArtistID3> = fetched_artists
@@ -156,11 +169,7 @@ where
     }
 
     // 1. library metadata
-    progress(SyncProgress {
-        message: "Indexing library…".to_string(),
-        done: 65,
-        total: 100,
-    });
+    report(&mut progress, "Indexing library…", 65);
     crate::library::replace(
         &dbs.library,
         &artists,
@@ -174,75 +183,62 @@ where
     rebuild_search(dbs).await?;
 
     // 3. plain-text mirror for external tools (best effort)
-    if let Err(err) = crate::library::write_mirror(&dbs.library).await {
-        eprintln!("index: could not write the search mirror: {err:#}");
-    }
+    best_effort(
+        "could not write the search mirror",
+        crate::library::write_mirror(&dbs.library),
+    )
+    .await;
 
     // 4. cover cache, only now that the sync has otherwise succeeded
-    progress(SyncProgress {
-        message: "Caching covers…".to_string(),
-        done: 80,
-        total: 100,
-    });
+    report(&mut progress, "Caching covers…", 80);
     let covers = refresh_covers(dbs, &client).await;
 
     // 5. lyric cache: drop entries for songs that left the library
-    if let Err(err) = crate::lyrics::purge(dbs).await {
-        eprintln!("index: lyric cache purge failed: {err:#}");
-    }
+    best_effort("lyric cache purge failed", crate::lyrics::purge(dbs)).await;
 
     // 5b. artist biography cache: drop artists that left the library
-    if let Err(err) = crate::library::purge_stale_artist_info(&dbs.library).await {
-        eprintln!("index: artist info purge failed: {err:#}");
-    }
+    best_effort(
+        "artist info purge failed",
+        crate::library::purge_stale_artist_info(&dbs.library),
+    )
+    .await;
 
     // 5c. media cache: drop blobs for vanished songs and dead rules
-    if let Err(err) = crate::media::purge(dbs).await {
-        eprintln!("index: media cache purge failed: {err:#}");
-    }
+    best_effort("media cache purge failed", crate::media::purge(dbs)).await;
 
     // 5c'. media cache: rule-owned blobs no longer inside a selected
     // artist/album container (CACHE-5 coverage check)
-    if let Err(err) = crate::media::prune_uncovered(dbs).await {
-        eprintln!("index: media coverage prune failed: {err:#}");
-    }
+    best_effort(
+        "media coverage prune failed",
+        crate::media::prune_uncovered(dbs),
+    )
+    .await;
 
     // 5d. download ledger: drop rows for songs that left the library
-    match crate::library::song_ids(&dbs.library).await {
-        Ok(ids) => {
-            let owners: std::collections::HashSet<String> = ids.into_iter().collect();
-            if let Err(err) =
-                crate::cache::purge_missing(&dbs.download, "download", "song_id", &owners).await
-            {
-                eprintln!("index: download ledger purge failed: {err:#}");
-            }
-        }
-        Err(err) => eprintln!("index: could not list songs for the download purge: {err:#}"),
-    }
+    best_effort("download ledger purge failed", async {
+        let ids = crate::library::song_ids(&dbs.library).await?;
+        let owners: std::collections::HashSet<String> = ids.into_iter().collect();
+        crate::cache::purge_missing(&dbs.download, "download", "song_id", &owners).await?;
+        Ok(())
+    })
+    .await;
 
     // 6. bounded lyric backfill (the sync button's lyric pass)
     let lyrics = refresh_lyrics(dbs, &client, &mut progress).await;
 
     // 7. color cache: drop schemes whose cover vanished from covers.db
-    if let Err(err) = crate::colors::purge(dbs).await {
-        eprintln!("index: color cache purge failed: {err:#}");
-    }
+    best_effort("color cache purge failed", crate::colors::purge(dbs)).await;
 
     // 8. ARC-44: the Subsonic playlist list rides the library sync; the
     // contents stay lazy, and a failure here never fails the sync.
-    let playlists = match crate::playlists::refresh_subsonic(dbs, &client).await {
-        Ok(count) => count,
-        Err(err) => {
-            eprintln!("index: could not refresh playlists: {err:#}");
-            0
-        }
-    };
+    let playlists = best_effort(
+        "could not refresh playlists",
+        crate::playlists::refresh_subsonic(dbs, &client),
+    )
+    .await
+    .unwrap_or(0);
 
-    progress(SyncProgress {
-        message: "Done".to_string(),
-        done: 100,
-        total: 100,
-    });
+    report(&mut progress, "Done", 100);
 
     Ok(SyncReport {
         updated: true,
@@ -268,18 +264,13 @@ async fn refresh_lyrics<F>(dbs: &Dbs, client: &Arc<SubsonicClient>, progress: &m
 where
     F: FnMut(SyncProgress),
 {
-    progress(SyncProgress {
-        message: "Fetching lyrics…".to_string(),
-        done: 85,
-        total: 100,
-    });
-    match crate::lyrics::backfill(dbs, client, crate::lyrics::SYNC_BACKFILL_LIMIT).await {
-        Ok(report) => report.fetched,
-        Err(err) => {
-            eprintln!("index: lyric backfill failed: {err:#}");
-            0
-        }
-    }
+    report(progress, "Fetching lyrics…", 85);
+    best_effort(
+        "lyric backfill failed",
+        crate::lyrics::backfill(dbs, client, crate::lyrics::SYNC_BACKFILL_LIMIT),
+    )
+    .await
+    .map_or(0, |report| report.fetched)
 }
 
 /// Revalidates/downloads referenced covers and purges the rest.

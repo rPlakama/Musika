@@ -57,7 +57,7 @@ async fn upsert_artist_user(
              updated_at = excluded.updated_at",
     )
     .bind(artist_id)
-    .bind(starred.map(i64::from))
+    .bind(starred)
     .bind(rating.map(i64::from))
     .bind(crate::consts::now_secs().to_string())
     .execute(pool)
@@ -120,22 +120,10 @@ pub async fn payload(pool: &SqlitePool, artist_id: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use std::str::FromStr;
-
     use super::*;
 
     async fn memory_pool() -> SqlitePool {
-        let options = sqlx::sqlite::SqliteConnectOptions::from_str("sqlite::memory:").unwrap();
-        let pool = sqlx::sqlite::SqlitePoolOptions::new()
-            .max_connections(1)
-            .connect_with(options)
-            .await
-            .unwrap();
-        sqlx::migrate!("./migrations_artist_user")
-            .run(&pool)
-            .await
-            .unwrap();
-        pool
+        crate::sqlite::memory_pool(sqlx::migrate!("./migrations_artist_user")).await
     }
 
     #[tokio::test]

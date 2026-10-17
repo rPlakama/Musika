@@ -685,33 +685,15 @@ fn cache_is_stale(document: &Document, fetched_at: i64) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use std::str::FromStr;
-
     use super::*;
     use crate::api::{LyricLine, StructuredLyrics};
-    use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 
     async fn lyrics_pool() -> SqlitePool {
-        let options = SqliteConnectOptions::from_str("sqlite::memory:").unwrap();
-        let pool = SqlitePoolOptions::new()
-            .max_connections(1)
-            .connect_with(options)
-            .await
-            .unwrap();
-        sqlx::migrate!("./migrations_lyrics")
-            .run(&pool)
-            .await
-            .unwrap();
-        pool
+        crate::sqlite::memory_pool(sqlx::migrate!("./migrations_lyrics")).await
     }
 
     async fn library_pool() -> SqlitePool {
-        let options = SqliteConnectOptions::from_str("sqlite::memory:").unwrap();
-        SqlitePoolOptions::new()
-            .max_connections(1)
-            .connect_with(options)
-            .await
-            .unwrap()
+        crate::sqlite::memory_pool(None).await
     }
 
     #[test]

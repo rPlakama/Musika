@@ -140,23 +140,10 @@ fn fts_query(raw: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use std::str::FromStr;
-
     use super::*;
-    use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 
     async fn memory_pool() -> SqlitePool {
-        let options = SqliteConnectOptions::from_str("sqlite::memory:").unwrap();
-        let pool = SqlitePoolOptions::new()
-            .max_connections(1)
-            .connect_with(options)
-            .await
-            .unwrap();
-        sqlx::migrate!("./migrations_search")
-            .run(&pool)
-            .await
-            .unwrap();
-        pool
+        crate::sqlite::memory_pool(sqlx::migrate!("./migrations_search")).await
     }
 
     #[tokio::test]

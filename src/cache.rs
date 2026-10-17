@@ -102,12 +102,9 @@ pub async fn purge_missing(
 mod tests {
     use super::*;
     use sqlx::SqlitePool;
-    use sqlx::sqlite::SqliteConnectOptions;
-    use std::str::FromStr;
 
     async fn pool() -> SqlitePool {
-        let options = SqliteConnectOptions::from_str("sqlite::memory:").unwrap();
-        SqlitePool::connect_with(options).await.unwrap()
+        crate::sqlite::memory_pool(None).await
     }
 
     #[tokio::test]

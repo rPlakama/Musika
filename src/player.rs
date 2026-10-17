@@ -25,11 +25,11 @@
 //! Q-5 window model (`PLAYBACKSTUDY.md`): the current track is played as an
 //! mpv *playlist* — the current entry plus the next one appended once the
 //! current reports `file-loaded` — so mpv advances gap-free with
-//! `--gapless-audio=yes`. A load failure has no
-//! next entry to auto-advance to, so it can be retried in place with
-//! `playlist-play-index` before the queue moves on. The Rust queue stays the
-//! source of truth; `playlist-pos` maps back into it
-//! (`index = window_base + pos`).
+//! `--gapless-audio=yes` and a cache-bounded `--prefetch-playlist=yes`.
+//! A load failure has no next entry to auto-advance to, so it can be
+//! retried in place with `playlist-play-index` before the queue moves on.
+//! The Rust queue stays the source of truth; `playlist-pos` maps back into
+//! it (`index = window_base + pos`).
 //!
 //! A small reader thread owns the read half of the socket and mirrors mpv's
 //! observed properties and events into a shared [`Shared`] snapshot that the
@@ -38,7 +38,7 @@
 //! depend on network timing (the queue advances on keypress, not on the
 //! stream).
 
-use std::io::{BufRead, BufReader, Write};
+use std::io::Write;
 use std::os::unix::net::UnixStream;
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
@@ -84,6 +84,14 @@ impl State {
             Self::Paused => "paused",
         }
     }
+
+    pub fn mpris_status(self) -> &'static str {
+        match self {
+            Self::Stopped => "Stopped",
+            Self::Playing => "Playing",
+            Self::Paused => "Paused",
+        }
+    }
 }
 
 /// A failed `end-file` for the UI thread to act on (Q-5).
@@ -114,6 +122,14 @@ struct Shared {
     /// While set, `end-file` events belong to the file we deliberately
     /// replaced and must not advance the queue (fast skip/previous races).
     pending_load: bool,
+}
+
+impl Shared {
+    fn reset(&mut self) {
+        self.position = 0.0;
+        self.duration = 0.0;
+        self.error = None;
+    }
 }
 
 /// `playlist-play-index` attempts after a failed load before advancing (Q-5).
@@ -221,8 +237,20 @@ impl Player {
         self.muted
     }
 
+    fn shared(&self) -> std::sync::MutexGuard<'_, Shared> {
+        self.shared.lock().unwrap()
+    }
+
+    fn set_property(&mut self, name: &str, value: Value) {
+        self.command(vec![json!("set_property"), json!(name), value]);
+    }
+
+    fn observe(&mut self, id: u32, name: &str) {
+        self.command(vec![json!("observe_property"), json!(id), json!(name)]);
+    }
+
     pub fn duration(&self) -> f64 {
-        let shared = self.shared.lock().unwrap();
+        let shared = self.shared();
         if shared.duration > 0.0 {
             shared.duration
         } else {
@@ -231,7 +259,7 @@ impl Player {
     }
 
     pub fn position(&self) -> f64 {
-        self.shared.lock().unwrap().position
+        self.shared().position
     }
 
     /// Replaces the queue and starts at `start`.
@@ -278,14 +306,11 @@ impl Player {
     /// loaded, so a load failure has nothing to auto-advance to.
     fn rebuild(&mut self) {
         let track = self.queue[self.index].clone();
-        {
-            let mut shared = self.shared.lock().unwrap();
-            *shared = Shared {
-                duration: track.duration,
-                pending_load: true,
-                ..Shared::default()
-            };
-        }
+        *self.shared() = Shared {
+            duration: track.duration,
+            pending_load: true,
+            ..Shared::default()
+        };
         self.fallback_duration = track.duration;
         self.window_base = self.index;
         self.window_len = 1;
@@ -294,7 +319,7 @@ impl Player {
 
         self.command(vec![json!("loadfile"), json!(track.url.clone()), json!("replace")]);
         self.push_metadata(&track);
-        self.command(vec![json!("set_property"), json!("pause"), json!(false)]);
+        self.set_property("pause", json!(false));
         self.state = State::Playing;
     }
 
@@ -308,7 +333,7 @@ impl Player {
             "artUrl": track.cover_url,
             "mpris:artUrl": track.cover_url,
         });
-        self.command(vec![json!("set_property"), json!("metadata"), metadata]);
+        self.set_property("metadata", metadata);
     }
 
     pub fn toggle(&mut self) {
@@ -327,7 +352,7 @@ impl Player {
         if self.state != State::Playing {
             return;
         }
-        self.command(vec![json!("set_property"), json!("pause"), json!(true)]);
+        self.set_property("pause", json!(true));
         self.state = State::Paused;
     }
 
@@ -335,16 +360,15 @@ impl Player {
         if self.state != State::Paused {
             return;
         }
-        self.command(vec![json!("set_property"), json!("pause"), json!(false)]);
+        self.set_property("pause", json!(false));
         self.state = State::Playing;
     }
 
     pub fn stop(&mut self) {
         self.command(vec![json!("stop")]);
         {
-            let mut shared = self.shared.lock().unwrap();
-            shared.position = 0.0;
-            shared.error = None;
+            let mut shared = self.shared();
+            shared.reset();
             shared.idle = false;
             shared.playlist_pos = None;
         }
@@ -363,10 +387,10 @@ impl Player {
         let local = self.index - self.window_base;
         if local + 1 < self.window_len {
             // The next entry is already in the mpv playlist: it advances
-            // natively, so the skip stays gapless.
+            // natively (prefetched, cache-bounded), so the skip stays gapless.
             self.index += 1;
             self.command(vec![json!("playlist-next")]);
-            self.command(vec![json!("set_property"), json!("pause"), json!(false)]);
+            self.set_property("pause", json!(false));
             self.state = State::Playing;
             let track = self.queue[self.index].clone();
             self.push_metadata(&track);
@@ -389,7 +413,7 @@ impl Player {
             // The previous entry is still in the window: replay it in place.
             let local = target - self.window_base;
             self.command(vec![json!("playlist-play-index"), json!(local)]);
-            self.command(vec![json!("set_property"), json!("pause"), json!(false)]);
+            self.set_property("pause", json!(false));
             self.state = State::Playing;
             let track = self.queue[target].clone();
             self.push_metadata(&track);
@@ -495,27 +519,19 @@ impl Player {
     pub fn seek(&mut self, seconds: f64) {
         let seconds = seconds.max(0.0);
         self.command(vec![json!("seek"), json!(seconds), json!("absolute")]);
-        self.shared.lock().unwrap().position = seconds;
+        self.shared().position = seconds;
     }
 
     /// Sets volume (0-100).
     pub fn set_volume(&mut self, volume: f64) {
         self.volume = volume.clamp(0.0, 100.0);
-        self.command(vec![
-            json!("set_property"),
-            json!("volume"),
-            json!(self.volume),
-        ]);
+        self.set_property("volume", json!(self.volume));
     }
 
     /// Mutes or unmutes without touching the volume value.
     pub fn set_muted(&mut self, muted: bool) {
         self.muted = muted;
-        self.command(vec![
-            json!("set_property"),
-            json!("mute"),
-            json!(self.muted),
-        ]);
+        self.set_property("mute", json!(self.muted));
     }
 
     pub fn toggle_mute(&mut self) {
@@ -538,7 +554,7 @@ impl Player {
         }
 
         let (pending, pos, loaded, idle, error) = {
-            let mut shared = self.shared.lock().unwrap();
+            let mut shared = self.shared();
             (
                 shared.pending_load,
                 shared.playlist_pos,
@@ -635,10 +651,10 @@ impl Player {
     fn reload_current(&mut self) {
         let local = self.index - self.window_base;
         {
-            let mut shared = self.shared.lock().unwrap();
+            let mut shared = self.shared();
+            shared.reset();
             shared.loaded = false;
             shared.idle = false;
-            shared.position = 0.0;
         }
         self.command(vec![json!("playlist-play-index"), json!(local)]);
     }
@@ -655,14 +671,14 @@ impl Player {
     }
 
     fn pending_load(&self) -> bool {
-        self.shared.lock().unwrap().pending_load
+        self.shared().pending_load
     }
 
     /// Explicit user moves supersede any recorded failure.
     fn forget_error(&mut self) {
         self.retries = 0;
         self.retry_at = None;
-        self.shared.lock().unwrap().error = None;
+        self.shared().error = None;
     }
 
     fn ensure_ready(&mut self) -> bool {
@@ -670,8 +686,8 @@ impl Player {
             return true;
         }
 
-        let socket = socket_path();
-        let _ = std::fs::remove_file(&socket);
+        let socket = crate::db::config_socket("mpv.sock");
+        crate::ipc::remove_stale_socket(&socket);
 
         // mpv is our direct child and the kernel TERMs it if we die (even on
         // SIGKILL, where Drop never runs): PR_SET_PDEATHSIG in `pre_exec`, no
@@ -687,14 +703,17 @@ impl Player {
             .arg("--no-terminal")
             .arg("--really-quiet")
             // Q-5: gap-free playlist transitions and HTTP drop recovery
-            // (`PLAYBACKSTUDY.md` §2/§4).
+            // (`PLAYBACKSTUDY.md` §2/§4). The prefetch is capped: the
+            // demuxer caches default to 150+50 MiB per demuxer, and the
+            // prefetched entry is a second one.
             .arg("--gapless-audio=yes")
+            .arg("--prefetch-playlist=yes")
+            .arg("--demuxer-max-bytes=32MiB")
+            .arg("--demuxer-max-back-bytes=8MiB")
             .arg("--stream-lavf-o=reconnect=1,reconnect_streamed=1,reconnect_delay_max=5")
             .arg(&socket_arg);
-        if let Ok(script) = std::env::var("MUSIKA_MPRIS_SCRIPT") {
-            if !script.is_empty() {
-                command.arg(format!("--script={script}"));
-            }
+        if let Some(script) = crate::mpris::mpris_script() {
+            command.arg(format!("--script={script}"));
         }
         unsafe {
             command.pre_exec(move || {
@@ -730,16 +749,23 @@ impl Player {
         };
 
         if let Ok(reader) = stream.try_clone() {
-            spawn_reader(reader, Arc::clone(&self.shared));
+            let shared = Arc::clone(&self.shared);
+            crate::ipc::spawn_line_reader(reader, move |line| {
+                let Ok(value) = serde_json::from_str::<Value>(&line) else {
+                    return;
+                };
+                let mut shared = shared.lock().unwrap();
+                apply_event(&mut shared, &value);
+            });
         }
         self.ipc = Some(stream);
         self.socket = Some(socket);
 
         // Observe the properties the UI needs, then apply volume and mute.
-        self.command(vec![json!("observe_property"), json!(1), json!("time-pos")]);
-        self.command(vec![json!("observe_property"), json!(2), json!("duration")]);
-        self.command(vec![json!("observe_property"), json!(3), json!("pause")]);
-        self.command(vec![json!("observe_property"), json!(4), json!("playlist-pos")]);
+        self.observe(1, "time-pos");
+        self.observe(2, "duration");
+        self.observe(3, "pause");
+        self.observe(4, "playlist-pos");
         self.set_volume(self.volume);
         self.set_muted(self.muted);
         true
@@ -767,15 +793,9 @@ impl Drop for Player {
             let _ = child.wait();
         }
         if let Some(socket) = &self.socket {
-            let _ = std::fs::remove_file(socket);
+            crate::ipc::remove_stale_socket(socket);
         }
     }
-}
-
-fn socket_path() -> PathBuf {
-    crate::db::config_dir()
-        .map(|dir| dir.join("mpv.sock"))
-        .unwrap_or_else(|_| PathBuf::from("/tmp/musika-mpv.sock"))
 }
 
 fn connect_retry(path: &Path, timeout: Duration) -> Option<UnixStream> {
@@ -796,20 +816,6 @@ fn signal(pid: u32, signal: libc::c_int) {
     unsafe {
         libc::kill(pid as libc::pid_t, signal);
     }
-}
-
-fn spawn_reader(stream: UnixStream, shared: Arc<Mutex<Shared>>) {
-    std::thread::spawn(move || {
-        let reader = BufReader::new(stream);
-        for line in reader.lines() {
-            let Ok(line) = line else { break };
-            let Ok(value) = serde_json::from_str::<Value>(&line) else {
-                continue;
-            };
-            let mut shared = shared.lock().unwrap();
-            apply_event(&mut shared, &value);
-        }
-    });
 }
 
 /// Mirrors one mpv event into [`Shared`].

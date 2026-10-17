@@ -338,6 +338,10 @@ impl Palette {
             return;
         }
 
+        self.apply_roles(&roles);
+    }
+
+    fn apply_roles(&mut self, roles: &std::collections::BTreeMap<String, String>) {
         apply_role!(self, roles, background, "background", background_changed);
         apply_role!(
             self,
@@ -502,47 +506,76 @@ impl Palette {
     #[qslot(qml_name = "reset")]
     fn reset(&mut self) {
         let defaults = Self::default();
-
-        macro_rules! restore {
-            ($field:ident, $signal:ident) => {
-                if self.$field != defaults.$field {
-                    self.$field = defaults.$field.clone();
-                    self.$signal();
-                }
-            };
-        }
-
-        restore!(background, background_changed);
-        restore!(on_background, on_background_changed);
-        restore!(surface, surface_changed);
-        restore!(surface_dim, surface_dim_changed);
-        restore!(surface_bright, surface_bright_changed);
-        restore!(surface_container_lowest, surface_container_lowest_changed);
-        restore!(surface_container_low, surface_container_low_changed);
-        restore!(surface_container, surface_container_changed);
-        restore!(surface_container_high, surface_container_high_changed);
-        restore!(surface_container_highest, surface_container_highest_changed);
-        restore!(on_surface, on_surface_changed);
-        restore!(surface_variant, surface_variant_changed);
-        restore!(on_surface_variant, on_surface_variant_changed);
-        restore!(primary, primary_changed);
-        restore!(on_primary, on_primary_changed);
-        restore!(primary_container, primary_container_changed);
-        restore!(on_primary_container, on_primary_container_changed);
-        restore!(secondary, secondary_changed);
-        restore!(secondary_container, secondary_container_changed);
-        restore!(on_secondary_container, on_secondary_container_changed);
-        restore!(tertiary, tertiary_changed);
-        restore!(tertiary_container, tertiary_container_changed);
-        restore!(on_tertiary_container, on_tertiary_container_changed);
-        restore!(error, error_changed);
-        restore!(error_container, error_container_changed);
-        restore!(on_error_container, on_error_container_changed);
-        restore!(inverse_surface, inverse_surface_changed);
-        restore!(on_inverse_surface, on_inverse_surface_changed);
-        restore!(surface_tint, surface_tint_changed);
-        restore!(outline, outline_changed);
-        restore!(outline_variant, outline_variant_changed);
-        restore!(scrim, scrim_changed);
+        let roles = std::collections::BTreeMap::from([
+            ("background".to_string(), defaults.background),
+            ("on_background".to_string(), defaults.on_background),
+            ("surface".to_string(), defaults.surface),
+            ("surface_dim".to_string(), defaults.surface_dim),
+            ("surface_bright".to_string(), defaults.surface_bright),
+            (
+                "surface_container_lowest".to_string(),
+                defaults.surface_container_lowest,
+            ),
+            (
+                "surface_container_low".to_string(),
+                defaults.surface_container_low,
+            ),
+            ("surface_container".to_string(), defaults.surface_container),
+            (
+                "surface_container_high".to_string(),
+                defaults.surface_container_high,
+            ),
+            (
+                "surface_container_highest".to_string(),
+                defaults.surface_container_highest,
+            ),
+            ("on_surface".to_string(), defaults.on_surface),
+            ("surface_variant".to_string(), defaults.surface_variant),
+            (
+                "on_surface_variant".to_string(),
+                defaults.on_surface_variant,
+            ),
+            ("primary".to_string(), defaults.primary),
+            ("on_primary".to_string(), defaults.on_primary),
+            ("primary_container".to_string(), defaults.primary_container),
+            (
+                "on_primary_container".to_string(),
+                defaults.on_primary_container,
+            ),
+            ("secondary".to_string(), defaults.secondary),
+            (
+                "secondary_container".to_string(),
+                defaults.secondary_container,
+            ),
+            (
+                "on_secondary_container".to_string(),
+                defaults.on_secondary_container,
+            ),
+            ("tertiary".to_string(), defaults.tertiary),
+            (
+                "tertiary_container".to_string(),
+                defaults.tertiary_container,
+            ),
+            (
+                "on_tertiary_container".to_string(),
+                defaults.on_tertiary_container,
+            ),
+            ("error".to_string(), defaults.error),
+            ("error_container".to_string(), defaults.error_container),
+            (
+                "on_error_container".to_string(),
+                defaults.on_error_container,
+            ),
+            ("inverse_surface".to_string(), defaults.inverse_surface),
+            (
+                "inverse_on_surface".to_string(),
+                defaults.on_inverse_surface,
+            ),
+            ("surface_tint".to_string(), defaults.surface_tint),
+            ("outline".to_string(), defaults.outline),
+            ("outline_variant".to_string(), defaults.outline_variant),
+            ("scrim".to_string(), defaults.scrim),
+        ]);
+        self.apply_roles(&roles);
     }
 }

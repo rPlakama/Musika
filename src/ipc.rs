@@ -29,8 +29,8 @@
 //! `play_song_in_album <song-id>` (opens the album page and plays from there).
 
 use std::io::{BufRead, BufReader};
-use std::os::unix::net::UnixListener;
-use std::path::PathBuf;
+use std::os::unix::net::{UnixListener, UnixStream};
+use std::path::{Path, PathBuf};
 
 /// Path of the IPC socket (`MUSIKA_IPC_SOCKET` overrides).
 pub fn socket_path() -> PathBuf {
@@ -39,9 +39,31 @@ pub fn socket_path() -> PathBuf {
             return PathBuf::from(path);
         }
     }
-    crate::db::config_dir()
-        .map(|dir| dir.join("ipc.sock"))
-        .unwrap_or_else(|_| PathBuf::from("/tmp/musika-ipc.sock"))
+    crate::db::config_socket("ipc.sock")
+}
+
+pub fn remove_stale_socket(path: &Path) {
+    let _ = std::fs::remove_file(path);
+}
+
+pub fn spawn_line_reader<F>(stream: UnixStream, on_line: F)
+where
+    F: FnMut(String) + Send + 'static,
+{
+    std::thread::spawn(move || read_lines(stream, on_line));
+}
+
+fn read_lines<F>(stream: UnixStream, mut on_line: F)
+where
+    F: FnMut(String),
+{
+    for line in BufReader::new(stream).lines() {
+        let Ok(line) = line else { break };
+        let command = line.trim();
+        if !command.is_empty() {
+            on_line(command.to_string());
+        }
+    }
 }
 
 /// Serves commands on `path` from a dedicated thread, one connection at a time.
@@ -50,7 +72,7 @@ where
     F: Fn(String) + Send + 'static,
 {
     std::thread::spawn(move || {
-        let _ = std::fs::remove_file(&path);
+        remove_stale_socket(&path);
         if let Some(parent) = path.parent() {
             let _ = std::fs::create_dir_all(parent);
         }
@@ -63,19 +85,12 @@ where
             }
         };
 
+        let mut handler = handler;
         for stream in listener.incoming() {
             let Ok(stream) = stream else {
                 continue;
             };
-            for line in BufReader::new(stream).lines() {
-                let Ok(line) = line else {
-                    break;
-                };
-                let command = line.trim();
-                if !command.is_empty() {
-                    handler(command.to_string());
-                }
-            }
+            read_lines(stream, &mut handler);
         }
     });
 }

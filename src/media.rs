@@ -471,28 +471,13 @@ fn md5_hex(bytes: &[u8]) -> String {
 
 #[cfg(test)]
 mod tests {
-    use std::str::FromStr;
-
     use super::*;
 
     async fn pool_with(migration: &str) -> SqlitePool {
-        let options = sqlx::sqlite::SqliteConnectOptions::from_str("sqlite::memory:").unwrap();
-        let pool = sqlx::sqlite::SqlitePoolOptions::new()
-            .max_connections(1)
-            .connect_with(options)
-            .await
-            .unwrap();
         match migration {
-            "media" => sqlx::migrate!("./migrations_media")
-                .run(&pool)
-                .await
-                .unwrap(),
-            _ => sqlx::migrate!("./migrations_library")
-                .run(&pool)
-                .await
-                .unwrap(),
+            "media" => crate::sqlite::memory_pool(sqlx::migrate!("./migrations_media")).await,
+            _ => crate::sqlite::memory_pool(sqlx::migrate!("./migrations_library")).await,
         }
-        pool
     }
 
     async fn media_pool() -> SqlitePool {

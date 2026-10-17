@@ -221,22 +221,10 @@ pub async fn unmark_rule(pool: &SqlitePool, rule_id: &str) -> Result<usize> {
 
 #[cfg(test)]
 mod tests {
-    use std::str::FromStr;
-
     use super::*;
 
     async fn memory_pool() -> SqlitePool {
-        let options = sqlx::sqlite::SqliteConnectOptions::from_str("sqlite::memory:").unwrap();
-        let pool = sqlx::sqlite::SqlitePoolOptions::new()
-            .max_connections(1)
-            .connect_with(options)
-            .await
-            .unwrap();
-        sqlx::migrate!("./migrations_download")
-            .run(&pool)
-            .await
-            .unwrap();
-        pool
+        crate::sqlite::memory_pool(sqlx::migrate!("./migrations_download")).await
     }
 
     #[tokio::test]

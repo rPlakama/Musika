@@ -111,6 +111,22 @@ fn submit(command: String) {
     }
 }
 
+fn submit_action(action: &str) {
+    submit(format!("mpris_{action}"));
+}
+
+fn put_nonempty(map: &mut HashMap<String, OwnedValue>, key: &str, value: &str) {
+    if !value.is_empty() {
+        map.insert(key.to_string(), owned(Value::from(value.to_string())));
+    }
+}
+
+pub fn mpris_script() -> Option<String> {
+    std::env::var("MUSIKA_MPRIS_SCRIPT")
+        .ok()
+        .filter(|script| !script.is_empty())
+}
+
 /// Drains pending control commands (called from the player tick).
 pub fn drain() -> Vec<String> {
     let Some(rx) = COMMAND_RX.get() else {
@@ -141,11 +157,9 @@ async fn serve() {
         eprintln!("mpris: no session bus; native MPRIS disabled");
         return;
     }
-    if let Ok(script) = std::env::var("MUSIKA_MPRIS_SCRIPT") {
-        if !script.is_empty() {
-            eprintln!("mpris: MUSIKA_MPRIS_SCRIPT is set; keeping the mpv fallback");
-            return;
-        }
+    if mpris_script().is_some() {
+        eprintln!("mpris: MUSIKA_MPRIS_SCRIPT is set; keeping the mpv fallback");
+        return;
     }
 
     let Ok(builder) = Builder::session() else {
@@ -263,30 +277,15 @@ fn metadata(state: &Snapshot) -> HashMap<String, OwnedValue> {
             owned(Value::from(state.duration_us)),
         );
     }
-    if !state.art_url.is_empty() {
-        map.insert(
-            "mpris:artUrl".to_string(),
-            owned(Value::from(state.art_url.clone())),
-        );
-    }
-    if !state.title.is_empty() {
-        map.insert(
-            "xesam:title".to_string(),
-            owned(Value::from(state.title.clone())),
-        );
-    }
+    put_nonempty(&mut map, "mpris:artUrl", &state.art_url);
+    put_nonempty(&mut map, "xesam:title", &state.title);
     if !state.artist.is_empty() {
         map.insert(
             "xesam:artist".to_string(),
             owned(Value::from(vec![state.artist.clone()])),
         );
     }
-    if !state.album.is_empty() {
-        map.insert(
-            "xesam:album".to_string(),
-            owned(Value::from(state.album.clone())),
-        );
-    }
+    put_nonempty(&mut map, "xesam:album", &state.album);
     map
 }
 
@@ -435,27 +434,27 @@ impl MprisPlayer {
     }
 
     fn play(&self) {
-        submit("mpris_play".to_string());
+        submit_action("play");
     }
 
     fn pause(&self) {
-        submit("mpris_pause".to_string());
+        submit_action("pause");
     }
 
     fn play_pause(&self) {
-        submit("mpris_toggle".to_string());
+        submit_action("toggle");
     }
 
     fn stop(&self) {
-        submit("mpris_stop".to_string());
+        submit_action("stop");
     }
 
     fn next(&self) {
-        submit("mpris_next".to_string());
+        submit_action("next");
     }
 
     fn previous(&self) {
-        submit("mpris_prev".to_string());
+        submit_action("prev");
     }
 
     async fn seek(&self, offset: i64, #[zbus(signal_emitter)] emitter: SignalEmitter<'_>) {

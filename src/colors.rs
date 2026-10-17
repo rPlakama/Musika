@@ -46,8 +46,6 @@ pub use seed::SourceMode;
 
 #[cfg(test)]
 mod tests {
-    use std::str::FromStr;
-
     use super::engine;
     use super::seed;
     use super::*;
@@ -206,26 +204,11 @@ mod tests {
     }
 
     async fn colors_pool() -> SqlitePool {
-        let options = sqlx::sqlite::SqliteConnectOptions::from_str("sqlite::memory:").unwrap();
-        let pool = sqlx::sqlite::SqlitePoolOptions::new()
-            .max_connections(1)
-            .connect_with(options)
-            .await
-            .unwrap();
-        sqlx::migrate!("./migrations_colors")
-            .run(&pool)
-            .await
-            .unwrap();
-        pool
+        crate::sqlite::memory_pool(sqlx::migrate!("./migrations_colors")).await
     }
 
     async fn covers_pool() -> SqlitePool {
-        let options = sqlx::sqlite::SqliteConnectOptions::from_str("sqlite::memory:").unwrap();
-        let pool = sqlx::sqlite::SqlitePoolOptions::new()
-            .max_connections(1)
-            .connect_with(options)
-            .await
-            .unwrap();
+        let pool = crate::sqlite::memory_pool(None).await;
         sqlx::query("CREATE TABLE covers (id TEXT PRIMARY KEY)")
             .execute(&pool)
             .await

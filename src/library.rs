@@ -119,8 +119,13 @@ pub async fn replace(
     )
     .await?;
 
-    set_meta(&mut tx, "last_modified", &last_modified.to_string()).await?;
-    set_meta(&mut tx, "last_sync", &unix_now().to_string()).await?;
+    upsert_meta(&mut *tx, "last_modified", &last_modified.to_string()).await?;
+    upsert_meta(
+        &mut *tx,
+        "last_sync",
+        &crate::consts::now_secs().to_string(),
+    )
+    .await?;
 
     tx.commit().await?;
     Ok(())
@@ -135,7 +140,7 @@ pub async fn set_song_starred(pool: &SqlitePool, id: &str, on: bool) -> Result<(
         "UPDATE songs SET starred = CASE WHEN ?1 THEN ?2 ELSE NULL END WHERE id = ?3",
     )
     .bind(on)
-    .bind(unix_now().to_string())
+    .bind(crate::consts::now_secs().to_string())
     .bind(id)
     .execute(pool)
     .await?;
@@ -196,7 +201,7 @@ pub async fn set_album_starred(pool: &SqlitePool, id: &str, on: bool) -> Result<
         "UPDATE albums SET starred = CASE WHEN ?1 THEN ?2 ELSE NULL END WHERE id = ?3",
     )
     .bind(on)
-    .bind(unix_now().to_string())
+    .bind(crate::consts::now_secs().to_string())
     .bind(id)
     .execute(pool)
     .await?;
@@ -205,14 +210,7 @@ pub async fn set_album_starred(pool: &SqlitePool, id: &str, on: bool) -> Result<
 
 /// Records that a sync was attempted even when the server reported no changes.
 pub async fn touch_last_sync(pool: &SqlitePool) -> Result<()> {
-    sqlx::query(
-        "INSERT INTO meta (key, value) VALUES ('last_sync', ?1)
-         ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-    )
-    .bind(unix_now().to_string())
-    .execute(pool)
-    .await?;
-    Ok(())
+    upsert_meta(pool, "last_sync", &crate::consts::now_secs().to_string()).await
 }
 
 pub async fn last_modified(pool: &SqlitePool) -> Result<i64> {
@@ -850,55 +848,32 @@ pub async fn write_mirror(pool: &SqlitePool) -> Result<()> {
     }
 
     let path = crate::db::mirror_path()?;
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)
-            .with_context(|| format!("failed to create {}", parent.display()))?;
-    }
+    crate::db::ensure_parent_dir(&path)?;
     std::fs::write(&path, text).with_context(|| format!("failed to write {}", path.display()))?;
     Ok(())
 }
 
-async fn set_meta(
-    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
-    key: &str,
-    value: &str,
-) -> Result<()> {
+async fn upsert_meta<'e, E>(executor: E, key: &str, value: &str) -> Result<()>
+where
+    E: sqlx::Executor<'e, Database = sqlx::Sqlite>,
+{
     sqlx::query(
         "INSERT INTO meta (key, value) VALUES (?1, ?2)
          ON CONFLICT(key) DO UPDATE SET value = excluded.value",
     )
     .bind(key)
     .bind(value)
-    .execute(&mut **tx)
+    .execute(executor)
     .await?;
     Ok(())
 }
 
-fn unix_now() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|duration| duration.as_secs())
-        .unwrap_or(0)
-}
-
 #[cfg(test)]
 mod tests {
-    use std::str::FromStr;
-
     use super::*;
 
     async fn memory_pool() -> SqlitePool {
-        let options = sqlx::sqlite::SqliteConnectOptions::from_str("sqlite::memory:").unwrap();
-        let pool = sqlx::sqlite::SqlitePoolOptions::new()
-            .max_connections(1)
-            .connect_with(options)
-            .await
-            .unwrap();
-        sqlx::migrate!("./migrations_library")
-            .run(&pool)
-            .await
-            .unwrap();
-        pool
+        crate::sqlite::memory_pool(sqlx::migrate!("./migrations_library")).await
     }
 
     #[tokio::test]

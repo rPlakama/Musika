@@ -337,16 +337,27 @@ async fn wipe_pool(pool: &SqlitePool) -> Result<()> {
     Ok(())
 }
 
+pub fn config_socket(name: &str) -> PathBuf {
+    config_dir()
+        .map(|dir| dir.join(name))
+        .unwrap_or_else(|_| PathBuf::from(format!("/tmp/musika-{name}")))
+}
+
+pub fn ensure_parent_dir(path: &Path) -> Result<()> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)
+            .with_context(|| format!("failed to create {}", parent.display()))?;
+    }
+    Ok(())
+}
+
 async fn open_migrated(
     path: PathBuf,
     max_connections: u32,
     mut migrations: sqlx::migrate::Migrator,
     ignore_missing: bool,
 ) -> Result<SqlitePool> {
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)
-            .with_context(|| format!("failed to create {}", parent.display()))?;
-    }
+    ensure_parent_dir(&path)?;
 
     let options = sqlx::sqlite::SqliteConnectOptions::new()
         .filename(&path)
@@ -445,22 +456,11 @@ fn non_empty_env(key: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use std::str::FromStr;
-
     use super::*;
 
     #[tokio::test]
     async fn wipe_pool_drops_every_table_and_migrations_rebuild_them() {
-        let options = sqlx::sqlite::SqliteConnectOptions::from_str("sqlite::memory:").unwrap();
-        let pool = SqlitePoolOptions::new()
-            .max_connections(1)
-            .connect_with(options)
-            .await
-            .unwrap();
-        sqlx::migrate!("./migrations_library")
-            .run(&pool)
-            .await
-            .unwrap();
+        let pool = crate::sqlite::memory_pool(sqlx::migrate!("./migrations_library")).await;
         sqlx::query("INSERT INTO artists (id, name) VALUES ('a', 'A')")
             .execute(&pool)
             .await

@@ -296,123 +296,25 @@ ScrollPanel {
                 }
             }
 
-            Rectangle {
-                id: cover
-                anchors.left: parent.left
-                anchors.verticalCenter: parent.verticalCenter
-                anchors.leftMargin: row.viewWidth * 0.04
-                width: row.height * 0.78
-                height: row.height * 0.78
-                radius: root.roundedArt ? width * 0.5 : Theme.radius
-                color: Palette.surfaceContainerHigh
-                clip: true
-                // UI-45: the art grows with the emphasized row (same
-                // animation as the title, transform only).
-                scale: (row.emphasized && !Theme.reduceMotion) ? Theme.selectionEmphasis : 1.0
-
-                Behavior on scale {
-                    NumberAnimation { duration: Theme.motion.quick; easing.type: Easing.Bezier; easing.bezierCurve: Theme.ease.standard }
-                }
-
-                CoverImage {
-                    anchors.fill: parent
-                    source: row.cover
-                    // ARC-40: ×2 headroom for the UI-45 hover scale.
-                    sizeFactor: 2
-                }
-            }
-
-            Column {
-                id: textColumn
-                anchors.verticalCenter: parent.verticalCenter
-                anchors.left: cover.right
-                anchors.leftMargin: row.viewWidth * 0.04
-                anchors.right: metaBox.left
-                anchors.rightMargin: row.viewWidth * 0.04
-                spacing: row.height * 0.05
-
-                SearchText {
-                    id: titleText
-                    width: parent.width
-                    text: row.title
-                    color: Palette.onSurface
-                    font.pixelSize: row.height * 0.26
-                    elide: Text.ElideRight
-                    animated: false
-                    // ARC-UI-2 M2: hlsearch blocks from the live `/` session.
-                    query: root.searchQuery
-                    currentMatch: row.index === root.searchCurrentRow
-                    transformOrigin: Item.Left
-                    // UI-45 selection stage: the cursor/hover row leads its
-                    // neighbours (transform only, no reflow), capped to the
-                    // title box so it never reaches the meta gutter.
-                    scale: (row.emphasized && !Theme.reduceMotion)
-                        ? Theme.fitScale(titleText.width, titleText.paintedWidth, Theme.selectionEmphasis)
-                        : 1.0
-
-                    Behavior on scale {
-                        NumberAnimation { duration: Theme.motion.quick; easing.type: Easing.Bezier; easing.bezierCurve: Theme.ease.standard }
-                    }
-                }
-                SearchText {
-                    width: parent.width
-                    text: row.subtitle
-                    color: Palette.onSurfaceVariant
-                    font.pixelSize: row.height * 0.19
-                    elide: Text.ElideRight
-                    animated: false
-                    query: root.searchQuery
-                    currentMatch: row.index === root.searchCurrentRow
-                }
-            }
-
-            // REC-UI-1: the right rail is two right-anchored rectangles —
-            // the meta box then the symbols beside it. A song's meta is a
-            // timecode, so its box reserves the widest one and the marks
-            // never move as the seconds grow; counts/years hug their text.
-            Rectangle {
-                radius: Theme.radius
-                id: metaBox
-                anchors.verticalCenter: parent.verticalCenter
-                anchors.right: parent.right
-                anchors.rightMargin: row.viewWidth * 0.04
-                width: root.quickActionKind === "song"
-                    ? metaMetrics.advanceWidth("00:00:00")
-                    : metaLabel.implicitWidth
-                height: metaLabel.implicitHeight
-                color: "transparent"
-
-                FontMetrics {
-                    id: metaMetrics
-                    font.family: Theme.fonts.body
-                    font.pixelSize: metaLabel.font.pixelSize
-                }
-
-                SearchText {
-                    id: metaLabel
-                    anchors.fill: parent
-                    text: row.meta
-                    color: Palette.onSurfaceVariant
-                    font.pixelSize: row.height * 0.19
-                    horizontalAlignment: root.quickActionKind === "song"
-                        ? Text.AlignRight : Text.AlignLeft
-                    animated: false
-                    query: root.searchQuery
-                    currentMatch: row.index === root.searchCurrentRow
-                }
-            }
-
-            // REC-UI-1: the shared state-mark block (download then heart).
-            RowMarks {
-                anchors.verticalCenter: parent.verticalCenter
-                anchors.right: metaBox.left
-                anchors.rightMargin: row.viewWidth * 0.01275
-                cursor: root.currentIndex
-                index: row.index
-                songId: row.songId
-                albumId: row.albumId
-                starred: row.starred
-                base: metaLabel.font.pixelSize * 0.8
+            RowBody {
+                anchors.fill: parent
+                viewWidth: row.viewWidth
+                rowHeight: row.height
+                emphasized: row.emphasized
+                roundedArt: root.roundedArt
+                cover: row.cover
+                title: row.title
+                subtitle: row.subtitle
+                meta: row.meta
+                reserveMeta: root.quickActionKind === "song"
+                metaAlignRight: root.quickActionKind === "song"
+                markCursor: root.currentIndex
+                markIndex: row.index
+                markSongId: row.songId
+                markAlbumId: row.albumId
+                markStarred: row.starred
+                searchQuery: root.searchQuery
+                searchCurrent: row.index === root.searchCurrentRow
             }
 
             HoverHandler {

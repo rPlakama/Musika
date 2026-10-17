@@ -148,6 +148,11 @@ The app is unsafe or misleading without these.
 - [ ] **ARC-3 · Cancellable sync + HTTP retry/backoff/timeouts** — P1 · (A5, O5)
   - **Why:** a hung request blocks the sync pipeline; `reqwest` has no timeout.
 
+- [ ] **ARC-IDK** Breaking down Row mechanism into smaller segments for UI Reload calls; Titles, Symbols, Covers -- all they have their own UI call instead of the whole UI recall; Benefits is many, such as lower CPU compromisse in Row reload/reset, and information update. As a example, the Action of Favorite/Removal of Favorite/Download or Removal of Download have their own Rectangle update call, which is not the whole Row; Another segmnet, is the 'expect factor row' which defines a row by a Rectangle without specifically it contents inside, reducing the amount of CPU cicles to render predicted rows (such as in Queuques) or render distance of rows;
+  - **Now:** the shared `RowBody.qml` (cover, title/subtitle, meta, `RowMarks`) is consumed by `MediaList` rows and the fullscreen queue; each part is a named property, so a per-row change updates that part without recalling the list. Expected/placeholder rows remain.
+
+- [ ] **ARC-IDK1** SearchUI design for Shift+Space++F search -- Sleek and less transparent, breath more -- proper details in init;
+
 - [ ] **ARC-4 · ID-namespace correctness** — P1 · (A6, O4)
   - **Why:** `getIndexes` returns file-structure IDs passed to ID3 endpoints;
     handle `getMusicDirectory`/`indexes.child`.

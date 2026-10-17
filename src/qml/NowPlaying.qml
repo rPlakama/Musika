@@ -1358,82 +1358,30 @@ Rectangle {
                                             overflow: queueContent.bleed
                                         }
 
-                                        SearchText {
-                                            id: titleText
-                                            anchors.left: parent.left
-                                            // The delegate's own width, never
-                                            // `ListView.view`: teardown
-                                            // detaches the view before the
-                                            // anchors re-run, and the direct
-                                            // read spams "width of null".
-                                            anchors.leftMargin: row.width * 0.01
-                                            anchors.right: durationBox.left
-                                            anchors.rightMargin: row.width * 0.01
-                                            anchors.verticalCenter: parent.verticalCenter
-                                            text: row.title
-                                            color: index === root.queueCursor ? Palette.onSecondaryContainer : Palette.onSurface
-                                            font.pixelSize: Theme.fontSize("body", root.height)
-                                            elide: Text.ElideRight
-                                            animated: false
-                                            query: queueContent.searchQuery
-                                            currentMatch: index === queueContent.searchCurrentRow
-                                            transformOrigin: Item.Left
-                                            // UI-45: the cursor/hover row leads, capped to its box.
-                                            scale: (row.emphasized && !Theme.reduceMotion) ? Theme.fitScale(titleText.width, titleText.paintedWidth, Theme.selectionEmphasis) : 1.0
-
-                                            Behavior on scale {
-                                                NumberAnimation {
-                                                    duration: Theme.motion.quick
-                                                    easing.type: Easing.Bezier
-                                                    easing.bezierCurve: Theme.ease.standard
-                                                }
-                                            }
-                                        }
-
-                                        // REC-UI-1: the right rail is two
-                                        // right-anchored rectangles — the
-                                        // length box reserves the widest
-                                        // timecode, the symbols anchor to its
-                                        // left. The rail's width (and so the
-                                        // marks' place) never moves as the
-                                        // seconds grow.
-                                        Rectangle {
-                                            radius: Theme.radius
-                                            id: durationBox
-                                            anchors.right: parent.right
-                                            anchors.verticalCenter: parent.verticalCenter
-                                            // QR-7: the pane's shared metric (the
-                                            // same font as the label) instead
-                                            // of a FontMetrics per row.
-                                            width: timeMetrics.advanceWidth("00:00:00")
-                                            height: durationLabel.implicitHeight
-                                            color: "transparent"
-
-                                            SearchText {
-                                                id: durationLabel
-                                                anchors.fill: parent
-                                                text: row.duration
-                                                color: Palette.onSurfaceVariant
-                                                font.pixelSize: Theme.fontSize("mono", root.height)
-                                                horizontalAlignment: Text.AlignRight
-                                                animated: false
-                                                query: queueContent.searchQuery
-                                                currentMatch: index === queueContent.searchCurrentRow
-                                            }
-                                        }
-
-                                        // REC-UI-1: the shared state-mark
-                                        // block (download then heart).
-                                        RowMarks {
-                                            anchors.verticalCenter: parent.verticalCenter
-                                            anchors.right: durationBox.left
-                                            // 10% more air than the row gutter.
-                                            anchors.rightMargin: row.width * 0.00935
-                                            cursor: root.queueCursor
-                                            index: row.index
-                                            songId: row.songId
-                                            starred: row.starred
-                                            base: durationLabel.font.pixelSize * 0.8
+                                        RowBody {
+                                            anchors.fill: parent
+                                            viewWidth: row.width
+                                            rowHeight: row.height
+                                            emphasized: row.emphasized
+                                            showCover: false
+                                            showSubtitle: false
+                                            title: row.title
+                                            meta: row.duration
+                                            titlePixelSize: Theme.fontSize("body", root.height)
+                                            titleColor: index === root.queueCursor ? Palette.onSecondaryContainer : Palette.onSurface
+                                            metaPixelSize: Theme.fontSize("mono", root.height)
+                                            reserveMeta: true
+                                            metaAlignRight: true
+                                            leftMargin: row.width * 0.01
+                                            textGap: row.width * 0.01
+                                            rightMargin: 0
+                                            marksMargin: row.width * 0.00935
+                                            markCursor: root.queueCursor
+                                            markIndex: row.index
+                                            markSongId: row.songId
+                                            markStarred: row.starred
+                                            searchQuery: queueContent.searchQuery
+                                            searchCurrent: index === queueContent.searchCurrentRow
                                         }
 
                                         HoverHandler {

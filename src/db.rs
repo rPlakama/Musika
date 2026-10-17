@@ -16,20 +16,17 @@
 
 //! Database layout for Musika.
 //!
-//! Ten independent SQLite databases live under `~/.config/musika` (each
-//! with its own connection pool, so separate worker threads can write without
-//! contending on a single writer lock):
+//! Two SQLite databases live under `~/.config/musika`, each with its own
+//! connection pool:
 //!
-//! - `credentials.db` — encrypted account information (DB1)
-//! - `library.db`     — artists / albums / songs metadata (DB2a)
-//! - `search.db`      — FTS5 index over song metadata (DB2b)
-//! - `covers.db`      — cover-art cache index; blobs sit in `covers/` (DB3)
-//! - `media.db`       — offline audio cache index; blobs in `media/` (DB4)
-//! - `lyrics.db`      — lyric cache (DB5)
-//! - `colors.db`      — cover-seeded dynamic color cache (DB6)
-//! - `statussave.db`  — last session status, restored on login (DB7)
-//! - `artist_user.db` — per-artist favourite/rating user state (DB8)
-//! - `download.db`    — per-song download intent/progress ledger (DB9)
+//! - `library.db` — account, metadata and library-side state: credentials,
+//!   artists / albums / songs, FTS search, artist user state, session status,
+//!   cover colors and playlists.
+//! - `media.db`   — blob-cache indexes and media state: covers, lyrics,
+//!   offline media and the download ledger.
+//!
+//! `Dbs` keeps the old logical names as aliases of those two pools, so the
+//! modules stay independent without opening a pool per table.
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -37,7 +34,7 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 use sqlx::sqlite::{SqliteJournalMode, SqlitePool, SqlitePoolOptions};
 
-/// The ten databases, opened and migrated at start-up.
+/// The two physical databases, with the logical pools kept as aliases.
 #[derive(Clone)]
 pub struct Dbs {
     pub credentials: SqlitePool,
@@ -55,152 +52,201 @@ pub struct Dbs {
 
 /// Opens every database and applies its migrations.
 pub async fn init() -> Result<Dbs> {
+    let library = open_migrated(
+        library_path()?,
+        5,
+        sqlx::migrate!("./migrations_library"),
+        false,
+    )
+    .await?;
+    let media = open_migrated(media_path()?, 3, sqlx::migrate!("./migrations_media"), false).await?;
+    absorb_legacy(&library, &media).await?;
+
     Ok(Dbs {
-        credentials: open_migrated(credentials_path()?, 5, sqlx::migrate!("./migrations"), true)
-            .await?,
-        library: open_migrated(
-            library_path()?,
-            5,
-            sqlx::migrate!("./migrations_library"),
-            false,
-        )
-        .await?,
-        search: open_migrated(
-            search_path()?,
-            3,
-            sqlx::migrate!("./migrations_search"),
-            false,
-        )
-        .await?,
-        covers: open_migrated(
-            covers_path()?,
-            5,
-            sqlx::migrate!("./migrations_covers"),
-            false,
-        )
-        .await?,
-        media: open_migrated(
-            media_path()?,
-            3,
-            sqlx::migrate!("./migrations_media"),
-            false,
-        )
-        .await?,
-        lyrics: open_migrated(
-            lyrics_path()?,
-            3,
-            sqlx::migrate!("./migrations_lyrics"),
-            false,
-        )
-        .await?,
-        colors: open_migrated(
-            colors_path()?,
-            3,
-            sqlx::migrate!("./migrations_colors"),
-            false,
-        )
-        .await?,
-        // Single row, tiny: one connection is plenty.
-        status: open_migrated(
-            status_path()?,
-            1,
-            sqlx::migrate!("./migrations_status"),
-            false,
-        )
-        .await?,
-        artist_user: open_migrated(
-            artist_user_path()?,
-            3,
-            sqlx::migrate!("./migrations_artist_user"),
-            false,
-        )
-        .await?,
-        download: open_migrated(
-            download_path()?,
-            3,
-            sqlx::migrate!("./migrations_download"),
-            false,
-        )
-        .await?,
-        playlist: open_migrated(
-            playlist_path()?,
-            3,
-            sqlx::migrate!("./migrations_playlist"),
-            false,
-        )
-        .await?,
+        credentials: library.clone(),
+        library: library.clone(),
+        search: library.clone(),
+        covers: media.clone(),
+        media: media.clone(),
+        lyrics: media.clone(),
+        colors: library.clone(),
+        status: library.clone(),
+        artist_user: library.clone(),
+        download: media.clone(),
+        playlist: library,
     })
 }
 
-/// Applies every pool's embedded migrations (shared by [`init`] and [`wipe`]).
+/// Applies both embedded migrations (shared by [`init`] and [`wipe`]).
 #[allow(dead_code)]
 pub async fn migrate(dbs: &Dbs) -> Result<()> {
-    // Two early no-op migrations were removed (ARC-18); ignore them if this
-    // database already applied them.
-    sqlx::migrate!("./migrations")
-        .set_ignore_missing(true)
-        .run(&dbs.credentials)
-        .await?;
     sqlx::migrate!("./migrations_library")
         .run(&dbs.library)
         .await?;
-    sqlx::migrate!("./migrations_search")
-        .run(&dbs.search)
-        .await?;
-    sqlx::migrate!("./migrations_covers")
-        .run(&dbs.covers)
-        .await?;
     sqlx::migrate!("./migrations_media").run(&dbs.media).await?;
-    sqlx::migrate!("./migrations_lyrics")
-        .run(&dbs.lyrics)
+    Ok(())
+}
+
+/// One-time import of the old per-domain databases (backup, not required).
+async fn absorb_legacy(library: &SqlitePool, media: &SqlitePool) -> Result<()> {
+    if meta_flag(library, "legacy_absorbed").await? {
+        return Ok(());
+    }
+
+    let mut conn = library.acquire().await?;
+    let library_legacy = [
+        (credentials_path()?, &["users"][..]),
+        (search_path()?, &["song_search"][..]),
+        (artist_user_path()?, &["artist_user"][..]),
+        (status_path()?, &["session_status"][..]),
+        (
+            colors_path()?,
+            &["cover_color", "colors_meta", "color_seed"][..],
+        ),
+        (
+            playlist_path()?,
+            &["playlist", "playlist_song", "playlist_meta"][..],
+        ),
+    ];
+    for (path, tables) in &library_legacy {
+        import_file(&mut conn, path, tables).await?;
+    }
+    sqlx::query(
+        "INSERT INTO meta (key, value) VALUES ('legacy_absorbed', '1')
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+    )
+    .execute(&mut *conn)
+    .await?;
+    drop(conn);
+    for (path, _) in &library_legacy {
+        remove_legacy_db(path);
+    }
+
+    let mut conn = media.acquire().await?;
+    let media_legacy = [
+        (covers_path()?, &["covers"][..]),
+        (
+            lyrics_path()?,
+            &["lyrics", "lyric_line", "lyrics_meta"][..],
+        ),
+        (download_path()?, &["download"][..]),
+    ];
+    for (path, tables) in &media_legacy {
+        import_file(&mut conn, path, tables).await?;
+    }
+    sqlx::query(
+        "INSERT INTO media_meta (key, value) VALUES ('legacy_absorbed', '1')
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+    )
+    .execute(&mut *conn)
+    .await?;
+    drop(conn);
+    for (path, _) in &media_legacy {
+        remove_legacy_db(path);
+    }
+    Ok(())
+}
+
+fn remove_legacy_db(path: &Path) {
+    for suffix in ["", "-wal", "-shm"] {
+        let candidate = PathBuf::from(format!("{}{suffix}", path.display()));
+        let _ = std::fs::remove_file(candidate);
+    }
+}
+
+async fn meta_flag(pool: &SqlitePool, key: &str) -> Result<bool> {
+    let value: Option<String> = sqlx::query_scalar("SELECT value FROM meta WHERE key = ?1")
+        .bind(key)
+        .fetch_optional(pool)
         .await?;
-    sqlx::migrate!("./migrations_colors")
-        .run(&dbs.colors)
+    Ok(value.is_some())
+}
+
+async fn import_file(
+    conn: &mut sqlx::SqliteConnection,
+    path: &Path,
+    tables: &[&'static str],
+) -> Result<()> {
+    if !path.is_file() {
+        return Ok(());
+    }
+    sqlx::query("ATTACH DATABASE ?1 AS legacy")
+        .bind(path.to_string_lossy().to_string())
+        .execute(&mut *conn)
         .await?;
-    sqlx::migrate!("./migrations_status")
-        .run(&dbs.status)
+    for table in tables {
+        let exists: Option<String> = sqlx::query_scalar(
+            "SELECT name FROM legacy.sqlite_master WHERE type IN ('table', 'view') AND name = ?1",
+        )
+        .bind(table)
+        .fetch_optional(&mut *conn)
         .await?;
-    sqlx::migrate!("./migrations_artist_user")
-        .run(&dbs.artist_user)
-        .await?;
-    sqlx::migrate!("./migrations_download")
-        .run(&dbs.download)
-        .await?;
-    sqlx::migrate!("./migrations_playlist")
-        .run(&dbs.playlist)
+        if exists.is_some() {
+            let sql = if *table == "song_search" {
+                "INSERT OR IGNORE INTO main.song_search
+                     (rowid, title, artist, album, duration, song_id, play_count)
+                 SELECT rowid, title, artist, album, duration, song_id, play_count
+                 FROM legacy.song_search"
+                    .to_string()
+            } else {
+                format!("INSERT OR IGNORE INTO main.{table} SELECT * FROM legacy.{table}")
+            };
+            sqlx::raw_sql(sqlx::AssertSqlSafe(sql))
+                .execute(&mut *conn)
+                .await?;
+        }
+    }
+    sqlx::query("DETACH DATABASE legacy")
+        .execute(&mut *conn)
         .await?;
     Ok(())
 }
 
-/// Wipes only the library metadata (`library.db`): artists, albums, songs,
-/// artist info and the sync bookkeeping. The next sync repopulates it; the
-/// derived `index.txt` mirror goes with it.
+async fn delete_tables(pool: &SqlitePool, tables: &[&'static str]) -> Result<()> {
+    for table in tables {
+        sqlx::query(sqlx::AssertSqlSafe(format!("DELETE FROM {table}")))
+            .execute(pool)
+            .await?;
+    }
+    Ok(())
+}
+
+/// Wipes only the library metadata: artists, albums, songs, artist info and
+/// the sync bookkeeping. The next sync repopulates it; the derived
+/// `index.txt` mirror goes with it.
+pub async fn wipe_library(dbs: &Dbs) -> Result<()> {
+    delete_tables(
+        &dbs.library,
+        &["songs", "albums", "artists", "artist_info", "meta"],
+    )
+    .await?;
+    remove_mirror();
+    Ok(())
+}
+
+/// Wipes the derived full-text index plus the `index.txt` mirror. Both
+/// rebuild from the library on the next sync.
+pub async fn wipe_indexes(dbs: &Dbs) -> Result<()> {
+    delete_tables(&dbs.search, &["song_search"]).await?;
+    remove_mirror();
+    Ok(())
+}
+
+/// Wipes the cover-art cache: its index, the blob directory and the
+/// cover-derived color cache, all refetched on demand.
+pub async fn wipe_covers(dbs: &Dbs) -> Result<()> {
+    delete_tables(
+        &dbs.covers,
+        &["covers", "cover_color", "color_seed", "colors_meta"],
+    )
+    .await?;
+    remove_dir(&covers_dir()?)?;
+    Ok(())
+}
+
 async fn wipe_and_migrate(pool: &SqlitePool, migrations: sqlx::migrate::Migrator) -> Result<()> {
     wipe_pool(pool).await?;
     migrations.run(pool).await?;
-    Ok(())
-}
-
-pub async fn wipe_library(dbs: &Dbs) -> Result<()> {
-    wipe_and_migrate(&dbs.library, sqlx::migrate!("./migrations_library")).await?;
-    remove_mirror();
-    Ok(())
-}
-
-/// Wipes the derived text indexes (`search.db` FTS plus the `index.txt`
-/// mirror). Both rebuild from `library.db` on the next sync.
-pub async fn wipe_indexes(dbs: &Dbs) -> Result<()> {
-    wipe_and_migrate(&dbs.search, sqlx::migrate!("./migrations_search")).await?;
-    remove_mirror();
-    Ok(())
-}
-
-/// Wipes the cover-art cache: `covers.db`, the blob directory and the
-/// cover-derived color cache (`colors.db`), all refetched on demand.
-pub async fn wipe_covers(dbs: &Dbs) -> Result<()> {
-    wipe_and_migrate(&dbs.covers, sqlx::migrate!("./migrations_covers")).await?;
-    wipe_and_migrate(&dbs.colors, sqlx::migrate!("./migrations_colors")).await?;
-    remove_dir(&covers_dir()?)?;
     Ok(())
 }
 
@@ -227,19 +273,7 @@ fn remove_dir(dir: &Path) -> Result<()> {
 pub async fn wipe_files(dbs: &Dbs) -> Result<()> {
     // Close first: an open pool keeps the deleted inodes alive and the next
     // login would write into unlinked files.
-    for pool in [
-        &dbs.credentials,
-        &dbs.library,
-        &dbs.search,
-        &dbs.covers,
-        &dbs.media,
-        &dbs.lyrics,
-        &dbs.colors,
-        &dbs.status,
-        &dbs.artist_user,
-        &dbs.download,
-        &dbs.playlist,
-    ] {
+    for pool in [&dbs.library, &dbs.media] {
         pool.clone().close().await;
     }
     let dir = config_dir()?;
@@ -278,21 +312,8 @@ pub async fn wipe_files(dbs: &Dbs) -> Result<()> {
 /// login screen afterwards.
 #[allow(dead_code)]
 pub async fn wipe(dbs: &Dbs) -> Result<()> {
-    for pool in [
-        &dbs.credentials,
-        &dbs.library,
-        &dbs.search,
-        &dbs.covers,
-        &dbs.media,
-        &dbs.lyrics,
-        &dbs.colors,
-        &dbs.status,
-        &dbs.artist_user,
-        &dbs.download,
-    ] {
-        wipe_pool(pool).await?;
-    }
-    migrate(dbs).await?;
+    wipe_and_migrate(&dbs.library, sqlx::migrate!("./migrations_library")).await?;
+    wipe_and_migrate(&dbs.media, sqlx::migrate!("./migrations_media")).await?;
 
     for dir in [covers_dir(), media_dir(), playback_dir()] {
         if let Ok(dir) = dir {
@@ -456,6 +477,16 @@ fn non_empty_env(key: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn library_migrations_include_the_combined_schema() {
+        let migrations = sqlx::migrate!("./migrations_library");
+        assert!(
+            migrations
+                .iter()
+                .any(|migration| migration.version == 20261017000001)
+        );
+    }
 
     #[tokio::test]
     async fn wipe_pool_drops_every_table_and_migrations_rebuild_them() {

@@ -10,9 +10,9 @@ Musika is a Keyboard driven Navidrome/Subsonic Client made with AI assistance. W
 
 1 - Alt-Menu -- A multipoint(Alt) call for Tracks, Albums. Which is capable of transporting through other sections, or executing context-driven actions (like bulk-download, favoriting, etc;). Four quadrants: Add to Queue (N), Favorite (S), Go to Artist (W), Go to Album (E — on an album row the east slot carries the download toggle instead), aimed with `h/j/k/l` or the arrows (mouse works too), fired on Alt release, cancelled by Esc or a neutral aim. With a visual selection up (`v`/`V`) the verbs apply to the whole range, including a bulk **Download** that toggles: a selection already cached is removed instead.
 
-2 - Download System -- Local-first, two databases and two tiers: `media.db` owns the artifacts (the blobs + the container *rules*), `download.db` owns the intent and progress (queued → active → done/error). An explicit song download is `permanent`; selecting an album or an artist writes a rule, downloads every existing track and keeps catching new ones on sync — toggling it off removes the rule and its files. Permanent/rule blobs live under `~/.config/musika/media`, the purgeable playback tier under `~/.cache/musika/media`. Row glyphs show the state (outline → spinning loop → filled), and offline mode serves the downloaded catalog only.
+2 - Download System -- Local-first, two ledgers in `media.db` and two tiers: the artifact tables own the blobs + the container *rules*, the download ledger owns the intent and progress (queued → active → done/error). An explicit song download is `permanent`; selecting an album or an artist writes a rule, downloads every existing track and keeps catching new ones on sync — toggling it off removes the rule and its files. Permanent/rule blobs live under `~/.config/musika/media`, the purgeable playback tier under `~/.cache/musika/media`. Row glyphs show the state (outline → spinning loop → filled), and offline mode serves the downloaded catalog only.
 
-3 - Search -- `/` searches the surface in front of you (literal, smartcase, viewport-scoped) with in-place match blocks and `[i/N]` counts; Enter jumps, Esc abandons. The global overlay searches the whole indexed library through `search.db`'s FTS with per-column scoping.
+3 - Search -- `/` searches the surface in front of you (literal, smartcase, viewport-scoped) with in-place match blocks and `[i/N]` counts; Enter jumps, Esc abandons. The global overlay searches the whole indexed library through `library.db`'s FTS with per-column scoping.
 
 4 - Playback -- MPV runs as the backend subprocess: gapless with prefetch, stream-error retry + auto-advance, native MPRIS, seek/volume, and synced lyrics (OpenSubsonic) that ride the shared scroll body.
 
@@ -37,19 +37,12 @@ inputs.musika.packages.${pkgs.system}.default
 
 # Technical Information
 
-It works with a multi-db system:
+It works with two databases:
 
-- `credentials.db` -- the server and account
-- `library.db` -- artists, albums, songs, artist biographies
-- `search.db` -- the FTS index
-- `covers.db` -- cover URLs + cached art
-- `media.db` -- download blobs + container rules
-- `download.db` -- the download ledger
-- `lyrics.db` -- cached lyrics
-- `colors.db` -- cover-derived color schemes
-- `artist_user.db` -- artist stars and ratings
-- `playlist.db` -- playlists
-- `statussave.db` -- session resume
+- `library.db` -- the server and account, artists/albums/songs, the FTS index,
+  artist stars and ratings, playlists, session resume and cover-derived colors
+- `media.db` -- cover URLs + cached art, cached lyrics, download blobs + rules
+  and the download ledger
 
 # Sections
 

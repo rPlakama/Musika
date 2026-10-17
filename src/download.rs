@@ -49,27 +49,39 @@ pub struct DownloadState {
     pub updated_at: i64,
 }
 
-/// Marks a song for download. A `done` row is never downgraded; anything else
-/// resets to `queued` and clears the old error (re-selection retries it).
-pub async fn mark_queued(pool: &SqlitePool, song_id: &str, rule_id: Option<&str>) -> Result<()> {
+async fn set_download_state(
+    pool: &SqlitePool,
+    song_id: &str,
+    state: &str,
+    error: Option<&str>,
+    rule_id: Option<&str>,
+) -> Result<()> {
     let now = crate::consts::now_secs() as i64;
     sqlx::query(
         "INSERT INTO download (song_id, state, error, rule_id, requested_at, updated_at)
-         VALUES (?1, 'queued', NULL, ?2, ?3, ?3)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?5)
          ON CONFLICT(song_id) DO UPDATE SET
-             state      = CASE WHEN download.state = 'done'
-                               THEN download.state ELSE 'queued' END,
-             error      = CASE WHEN download.state = 'done'
-                               THEN download.error ELSE NULL END,
+             state      = CASE WHEN excluded.state = 'queued' AND download.state = 'done'
+                               THEN download.state ELSE excluded.state END,
+             error      = CASE WHEN excluded.state = 'queued' AND download.state = 'done'
+                               THEN download.error ELSE excluded.error END,
              rule_id    = COALESCE(excluded.rule_id, download.rule_id),
              updated_at = excluded.updated_at",
     )
     .bind(song_id)
+    .bind(state)
+    .bind(error)
     .bind(rule_id)
     .bind(now)
     .execute(pool)
     .await?;
     Ok(())
+}
+
+/// Marks a song for download. A `done` row is never downgraded; anything else
+/// resets to `queued` and clears the old error (re-selection retries it).
+pub async fn mark_queued(pool: &SqlitePool, song_id: &str, rule_id: Option<&str>) -> Result<()> {
+    set_download_state(pool, song_id, QUEUED, None, rule_id).await
 }
 
 /// Records a state transition (`active`/`done`/`error`), creating the row when
@@ -80,22 +92,7 @@ pub async fn set_state(
     state: &str,
     error: Option<&str>,
 ) -> Result<()> {
-    let now = crate::consts::now_secs() as i64;
-    sqlx::query(
-        "INSERT INTO download (song_id, state, error, requested_at, updated_at)
-         VALUES (?1, ?2, ?3, ?4, ?4)
-         ON CONFLICT(song_id) DO UPDATE SET
-             state      = excluded.state,
-             error      = excluded.error,
-             updated_at = excluded.updated_at",
-    )
-    .bind(song_id)
-    .bind(state)
-    .bind(error)
-    .bind(now)
-    .execute(pool)
-    .await?;
-    Ok(())
+    set_download_state(pool, song_id, state, error, None).await
 }
 
 /// One row; `None` when the song was never marked.
@@ -141,11 +138,7 @@ pub async fn done_ids_of(pool: &SqlitePool, ids: &[String]) -> Result<Vec<String
     let mut builder = sqlx::QueryBuilder::new(
         "SELECT song_id FROM download WHERE state = 'done' AND song_id IN (",
     );
-    let mut separated = builder.separated(", ");
-    for id in ids {
-        separated.push_bind(id.clone());
-    }
-    separated.push_unseparated(")");
+    crate::cache::push_in_list(&mut builder, ids);
     let rows = builder.build_query_scalar::<String>().fetch_all(pool).await?;
     Ok(rows)
 }
@@ -159,11 +152,7 @@ pub async fn pending_ids_of(pool: &SqlitePool, ids: &[String]) -> Result<Vec<Str
     let mut builder = sqlx::QueryBuilder::new(
         "SELECT song_id FROM download WHERE state IN ('queued', 'active') AND song_id IN (",
     );
-    let mut separated = builder.separated(", ");
-    for id in ids {
-        separated.push_bind(id.clone());
-    }
-    separated.push_unseparated(")");
+    crate::cache::push_in_list(&mut builder, ids);
     let rows = builder.build_query_scalar::<String>().fetch_all(pool).await?;
     Ok(rows)
 }

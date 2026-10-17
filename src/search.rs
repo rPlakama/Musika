@@ -54,20 +54,21 @@ pub async fn rebuild(pool: &SqlitePool, rows: &[SongSearchRow]) -> Result<()> {
         .execute(&mut *tx)
         .await?;
 
-    for row in rows {
-        sqlx::query(
-            "INSERT INTO song_search (title, artist, album, duration, song_id, play_count)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-        )
-        .bind(&row.title)
-        .bind(row.artist.as_deref().unwrap_or(""))
-        .bind(row.album.as_deref().unwrap_or(""))
-        .bind(row.duration.map(|value| value.to_string()))
-        .bind(&row.id)
-        .bind(row.play_count.unwrap_or(0))
-        .execute(&mut *tx)
-        .await?;
-    }
+    crate::cache::insert_many(
+        &mut tx,
+        "INSERT INTO song_search (title, artist, album, duration, song_id, play_count) ",
+        rows,
+        |mut values, row| {
+            values
+                .push_bind(&row.title)
+                .push_bind(row.artist.as_deref().unwrap_or(""))
+                .push_bind(row.album.as_deref().unwrap_or(""))
+                .push_bind(row.duration.map(|value| value.to_string()))
+                .push_bind(&row.id)
+                .push_bind(row.play_count.unwrap_or(0));
+        },
+    )
+    .await?;
 
     tx.commit().await?;
     Ok(())

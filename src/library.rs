@@ -55,69 +55,69 @@ pub async fn replace(
     sqlx::query("DELETE FROM albums").execute(&mut *tx).await?;
     sqlx::query("DELETE FROM artists").execute(&mut *tx).await?;
 
-    for artist in artists {
-        sqlx::query(
-            "INSERT INTO artists (id, name, album_count, cover_art, image_url, starred)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-        )
-        .bind(&artist.id)
-        .bind(&artist.name)
-        .bind(artist.album_count)
-        .bind(&artist.cover_art)
-        .bind(&artist.artist_image_url)
-        .bind(&artist.starred)
-        .execute(&mut *tx)
-        .await?;
-    }
+    crate::cache::insert_many(
+        &mut tx,
+        "INSERT INTO artists (id, name, album_count, cover_art, image_url, starred) ",
+        artists,
+        |mut row, artist| {
+            row.push_bind(&artist.id)
+                .push_bind(&artist.name)
+                .push_bind(artist.album_count)
+                .push_bind(&artist.cover_art)
+                .push_bind(&artist.artist_image_url)
+                .push_bind(&artist.starred);
+        },
+    )
+    .await?;
 
-    for album in albums {
-        sqlx::query(
-            "INSERT INTO albums
-                 (id, artist_id, name, artist, year, genre, song_count, duration, cover_art, starred)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
-        )
-        .bind(&album.id)
-        .bind(&album.artist_id)
-        .bind(&album.name)
-        .bind(&album.artist)
-        .bind(album.year)
-        .bind(&album.genre)
-        .bind(album.song_count)
-        .bind(album.duration)
-        .bind(&album.cover_art)
-        .bind(&album.starred)
-        .execute(&mut *tx)
-        .await?;
-    }
+    crate::cache::insert_many(
+        &mut tx,
+        "INSERT INTO albums
+             (id, artist_id, name, artist, year, genre, song_count, duration, cover_art, starred) ",
+        albums,
+        |mut row, album| {
+            row.push_bind(&album.id)
+                .push_bind(&album.artist_id)
+                .push_bind(&album.name)
+                .push_bind(&album.artist)
+                .push_bind(album.year)
+                .push_bind(&album.genre)
+                .push_bind(album.song_count)
+                .push_bind(album.duration)
+                .push_bind(&album.cover_art)
+                .push_bind(&album.starred);
+        },
+    )
+    .await?;
 
-    for song in songs {
-        sqlx::query(
-            "INSERT OR REPLACE INTO songs
-                 (id, album_id, artist_id, title, album, artist, track, disc_number, year,
-                  genre, duration, bit_rate, suffix, size, path, cover_art, play_count, starred)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)",
-        )
-        .bind(&song.id)
-        .bind(&song.album_id)
-        .bind(&song.artist_id)
-        .bind(&song.title)
-        .bind(&song.album)
-        .bind(&song.artist)
-        .bind(song.track)
-        .bind(song.disc_number)
-        .bind(song.year)
-        .bind(&song.genre)
-        .bind(song.duration)
-        .bind(song.bit_rate)
-        .bind(&song.suffix)
-        .bind(song.size)
-        .bind(&song.path)
-        .bind(&song.cover_art)
-        .bind(song.play_count)
-        .bind(&song.starred)
-        .execute(&mut *tx)
-        .await?;
-    }
+    crate::cache::insert_many(
+        &mut tx,
+        "INSERT OR REPLACE INTO songs
+             (id, album_id, artist_id, title, album, artist, track, disc_number, year,
+              genre, duration, bit_rate, suffix, size, path, cover_art, play_count, starred) ",
+        songs,
+        |mut row, song| {
+            row.push_bind(&song.id)
+                .push_bind(&song.album_id)
+                .push_bind(&song.artist_id)
+                .push_bind(&song.title)
+                .push_bind(&song.album)
+                .push_bind(&song.artist)
+                .push_bind(song.track)
+                .push_bind(song.disc_number)
+                .push_bind(song.year)
+                .push_bind(&song.genre)
+                .push_bind(song.duration)
+                .push_bind(song.bit_rate)
+                .push_bind(&song.suffix)
+                .push_bind(song.size)
+                .push_bind(&song.path)
+                .push_bind(&song.cover_art)
+                .push_bind(song.play_count)
+                .push_bind(&song.starred);
+        },
+    )
+    .await?;
 
     set_meta(&mut tx, "last_modified", &last_modified.to_string()).await?;
     set_meta(&mut tx, "last_sync", &unix_now().to_string()).await?;
@@ -180,11 +180,7 @@ pub async fn album_song_ids_of(
         return Ok(std::collections::HashMap::new());
     }
     let mut builder = sqlx::QueryBuilder::new("SELECT album_id, id FROM songs WHERE album_id IN (");
-    let mut separated = builder.separated(", ");
-    for id in album_ids {
-        separated.push_bind(id.clone());
-    }
-    separated.push_unseparated(")");
+    crate::cache::push_in_list(&mut builder, album_ids);
     let rows: Vec<(String, String)> = builder.build_query_as().fetch_all(pool).await?;
     let mut grouped: std::collections::HashMap<String, Vec<String>> =
         std::collections::HashMap::new();
@@ -283,11 +279,8 @@ pub async fn downloaded_owners(
     for chunk in song_ids.chunks(500) {
         let mut query =
             QueryBuilder::new("SELECT album_id, artist_id, COUNT(*) FROM songs WHERE id IN (");
-        let mut separated = query.separated(", ");
-        for id in chunk {
-            separated.push_bind(id);
-        }
-        separated.push_unseparated(") GROUP BY album_id, artist_id");
+        crate::cache::push_in_list(&mut query, chunk);
+        query.push(" GROUP BY album_id, artist_id");
         let rows: Vec<(Option<String>, Option<String>, i64)> =
             query.build_query_as().fetch_all(pool).await?;
 
@@ -326,29 +319,23 @@ pub async fn search_artists_albums(
         .replace('_', "\\_");
     let like = format!("%{escaped}%");
 
-    let artists = sqlx::query_as::<_, ArtistRow>(
-        "SELECT id, name, album_count, cover_art, starred
-         FROM artists
-         WHERE name LIKE ?1 ESCAPE '\\'
-         ORDER BY name
-         LIMIT ?2",
-    )
-    .bind(&like)
-    .bind(limit)
-    .fetch_all(pool)
-    .await?;
+    let artist_sql =
+        format!("{ARTIST_SELECT} WHERE name LIKE ?1 ESCAPE '\\' ORDER BY name LIMIT ?2");
+    let artists = sqlx::query_as::<_, ArtistRow>(sqlx::AssertSqlSafe(artist_sql))
+        .bind(&like)
+        .bind(limit)
+        .fetch_all(pool)
+        .await?;
 
-    let albums = sqlx::query_as::<_, AlbumRow>(
-        "SELECT id, name AS title, artist, year, song_count, cover_art, starred
-         FROM albums
-         WHERE name LIKE ?1 ESCAPE '\\' OR artist LIKE ?1 ESCAPE '\\'
-         ORDER BY artist, name
-         LIMIT ?2",
-    )
-    .bind(&like)
-    .bind(limit)
-    .fetch_all(pool)
-    .await?;
+    let album_sql = format!(
+        "{ALBUM_SELECT} WHERE name LIKE ?1 ESCAPE '\\' OR artist LIKE ?1 ESCAPE '\\'{} LIMIT ?2",
+        album_order("Artist", true)
+    );
+    let albums = sqlx::query_as::<_, AlbumRow>(sqlx::AssertSqlSafe(album_sql))
+        .bind(&like)
+        .bind(limit)
+        .fetch_all(pool)
+        .await?;
 
     Ok((artists, albums))
 }
@@ -367,11 +354,7 @@ pub async fn song_cover_ids(
          FROM songs s LEFT JOIN albums al ON al.id = s.album_id
          WHERE s.id IN (",
     );
-    let mut separated = builder.separated(", ");
-    for id in ids {
-        separated.push_bind(id.clone());
-    }
-    separated.push_unseparated(")");
+    crate::cache::push_in_list(&mut builder, ids);
 
     let rows: Vec<(String, Option<String>)> = builder.build_query_as().fetch_all(pool).await?;
     Ok(rows
@@ -391,11 +374,7 @@ pub async fn song_album_ids(
     }
 
     let mut builder = sqlx::QueryBuilder::new("SELECT id, album_id FROM songs WHERE id IN (");
-    let mut separated = builder.separated(", ");
-    for id in ids {
-        separated.push_bind(id.clone());
-    }
-    separated.push_unseparated(")");
+    crate::cache::push_in_list(&mut builder, ids);
 
     let rows: Vec<(String, Option<String>)> = builder.build_query_as().fetch_all(pool).await?;
     Ok(rows
@@ -417,11 +396,7 @@ pub async fn song_starred_ids(
 
     let mut builder =
         sqlx::QueryBuilder::new("SELECT id FROM songs WHERE starred IS NOT NULL AND id IN (");
-    let mut separated = builder.separated(", ");
-    for id in ids {
-        separated.push_bind(id.clone());
-    }
-    separated.push_unseparated(")");
+    crate::cache::push_in_list(&mut builder, ids);
 
     let rows: Vec<String> = builder.build_query_scalar().fetch_all(pool).await?;
     Ok(rows.into_iter().collect())
@@ -516,41 +491,25 @@ pub fn cycle_artist_order(current: &str, delta: i64) -> &'static str {
 /// by one of [`ORDERS`]. Kept as static SQL (no interpolation) so the
 /// allowlist is enforced at the type level.
 pub async fn albums(pool: &SqlitePool, artist: Option<&str>, order: &str) -> Result<Vec<AlbumRow>> {
-    let sql: &'static str = match (artist.is_some(), order) {
-        (true, "Name") => {
-            "SELECT id, name AS title, artist, year, song_count, cover_art, starred
-             FROM albums WHERE artist = ?1 ORDER BY name"
-        }
-        (true, "Year") => {
-            "SELECT id, name AS title, artist, year, song_count, cover_art, starred
-             FROM albums WHERE artist = ?1 ORDER BY year DESC, name"
-        }
-        (true, _) => {
-            "SELECT id, name AS title, artist, year, song_count, cover_art, starred
-             FROM albums WHERE artist = ?1 ORDER BY artist, name"
-        }
-        (false, "Name") => {
-            "SELECT id, name AS title, artist, year, song_count, cover_art, starred
-             FROM albums ORDER BY name"
-        }
-        (false, "Year") => {
-            "SELECT id, name AS title, artist, year, song_count, cover_art, starred
-             FROM albums ORDER BY year DESC, name"
-        }
-        (false, _) => {
-            "SELECT id, name AS title, artist, year, song_count, cover_art, starred
-             FROM albums ORDER BY artist, name"
-        }
+    let filter = if artist.is_some() {
+        " WHERE artist = ?1"
+    } else {
+        ""
     };
+    let sql = format!("{ALBUM_SELECT}{filter}{}", album_order(order, true));
 
     let rows = match artist {
         Some(artist) => {
-            sqlx::query_as::<_, AlbumRow>(sql)
+            sqlx::query_as::<_, AlbumRow>(sqlx::AssertSqlSafe(sql))
                 .bind(artist)
                 .fetch_all(pool)
                 .await?
         }
-        None => sqlx::query_as::<_, AlbumRow>(sql).fetch_all(pool).await?,
+        None => {
+            sqlx::query_as::<_, AlbumRow>(sqlx::AssertSqlSafe(sql))
+                .fetch_all(pool)
+                .await?
+        }
     };
     Ok(rows)
 }
@@ -562,21 +521,11 @@ pub async fn artist_albums(
     artist_id: &str,
     order: &str,
 ) -> Result<Vec<AlbumRow>> {
-    let sql: &'static str = match order {
-        "Name" => {
-            "SELECT id, name AS title, artist, year, song_count, cover_art, starred
-             FROM albums WHERE artist_id = ?1 ORDER BY name"
-        }
-        "Year" => {
-            "SELECT id, name AS title, artist, year, song_count, cover_art, starred
-             FROM albums WHERE artist_id = ?1 ORDER BY year DESC, name"
-        }
-        _ => {
-            "SELECT id, name AS title, artist, year, song_count, cover_art, starred
-             FROM albums WHERE artist_id = ?1 ORDER BY year, name"
-        }
-    };
-    let rows = sqlx::query_as::<_, AlbumRow>(sql)
+    let sql = format!(
+        "{ALBUM_SELECT} WHERE artist_id = ?1{}",
+        album_order(order, false)
+    );
+    let rows = sqlx::query_as::<_, AlbumRow>(sqlx::AssertSqlSafe(sql))
         .bind(artist_id)
         .fetch_all(pool)
         .await?;
@@ -585,15 +534,29 @@ pub async fn artist_albums(
 
 /// All artists, ordered by one of [`ARTIST_ORDERS`].
 pub async fn artists(pool: &SqlitePool, order: &str) -> Result<Vec<ArtistRow>> {
-    let sql: &'static str = match order {
-        "Albums" => {
-            "SELECT id, name, album_count, cover_art, starred FROM artists
-             ORDER BY album_count DESC, name"
-        }
-        _ => "SELECT id, name, album_count, cover_art, starred FROM artists ORDER BY name",
+    let order = match order {
+        "Albums" => " ORDER BY album_count DESC, name",
+        _ => " ORDER BY name",
     };
-    let rows = sqlx::query_as::<_, ArtistRow>(sql).fetch_all(pool).await?;
+    let sql = format!("{ARTIST_SELECT}{order}");
+    let rows = sqlx::query_as::<_, ArtistRow>(sqlx::AssertSqlSafe(sql))
+        .fetch_all(pool)
+        .await?;
     Ok(rows)
+}
+
+const ALBUM_SELECT: &str = "SELECT id, name AS title, artist, year, song_count, cover_art, starred
+     FROM albums";
+
+const ARTIST_SELECT: &str = "SELECT id, name, album_count, cover_art, starred FROM artists";
+
+fn album_order(order: &str, by_artist: bool) -> &'static str {
+    match (by_artist, order) {
+        (_, "Name") => " ORDER BY name",
+        (_, "Year") => " ORDER BY year DESC, name",
+        (true, _) => " ORDER BY artist, name",
+        (false, _) => " ORDER BY year, name",
+    }
 }
 
 const SONG_SELECT: &str =
@@ -692,14 +655,11 @@ pub async fn find_song_id(
 
 /// A single album by id.
 pub async fn album(pool: &SqlitePool, id: &str) -> Result<Option<AlbumRow>> {
-    let row = sqlx::query_as::<_, AlbumRow>(
-        "SELECT id, name AS title, artist, year, song_count, cover_art, starred
-         FROM albums
-         WHERE id = ?1",
-    )
-    .bind(id)
-    .fetch_optional(pool)
-    .await?;
+    let sql = format!("{ALBUM_SELECT} WHERE id = ?1");
+    let row = sqlx::query_as::<_, AlbumRow>(sqlx::AssertSqlSafe(sql))
+        .bind(id)
+        .fetch_optional(pool)
+        .await?;
     Ok(row)
 }
 
@@ -716,12 +676,11 @@ pub async fn album_artist_id(pool: &SqlitePool, album_id: &str) -> Result<Option
 
 /// A single artist by id.
 pub async fn artist(pool: &SqlitePool, id: &str) -> Result<Option<ArtistRow>> {
-    let row = sqlx::query_as::<_, ArtistRow>(
-        "SELECT id, name, album_count, cover_art, starred FROM artists WHERE id = ?1",
-    )
-    .bind(id)
-    .fetch_optional(pool)
-    .await?;
+    let sql = format!("{ARTIST_SELECT} WHERE id = ?1");
+    let row = sqlx::query_as::<_, ArtistRow>(sqlx::AssertSqlSafe(sql))
+        .bind(id)
+        .fetch_optional(pool)
+        .await?;
     Ok(row)
 }
 
@@ -734,11 +693,7 @@ pub async fn songs_by_ids(pool: &SqlitePool, ids: &[String]) -> Result<Vec<SongR
     }
 
     let mut builder = sqlx::QueryBuilder::new(format!("{SONG_SELECT} WHERE s.id IN ("));
-    let mut separated = builder.separated(", ");
-    for id in ids {
-        separated.push_bind(id.clone());
-    }
-    separated.push_unseparated(")");
+    crate::cache::push_in_list(&mut builder, ids);
 
     let rows: Vec<SongRow> = builder.build_query_as().fetch_all(pool).await?;
     let mut by_id: std::collections::HashMap<String, SongRow> =
@@ -812,11 +767,7 @@ pub async fn song_scopes(
     }
     let mut builder =
         sqlx::QueryBuilder::new("SELECT id, artist_id, album_id FROM songs WHERE id IN (");
-    let mut separated = builder.separated(", ");
-    for id in ids {
-        separated.push_bind(id);
-    }
-    separated.push_unseparated(")");
+    crate::cache::push_in_list(&mut builder, ids);
     let rows: Vec<(String, Option<String>, Option<String>)> =
         builder.build_query_as().fetch_all(pool).await?;
     Ok(rows

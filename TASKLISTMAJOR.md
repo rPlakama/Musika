@@ -2970,14 +2970,14 @@ Small, bounded, high-value changes.
   - **Details:** `const SONG_SELECT` and `fn song_order(order) -> &'static str`;
     expect ~80 lines removed.
 
-- [ ] **REC-8 · `ALBUM_SELECT`/`ARTIST_SELECT` + order** — P3 · (RECYCLECRITIQUE §B, phase 0)
+- [x] **REC-8 · `ALBUM_SELECT`/`ARTIST_SELECT` + order** — P3 · (RECYCLECRITIQUE §B, phase 0)
   - **Why:** 11 album projections (`library.rs:261,386-408,432-442,605`),
     4 artist column copies (`:249,455,458,618`) and 9 order strings repeat the
     REC-7 shape.
   - **Details:** `const ALBUM_SELECT`, `const ARTIST_SELECT`,
     `album_order(order, by_artist)`.
 
-- [ ] **REC-9 · `db_path!` + `open_migrated`** — P2 · (RECYCLECRITIQUE §B, phase 0)
+- [x] **REC-9 · `db_path!` + `open_migrated`** — P2 · (RECYCLECRITIQUE §B, phase 0)
   - **Why:** 11 one-line path wrappers (`db.rs:136-174`), 3 env-override-else-
     `config_dir` copies (`:182-205`), 2 XDG-else-HOME copies (`:207-228`) and
     10 `open_file` + `sqlx::migrate!().run()` pairs (`:65-95`).
@@ -2985,7 +2985,7 @@ Small, bounded, high-value changes.
     `async fn open_migrated(path, max_connections, migrations, ignore_missing)`;
     removes the `set_ignore_missing` special case buried in `init()`.
 
-- [ ] **REC-10 · Upsert pairs (`artist_user`, `download`)** — P3 · (RECYCLECRITIQUE §B, phase 0)
+- [x] **REC-10 · Upsert pairs (`artist_user`, `download`)** — P3 · (RECYCLECRITIQUE §B, phase 0)
   - **Why:** `set_starred`/`set_rating` (`artist_user.rs:38/56`) and
     `mark_queued`/`set_state` (`download.rs:54/77`) each rewrite the same
     `INSERT … ON CONFLICT DO UPDATE` COALESCE-preserve-column shape.
@@ -2993,7 +2993,7 @@ Small, bounded, high-value changes.
     `set_download_state(pool, song_id, state, …)`; callers pass only the field
     they change.
 
-- [ ] **REC-11 · Dynamic SQL assembly (`push_in_list`/`insert_many`)** — P2 · (RECYCLECRITIQUE §B, phase 0)
+- [x] **REC-11 · Dynamic SQL assembly (`push_in_list`/`insert_many`)** — P2 · (RECYCLECRITIQUE §B, phase 0)
   - **Why:** 4 copies of the `builder.separated(", ") … push_bind …
     push_unseparated(")")` `IN`-list (`library.rs:203,284,634,697`) and 4
     row-by-row insert loops in a transaction (`library.rs:58,73,93`,

@@ -55,25 +55,85 @@ pub struct Dbs {
 
 /// Opens every database and applies its migrations.
 pub async fn init() -> Result<Dbs> {
-    let dbs = Dbs {
-        credentials: open_file(&credentials_path()?, 5).await?,
-        library: open_file(&library_path()?, 5).await?,
-        search: open_file(&search_path()?, 3).await?,
-        covers: open_file(&covers_path()?, 5).await?,
-        media: open_file(&media_path()?, 3).await?,
-        lyrics: open_file(&lyrics_path()?, 3).await?,
-        colors: open_file(&colors_path()?, 3).await?,
+    Ok(Dbs {
+        credentials: open_migrated(credentials_path()?, 5, sqlx::migrate!("./migrations"), true)
+            .await?,
+        library: open_migrated(
+            library_path()?,
+            5,
+            sqlx::migrate!("./migrations_library"),
+            false,
+        )
+        .await?,
+        search: open_migrated(
+            search_path()?,
+            3,
+            sqlx::migrate!("./migrations_search"),
+            false,
+        )
+        .await?,
+        covers: open_migrated(
+            covers_path()?,
+            5,
+            sqlx::migrate!("./migrations_covers"),
+            false,
+        )
+        .await?,
+        media: open_migrated(
+            media_path()?,
+            3,
+            sqlx::migrate!("./migrations_media"),
+            false,
+        )
+        .await?,
+        lyrics: open_migrated(
+            lyrics_path()?,
+            3,
+            sqlx::migrate!("./migrations_lyrics"),
+            false,
+        )
+        .await?,
+        colors: open_migrated(
+            colors_path()?,
+            3,
+            sqlx::migrate!("./migrations_colors"),
+            false,
+        )
+        .await?,
         // Single row, tiny: one connection is plenty.
-        status: open_file(&status_path()?, 1).await?,
-        artist_user: open_file(&artist_user_path()?, 3).await?,
-        download: open_file(&download_path()?, 3).await?,
-        playlist: open_file(&playlist_path()?, 3).await?,
-    };
-    migrate(&dbs).await?;
-    Ok(dbs)
+        status: open_migrated(
+            status_path()?,
+            1,
+            sqlx::migrate!("./migrations_status"),
+            false,
+        )
+        .await?,
+        artist_user: open_migrated(
+            artist_user_path()?,
+            3,
+            sqlx::migrate!("./migrations_artist_user"),
+            false,
+        )
+        .await?,
+        download: open_migrated(
+            download_path()?,
+            3,
+            sqlx::migrate!("./migrations_download"),
+            false,
+        )
+        .await?,
+        playlist: open_migrated(
+            playlist_path()?,
+            3,
+            sqlx::migrate!("./migrations_playlist"),
+            false,
+        )
+        .await?,
+    })
 }
 
 /// Applies every pool's embedded migrations (shared by [`init`] and [`wipe`]).
+#[allow(dead_code)]
 pub async fn migrate(dbs: &Dbs) -> Result<()> {
     // Two early no-op migrations were removed (ARC-18); ignore them if this
     // database already applied them.
@@ -222,6 +282,7 @@ pub async fn wipe_files(dbs: &Dbs) -> Result<()> {
 /// re-migrated, and the derived blobs (covers/media) and the `index.txt`
 /// mirror are removed. Credentials go too, so the caller must return to the
 /// login screen afterwards.
+#[allow(dead_code)]
 pub async fn wipe(dbs: &Dbs) -> Result<()> {
     for pool in [
         &dbs.credentials,
@@ -276,14 +337,19 @@ async fn wipe_pool(pool: &SqlitePool) -> Result<()> {
     Ok(())
 }
 
-async fn open_file(path: &Path, max_connections: u32) -> Result<SqlitePool> {
+async fn open_migrated(
+    path: PathBuf,
+    max_connections: u32,
+    mut migrations: sqlx::migrate::Migrator,
+    ignore_missing: bool,
+) -> Result<SqlitePool> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)
             .with_context(|| format!("failed to create {}", parent.display()))?;
     }
 
     let options = sqlx::sqlite::SqliteConnectOptions::new()
-        .filename(path)
+        .filename(&path)
         .create_if_missing(true)
         .journal_mode(SqliteJournalMode::Wal)
         .busy_timeout(Duration::from_secs(5))
@@ -294,6 +360,11 @@ async fn open_file(path: &Path, max_connections: u32) -> Result<SqlitePool> {
         .connect_with(options)
         .await?;
 
+    if ignore_missing {
+        migrations.set_ignore_missing(true);
+    }
+    migrations.run(&pool).await?;
+
     Ok(pool)
 }
 
@@ -301,103 +372,71 @@ async fn open_file(path: &Path, max_connections: u32) -> Result<SqlitePool> {
 // Paths
 // ---------------------------------------------------------------------------
 
-pub fn credentials_path() -> Result<PathBuf> {
-    db_path("credentials.db", "MUSIKA_CREDENTIALS_FILE")
+macro_rules! db_path {
+    ($($func:ident: $file:literal, $env:literal);* $(;)?) => {
+        $(
+            pub fn $func() -> Result<PathBuf> {
+                dir_from_env($env, || Ok(config_dir()?.join($file)))
+            }
+        )*
+    };
 }
 
-pub fn library_path() -> Result<PathBuf> {
-    db_path("library.db", "MUSIKA_LIBRARY_FILE")
-}
-
-pub fn search_path() -> Result<PathBuf> {
-    db_path("search.db", "MUSIKA_SEARCH_FILE")
-}
-
-pub fn covers_path() -> Result<PathBuf> {
-    db_path("covers.db", "MUSIKA_COVERS_FILE")
-}
-
-pub fn media_path() -> Result<PathBuf> {
-    db_path("media.db", "MUSIKA_MEDIA_FILE")
-}
-
-pub fn lyrics_path() -> Result<PathBuf> {
-    db_path("lyrics.db", "MUSIKA_LYRICS_FILE")
-}
-
-pub fn colors_path() -> Result<PathBuf> {
-    db_path("colors.db", "MUSIKA_COLORS_FILE")
-}
-
-pub fn status_path() -> Result<PathBuf> {
-    db_path("statussave.db", "MUSIKA_STATUS_FILE")
-}
-
-pub fn artist_user_path() -> Result<PathBuf> {
-    db_path("artist_user.db", "MUSIKA_ARTIST_USER_FILE")
-}
-
-pub fn download_path() -> Result<PathBuf> {
-    db_path("download.db", "MUSIKA_DOWNLOAD_FILE")
-}
-
-/// The playlist index (ARC-44) — Subsonic playlists + local m3u files.
-pub fn playlist_path() -> Result<PathBuf> {
-    db_path("playlist.db", "MUSIKA_PLAYLIST_FILE")
-}
-
-/// Plain-text mirror of the library, for external tools such as `rg`.
-pub fn mirror_path() -> Result<PathBuf> {
-    db_path("index.txt", "MUSIKA_INDEX_MIRROR")
+db_path! {
+    credentials_path: "credentials.db", "MUSIKA_CREDENTIALS_FILE";
+    library_path: "library.db", "MUSIKA_LIBRARY_FILE";
+    search_path: "search.db", "MUSIKA_SEARCH_FILE";
+    covers_path: "covers.db", "MUSIKA_COVERS_FILE";
+    media_path: "media.db", "MUSIKA_MEDIA_FILE";
+    lyrics_path: "lyrics.db", "MUSIKA_LYRICS_FILE";
+    colors_path: "colors.db", "MUSIKA_COLORS_FILE";
+    status_path: "statussave.db", "MUSIKA_STATUS_FILE";
+    artist_user_path: "artist_user.db", "MUSIKA_ARTIST_USER_FILE";
+    download_path: "download.db", "MUSIKA_DOWNLOAD_FILE";
+    playlist_path: "playlist.db", "MUSIKA_PLAYLIST_FILE";
+    mirror_path: "index.txt", "MUSIKA_INDEX_MIRROR";
 }
 
 /// Directory holding the cached cover-art blobs.
 pub fn covers_dir() -> Result<PathBuf> {
-    if let Some(dir) = non_empty_env("MUSIKA_COVERS_DIR") {
-        return Ok(PathBuf::from(dir));
-    }
-    Ok(config_dir()?.join("covers"))
+    dir_from_env("MUSIKA_COVERS_DIR", || Ok(config_dir()?.join("covers")))
 }
 
 /// Directory holding permanent/rule media blobs (CACHE-1): config root, never
 /// auto-removed below the permanent/rule tiers.
 pub fn media_dir() -> Result<PathBuf> {
-    if let Some(dir) = non_empty_env("MUSIKA_MEDIA_DIR") {
-        return Ok(PathBuf::from(dir));
-    }
-    Ok(config_dir()?.join("media"))
+    dir_from_env("MUSIKA_MEDIA_DIR", || Ok(config_dir()?.join("media")))
 }
 
 /// Directory holding playback/rolling media blobs (CACHE-1): XDG cache,
 /// purgeable without losing user data.
 pub fn playback_dir() -> Result<PathBuf> {
-    if let Some(dir) = non_empty_env("MUSIKA_MEDIA_CACHE_DIR") {
-        return Ok(PathBuf::from(dir));
-    }
-    Ok(cache_dir()?.join("musika").join("media"))
+    dir_from_env("MUSIKA_MEDIA_CACHE_DIR", || {
+        Ok(cache_dir()?.join("musika").join("media"))
+    })
 }
 
 fn cache_dir() -> Result<PathBuf> {
-    if let Some(dir) = non_empty_env("XDG_CACHE_HOME") {
-        return Ok(PathBuf::from(dir));
-    }
-    let home = std::env::var("HOME").context("HOME is not set")?;
-    Ok(PathBuf::from(home).join(".cache"))
+    dir_from_env("XDG_CACHE_HOME", || Ok(home_dir()?.join(".cache")))
 }
 
-fn db_path(name: &str, override_env: &str) -> Result<PathBuf> {
-    if let Some(path) = non_empty_env(override_env) {
-        return Ok(PathBuf::from(path));
+fn dir_from_env(env: &str, fallback: impl FnOnce() -> Result<PathBuf>) -> Result<PathBuf> {
+    match non_empty_env(env) {
+        Some(dir) => Ok(PathBuf::from(dir)),
+        None => fallback(),
     }
-    Ok(config_dir()?.join(name))
+}
+
+fn home_dir() -> Result<PathBuf> {
+    Ok(PathBuf::from(
+        std::env::var("HOME").context("HOME is not set")?,
+    ))
 }
 
 pub fn config_dir() -> Result<PathBuf> {
-    if let Some(dir) = non_empty_env("XDG_CONFIG_HOME") {
-        return Ok(PathBuf::from(dir).join("musika"));
-    }
-    let home = std::env::var("HOME").context("HOME is not set")?;
-    Ok(PathBuf::from(home).join(".config").join("musika"))
+    dir_from_env("XDG_CONFIG_HOME", || {
+        Ok(home_dir()?.join(".config").join("musika"))
+    })
 }
 
 fn non_empty_env(key: &str) -> Option<String> {

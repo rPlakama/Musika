@@ -34,42 +34,46 @@ pub struct ArtistUser {
     pub updated_at: String,
 }
 
-/// Records the favourite state, preserving any stored rating.
-pub async fn set_starred(pool: &SqlitePool, artist_id: &str, starred: bool) -> Result<()> {
+async fn upsert_artist_user(
+    pool: &SqlitePool,
+    artist_id: &str,
+    starred: Option<bool>,
+    rating: Option<u8>,
+) -> Result<()> {
+    if let Some(rating) = rating
+        && rating > 5
+    {
+        bail!("artist rating {rating} is outside the 0..=5 domain");
+    }
     sqlx::query(
         "INSERT INTO artist_user (artist_id, starred, rating, updated_at)
-         VALUES (?1, ?2, COALESCE((SELECT rating FROM artist_user WHERE artist_id = ?1), 0), ?3)
+         VALUES (?1,
+                 COALESCE(?2, (SELECT starred FROM artist_user WHERE artist_id = ?1), 0),
+                 COALESCE(?3, (SELECT rating FROM artist_user WHERE artist_id = ?1), 0),
+                 ?4)
          ON CONFLICT(artist_id) DO UPDATE SET
-             starred    = excluded.starred,
+             starred    = COALESCE(?2, artist_user.starred),
+             rating     = COALESCE(?3, artist_user.rating),
              updated_at = excluded.updated_at",
     )
     .bind(artist_id)
-    .bind(starred as i64)
+    .bind(starred.map(i64::from))
+    .bind(rating.map(i64::from))
     .bind(crate::consts::now_secs().to_string())
     .execute(pool)
     .await?;
     Ok(())
 }
 
+/// Records the favourite state, preserving any stored rating.
+pub async fn set_starred(pool: &SqlitePool, artist_id: &str, starred: bool) -> Result<()> {
+    upsert_artist_user(pool, artist_id, Some(starred), None).await
+}
+
 /// Records the rating, preserving the stored favourite state. Ratings are the
 /// Subsonic 0..=5 domain; anything else is refused at this boundary.
 pub async fn set_rating(pool: &SqlitePool, artist_id: &str, rating: u8) -> Result<()> {
-    if rating > 5 {
-        bail!("artist rating {rating} is outside the 0..=5 domain");
-    }
-    sqlx::query(
-        "INSERT INTO artist_user (artist_id, starred, rating, updated_at)
-         VALUES (?1, COALESCE((SELECT starred FROM artist_user WHERE artist_id = ?1), 0), ?2, ?3)
-         ON CONFLICT(artist_id) DO UPDATE SET
-             rating     = excluded.rating,
-             updated_at = excluded.updated_at",
-    )
-    .bind(artist_id)
-    .bind(rating as i64)
-    .bind(crate::consts::now_secs().to_string())
-    .execute(pool)
-    .await?;
-    Ok(())
+    upsert_artist_user(pool, artist_id, None, Some(rating)).await
 }
 
 /// One artist's stored state; `None` when the user never touched it.

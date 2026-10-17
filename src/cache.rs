@@ -35,6 +35,33 @@ where
     Ok(())
 }
 
+/// Appends a comma-separated `?` list and the closing parenthesis.
+pub fn push_in_list(builder: &mut sqlx::QueryBuilder<sqlx::Sqlite>, ids: &[String]) {
+    let mut separated = builder.separated(", ");
+    for id in ids {
+        separated.push_bind(id);
+    }
+    separated.push_unseparated(")");
+}
+
+/// Inserts `rows` under a static `INSERT ...` prefix, in bounded batches.
+pub async fn insert_many<T, F>(
+    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    sql: &'static str,
+    rows: &[T],
+    mut push_tuple: F,
+) -> Result<()>
+where
+    F: FnMut(sqlx::query_builder::Separated<'_, sqlx::Sqlite, &'static str>, &T),
+{
+    for chunk in rows.chunks(32) {
+        let mut query = sqlx::QueryBuilder::<sqlx::Sqlite>::new(sql);
+        query.push_values(chunk, &mut push_tuple);
+        query.build().execute(&mut **tx).await?;
+    }
+    Ok(())
+}
+
 /// Deletes rows from `derived` whose `key_col` is absent from `owner_ids`.
 ///
 /// `table`/`key_col` are compile-time constants supplied by the caller (never

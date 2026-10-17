@@ -66,14 +66,9 @@ async fn filter_offline(
     offline: bool,
     songs: &mut Vec<crate::library::SongRow>,
 ) -> anyhow::Result<()> {
-    if !offline {
-        return Ok(());
+    if let Some(done) = crate::download::offline_song_ids(dbs, offline).await? {
+        songs.retain(|song| done.contains(&song.id));
     }
-    let done: std::collections::HashSet<String> = crate::download::done_ids(&dbs.download)
-        .await?
-        .into_iter()
-        .collect();
-    songs.retain(|song| done.contains(&song.id));
     Ok(())
 }
 
@@ -220,22 +215,7 @@ fn queue_album_json(
     album: &crate::library::AlbumRow,
     covers: &HashMap<String, String>,
 ) -> serde_json::Value {
-    let cover = album
-        .cover_art
-        .as_deref()
-        .and_then(|id| covers.get(id))
-        .cloned()
-        .unwrap_or_default();
-    serde_json::json!({
-        "id": album.id,
-        "title": album.title,
-        "artist": album.artist,
-        "year": album.year,
-        "tracks": album.song_count,
-        "cover": cover,
-        // UI-56/ARC-I-2: the album page header's favourite mark.
-        "starred": album.starred.is_some(),
-    })
+    crate::browse::album_json(album, covers, None)
 }
 
 /// Single pumped event for "play this song inside its album": the serialized
@@ -400,15 +380,16 @@ pub async fn resume_payload(
 
     // CACHE-9: offline, only downloaded content comes back; the album page
     // reopens only when it owns downloads.
-    let offline_albums = if offline {
-        let ids = crate::download::done_ids(&dbs.download).await?;
-        Some(
-            crate::library::downloaded_owners(&dbs.library, &ids)
-                .await?
-                .0,
-        )
-    } else {
-        None
+    let offline_albums = match crate::download::offline_song_ids(dbs, offline).await? {
+        Some(songs) => {
+            let ids: Vec<String> = songs.into_iter().collect();
+            Some(
+                crate::library::downloaded_owners(&dbs.library, &ids)
+                    .await?
+                    .0,
+            )
+        }
+        None => None,
     };
 
     let album = match status.album_id.as_deref().filter(|id| !id.is_empty()) {
@@ -482,15 +463,7 @@ async fn tracks_json(
     dbs: &crate::db::Dbs,
     songs: Vec<crate::library::SongRow>,
 ) -> anyhow::Result<String> {
-    let credentials = crate::sqlite::load_credentials(&dbs.credentials).await?;
-    let Some(credentials) = credentials else {
-        return Err(anyhow::anyhow!("no saved credentials to stream with"));
-    };
-    let client = SubsonicClient::new(
-        &credentials.server_url,
-        &credentials.username,
-        &credentials.password,
-    );
+    let client = crate::qml::client(dbs).await?;
     let covers = crate::covers::url_map(&dbs.covers).await?;
     let media = crate::media::path_map(&dbs.media).await.unwrap_or_default();
 
@@ -714,13 +687,17 @@ mod tests {
         // ARC-I: an artist hit queues every song of the artist's albums.
         let songs = quick_songs(&dbs, "artist", "ar1").await.unwrap();
         assert_eq!(songs.len(), 2);
-        assert!(songs
-            .iter()
-            .all(|song| song.album_id.as_deref() == Some("al1")));
-        assert!(quick_songs(&dbs, "artist", "gone")
-            .await
-            .unwrap()
-            .is_empty());
+        assert!(
+            songs
+                .iter()
+                .all(|song| song.album_id.as_deref() == Some("al1"))
+        );
+        assert!(
+            quick_songs(&dbs, "artist", "gone")
+                .await
+                .unwrap()
+                .is_empty()
+        );
 
         // ARC-I: the search payload album-id map (the search index carries no
         // album ids; the library lookup fills the Go to Artist jump).

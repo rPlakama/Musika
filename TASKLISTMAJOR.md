@@ -3069,7 +3069,7 @@ Small, bounded, high-value changes.
   - **Details:** `fn apply_roles(&mut self, roles: &BTreeMap<String, String>)`;
     `apply` calls it and `reset` builds the default map once; ~36 lines.
 
-- [ ] **REC-20 · Enum string tables (`name_enum!`)** — P3 · (RECYCLECRITIQUE §D, phase 2)
+- [x] **REC-20 · Enum string tables (`name_enum!`)** — P3 · (RECYCLECRITIQUE §D, phase 2)
   - **Why:** `seed.rs:69` `SourceMode`, `scheme.rs:42` `Spec`,
     `scheme.rs:78` `VariantChoice`, plus `scheme.rs:259` `variant_name`
     duplicating `VariantChoice::name`, all hand-roll `name()`/`from_name()`
@@ -3077,7 +3077,7 @@ Small, bounded, high-value changes.
   - **Details:** one `name_enum!` macro removes ~25 lines and the fourth copy
     of the variant names.
 
-- [ ] **REC-21 · Colors minors (`spec_scheme`, `rgb` codec, `build_scheme`)** — P3 · (RECYCLECRITIQUE §D, phase 2)
+- [x] **REC-21 · Colors minors (`spec_scheme`, `rgb` codec, `build_scheme`)** — P3 · (RECYCLECRITIQUE §D, phase 2)
   - **Why:** `DynamicScheme::from_spec(hct, variant, is_dark, Some(contrast),
     Platform::Phone, SpecVersion::Spec2025)` is written 7×
     (`scheme.rs:164-243`); `fetch_into` (`engine.rs:193`) and `build_scheme`
@@ -3086,7 +3086,7 @@ Small, bounded, high-value changes.
   - **Details:** `spec_scheme(hct, variant, version, contrast, is_dark)`;
     `fetch_into` calls `build_scheme`; one `rgb` codec module.
 
-- [ ] **REC-22 · QML async-slot prelude (`spawn_data`)** — P2 · (RECYCLECRITIQUE §E, phase 2)
+- [x] **REC-22 · QML async-slot prelude (`spawn_data`)** — P2 · (RECYCLECRITIQUE §E, phase 2)
   - **Why:** 9+ slots repeat the same 15-line shape
     (`qml.rs:1069,1148,1170,1192,1220,1420,1519,1537,1551`): invoker, `dbs`
     clone, `runtime().spawn`, `emitData`/`eprintln!`.
@@ -3095,7 +3095,7 @@ Small, bounded, high-value changes.
     keep a second path (or a bool) for slots that raise `errorRaised`; ~100
     lines, every new slot becomes one line.
 
-- [ ] **REC-23 · QML property plumbing (`qprop!`, `sync_field!`)** — P2 · (RECYCLECRITIQUE §E, phase 2)
+- [x] **REC-23 · QML property plumbing (`qprop!`, `sync_field!`)** — P2 · (RECYCLECRITIQUE §E, phase 2)
   - **Why:** 31 `qproperty!` declarations (`qml.rs:194-319`), 29 matching
     `#[qsignal]` stubs (`:334-403`) and 3 hand-written setters (`:321-332`)
     must be written twice because of the derive; `sync_player` (`:2054`) adds
@@ -3105,7 +3105,7 @@ Small, bounded, high-value changes.
     Medium risk around macro hygiene and the `Notify` signal names — do it
     property-by-property with `cargo test` after each.
 
-- [ ] **REC-24 · Row→JSON builders + the `song_count`/`tracks` drift** — P2 · (RECYCLECRITIQUE §E, phase 3)
+- [x] **REC-24 · Row→JSON builders + the `song_count`/`tracks` drift** — P2 · (RECYCLECRITIQUE §E, phase 3)
   - **Why:** `artist_json` (`browse.rs:172`), `album_json` (`:186`) and
     `song_rows_json` (`:202`) are re-implemented inline in `search_json`
     (`:297-339`); `queue_album_json` (`queue.rs:134`) copies `album_json`;
@@ -3118,7 +3118,7 @@ Small, bounded, high-value changes.
     `AlbumRow`/`ArtistRow`/`SongRow`/`player::Track` a `qml_json(covers, …)`
     in one module; ~60 lines and the next key addition happens once.
 
-- [ ] **REC-25 · Error/emit plumbing (`raise`, `emit`)** — P3 · (RECYCLECRITIQUE §E, phase 2)
+- [x] **REC-25 · Error/emit plumbing (`raise`, `emit`)** — P3 · (RECYCLECRITIQUE §E, phase 2)
   - **Why:** `errorRaised` + `format!("...{err:#}")` appears 12×
     (`qml.rs:1246,1274,1306,1329,1408,1453,1596,1628,1666,2312` …) and
     `emitData` 23×.
@@ -3126,7 +3126,7 @@ Small, bounded, high-value changes.
     `emit(&invoker, channel, payload)`; the 10 invoke sites become one line
     each; ~30 lines.
 
-- [ ] **REC-26 · Session, sync and auth handshake** — P3 · (RECYCLECRITIQUE §E, phase 2)
+- [x] **REC-26 · Session, sync and auth handshake** — P3 · (RECYCLECRITIQUE §E, phase 2)
   - **Why:** `queue_status_save` (`qml.rs:709-753`) and `flush_status`
     (`:770-794`) build the same `SessionStatus` field-by-field; the
     `SyncProgress` closure (`:990`, `:2277`) and its `librarySyncFinished` +
@@ -3137,7 +3137,7 @@ Small, bounded, high-value changes.
   - **Details:** `session_status()`, `sync_progress_cb(invoker)` and
     `authenticated(...)` helpers; ~50 lines, medium risk (QML-visible).
 
-- [ ] **REC-27 · Small QML clusters** — P2 · (RECYCLECRITIQUE §E, phase 3)
+- [x] **REC-27 · Small QML clusters** — P2 · (RECYCLECRITIQUE §E, phase 3)
   - **Why:** `client(dbs)` already exists (`qml.rs:37`) but is re-inlined in
     `sync_library` (`:984`), `request_lyrics` (`:1872`), `browse::album_notes`
     (`:226`) and `queue::tracks_json` (`:297`); the offline filter is spelled

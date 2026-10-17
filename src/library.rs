@@ -136,14 +136,12 @@ pub async fn replace(
 /// reconciles on the next sync. Songs and albums only — artists live in
 /// `artist_user.db` (`artist_user::set_starred`).
 pub async fn set_song_starred(pool: &SqlitePool, id: &str, on: bool) -> Result<()> {
-    sqlx::query(
-        "UPDATE songs SET starred = CASE WHEN ?1 THEN ?2 ELSE NULL END WHERE id = ?3",
-    )
-    .bind(on)
-    .bind(crate::consts::now_secs().to_string())
-    .bind(id)
-    .execute(pool)
-    .await?;
+    sqlx::query("UPDATE songs SET starred = CASE WHEN ?1 THEN ?2 ELSE NULL END WHERE id = ?3")
+        .bind(on)
+        .bind(crate::consts::now_secs().to_string())
+        .bind(id)
+        .execute(pool)
+        .await?;
     Ok(())
 }
 
@@ -197,14 +195,12 @@ pub async fn album_song_ids_of(
 
 /// Album twin of [`set_song_starred`].
 pub async fn set_album_starred(pool: &SqlitePool, id: &str, on: bool) -> Result<()> {
-    sqlx::query(
-        "UPDATE albums SET starred = CASE WHEN ?1 THEN ?2 ELSE NULL END WHERE id = ?3",
-    )
-    .bind(on)
-    .bind(crate::consts::now_secs().to_string())
-    .bind(id)
-    .execute(pool)
-    .await?;
+    sqlx::query("UPDATE albums SET starred = CASE WHEN ?1 THEN ?2 ELSE NULL END WHERE id = ?3")
+        .bind(on)
+        .bind(crate::consts::now_secs().to_string())
+        .bind(id)
+        .execute(pool)
+        .await?;
     Ok(())
 }
 
@@ -483,6 +479,16 @@ pub fn cycle_order(current: &str, delta: i64) -> &'static str {
 /// Cycles an artist order label by `delta` ([`ARTIST_ORDERS`]).
 pub fn cycle_artist_order(current: &str, delta: i64) -> &'static str {
     cycle_in(&ARTIST_ORDERS, current, delta)
+}
+
+/// Applies `delta` to `current`, treating empty as the first order.
+pub fn effective_order(orders: &[&'static str], current: &str, delta: i64) -> &'static str {
+    let current = if current.is_empty() {
+        orders[0]
+    } else {
+        current
+    };
+    cycle_in(orders, current, delta)
 }
 
 /// Albums for the central list, optionally filtered by artist name, ordered

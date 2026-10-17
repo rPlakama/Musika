@@ -129,6 +129,17 @@ pub async fn done_ids(pool: &SqlitePool) -> Result<Vec<String>> {
     Ok(ids)
 }
 
+/// The downloaded catalog while offline; `None` when online.
+pub async fn offline_song_ids(
+    dbs: &crate::db::Dbs,
+    offline: bool,
+) -> Result<Option<std::collections::HashSet<String>>> {
+    if !offline {
+        return Ok(None);
+    }
+    Ok(Some(done_ids(&dbs.download).await?.into_iter().collect()))
+}
+
 /// The finished subset of `ids` — the row marks' window read. One batched
 /// query; an empty window costs nothing.
 pub async fn done_ids_of(pool: &SqlitePool, ids: &[String]) -> Result<Vec<String>> {
@@ -139,7 +150,10 @@ pub async fn done_ids_of(pool: &SqlitePool, ids: &[String]) -> Result<Vec<String
         "SELECT song_id FROM download WHERE state = 'done' AND song_id IN (",
     );
     crate::cache::push_in_list(&mut builder, ids);
-    let rows = builder.build_query_scalar::<String>().fetch_all(pool).await?;
+    let rows = builder
+        .build_query_scalar::<String>()
+        .fetch_all(pool)
+        .await?;
     Ok(rows)
 }
 
@@ -153,7 +167,10 @@ pub async fn pending_ids_of(pool: &SqlitePool, ids: &[String]) -> Result<Vec<Str
         "SELECT song_id FROM download WHERE state IN ('queued', 'active') AND song_id IN (",
     );
     crate::cache::push_in_list(&mut builder, ids);
-    let rows = builder.build_query_scalar::<String>().fetch_all(pool).await?;
+    let rows = builder
+        .build_query_scalar::<String>()
+        .fetch_all(pool)
+        .await?;
     Ok(rows)
 }
 

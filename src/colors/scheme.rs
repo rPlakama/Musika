@@ -28,81 +28,50 @@ use material_colors::dynamic_color::{DynamicScheme, Platform, SpecVersion, Varia
 use material_colors::hct::Hct;
 use material_colors::palette::TonalPalette;
 
-/// Palette spec versions.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum Spec {
-    Spec2021,
-    Spec2025,
-    /// The default: DMS parity (2025 + raised accents).
-    #[default]
-    Dms,
-}
-
-impl Spec {
-    pub fn name(self) -> &'static str {
-        match self {
-            Self::Spec2021 => "2021",
-            Self::Spec2025 => "2025",
-            Self::Dms => "dms",
-        }
-    }
-
-    pub fn from_name(value: &str) -> Option<Self> {
-        match value.trim().to_ascii_lowercase().as_str() {
-            "2021" | "spec2021" => Some(Self::Spec2021),
-            "2025" | "spec2025" => Some(Self::Spec2025),
-            "dms" => Some(Self::Dms),
-            _ => None,
-        }
+name_enum! {
+    /// Palette spec versions.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+    pub enum Spec {
+        Spec2021 => "2021" | "spec2021",
+        Spec2025 => "2025" | "spec2025",
+        /// The default: DMS parity (2025 + raised accents).
+        #[default]
+        Dms => "dms",
     }
 }
 
-/// Which scheme family to build. `Smart` picks per image (T4).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum VariantChoice {
-    /// Choose by Hasler-Süsstrunk colorfulness (the default).
-    #[default]
-    Smart,
-    TonalSpot,
-    Vibrant,
-    Expressive,
-    Neutral,
-    Monochrome,
-    Fidelity,
-    Content,
-    Rainbow,
-    FruitSalad,
+name_enum! {
+    /// Which scheme family to build. `Smart` picks per image (T4).
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+    pub enum VariantChoice {
+        /// Choose by Hasler-Süsstrunk colorfulness (the default).
+        #[default]
+        Smart => "smart",
+        TonalSpot => "tonal_spot",
+        Vibrant => "vibrant",
+        Expressive => "expressive",
+        Neutral => "neutral",
+        Monochrome => "monochrome",
+        Fidelity => "fidelity",
+        Content => "content",
+        Rainbow => "rainbow",
+        FruitSalad => "fruit_salad",
+    }
 }
 
 impl VariantChoice {
-    pub fn name(self) -> &'static str {
-        match self {
-            Self::Smart => "smart",
-            Self::TonalSpot => "tonal_spot",
-            Self::Vibrant => "vibrant",
-            Self::Expressive => "expressive",
-            Self::Neutral => "neutral",
-            Self::Monochrome => "monochrome",
-            Self::Fidelity => "fidelity",
-            Self::Content => "content",
-            Self::Rainbow => "rainbow",
-            Self::FruitSalad => "fruit_salad",
-        }
-    }
-
-    pub fn from_name(value: &str) -> Option<Self> {
-        match value.trim().to_ascii_lowercase().as_str() {
-            "smart" => Some(Self::Smart),
-            "tonal_spot" => Some(Self::TonalSpot),
-            "vibrant" => Some(Self::Vibrant),
-            "expressive" => Some(Self::Expressive),
-            "neutral" => Some(Self::Neutral),
-            "monochrome" => Some(Self::Monochrome),
-            "fidelity" => Some(Self::Fidelity),
-            "content" => Some(Self::Content),
-            "rainbow" => Some(Self::Rainbow),
-            "fruit_salad" => Some(Self::FruitSalad),
-            _ => None,
+    fn from_variant(variant: Variant) -> Option<Self> {
+        match variant {
+            Variant::TonalSpot => Some(Self::TonalSpot),
+            Variant::Vibrant => Some(Self::Vibrant),
+            Variant::Expressive => Some(Self::Expressive),
+            Variant::Neutral => Some(Self::Neutral),
+            Variant::Monochrome => Some(Self::Monochrome),
+            Variant::Fidelity => Some(Self::Fidelity),
+            Variant::Content => Some(Self::Content),
+            Variant::Rainbow => Some(Self::Rainbow),
+            Variant::FruitSalad => Some(Self::FruitSalad),
+            Variant::Cmf => None,
         }
     }
 
@@ -161,37 +130,39 @@ pub fn dynamic_scheme(
 ) -> DynamicScheme {
     let hct: Hct = seed.into();
     match spec {
-        Spec::Spec2021 => DynamicScheme::from_spec(
-            hct,
-            variant,
-            is_dark,
-            Some(contrast),
-            Platform::Phone,
-            SpecVersion::Spec2021,
-        ),
-        Spec::Spec2025 => DynamicScheme::from_spec(
-            hct,
-            variant,
-            is_dark,
-            Some(contrast),
-            Platform::Phone,
-            SpecVersion::Spec2025,
-        ),
+        Spec::Spec2021 => spec_scheme(hct, variant, SpecVersion::Spec2021, contrast, is_dark),
+        Spec::Spec2025 => spec_scheme(hct, variant, SpecVersion::Spec2025, contrast, is_dark),
         Spec::Dms => dms_scheme(hct, variant, contrast, is_dark),
     }
+}
+
+fn spec_scheme(
+    hct: Hct,
+    variant: Variant,
+    version: SpecVersion,
+    contrast: f64,
+    is_dark: bool,
+) -> DynamicScheme {
+    DynamicScheme::from_spec(
+        hct,
+        variant,
+        is_dark,
+        Some(contrast),
+        Platform::Phone,
+        version,
+    )
 }
 
 /// DMS parity (`newDMSScheme` in `spec.go`): 2025 palettes with raised accent
 /// chromas, and neutral surfaces always taken from Tonal Spot. Tonal Spot runs
 /// Vibrant's tone rules; Expressive keeps its 2021 rotated hues.
 fn dms_scheme(hct: Hct, variant: Variant, contrast: f64, is_dark: bool) -> DynamicScheme {
-    let neutral = DynamicScheme::from_spec(
+    let neutral = spec_scheme(
         hct,
         Variant::TonalSpot,
-        is_dark,
-        Some(contrast),
-        Platform::Phone,
         SpecVersion::Spec2025,
+        contrast,
+        is_dark,
     );
 
     let (rules, chromas) = match variant {
@@ -202,52 +173,24 @@ fn dms_scheme(hct: Hct, variant: Variant, contrast: f64, is_dark: bool) -> Dynam
             // Vibrant and anything the 2025 spec does not define: keep the
             // variant's own palettes, only the neutral surfaces come from
             // Tonal Spot.
-            let mut scheme = DynamicScheme::from_spec(
-                hct,
-                variant,
-                is_dark,
-                Some(contrast),
-                Platform::Phone,
-                SpecVersion::Spec2025,
-            );
+            let mut scheme = spec_scheme(hct, variant, SpecVersion::Spec2025, contrast, is_dark);
             scheme.neutral_palette = neutral.neutral_palette;
             scheme.neutral_variant_palette = neutral.neutral_variant_palette;
             return scheme;
         }
     };
 
-    let own = DynamicScheme::from_spec(
-        hct,
-        variant,
-        is_dark,
-        Some(contrast),
-        Platform::Phone,
-        SpecVersion::Spec2025,
-    );
+    let own = spec_scheme(hct, variant, SpecVersion::Spec2025, contrast, is_dark);
     let (secondary_hue, tertiary_hue) = if variant == Variant::Expressive {
         // 2025 Expressive dropped the rotated secondary/tertiary; they are its
         // identity, so take the hues from 2021.
-        let old = DynamicScheme::from_spec(
-            hct,
-            variant,
-            is_dark,
-            Some(contrast),
-            Platform::Phone,
-            SpecVersion::Spec2021,
-        );
+        let old = spec_scheme(hct, variant, SpecVersion::Spec2021, contrast, is_dark);
         (old.secondary_palette.hue(), old.tertiary_palette.hue())
     } else {
         (own.secondary_palette.hue(), own.tertiary_palette.hue())
     };
 
-    let mut scheme = DynamicScheme::from_spec(
-        hct,
-        rules,
-        is_dark,
-        Some(contrast),
-        Platform::Phone,
-        SpecVersion::Spec2025,
-    );
+    let mut scheme = spec_scheme(hct, rules, SpecVersion::Spec2025, contrast, is_dark);
     scheme.primary_palette = TonalPalette::of(own.primary_palette.hue(), chromas.0);
     scheme.secondary_palette = TonalPalette::of(secondary_hue, chromas.1);
     scheme.tertiary_palette = TonalPalette::of(tertiary_hue, chromas.2);
@@ -257,18 +200,7 @@ fn dms_scheme(hct: Hct, variant: Variant, contrast: f64, is_dark: bool) -> Dynam
 }
 
 fn variant_name(variant: &Variant) -> &'static str {
-    match variant {
-        Variant::Monochrome => "monochrome",
-        Variant::Neutral => "neutral",
-        Variant::TonalSpot => "tonal_spot",
-        Variant::Vibrant => "vibrant",
-        Variant::Expressive => "expressive",
-        Variant::Fidelity => "fidelity",
-        Variant::Content => "content",
-        Variant::Rainbow => "rainbow",
-        Variant::FruitSalad => "fruit_salad",
-        Variant::Cmf => "cmf",
-    }
+    VariantChoice::from_variant(*variant).map_or("cmf", VariantChoice::name)
 }
 
 /// The curated role subset: everything `Palette` exposes, and nothing
@@ -325,7 +257,7 @@ fn role_map(dynamic: &DynamicScheme) -> BTreeMap<String, String> {
 }
 
 fn hex(color: Rgb) -> String {
-    format!("#{}", color.as_hex())
+    super::rgb::hex(color)
 }
 
 #[cfg(test)]

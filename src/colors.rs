@@ -30,7 +30,43 @@
 
 #![allow(dead_code)] // some milestone APIs (previews/settings) land later.
 
+macro_rules! name_enum {
+    (
+        $(#[$meta:meta])*
+        $vis:vis enum $name:ident {
+            $(
+                $(#[$variant_meta:meta])*
+                $variant:ident => $text:literal $(| $alias:literal)*,
+            )*
+        }
+    ) => {
+        $(#[$meta])*
+        $vis enum $name {
+            $(
+                $(#[$variant_meta])*
+                $variant,
+            )*
+        }
+
+        impl $name {
+            pub fn name(self) -> &'static str {
+                match self {
+                    $(Self::$variant => $text,)*
+                }
+            }
+
+            pub fn from_name(value: &str) -> Option<Self> {
+                match value.trim().to_ascii_lowercase().as_str() {
+                    $($text $(| $alias)* => Some(Self::$variant),)*
+                    _ => None,
+                }
+            }
+        }
+    };
+}
+
 mod engine;
+mod rgb;
 mod scheme;
 mod seed;
 

@@ -74,7 +74,7 @@ impl Options {
             let value = value.trim();
             if let Some(mode) = SourceMode::from_name(value) {
                 source = mode;
-            } else if let Some(argb) = parse_hex_seed(value) {
+            } else if let Some(argb) = super::rgb::parse_hex(value) {
                 seed_override = Some(argb);
             }
         }
@@ -190,25 +190,11 @@ pub async fn fetch_into(
 
     let knobs = *options;
     let colorfulness = resolved.colorfulness;
-    let (name, roles) = tokio::task::spawn_blocking(move || {
-        scheme::build(
-            resolved.color,
-            knobs.variant,
-            colorfulness,
-            knobs.contrast,
-            knobs.spec,
-        )
-    })
-    .await
-    .context("palette task panicked")?;
+    let scheme =
+        tokio::task::spawn_blocking(move || build_scheme(resolved.color, colorfulness, &knobs))
+            .await
+            .context("palette task panicked")?;
 
-    let scheme = CoverScheme {
-        scheme: name,
-        seed: resolved.argb(),
-        colorfulness,
-        role_hash: hash_roles(&roles),
-        roles,
-    };
     store(pool, cover_art, cover_hash, &generator, &scheme).await?;
     Ok(scheme)
 }
@@ -216,7 +202,7 @@ pub async fn fetch_into(
 /// Synchronous generation without the DB (tests, previews).
 pub fn generate_from_path(path: &Path, options: &Options) -> Result<CoverScheme> {
     let (color, colorfulness) = match options.seed_override {
-        Some(argb) => (seed::rgb_from_argb(argb), 0.0),
+        Some(argb) => (super::rgb::from_argb(argb), 0.0),
         None => seed::extract(path, options.source)?,
     };
     Ok(build_scheme(color, colorfulness, options))
@@ -245,7 +231,7 @@ fn build_scheme(seed: Rgb, colorfulness: f64, options: &Options) -> CoverScheme 
     );
     CoverScheme {
         scheme: name,
-        seed: seed.as_argb_u32(),
+        seed: super::rgb::argb(seed),
         colorfulness,
         role_hash: hash_roles(&roles),
         roles,
@@ -345,14 +331,4 @@ pub fn hash_roles(roles: &BTreeMap<String, String>) -> String {
     let mut hasher = Md5::new();
     hasher.update(canonical.as_bytes());
     hex::encode(hasher.finalize())
-}
-
-fn parse_hex_seed(value: &str) -> Option<u32> {
-    let hex = value.trim().strip_prefix('#')?;
-    if hex.len() != 6 || !hex.chars().all(|c| c.is_ascii_hexdigit()) {
-        return None;
-    }
-    u32::from_str_radix(hex, 16)
-        .ok()
-        .map(|rgb| 0xFF00_0000 | rgb)
 }

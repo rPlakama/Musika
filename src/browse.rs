@@ -21,8 +21,6 @@
 
 use std::collections::{HashMap, HashSet};
 
-use crate::http_client::SubsonicClient;
-
 /// CACHE-9: the offline catalog. Only songs whose download finished are
 /// listable (and therefore playable) while the server is unreachable; albums
 /// and artists survive only through their downloaded songs.
@@ -37,13 +35,13 @@ async fn offline_filter(
     dbs: &crate::db::Dbs,
     offline: bool,
 ) -> anyhow::Result<Option<OfflineFilter>> {
-    if !offline {
+    let Some(songs) = crate::download::offline_song_ids(dbs, offline).await? else {
         return Ok(None);
-    }
-    let ids = crate::download::done_ids(&dbs.download).await?;
+    };
+    let ids: Vec<String> = songs.iter().cloned().collect();
     let (albums, artists) = crate::library::downloaded_owners(&dbs.library, &ids).await?;
     Ok(Some(OfflineFilter {
-        songs: ids.into_iter().collect(),
+        songs,
         albums,
         artists,
     }))
@@ -183,7 +181,7 @@ pub async fn load_artist_json(
     Ok(Some(value.to_string()))
 }
 
-fn artist_json(
+pub(crate) fn artist_json(
     artist: &crate::library::ArtistRow,
     covers: &HashMap<String, String>,
     album_count: Option<i64>,
@@ -200,18 +198,20 @@ fn artist_json(
     })
 }
 
-fn album_json(
+pub(crate) fn album_json(
     album: &crate::library::AlbumRow,
     covers: &HashMap<String, String>,
     song_count: Option<i64>,
 ) -> serde_json::Value {
     let cover = cover_url(album.cover_art.as_deref(), covers);
+    let count = song_count.unwrap_or(album.song_count);
     serde_json::json!({
         "id": album.id,
         "title": album.title,
         "artist": album.artist,
         "year": album.year,
-        "song_count": song_count.unwrap_or(album.song_count),
+        "song_count": count,
+        "tracks": count,
         "cover": cover,
         "starred": album.starred.is_some(),
     })
@@ -243,14 +243,9 @@ fn song_rows_json(
 
 /// Fetches an album's description text from the server (`getAlbumInfo2`).
 pub async fn album_notes(dbs: &crate::db::Dbs, album_id: &str) -> String {
-    let Ok(Some(credentials)) = crate::sqlite::load_credentials(&dbs.credentials).await else {
+    let Ok(client) = crate::qml::client(dbs).await else {
         return String::new();
     };
-    let client = SubsonicClient::new(
-        &credentials.server_url,
-        &credentials.username,
-        &credentials.password,
-    );
     match client.get_album_info2(album_id).await {
         Ok(info) => info.notes.unwrap_or_default(),
         Err(err) => {
@@ -326,28 +321,13 @@ pub async fn search_json(
     let artist_rows: Vec<serde_json::Value> = artists
         .into_iter()
         .map(|artist| {
-            serde_json::json!({
-                "id": artist.id,
-                "name": artist.name,
-                "album_count": artist.album_count,
-                "cover": cover_url(artist.cover_art.as_deref(), &covers),
-                "starred": artist.starred.is_some() || user_starred.contains(&artist.id),
-            })
+            let starred = artist.starred.is_some() || user_starred.contains(&artist.id);
+            artist_json(&artist, &covers, None, starred)
         })
         .collect();
     let album_rows: Vec<serde_json::Value> = albums
         .into_iter()
-        .map(|album| {
-            serde_json::json!({
-                "id": album.id,
-                "title": album.title,
-                "artist": album.artist,
-                "year": album.year,
-                "song_count": album.song_count,
-                "cover": cover_url(album.cover_art.as_deref(), &covers),
-                "starred": album.starred.is_some(),
-            })
-        })
+        .map(|album| album_json(&album, &covers, None))
         .collect();
     let song_rows: Vec<serde_json::Value> = songs
         .iter()

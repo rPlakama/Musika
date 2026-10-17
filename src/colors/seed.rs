@@ -55,30 +55,15 @@ const SCORE_WEIGHT_PROPORTION: f64 = 0.7;
 const SCORE_WEIGHT_CHROMA_ABOVE: f64 = 0.3;
 const SCORE_WEIGHT_CHROMA_BELOW: f64 = 0.1;
 
-/// Where the seed comes from.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum SourceMode {
-    /// matugen's own `Score` pick (the historical default).
-    #[default]
-    Dominant,
-    /// caelestia-style vivid scoring.
-    Colorful,
-}
-
-impl SourceMode {
-    pub fn name(self) -> &'static str {
-        match self {
-            Self::Dominant => "dominant",
-            Self::Colorful => "colorful",
-        }
-    }
-
-    pub fn from_name(value: &str) -> Option<Self> {
-        match value.trim().to_ascii_lowercase().as_str() {
-            "dominant" | "default" => Some(Self::Dominant),
-            "colorful" => Some(Self::Colorful),
-            _ => None,
-        }
+name_enum! {
+    /// Where the seed comes from.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+    pub enum SourceMode {
+        /// matugen's own `Score` pick (the historical default).
+        #[default]
+        Dominant => "dominant" | "default",
+        /// caelestia-style vivid scoring.
+        Colorful => "colorful",
     }
 }
 
@@ -89,12 +74,6 @@ pub struct Seed {
     pub colorfulness: f64,
     /// `dominant`, `colorful` or `seed` (explicit override).
     pub mode: &'static str,
-}
-
-impl Seed {
-    pub fn argb(&self) -> u32 {
-        self.color.as_argb_u32()
-    }
 }
 
 /// Decodes `path`, downscales to a 112² thumbnail and keeps opaque pixels.
@@ -132,7 +111,7 @@ fn colorful(pixels: &[Rgb]) -> Result<Rgb> {
     // Sorted so the stable sort below and the cutoff scan resolve ties the
     // same way every run; the quantizer's map order is not a contract.
     let mut keys: Vec<Rgb> = population.color_to_count.keys().copied().collect();
-    keys.sort_by_key(|color| color.as_argb_u32());
+    keys.sort_by_key(|color| super::rgb::argb(*color));
 
     let mut hue_population = [0u32; 360];
     let mut total = 0u64;
@@ -207,7 +186,7 @@ pub async fn resolve(
 ) -> Result<Seed> {
     if let Some(argb) = override_seed {
         return Ok(Seed {
-            color: rgb_from_argb(argb),
+            color: super::rgb::from_argb(argb),
             colorfulness: 0.0,
             mode: "seed",
         });
@@ -216,7 +195,7 @@ pub async fn resolve(
     if let Some((argb, colorfulness)) = load(pool, cover_hash, mode).await? {
         touch(pool, cover_hash, mode).await?;
         return Ok(Seed {
-            color: rgb_from_argb(argb),
+            color: super::rgb::from_argb(argb),
             colorfulness,
             mode: mode.name(),
         });
@@ -291,7 +270,7 @@ async fn store(
     .bind(cover_hash)
     .bind(mode.name())
     .bind(SEED_ENGINE)
-    .bind(color.as_argb_u32() as i64)
+    .bind(super::rgb::argb(color) as i64)
     .bind(colorfulness)
     .bind(now_secs())
     .execute(pool)
@@ -358,12 +337,4 @@ fn colorfulness(pixels: &[Rgb]) -> f64 {
 
 fn normalize_degree(degree: i32) -> usize {
     degree.rem_euclid(360) as usize
-}
-
-pub(super) fn rgb_from_argb(argb: u32) -> Rgb {
-    Rgb::new(
-        ((argb >> 16) & 0xff) as u8,
-        ((argb >> 8) & 0xff) as u8,
-        (argb & 0xff) as u8,
-    )
 }

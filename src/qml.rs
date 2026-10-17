@@ -54,7 +54,7 @@ static QUEUE_ROWS_HASH: AtomicU64 = AtomicU64::new(0);
 
 /// Builds a client from the saved credentials for the ad-hoc slots (ARC-42
 /// and friends); the sync path keeps its own explicit copy.
-async fn client(dbs: &crate::db::Dbs) -> anyhow::Result<SubsonicClient> {
+pub(crate) async fn client(dbs: &crate::db::Dbs) -> anyhow::Result<SubsonicClient> {
     let credentials = crate::sqlite::load_credentials(&dbs.credentials)
         .await?
         .ok_or_else(|| anyhow::anyhow!("no saved credentials"))?;
@@ -63,6 +63,42 @@ async fn client(dbs: &crate::db::Dbs) -> anyhow::Result<SubsonicClient> {
         &credentials.username,
         &credentials.password,
     ))
+}
+
+enum ArtistUserAction {
+    Star(bool),
+    Rate(u8),
+}
+
+async fn apply_artist_user(
+    dbs: &crate::db::Dbs,
+    artist_id: &str,
+    action: ArtistUserAction,
+) -> anyhow::Result<()> {
+    let client = client(dbs).await?;
+    match action {
+        ArtistUserAction::Star(on) => {
+            if on {
+                client.star(&[], &[], &[artist_id]).await?;
+            } else {
+                client.unstar(&[], &[], &[artist_id]).await?;
+            }
+            crate::artist_user::set_starred(&dbs.artist_user, artist_id, on).await?;
+        }
+        ArtistUserAction::Rate(rating) => {
+            client.set_rating(artist_id, rating).await?;
+            crate::artist_user::set_rating(&dbs.artist_user, artist_id, rating).await?;
+        }
+    }
+    Ok(())
+}
+
+fn emit(invoker: &QmlMethodInvoker, channel: &str, payload: String) {
+    qtbridge::invoke_method!(invoker, "emitData", channel.to_string(), payload);
+}
+
+fn raise(invoker: &QmlMethodInvoker, kind: &str, message: String) {
+    qtbridge::invoke_method!(invoker, "errorRaised", kind.to_string(), message);
 }
 
 /// The artist-container toggle payload (`artist_cache` channel, CACHE-5);
@@ -373,11 +409,10 @@ async fn selection_toggle(
                     }
                 }
                 if songs.is_empty() {
-                    qtbridge::invoke_method!(
-                        error_invoker,
-                        "errorRaised",
-                        "error".to_string(),
-                        "Nothing to download here.".to_string()
+                    raise(
+                        &error_invoker,
+                        "error",
+                        "Nothing to download here.".to_string(),
                     );
                     return Ok(());
                 }
@@ -434,11 +469,10 @@ async fn selection_toggle(
                     }
                 }
                 if songs.is_empty() {
-                    qtbridge::invoke_method!(
-                        error_invoker,
-                        "errorRaised",
-                        "error".to_string(),
-                        "Nothing to download here.".to_string()
+                    raise(
+                        &error_invoker,
+                        "error",
+                        "Nothing to download here.".to_string(),
                     );
                     return Ok(());
                 }
@@ -861,6 +895,23 @@ impl Backend {
         Notify = line_search_open_changed
     );
 
+    fn spawn_data<F, Fut>(&self, channel: &'static str, load: F)
+    where
+        F: FnOnce(crate::db::Dbs) -> Fut + Send + 'static,
+        Fut: std::future::Future<Output = anyhow::Result<String>> + Send,
+    {
+        let invoker = self.get_qml_method_invoker();
+        let Some(dbs) = crate::dbs().cloned() else {
+            return;
+        };
+        crate::runtime().spawn(async move {
+            match load(dbs).await {
+                Ok(json) => emit(&invoker, channel, json),
+                Err(err) => eprintln!("qml: {channel} load failed: {err:#}"),
+            }
+        });
+    }
+
     fn set_server_url(&mut self, v: String) {
         self.server_url = v;
         self.server_url_changed();
@@ -1068,16 +1119,25 @@ impl Backend {
 
     #[qslot]
     fn startup(&mut self) {
-        if self.album_order.is_empty() {
-            self.album_order = crate::library::ORDERS[0].to_string();
+        let album_order =
+            crate::library::effective_order(&crate::library::ORDERS, &self.album_order, 0)
+                .to_string();
+        if self.album_order != album_order {
+            self.album_order = album_order;
             self.album_order_changed();
         }
-        if self.song_order.is_empty() {
-            self.song_order = crate::library::ORDERS[0].to_string();
+        let song_order =
+            crate::library::effective_order(&crate::library::ORDERS, &self.song_order, 0)
+                .to_string();
+        if self.song_order != song_order {
+            self.song_order = song_order;
             self.song_order_changed();
         }
-        if self.artist_order.is_empty() {
-            self.artist_order = crate::library::ARTIST_ORDERS[0].to_string();
+        let artist_order =
+            crate::library::effective_order(&crate::library::ARTIST_ORDERS, &self.artist_order, 0)
+                .to_string();
+        if self.artist_order != artist_order {
+            self.artist_order = artist_order;
             self.artist_order_changed();
         }
         let invoker = self.get_qml_method_invoker();
@@ -1295,6 +1355,21 @@ impl Backend {
         self.queue_status_save();
     }
 
+    fn session_status(&self) -> crate::status::SessionStatus {
+        crate::status::SessionStatus {
+            server_url: self.server_url.trim().to_string(),
+            username: self.username.trim().to_string(),
+            album_id: self.status_album.clone(),
+            song_id: self.status_song.clone(),
+            queue: self.queue_ids_json(),
+            queue_index: self.player.index() as i64,
+            position: self.player.position(),
+            volume: self.player.volume(),
+            muted: self.player.muted(),
+            updated_at: crate::consts::now_secs(),
+        }
+    }
+
     /// Arms the 500 ms session debounce: volume/mute drags coalesce into one
     /// write; a row from another account is discarded first (P-6 / S1).
     fn queue_status_save(&mut self) {
@@ -1305,38 +1380,12 @@ impl Backend {
         let Some(dbs) = crate::dbs().cloned() else {
             return;
         };
-        let server_url = self.server_url.trim().to_string();
-        let username = self.username.trim().to_string();
-        let album_id = self.status_album.clone();
-        let song_id = self.status_song.clone();
-        let queue = self.queue_ids_json();
-        let queue_index = self.player.index() as i64;
-        let position = self.player.position();
-        let volume = self.player.volume();
-        let muted = self.player.muted();
+        let status = self.session_status();
         crate::runtime().spawn(async move {
             tokio::time::sleep(std::time::Duration::from_millis(500)).await;
             if STATUS_WRITE_GEN.load(Ordering::Relaxed) != generation {
                 return;
             }
-            let mut status = crate::status::load(&dbs.status)
-                .await
-                .ok()
-                .flatten()
-                .unwrap_or_default();
-            if status.server_url != server_url || status.username != username {
-                status = crate::status::SessionStatus::default();
-            }
-            status.server_url = server_url;
-            status.username = username;
-            status.album_id = album_id;
-            status.song_id = song_id;
-            status.queue = queue;
-            status.queue_index = queue_index;
-            status.position = position;
-            status.volume = volume;
-            status.muted = muted;
-            status.updated_at = crate::consts::now_secs();
             if let Err(err) = crate::status::save(&dbs.status, &status).await {
                 eprintln!("status: could not save the session: {err:#}");
             }
@@ -1367,18 +1416,7 @@ impl Backend {
         };
         // Cancel a pending debounce so it cannot race (or overwrite) this.
         STATUS_WRITE_GEN.fetch_add(1, Ordering::Relaxed);
-        let status = crate::status::SessionStatus {
-            server_url: self.server_url.trim().to_string(),
-            username: self.username.trim().to_string(),
-            album_id: self.status_album.clone(),
-            song_id: self.status_song.clone(),
-            queue: self.queue_ids_json(),
-            queue_index: self.player.index() as i64,
-            position: self.player.position(),
-            volume: self.player.volume(),
-            muted: self.player.muted(),
-            updated_at: crate::consts::now_secs(),
-        };
+        let status = self.session_status();
         if let Err(err) = crate::runtime().block_on(crate::status::save(&dbs.status, &status)) {
             eprintln!("status: could not flush the session: {err:#}");
         }
@@ -1622,16 +1660,8 @@ impl Backend {
         };
 
         crate::runtime().spawn(async move {
-            let credentials = match crate::sqlite::load_credentials(&dbs.credentials).await {
-                Ok(Some(credentials)) => credentials,
-                Ok(None) => {
-                    qtbridge::invoke_method!(
-                        finish_invoker,
-                        "librarySyncFinished",
-                        "No saved credentials to sync with.".to_string()
-                    );
-                    return;
-                }
+            let client = match client(&dbs).await {
+                Ok(client) => client,
                 Err(err) => {
                     qtbridge::invoke_method!(
                         finish_invoker,
@@ -1644,16 +1674,7 @@ impl Backend {
 
             // The shared pipeline (ARC-8): the started state was already
             // shown synchronously above, so this only reports progress.
-            spawn_sync(
-                finish_invoker,
-                progress_invoker,
-                SubsonicClient::new(
-                    &credentials.server_url,
-                    &credentials.username,
-                    &credentials.password,
-                ),
-                false,
-            );
+            spawn_sync(finish_invoker, progress_invoker, client, false);
         });
     }
 
@@ -1723,12 +1744,7 @@ impl Backend {
                         "librarySyncFinished",
                         format!("Wipe failed: {err:#}")
                     );
-                    qtbridge::invoke_method!(
-                        error_invoker,
-                        "errorRaised",
-                        "error".to_string(),
-                        format!("Wipe failed: {err:#}")
-                    );
+                    raise(&error_invoker, "error", format!("Wipe failed: {err:#}"));
                 }
             }
         });
@@ -1769,7 +1785,9 @@ impl Backend {
         let invoker = self.get_qml_method_invoker();
         if let Some(dbs) = crate::dbs().cloned() {
             crate::runtime().spawn(async move {
-                let covers = crate::covers::url_map(&dbs.covers).await.unwrap_or_default();
+                let covers = crate::covers::url_map(&dbs.covers)
+                    .await
+                    .unwrap_or_default();
                 let json = serde_json::to_string(&covers).unwrap_or_default();
                 qtbridge::invoke_method!(invoker, "applyQueueCovers", json);
             });
@@ -1836,23 +1854,11 @@ impl Backend {
 
     #[qslot(qml_name = "requestAlbums")]
     fn request_albums(&mut self, artist: String) {
-        let invoker = self.get_qml_method_invoker();
-        let Some(dbs) = crate::dbs().cloned() else {
-            return;
-        };
-        let order = if self.album_order.is_empty() {
-            crate::library::ORDERS[0].to_string()
-        } else {
-            self.album_order.clone()
-        };
+        let order = crate::library::effective_order(&crate::library::ORDERS, &self.album_order, 0)
+            .to_string();
         let offline = self.offline;
-        crate::runtime().spawn(async move {
-            match load_albums_json(&dbs, &artist, &order, offline).await {
-                Ok(json) => {
-                    qtbridge::invoke_method!(invoker, "emitData", "albums".to_string(), json);
-                }
-                Err(err) => eprintln!("library: could not read albums: {err:#}"),
-            }
+        self.spawn_data("albums", move |dbs| async move {
+            load_albums_json(&dbs, &artist, &order, offline).await
         });
     }
 
@@ -1860,27 +1866,12 @@ impl Backend {
     /// `playlist.db` and emits the list rows. Subsonic playlists join in M1.
     #[qslot(qml_name = "requestPlaylists")]
     fn request_playlists(&mut self) {
-        let invoker = self.get_qml_method_invoker();
-        let Some(dbs) = crate::dbs().cloned() else {
-            return;
-        };
-        crate::runtime().spawn(async move {
+        self.spawn_data("playlists", |dbs| async move {
             // Subsonic playlists + the local m3u folder; offline serves the
             // cached rows and the m3u half.
-            let result = match client(&dbs).await {
+            match client(&dbs).await {
                 Ok(client) => crate::playlists::refresh(&dbs, &client).await,
                 Err(_) => crate::playlists::scan(&dbs).await,
-            };
-            match result {
-                Ok(json) => {
-                    qtbridge::invoke_method!(
-                        invoker,
-                        "emitData",
-                        "playlists".to_string(),
-                        json
-                    );
-                }
-                Err(err) => eprintln!("playlists: could not refresh the index: {err:#}"),
             }
         });
     }
@@ -1919,7 +1910,9 @@ impl Backend {
     }
 
     fn step_album_order(&mut self, delta: i64) {
-        let next = stepped_order(&self.album_order, delta);
+        let next =
+            crate::library::effective_order(&crate::library::ORDERS, &self.album_order, delta)
+                .to_string();
         if self.album_order != next {
             self.album_order = next;
             self.album_order_changed();
@@ -1927,7 +1920,9 @@ impl Backend {
     }
 
     fn step_song_order(&mut self, delta: i64) {
-        let next = stepped_order(&self.song_order, delta);
+        let next =
+            crate::library::effective_order(&crate::library::ORDERS, &self.song_order, delta)
+                .to_string();
         if self.song_order != next {
             self.song_order = next;
             self.song_order_changed();
@@ -1935,7 +1930,12 @@ impl Backend {
     }
 
     fn step_artist_order(&mut self, delta: i64) {
-        let next = stepped_artist_order(&self.artist_order, delta);
+        let next = crate::library::effective_order(
+            &crate::library::ARTIST_ORDERS,
+            &self.artist_order,
+            delta,
+        )
+        .to_string();
         if self.artist_order != next {
             self.artist_order = next;
             self.artist_order_changed();
@@ -1944,68 +1944,34 @@ impl Backend {
 
     #[qslot(qml_name = "requestSongs")]
     fn request_songs(&mut self) {
-        let invoker = self.get_qml_method_invoker();
-        let Some(dbs) = crate::dbs().cloned() else {
-            return;
-        };
-        let order = if self.song_order.is_empty() {
-            crate::library::ORDERS[0].to_string()
-        } else {
-            self.song_order.clone()
-        };
+        let order = crate::library::effective_order(&crate::library::ORDERS, &self.song_order, 0)
+            .to_string();
         let offline = self.offline;
-        crate::runtime().spawn(async move {
-            match load_songs_json(&dbs, &order, offline).await {
-                Ok(json) => {
-                    qtbridge::invoke_method!(invoker, "emitData", "songs".to_string(), json);
-                }
-                Err(err) => eprintln!("library: could not read songs: {err:#}"),
-            }
+        self.spawn_data("songs", move |dbs| async move {
+            load_songs_json(&dbs, &order, offline).await
         });
     }
 
     #[qslot(qml_name = "requestArtists")]
     fn request_artists(&mut self) {
-        let invoker = self.get_qml_method_invoker();
-        let Some(dbs) = crate::dbs().cloned() else {
-            return;
-        };
-        let order = if self.artist_order.is_empty() {
-            crate::library::ARTIST_ORDERS[0].to_string()
-        } else {
-            self.artist_order.clone()
-        };
+        let order =
+            crate::library::effective_order(&crate::library::ARTIST_ORDERS, &self.artist_order, 0)
+                .to_string();
         let offline = self.offline;
-        crate::runtime().spawn(async move {
-            match load_artists_json(&dbs, &order, offline).await {
-                Ok(json) => {
-                    qtbridge::invoke_method!(invoker, "emitData", "artists".to_string(), json);
-                }
-                Err(err) => eprintln!("library: could not read artists: {err:#}"),
-            }
+        self.spawn_data("artists", move |dbs| async move {
+            load_artists_json(&dbs, &order, offline).await
         });
     }
 
     #[qslot(qml_name = "requestArtist")]
     fn request_artist(&mut self, artist_id: String) {
-        let invoker = self.get_qml_method_invoker();
-        let Some(dbs) = crate::dbs().cloned() else {
-            return;
-        };
-        let order = if self.album_order.is_empty() {
-            crate::library::ORDERS[0].to_string()
-        } else {
-            self.album_order.clone()
-        };
+        let order = crate::library::effective_order(&crate::library::ORDERS, &self.album_order, 0)
+            .to_string();
         let offline = self.offline;
-        crate::runtime().spawn(async move {
-            match load_artist_json(&dbs, &artist_id, &order, offline).await {
-                Ok(Some(json)) => {
-                    qtbridge::invoke_method!(invoker, "emitData", "artist".to_string(), json);
-                }
-                Ok(None) => eprintln!("library: artist {artist_id} is not indexed"),
-                Err(err) => eprintln!("library: could not read artist: {err:#}"),
-            }
+        self.spawn_data("artist", move |dbs| async move {
+            load_artist_json(&dbs, &artist_id, &order, offline)
+                .await?
+                .ok_or_else(|| anyhow::anyhow!("artist {artist_id} is not indexed"))
         });
     }
 
@@ -2022,7 +1988,7 @@ impl Backend {
         };
         crate::runtime().spawn(async move {
             let json = crate::artist_user::payload(&dbs.artist_user, &artist_id).await;
-            qtbridge::invoke_method!(invoker, "emitData", "artist_user".to_string(), json);
+            emit(&invoker, "artist_user", json);
         });
     }
 
@@ -2037,44 +2003,15 @@ impl Backend {
             return;
         };
         crate::runtime().spawn(async move {
-            let client = match client(&dbs).await {
-                Ok(client) => client,
-                Err(err) => {
-                    qtbridge::invoke_method!(
-                        error_invoker,
-                        "errorRaised",
-                        "error".to_string(),
-                        format!("Could not toggle favourite: {err:#}")
-                    );
-                    return;
-                }
-            };
-            let result = if on {
-                client.star(&[], &[], &[artist_id.as_str()]).await
-            } else {
-                client.unstar(&[], &[], &[artist_id.as_str()]).await
-            };
-            match result {
-                Ok(()) => {
-                    if let Err(err) =
-                        crate::artist_user::set_starred(&dbs.artist_user, &artist_id, on).await
-                    {
-                        eprintln!("artist_user: could not store favourite: {err:#}");
-                    }
-                    let json = crate::artist_user::payload(&dbs.artist_user, &artist_id).await;
-                    qtbridge::invoke_method!(invoker, "emitData", "artist_user".to_string(), json);
-                }
-                Err(err) => {
-                    // Reconcile the optimistic UI with what is stored.
-                    let json = crate::artist_user::payload(&dbs.artist_user, &artist_id).await;
-                    qtbridge::invoke_method!(invoker, "emitData", "artist_user".to_string(), json);
-                    qtbridge::invoke_method!(
-                        error_invoker,
-                        "errorRaised",
-                        "error".to_string(),
-                        format!("Could not toggle favourite: {err:#}")
-                    );
-                }
+            let result = apply_artist_user(&dbs, &artist_id, ArtistUserAction::Star(on)).await;
+            let json = crate::artist_user::payload(&dbs.artist_user, &artist_id).await;
+            emit(&invoker, "artist_user", json);
+            if let Err(err) = result {
+                raise(
+                    &error_invoker,
+                    "error",
+                    format!("Could not toggle favourite: {err:#}"),
+                );
             }
         });
     }
@@ -2097,39 +2034,15 @@ impl Backend {
             return;
         };
         crate::runtime().spawn(async move {
-            let client = match client(&dbs).await {
-                Ok(client) => client,
-                Err(err) => {
-                    qtbridge::invoke_method!(
-                        error_invoker,
-                        "errorRaised",
-                        "error".to_string(),
-                        format!("Could not rate artist: {err:#}")
-                    );
-                    return;
-                }
-            };
-            match client.set_rating(&artist_id, rating).await {
-                Ok(()) => {
-                    if let Err(err) =
-                        crate::artist_user::set_rating(&dbs.artist_user, &artist_id, rating).await
-                    {
-                        eprintln!("artist_user: could not store rating: {err:#}");
-                    }
-                    let json = crate::artist_user::payload(&dbs.artist_user, &artist_id).await;
-                    qtbridge::invoke_method!(invoker, "emitData", "artist_user".to_string(), json);
-                }
-                Err(err) => {
-                    // Reconcile the optimistic UI with what is stored.
-                    let json = crate::artist_user::payload(&dbs.artist_user, &artist_id).await;
-                    qtbridge::invoke_method!(invoker, "emitData", "artist_user".to_string(), json);
-                    qtbridge::invoke_method!(
-                        error_invoker,
-                        "errorRaised",
-                        "error".to_string(),
-                        format!("Could not rate artist: {err:#}")
-                    );
-                }
+            let result = apply_artist_user(&dbs, &artist_id, ArtistUserAction::Rate(rating)).await;
+            let json = crate::artist_user::payload(&dbs.artist_user, &artist_id).await;
+            emit(&invoker, "artist_user", json);
+            if let Err(err) = result {
+                raise(
+                    &error_invoker,
+                    "error",
+                    format!("Could not rate artist: {err:#}"),
+                );
             }
         });
     }
@@ -2179,7 +2092,7 @@ impl Backend {
                 "url": url,
             })
             .to_string();
-            qtbridge::invoke_method!(invoker, "emitData", "artist_info".to_string(), json);
+            emit(&invoker, "artist_info", json);
         });
     }
     /// CACHE-1/8: an explicit user download. Idempotent — a cached blob or an
@@ -2218,12 +2131,7 @@ impl Backend {
                         song_id.clone(),
                         crate::download::ERROR.to_string()
                     );
-                    qtbridge::invoke_method!(
-                        error_invoker,
-                        "errorRaised",
-                        "error".to_string(),
-                        format!("Download failed: {err:#}")
-                    );
+                    raise(&error_invoker, "error", format!("Download failed: {err:#}"));
                 }
             }
         });
@@ -2253,7 +2161,7 @@ impl Backend {
                 }
             }
             let json = artist_cache_payload(&artist_id, on, false);
-            qtbridge::invoke_method!(invoker, "emitData", "artist_cache".to_string(), json);
+            emit(&invoker, "artist_cache", json);
         });
     }
 
@@ -2299,11 +2207,10 @@ impl Backend {
                             queued_albums.push(album.clone());
                         }
                         Err(err) => {
-                            qtbridge::invoke_method!(
-                                error_invoker,
-                                "errorRaised",
-                                "error".to_string(),
-                                format!("Could not select the album for download: {err:#}")
+                            raise(
+                                &error_invoker,
+                                "error",
+                                format!("Could not select the album for download: {err:#}"),
                             );
                         }
                     }
@@ -2318,20 +2225,16 @@ impl Backend {
                 );
                 // The pass is now in flight: the chip shows its loading loop.
                 let json = artist_cache_payload(&artist_id, true, true);
-                qtbridge::invoke_method!(invoker, "emitData", "artist_cache".to_string(), json);
+                emit(&invoker, "artist_cache", json);
                 fetch_marked(&dbs, &songs, &artist_id, fetch_invoker).await;
                 // The albums that had nothing to fetch never emitted a
                 // completion: settle their rows here.
                 for album in &queued_albums {
-                    qtbridge::invoke_method!(
-                        invoker,
-                        "settleDownloadRequest",
-                        album.clone()
-                    );
+                    qtbridge::invoke_method!(invoker, "settleDownloadRequest", album.clone());
                 }
                 eprintln!("download: artist {artist_id} pass finished");
                 let json = artist_cache_payload(&artist_id, true, false);
-                qtbridge::invoke_method!(invoker, "emitData", "artist_cache".to_string(), json);
+                emit(&invoker, "artist_cache", json);
             } else {
                 for album in &albums {
                     album_container_off(&dbs, album).await;
@@ -2345,7 +2248,7 @@ impl Backend {
                 }
                 eprintln!("download: artist {artist_id} removed from the cache");
                 let json = artist_cache_payload(&artist_id, false, false);
-                qtbridge::invoke_method!(invoker, "emitData", "artist_cache".to_string(), json);
+                emit(&invoker, "artist_cache", json);
                 // The marks lose the artist's songs: hard reset + re-read.
                 qtbridge::invoke_method!(fetch_invoker, "ResetRowMarks");
             }
@@ -2365,16 +2268,18 @@ impl Backend {
                 crate::media::rule_for(&dbs.media, "album", &album_id).await,
                 Ok(Some(_))
             );
-            let artist_covered = match crate::library::album_artist_id(&dbs.library, &album_id).await
-            {
-                Ok(Some(artist_id)) => {
-                    artist_covers_album(&dbs, &artist_id, &album_id).await
-                }
-                _ => false,
-            };
-            let json =
-                album_cache_payload(&album_id, album_rule || artist_covered, false, artist_covered);
-            qtbridge::invoke_method!(invoker, "emitData", "album_cache".to_string(), json);
+            let artist_covered =
+                match crate::library::album_artist_id(&dbs.library, &album_id).await {
+                    Ok(Some(artist_id)) => artist_covers_album(&dbs, &artist_id, &album_id).await,
+                    _ => false,
+                };
+            let json = album_cache_payload(
+                &album_id,
+                album_rule || artist_covered,
+                false,
+                artist_covered,
+            );
+            emit(&invoker, "album_cache", json);
         });
     }
 
@@ -2390,7 +2295,7 @@ impl Backend {
                 .await
                 .unwrap_or(false);
             let json = album_state_payload(&album_id, starred);
-            qtbridge::invoke_method!(invoker, "emitData", "album_state".to_string(), json);
+            emit(&invoker, "album_state", json);
         });
     }
 
@@ -2427,18 +2332,13 @@ impl Backend {
                         "download: album {album_id} already covered by the artist container; skipping"
                     );
                     let json = album_cache_payload(&album_id, true, false, true);
-                    qtbridge::invoke_method!(invoker, "emitData", "album_cache".to_string(), json);
+                    emit(&invoker, "album_cache", json);
                     return;
                 }
                 let songs = match album_container_on(&dbs, &album_id).await {
                     Ok(songs) => songs,
                     Err(err) => {
-                        qtbridge::invoke_method!(
-                            error_invoker,
-                            "errorRaised",
-                            "error".to_string(),
-                            format!("Could not select the album for download: {err:#}")
-                        );
+                        raise(&error_invoker, "error", format!("Could not select the album for download: {err:#}"));
                         return;
                     }
                 };
@@ -2448,16 +2348,16 @@ impl Backend {
                 );
                 // The pass is now in flight: the chip shows its loading loop.
                 let json = album_cache_payload(&album_id, true, true, false);
-                qtbridge::invoke_method!(invoker, "emitData", "album_cache".to_string(), json);
+                emit(&invoker, "album_cache", json);
                 fetch_marked(&dbs, &songs, &album_id, fetch_invoker).await;
                 eprintln!("download: album {album_id} pass finished");
                 let json = album_cache_payload(&album_id, true, false, false);
-                qtbridge::invoke_method!(invoker, "emitData", "album_cache".to_string(), json);
+                emit(&invoker, "album_cache", json);
             } else {
                 album_container_off(&dbs, &album_id).await;
                 eprintln!("download: album {album_id} removed from the cache");
                 let json = album_cache_payload(&album_id, false, false, false);
-                qtbridge::invoke_method!(invoker, "emitData", "album_cache".to_string(), json);
+                emit(&invoker, "album_cache", json);
                 // The marks lose the album's songs: hard reset + re-read.
                 qtbridge::invoke_method!(fetch_invoker, "ResetRowMarks");
             }
@@ -2466,47 +2366,29 @@ impl Backend {
 
     #[qslot(qml_name = "requestAlbumSongs")]
     fn request_album_songs(&mut self, album_id: String) {
-        let invoker = self.get_qml_method_invoker();
-        let Some(dbs) = crate::dbs().cloned() else {
-            return;
-        };
         let offline = self.offline;
-        crate::runtime().spawn(async move {
-            match load_album_songs_json(&dbs, &album_id, offline).await {
-                Ok(json) => {
-                    qtbridge::invoke_method!(invoker, "emitData", "album_songs".to_string(), json);
-                }
-                Err(err) => eprintln!("library: could not read album songs: {err:#}"),
-            }
+        self.spawn_data("album_songs", move |dbs| async move {
+            load_album_songs_json(&dbs, &album_id, offline).await
         });
     }
 
     /// Fetches an album's description ("notes") from the server.
     #[qslot(qml_name = "requestAlbumInfo")]
     fn request_album_info(&mut self, album_id: String) {
-        let invoker = self.get_qml_method_invoker();
-        let Some(dbs) = crate::dbs().cloned() else {
-            return;
-        };
-        crate::runtime().spawn(async move {
+        self.spawn_data("album_info", move |dbs| async move {
             let notes = album_notes(&dbs, &album_id).await;
-            let json = serde_json::json!({ "notes": notes }).to_string();
-            qtbridge::invoke_method!(invoker, "emitData", "album_info".to_string(), json);
+            Ok(serde_json::json!({ "notes": notes }).to_string())
         });
     }
 
     /// Global library search (artists > albums > songs) for the search bar.
     #[qslot(qml_name = "requestSearch")]
     fn request_search(&mut self, query: String) {
-        let invoker = self.get_qml_method_invoker();
-        let Some(dbs) = crate::dbs().cloned() else {
-            return;
-        };
         let offline = self.offline;
-        crate::runtime().spawn(async move {
-            let json = match search_json(&dbs, &query, offline).await {
-                Ok(json) => json,
-                Err(err) => {
+        self.spawn_data("search", move |dbs| async move {
+            Ok(search_json(&dbs, &query, offline)
+                .await
+                .unwrap_or_else(|err| {
                     eprintln!("search: {err:#}");
                     serde_json::json!({
                         "query": query,
@@ -2516,9 +2398,7 @@ impl Backend {
                         "songs": []
                     })
                     .to_string()
-                }
-            };
-            qtbridge::invoke_method!(invoker, "emitData", "search".to_string(), json);
+                }))
         });
     }
 
@@ -2699,11 +2579,8 @@ impl Backend {
         let Some(dbs) = crate::dbs().cloned() else {
             return;
         };
-        let order = if self.song_order.is_empty() {
-            crate::library::ORDERS[0].to_string()
-        } else {
-            self.song_order.clone()
-        };
+        let order = crate::library::effective_order(&crate::library::ORDERS, &self.song_order, 0)
+            .to_string();
         let offline = self.offline;
         crate::runtime().spawn(async move {
             match library_queue_payload(&dbs, &song_id, &order, offline).await {
@@ -2740,12 +2617,7 @@ impl Backend {
         crate::runtime().spawn(async move {
             match song_album_payload(&dbs, &song_id, offline).await {
                 Ok(payload) => {
-                    qtbridge::invoke_method!(
-                        invoker,
-                        "emitData",
-                        "song_album".to_string(),
-                        payload
-                    );
+                    emit(&invoker, "song_album", payload);
                 }
                 Err(err) => {
                     eprintln!("player: could not queue album: {err:#}");
@@ -2773,7 +2645,7 @@ impl Backend {
     fn player_load_paused(&mut self, tracks_json: String, start: i64) {
         match serde_json::from_str::<Vec<crate::player::Track>>(&tracks_json) {
             Ok(tracks) => {
-                self.player.load_paused(tracks, start.max(0) as usize);
+                self.player.load_paused(tracks, index_value(start));
                 // S3: the saved playhead, applied once to the restored queue.
                 if let Some(position) = self.status_restore_position.take() {
                     self.player.seek(position);
@@ -2798,7 +2670,7 @@ impl Backend {
     fn load_queue(&mut self, tracks_json: String, start: i64, announce: bool) {
         match serde_json::from_str::<Vec<crate::player::Track>>(&tracks_json) {
             Ok(tracks) => {
-                self.player.load(tracks, start.max(0) as usize);
+                self.player.load(tracks, index_value(start));
                 self.sync_player();
                 self.emit_queue(false);
                 if announce {
@@ -2928,7 +2800,7 @@ impl Backend {
             }
             eprintln!("queue: published {} rows", items.len());
             let json = serde_json::json!({ "index": index, "items": items }).to_string();
-            qtbridge::invoke_method!(invoker, "emitData", "queue".to_string(), json);
+            emit(&invoker, "queue", json);
         });
     }
 
@@ -2971,7 +2843,8 @@ impl Backend {
             .back()
             .is_none_or(|(s, a)| *s != songs || *a != albums)
         {
-            self.recent_mark_requests.push_back((songs.clone(), albums.clone()));
+            self.recent_mark_requests
+                .push_back((songs.clone(), albums.clone()));
             while self.recent_mark_requests.len() > RECENT_REQUESTS {
                 self.recent_mark_requests.pop_front();
             }
@@ -3011,9 +2884,7 @@ impl Backend {
             self.set_mark_state(&id, state);
         }
         for id in queried_albums {
-            let state = albums
-                .contains(&id)
-                .then_some(MarkState::AlbumCached);
+            let state = albums.contains(&id).then_some(MarkState::AlbumCached);
             self.set_mark_state(&id, state);
         }
         self.rebuild_mark_sets();
@@ -3077,8 +2948,7 @@ impl Backend {
     /// affected row's bindings re-evaluate — no window reloads.
     #[qslot(qml_name = "noteDownloadState")]
     fn note_download_state(&mut self, song_id: String, state: String) {
-        let in_flight =
-            state == crate::download::QUEUED || state == crate::download::ACTIVE;
+        let in_flight = state == crate::download::QUEUED || state == crate::download::ACTIVE;
         if in_flight {
             self.hold_download_request();
             self.set_mark_state(&song_id, Some(MarkState::SongInFlight));
@@ -3234,22 +3104,21 @@ impl Backend {
 
     #[qslot(qml_name = "queueJump")]
     fn queue_jump(&mut self, index: i64) {
-        self.player.jump(index.max(0) as usize);
+        self.player.jump(index_value(index));
         self.sync_player();
         self.emit_queue(false);
     }
 
     #[qslot(qml_name = "queueRemove")]
     fn queue_remove(&mut self, index: i64) {
-        self.player.remove(index.max(0) as usize);
+        self.player.remove(index_value(index));
         self.sync_player();
         self.emit_queue(false);
     }
 
     #[qslot(qml_name = "queueMove")]
     fn queue_move(&mut self, from: i64, to: i64) {
-        self.player
-            .move_item(from.max(0) as usize, to.max(0) as usize);
+        self.player.move_item(index_value(from), index_value(to));
         self.emit_queue(false);
     }
 
@@ -3291,11 +3160,10 @@ impl Backend {
                 }
                 Err(err) => {
                     eprintln!("alt actions: could not queue {kind} {id}: {err:#}");
-                    qtbridge::invoke_method!(
-                        error_invoker,
-                        "errorRaised",
-                        "playback".to_string(),
-                        format!("Could not add to queue: {err:#}")
+                    raise(
+                        &error_invoker,
+                        "playback",
+                        format!("Could not add to queue: {err:#}"),
                     );
                 }
             }
@@ -3330,11 +3198,10 @@ impl Backend {
                 }
                 Err(err) => {
                     eprintln!("alt actions: could not queue the selection ({kind}): {err:#}");
-                    qtbridge::invoke_method!(
-                        error_invoker,
-                        "errorRaised",
-                        "playback".to_string(),
-                        format!("Could not add to queue: {err:#}")
+                    raise(
+                        &error_invoker,
+                        "playback",
+                        format!("Could not add to queue: {err:#}"),
                     );
                 }
             }
@@ -3371,11 +3238,10 @@ impl Backend {
         crate::runtime().spawn(async move {
             if let Err(err) = selection_toggle(&dbs, &kind, &ids, invoker, error_invoker).await {
                 eprintln!("download: selection ({kind}) failed: {err:#}");
-                qtbridge::invoke_method!(
-                    outer_invoker,
-                    "errorRaised",
-                    "error".to_string(),
-                    format!("Could not download the selection: {err:#}")
+                raise(
+                    &outer_invoker,
+                    "error",
+                    format!("Could not download the selection: {err:#}"),
                 );
             } else {
                 eprintln!("download: selection ({kind}) done");
@@ -3422,12 +3288,7 @@ impl Backend {
                 if kind == "album" {
                     // The fullscreen keybar heart reconciles through this.
                     let json = album_state_payload(&id, on);
-                    qtbridge::invoke_method!(
-                        state_invoker,
-                        "emitData",
-                        "album_state".to_string(),
-                        json
-                    );
+                    emit(&state_invoker, "album_state", json);
                 }
                 // Per-row reconcile: the queue patches every matching row in
                 // place. The old full `TriggerRowReload` re-emitted the queue
@@ -3443,11 +3304,10 @@ impl Backend {
             }
             if let Err(err) = result {
                 eprintln!("alt actions: could not update favourite {kind} {id}: {err:#}");
-                qtbridge::invoke_method!(
-                    error_invoker,
-                    "errorRaised",
-                    "error".to_string(),
-                    format!("Could not update the favourite: {err:#}")
+                raise(
+                    &error_invoker,
+                    "error",
+                    format!("Could not update the favourite: {err:#}"),
                 );
             }
         });
@@ -3463,7 +3323,7 @@ impl Backend {
         crate::runtime().spawn(async move {
             match crate::queue::song_album_page_json(&dbs, &song_id).await {
                 Ok(json) => {
-                    qtbridge::invoke_method!(invoker, "emitData", "open_album".to_string(), json);
+                    emit(&invoker, "open_album", json);
                 }
                 Err(err) => {
                     eprintln!("alt actions: could not open the album for {song_id}: {err:#}");
@@ -3482,7 +3342,7 @@ impl Backend {
         crate::runtime().spawn(async move {
             match crate::queue::album_artist_page_json(&dbs, &album_id).await {
                 Ok(json) => {
-                    qtbridge::invoke_method!(invoker, "emitData", "open_artist".to_string(), json);
+                    emit(&invoker, "open_artist", json);
                 }
                 Err(err) => {
                     eprintln!("alt actions: could not open the artist for {album_id}: {err:#}");
@@ -3544,13 +3404,8 @@ impl Backend {
         let upcoming = self.player.upcoming(3);
 
         crate::runtime().spawn(async move {
-            let client = match crate::sqlite::load_credentials(&dbs.credentials).await {
-                Ok(Some(credentials)) => Some(SubsonicClient::new(
-                    &credentials.server_url,
-                    &credentials.username,
-                    &credentials.password,
-                )),
-                Ok(None) => None,
+            let client = match client(&dbs).await {
+                Ok(client) => Some(client),
                 Err(err) => {
                     eprintln!("lyrics: could not load credentials: {err:#}");
                     None
@@ -3564,12 +3419,7 @@ impl Backend {
                     crate::lyrics::Document::missing(&song_id)
                 }
             };
-            qtbridge::invoke_method!(
-                invoker,
-                "emitData",
-                "lyrics".to_string(),
-                document.to_json()
-            );
+            emit(&invoker, "lyrics", document.to_json());
 
             for id in upcoming {
                 if let Err(err) = crate::lyrics::fetch(&dbs, client.as_ref(), &id).await {
@@ -3663,7 +3513,7 @@ impl Backend {
             .to_string();
 
             qtbridge::invoke_method!(invoker, "colorsReady", cover.clone());
-            qtbridge::invoke_method!(invoker, "emitData", "colors".to_string(), payload);
+            emit(&invoker, "colors", payload);
         });
     }
 
@@ -3849,41 +3699,27 @@ impl Backend {
             }
         }
 
-        let state = self.player.state().name().to_string();
-        if self.playback_state != state {
-            self.playback_state = state;
-            self.playback_state_changed();
+        macro_rules! sync_field {
+            ($field:ident, $signal:ident, $value:expr) => {{
+                let value = $value;
+                if self.$field != value {
+                    self.$field = value;
+                    self.$signal();
+                }
+            }};
         }
-        let duration = self.player.duration();
-        if self.duration != duration {
-            self.duration = duration;
-            self.duration_changed();
-        }
-        let position = self.player.position();
-        if self.position != position {
-            self.position = position;
-            self.position_changed();
-        }
-        let volume = self.player.volume();
-        if self.volume != volume {
-            self.volume = volume;
-            self.volume_changed();
-        }
-        let muted = self.player.muted();
-        if self.muted != muted {
-            self.muted = muted;
-            self.muted_changed();
-        }
-        let queue_index = self.player.index() as i64;
-        if self.queue_index != queue_index {
-            self.queue_index = queue_index;
-            self.queue_index_changed();
-        }
-        let queue_length = self.player.len() as i64;
-        if self.queue_length != queue_length {
-            self.queue_length = queue_length;
-            self.queue_length_changed();
-        }
+
+        sync_field!(
+            playback_state,
+            playback_state_changed,
+            self.player.state().name().to_string()
+        );
+        sync_field!(duration, duration_changed, self.player.duration());
+        sync_field!(position, position_changed, self.player.position());
+        sync_field!(volume, volume_changed, self.player.volume());
+        sync_field!(muted, muted_changed, self.player.muted());
+        sync_field!(queue_index, queue_index_changed, self.player.index() as i64);
+        sync_field!(queue_length, queue_length_changed, self.player.len() as i64);
 
         // Q-8: mirror the player into the native MPRIS service.
         crate::mpris::publish(self.mpris_snapshot());
@@ -3911,24 +3747,8 @@ impl Backend {
     }
 }
 
-/// Next label for the shared [`crate::library::ORDERS`] cycle; empty means
-/// the first entry. One helper keeps album and song ordering in lockstep.
-fn stepped_order(current: &str, delta: i64) -> String {
-    let current = if current.is_empty() {
-        crate::library::ORDERS[0]
-    } else {
-        current
-    };
-    crate::library::cycle_order(current, delta).to_string()
-}
-
-fn stepped_artist_order(current: &str, delta: i64) -> String {
-    let current = if current.is_empty() {
-        crate::library::ARTIST_ORDERS[0]
-    } else {
-        current
-    };
-    crate::library::cycle_artist_order(current, delta).to_string()
+fn index_value(value: i64) -> usize {
+    value.max(0) as usize
 }
 
 /// Status-bar summary of a finished sync; lyrics only when any were fetched.

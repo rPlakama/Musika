@@ -3,10 +3,14 @@
 All notable changes to Musika, newest first. `TASKLISTMAJOR.md` tracks the
 open work; this file is the release history.
 
-## 0.3.1 — _Reciclagem eh amor (QML split)_
+## 0.3.1 — _Optimizing and reducing_
 
 All commits since `v0.3.0`:
 
+- `ff826b0` Combine logical databases into two
+- `981704f` Forget the previous queue scroll memory
+- `3c4d3c2` Predict offscreen rows and fix queue edge jumps
+- `b571eb5` Share one row body across lists and queue
 - `bd58920` Split QML backend helpers by purpose
 
 ## 0.3.0 — _Reciclagem eh amor_

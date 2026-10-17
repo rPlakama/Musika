@@ -173,10 +173,7 @@ pub async fn refresh(
     for (id, row) in known.iter() {
         if !referenced.contains(id) {
             let _ = std::fs::remove_file(dir.join(&row.file));
-            sqlx::query("DELETE FROM covers WHERE id = ?1")
-                .bind(id)
-                .execute(pool)
-                .await?;
+            crate::cache::delete_by(pool, "DELETE FROM covers WHERE id = ?1", id).await?;
             report.removed += 1;
         }
     }

@@ -278,11 +278,7 @@ pub async fn set_rule(pool: &SqlitePool, kind: &str, ref_id: &str) -> Result<Str
 
 /// Drops one rule (its blobs/marks are the caller's next step).
 pub async fn delete_rule(pool: &SqlitePool, rule_id: &str) -> Result<()> {
-    sqlx::query("DELETE FROM media_rule WHERE id = ?1")
-        .bind(rule_id)
-        .execute(pool)
-        .await?;
-    Ok(())
+    crate::cache::delete_by(pool, "DELETE FROM media_rule WHERE id = ?1", rule_id).await
 }
 
 /// Removes every blob owned by a rule (rule removal, CACHE-5). Explicit
@@ -298,10 +294,7 @@ pub async fn remove_rule_media(pool: &SqlitePool, rule_id: &str) -> Result<usize
             .await?;
     for row in &rows {
         remove_blob(row);
-        sqlx::query("DELETE FROM media WHERE song_id = ?1")
-            .bind(&row.song_id)
-            .execute(pool)
-            .await?;
+        crate::cache::delete_by(pool, "DELETE FROM media WHERE song_id = ?1", &row.song_id).await?;
     }
     Ok(rows.len())
 }
@@ -321,10 +314,7 @@ pub async fn remove_songs_media(pool: &SqlitePool, song_ids: &[String]) -> Resul
             continue;
         }
         remove_blob(&row);
-        sqlx::query("DELETE FROM media WHERE song_id = ?1")
-            .bind(song_id)
-            .execute(pool)
-            .await?;
+        crate::cache::delete_by(pool, "DELETE FROM media WHERE song_id = ?1", song_id).await?;
         removed += 1;
     }
     Ok(removed)
@@ -394,9 +384,7 @@ pub async fn prune_uncovered(dbs: &crate::db::Dbs) -> Result<usize> {
             kind,
             file,
         });
-        sqlx::query("DELETE FROM media WHERE song_id = ?1")
-            .bind(&song_id)
-            .execute(&dbs.media)
+        crate::cache::delete_by(&dbs.media, "DELETE FROM media WHERE song_id = ?1", &song_id)
             .await?;
         removed += 1;
     }
@@ -464,10 +452,12 @@ pub async fn purge(dbs: &crate::db::Dbs) -> Result<usize> {
             continue;
         }
         remove_blob(&row);
-        sqlx::query("DELETE FROM media WHERE song_id = ?1")
-            .bind(&row.song_id)
-            .execute(&dbs.media)
-            .await?;
+        crate::cache::delete_by(
+            &dbs.media,
+            "DELETE FROM media WHERE song_id = ?1",
+            &row.song_id,
+        )
+        .await?;
         removed += 1;
     }
     Ok(removed)

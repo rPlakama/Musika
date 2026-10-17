@@ -2940,7 +2940,7 @@ Small, bounded, high-value changes.
     collection in the helper; callers keep their `ensure_complete`/progress
     logic and pass only the fetch fn.
 
-- [ ] **REC-4 · HTTP pipeline + cover URL builders** — P3 · (RECYCLECRITIQUE §A, phase 1)
+- [x] **REC-4 · HTTP pipeline + cover URL builders** — P3 · (RECYCLECRITIQUE §A, phase 1)
   - **Why:** `http_client.rs:101/123/166` each repeat
     send → `status().is_success()` → body; `api.rs:1289/1320` rebuild the same
     cover/download params that `http_client.rs:122/152` rebuild again.
@@ -2948,20 +2948,20 @@ Small, bounded, high-value changes.
     cover-art special case); `download_media` takes the client's own
     `download_url`.
 
-- [ ] **REC-5 · Lyrics `Line` ↔ text codec** — P3 · (RECYCLECRITIQUE §A, phase 0)
+- [x] **REC-5 · Lyrics `Line` ↔ text codec** — P3 · (RECYCLECRITIQUE §A, phase 0)
   - **Why:** the same `lines.iter().map(...).join("\n")` / split appears 5×
     (`lyrics.rs:105,135,360,515,664`).
   - **Details:** `lines_to_text(&[Line]) -> String` and
     `text_to_lines(&str) -> Vec<Line>`.
 
-- [ ] **REC-6 · `delete_by` for the static `DELETE`s** — P3 · (RECYCLECRITIQUE §B, phase 0)
+- [x] **REC-6 · `delete_by` for the static `DELETE`s** — P3 · (RECYCLECRITIQUE §B, phase 0)
   - **Why:** the seven static `DELETE FROM <table> WHERE <col>` blocks repeat
     the same execute envelope (`covers.rs:177`; `media.rs:272,292,364,434`;
     `lyrics.rs:316,387`).
   - **Details:** `async fn delete_by(pool, sql: &'static str, key: &str)`;
     SQL stays literal per call site — never interpolate identifiers.
 
-- [ ] **REC-7 · `SONG_SELECT` + `song_order()`** — P2 · (RECYCLECRITIQUE §B, phase 0)
+- [x] **REC-7 · `SONG_SELECT` + `song_order()`** — P2 · (RECYCLECRITIQUE §B, phase 0)
   - **Why:** the 4-line column list + `LEFT JOIN albums` repeats 9× and the
     three `ORDER BY` strings twice (`library.rs::all_songs` `:468-495`,
     `songs_range` `:539-566`, `song` `:571`, `songs_by_ids` `:635`,

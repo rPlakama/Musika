@@ -70,6 +70,25 @@ pub struct Line {
     pub value: String,
 }
 
+fn lines_to_text(lines: &[Line]) -> String {
+    lines
+        .iter()
+        .map(|line| line.value.as_str())
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn text_to_lines(text: &str) -> Vec<Line> {
+    text.lines()
+        .map(str::trim_end)
+        .filter(|line| !line.trim().is_empty())
+        .map(|line| Line {
+            start_ms: None,
+            value: line.to_string(),
+        })
+        .collect()
+}
+
 impl Document {
     pub fn missing(song_id: &str) -> Self {
         Self {
@@ -102,15 +121,7 @@ impl Document {
     }
 
     fn plain(song_id: &str, source: &str, text: &str) -> Self {
-        let lines = text
-            .lines()
-            .map(str::trim_end)
-            .filter(|line| !line.trim().is_empty())
-            .map(|line| Line {
-                start_ms: None,
-                value: line.to_string(),
-            })
-            .collect();
+        let lines = text_to_lines(text);
         Self {
             song_id: song_id.to_string(),
             source: source.to_string(),
@@ -132,11 +143,7 @@ fn legacy_document(song_id: &str, value: &str) -> Document {
         return Document::plain(song_id, "legacy", value);
     }
 
-    let text = lines
-        .iter()
-        .map(|line| line.value.as_str())
-        .collect::<Vec<_>>()
-        .join("\n");
+    let text = lines_to_text(&lines);
     Document {
         song_id: song_id.to_string(),
         source: "legacy".to_string(),
@@ -306,11 +313,7 @@ pub async fn purge(dbs: &Dbs) -> Result<usize> {
 /// Drops the cached document for one song, forcing the next fetch to hit the
 /// server again (manual `lyrics_refresh`; LYR-5).
 pub async fn invalidate(lyrics: &SqlitePool, song_id: &str) -> Result<()> {
-    sqlx::query("DELETE FROM lyrics WHERE song_id = ?1")
-        .bind(song_id)
-        .execute(lyrics)
-        .await?;
-    Ok(())
+    crate::cache::delete_by(lyrics, "DELETE FROM lyrics WHERE song_id = ?1", song_id).await
 }
 
 // ---------------------------------------------------------------------------
@@ -350,14 +353,7 @@ async fn load_cached(pool: &SqlitePool, song_id: &str) -> Result<Option<(Documen
         .map(|(start_ms, value)| Line { start_ms, value })
         .collect()
     } else {
-        row.text
-            .lines()
-            .filter(|line| !line.trim().is_empty())
-            .map(|line| Line {
-                start_ms: None,
-                value: line.to_string(),
-            })
-            .collect()
+        text_to_lines(&row.text)
     };
 
     Ok(Some((
@@ -377,10 +373,12 @@ async fn load_cached(pool: &SqlitePool, song_id: &str) -> Result<Option<(Documen
 async fn store(pool: &SqlitePool, document: &Document) -> Result<()> {
     let mut tx = pool.begin().await?;
 
-    sqlx::query("DELETE FROM lyric_line WHERE song_id = ?1")
-        .bind(&document.song_id)
-        .execute(&mut *tx)
-        .await?;
+    crate::cache::delete_by(
+        &mut *tx,
+        "DELETE FROM lyric_line WHERE song_id = ?1",
+        &document.song_id,
+    )
+    .await?;
 
     sqlx::query(
         "INSERT INTO lyrics (song_id, source, synced, lang, offset_ms, text, fetched_at)
@@ -505,11 +503,7 @@ fn override_document(song_id: &str) -> Option<Document> {
 
         if extension == "lrc" {
             let (synced, lines) = parse_lrc(&text);
-            let plain = lines
-                .iter()
-                .map(|line| line.value.as_str())
-                .collect::<Vec<_>>()
-                .join("\n");
+            let plain = lines_to_text(&lines);
             return Some(Document {
                 song_id: song_id.to_string(),
                 source: "lrc".to_string(),
@@ -654,11 +648,7 @@ fn structured_document(song_id: &str, list: &LyricsList) -> Option<Document> {
         }
     }
 
-    let text = lines
-        .iter()
-        .map(|line| line.value.as_str())
-        .collect::<Vec<_>>()
-        .join("\n");
+    let text = lines_to_text(&lines);
 
     Some(Document {
         song_id: song_id.to_string(),

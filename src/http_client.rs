@@ -96,18 +96,7 @@ impl SubsonicClient {
         method: &str,
         params: &[(&str, String)],
     ) -> Result<T> {
-        let url = self.endpoint_url(method, params)?;
-
-        let response = self
-            .http
-            .get(url)
-            .send()
-            .await
-            .context("Could not reach the server")?;
-
-        if !response.status().is_success() {
-            bail!("Server returned HTTP {}", response.status());
-        }
+        let response = self.get_checked(self.endpoint_url(method, params)?).await?;
 
         let envelope: Envelope<T> = response
             .json()
@@ -117,18 +106,23 @@ impl SubsonicClient {
         envelope.response.into_result()
     }
 
+    async fn get_checked(&self, url: Url) -> Result<reqwest::Response> {
+        self.send_checked(self.http.get(url)).await
+    }
+
+    async fn send_checked(&self, request: reqwest::RequestBuilder) -> Result<reqwest::Response> {
+        let response = request.send().await.context("Could not reach the server")?;
+        let status = response.status();
+        if !status.is_success() && status != reqwest::StatusCode::NOT_MODIFIED {
+            bail!("Server returned HTTP {status}");
+        }
+        Ok(response)
+    }
+
     /// Fetches the original media file (`download`) as raw bytes (CACHE-1/8).
     pub async fn download_media(&self, id: &str) -> Result<Vec<u8>> {
         let url = self.endpoint_url("download", &[("id", id.to_string())])?;
-        let response = self
-            .http
-            .get(url)
-            .send()
-            .await
-            .context("Could not reach the server")?;
-        if !response.status().is_success() {
-            bail!("Server returned HTTP {} for media", response.status());
-        }
+        let response = self.get_checked(url).await?;
         let bytes = response
             .bytes()
             .await
@@ -163,7 +157,7 @@ impl SubsonicClient {
             request = request.header(reqwest::header::IF_MODIFIED_SINCE, last_modified);
         }
 
-        let response = request.send().await.context("Could not reach the server")?;
+        let response = self.send_checked(request).await?;
 
         if response.status() == reqwest::StatusCode::NOT_MODIFIED {
             return Ok(CoverArt {
@@ -173,10 +167,6 @@ impl SubsonicClient {
                 content_type: None,
                 bytes: Vec::new(),
             });
-        }
-
-        if !response.status().is_success() {
-            bail!("Server returned HTTP {} for cover art", response.status());
         }
 
         let header = |name: reqwest::header::HeaderName| {

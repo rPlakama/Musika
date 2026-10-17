@@ -26,6 +26,15 @@ use anyhow::Result;
 use sqlx::AssertSqlSafe;
 use sqlx::sqlite::SqlitePool;
 
+/// Deletes rows matched by one static `DELETE` statement and one bound key.
+pub async fn delete_by<'e, E>(executor: E, sql: &'static str, key: &str) -> Result<()>
+where
+    E: sqlx::Executor<'e, Database = sqlx::Sqlite>,
+{
+    sqlx::query(sql).bind(key).execute(executor).await?;
+    Ok(())
+}
+
 /// Deletes rows from `derived` whose `key_col` is absent from `owner_ids`.
 ///
 /// `table`/`key_col` are compile-time constants supplied by the caller (never

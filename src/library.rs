@@ -596,29 +596,25 @@ pub async fn artists(pool: &SqlitePool, order: &str) -> Result<Vec<ArtistRow>> {
     Ok(rows)
 }
 
+const SONG_SELECT: &str =
+    "SELECT s.id, s.title, s.artist, s.album, s.album_id, s.track, s.duration, s.starred,
+            COALESCE(al.cover_art, s.cover_art) AS cover_art
+     FROM songs s LEFT JOIN albums al ON al.id = s.album_id";
+
+fn song_order(order: &str) -> &'static str {
+    match order {
+        "Name" => " ORDER BY s.title, s.artist, s.album",
+        "Year" => " ORDER BY s.year DESC, s.title, s.artist",
+        _ => " ORDER BY s.artist, s.album, s.disc_number, s.track, s.title",
+    }
+}
+
 /// Every song, ordered by one of [`ORDERS`]. Covers come from the album.
 pub async fn all_songs(pool: &SqlitePool, order: &str) -> Result<Vec<SongRow>> {
-    let sql: &'static str = match order {
-        "Name" => {
-            "SELECT s.id, s.title, s.artist, s.album, s.album_id, s.track, s.duration, s.starred,
-                    COALESCE(al.cover_art, s.cover_art) AS cover_art
-             FROM songs s LEFT JOIN albums al ON al.id = s.album_id
-             ORDER BY s.title, s.artist, s.album"
-        }
-        "Year" => {
-            "SELECT s.id, s.title, s.artist, s.album, s.album_id, s.track, s.duration, s.starred,
-                    COALESCE(al.cover_art, s.cover_art) AS cover_art
-             FROM songs s LEFT JOIN albums al ON al.id = s.album_id
-             ORDER BY s.year DESC, s.title, s.artist"
-        }
-        _ => {
-            "SELECT s.id, s.title, s.artist, s.album, s.album_id, s.track, s.duration, s.starred,
-                    COALESCE(al.cover_art, s.cover_art) AS cover_art
-             FROM songs s LEFT JOIN albums al ON al.id = s.album_id
-             ORDER BY s.artist, s.album, s.disc_number, s.track, s.title"
-        }
-    };
-    let rows = sqlx::query_as::<_, SongRow>(sql).fetch_all(pool).await?;
+    let sql = format!("{SONG_SELECT}{}", song_order(order));
+    let rows = sqlx::query_as::<_, SongRow>(sqlx::AssertSqlSafe(sql))
+        .fetch_all(pool)
+        .await?;
     Ok(rows)
 }
 
@@ -633,28 +629,14 @@ pub async fn song_count(pool: &SqlitePool) -> Result<usize> {
 /// 0-based position of a song in [`all_songs`] order, without materializing
 /// the library (same ORDER BY, evaluated by SQLite's ROW_NUMBER).
 pub async fn song_ordinal(pool: &SqlitePool, id: &str, order: &str) -> Result<Option<usize>> {
-    let sql: &'static str = match order {
-        "Name" => {
-            "SELECT rn - 1 FROM (
-                 SELECT id, ROW_NUMBER() OVER (ORDER BY title, artist, album) AS rn
-                 FROM songs
-             ) WHERE id = ?1"
-        }
-        "Year" => {
-            "SELECT rn - 1 FROM (
-                 SELECT id, ROW_NUMBER() OVER (ORDER BY year DESC, title, artist) AS rn
-                 FROM songs
-             ) WHERE id = ?1"
-        }
-        _ => {
-            "SELECT rn - 1 FROM (
-                 SELECT id, ROW_NUMBER() OVER (
-                            ORDER BY artist, album, disc_number, track, title) AS rn
-                 FROM songs
-             ) WHERE id = ?1"
-        }
-    };
-    let ordinal: Option<i64> = sqlx::query_scalar(sql)
+    let sql = format!(
+        "SELECT rn - 1 FROM (
+             SELECT s.id, ROW_NUMBER() OVER ({}) AS rn
+             FROM songs s
+         ) WHERE id = ?1",
+        song_order(order)
+    );
+    let ordinal: Option<i64> = sqlx::query_scalar(sqlx::AssertSqlSafe(sql))
         .bind(id)
         .fetch_optional(pool)
         .await?;
@@ -669,30 +651,8 @@ pub async fn songs_range(
     limit: i64,
     order: &str,
 ) -> Result<Vec<SongRow>> {
-    let sql: &'static str = match order {
-        "Name" => {
-            "SELECT s.id, s.title, s.artist, s.album, s.album_id, s.track, s.duration, s.starred,
-                    COALESCE(al.cover_art, s.cover_art) AS cover_art
-             FROM songs s LEFT JOIN albums al ON al.id = s.album_id
-             ORDER BY s.title, s.artist, s.album
-             LIMIT ?1 OFFSET ?2"
-        }
-        "Year" => {
-            "SELECT s.id, s.title, s.artist, s.album, s.album_id, s.track, s.duration, s.starred,
-                    COALESCE(al.cover_art, s.cover_art) AS cover_art
-             FROM songs s LEFT JOIN albums al ON al.id = s.album_id
-             ORDER BY s.year DESC, s.title, s.artist
-             LIMIT ?1 OFFSET ?2"
-        }
-        _ => {
-            "SELECT s.id, s.title, s.artist, s.album, s.album_id, s.track, s.duration, s.starred,
-                    COALESCE(al.cover_art, s.cover_art) AS cover_art
-             FROM songs s LEFT JOIN albums al ON al.id = s.album_id
-             ORDER BY s.artist, s.album, s.disc_number, s.track, s.title
-             LIMIT ?1 OFFSET ?2"
-        }
-    };
-    let rows = sqlx::query_as::<_, SongRow>(sql)
+    let sql = format!("{SONG_SELECT}{} LIMIT ?1 OFFSET ?2", song_order(order));
+    let rows = sqlx::query_as::<_, SongRow>(sqlx::AssertSqlSafe(sql))
         .bind(limit.max(0))
         .bind(offset.max(0))
         .fetch_all(pool)
@@ -702,15 +662,11 @@ pub async fn songs_range(
 
 /// A single song by id.
 pub async fn song(pool: &SqlitePool, id: &str) -> Result<Option<SongRow>> {
-    let row = sqlx::query_as::<_, SongRow>(
-        "SELECT s.id, s.title, s.artist, s.album, s.album_id, s.track, s.duration, s.starred,
-                COALESCE(al.cover_art, s.cover_art) AS cover_art
-         FROM songs s LEFT JOIN albums al ON al.id = s.album_id
-         WHERE s.id = ?1",
-    )
-    .bind(id)
-    .fetch_optional(pool)
-    .await?;
+    let sql = format!("{SONG_SELECT} WHERE s.id = ?1");
+    let row = sqlx::query_as::<_, SongRow>(sqlx::AssertSqlSafe(sql))
+        .bind(id)
+        .fetch_optional(pool)
+        .await?;
     Ok(row)
 }
 
@@ -777,12 +733,7 @@ pub async fn songs_by_ids(pool: &SqlitePool, ids: &[String]) -> Result<Vec<SongR
         return Ok(Vec::new());
     }
 
-    let mut builder = sqlx::QueryBuilder::new(
-        "SELECT s.id, s.title, s.artist, s.album, s.album_id, s.track, s.duration, s.starred,
-                COALESCE(al.cover_art, s.cover_art) AS cover_art
-         FROM songs s LEFT JOIN albums al ON al.id = s.album_id
-         WHERE s.id IN (",
-    );
+    let mut builder = sqlx::QueryBuilder::new(format!("{SONG_SELECT} WHERE s.id IN ("));
     let mut separated = builder.separated(", ");
     for id in ids {
         separated.push_bind(id.clone());
@@ -797,32 +748,25 @@ pub async fn songs_by_ids(pool: &SqlitePool, ids: &[String]) -> Result<Vec<SongR
 
 /// Songs of one album, in disc/track order. Covers come from the album.
 pub async fn album_songs(pool: &SqlitePool, album_id: &str) -> Result<Vec<SongRow>> {
-    let rows = sqlx::query_as::<_, SongRow>(
-        "SELECT s.id, s.title, s.artist, s.album, s.album_id, s.track, s.duration, s.starred,
-                COALESCE(al.cover_art, s.cover_art) AS cover_art
-         FROM songs s LEFT JOIN albums al ON al.id = s.album_id
-         WHERE s.album_id = ?1
-         ORDER BY s.disc_number, s.track, s.title",
-    )
-    .bind(album_id)
-    .fetch_all(pool)
-    .await?;
+    let sql =
+        format!("{SONG_SELECT} WHERE s.album_id = ?1 ORDER BY s.disc_number, s.track, s.title");
+    let rows = sqlx::query_as::<_, SongRow>(sqlx::AssertSqlSafe(sql))
+        .bind(album_id)
+        .fetch_all(pool)
+        .await?;
     Ok(rows)
 }
 
 /// Every song of an artist's albums (ARC-I "Add to Queue" on an artist hit),
 /// album-major then disc/track order.
 pub async fn artist_songs(pool: &SqlitePool, artist_id: &str) -> Result<Vec<SongRow>> {
-    let rows = sqlx::query_as::<_, SongRow>(
-        "SELECT s.id, s.title, s.artist, s.album, s.album_id, s.track, s.duration, s.starred,
-                COALESCE(al.cover_art, s.cover_art) AS cover_art
-         FROM songs s JOIN albums al ON al.id = s.album_id
-         WHERE al.artist_id = ?1
-         ORDER BY al.name, s.disc_number, s.track, s.title",
-    )
-    .bind(artist_id)
-    .fetch_all(pool)
-    .await?;
+    let sql = format!(
+        "{SONG_SELECT} WHERE al.artist_id = ?1 ORDER BY al.name, s.disc_number, s.track, s.title"
+    );
+    let rows = sqlx::query_as::<_, SongRow>(sqlx::AssertSqlSafe(sql))
+        .bind(artist_id)
+        .fetch_all(pool)
+        .await?;
     Ok(rows)
 }
 

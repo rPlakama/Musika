@@ -3,6 +3,20 @@
 All notable changes to Musika, newest first. `TASKLISTMAJOR.md` tracks the
 open work; this file is the release history.
 
+## 0.3.0 — _Reciclagem eh amor_
+
+All commits since `v0.2.2`:
+
+- `85dd21c` Track ARC note and note icon
+- `799f391` Share QML spawn, auth and song JSON helpers
+- `3e9b786` Share time, directory, atomic-write and QML slot helpers
+- `010a398` Recycle colors, QML plumbing and row builders (REC-20..27)
+- `9871c50` Recycle persistence, sockets, player and palette (REC-12..19)
+- `cadff52` Recycle selects, DB setup and SQL assembly (REC-8..11)
+- `973ec2e` Recycle HTTP, lyrics, deletes and song queries (REC-4..7)
+- `c4c6424` Dedup API envelopes and fan-out (REC-1..3)
+- `724a543` Config flag and configurator groundwork
+
 ## 0.2.2 — _Small fixes and patches_
 
 All commits since `v0.2.1`:

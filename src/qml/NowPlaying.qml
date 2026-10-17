@@ -534,6 +534,11 @@ Rectangle {
 
         // VI-7: the count walks the queue cursor by that many rows.
         var queueSteps = Math.max(1, Backend.keyCount);
+        if (action === "top" || action === "bottom") {
+            queueContent.edgeJump(action === "bottom", queueSteps);
+            queueCursor = queueContent.currentIndex;
+            return;
+        }
         if (action === "move_up")
             moveQueueCursor(-queueSteps);
         else if (action === "move_down")
@@ -1315,6 +1320,11 @@ Rectangle {
                                 searchFields: ["title", "duration"]
                                 // UI-58: adaptive rows for the queue pane.
                                 rowRatio: 0.16
+                                // ARC-IDK: constant-height queue rows can
+                                // pre-calculate their scroll extent before
+                                // Qt's lazy delegate estimate settles.
+                                contentHeightHint: queueItems.count
+                                    * queueContent.adaptiveRowHeight
                                 // The fullscreen memory also stores the focused
                                 // pane; without this the continuous remembers
                                 // clobbered it to the default scope.
@@ -1382,6 +1392,9 @@ Rectangle {
                                             markStarred: row.starred
                                             searchQuery: queueContent.searchQuery
                                             searchCurrent: index === queueContent.searchCurrentRow
+                                            expected: row.index !== queueContent.currentIndex
+                                                && queueContent.isExpected(row.y)
+                                            immediate: row.index === queueContent.currentIndex
                                         }
 
                                         HoverHandler {

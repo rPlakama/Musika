@@ -62,9 +62,29 @@ Item {
 
     property string searchQuery: ""
     property bool searchCurrent: false
+    /// A predicted row: the cheap shell stays, the content is not built
+    /// until the row reaches the visible/cached band.
+    property bool expected: false
+    /// The cursor row is never a placeholder: its content loads with the
+    /// landing instead of one async frame later.
+    property bool immediate: false
 
-    Rectangle {
-        id: cover
+    Loader {
+        anchors.fill: parent
+        active: root.immediate || !root.expected
+        asynchronous: !root.immediate
+        sourceComponent: body
+    }
+
+    Component {
+        id: body
+
+        Item {
+            width: root.width
+            height: root.height
+
+            Rectangle {
+                id: cover
         visible: root.showCover
         anchors.left: parent.left
         anchors.verticalCenter: parent.verticalCenter
@@ -179,5 +199,7 @@ Item {
         albumId: root.markAlbumId
         starred: root.markStarred
         base: metaLabel.font.pixelSize * 0.8
+        }
+        }
     }
 }

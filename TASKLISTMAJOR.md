@@ -146,12 +146,22 @@ The app is unsafe or misleading without these.
     segments.
 
 - [ ] **ARC-3 · Cancellable sync + HTTP retry/backoff/timeouts** — P1 · (A5, O5)
+
   - **Why:** a hung request blocks the sync pipeline; `reqwest` has no timeout.
 
-- [ ] **ARC-IDK** Breaking down Row mechanism into smaller segments for UI Reload calls; Titles, Symbols, Covers -- all they have their own UI call instead of the whole UI recall; Benefits is many, such as lower CPU compromisse in Row reload/reset, and information update. As a example, the Action of Favorite/Removal of Favorite/Download or Removal of Download have their own Rectangle update call, which is not the whole Row; Another segmnet, is the 'expect factor row' which defines a row by a Rectangle without specifically it contents inside, reducing the amount of CPU cicles to render predicted rows (such as in Queuques) or render distance of rows;
-  - **Now:** the shared `RowBody.qml` (cover, title/subtitle, meta, `RowMarks`) is consumed by `MediaList` rows and the fullscreen queue; each part is a named property, so a per-row change updates that part without recalling the list. Expected/placeholder rows remain.
+- [ ] **ARC-memory** Leaving a Queque to start a new one, like initiating a new album, or whatever triggers a new queuque, should unload the memory of previous prefetch;
+
+- [x] **ARC-IDK** Breaking down Row mechanism into smaller segments for UI Reload calls; Titles, Symbols, Covers -- all they have their own UI call instead of the whole UI recall; Benefits is many, such as lower CPU compromisse in Row reload/reset, and information update. As a example, the Action of Favorite/Removal of Favorite/Download or Removal of Download have their own Rectangle update call, which is not the whole Row; Another segmnet, is the 'expect factor row' which defines a row by a Rectangle without specifically it contents inside, reducing the amount of CPU cicles to render predicted rows (such as in Queuques) or render distance of rows;
+  - **Now:** the shared `RowBody.qml` (cover, title/subtitle, meta, `RowMarks`) is consumed by `MediaList` rows and the fullscreen queue; each part is a named property, so a per-row change updates that part without recalling the list. Rows outside the near viewport band keep the cheap shell and load their content lazily through `RowBody.expected` (`ScrollContent.isExpected`), with the queue's scroll extent precalculated.
+
+  - [x] **Sharing is Care ARC-IDK** Upon a queuque entering (FullPlayBackMode) screen, it should-precalculate the scroll range from cursor to latest Item based in the amoount of rows, const of height -- object if for a more stable scrolling (skipping without flicking) experience;
+    - **Now:** `ScrollContent.contentHeightHint` lets fixed-height hosts supply the true extent before Qt's lazy delegate estimate settles; the fullscreen queue feeds `count * adaptiveRowHeight`, so its clamp/glide range is precalculated.
 
 - [ ] **ARC-IDK1** SearchUI design for Shift+Space++F search -- Sleek and less transparent, breath more -- proper details in init;
+
+- [ ] **ARC-IDK2 · Row Predict parent pre-load** — P3 · (ARC-IDK follow-up)
+  - **Why:** the predicted-row array should warm incrementally around the cursor instead of waiting for a far `G`/`gg` landing to realise its target.
+  - **Details:** keep a small forward/backward prediction window in the parent, extend it in fixed batches as the cursor approaches, and drop rows far behind; the same seam serves Album/Songs and the queue so an edge jump never shows the load shell.
 
 - [ ] **ARC-4 · ID-namespace correctness** — P1 · (A6, O4)
   - **Why:** `getIndexes` returns file-structure IDs passed to ID3 endpoints;

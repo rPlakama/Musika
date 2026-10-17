@@ -161,7 +161,8 @@ Item {
         // 0, so row 0 and the last row can reach the centre; other hosts
         // keep the old clamped-to-content behaviour.
         var lo = root.unlimitedScrolloff ? Math.min(0, v.originY) : 0;
-        var limit = Math.max(lo, lo + v.contentHeight - v.height);
+        var extent = root.contentHeightHint > 0 ? root.contentHeightHint : v.contentHeight;
+        var limit = Math.max(lo, lo + extent - v.height);
         var target = Math.max(lo, Math.min(limit,
             item.y + item.height * 0.5 - v.height * 0.5));
         if (Math.abs(target - v.contentY) < 1)
@@ -218,6 +219,10 @@ Item {
     /// Extra spacing between list rows (0 = the delegate owns it); grid
     /// cells are placed by `cellHeight`.
     property real rowSpacing: 0
+    /// Fixed-row hosts can pre-calculate the content extent as
+    /// `count * rowHeight` before Qt's lazy delegate estimate settles.
+    /// The follow/clamp math prefers this when non-zero.
+    property real contentHeightHint: 0
     /// Unlimited scrolloff: no edge rule — the view reserves half a
     /// viewport of empty space above the first row and below the last, so
     /// the follow can centre *any* row, first and last included. List mode
@@ -236,7 +241,8 @@ Item {
     /// plain [0, contentHeight - height] range.
     function _clampY(v) {
         var lo = root.unlimitedScrolloff ? Math.min(0, v.originY) : 0;
-        var limit = Math.max(lo, lo + v.contentHeight - v.height);
+        var extent = root.contentHeightHint > 0 ? root.contentHeightHint : v.contentHeight;
+        var limit = Math.max(lo, lo + extent - v.height);
         if (v.contentY < lo || v.contentY > limit)
             v.contentY = Math.max(lo, Math.min(limit, v.contentY));
     }
@@ -250,6 +256,15 @@ Item {
     function _landUnrealised(v, index) {
         v.positionViewAtIndex(index, ListView.Beginning);
         root._clampY(v);
+    }
+
+    /// True when a cached row at `y` is outside the near viewport band:
+    /// hosts keep the cheap row shell and load its content lazily.
+    function isExpected(y) {
+        var v = root.view;
+        if (!v || v.height <= 0)
+            return false;
+        return y < v.contentY - v.height || y > v.contentY + v.height * 2;
     }
 
     /// The instant landing (semantic jumps: `gg`/`G`, search, restores, the

@@ -1938,6 +1938,8 @@ Small, bounded, high-value changes.
 > **Easiest batch** — moved from Should have on 2026-10-14 (the smallest
 > remaining work): UI-35, S-6, UI-42, CACHE-3, CACHE-4, P-1.
 
+- [] **ARC-Whatever** While holding ALT in Search mode, Alt takes priority over the SearchBox, making it impossible to write text while using alt;
+
 - [x] **UI-58 · Adaptive rows — cut a row past a 30% squeeze** — P1 · **top priority** · (design; window-height responsive; last design before the next release)
   - **Why:** every scroll list sizes its rows as a fraction of the live
     viewport, so shrinking the window squeezes the rows endlessly until the

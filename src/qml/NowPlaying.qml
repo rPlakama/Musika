@@ -475,6 +475,10 @@ Rectangle {
                 scrollLyrics(-lyricsView.height * 0.3 * lyricSteps);
             else if (action === "move_down")
                 scrollLyrics(lyricsView.height * 0.3 * lyricSteps);
+            else if (action === "page_up")
+                scrollLyrics(-lyricsView.height * 0.5);
+            else if (action === "page_down")
+                scrollLyrics(lyricsView.height * 0.5);
             else if (action === "move_left" || action === "move_right")
                 pane = 2;
             return;
@@ -502,6 +506,13 @@ Rectangle {
             moveQueueCursor(-queueSteps);
         else if (action === "move_down")
             moveQueueCursor(queueSteps);
+        else if (action === "page_up" || action === "page_down") {
+            queueContent.pageJump(action === "page_down");
+            queueCursor = queueContent.currentIndex;
+        } else if (action.indexOf("extend_") === 0) {
+            queueContent.extendSelection("move_" + action.substring(7));
+            queueCursor = queueContent.currentIndex;
+        }
         else if (action === "queue_up" && queueCursor > 0) {
             root._reordering = true;
             // VI-4: a reorder shifts every anchored row; the range dies.
@@ -1315,11 +1326,6 @@ Rectangle {
                                 searchFields: ["title", "duration"]
                                 // UI-58: adaptive rows for the queue pane.
                                 rowRatio: 0.16
-                                // ARC-IDK: constant-height queue rows can
-                                // pre-calculate their scroll extent before
-                                // Qt's lazy delegate estimate settles.
-                                contentHeightHint: queueItems.count
-                                    * queueContent.adaptiveRowHeight
                                 // The fullscreen memory also stores the focused
                                 // pane; without this the continuous remembers
                                 // clobbered it to the default scope.
@@ -1398,6 +1404,14 @@ Rectangle {
                                         }
 
                                         TapHandler {
+                                            acceptedModifiers: Qt.ShiftModifier
+                                            onTapped: {
+                                                queueContent.extendSelectionTo(row.index);
+                                                root.queueCursor = queueContent.currentIndex;
+                                            }
+                                        }
+                                        TapHandler {
+                                            acceptedModifiers: Qt.NoModifier
                                             onTapped: {
                                                 root.queueCursor = row.index;
                                                 Backend.queueJump(row.index);

@@ -878,6 +878,11 @@ Rectangle {
                         }
 
                         TapHandler {
+                            acceptedModifiers: Qt.ShiftModifier
+                            onTapped: wall.extendSelectionTo(cell.index)
+                        }
+                        TapHandler {
+                            acceptedModifiers: Qt.NoModifier
                             onTapped: {
                                 wall.currentIndex = cell.index;
                                 root.activateCurrent();
@@ -992,6 +997,11 @@ Rectangle {
                         }
 
                         TapHandler {
+                            acceptedModifiers: Qt.ShiftModifier
+                            onTapped: wall.extendSelectionTo(row.index)
+                        }
+                        TapHandler {
+                            acceptedModifiers: Qt.NoModifier
                             onTapped: {
                                 wall.currentIndex = row.index;
                                 root.activateCurrent();

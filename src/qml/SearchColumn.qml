@@ -38,8 +38,21 @@ Item {
     property bool active: false
     property bool loading: false
     property bool hasQuery: false
+    /// ARC-UI-7.13: a search that finishes inside the delay never flashes a
+    /// spinner; slower ones fade the loop in instead of spawning it raw.
+    property bool _showLoading: false
+    Timer {
+        id: loadingDelay
+        interval: 60
+        repeat: false
+        running: root.loading && (!root.model || root.model.count === 0)
+        onRunningChanged: if (!running) root._showLoading = false
+        onTriggered: root._showLoading = true
+    }
 
     signal picked(int index)
+    /// ARC-UI-7.9: forwarded from the result body for host badges/status.
+    signal selectionChanged
 
     // ARC-I: which recycled Alt-hold verb set this column arms ("song",
     // "album" or "artist"); the column only relays the cursor row it anchors.
@@ -157,6 +170,30 @@ Item {
             return;
         root.cursor = row;
         content.goto(row);
+    }
+
+    /// `Ctrl-D`/`Ctrl-U` in the active result column.
+    function pageJump(down) {
+        if (!root.model || root.model.count === 0)
+            return;
+        content.pageJump(down);
+        root.cursor = content.currentIndex;
+    }
+
+    /// Shift+Arrow in the active result column.
+    function extendSelection(action) {
+        if (!root.model || root.model.count === 0)
+            return;
+        content.extendSelection(action);
+        root.cursor = content.currentIndex;
+    }
+
+    /// Shift+Click on a result row.
+    function extendSelectionTo(index) {
+        if (!root.model || root.model.count === 0)
+            return;
+        content.extendSelectionTo(index);
+        root.cursor = content.currentIndex;
     }
 
     /// ARC-I: Alt armed the gesture — anchor on the cursor row; a visual
@@ -342,6 +379,7 @@ Item {
                 bleed: root.overflow
                 model: root.model
                 selectable: quickActionKind !== ""
+                onSelectionChanged: root.selectionChanged()
                 // ARC-UI-2 M1: the columns paint the same three cells.
                 searchFields: ["title", "subtitle", "meta"]
                 // UI-58: rows scale from the shared panel height (not the
@@ -352,8 +390,6 @@ Item {
                 // Two-thirds of the normal row: a 1/3 cut for Search.
                 rowHeightScale: 2 / 3
                 rowRefHeight: root._rowSizingHeight
-                contentHeightHint: root.model
-                    ? root.model.count * content.adaptiveRowHeight : 0
 
                 rowDelegate: Component {
                     Rectangle {
@@ -447,6 +483,11 @@ Item {
                         }
 
                         TapHandler {
+                            acceptedModifiers: Qt.ShiftModifier
+                            onTapped: root.extendSelectionTo(row.index)
+                        }
+                        TapHandler {
+                            acceptedModifiers: Qt.NoModifier
                             onTapped: root.picked(row.index)
                         }
                     }
@@ -454,19 +495,56 @@ Item {
             }
 
             SymbolIcon {
+                id: noGlyph
                 anchors.centerIn: parent
-                visible: root.noMatches
+                visible: root.noMatches || noGlyph.opacity > 0
+                opacity: root.noMatches ? 1 : 0
                 width: Math.max(14, Math.min(listItem.height * 0.7,
                     listItem.width * 0.2))
                 height: width
                 source: "qrc:/app/icons/no.svg"
                 symbolColor: Palette.onSurfaceVariant
+
+                Behavior on opacity {
+                    enabled: !Theme.reduceMotion
+                    NumberAnimation {
+                        duration: 60
+                        easing.type: Easing.Bezier
+                        easing.bezierCurve: Theme.ease.decelerate
+                    }
+                }
             }
 
-            // Skeleton while the request is in flight (shared UI-22 pattern).
-            SkeletonList {
-                anchors.fill: parent
-                visible: root.loading && root.model && root.model.count === 0
+            // While the request is in flight show the shared fetch loop (the
+            // download button's glyph), never the no-result mark. The no.svg
+            // only appears once the response landed empty (`noMatches`).
+            SymbolIcon {
+                id: loadingGlyph
+                anchors.centerIn: parent
+                visible: root._showLoading
+                opacity: root._showLoading ? 1 : 0
+                width: Math.max(14, Math.min(listItem.height * 0.7,
+                    listItem.width * 0.2))
+                height: width
+                source: "qrc:/app/icons/loading-loop.svg"
+                symbolColor: Palette.onSurfaceVariant
+
+                Behavior on opacity {
+                    enabled: !Theme.reduceMotion
+                    NumberAnimation {
+                        duration: 60
+                        easing.type: Easing.Bezier
+                        easing.bezierCurve: Theme.ease.decelerate
+                    }
+                }
+
+                NumberAnimation on rotation {
+                    from: 0
+                    to: 360
+                    duration: Theme.motion.spin
+                    loops: Animation.Infinite
+                    running: loadingGlyph.visible && !Theme.reduceMotion
+                }
             }
         }
     }

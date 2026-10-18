@@ -365,6 +365,11 @@ ScrollPanel {
             }
 
             TapHandler {
+                acceptedModifiers: Qt.ShiftModifier
+                onTapped: root.extendSelectionTo(row.index)
+            }
+            TapHandler {
+                acceptedModifiers: Qt.NoModifier
                 onTapped: {
                     root.currentIndex = row.index;
                     root.activate();
@@ -536,6 +541,11 @@ ScrollPanel {
             }
 
             TapHandler {
+                acceptedModifiers: Qt.ShiftModifier
+                onTapped: root.extendSelectionTo(cell.index)
+            }
+            TapHandler {
+                acceptedModifiers: Qt.NoModifier
                 onTapped: {
                     root.currentIndex = cell.index;
                     root.activate();

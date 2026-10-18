@@ -34,6 +34,12 @@ pub enum Action {
     MoveRight,
     Top,
     Bottom,
+    PageUp,
+    PageDown,
+    ExtendUp,
+    ExtendDown,
+    ExtendLeft,
+    ExtendRight,
     Search,
     SearchAction,
     VisualSelect,
@@ -75,6 +81,12 @@ impl Action {
             Self::MoveRight => "move_right",
             Self::Top => "top",
             Self::Bottom => "bottom",
+            Self::PageUp => "page_up",
+            Self::PageDown => "page_down",
+            Self::ExtendUp => "extend_up",
+            Self::ExtendDown => "extend_down",
+            Self::ExtendLeft => "extend_left",
+            Self::ExtendRight => "extend_right",
             Self::Search => "search",
             Self::SearchAction => "search_action",
             Self::VisualSelect => "visual",
@@ -162,6 +174,16 @@ fn defaults() -> Vec<(&'static str, Action)> {
         ("l", Action::MoveRight),
         ("g g", Action::Top),
         ("shift-g", Action::Bottom),
+        // VI/Neovim half-page motions.
+        ("ctrl-d", Action::PageDown),
+        ("ctrl-u", Action::PageUp),
+        ("pagedown", Action::PageDown),
+        ("pageup", Action::PageUp),
+        // VI-4/ARC-UI-7.9: Shift+Arrow extends the visual range.
+        ("shift-up", Action::ExtendUp),
+        ("shift-down", Action::ExtendDown),
+        ("shift-left", Action::ExtendLeft),
+        ("shift-right", Action::ExtendRight),
         ("v", Action::VisualSelect),
         ("shift-v", Action::VisualAll),
         ("enter", Action::Enter),
@@ -711,5 +733,29 @@ mod tests {
 
         // A shifted digit is a symbol, not a count (`#` etc. stay unbound).
         assert_eq!(token_from_qt(0x31, QT_SHIFT).as_deref(), Some("shift-1"));
+    }
+
+    #[test]
+    fn page_and_extend_motions() {
+        let mut keymap = Keymap::new();
+        assert_eq!(keymap.feed("ctrl-d"), Outcome::Action(Action::PageDown));
+        assert_eq!(keymap.feed("ctrl-u"), Outcome::Action(Action::PageUp));
+        assert_eq!(
+            keymap.feed("shift-down"),
+            Outcome::Action(Action::ExtendDown)
+        );
+        assert_eq!(keymap.feed("shift-up"), Outcome::Action(Action::ExtendUp));
+        assert_eq!(
+            keymap.feed("shift-left"),
+            Outcome::Action(Action::ExtendLeft)
+        );
+        assert_eq!(
+            keymap.feed("shift-right"),
+            Outcome::Action(Action::ExtendRight)
+        );
+        assert_eq!(
+            token_from_qt(QT_KEY_DOWN, QT_SHIFT).as_deref(),
+            Some("shift-down")
+        );
     }
 }

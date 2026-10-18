@@ -442,6 +442,7 @@ db_path! {
     download_path: "download.db", "MUSIKA_DOWNLOAD_FILE";
     playlist_path: "playlist.db", "MUSIKA_PLAYLIST_FILE";
     mirror_path: "index.txt", "MUSIKA_INDEX_MIRROR";
+    scroll_path: "scroll.json", "MUSIKA_SCROLL_FILE";
 }
 
 /// Directory holding the cached cover-art blobs.

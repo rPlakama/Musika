@@ -109,7 +109,7 @@ Item {
         // A landing (`land`) owns the view: it positions and mirrors the
         // index itself; starting a glide here would fight it and leave a
         // corrupted contentY behind.
-        if (root._instantFollow)
+        if (root.isLanding)
             return;
         var v = root.view;
         if (v && v.count > 0 && v.currentIndex !== root.currentIndex) {
@@ -129,7 +129,9 @@ Item {
         target: root.view
         property: "contentY"
         duration: root.followMs
-        easing.type: Easing.OutBack
+        // Edge targets must not overshoot (see `_glideTo`); OutBack only in
+        // the mid-list band where the spring is a deliberate affordance.
+        easing.type: root._glideEdge ? Easing.OutCubic : Easing.OutBack
         easing.overshoot: 1.7
         onFinished: root._settleGlide()
     }
@@ -138,7 +140,7 @@ Item {
     /// (lyric rows have variable heights); an unrealised line falls back to
     /// an instant `Center`.
     function _glideTo(v, index) {
-        if (!v || v.count === 0 || index < 0 || root._instantFollow)
+        if (!v || v.count === 0 || index < 0 || root.isLanding)
             return;
         var item = v.itemAtIndex(index);
         if (!item) {
@@ -161,16 +163,21 @@ Item {
         // 0, so row 0 and the last row can reach the centre; other hosts
         // keep the old clamped-to-content behaviour.
         var lo = root.unlimitedScrolloff ? Math.min(0, v.originY) : 0;
-        var extent = root.contentHeightHint > 0 ? root.contentHeightHint : v.contentHeight;
+        var extent = root.contentExtent(v);
         var limit = Math.max(lo, lo + extent - v.height);
-        var target = Math.max(lo, Math.min(limit,
-            item.y + item.height * 0.5 - v.height * 0.5));
+        var ideal = item.y + item.height * 0.5 - v.height * 0.5;
+        var target = Math.max(lo, Math.min(limit, ideal));
         if (Math.abs(target - v.contentY) < 1)
             return;
         if (Theme.reduceMotion) {
             v.contentY = target;
             return;
         }
+        // The spring is a mid-list affordance. At a content edge the target
+        // is the clamp itself, and an OutBack overshoot would paint past the
+        // last row (the k-from-G gap) before the settle snapped it back.
+        root._glideEdge = Math.abs(target - ideal) > 0.5
+            || target <= lo + 0.5 || target >= limit - 0.5;
         centerGlide.stop();
         centerGlide.from = v.contentY;
         centerGlide.to = target;
@@ -199,6 +206,7 @@ Item {
         if (item.y < v.contentY
                 || item.y + item.height > v.contentY + v.height)
             v.positionViewAtIndex(root.currentIndex, ListView.Contain);
+        root._clampY(v);
     }
 
     /// The active view (itemAtIndex, positionViewAtIndex, …).
@@ -221,18 +229,55 @@ Item {
     property real rowSpacing: 0
     /// Fixed-row hosts can pre-calculate the content extent as
     /// `count * rowHeight` before Qt's lazy delegate estimate settles.
-    /// The follow/clamp math prefers this when non-zero.
+    /// The follow/clamp math prefers this when non-zero; otherwise
+    /// ARC-UI-7.7 derives the same extent from the model count + row size.
     property real contentHeightHint: 0
     /// Unlimited scrolloff: no edge rule — the view reserves half a
     /// viewport of empty space above the first row and below the last, so
-    /// the follow can centre *any* row, first and last included. List mode
-    /// only (GridView has no margins); the lyrics pane sets it.
+    /// the follow can centre *any* row, first and last included. The list
+    /// carries header/footer spacers, the grid Flickable margins.
     property bool unlimitedScrolloff: false
     readonly property real _edgeMargin: root.unlimitedScrolloff ? root.height * 0.5 : 0
+
+    /// ARC-UI-7.7: the extent the clamp/centre math should use. Fixed-row
+    /// bodies no longer have to subscribe this themselves; variable-row
+    /// hosts (lyrics) keep the live view estimate.
+    function _autoContentExtent() {
+        if (root.contentHeightHint > 0)
+            return root.contentHeightHint;
+        if (root.rowRatio <= 0 || root.count === 0)
+            return 0;
+        var rowH = root.layout === "grid"
+            ? (root.cellHeight > 0 ? root.cellHeight : root.cellWidth)
+            : root.adaptiveRowHeight;
+        if (rowH <= 0)
+            return 0;
+        var rows = root.layout === "grid"
+            ? Math.ceil(root.count / Math.max(1, root.columns))
+            : root.count;
+        var extent = rows * rowH;
+        if (root.layout !== "grid" && root.count > 1)
+            extent += (root.count - 1) * root.rowSpacing;
+        if (root.unlimitedScrolloff)
+            extent += 2 * root._edgeMargin;
+        return extent;
+    }
+    function contentExtent(v) {
+        var auto = root._autoContentExtent();
+        if (auto > 0)
+            return auto;
+        return v ? v.contentHeight : 0;
+    }
 
     /// True while a landing runs: the root index handler must not start a
     /// glide the landing is already positioning (`land` owns the view).
     property bool _instantFollow: false
+    /// The last glide was clamped at a content edge, so it must not use the
+    /// OutBack spring (it would paint past the last row before settling).
+    property bool _glideEdge: false
+    /// ARC-UI-7.12: the landing state as a public read-only seam, so outer
+    /// chrome can react without polling the private flag.
+    readonly property bool isLanding: root._instantFollow
 
     /// Keep `contentY` inside the content bounds (Qt's async `Contain`
     /// layouts can park it outside; probed). The lyrics scrolloff is the
@@ -241,7 +286,7 @@ Item {
     /// plain [0, contentHeight - height] range.
     function _clampY(v) {
         var lo = root.unlimitedScrolloff ? Math.min(0, v.originY) : 0;
-        var extent = root.contentHeightHint > 0 ? root.contentHeightHint : v.contentHeight;
+        var extent = root.contentExtent(v);
         var limit = Math.max(lo, lo + extent - v.height);
         if (v.contentY < lo || v.contentY > limit)
             v.contentY = Math.max(lo, Math.min(limit, v.contentY));
@@ -417,6 +462,22 @@ Item {
         return true;
     }
 
+    /// `Ctrl-D`/`Ctrl-U`: move by `fraction` of the viewport, in rows. The
+    /// step reuses `moveStep` so grid mode walks whole rows and both ends
+    /// clamp exactly like a counted move; the normal 300 ms follow glides.
+    function pageJump(down, fraction) {
+        if (root.count === 0 || !root.view)
+            return false;
+        var rowH = root.layout === "grid"
+            ? (root.cellHeight > 0 ? root.cellHeight : root.cellWidth)
+            : root.adaptiveRowHeight;
+        if (rowH <= 0)
+            return false;
+        var rows = Math.max(1, Math.floor(
+            root.view.height * (fraction === undefined ? 0.5 : fraction) / rowH));
+        return root.moveStep(down ? "move_down" : "move_up", rows);
+    }
+
     function activate() {
         if (root.currentIndex >= 0)
             root.itemActivated(root.currentIndex);
@@ -441,8 +502,10 @@ Item {
         if (index < 0)
             return false;
         root.land(index);
-        scroll.recall(root.memoryKey, root.view);
-        return true;
+        var recalled = scroll.recall(root.memoryKey, root.view);
+        // An empty view defers the landing to `onCountChanged`; the saved
+        // index still owns it, so report the memory as consumed.
+        return recalled.ok || root.count === 0;
     }
 
     function remember(scope) {
@@ -515,11 +578,19 @@ Item {
     // (CRITIQUESCROLL SC-7), fed by the body's cursor.
     property bool selectable: false
 
+    /// ARC-UI-7.9: the range changed (start/clear/all or a cursor move while
+    /// a range is live), so a badge/status can follow without polling.
+    signal selectionChanged
+
     RowState {
         id: rowState
         model: root.model
         cursor: root.currentIndex
         selectable: root.selectable
+    }
+    Connections {
+        target: rowState
+        function onSelectionChanged() { root.selectionChanged(); }
     }
 
     readonly property bool hasSelection: rowState.hasSelection
@@ -534,6 +605,23 @@ Item {
     /// widens the anchor.
     function selectAllRows() {
         rowState.selectAllRows();
+    }
+
+    /// Shift+motion: keep the anchor and move one step in `action`'s
+    /// direction (grid-aware through `moveStep`).
+    function extendSelection(action) {
+        if (!rowState.extendTo(root.currentIndex))
+            return false;
+        return root.moveStep(action, 1);
+    }
+
+    /// Shift+Click: anchor on the old cursor, then move to `index`.
+    function extendSelectionTo(index) {
+        if (index < 0 || index >= root.count
+                || !rowState.extendTo(root.currentIndex))
+            return false;
+        root.currentIndex = index;
+        return true;
     }
 
     function clearSelection() {
@@ -642,14 +730,15 @@ Item {
 
     // ── The views ────────────────────────────────────────────────────────
 
-    ListScroll {
+    ScrollMemory {
         id: scroll
     }
 
     // Unlimited scrolloff carriers: half a viewport of empty space above the
-    // first row and below the last (a ListView header/footer; margins are a
-    // Flickable property the list layout ignores). With them the follow can
-    // centre row 0 and the final row like any other.
+    // first row and below the last. The list takes the spacer as a header/
+    // footer (its layout ignores Flickable margins); the grid uses the
+    // Flickable top/bottom margins. Either way the follow can centre row 0
+    // and the final row like any other.
     Component {
         id: edgeSpacer
         Item {
@@ -658,6 +747,10 @@ Item {
         }
     }
 
+    // UI-48: the stage is the clip owner when bleed is on — it overhangs the
+    // row edges by `bleed`, while both views inset by the same amount, so the
+    // highlight can paint into the gutter without the real rows resizing.
+    // With bleed 0 the stage is exactly the body and the view clips itself.
     Item {
         id: stage
         x: -root.bleed
@@ -695,6 +788,10 @@ Item {
             delegate: root.cellDelegate
             cellWidth: root.cellWidth
             cellHeight: root.cellHeight > 0 ? root.cellHeight : root.cellWidth
+            // ARC-UI-7.8: GridView has no header/footer, so the unlimited
+            // scrolloff rides the Flickable margins instead.
+            topMargin: root.unlimitedScrolloff ? root._edgeMargin : 0
+            bottomMargin: root.unlimitedScrolloff ? root._edgeMargin : 0
             boundsBehavior: Flickable.StopAtBounds
             // QR-9: same contract as the list above.
             reuseItems: true
@@ -715,7 +812,7 @@ Item {
         }
         function onCurrentIndexChanged() {
             // A landing owns the view while it runs.
-            if (target.count === 0 || root._instantFollow)
+            if (target.count === 0 || root.isLanding)
                 return;
             if (root.currentIndex >= 0 && target.currentIndex !== root.currentIndex)
                 target.currentIndex = root.currentIndex;

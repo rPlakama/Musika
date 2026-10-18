@@ -44,14 +44,20 @@ function spans(text, query) {
 /// Row indices whose cells contain the query. An uppercase character in the
 /// query makes it case-sensitive (smartcase); otherwise it folds. An empty
 /// query matches nothing — the caller owns the "no query, no session" rule.
+/// `rows` may be sparse (only the visible band carries cells); iterating its
+/// keys keeps the match O(visible rows), not O(model count).
 function candidates(rows, query) {
     var out = []
     if (!query || query.length === 0 || !rows)
         return out
     var sensitive = /[A-Z]/.test(query)
     var needle = sensitive ? query : query.toLowerCase()
-    for (var i = 0; i < rows.length; ++i) {
+    var keys = Object.keys(rows)
+    for (var k = 0; k < keys.length; ++k) {
+        var i = Number(keys[k])
         var cells = rows[i]
+        if (!cells)
+            continue
         for (var c = 0; c < cells.length; ++c) {
             var hay = sensitive ? String(cells[c]) : String(cells[c]).toLowerCase()
             if (hay.indexOf(needle) >= 0) {

@@ -68,6 +68,10 @@ Rectangle {
             moveSelection(-1);
         else if (action === "move_down")
             moveSelection(1);
+        else if (action === "page_up")
+            moveSelection(-5);
+        else if (action === "page_down")
+            moveSelection(5);
         else if (action === "enter" && segments[selected].enabled)
             segmentActivated(selected);
     }

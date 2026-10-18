@@ -39,9 +39,11 @@ Item {
     /// the buffer: each entry is a proxy (`searchRows()`/`searchJump(row)`/
     /// `setQuery(q, row)`) built by Home.
     property var targets: []
-    /// Every row's rendered cells, concatenated in target order.
+    /// Every row's rendered cells, concatenated in target order. Sparse:
+    /// only visible rows carry cells (off-band rows are holes), and the
+    /// index stays the absolute row so `searchJump` needs no remapping.
     property var _rows: []
-    /// Cumulative row counts per target (offsets into `_rows`).
+    /// Cumulative model row counts per target (offsets into `_rows`).
     property var _offsets: []
     /// Candidate row indices (global), in buffer order.
     property var _candidates: []
@@ -67,9 +69,12 @@ Item {
         _offsets = [];
         for (var i = 0; i < targets.length; ++i) {
             var rows = targets[i].searchRows();
-            for (var r = 0; r < rows.length; ++r)
-                _rows.push(rows[r]);
-            _offsets.push(_rows.length);
+            var base = _offsets.length > 0 ? _offsets[_offsets.length - 1] : 0;
+            for (var r = 0; r < rows.length; ++r) {
+                if (rows[r] !== undefined)
+                    _rows[base + r] = rows[r];
+            }
+            _offsets.push(base + rows.length);
         }
         _candidates = [];
         _index = -1;

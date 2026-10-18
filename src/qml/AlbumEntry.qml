@@ -320,6 +320,22 @@ Rectangle {
             content.edgeJump(action === "bottom");
             return;
         }
+        if (action === "page_up" || action === "page_down") {
+            if (songs.count === 0)
+                return;
+            root.onCover = false;
+            root.onToolbar = false;
+            content.pageJump(action === "page_down");
+            return;
+        }
+        if (action.indexOf("extend_") === 0) {
+            if (songs.count === 0)
+                return;
+            root.onCover = false;
+            root.onToolbar = false;
+            content.extendSelection("move_" + action.substring(7));
+            return;
+        }
 
         if (root.onCover) {
             // UI-60: the cover sits between the Back chip and the first row.
@@ -689,7 +705,6 @@ Rectangle {
             // estimate.
             rowRatio: 0.055
             rowRefHeight: root.height
-            contentHeightHint: songs.count * content.adaptiveRowHeight
 
             rowDelegate: Component {
                 Rectangle {
@@ -764,6 +779,15 @@ Rectangle {
                     }
 
                     TapHandler {
+                        acceptedModifiers: Qt.ShiftModifier
+                        onTapped: {
+                            root.onCover = false;
+                            root.onToolbar = false;
+                            content.extendSelectionTo(songRow.index);
+                        }
+                    }
+                    TapHandler {
+                        acceptedModifiers: Qt.NoModifier
                         onTapped: {
                             // VI-4: direct play ends the visual selection.
                             root.onCover = false;

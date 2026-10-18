@@ -63,6 +63,10 @@ static MARK_WINDOW_GEN: AtomicU64 = AtomicU64::new(0);
 /// no newer keystroke owns it, and a superseded task skips its DB work.
 static SEARCH_GEN: AtomicU64 = AtomicU64::new(0);
 
+/// Bumped by every scroll-memory flush; an older async write must not land
+/// after a newer one.
+static SCROLL_WRITE_GEN: AtomicU64 = AtomicU64::new(0);
+
 /// The union of ids requested since the last applied read: a cursor sweep
 /// and every visible surface coalesce into one query.
 #[derive(Default)]
@@ -2001,6 +2005,36 @@ impl Backend {
                 "album_info",
                 serde_json::json!({ "notes": fresh }).to_string(),
             );
+        });
+    }
+
+    /// ARC-UI-7.5: the persisted scroll store (empty on first launch).
+    #[qslot(qml_name = "scrollMemory")]
+    fn scroll_memory(&self) -> String {
+        let Ok(path) = crate::db::scroll_path() else {
+            return String::new();
+        };
+        std::fs::read_to_string(path).unwrap_or_default()
+    }
+
+    /// ARC-UI-7.5: atomic write of the scroll store from the QML debounce.
+    #[qslot(qml_name = "saveScrollMemory")]
+    fn save_scroll_memory(&mut self, payload: String) {
+        let Ok(path) = crate::db::scroll_path() else {
+            return;
+        };
+        let generation = SCROLL_WRITE_GEN.fetch_add(1, Ordering::Relaxed) + 1;
+        crate::runtime().spawn(async move {
+            let _ = tokio::task::spawn_blocking(move || {
+                if SCROLL_WRITE_GEN.load(Ordering::Relaxed) != generation {
+                    return;
+                }
+                let tmp = path.with_extension("json.tmp");
+                if std::fs::write(&tmp, payload).is_ok() {
+                    let _ = std::fs::rename(&tmp, &path);
+                }
+            })
+            .await;
         });
     }
 

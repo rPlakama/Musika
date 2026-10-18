@@ -22,6 +22,8 @@ import QtQuick
 QtObject {
     id: root
 
+    signal selectionChanged
+
     property bool active: false
     property int anchor: -1
 
@@ -43,17 +45,22 @@ QtObject {
             return;
         root.active = true;
         root.anchor = cursor;
+        root.selectionChanged();
     }
 
     /// Whole list; the host moves its cursor to the last row.
     function all() {
         root.active = true;
         root.anchor = 0;
+        root.selectionChanged();
     }
 
     function clear() {
+        if (!root.active && root.anchor < 0)
+            return;
         root.active = false;
         root.anchor = -1;
+        root.selectionChanged();
     }
 
     /// `field` ids of the selected rows, in list order.

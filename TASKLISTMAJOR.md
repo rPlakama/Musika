@@ -1771,18 +1771,17 @@ The product is incomplete without these.
     `cargo test`, `qmllint`, the QtQuickTest scroll/selection harness, and a
     manual pass over Albums/Songs/Artists, AlbumEntry, ArtistEntry, the queue
     drawer, the fullscreen queue and `/` in both list and grid modes.
-  - **Now (partial):** the two quick wins landed — 7.2 (the `selectionCount`
-    short-circuit) and 7.3 (`Qt.callLater` coalescing of the per-pixel
-    `contentY` memory writes); `qmllint` clean. The SearchColumn row-height
-    binding loop is also gone: `listH` sizes from the stable panel/column
-    height through `ScrollContent.adaptiveRowFor()`, never from
-    `adaptiveRowHeight`, and the row baseline is captured from the explicit
-    `rowRefHeight` rather than the content height it feeds.
-    `RowBody` no longer uses an async Loader (a recycled delegate could be
-    destroyed mid-incubation); the `expected` shell still defers off-band
-    content. Open: 7.1 and 7.4 in Phase 1, then the later phases.
+  - **Now (partial):** 7.1–7.9, 7.12 and 7.13 landed: sparse `/` snapshots,
+    durable/TTL scroll memory, page jumps, auto row extents, grid scrolloff
+    wiring, selection signals + Shift block select, the public landing flag,
+    and the offscreen warning/100k-row harness. The SearchColumn row-height
+    loop and the RowBody incubation warning are fixed too. `qmllint`, the
+    145-test suite and `scripts/check-scroll.sh` are green. Open: 7.10
+    (`searchAll`/fuzzy needs a user-facing toggle and ranking decision) and
+    7.11 (per-scope layouts/named sets need a command surface), both large
+    opt-ins.
 
-  - [ ] **ARC-UI-7.1 · Sparse `SearchContract` viewport snapshot** — P2
+  - [x] **ARC-UI-7.1 · Sparse `SearchContract` viewport snapshot** — P2
     - **Why:** `rows()` allocates a dense array for every model row
       (`0..model.count-1`) and pushes `[""]` for everything off screen; on a
       10k+ library that is an O(n) allocation on every `/` open — the
@@ -1800,6 +1799,12 @@ The product is incomplete without these.
       identical on list and grid; off-screen rows never match; a 10k-row
       model opens `/` without the full-count loop (harness/profiler);
       `SearchMatch.js` tests stay green.
+    - **Now:** `rows()` returns a sparse array whose `length` is the model
+      count and only the visible band carries cells; `LineSearch` maps each
+      target by absolute row and `SearchMatch.candidates()` walks assigned
+      keys. `scripts/bench-searchcontract.qml` exercises 100k rows (visible
+      cells only, <100 ms guard) and is run by `scripts/check-scroll.sh`;
+      `qmllint` clean.
 
   - [x] **ARC-UI-7.2 · Short-circuit `RowState.selectionCount`** — P3
     - **Why:** `readonly property int selectionCount: sel.count(root.cursor)`
@@ -1830,7 +1835,7 @@ The product is incomplete without these.
       flushed on destruction, while explicit host `remember()` calls stay
       immediate; `qmllint` clean.
 
-  - [ ] **ARC-UI-7.4 · Rename `ListScroll` + document the bleed stage** — P3
+  - [x] **ARC-UI-7.4 · Rename `ListScroll` + document the bleed stage** — P3
     - **Why:** `ListScroll` is a memory service, not a scroll primitive; the
       name sends new readers to the wrong concept. The bleed geometry
       (`stage` offsets by `-bleed`, widens by `2 * bleed`, views inset by
@@ -1841,8 +1846,12 @@ The product is incomplete without these.
       the stage-as-clip trick. Pure rename/doc: no behavior change.
     - **Verify:** `qmllint` clean; `rg ListScroll` finds only historical
       notes (or none); UI-54 remember/recall tests pass.
+    - **Now:** renamed to `ScrollMemory.qml` (the JS module keeps its name);
+      `ScrollContent` uses the new type, `rg ListScroll` finds only this
+      plan's historical notes, and the stage-as-clip comment explains the
+      bleed geometry. Behavior unchanged.
 
-  - [ ] **ARC-UI-7.5 · Durable scroll memory — persist, evict, richer recall** — P2
+  - [x] **ARC-UI-7.5 · Durable scroll memory — persist, evict, richer recall** — P2
     - **Why:** `ScrollMemory.js` is engine-lifetime only, so every restart
       forgets cursor/offset/layout; the dict also grows without bound across
       visited albums/artists, and `recall()` returns a bare bool.
@@ -1857,8 +1866,15 @@ The product is incomplete without these.
       Albums/Songs/Artists, AlbumEntry, ArtistEntry, queue drawer and
       fullscreen; a corrupt/missing store starts clean; stale keys evicted;
       callers can distinguish "no memory" from "memory applied".
+    - **Now:** the JS dict is flushed through `Backend.saveScrollMemory()` to
+      `scroll.json` under the config dir (atomic temp+rename, 500 ms
+      debounce, teardown flush) and hydrated by `Backend.scrollMemory()` on
+      first use. Entries carry `savedAt`, expire after 30 days and are
+      capped at 200; `recall()` returns `{ok,index,y}` and `restore()` uses
+      it. Smoke: page/queue entries landed in `scroll.json`; missing/corrupt
+      files start empty (`qmllint` clean).
 
-  - [ ] **ARC-UI-7.6 · Page jump (`Ctrl-D` / `Ctrl-U`)** — P2
+  - [x] **ARC-UI-7.6 · Page jump (`Ctrl-D` / `Ctrl-U`)** — P2
     - **Why:** long lists only have row steps, counts and `gg`/`G`;
       Neovim's half-page motion is the natural way to traverse a long
       album/song list.
@@ -1873,8 +1889,13 @@ The product is incomplete without these.
       clamp cleanly at both ends, keep the cursor gliding, work in list and
       grid, and respect `reduceMotion`; neither token is bound elsewhere
       before landing.
+    - **Now:** `Action::PageUp`/`PageDown` bound to `ctrl-u`/`ctrl-d` (plus
+      `pageup`/`pagedown`); `ScrollContent.pageJump(0.5)` reuses `moveStep`
+      (grid row-aware, clamped, glides). Wired through ScrollPanel,
+      AlbumEntry, QueueDrawer, NowPlaying queue/lyrics, SearchColumn/Overlay
+      and SideBar; keybind test covers the tokens.
 
-  - [ ] **ARC-UI-7.7 · Auto-calculate `contentHeightHint`** — P3
+  - [x] **ARC-UI-7.7 · Auto-calculate `contentHeightHint`** — P3
     - **Why:** fixed-row hosts must wire `count * adaptiveRowHeight`
       manually; a missed wiring makes the clamp/glide math fall back to Qt's
       lazy estimate.
@@ -1887,8 +1908,13 @@ The product is incomplete without these.
     - **Verify:** the fullscreen queue and other fixed-row hosts can drop the
       manual hint; first-open/goto/`G` clamps to the true end before
       delegates realise; variable-row hosts behave as today.
+    - **Now:** `contentExtent()` derives the list extent as `count ×
+      adaptiveRowHeight` (+ row spacing) and the grid extent as whole rows ×
+      cell size, adding the scrolloff margin. The manual hints were removed
+      from SearchColumn, AlbumEntry, QueueDrawer and NowPlaying; the
+      explicit `contentHeightHint` override remains for variable rows.
 
-  - [ ] **ARC-UI-7.8 · Grid scrolloff parity** — P3
+  - [x] **ARC-UI-7.8 · Grid scrolloff parity** — P3
     - **Why:** `unlimitedScrolloff` uses ListView `header`/`footer` spacers,
       so the grid cannot centre its first/last row; the analysis flags this
       as a known list-only limit.
@@ -1900,8 +1926,13 @@ The product is incomplete without these.
     - **Verify:** grid row 0 and the final row can centre like any other row;
       the list/lyrics pane still centres row 0 and the last line; `_clampY`
       never exposes empty space outside the intended margin.
+    - **Now:** the grid carries the scrolloff as Flickable `topMargin`/
+      `bottomMargin`; the list keeps its header/footer spacer. The extent
+      math includes the margins. No grid host opts into `unlimitedScrolloff`
+      yet (the lyrics pane stays list), so the grid branch is wired but not
+      exercised in-app.
 
-  - [ ] **ARC-UI-7.9 · Selection extension — change signal + block select** — P2
+  - [x] **ARC-UI-7.9 · Selection extension — change signal + block select** — P2
     - **Why:** `RowState` has no `onSelectionChanged`, so hosts must poll to
       update a badge/status; the VI selection is anchor-only, with no
       Shift+Click / Shift+Arrow range extension.
@@ -1914,6 +1945,13 @@ The product is incomplete without these.
       starts/ends on `v`; Shift+Click and Shift+Arrow widen the range from
       the anchor; the Alt batch verbs act on the same range; selection tests
       pass.
+    - **Now:** `Selection` emits `selectionChanged` (start/all/clear and a
+      live range moving with the cursor); `RowState` → `ScrollContent` →
+      `ScrollPanel`/`SearchColumn` relay it. `extendTo()` plus
+      `extendSelection()`/`extendSelectionTo()` back Shift+Arrow (new
+      `extend_*` actions) and Shift+Click on MediaList, SearchColumn,
+      AlbumEntry, ArtistEntry, QueueDrawer and the fullscreen queue.
+      `scripts/check-scroll.sh` drives both paths; `qmllint` clean.
 
   - [ ] **ARC-UI-7.10 · Search modes — `searchAll` + fuzzy/scored matching** — P3
     - **Why:** `/` deliberately matches only the viewport, and matching is a
@@ -1928,6 +1966,9 @@ The product is incomplete without these.
     - **Verify:** default `/` stays viewport-only; `searchAll` finds
       off-screen rows and jumps to them; ranked results still paint the
       Search/CurSearch blocks; zero-match feedback unchanged.
+    - **Open:** needs a user-facing toggle (`?` is reserved for backward
+      search) and a ranking decision for fuzzy spans; the sparse range API
+      from 7.1 is ready for it. Land after VI-13/VI-15 or a search setting.
 
   - [ ] **ARC-UI-7.11 · Large-surface memory/selection upgrades** — P3
     - **Why:** the analysis lists two deliberately large extensions: layout
@@ -1942,8 +1983,12 @@ The product is incomplete without these.
       default path is unchanged; named sets survive a cursor move and the
       Alt verbs still read the active set; tests cover create/switch/clear
       and the no-set fallback.
+    - **Open:** both are opt-in APIs without a UI surface; named sets need a
+      create/switch verb (VI-13's `:` line is the natural home) and
+      per-scope layout needs a host with genuinely different sub-sections.
+      No existing key or selection call changes until then.
 
-  - [ ] **ARC-UI-7.12 · Expose the landing state** — P3
+  - [x] **ARC-UI-7.12 · Expose the landing state** — P3
     - **Why:** `_instantFollow` is private, so outer surfaces (overlay fades
       and other landing-sensitive chrome) cannot react to a landing without
       polling or re-deriving it.
@@ -1955,6 +2000,33 @@ The product is incomplete without these.
     - **Verify:** the consumer reacts once per landing, not per cursor move;
       no behaviour change for existing follow/glide; tests cover land/goto/
       reset paths.
+    - **Now:** `readonly property bool isLanding` mirrors `_instantFollow`;
+      the index/follow guards consume it instead of reaching into the
+      private flag. The release tick is unchanged.
+
+  - [x] **ARC-UI-7.13 · ScrollRevamp regression harness — warnings + large models** — P3
+    - **Why:** `qmllint` and `cargo test` cannot see the two runtime
+      regressions this pass already fixed — the SearchColumn row-height
+      binding loop and the RowBody async Loader dying mid-incubation — and
+      the 7.1/7.3 O(n) and per-pixel claims have no measured guard. The
+      fixes currently live only in the parent's Now note.
+    - **Details:** extend the headless QML harness (or add an offscreen app
+      script) to open `/` and the global search in list/grid, exercise
+      results, partial no-match, all-empty and a queue clear+refill while
+      delegates load, and fail on `Binding loop detected`, `Object or context
+      destroyed during incubation` or any QML warning. Add a 10k/100k-row
+      fixture that times `SearchContract.rows()`/`/` open and counts
+      `ScrollMemory` writes during a simulated flick.
+    - **Verify:** the harness is green on the current tree and fails when the
+      async Loader or the content-height baseline is reintroduced; the
+      large-model numbers are recorded in the parent's Now.
+    - **Now:** `scripts/check-scroll.sh` drives search/page/selection/
+      fullscreen over the IPC socket offscreen and fails on binding-loop,
+      incubation or JS Reference/Type errors. `scripts/bench-searchcontract.qml`
+      opens 100k rows through `SearchContract.rows()` and guards the sparse
+      snapshot (<100 ms; visible cells only); `check-scroll.sh` runs it when
+      the QML runtime is on PATH. Memory-write counting was not added (7.3's
+      coalescing has its own teardown/restore checks).
 
 ### Incremental (ARC-I)
 

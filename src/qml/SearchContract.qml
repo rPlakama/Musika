@@ -33,8 +33,10 @@ QtObject {
     /// contract); cells for absent roles come back empty.
     property var fields: ["title"]
 
-    /// Array indexed by row: each entry is the row's rendered cell strings,
-    /// or `[""]` for rows outside the visible band.
+    /// Sparse array indexed by absolute row: visible rows carry their cell
+    /// strings; off-band rows are holes. `length` is the model count, so
+    /// callers keep real row indices without allocating a placeholder per
+    /// row (the old dense `[""]` copy was O(model count) on every `/`).
     function rows() {
         var out = [];
         if (!root.model || !root.model.get || !root.view)
@@ -47,18 +49,15 @@ QtObject {
             first = 0;
         if (last < 0)
             last = root.model.count - 1;
-        for (var i = 0; i < root.model.count; ++i) {
-            if (i < first || i > last) {
-                out.push([""]);
-                continue;
-            }
+        out.length = root.model.count;
+        for (var i = first; i <= last; ++i) {
             var item = root.model.get(i);
             var cells = [];
             for (var f = 0; f < root.fields.length; ++f) {
                 var value = item[root.fields[f]];
                 cells.push(value === undefined || value === null ? "" : String(value));
             }
-            out.push(cells);
+            out[i] = cells;
         }
         return out;
     }

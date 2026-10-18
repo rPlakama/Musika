@@ -24,6 +24,8 @@ import QtQuick
 QtObject {
     id: root
 
+    signal selectionChanged
+
     /// The rows and the host's cursor.
     property var model: null
     property int cursor: -1
@@ -32,7 +34,13 @@ QtObject {
 
     // Object-valued (a QtObject has no default child list): the anchored
     // range state, shared with every selection surface.
-    property Selection sel: Selection {}
+    property Selection sel: Selection {
+        onSelectionChanged: root.selectionChanged()
+    }
+
+    /// The range depends on the cursor too: move it while active and the
+    /// host's badge must follow.
+    onCursorChanged: if (root.hasSelection) root.selectionChanged()
 
     readonly property bool hasSelection: sel.hasSelection
     readonly property int selectionCount: sel.hasSelection
@@ -55,6 +63,17 @@ QtObject {
         if (!root.selectable || !root.model || root.model.count === 0)
             return;
         sel.all();
+    }
+
+    /// Shift+motion: keep the anchor, let the host move the cursor to
+    /// `index`. Starts a selection on the old cursor when none is live.
+    function extendTo(index) {
+        if (!root.selectable || !root.model || root.cursor < 0
+                || index < 0 || index >= root.model.count)
+            return false;
+        if (!sel.hasSelection)
+            sel.start(root.cursor);
+        return true;
     }
 
     function clear() {

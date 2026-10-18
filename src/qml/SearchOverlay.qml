@@ -38,11 +38,10 @@ Item {
     // UI-49: last query that already got the denied cue, so one response (or
     // one Enter) lights it once and holding a zero query never strobes.
     property string _zeroQuery: ""
-    /// Chrome and row sizing keep the normal panel height even while the
-    /// panel itself shrinks for the Nothing Found state.
+    /// The panel's stable height (chrome, row sizing and the panel itself).
     readonly property real panelRefHeight: root.height * 0.78
     /// A live query with no hits in any of the three sections: the panel
-    /// replaces the stack with one message and shrinks to fit it.
+    /// replaces the stack with one message.
     readonly property bool nothingFound: field.text.length > 0
         && !root.loading
         && songResults.count + albumResults.count + artistResults.count === 0
@@ -163,6 +162,11 @@ Item {
             moveRow(1);
         } else if (action === "top" || action === "bottom") {
             moveEdge(action === "bottom");
+        } else if (action === "page_up" || action === "page_down") {
+            columnFor(activeColumn).pageJump(action === "page_down");
+        } else if (action.indexOf("extend_") === 0) {
+            columnFor(activeColumn).extendSelection(
+                "move_" + action.substring(7));
         } else if (action === "visual") {
             columnFor(activeColumn).toggleSelection();
         } else if (action === "visual_all") {
@@ -213,10 +217,14 @@ Item {
     function searchRows() {
         var out = [];
         var cols = _searchColumns();
+        var base = 0;
         for (var c = 0; c < cols.length; ++c) {
             var rows = cols[c].searchRows();
-            for (var i = 0; i < rows.length; ++i)
-                out.push(rows[i]);
+            for (var i = 0; i < rows.length; ++i) {
+                if (rows[i] !== undefined)
+                    out[base + i] = rows[i];
+            }
+            base += rows.length;
         }
         return out;
     }
@@ -470,9 +478,7 @@ Item {
     AcrylicPanel {
         id: panel
         width: root.width * 0.84
-        height: root.nothingFound
-            ? root.panelRefHeight / 3
-            : root.panelRefHeight
+        height: root.panelRefHeight
         x: (root.width - width) / 2
         // Slides up into place, back down on close (motion §3.1).
         y: (root.height - height) / 2 + (root.opened ? 0 : height * 0.04)
@@ -500,16 +506,6 @@ Item {
                 easing.bezierCurve: root.opened ? Theme.ease.decelerate : Theme.ease.accelerate
             }
         }
-        // The Nothing Found squash is a state response: react on the next
-        // frame (micro) and accelerate into the smaller height.
-        Behavior on height {
-            NumberAnimation {
-                duration: Theme.motion.micro
-                easing.type: Easing.Bezier
-                easing.bezierCurve: Theme.ease.accelerate
-            }
-        }
-
         ColumnLayout {
             anchors.fill: parent
             anchors.margins: root.panelRefHeight * 0.042

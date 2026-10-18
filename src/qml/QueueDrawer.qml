@@ -123,6 +123,13 @@ Item {
         else if ((action === "top" || action === "bottom") && items.count > 0) {
             content.edgeJump(action === "bottom", steps);
             cursor = content.currentIndex;
+        } else if ((action === "page_up" || action === "page_down")
+                && items.count > 0) {
+            content.pageJump(action === "page_down");
+            cursor = content.currentIndex;
+        } else if (action.indexOf("extend_") === 0 && items.count > 0) {
+            content.extendSelection("move_" + action.substring(7));
+            cursor = content.currentIndex;
         } else if (action === "enter")
             Backend.queueJump(cursor);
         else if (action === "queue_up" && cursor > 0) {
@@ -236,7 +243,6 @@ Item {
                 // estimate.
                 rowRatio: 0.06
                 rowRefHeight: panel.height
-                contentHeightHint: items.count * content.adaptiveRowHeight
 
                 Behavior on opacity {
                     NumberAnimation { duration: Theme.motion.quick; easing.type: Easing.Bezier; easing.bezierCurve: Theme.ease.standard }
@@ -306,6 +312,14 @@ Item {
                         }
 
                         TapHandler {
+                            acceptedModifiers: Qt.ShiftModifier
+                            onTapped: {
+                                content.extendSelectionTo(row.index);
+                                root.cursor = content.currentIndex;
+                            }
+                        }
+                        TapHandler {
+                            acceptedModifiers: Qt.NoModifier
                             onTapped: {
                                 root.cursor = row.index;
                                 Backend.queueJump(row.index);

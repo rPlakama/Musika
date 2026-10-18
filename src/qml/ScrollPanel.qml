@@ -94,6 +94,8 @@ Rectangle {
     property var actionHandler: null
 
     signal itemActivated(int index)
+    /// ARC-UI-7.9: forwarded from the shared body for host badges/status.
+    signal selectionChanged
 
     color: Palette.surface
 
@@ -164,6 +166,11 @@ Rectangle {
 
     function activate() {
         content.activate();
+    }
+
+    /// ARC-UI-7.9: Shift+Click anchor extension for the shared row delegates.
+    function extendSelectionTo(index) {
+        return content.extendSelectionTo(index);
     }
 
     /// The header-chip Tab stop: a host with a reachable header control sets
@@ -241,7 +248,11 @@ Rectangle {
             return;
         // VI-7: the count register rides the movement (`3j`, `10l`, `5G`).
         var steps = Math.max(1, Backend.keyCount);
-        if (action === "move_up" || action === "move_down"
+        if (action === "page_up" || action === "page_down")
+            content.pageJump(action === "page_down");
+        else if (action.indexOf("extend_") === 0)
+            content.extendSelection("move_" + action.substring(7));
+        else if (action === "move_up" || action === "move_down"
                 || action === "move_left" || action === "move_right")
             content.moveStep(action, steps);
         else if (action === "top" || action === "bottom")
@@ -298,6 +309,7 @@ Rectangle {
             memoryKey: root.memoryKey
             memoryScope: root.memoryScope
             onItemActivated: (index) => root.itemActivated(index)
+            onSelectionChanged: root.selectionChanged()
         }
 
         FadeText {

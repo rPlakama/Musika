@@ -486,8 +486,8 @@ Item {
 
         ColumnLayout {
             anchors.fill: parent
-            anchors.margins: panel.height * 0.035
-            spacing: panel.height * 0.025
+            anchors.margins: panel.height * 0.042
+            spacing: panel.height * 0.032
 
             // The search bar, full width: the old mode chip is gone — the
             // bar's own focus highlight is the INSERT cue.
@@ -495,7 +495,7 @@ Item {
                 radius: Theme.radius
                 id: searchRow
                 Layout.fillWidth: true
-                implicitHeight: panel.height * 0.06
+                implicitHeight: panel.height * 0.066
                 color: "transparent"
 
                 // ARC-UI-2: the shared search input (binds live in
@@ -506,6 +506,8 @@ Item {
                     anchors.right: parent.right
                     anchors.top: parent.top
                     anchors.bottom: parent.bottom
+                    leftPadding: panel.height * 0.024
+                    rightPadding: panel.height * 0.024
                     color: Palette.onSurface
                     font.family: Theme.fonts.body
                     font.pixelSize: panel.height * 0.030

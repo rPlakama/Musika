@@ -160,7 +160,8 @@ var scrimOpacity = 0.5
 // ---------------------------------------------------------------------------
 var acrylic = {
     enabled: true,
-    tintAlpha: 0.76,  // tint opacity over the blur
+    tintAlpha: 1.0,   // tint opacity over the blur (ARC-IDK1: 40% less
+                      // transparent than 0.76, clamped to opaque)
     blur: 0.8,        // MultiEffect blur amount
     blurMax: 64,      // blur kernel ceiling
     saturation: 0.6,  // niri-like desaturation (1.6x)

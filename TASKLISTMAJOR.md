@@ -158,7 +158,8 @@ The app is unsafe or misleading without these.
   - [x] **Sharing is Care ARC-IDK** Upon a queuque entering (FullPlayBackMode) screen, it should-precalculate the scroll range from cursor to latest Item based in the amoount of rows, const of height -- object if for a more stable scrolling (skipping without flicking) experience;
     - **Now:** `ScrollContent.contentHeightHint` lets fixed-height hosts supply the true extent before Qt's lazy delegate estimate settles; the fullscreen queue feeds `count * adaptiveRowHeight`, so its clamp/glide range is precalculated.
 
-- [ ] **ARC-IDK1** SearchUI design for Shift+Space++F search -- Sleek and less transparent, breath more -- proper details in init;
+- [x] **ARC-IDK1** SearchUI design for Shift+Space++F search -- Sleek and less transparent, breath more -- proper details in init;
+  - **Now:** the acrylic tint is 40% less transparent than the old 0.76 (`Theme.acrylic.tintAlpha`, clamped to 1.0), and the search panel gained wider inner margins/spacing plus padded field text so the toolbar and columns breathe without changing the result layout.
 
 - [ ] **ARC-IDK2 · Row Predict parent pre-load** — P3 · (ARC-IDK follow-up)
   - **Why:** the predicted-row array should warm incrementally around the cursor instead of waiting for a far `G`/`gg` landing to realise its target.

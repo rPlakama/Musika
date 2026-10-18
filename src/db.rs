@@ -61,11 +61,15 @@ pub async fn init() -> Result<Dbs> {
     .await?;
     let media = open_migrated(media_path()?, 3, sqlx::migrate!("./migrations_media"), false).await?;
     absorb_legacy(&library, &media).await?;
+    // Search gets its own connections over the same library file: a slow or
+    // cancelled query can never occupy the writer's pool (the search box
+    // stays responsive while a sync rebuilds the FTS table).
+    let search = open_pool(library_path()?, 2).await?;
 
     Ok(Dbs {
         credentials: library.clone(),
         library: library.clone(),
-        search: library.clone(),
+        search,
         covers: media.clone(),
         media: media.clone(),
         lyrics: media.clone(),
@@ -377,6 +381,16 @@ async fn open_migrated(
     mut migrations: sqlx::migrate::Migrator,
     ignore_missing: bool,
 ) -> Result<SqlitePool> {
+    let pool = open_pool(path, max_connections).await?;
+    if ignore_missing {
+        migrations.set_ignore_missing(true);
+    }
+    migrations.run(&pool).await?;
+    Ok(pool)
+}
+
+/// Opens a pool with the shared connection options (no migrations).
+async fn open_pool(path: PathBuf, max_connections: u32) -> Result<SqlitePool> {
     ensure_parent_dir(&path)?;
 
     let options = sqlx::sqlite::SqliteConnectOptions::new()
@@ -384,17 +398,19 @@ async fn open_migrated(
         .create_if_missing(true)
         .journal_mode(SqliteJournalMode::Wal)
         .busy_timeout(Duration::from_secs(5))
-        .foreign_keys(true);
+        .foreign_keys(true)
+        // PATH: the catalogs are small enough to stay resident; a warmed
+        // page cache and memory-backed sorts keep search/gather reads off
+        // the disk after the first touch. `mmap_size` is virtual address
+        // space, not committed RAM.
+        .pragma("cache_size", "-32768")
+        .pragma("mmap_size", "268435456")
+        .pragma("temp_store", "MEMORY");
 
     let pool = SqlitePoolOptions::new()
         .max_connections(max_connections)
         .connect_with(options)
         .await?;
-
-    if ignore_missing {
-        migrations.set_ignore_missing(true);
-    }
-    migrations.run(&pool).await?;
 
     Ok(pool)
 }

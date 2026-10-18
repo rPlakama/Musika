@@ -38,6 +38,14 @@ Item {
     // UI-49: last query that already got the denied cue, so one response (or
     // one Enter) lights it once and holding a zero query never strobes.
     property string _zeroQuery: ""
+    /// Chrome and row sizing keep the normal panel height even while the
+    /// panel itself shrinks for the Nothing Found state.
+    readonly property real panelRefHeight: root.height * 0.78
+    /// A live query with no hits in any of the three sections: the panel
+    /// replaces the stack with one message and shrinks to fit it.
+    readonly property bool nothingFound: field.text.length > 0
+        && !root.loading
+        && songResults.count + albumResults.count + artistResults.count === 0
 
     signal songActivated(string id)
     signal albumActivated(string albumId, string title, string artist, string year, string tracks, string cover, bool starred)
@@ -462,7 +470,9 @@ Item {
     AcrylicPanel {
         id: panel
         width: root.width * 0.84
-        height: root.height * 0.78
+        height: root.nothingFound
+            ? root.panelRefHeight / 3
+            : root.panelRefHeight
         x: (root.width - width) / 2
         // Slides up into place, back down on close (motion §3.1).
         y: (root.height - height) / 2 + (root.opened ? 0 : height * 0.04)
@@ -490,11 +500,20 @@ Item {
                 easing.bezierCurve: root.opened ? Theme.ease.decelerate : Theme.ease.accelerate
             }
         }
+        // The Nothing Found squash is a state response: react on the next
+        // frame (micro) and accelerate into the smaller height.
+        Behavior on height {
+            NumberAnimation {
+                duration: Theme.motion.micro
+                easing.type: Easing.Bezier
+                easing.bezierCurve: Theme.ease.accelerate
+            }
+        }
 
         ColumnLayout {
             anchors.fill: parent
-            anchors.margins: panel.height * 0.042
-            spacing: panel.height * 0.032
+            anchors.margins: root.panelRefHeight * 0.042
+            spacing: root.panelRefHeight * 0.032
 
             // The search bar, full width: the old mode chip is gone — the
             // bar's own focus highlight is the INSERT cue.
@@ -502,7 +521,7 @@ Item {
                 radius: Theme.radius
                 id: searchRow
                 Layout.fillWidth: true
-                implicitHeight: panel.height * 0.066
+                implicitHeight: root.panelRefHeight * 0.066
                 color: "transparent"
 
                 // ARC-UI-2: the shared search input (binds live in
@@ -513,11 +532,11 @@ Item {
                     anchors.right: parent.right
                     anchors.top: parent.top
                     anchors.bottom: parent.bottom
-                    leftPadding: panel.height * 0.024
-                    rightPadding: panel.height * 0.024
+                    leftPadding: root.panelRefHeight * 0.024
+                    rightPadding: root.panelRefHeight * 0.024
                     color: Palette.onSurface
                     font.family: Theme.fonts.body
-                    font.pixelSize: panel.height * 0.030
+                    font.pixelSize: root.panelRefHeight * 0.030
 
                     onTextChanged: debounce.restart()
 
@@ -538,7 +557,7 @@ Item {
                     text: "Search anything"
                     color: Palette.onSurfaceVariant
                     font.family: Theme.fonts.body
-                    font.pixelSize: panel.height * 0.030
+                    font.pixelSize: root.panelRefHeight * 0.030
                     horizontalAlignment: Text.AlignHCenter
                     verticalAlignment: Text.AlignVCenter
                     animated: false
@@ -556,6 +575,29 @@ Item {
                 }
             }
 
+            // All three sections empty: one message in the panel itself
+            // replaces the stack (and the panel shrinks to fit it).
+            FadeText {
+                Layout.fillWidth: true
+                Layout.fillHeight: root.nothingFound
+                visible: root.nothingFound || opacity > 0
+                opacity: root.nothingFound ? 1 : 0
+                text: "Nothing Found"
+                color: Palette.onSurfaceVariant
+                font.pixelSize: Theme.fontSize("title", root.panelRefHeight)
+                horizontalAlignment: Text.AlignHCenter
+                verticalAlignment: Text.AlignVCenter
+                animated: false
+
+                Behavior on opacity {
+                    NumberAnimation {
+                        duration: Theme.motion.quick
+                        easing.type: Easing.Bezier
+                        easing.bezierCurve: Theme.ease.accelerate
+                    }
+                }
+            }
+
             // The three result surfaces stack vertically; each gets an equal
             // share of the panel height (the empty-query Songs surface takes
             // the whole stack once the other two are hidden).
@@ -563,7 +605,8 @@ Item {
                 id: columnsStack
                 Layout.fillWidth: true
                 Layout.fillHeight: true
-                spacing: panel.height * 0.012
+                visible: !root.nothingFound
+                spacing: root.panelRefHeight * 0.012
 
                 Behavior on opacity {
                     NumberAnimation {
@@ -576,8 +619,11 @@ Item {
                 SearchColumn {
                     id: songsColumn
                     Layout.fillWidth: true
-                    Layout.fillHeight: true
-                    Layout.preferredHeight: 1
+                    // No matches collapse to the header + "no" glyph, so the
+                    // remaining columns share the freed stack height.
+                    Layout.fillHeight: !songsColumn.noMatches
+                    Layout.preferredHeight: songsColumn.noMatches
+                        ? songsColumn.collapsedHeight : 1
                     // S-9: the empty-query surface uses this column alone.
                     title: field.text.length > 0 ? "Songs" : "Most played"
                     model: songResults
@@ -586,7 +632,7 @@ Item {
                     hasQuery: field.text.length > 0
                     // The whole panel sizes the rows; the stacked section
                     // must not compress them.
-                    rowRefHeight: panel.height
+                    rowRefHeight: root.panelRefHeight
                     // The full stack area sizes every title, so the stacked
                     // sections keep "Most played"'s type scale.
                     headerRefHeight: columnsStack.height
@@ -606,7 +652,7 @@ Item {
                 Rectangle {
                     radius: Theme.radius
                     Layout.fillWidth: true
-                    Layout.preferredHeight: Math.max(1, panel.height * Theme.hairlineRatio)
+                    Layout.preferredHeight: Math.max(1, root.panelRefHeight * Theme.hairlineRatio)
                     color: Palette.outlineVariant
                     z: 1
                     visible: field.text.length > 0
@@ -615,15 +661,16 @@ Item {
                 SearchColumn {
                     id: albumsColumn
                     Layout.fillWidth: true
-                    Layout.fillHeight: true
-                    Layout.preferredHeight: 1
+                    Layout.fillHeight: !albumsColumn.noMatches
+                    Layout.preferredHeight: albumsColumn.noMatches
+                        ? albumsColumn.collapsedHeight : 1
                     title: "Albums"
                     model: albumResults
                     active: root.activeColumn === 1
                     loading: root.loading
                     hasQuery: field.text.length > 0
                     visible: field.text.length > 0
-                    rowRefHeight: panel.height
+                    rowRefHeight: root.panelRefHeight
                     headerRefHeight: columnsStack.height
                     quickActionKind: "album"
                     selectionField: "albumId"
@@ -640,7 +687,7 @@ Item {
                 Rectangle {
                     radius: Theme.radius
                     Layout.fillWidth: true
-                    Layout.preferredHeight: Math.max(1, panel.height * Theme.hairlineRatio)
+                    Layout.preferredHeight: Math.max(1, root.panelRefHeight * Theme.hairlineRatio)
                     color: Palette.outlineVariant
                     z: 1
                     visible: field.text.length > 0
@@ -649,8 +696,9 @@ Item {
                 SearchColumn {
                     id: artistsColumn
                     Layout.fillWidth: true
-                    Layout.fillHeight: true
-                    Layout.preferredHeight: 1
+                    Layout.fillHeight: !artistsColumn.noMatches
+                    Layout.preferredHeight: artistsColumn.noMatches
+                        ? artistsColumn.collapsedHeight : 1
                     title: "Artists"
                     roundedArt: true
                     model: artistResults
@@ -658,7 +706,7 @@ Item {
                     loading: root.loading
                     hasQuery: field.text.length > 0
                     visible: field.text.length > 0
-                    rowRefHeight: panel.height
+                    rowRefHeight: root.panelRefHeight
                     headerRefHeight: columnsStack.height
                     quickActionKind: "artist"
                     selectionField: "artistId"
@@ -686,7 +734,7 @@ Item {
                 Layout.fillWidth: true
                 text: root.typing ? "Type to filter  ·  Tab/↑/↓ navigate  ·  Enter open/play  ·  Esc normal mode" : "Tab/h/l sections  ·  j/k rows  ·  i type  ·  Enter open/play  ·  Esc close"
                 color: Palette.onSurfaceVariant
-                font.pixelSize: Theme.fontSize("label", panel.height)
+                font.pixelSize: Theme.fontSize("label", root.panelRefHeight)
                 horizontalAlignment: Text.AlignHCenter
             }
         }

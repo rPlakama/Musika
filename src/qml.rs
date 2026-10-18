@@ -59,6 +59,10 @@ static QUEUE_EMIT_GEN: AtomicU64 = AtomicU64::new(0);
 /// the final cursor window instead of stacking DB tasks).
 static MARK_WINDOW_GEN: AtomicU64 = AtomicU64::new(0);
 
+/// Bumped by every search request: a completed read only reaches the box if
+/// no newer keystroke owns it, and a superseded task skips its DB work.
+static SEARCH_GEN: AtomicU64 = AtomicU64::new(0);
+
 /// The union of ids requested since the last applied read: a cursor sweep
 /// and every visible surface coalesce into one query.
 #[derive(Default)]
@@ -2004,8 +2008,19 @@ impl Backend {
     #[qslot(qml_name = "requestSearch")]
     fn request_search(&mut self, query: String) {
         let offline = self.offline;
-        self.spawn_data("search", move |dbs| async move {
-            Ok(search_json(&dbs, &query, offline)
+        let generation = SEARCH_GEN.fetch_add(1, Ordering::Relaxed) + 1;
+        let invoker = self.get_qml_method_invoker();
+        let Some(dbs) = crate::dbs().cloned() else {
+            return;
+        };
+        crate::runtime().spawn(async move {
+            // A newer keystroke owns the box: never start (or emit) a read
+            // the user already superseded. The search pool is separate from
+            // the library writer, so this task can never pin the sync.
+            if SEARCH_GEN.load(Ordering::Relaxed) != generation {
+                return;
+            }
+            let json = search_json(&dbs, &query, offline)
                 .await
                 .unwrap_or_else(|err| {
                     eprintln!("search: {err:#}");
@@ -2017,7 +2032,11 @@ impl Backend {
                         "songs": []
                     })
                     .to_string()
-                }))
+                });
+            if SEARCH_GEN.load(Ordering::Relaxed) != generation {
+                return;
+            }
+            emit(&invoker, "search", json);
         });
     }
 

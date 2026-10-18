@@ -224,6 +224,23 @@ Item {
     readonly property real listH: rowH > 0
         ? Math.max(rowH, Math.floor((height - headerH) / rowH) * rowH)
         : 0
+    /// A live query with no result rows: collapse the body to the shared
+    /// "no" glyph so the other stacked columns keep the freed height.
+    readonly property bool noMatches: root.hasQuery && !root.loading
+        && root.model !== null && root.model.count === 0
+    /// The collapsed column height, derived from the shared stack height
+    /// rather than this column's own height (which the layout is about to
+    /// shrink), so `Layout.preferredHeight` cannot feed back into itself.
+    readonly property real collapsedHeight: {
+        var ref = root.headerRefHeight > 0
+            ? root.headerRefHeight : root.height;
+        var title = ref * 0.10 * 0.42;
+        return title * 1.6 * 1.7;
+    }
+    readonly property real collapsedBodyHeight:
+        Math.max(1, root.collapsedHeight - root.headerH)
+    readonly property real bodyHeight: root.noMatches
+        ? root.collapsedBodyHeight : root.listH
 
     Column {
         anchors.fill: parent
@@ -314,14 +331,7 @@ Item {
         Item {
             id: listItem
             width: parent.width
-            height: root.listH
-
-            // Empty state: when the column squeezes the sentence to a cut,
-            // trade it for the shared "no" glyph (the LeftBar's rule).
-            readonly property bool noMatches: root.hasQuery && !root.loading
-                && root.model !== null && root.model.count === 0
-            readonly property bool noMatchTextFits: noMatchText.implicitWidth
-                <= listItem.width * 0.9
+            height: root.bodyHeight
 
             // UI-48: the shared scroll body carries the overflow stage, so
             // the highlight bleeds past the row (clipped at the gutter edge)
@@ -443,22 +453,11 @@ Item {
                 }
             }
 
-            FadeText {
-                id: noMatchText
-                anchors.centerIn: parent
-                visible: listItem.noMatches && listItem.noMatchTextFits
-                text: "no matches"
-                color: Palette.onSurfaceVariant
-                // Match the result-row title (same clamp as RowBody's
-                // titlePixelSize) instead of the old header-relative size.
-                font.pixelSize: Theme.clamp(content.adaptiveRowHeight * 0.3,
-                    12, 18)
-            }
-
             SymbolIcon {
                 anchors.centerIn: parent
-                visible: listItem.noMatches && !listItem.noMatchTextFits
-                width: Math.max(14, Math.min(listItem.width * 0.3, root.height * 0.09))
+                visible: root.noMatches
+                width: Math.max(14, Math.min(listItem.height * 0.7,
+                    listItem.width * 0.2))
                 height: width
                 source: "qrc:/app/icons/no.svg"
                 symbolColor: Palette.onSurfaceVariant

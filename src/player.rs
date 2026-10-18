@@ -702,6 +702,11 @@ impl Player {
             .arg("--idle=yes")
             .arg("--no-terminal")
             .arg("--really-quiet")
+            // Hardware decode when the backend/source supports it; the safe
+            // variant falls back to software instead of failing playback.
+            // (The player is audio-only, so this matters for video-bearing
+            // streams and codecs with a hw path; audio keeps FFmpeg.)
+            .arg("--hwdec=auto-safe")
             // Q-5: gap-free playlist transitions and HTTP drop recovery
             // (`PLAYBACKSTUDY.md` §2/§4). The prefetch is capped: the
             // demuxer caches default to 150+50 MiB per demuxer, and the

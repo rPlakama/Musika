@@ -452,6 +452,23 @@ Item {
                 root.currentIndex);
     }
 
+    // A manual scroll emits `contentY` per pixel; coalesce the writes so a
+    // flick touches the memory once per event-loop batch, not once per pixel.
+    // Explicit host `remember()` calls stay immediate.
+    property bool _rememberScheduled: false
+    function _scheduleRemember() {
+        if (!root.memoryKey || root._rememberScheduled)
+            return;
+        root._rememberScheduled = true;
+        Qt.callLater(root._flushRemember);
+    }
+    function _flushRemember() {
+        root._rememberScheduled = false;
+        if (root.memoryKey)
+            root.remember();
+    }
+    Component.onDestruction: root._flushRemember()
+
     /// §4.3: a filter/order swap rebuilds the rows under the same indices,
     /// so the next payload must land on row 0 with the offset at the top.
     /// Hosts raise this before reloading; the payload consumes it.
@@ -584,18 +601,33 @@ Item {
     /// The row baseline captured on the first real measure — the default
     /// window geometry (Main starts at `Screen.height * 0.72`).
     property real _rowBase: 0
+    /// The adaptive row for an explicit sizing height. Hosts whose viewport
+    /// height is itself derived from the row height (the search columns snap
+    /// to whole rows) call this with a stable external height, so the two
+    /// cannot feed each other through `adaptiveRowHeight`.
+    function adaptiveRowFor(viewHeight) {
+        return Theme.adaptiveRow(viewHeight, root.rowRatio, root._rowBase)
+            * root.rowHeightScale;
+    }
+
     /// The row height to paint — scales with the sizing height inside the
     /// 18% band (0.82, 40% sooner than the original), cuts whole rows past it
     /// (see `Theme.adaptiveRow`). Delegates must size from this, never from
     /// raw viewport fractions (§5).
-    readonly property real adaptiveRowHeight: Theme.adaptiveRow(
-        root.rowViewHeight, root.rowRatio, root._rowBase) * root.rowHeightScale
+    readonly property real adaptiveRowHeight: adaptiveRowFor(root.rowViewHeight)
 
     Component.onCompleted: {
         captureRowBase();
         applySavedLayout();
     }
-    onHeightChanged: captureRowBase()
+    // With an explicit sizing height, the baseline must come from it: a
+    // content-height capture is fed by the row height the baseline itself
+    // scales (`listH` → `height` → `_rowBase` → `rowH`), which is the
+    // SearchColumn binding loop.
+    onHeightChanged: {
+        if (root.rowRefHeight <= 0)
+            captureRowBase();
+    }
     onRowRefHeightChanged: captureRowBase()
     onMemoryKeyChanged: applySavedLayout()
 
@@ -675,7 +707,7 @@ Item {
         target: root.view
         function onContentYChanged() {
             if (root.memoryKey)
-                root.remember();
+                root._scheduleRemember();
         }
         // A drag owns the viewport: kill any centre glide in flight.
         function onMovementStarted() {

@@ -35,7 +35,8 @@ QtObject {
     property Selection sel: Selection {}
 
     readonly property bool hasSelection: sel.hasSelection
-    readonly property int selectionCount: sel.count(root.cursor)
+    readonly property int selectionCount: sel.hasSelection
+        ? sel.count(root.cursor) : 0
 
     /// `v`: start a selection on the cursor row, or end the current one.
     function toggle() {

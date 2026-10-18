@@ -68,13 +68,15 @@ Item {
     /// until the row reaches the visible/cached band.
     property bool expected: false
     /// The cursor row is never a placeholder: its content loads with the
-    /// landing instead of one async frame later.
+    /// landing. Other rows build when they enter the band; an async Loader
+    /// in a recycled delegate can be destroyed mid-incubation
+    /// ("Object or context destroyed during incubation"), so the cheap
+    /// shell is the only deferral.
     property bool immediate: false
 
     Loader {
         anchors.fill: parent
         active: root.immediate || !root.expected
-        asynchronous: !root.immediate
         sourceComponent: body
     }
 

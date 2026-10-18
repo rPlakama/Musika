@@ -212,9 +212,15 @@ Item {
     /// rows scale from the whole panel, never from the thinner section the
     /// row amount happens to leave (0 = this column's own height).
     property real rowRefHeight: 0
+    /// The stable sizing height for the rows: the shared panel height when
+    /// the overlay supplies one, else this column's own height. `listH`
+    /// derives from it directly — never from `content.adaptiveRowHeight`,
+    /// which depends on the content height `listH` sets (a binding loop).
+    readonly property real _rowSizingHeight: root.rowRefHeight > 0
+        ? root.rowRefHeight : root.height
     /// The model owns the adaptive row; this column only snaps its viewport
     /// to full rows so the footer never slices one in half.
-    readonly property real rowH: content.adaptiveRowHeight
+    readonly property real rowH: content.adaptiveRowFor(root._rowSizingHeight)
     readonly property real listH: rowH > 0
         ? Math.max(rowH, Math.floor((height - headerH) / rowH) * rowH)
         : 0
@@ -335,8 +341,7 @@ Item {
                 rowRatio: 0.12
                 // Two-thirds of the normal row: a 1/3 cut for Search.
                 rowHeightScale: 2 / 3
-                rowRefHeight: root.rowRefHeight > 0
-                    ? root.rowRefHeight : root.height
+                rowRefHeight: root._rowSizingHeight
                 contentHeightHint: root.model
                     ? root.model.count * content.adaptiveRowHeight : 0
 
@@ -444,7 +449,10 @@ Item {
                 visible: listItem.noMatches && listItem.noMatchTextFits
                 text: "no matches"
                 color: Palette.onSurfaceVariant
-                font.pixelSize: root.height * 0.055
+                // Match the result-row title (same clamp as RowBody's
+                // titlePixelSize) instead of the old header-relative size.
+                font.pixelSize: Theme.clamp(content.adaptiveRowHeight * 0.3,
+                    12, 18)
             }
 
             SymbolIcon {

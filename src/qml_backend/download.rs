@@ -78,7 +78,7 @@ pub(super) async fn apply_window(
         "downloading": songs_pending,
         // The window's queried ids: their states get rewritten, everything
         // else keeps its own (reads never clobber other surfaces).
-        "queried_songs": all,
+        "queried_songs": songs,
         "queried_albums": albums,
     })
     .to_string();

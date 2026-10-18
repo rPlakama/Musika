@@ -247,7 +247,8 @@ pub async fn song_album_payload(
 
     let album = match crate::library::album(&dbs.library, album_id).await? {
         Some(album) => {
-            let covers = crate::covers::url_map(&dbs.covers).await?;
+            let cover_ids: Vec<String> = album.cover_art.clone().into_iter().collect();
+            let covers = crate::covers::url_map_of(&dbs.covers, &cover_ids).await?;
             queue_album_json(&album, &covers)
         }
         None => serde_json::Value::Null,
@@ -331,7 +332,8 @@ pub async fn song_album_page_json(dbs: &crate::db::Dbs, song_id: &str) -> anyhow
     let album = crate::library::album(&dbs.library, album_id)
         .await?
         .ok_or_else(|| anyhow::anyhow!("album not found in index"))?;
-    let covers = crate::covers::url_map(&dbs.covers).await?;
+    let cover_ids: Vec<String> = album.cover_art.clone().into_iter().collect();
+    let covers = crate::covers::url_map_of(&dbs.covers, &cover_ids).await?;
     Ok(queue_album_json(&album, &covers).to_string())
 }
 
@@ -346,7 +348,8 @@ pub async fn album_artist_page_json(
     let artist = crate::library::artist(&dbs.library, &artist_id)
         .await?
         .ok_or_else(|| anyhow::anyhow!("artist not found in index"))?;
-    let covers = crate::covers::url_map(&dbs.covers).await?;
+    let cover_ids: Vec<String> = artist.cover_art.clone().into_iter().collect();
+    let covers = crate::covers::url_map_of(&dbs.covers, &cover_ids).await?;
     let cover = crate::browse::cover_url(artist.cover_art.as_deref(), &covers);
     Ok(serde_json::json!({
         "id": artist.id,
@@ -368,8 +371,6 @@ pub async fn resume_payload(
     status: &crate::status::SessionStatus,
     offline: bool,
 ) -> anyhow::Result<String> {
-    let covers = crate::covers::url_map(&dbs.covers).await?;
-
     // CACHE-9: offline, only downloaded content comes back; the album page
     // reopens only when it owns downloads.
     let offline_albums = match crate::download::offline_song_ids(dbs, offline).await? {
@@ -390,9 +391,14 @@ pub async fn resume_payload(
                 .as_ref()
                 .map_or(true, |albums| albums.contains_key(album_id)) =>
         {
-            crate::library::album(&dbs.library, album_id)
-                .await?
-                .map(|album| queue_album_json(&album, &covers))
+            match crate::library::album(&dbs.library, album_id).await? {
+                Some(album) => {
+                    let cover_ids: Vec<String> = album.cover_art.clone().into_iter().collect();
+                    let covers = crate::covers::url_map_of(&dbs.covers, &cover_ids).await?;
+                    Some(queue_album_json(&album, &covers))
+                }
+                None => None,
+            }
         }
         _ => None,
     };
@@ -456,8 +462,15 @@ async fn tracks_json(
     songs: Vec<crate::library::SongRow>,
 ) -> anyhow::Result<String> {
     let client = crate::qml::client(dbs).await?;
-    let covers = crate::covers::url_map(&dbs.covers).await?;
-    let media = crate::media::path_map(&dbs.media).await.unwrap_or_default();
+    let cover_ids: Vec<String> = songs
+        .iter()
+        .filter_map(|song| song.cover_art.clone())
+        .collect();
+    let covers = crate::covers::url_map_of(&dbs.covers, &cover_ids).await?;
+    let song_ids: Vec<String> = songs.iter().map(|song| song.id.clone()).collect();
+    let media = crate::media::path_map_of(&dbs.media, &song_ids)
+        .await
+        .unwrap_or_default();
 
     let mut tracks = Vec::with_capacity(songs.len());
     for song in songs {

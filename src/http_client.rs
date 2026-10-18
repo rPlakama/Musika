@@ -19,15 +19,26 @@ use md5::{Digest, Md5};
 use reqwest::Url;
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
+use std::sync::OnceLock;
 
 const API_VERSION: &str = "1.16.1";
 const CLIENT_NAME: &str = "musika";
+
+/// One process-wide reqwest client: every `SubsonicClient` shares its
+/// connection pool and TLS session cache. Cloning a reqwest client is a
+/// refcount bump, so per-action clients stay cheap.
+static HTTP_CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
+
+fn shared_http_client() -> reqwest::Client {
+    HTTP_CLIENT.get_or_init(reqwest::Client::new).clone()
+}
 
 /// A reusable client for the [Subsonic API](https://www.subsonic.org/pages/api.jsp).
 ///
 /// It owns the server URL and credentials and takes care of the shared
 /// authentication query parameters (`u`, `t`, `s`, `v`, `c`, `f`) on every
 /// call, so endpoint wrappers only have to name their method and extra params.
+#[derive(Clone)]
 pub struct SubsonicClient {
     base: String,
     username: String,
@@ -41,7 +52,7 @@ impl SubsonicClient {
             base: normalize_base(server_url),
             username: username.to_string(),
             password: password.to_string(),
-            http: reqwest::Client::new(),
+            http: shared_http_client(),
         }
     }
 

@@ -17,12 +17,19 @@
 import QtQuick
 import musika
 import "Theme.js" as Theme
+import "ScrollMemory.js" as Memory
 
-// Songs segment: all indexed songs. The list UI and cursor behaviour live in
-// the shared `MediaList` (see AlbumList); this wrapper owns the `songs`
-// channel and maps payload rows. Enter (or click) plays the selected song.
+// Songs segment: the indexed songs, loaded in pages (PATH-3). The first page
+// loads up to the remembered cursor (one page of headroom) so the scroll
+// memory still lands; pages append as the cursor approaches the loaded end,
+// and the player queue is built independently in Rust by `playSong`.
 MediaList {
     id: root
+
+    readonly property int pageSize: 300
+    property int _nextOffset: 0
+    property bool _allLoaded: false
+    property bool _loadingPage: false
 
     title: "Songs"
     orderText: Backend.songOrder
@@ -30,29 +37,69 @@ MediaList {
 
     function reload() {
         root.loading = true;
-        Backend.requestSongs();
+        root._allLoaded = false;
+        root._loadingPage = true;
+        root._nextOffset = 0;
+        // UI-54: preload through the remembered cursor so `restore()` lands on
+        // the same row; beyond that, pages stream in on demand.
+        var saved = Memory.loadScroll(root.memoryKey);
+        var at = root.currentIndex >= 0
+            ? root.currentIndex
+            : (saved && saved.index >= 0 ? saved.index : 0);
+        var limit = Math.max(root.pageSize, at + root.pageSize);
+        Backend.requestSongsPage(0, limit);
     }
 
-    function apply(payload) {
-        var parsed = JSON.parse(payload);
+    function mapRow(song) {
+        var artist = song.artist ? song.artist : "";
+        var album = song.album ? song.album : "";
+        return {
+            title: song.title,
+            subtitle: artist + (album.length > 0 ? " · " + album : ""),
+            meta: Theme.formatTime(song.duration),
+            cover: song.cover ? song.cover : "",
+            songId: song.id,
+            albumId: song.album_id ? song.album_id : "",
+            starred: song.starred === true,
+            rating: 0
+        };
+    }
+
+    function applyPage(payload) {
+        var data = JSON.parse(payload);
+        // A page from before a reload/order swap must not append to the new
+        // model (only the first page may restart the list).
+        if (data.offset !== 0 && data.offset !== root._nextOffset)
+            return;
         var rows = [];
-        for (var i = 0; i < parsed.length; i++) {
-            var song = parsed[i];
-            var artist = song.artist ? song.artist : "";
-            var album = song.album ? song.album : "";
-            rows.push({
-                title: song.title,
-                subtitle: artist + (album.length > 0 ? " · " + album : ""),
-                meta: Theme.formatTime(song.duration),
-                cover: song.cover ? song.cover : "",
-                songId: song.id,
-                albumId: song.album_id ? song.album_id : "",
-                starred: song.starred === true,
-                rating: 0
-            });
-        }
-        root.setRows(rows);
+        for (var i = 0; i < data.rows.length; i++)
+            rows.push(root.mapRow(data.rows[i]));
+        if (data.offset === 0)
+            root.setRows(rows);
+        else
+            root.appendRows(rows);
+        root._nextOffset = data.next;
+        root._allLoaded = data.has_more !== true;
+        root._loadingPage = false;
         root.loading = false;
+        if (root.count > 0 && root.currentIndex < 0)
+            root.currentIndex = 0;
+        if (rows.length === 0 && data.has_more === true)
+            root.loadMore();
+        else if (!root._allLoaded && root.count > 0 && root.currentIndex >= root.count - 20)
+            root.loadMore();
+    }
+
+    function loadMore() {
+        if (root._allLoaded || root._loadingPage)
+            return;
+        root._loadingPage = true;
+        Backend.requestSongsPage(root._nextOffset, root.pageSize);
+    }
+
+    onCursorMoved: (index) => {
+        if (index >= root.count - 20)
+            root.loadMore();
     }
 
     onActivated: (item) => Backend.playSong(item.songId)
@@ -65,8 +112,8 @@ MediaList {
     Connections {
         target: Backend
         function onDataReady(channel, payload) {
-            if (channel === "songs")
-                root.apply(payload);
+            if (channel === "songs_page")
+                root.applyPage(payload);
         }
         function onLibrary_changed() {
             root.reload();

@@ -33,6 +33,8 @@ ScrollPanel {
     property bool roundedArt: false
 
     signal activated(var item)
+    /// PATH-3: pages append on demand; hosts use this to fetch the next one.
+    signal cursorMoved(int index)
 
     // ARC-UI-1: which recycled Alt-hold verb set this list arms — "song" for
     // track rows, "album" for album rows, "" for no overlay. The verbs live
@@ -124,7 +126,10 @@ ScrollPanel {
     }
 
     Component.onCompleted: root.requestMarkWindow()
-    onCurrentIndexChanged: root.requestMarkWindow()
+    onCurrentIndexChanged: {
+        root.requestMarkWindow();
+        root.cursorMoved(root.currentIndex);
+    }
 
     /// VI-4: the selection state lives in `ScrollContent` and is forwarded by
     /// `ScrollPanel` (`toggleSelection`/`selectAll`/`clearSelection`/…); the
@@ -217,6 +222,14 @@ ScrollPanel {
         // UI-10: a cursor row exists from the first paint.
         if (root.count > 0 && (root.currentIndex < 0 || root.currentIndex >= root.count))
             root.currentIndex = 0;
+    }
+
+    /// PATH-3: append one page without clearing the model, the selection or
+    /// the live cursor. Mark windows follow automatically.
+    function appendRows(rows) {
+        for (var i = 0; i < rows.length; i++)
+            mediaRows.append(rows[i]);
+        root.requestMarkWindow();
     }
 
     onItemActivated: (index) => {

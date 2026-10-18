@@ -199,22 +199,6 @@ pub async fn hash(pool: &SqlitePool, id: &str) -> Result<Option<String>> {
     Ok(hash.flatten())
 }
 
-/// Maps every cached cover id to its `file://` URL. Used to resolve art while
-/// loading lists off the UI thread.
-pub async fn url_map(pool: &SqlitePool) -> Result<HashMap<String, String>> {
-    let rows: Vec<(String, String)> = sqlx::query_as("SELECT id, file FROM covers")
-        .fetch_all(pool)
-        .await?;
-    let dir = crate::db::covers_dir()?;
-    let mut map = HashMap::new();
-    for (id, file) in rows {
-        if let Ok(url) = reqwest::Url::from_file_path(dir.join(&file)) {
-            map.insert(id, url.to_string());
-        }
-    }
-    Ok(map)
-}
-
 async fn touch(pool: &SqlitePool, id: &str) -> Result<()> {
     sqlx::query("UPDATE covers SET fetched_at = ?2 WHERE id = ?1")
         .bind(id)
@@ -370,6 +354,38 @@ fn md5_hex(bytes: &[u8]) -> String {
     let mut hasher = Md5::new();
     hasher.update(bytes);
     hex::encode(hasher.finalize())
+}
+
+/// Maps only the requested cover ids to `file://` URLs, in bounded batches.
+/// Payload loaders use this so a page's cost follows
+/// the page, never the whole cover cache.
+pub async fn url_map_of(pool: &SqlitePool, ids: &[String]) -> Result<HashMap<String, String>> {
+    let mut unique: Vec<&str> = ids
+        .iter()
+        .map(String::as_str)
+        .filter(|id| !id.is_empty())
+        .collect();
+    unique.sort_unstable();
+    unique.dedup();
+    if unique.is_empty() {
+        return Ok(HashMap::new());
+    }
+    let dir = crate::db::covers_dir()?;
+    let mut map = HashMap::with_capacity(unique.len());
+    for chunk in unique.chunks(500) {
+        let mut builder = sqlx::QueryBuilder::new("SELECT id, file FROM covers WHERE id IN (");
+        crate::cache::push_in_list(
+            &mut builder,
+            &chunk.iter().map(|id| id.to_string()).collect::<Vec<_>>(),
+        );
+        let rows: Vec<(String, String)> = builder.build_query_as().fetch_all(pool).await?;
+        for (id, file) in rows {
+            if let Ok(url) = reqwest::Url::from_file_path(dir.join(&file)) {
+                map.insert(id, url.to_string());
+            }
+        }
+    }
+    Ok(map)
 }
 
 #[cfg(test)]

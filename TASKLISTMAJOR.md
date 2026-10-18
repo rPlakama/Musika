@@ -1936,6 +1936,164 @@ The product is incomplete without these.
     wired in `flake.nix` and verified with `nix build` (store layout). GNOME/KDE
     launcher + dock grouping still a manual pass on a desktop session.
 
+### PATH-LIST — Performance & memory audit (2026-10-18)
+
+Maintenance pass over the hot paths: unnecessary allocations, unbounded
+state, async work that outlives its request, and full-table work per UI
+action. Ordered by expected ROI; each item is independently shippable.
+
+- [x] **PATH-1 · One shared API client** — P1 · (perf audit)
+  - **Why:** every API action calls `client()` (`qml_backend/support.rs:21`),
+    re-reads credentials from SQLite and constructs a new
+    `reqwest::Client` (`http_client.rs:44`) — a fresh connection pool/TLS
+    context per favorite, rating, download or metadata fetch.
+  - **Details:** cache an `Arc<SubsonicClient>` (or a shared
+    `reqwest::Client` plus credentials) behind the `Backend`; reset it on
+    login/logout/account change. Route `browse::album_notes`,
+    `queue::tracks_json` and `index`'s shared client through the same seam.
+  - **Verify:** one pool reused across actions; no credentials query per
+    call; repeated favorites/downloads show no new client allocations.
+  - **Now:** landed — `SubsonicClient` clones one process-wide
+    `reqwest::Client` (shared pool/TLS) and `support::client` caches one
+    client per credential triple, invalidated on a full wipe.
+
+- [x] **PATH-2 · Resolve only the payload's covers and media paths** — P1 · (perf audit)
+  - **Why:** `covers::url_map` loads every cover and `media::path_map` loads
+    every media row (and `is_file()`s each) on every list/search/queue
+    payload (`browse.rs:62/87/100/114`, `queue.rs:459-460`).
+  - **Details:** query the referenced cover ids only (the existing
+    `library::song_cover_ids` shape) and the queue's song ids only; drop the
+    per-row filesystem probe; chunk the `IN` lists. Cache the maps only if
+    a payload genuinely needs the whole catalog.
+  - **Verify:** memory/time per payload scales with the page, not the
+    library; no stat storm while playing a large cached library.
+  - **Now:** landed — `covers::url_map_of` and `media::path_map_of` query
+    only the payload ids in 500-row chunks; the full-table maps are gone and
+    queue paths no longer stat the filesystem.
+
+- [x] **PATH-3 · Page the Songs list and hand the queue to the player in Rust** — P1 · (perf audit)
+  - **Why:** `library::all_songs` materializes the whole table for the Songs
+    tab (`browse.rs:83`), the library queue (`queue.rs:184`) and shuffle
+    (`qml.rs:1969`); the queue then serializes to JSON, is parsed by
+    `playerLoadLibrary` (`qml.rs:2148`), cloned by `emit_queue`
+    (`qml.rs:2235`) and parsed again into the QML model
+    (`NowPlaying.qml:297`). `songs_range` exists but is unused.
+  - **Details:** serve the Songs tab in windows/pages (`songs_range` or a
+    cursor window), build the player queue directly in Rust for
+    `playSong`/shuffle (no JSON round-trip through QML), and publish queue
+    changes by revision/delta rather than the whole row set.
+  - **Verify:** 10k-song fixture: bounded payload memory, first paint not
+    blocked by the full-table sort, queue load without a JSON detour.
+  - **Now:** landed — `songs_page` serves `songs_range` pages (300 rows,
+    preloaded through the remembered cursor) and `SongList` appends on
+    approach; `playSong` still builds the full queue in Rust. Open: the
+    queue's internal JSON hop and paging the queue model itself.
+
+- [x] **PATH-4 · Keep the mark truth bounded and incremental** — P1 · (perf audit)
+  - **Why:** `mark_states` (`qml.rs:124`) keeps every id ever queried;
+    `rebuild_mark_sets` (`qml.rs:2385`) clones/sorts all states on every
+    patch and the exposed vectors are searched by `indexOf` per visible row.
+  - **Details:** retain only the union of active windows plus explicit
+    per-id patches with a last-seen/generation stamp; update the
+    done/cached/pending sets incrementally (membership sets, no full sort);
+    make `RowMarks` membership O(1). Also fix
+    `apply_downloaded_ids` so album-tracklist ids are not rewritten when
+    they were not part of the requested song window
+    (`qml_backend/download.rs:34-83`).
+  - **Verify:** scrolling through the whole library leaves the map bounded;
+    a rating/download patch costs O(changed), not O(history).
+  - **Now:** landed — per-id patches update the exposed sets incrementally,
+    window requests prune the mark map to the recent windows, and window
+    reads rewrite only the requested songs (album tracklists feed coverage,
+    not marks).
+
+- [ ] **PATH-5 · Coalesce and version the mark-window reads** — P1 · (perf audit)
+  - **Why:** every cursor move calls `requestDownloads` (`MediaList.qml:127`)
+    and spawns a DB read; fast scrolling stacks tasks and older snapshots
+    can land after newer ones. `recent_mark_requests` also unions 12
+    windows into one refresh (`qml.rs:2314-2330`) with unchunked `IN`
+    lists (`download.rs:145/162`, `library.rs:200`).
+  - **Details:** debounce/coalesce per surface, stamp each read with a
+    generation and drop stale landings, refresh the latest window (or
+    per-id deltas) instead of the 12-window union, and chunk the queries.
+  - **Verify:** holding `j`/`k` through a long list stays responsive, no
+    stale mark flicker, query size bounded.
+
+- [ ] **PATH-6 · Make queue publishing cheap** — P2 · (perf audit)
+  - **Why:** `emit_queue` clones the whole queue, queries the whole starred
+    set (`library.rs:151`) and builds/hashes the full JSON on every publish
+    (`qml.rs:2238-2280`).
+  - **Details:** cache starred ids and update them from `favoriteChanged`;
+    add a partial index on `songs(starred)`; skip the payload unless the
+    row set changed (compare a row revision, not a full JSON string);
+    expose an index-only/delta path for skips and advances.
+  - **Verify:** skipping through a 10k queue does no full-table scan or
+    full payload build.
+
+- [ ] **PATH-7 · Move session-status serialization off the Qt thread** — P2 · (perf audit)
+  - **Why:** `maybe_save_position` builds `session_status` on the Qt thread
+    every 10 s while playing, including the full queue id JSON
+    (`qml.rs:827/865/898`), before the debounce generation check.
+  - **Details:** snapshot only the mutable scalar fields, mark the queue
+    dirty on changes, and serialize the queue on the runtime thread after
+    the debounce wins.
+  - **Verify:** the 10 s tick does no O(queue) allocation on the UI thread.
+
+- [ ] **PATH-8 · Serve album/artist metadata local-first with a TTL** — P2 · (perf audit)
+  - **Why:** `requestAlbumInfo` (`qml.rs:1878` → `browse.rs:277`) and
+    `requestArtistInfo` (`qml.rs:1523`) hit the server on every page open
+    and fall back to the cache only on failure.
+  - **Details:** emit the cached row immediately, refresh in the background
+    behind a TTL (per album/artist), and coalesce duplicate opens.
+  - **Verify:** reopening a page is instant/offline-safe; no request per
+    navigation; refresh still lands when stale.
+
+- [ ] **PATH-9 · Gate up-to-date cover revalidation** — P2 · (perf audit)
+  - **Why:** an unchanged sync still runs `refresh_covers`
+    (`index.rs:105-118`), issuing a conditional request for every
+    referenced cover.
+  - **Details:** only revalidate on first run, a library change, or a cover
+    TTL / explicit refresh; report the skipped state in the sync message.
+  - **Verify:** an up-to-date sync performs no cover fan-out; the next real
+    sync still revalidates.
+
+- [ ] **PATH-10 · Index and chunk the hot DB paths** — P2 · (perf audit)
+  - **Why:** `all_songs` sorts the full table with no matching index
+    (`library.rs:601-606`), `most_played` orders on an `UNINDEXED` FTS
+    column, and several `IN` lists are not chunked (`cache::push_in_list`).
+  - **Details:** add a composite index for the default song order and a
+    partial index for `starred`; chunk `done/pending/album_song` ids (the
+    500-row pattern from `downloaded_owners`).
+  - **Verify:** `EXPLAIN QUERY PLAN` uses the indexes; large windows stay
+    under the bind limit with bounded plans.
+
+- [ ] **PATH-11 · Trim QML hot paths** — P2 · (perf audit)
+  - **Why:** `MediaList.qml:84` still logs on every mark request;
+    `NowPlaying.applyQueue` builds an O(n) string signature
+    (`NowPlaying.qml:306`) then rebuilds the whole model;
+    `activeLyric` linearly scans all lines per position tick
+    (`NowPlaying.qml:123`); `RatingBurst`'s particle system always runs
+    (`RatingBurst.qml:48`).
+  - **Details:** drop the debug log; send a backend row revision/hash and
+    rebuild only on real changes; binary-search the active lyric; start/stop
+    the particle system around bursts.
+  - **Verify:** no per-move logging; queue apply is O(1) for index-only
+    updates; lyric highlight stays cheap; idle particles cost nothing.
+
+- [ ] **PATH-12 · Cache the offline catalog filter** — P2 · (perf audit)
+  - **Why:** `browse::offline_filter` (`browse.rs:34-48`) reads the whole
+    downloaded id set and owner maps for every offline payload and search.
+  - **Details:** cache the filter in `Backend`, invalidate on download
+    settles/sync/rule changes, or filter in SQL for the paged paths.
+  - **Verify:** offline list/search paging does not re-read the whole
+    catalog per request.
+
+- [ ] **PATH-13 · Batch the sync rating import** — P3 · (perf audit)
+  - **Why:** `artist_user::import_ratings` (`artist_user.rs:104`) writes one
+    row at a time on every sync.
+  - **Details:** one transaction/batched upsert for the rated artists.
+  - **Verify:** sync with many rated artists performs one write batch.
+
 ## Quick wins
 
 > **All quick wins are done** (2026-10-13): UI-2, UI-4, UI-6, UI-7, UI-10,

@@ -20,7 +20,7 @@ use qtbridge::{QmlObject, qobject};
 
 use crate::browse::{
     album_notes, load_album_songs_json, load_albums_json, load_artist_json, load_artists_json,
-    load_songs_json, search_json,
+    load_songs_page_json, search_json,
 };
 use crate::http_client::SubsonicClient;
 use crate::keybind::{Keymap, Outcome};
@@ -63,6 +63,24 @@ enum MarkState {
     AlbumCached,
     /// The song's fetch is queued/active.
     SongInFlight,
+}
+
+fn remove_mark_id(ids: &mut Vec<String>, id: &str) -> bool {
+    if let Some(position) = ids.iter().position(|item| item == id) {
+        ids.remove(position);
+        true
+    } else {
+        false
+    }
+}
+
+fn add_mark_id(ids: &mut Vec<String>, id: &str) -> bool {
+    if ids.iter().any(|item| item == id) {
+        false
+    } else {
+        ids.push(id.to_string());
+        true
+    }
 }
 
 /// The hash of the last published queue rows ("RowAlreadyPublished"): the
@@ -1220,6 +1238,7 @@ impl Backend {
     #[qslot(qml_name = "wipeFinished")]
     fn wipe_finished(&mut self, scope: String) {
         if scope == "all" {
+            crate::runtime().spawn(async { support::invalidate_client().await });
             self.player.stop();
             self.sync_player();
             self.reset_colors();
@@ -1248,9 +1267,16 @@ impl Backend {
         // Re-resolve the queue's cover URLs against the (possibly empty)
         // covers index, then republish the queue and the palette.
         let invoker = self.get_qml_method_invoker();
+        let cover_ids: Vec<String> = self
+            .player
+            .queue()
+            .iter()
+            .map(|track| track.cover_art.clone())
+            .filter(|id| !id.is_empty())
+            .collect();
         if let Some(dbs) = crate::dbs().cloned() {
             crate::runtime().spawn(async move {
-                let covers = crate::covers::url_map(&dbs.covers)
+                let covers = crate::covers::url_map_of(&dbs.covers, &cover_ids)
                     .await
                     .unwrap_or_default();
                 let json = serde_json::to_string(&covers).unwrap_or_default();
@@ -1407,13 +1433,13 @@ impl Backend {
         }
     }
 
-    #[qslot(qml_name = "requestSongs")]
-    fn request_songs(&mut self) {
+    #[qslot(qml_name = "requestSongsPage")]
+    fn request_songs_page(&mut self, offset: i64, limit: i64) {
         let order = crate::library::effective_order(&crate::library::ORDERS, &self.song_order, 0)
             .to_string();
         let offline = self.offline;
-        self.spawn_data("songs", move |dbs| async move {
-            load_songs_json(&dbs, &order, offline).await
+        self.spawn_data("songs_page", move |dbs| async move {
+            load_songs_page_json(&dbs, offset, limit, &order, offline).await
         });
     }
 
@@ -2327,6 +2353,7 @@ impl Backend {
                 self.recent_mark_requests.pop_front();
             }
         }
+        self.prune_mark_states();
         self.refresh_window(songs, albums);
     }
 
@@ -2380,6 +2407,66 @@ impl Backend {
         }
     }
 
+    /// One id's state patch: keeps the exposed sets incremental instead of
+    /// rebuilding (and re-sorting) the whole mark truth on every fetch step.
+    fn patch_mark_state(&mut self, id: &str, state: Option<MarkState>) {
+        let old = self.mark_states.get(id).copied();
+        if old == state {
+            return;
+        }
+        self.set_mark_state(id, state);
+        let mut done_changed = false;
+        let mut cached_changed = false;
+        let mut pending_changed = false;
+        if let Some(old) = old {
+            match old {
+                MarkState::SongDone => done_changed |= remove_mark_id(&mut self.downloaded_ids, id),
+                MarkState::AlbumCached => {
+                    cached_changed |= remove_mark_id(&mut self.cached_album_ids, id)
+                }
+                MarkState::SongInFlight => {
+                    pending_changed |= remove_mark_id(&mut self.downloading_ids, id)
+                }
+            }
+        }
+        if let Some(state) = state {
+            match state {
+                MarkState::SongDone => done_changed |= add_mark_id(&mut self.downloaded_ids, id),
+                MarkState::AlbumCached => {
+                    cached_changed |= add_mark_id(&mut self.cached_album_ids, id)
+                }
+                MarkState::SongInFlight => {
+                    pending_changed |= add_mark_id(&mut self.downloading_ids, id)
+                }
+            }
+        }
+        if done_changed {
+            self.downloaded_ids_changed();
+        }
+        if cached_changed {
+            self.cached_album_ids_changed();
+        }
+        if pending_changed {
+            self.downloading_ids_changed();
+        }
+    }
+
+    /// Drops mark entries that fell out of every recent surface window. The
+    /// map therefore stays bounded by the recently requested rows instead of
+    /// accumulating every id ever scrolled past.
+    fn prune_mark_states(&mut self) {
+        let mut allowed: std::collections::HashSet<String> = std::collections::HashSet::new();
+        for (songs, albums) in &self.recent_mark_requests {
+            allowed.extend(songs.iter().cloned());
+            allowed.extend(albums.iter().cloned());
+        }
+        let before = self.mark_states.len();
+        self.mark_states.retain(|id, _| allowed.contains(id));
+        if self.mark_states.len() != before {
+            self.rebuild_mark_sets();
+        }
+    }
+
     /// Re-derives the three exposed sets from the state map (sorted,
     /// notify-on-change).
     fn rebuild_mark_sets(&mut self) {
@@ -2429,15 +2516,13 @@ impl Backend {
         let in_flight = state == crate::download::QUEUED || state == crate::download::ACTIVE;
         if in_flight {
             self.hold_download_request();
-            self.set_mark_state(&song_id, Some(MarkState::SongInFlight));
-            self.rebuild_mark_sets();
+            self.patch_mark_state(&song_id, Some(MarkState::SongInFlight));
             return;
         }
         // The fetch settled: the row keeps its loading glyph until the hold
         // expires (a cached fetch must still be *seen*), then flips.
         if state == crate::download::DONE {
-            self.set_mark_state(&song_id, Some(MarkState::SongDone));
-            self.rebuild_mark_sets();
+            self.patch_mark_state(&song_id, Some(MarkState::SongDone));
         }
         self.settle_download_request(song_id);
     }
@@ -2502,8 +2587,7 @@ impl Backend {
         if touched {
             // The completion already wrote SongDone for finished fetches;
             // only a still-in-flight mark falls away here.
-            self.set_mark_state(&song_id, None);
-            self.rebuild_mark_sets();
+            self.patch_mark_state(&song_id, None);
         }
         if self.downloading_ids.is_empty() && self.while_download_request {
             self.while_download_request = false;
@@ -2517,8 +2601,7 @@ impl Backend {
         if album_id.is_empty() {
             return;
         }
-        self.set_mark_state(&album_id, Some(MarkState::AlbumCached));
-        self.rebuild_mark_sets();
+        self.patch_mark_state(&album_id, Some(MarkState::AlbumCached));
     }
 
     /// The row-status refresh hook: finished download passes trigger it (the

@@ -18,7 +18,7 @@
 //!
 //! Storage layer only. Blobs are fetched by the playback/prefetch path
 //! (CACHE-2) and written through [`store`]; playback resolves local copies
-//! with [`cached_path`]/[`path_map`] and never waits on the network for them.
+//! with [`cached_path`]/[`path_map_of`] and never waits on the network for them.
 //! Pruning happens only after a fully successful sync (the covers.rs policy):
 //! vanished songs first, then rule-orphans; tier caps are CACHE-3.
 
@@ -198,23 +198,6 @@ pub async fn cached_path(pool: &SqlitePool, song_id: &str) -> Result<Option<Path
     };
     let path = tier_dir(&row.kind)?.join(&row.file);
     Ok(path.is_file().then_some(path))
-}
-
-/// Batch resolver for queues and lists (the `covers::url_map` pattern).
-pub async fn path_map(pool: &SqlitePool) -> Result<HashMap<String, PathBuf>> {
-    let rows: Vec<Stored> = sqlx::query_as("SELECT song_id, kind, file FROM media")
-        .fetch_all(pool)
-        .await?;
-    let mut map = HashMap::new();
-    for row in rows {
-        if let Ok(dir) = tier_dir(&row.kind) {
-            let path = dir.join(&row.file);
-            if path.is_file() {
-                map.insert(row.song_id, path);
-            }
-        }
-    }
-    Ok(map)
 }
 
 /// Marks a blob as recently used (CACHE-3's LRU input).
@@ -480,6 +463,35 @@ fn md5_hex(bytes: &[u8]) -> String {
     let mut hasher = Md5::new();
     hasher.update(bytes);
     hex::encode(hasher.finalize())
+}
+
+/// The cached paths for only `ids`, in bounded batches: a play action never
+/// walks the whole media cache.
+pub async fn path_map_of(pool: &SqlitePool, ids: &[String]) -> Result<HashMap<String, PathBuf>> {
+    let mut unique: Vec<&str> = ids
+        .iter()
+        .map(String::as_str)
+        .filter(|id| !id.is_empty())
+        .collect();
+    unique.sort_unstable();
+    unique.dedup();
+    if unique.is_empty() {
+        return Ok(HashMap::new());
+    }
+    let mut map = HashMap::with_capacity(unique.len());
+    for chunk in unique.chunks(500) {
+        let owned: Vec<String> = chunk.iter().map(|id| id.to_string()).collect();
+        let mut builder =
+            sqlx::QueryBuilder::new("SELECT song_id, kind, file FROM media WHERE song_id IN (");
+        crate::cache::push_in_list(&mut builder, &owned);
+        let rows: Vec<Stored> = builder.build_query_as().fetch_all(pool).await?;
+        for row in rows {
+            if let Ok(dir) = tier_dir(&row.kind) {
+                map.insert(row.song_id, dir.join(&row.file));
+            }
+        }
+    }
+    Ok(map)
 }
 
 #[cfg(test)]

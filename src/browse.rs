@@ -59,7 +59,11 @@ pub async fn load_albums_json(
     if let Some(offline) = &offline {
         albums.retain(|album| offline.albums.contains_key(&album.id));
     }
-    let covers = crate::covers::url_map(&dbs.covers).await?;
+    let cover_ids: Vec<String> = albums
+        .iter()
+        .filter_map(|album| album.cover_art.clone())
+        .collect();
+    let covers = crate::covers::url_map_of(&dbs.covers, &cover_ids).await?;
     let rows: Vec<serde_json::Value> = albums
         .iter()
         .map(|album| {
@@ -75,17 +79,34 @@ pub async fn load_albums_json(
     Ok(serde_json::to_string(&rows)?)
 }
 
-pub async fn load_songs_json(
+pub async fn load_songs_page_json(
     dbs: &crate::db::Dbs,
+    offset: i64,
+    limit: i64,
     order: &str,
     offline: bool,
 ) -> anyhow::Result<String> {
-    let mut songs = crate::library::all_songs(&dbs.library, order).await?;
+    let mut songs = crate::library::songs_range(&dbs.library, offset, limit + 1, order).await?;
+    let has_more = songs.len() as i64 > limit;
+    songs.truncate(limit.max(0) as usize);
+    let returned = songs.len() as i64;
     if let Some(filter) = offline_filter(dbs, offline).await? {
         songs.retain(|song| filter.songs.contains(&song.id));
     }
-    let covers = crate::covers::url_map(&dbs.covers).await?;
-    song_rows_json(&songs, &covers)
+    let cover_ids: Vec<String> = songs
+        .iter()
+        .filter_map(|song| song.cover_art.clone())
+        .collect();
+    let covers = crate::covers::url_map_of(&dbs.covers, &cover_ids).await?;
+    let rows: serde_json::Value = serde_json::from_str(&song_rows_json(&songs, &covers)?)
+        .unwrap_or_else(|_| serde_json::Value::Array(Vec::new()));
+    Ok(serde_json::json!({
+        "offset": offset,
+        "next": offset + returned,
+        "has_more": has_more,
+        "rows": rows,
+    })
+    .to_string())
 }
 
 pub async fn load_album_songs_json(
@@ -97,7 +118,11 @@ pub async fn load_album_songs_json(
     if let Some(filter) = offline_filter(dbs, offline).await? {
         songs.retain(|song| filter.songs.contains(&song.id));
     }
-    let covers = crate::covers::url_map(&dbs.covers).await?;
+    let cover_ids: Vec<String> = songs
+        .iter()
+        .filter_map(|song| song.cover_art.clone())
+        .collect();
+    let covers = crate::covers::url_map_of(&dbs.covers, &cover_ids).await?;
     song_rows_json(&songs, &covers)
 }
 
@@ -111,7 +136,11 @@ pub async fn load_artists_json(
     if let Some(filter) = &filter {
         artists.retain(|artist| filter.artists.contains_key(&artist.id));
     }
-    let covers = crate::covers::url_map(&dbs.covers).await?;
+    let cover_ids: Vec<String> = artists
+        .iter()
+        .filter_map(|artist| artist.cover_art.clone())
+        .collect();
+    let covers = crate::covers::url_map_of(&dbs.covers, &cover_ids).await?;
     // UI-56: the artist favourite is the server flag ORed with the local
     // `artist_user` overlay (ARC-42), so both surfaces agree.
     let user_starred: std::collections::HashSet<String> =
@@ -152,7 +181,11 @@ pub async fn load_artist_json(
     if let Some(filter) = &filter {
         albums.retain(|album| filter.albums.contains_key(&album.id));
     }
-    let covers = crate::covers::url_map(&dbs.covers).await?;
+    let cover_ids: Vec<String> = std::iter::once(artist.cover_art.clone())
+        .chain(albums.iter().map(|album| album.cover_art.clone()))
+        .flatten()
+        .collect();
+    let covers = crate::covers::url_map_of(&dbs.covers, &cover_ids).await?;
     let user_starred: std::collections::HashSet<String> =
         crate::artist_user::starred_ids(&dbs.artist_user)
             .await?
@@ -338,10 +371,16 @@ pub async fn search_json(
         songs.retain(|song| filter.songs.contains(&song.song_id));
     }
     songs.truncate(20);
-    let covers = crate::covers::url_map(&dbs.covers).await?;
 
     let song_ids: Vec<String> = songs.iter().map(|song| song.song_id.clone()).collect();
     let song_covers = crate::library::song_cover_ids(&dbs.library, &song_ids).await?;
+    let mut cover_ids: Vec<String> = albums
+        .iter()
+        .filter_map(|album| album.cover_art.clone())
+        .collect();
+    cover_ids.extend(artists.iter().filter_map(|artist| artist.cover_art.clone()));
+    cover_ids.extend(song_covers.values().cloned());
+    let covers = crate::covers::url_map_of(&dbs.covers, &cover_ids).await?;
     let song_albums = crate::library::song_album_ids(&dbs.library, &song_ids).await?;
     // UI-56: the search index carries no starred; join it back from the
     // library, and OR artists with the local `artist_user` overlay.

@@ -15,18 +15,53 @@
 // along with this program; if not, see <https://www.gnu.org/licenses/>.
 
 use qtbridge::QmlMethodInvoker;
+use std::sync::OnceLock;
 
 use crate::http_client::SubsonicClient;
+
+/// One client per credential set: the reqwest pool/TLS context is shared by
+/// every action (and the credential read only happens when the key changes).
+static CLIENT_CACHE: OnceLock<tokio::sync::Mutex<Option<CachedClient>>> = OnceLock::new();
+
+struct CachedClient {
+    server_url: String,
+    username: String,
+    password: String,
+    client: SubsonicClient,
+}
 
 pub(crate) async fn client(dbs: &crate::db::Dbs) -> anyhow::Result<SubsonicClient> {
     let credentials = crate::sqlite::load_credentials(&dbs.credentials)
         .await?
         .ok_or_else(|| anyhow::anyhow!("no saved credentials"))?;
-    Ok(SubsonicClient::new(
+    let cache = CLIENT_CACHE.get_or_init(|| tokio::sync::Mutex::new(None));
+    let mut guard = cache.lock().await;
+    if let Some(cached) = guard.as_ref()
+        && cached.server_url == credentials.server_url
+        && cached.username == credentials.username
+        && cached.password == credentials.password
+    {
+        return Ok(cached.client.clone());
+    }
+    let client = SubsonicClient::new(
         &credentials.server_url,
         &credentials.username,
         &credentials.password,
-    ))
+    );
+    *guard = Some(CachedClient {
+        server_url: credentials.server_url,
+        username: credentials.username,
+        password: credentials.password,
+        client: client.clone(),
+    });
+    Ok(client)
+}
+
+/// Drops the cached client (account switch, logout or a full wipe).
+pub(crate) async fn invalidate_client() {
+    if let Some(cache) = CLIENT_CACHE.get() {
+        *cache.lock().await = None;
+    }
 }
 pub(super) fn emit(invoker: &QmlMethodInvoker, channel: &str, payload: String) {
     qtbridge::invoke_method!(invoker, "emitData", channel.to_string(), payload);

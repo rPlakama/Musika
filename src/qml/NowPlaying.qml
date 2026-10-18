@@ -63,8 +63,8 @@ Rectangle {
     // snapping back to the playing track (Q-9).
     property bool _reordering: false
     // The rows the queue model currently holds: a payload with the same
-    // signature is a skip/advance, not a queue change — no rebuild.
-    property string _queueSignature: ""
+    // backend row hash is a skip/advance, not a queue change — no rebuild.
+    property string _queueHash: ""
     // UI-54: first queue payload after entering restores the saved highlight.
     property bool _recallQueue: false
 
@@ -126,13 +126,21 @@ Rectangle {
         if (!lyricsSynced || count === 0)
             return -1;
         var position = Math.round(Backend.position * 1000) - lyricsOffset;
+        // PATH-11: timestamps are ordered; binary search instead of walking
+        // every line on each position tick.
+        var low = 0;
+        var high = count - 1;
         var active = -1;
-        for (var i = 0; i < count; i++) {
-            var start = times[i];
-            if (start >= 0 && start <= position)
-                active = i;
-            else if (start > position)
-                break;
+        while (low <= high) {
+            var mid = (low + high) >> 1;
+            var start = times[mid];
+            if (start <= position) {
+                if (start >= 0)
+                    active = mid;
+                low = mid + 1;
+            } else {
+                high = mid - 1;
+            }
         }
         return active;
     }
@@ -303,14 +311,8 @@ Rectangle {
         // the view's layout (realised rows stopped at the old window and
         // later jumps inflated the item offsets — SC-5). So: rebuild only
         // when the rows really changed; a pure move just follows the index.
-        var signature = "";
-        for (var s = 0; s < data.items.length; s++) {
-            var sig = data.items[s];
-            signature += sig.id + "|" + sig.title + "|" + sig.duration
-                + "|" + (sig.starred === true ? 1 : 0) + ";";
-        }
-        if (signature !== root._queueSignature) {
-            root._queueSignature = signature;
+        if (data.hash !== root._queueHash) {
+            root._queueHash = data.hash;
             // ARC-memory: a different row set is a new queue — drop the old
             // queue's remembered scroll/prefetch target before it can be
             // restored.

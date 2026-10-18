@@ -31,9 +31,22 @@ Item {
     /// Stars per step ("few" — the rating key is tapped, not held).
     property int amount: 10
     property color starColor: Theme.favoriteStar
+    /// The particle system only runs while the burst (plus its tail) is
+    /// alive; an idle overlay costs no simulation.
+    property bool _alive: false
 
     function burst() {
+        root._alive = true;
+        idle.stop();
+        idle.restart();
         emitter.burst(root.amount)
+    }
+
+    Timer {
+        id: idle
+        interval: 1200
+        repeat: false
+        onTriggered: root._alive = false
     }
 
     function burstAt(x, y) {
@@ -45,7 +58,7 @@ Item {
     ParticleSystem {
         id: system
         anchors.fill: parent
-        running: true
+        running: root._alive
     }
 
     ImageParticle {

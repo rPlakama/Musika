@@ -83,7 +83,6 @@ ScrollPanel {
             else if (row.albumId)
                 albums.push(row.albumId);
         }
-        console.log("MRW count", mediaRows.count, "cur", root.currentIndex, "hi", Math.min(mediaRows.count - 1, Math.max(0, root.currentIndex) + 15), "albums", albums.length);
         if (force)
             Backend.refreshDownloads(JSON.stringify(songs), JSON.stringify(albums));
         else

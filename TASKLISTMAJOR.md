@@ -2076,7 +2076,7 @@ action. Ordered by expected ROI; each item is independently shippable.
     up-to-date sync: covers revalidate only when missing or older than
     `COVER_CHECK_TTL_SECS` (24 h), and a completed pass stamps the key.
 
-- [ ] **PATH-10 · Index and chunk the hot DB paths** — P2 · (perf audit)
+- [x] **PATH-10 · Index and chunk the hot DB paths** — P2 · (perf audit)
   - **Why:** `all_songs` sorts the full table with no matching index
     (`library.rs:601-606`), `most_played` orders on an `UNINDEXED` FTS
     column, and several `IN` lists are not chunked (`cache::push_in_list`).
@@ -2086,7 +2086,7 @@ action. Ordered by expected ROI; each item is independently shippable.
   - **Verify:** `EXPLAIN QUERY PLAN` uses the indexes; large windows stay
     under the bind limit with bounded plans.
 
-- [ ] **PATH-11 · Trim QML hot paths** — P2 · (perf audit)
+- [x] **PATH-11 · Trim QML hot paths** — P2 · (perf audit)
   - **Why:** `MediaList.qml:84` still logs on every mark request;
     `NowPlaying.applyQueue` builds an O(n) string signature
     (`NowPlaying.qml:306`) then rebuilds the whole model;
@@ -2098,8 +2098,12 @@ action. Ordered by expected ROI; each item is independently shippable.
     the particle system around bursts.
   - **Verify:** no per-move logging; queue apply is O(1) for index-only
     updates; lyric highlight stays cheap; idle particles cost nothing.
+  - **Now:** landed — the per-move `console.log` is gone; queue
+    payloads carry the backend row hash and QML compares that string; the
+    active lyric uses binary search; `RatingBurst` runs its particle system
+    only for 1.2 s after a burst.
 
-- [ ] **PATH-12 · Cache the offline catalog filter** — P2 · (perf audit)
+- [x] **PATH-12 · Cache the offline catalog filter** — P2 · (perf audit)
   - **Why:** `browse::offline_filter` (`browse.rs:34-48`) reads the whole
     downloaded id set and owner maps for every offline payload and search.
   - **Details:** cache the filter in `Backend`, invalidate on download
@@ -2107,11 +2111,20 @@ action. Ordered by expected ROI; each item is independently shippable.
   - **Verify:** offline list/search paging does not re-read the whole
     catalog per request.
 
-- [ ] **PATH-13 · Batch the sync rating import** — P3 · (perf audit)
+- [x] **PATH-13 · Batch the sync rating import** — P3 · (perf audit)
   - **Why:** `artist_user::import_ratings` (`artist_user.rs:104`) writes one
     row at a time on every sync.
   - **Details:** one transaction/batched upsert for the rated artists.
   - **Verify:** sync with many rated artists performs one write batch.
+  - **Now:** landed — `import_ratings` filters the 0..=5 domain and
+    writes one chunked, transactional multi-row upsert that preserves each
+    existing `starred` flag.
+  - **Now:** landed — one 2 s `Arc<OfflineFilter>` cache backs all
+    offline payloads; download settles and sync reloads clear it eagerly.
+  - **Now:** landed — `idx_songs_order` covers the default
+    `(artist, album, disc_number, track, title)` sort; `done_ids_of`,
+    `pending_ids_of` and `album_song_ids_of` now chunk their `IN` lists at
+    500 ids.
 
 ## Quick wins
 

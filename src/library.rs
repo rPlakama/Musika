@@ -204,13 +204,16 @@ pub async fn album_song_ids_of(
     if album_ids.is_empty() {
         return Ok(std::collections::HashMap::new());
     }
-    let mut builder = sqlx::QueryBuilder::new("SELECT album_id, id FROM songs WHERE album_id IN (");
-    crate::cache::push_in_list(&mut builder, album_ids);
-    let rows: Vec<(String, String)> = builder.build_query_as().fetch_all(pool).await?;
     let mut grouped: std::collections::HashMap<String, Vec<String>> =
         std::collections::HashMap::new();
-    for (album_id, song_id) in rows {
-        grouped.entry(album_id).or_default().push(song_id);
+    for chunk in album_ids.chunks(500) {
+        let mut builder =
+            sqlx::QueryBuilder::new("SELECT album_id, id FROM songs WHERE album_id IN (");
+        crate::cache::push_in_list(&mut builder, chunk);
+        let rows: Vec<(String, String)> = builder.build_query_as().fetch_all(pool).await?;
+        for (album_id, song_id) in rows {
+            grouped.entry(album_id).or_default().push(song_id);
+        }
     }
     Ok(grouped)
 }

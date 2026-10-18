@@ -143,35 +143,37 @@ pub async fn offline_song_ids(
 /// The finished subset of `ids` — the row marks' window read. One batched
 /// query; an empty window costs nothing.
 pub async fn done_ids_of(pool: &SqlitePool, ids: &[String]) -> Result<Vec<String>> {
-    if ids.is_empty() {
-        return Ok(Vec::new());
+    let mut out = Vec::new();
+    for chunk in ids.chunks(500) {
+        let mut builder = sqlx::QueryBuilder::new(
+            "SELECT song_id FROM download WHERE state = 'done' AND song_id IN (",
+        );
+        crate::cache::push_in_list(&mut builder, chunk);
+        let rows = builder
+            .build_query_scalar::<String>()
+            .fetch_all(pool)
+            .await?;
+        out.extend(rows);
     }
-    let mut builder = sqlx::QueryBuilder::new(
-        "SELECT song_id FROM download WHERE state = 'done' AND song_id IN (",
-    );
-    crate::cache::push_in_list(&mut builder, ids);
-    let rows = builder
-        .build_query_scalar::<String>()
-        .fetch_all(pool)
-        .await?;
-    Ok(rows)
+    Ok(out)
 }
 
 /// The in-flight subset of `ids` (`queued`/`active`) — the row marks show
 /// the loading glyph for these while the fetch runs.
 pub async fn pending_ids_of(pool: &SqlitePool, ids: &[String]) -> Result<Vec<String>> {
-    if ids.is_empty() {
-        return Ok(Vec::new());
+    let mut out = Vec::new();
+    for chunk in ids.chunks(500) {
+        let mut builder = sqlx::QueryBuilder::new(
+            "SELECT song_id FROM download WHERE state IN ('queued', 'active') AND song_id IN (",
+        );
+        crate::cache::push_in_list(&mut builder, chunk);
+        let rows = builder
+            .build_query_scalar::<String>()
+            .fetch_all(pool)
+            .await?;
+        out.extend(rows);
     }
-    let mut builder = sqlx::QueryBuilder::new(
-        "SELECT song_id FROM download WHERE state IN ('queued', 'active') AND song_id IN (",
-    );
-    crate::cache::push_in_list(&mut builder, ids);
-    let rows = builder
-        .build_query_scalar::<String>()
-        .fetch_all(pool)
-        .await?;
-    Ok(rows)
+    Ok(out)
 }
 
 /// Per-state counts for the status UI (`CACHE-7`): queued / active / done /

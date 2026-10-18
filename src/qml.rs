@@ -2395,7 +2395,14 @@ impl Backend {
                 return;
             }
             eprintln!("queue: published {} rows", items.len());
-            let json = serde_json::json!({ "index": index, "items": items }).to_string();
+            let json = serde_json::json!({
+                "index": index,
+                "items": items,
+                // PATH-11: the QML row-set check compares this revision string
+                // instead of concatenating every row again in JS.
+                "hash": rows_hash.to_string(),
+            })
+            .to_string();
             emit(&invoker, "queue", json);
         });
     }
@@ -2672,6 +2679,7 @@ impl Backend {
     }
 
     fn apply_download_settle(&mut self, song_id: String) {
+        crate::browse::clear_offline_filter();
         let touched = self
             .mark_states
             .get(&song_id)
@@ -2703,6 +2711,7 @@ impl Backend {
     /// favourites do not come through here anymore.
     #[qslot(qml_name = "TriggerRowReload")]
     fn trigger_row_reload(&mut self) {
+        crate::browse::clear_offline_filter();
         self.refresh_download_window();
         // Row content changed outside the player (syncs, wipe reloads,
         // download settles): the revision gate must not swallow this

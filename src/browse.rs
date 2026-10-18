@@ -30,21 +30,50 @@ struct OfflineFilter {
     artists: HashMap<String, i64>,
 }
 
+/// PATH-12: the offline catalog is the same for every payload between
+/// ledger changes; a short TTL coalesces paging/search bursts, and download
+/// settles clear it eagerly.
+static OFFLINE_FILTER: std::sync::OnceLock<
+    std::sync::Mutex<Option<(std::time::Instant, std::sync::Arc<OfflineFilter>)>>,
+> = std::sync::OnceLock::new();
+const OFFLINE_FILTER_TTL: std::time::Duration = std::time::Duration::from_secs(2);
+
+pub(crate) fn clear_offline_filter() {
+    if let Some(cache) = OFFLINE_FILTER.get() {
+        *cache.lock().unwrap_or_else(|error| error.into_inner()) = None;
+    }
+}
+
 /// `None` while online; the downloaded set while offline.
 async fn offline_filter(
     dbs: &crate::db::Dbs,
     offline: bool,
-) -> anyhow::Result<Option<OfflineFilter>> {
+) -> anyhow::Result<Option<std::sync::Arc<OfflineFilter>>> {
+    if !offline {
+        return Ok(None);
+    }
+    let cache = OFFLINE_FILTER.get_or_init(|| std::sync::Mutex::new(None));
+    {
+        let guard = cache.lock().unwrap_or_else(|error| error.into_inner());
+        if let Some((at, filter)) = guard.as_ref()
+            && at.elapsed() < OFFLINE_FILTER_TTL
+        {
+            return Ok(Some(std::sync::Arc::clone(filter)));
+        }
+    }
     let Some(songs) = crate::download::offline_song_ids(dbs, offline).await? else {
         return Ok(None);
     };
     let ids: Vec<String> = songs.iter().cloned().collect();
     let (albums, artists) = crate::library::downloaded_owners(&dbs.library, &ids).await?;
-    Ok(Some(OfflineFilter {
+    let filter = std::sync::Arc::new(OfflineFilter {
         songs,
         albums,
         artists,
-    }))
+    });
+    *cache.lock().unwrap_or_else(|error| error.into_inner()) =
+        Some((std::time::Instant::now(), std::sync::Arc::clone(&filter)));
+    Ok(Some(filter))
 }
 
 pub async fn load_albums_json(

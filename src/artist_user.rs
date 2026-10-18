@@ -102,13 +102,38 @@ pub async fn ratings(pool: &SqlitePool) -> Result<std::collections::HashMap<Stri
 /// (the server is the authority; a rating made elsewhere lands here).
 /// Out-of-domain values are ignored.
 pub async fn import_ratings(pool: &SqlitePool, ratings: &[(String, i64)]) -> Result<()> {
-    for (artist_id, rating) in ratings {
-        if let Ok(rating) = u8::try_from(*rating)
-            && rating <= 5
-        {
-            set_rating(pool, artist_id, rating).await?;
-        }
+    let valid: Vec<(&str, i64)> = ratings
+        .iter()
+        .filter_map(|(artist_id, rating)| {
+            u8::try_from(*rating)
+                .ok()
+                .filter(|rating| *rating <= 5)
+                .map(|rating| (artist_id.as_str(), i64::from(rating)))
+        })
+        .collect();
+    if valid.is_empty() {
+        return Ok(());
     }
+    let now = crate::consts::now_secs().to_string();
+    let mut tx = pool.begin().await?;
+    for chunk in valid.chunks(500) {
+        let mut query = sqlx::QueryBuilder::new(
+            "INSERT INTO artist_user (artist_id, starred, rating, updated_at) ",
+        );
+        query.push_values(chunk, |mut row, entry| {
+            row.push_bind(entry.0)
+                .push_bind(0i64)
+                .push_bind(entry.1)
+                .push_bind(now.as_str());
+        });
+        query.push(
+            " ON CONFLICT(artist_id) DO UPDATE SET
+                  rating = excluded.rating,
+                  updated_at = excluded.updated_at",
+        );
+        query.build().execute(&mut *tx).await?;
+    }
+    tx.commit().await?;
     Ok(())
 }
 
@@ -193,6 +218,8 @@ mod tests {
         set_rating(&pool, "a1", 3).await.unwrap();
         set_rating(&pool, "a2", 0).await.unwrap();
 
+        set_starred(&pool, "a1", true).await.unwrap();
+
         let map = ratings(&pool).await.unwrap();
         assert_eq!(map.len(), 1);
         assert_eq!(map.get("a1"), Some(&3));
@@ -207,7 +234,9 @@ mod tests {
         )
         .await
         .unwrap();
-        assert_eq!(get(&pool, "a1").await.unwrap().unwrap().rating, 5);
+        let row = get(&pool, "a1").await.unwrap().unwrap();
+        assert_eq!(row.rating, 5);
+        assert!(row.starred, "import must preserve the favourite");
         assert_eq!(get(&pool, "a2").await.unwrap().unwrap().rating, 2);
         assert!(get(&pool, "a3").await.unwrap().is_none());
     }

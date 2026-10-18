@@ -317,6 +317,12 @@ Item {
             quickActions.dismiss();
             return;
         }
+        // UI-60: Shift-J/K over the aimed favourite slot steps its rating.
+        if (action.indexOf("quick_rating ") === 0) {
+            quickActions.adjustRating(
+                action.substring("quick_rating ".length) === "up" ? 1 : -1);
+            return;
+        }
 
         // Sticky quadrant menu (the wipe chooser): h/j/k/l or arrows aim,
         // Enter fires the aimed wipe (at neutral it just closes). Esc is not
@@ -776,6 +782,12 @@ Item {
                                     artistCover: artistCover
                                 });
                             }
+                            // UI-60: the artist row arms the same Alt overlay
+                            // as albums/songs — without this relay the south
+                            // rating step never fired, so the Artists list's
+                            // favourite rectangle never reloaded.
+                            onQuickAction: (target, actions) =>
+                                root.armQuickActions(target, actions)
                         }
                     }
 
@@ -869,6 +881,14 @@ Item {
         z: searchOverlay.opened ? Theme.zOverlay + 1 : Theme.zRegion + 1
         backdrop: (root.nowPlayingExpanded && nowPlaying) ? nowPlaying
             : (searchOverlay.opened ? searchOverlay : shell)
+        // UI-60 "bright": the rating step's stars outlive the tile collapse.
+        onRatingStepped: (x, y) => ratingBurst.burstAt(x, y)
+    }
+
+    RatingBurst {
+        id: ratingBurst
+        anchors.fill: parent
+        z: quickActions.z + 1
     }
 
     Toast {

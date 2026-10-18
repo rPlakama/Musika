@@ -54,7 +54,8 @@ MediaList {
                 year: year,
                 tracks: String(album.song_count),
                 songId: "",
-                starred: album.starred === true
+                starred: album.starred === true,
+                rating: Number(album.rating) || 0
             });
         }
         root.setRows(rows);

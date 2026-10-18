@@ -76,6 +76,10 @@ QtObject {
                     ? "qrc:/app/icons/heart-minus.svg"
                     : "qrc:/app/icons/heart-add-fill.svg",
                 favorite: !fav,
+                // UI-60: the rating rides the favourite slot — Shift-J/K
+                // step it while the overlay aims here.
+                rating: Number(item.rating) || 0,
+                rate: function(level) { Backend.rateAlbum(item.albumId, level) },
                 invoke: function() { Backend.altFavorite("album", item.albumId, !fav) }
             },
             west: {
@@ -187,6 +191,10 @@ QtObject {
                     ? "qrc:/app/icons/heart-minus.svg"
                     : "qrc:/app/icons/heart-add-fill.svg",
                 favorite: !fav,
+                // UI-60: the rating rides the favourite slot — Shift-J/K
+                // step it while the overlay aims here.
+                rating: Number(item.rating) || 0,
+                rate: function(level) { Backend.rateArtist(item.artistId, level) },
                 invoke: function() { Backend.altFavorite("artist", item.artistId, !fav) }
             },
             west: null,

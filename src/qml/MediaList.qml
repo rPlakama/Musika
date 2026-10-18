@@ -39,6 +39,10 @@ ScrollPanel {
     // in `QuickActions`; the list only relays the row it anchors.
     property string quickActionKind: ""
     signal quickAction(var target, var actions)
+    /// UI-60: only album/artist rows own a rating; song rows show the heart
+    /// alone (no number-0 badge).
+    readonly property bool ratingMarks: quickActionKind === "album"
+        || quickActionKind === "artist"
 
     QuickActions {
         id: verbs
@@ -89,6 +93,17 @@ ScrollPanel {
     Connections {
         target: Backend
         function onRowReload() { root.requestMarkWindow(true); }
+        // UI-60: patch a rated album/artist row in place.
+        function onRatingChanged(kind, id, rating) {
+            for (var i = 0; i < mediaRows.count; ++i) {
+                var row = mediaRows.get(i);
+                if (!row)
+                    continue;
+                if ((kind === "album" && row.albumId === id)
+                        || (kind === "artist" && row.artistId === id))
+                    mediaRows.setProperty(i, "rating", rating);
+            }
+        }
     }
 
     /// A row's download mark: its song is cached, or it is an album row
@@ -116,7 +131,9 @@ ScrollPanel {
     /// list only gates it on the Alt verb kind and names the id field batch
     /// actions resolve to.
     selectable: quickActionKind !== ""
-    readonly property string selectionField: quickActionKind === "album" ? "albumId" : "songId"
+    readonly property string selectionField: quickActionKind === "album"
+        ? "albumId"
+        : (quickActionKind === "artist" ? "artistId" : "songId")
 
     /// ARC-43: Alt armed the gesture — anchor on the keyboard cursor row, or
     /// on the range with the selection verb set (VI-4).
@@ -133,7 +150,9 @@ ScrollPanel {
             actions = item
                 ? (quickActionKind === "album"
                     ? verbs.album(item, Backend.cachedAlbumIds.indexOf(item.albumId) !== -1)
-                    : verbs.song(item))
+                    : (quickActionKind === "artist"
+                        ? verbs.artist(item)
+                        : verbs.song(item)))
                 : null;
         }
         if (!actions)
@@ -270,6 +289,8 @@ ScrollPanel {
             required property string songId
             required property string albumId
             required property bool starred
+            /// UI-60: 0..=5; album/artist rows carry it, songs stay 0.
+            required property int rating
 
             readonly property real viewWidth: ListView.view ? ListView.view.width : 0
             // Mouse/keyboard parity: the hovered row expands like the cursor.
@@ -313,6 +334,8 @@ ScrollPanel {
                 markSongId: row.songId
                 markAlbumId: row.albumId
                 markStarred: row.starred
+                markRating: row.rating
+                markRatingVisible: root.ratingMarks
                 searchQuery: root.searchQuery
                 searchCurrent: row.index === root.searchCurrentRow
                 expected: row.index !== root.currentIndex && root.isExpected(row.y)
@@ -347,6 +370,8 @@ ScrollPanel {
             required property string songId
             required property string albumId
             required property bool starred
+            /// UI-60: 0..=5; album cells carry it, songs stay 0.
+            required property int rating
 
             readonly property bool current: GridView.isCurrentItem
             readonly property bool selectedCard: root.isSelected(cell.index)
@@ -401,18 +426,34 @@ ScrollPanel {
                     sizeFactor: 2
                 }
 
-                // UI-56: the favourite mark rides the cover corner; the
-                // download mark (the global ledger set) mirrors it on the
-                // other corner.
-                Icon {
-                    visible: root.markVisible(cell.index) && cell.starred
+                // UI-56/UI-60: the favourite mark rides the cover corner with
+                // the rating count at its bottom-right; the download mark
+                // (the global ledger set) mirrors it on the other corner.
+                Item {
+                    visible: root.markVisible(cell.index)
+                        && (cell.starred
+                            || (root.ratingMarks && cell.rating > 0))
                     anchors.right: parent.right
                     anchors.bottom: parent.bottom
                     anchors.margins: parent.width * 0.06
                     width: parent.width * 0.085
                     height: width
-                    name: "baseline-favorite"
-                    symbolColor: Theme.iconStrong
+
+                    Icon {
+                        anchors.fill: parent
+                        visible: cell.starred
+                        name: "baseline-favorite"
+                        symbolColor: Theme.iconStrong
+                    }
+
+                    RatingBadge {
+                        visible: root.ratingMarks
+                        anchors.right: parent.right
+                        anchors.bottom: parent.bottom
+                        width: parent.width * 0.84
+                        height: width
+                        rating: cell.rating
+                    }
                 }
 
                 Icon {

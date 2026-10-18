@@ -59,6 +59,8 @@ Item {
     property string markSongId: ""
     property string markAlbumId: ""
     property bool markStarred: false
+    property int markRating: 0
+    property bool markRatingVisible: false
 
     property string searchQuery: ""
     property bool searchCurrent: false
@@ -198,6 +200,8 @@ Item {
         songId: root.markSongId
         albumId: root.markAlbumId
         starred: root.markStarred
+        rating: root.markRating
+        showRating: root.markRatingVisible
         base: metaLabel.font.pixelSize * 0.8
         }
         }

@@ -182,6 +182,7 @@ pub struct AlbumID3 {
     pub play_count: Option<i64>,
     pub created: Option<String>,
     pub starred: Option<String>,
+    pub user_rating: Option<i32>,
     pub year: Option<i32>,
     pub genre: Option<String>,
 }

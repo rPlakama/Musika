@@ -20,22 +20,13 @@ import "Theme.js" as Theme
 
 // REC-UI-1: the one state-mark block every list row shares — the download
 // glyph (the windowed download.db sets: the song's id, or the album's when
-// every track of it is cached) followed by the favourite heart. Both marks
-// render only inside the host cursor's ±15-row window (`cursor`), and
-// nothing renders when neither applies (invisible boxes collapse in the
-// Row), so hosts only anchor the block and size it with `base` (the heart's
-// box; the download glyph is 1.2× for even ink).
-//
-//     RowMarks {
-//         anchors.right: meta.left
-//         cursor: root.currentIndex
-//         index: row.index
-//         songId: row.songId
-//         albumId: row.albumId
-//         starred: row.starred
-//         base: meta.font.pixelSize * 0.8
-//     }
-Row {
+// every track of it is cached) followed by the favourite heart and, on
+// album/artist rows only, its UI-60 rating count (songs keep the heart
+// alone). Both marks render only inside the host cursor's ±15-row window
+// (`cursor`), and nothing renders when neither applies (the zero-alpha box
+// collapses), so hosts only anchor the block and size it with `base` (the
+// heart's box; the download glyph is 1.2× for even ink).
+Rectangle {
     id: root
 
     /// The host's cursor (the selector): the rendering window's reference.
@@ -45,62 +36,98 @@ Row {
     property string songId: ""
     property string albumId: ""
     property bool starred: false
+    /// UI-60: the row's user rating (0..=5, 0 = unrated). The count badge
+    /// rides the favourite mark and stays visible even when unstarred —
+    /// only on rows that own a rating (albums/artists), never on songs.
+    property int rating: 0
+    property bool showRating: false
     /// The heart's box; the download glyph uses 1.2× of it. The block
     /// scales the host's base once, here (+8%).
     required property real base
     readonly property real box: root.base * 1.08
 
-    spacing: root.box * 0.05
+    // UI-60: one zero-alpha, content-sized box owns the symbols; every mark
+    // is vertically centred against the same Row axis (the download mark
+    // used to sit top-aligned while the heart/counter centred, which read as
+    // a diagonal). The box takes the Row's intrinsic size and centres it;
+    // binding to `implicit*` (not the anchored position) keeps it loop-free.
+    color: "transparent"
+    width: symbolsRow.implicitWidth
+    height: symbolsRow.implicitHeight
 
-    // The window's reference is the selector; a not-yet-landed cursor
-    // clamps to 0 (the same rule the hosts' request windows use).
-    readonly property bool windowed: Math.abs(root.index - Math.max(0, root.cursor)) <= 15
-    /// The row's fetch is running (queued/active in the ledger): the row
-    /// shows the shared loading loop, spinning, instead of the filled mark.
-    /// Album rows ride the same set through their own id — a container pass
-    /// also lights the album's row.
-    readonly property bool active: root.windowed
-        && ((root.songId.length > 0
-                && Backend.downloadingIds.indexOf(root.songId) !== -1)
-            || (root.albumId.length > 0
-                && Backend.downloadingIds.indexOf(root.albumId) !== -1))
-    /// The card's cache state, or the track's own.
-    readonly property bool cached: root.windowed
-        && ((root.songId.length > 0
-                && Backend.downloadedIds.indexOf(root.songId) !== -1)
-            || (root.albumId.length > 0
-                && Backend.cachedAlbumIds.indexOf(root.albumId) !== -1))
+    Row {
+        id: symbolsRow
+        anchors.centerIn: parent
+        spacing: root.box * 0.25
 
-    Rectangle {
-        radius: Theme.radius
-        visible: root.active || root.cached
-        width: root.box * 1.2
-        height: width
-        color: "transparent"
+        // The window's reference is the selector; a not-yet-landed cursor
+        // clamps to 0 (the same rule the hosts' request windows use).
+        readonly property bool windowed: Math.abs(root.index - Math.max(0, root.cursor)) <= 15
+        /// The row's fetch is running (queued/active in the ledger): the row
+        /// shows the shared loading loop, spinning, instead of the filled mark.
+        /// Album rows ride the same set through their own id — a container pass
+        /// also lights the album's row.
+        readonly property bool active: windowed
+            && ((root.songId.length > 0
+                    && Backend.downloadingIds.indexOf(root.songId) !== -1)
+                || (root.albumId.length > 0
+                    && Backend.downloadingIds.indexOf(root.albumId) !== -1))
+        /// The card's cache state, or the track's own.
+        readonly property bool cached: windowed
+            && ((root.songId.length > 0
+                    && Backend.downloadedIds.indexOf(root.songId) !== -1)
+                || (root.albumId.length > 0
+                    && Backend.cachedAlbumIds.indexOf(root.albumId) !== -1))
 
-        // ARC-UI-6: the shared download visual (loading while fetching,
-        // filled when cached, spin settling upright).
-        DownloadButton {
-            anchors.centerIn: parent
-            base: parent.width
-            fetching: root.active
-            done: root.cached
-        }
-    }
+        /// UI-60: the rating count owns its slot beside the heart and only
+        /// exists for a real level — an unrated (0) row shows the heart
+        /// alone. Sized 10% down from the balanced pass so the drawn digit
+        /// matches the row symbols' size ratio.
+        readonly property bool ratingMark: windowed && root.showRating
+            && root.rating > 0
 
-    Rectangle {
-        radius: Theme.radius
-        visible: root.windowed && root.starred
-        width: root.box * 1.2
-        height: width
-        color: "transparent"
-
-        Icon {
-            anchors.centerIn: parent
-            width: root.box
+        Rectangle {
+            radius: Theme.radius
+            visible: symbolsRow.active || symbolsRow.cached
+            anchors.verticalCenter: parent.verticalCenter
+            width: root.box * 1.2
             height: width
-            name: "baseline-favorite"
-            symbolColor: Theme.iconStrong
+            color: "transparent"
+
+            // ARC-UI-6: the shared download visual (loading while fetching,
+            // filled when cached, spin settling upright).
+            DownloadButton {
+                anchors.centerIn: parent
+                base: parent.width
+                fetching: symbolsRow.active
+                done: symbolsRow.cached
+            }
+        }
+
+        Rectangle {
+            radius: Theme.radius
+            visible: symbolsRow.windowed && root.starred
+            anchors.verticalCenter: parent.verticalCenter
+            width: root.box * 1.2
+            height: width
+            color: "transparent"
+
+            Icon {
+                anchors.centerIn: parent
+                width: root.box
+                height: width
+                name: "baseline-favorite"
+                symbolColor: Theme.iconStrong
+            }
+        }
+
+        RatingBadge {
+            visible: symbolsRow.ratingMark
+            anchors.verticalCenter: parent.verticalCenter
+            width: root.box * 1.89
+            height: width
+            glyphInset: 0.06
+            rating: root.rating
         }
     }
 }

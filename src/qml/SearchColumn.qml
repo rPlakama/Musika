@@ -119,6 +119,19 @@ Item {
     Connections {
         target: Backend
         function onRowReload() { root.requestMarkWindow(true); }
+        // UI-60: patch a rated hit in place.
+        function onRatingChanged(kind, id, rating) {
+            if (!root.model)
+                return;
+            for (var i = 0; i < root.model.count; ++i) {
+                var row = root.model.get(i);
+                if (!row)
+                    continue;
+                if ((kind === "album" && row.albumId === id)
+                        || (kind === "artist" && row.artistId === id))
+                    root.model.setProperty(i, "rating", rating);
+            }
+        }
     }
 
     /// Instant snap for far jumps (`gg`/`G`): the lists do the same through
@@ -283,6 +296,8 @@ Item {
                         required property string songId
                         required property string albumId
                         required property bool starred
+                        /// UI-60: 0..=5; album/artist hits carry it.
+                        required property int rating
 
                         readonly property bool current: index === root.cursor
                         // VI-4: the row sits inside the visual selection range.
@@ -368,23 +383,37 @@ Item {
                                 spacing: row.height * 0.06
                                 visible: row.subtitle.length > 0
 
-                                // UI-56: the artist column carries no meta, so
-                                // the heart leads its count subtitle instead.
-                                Icon {
-                                    id: subtitleHeart
-                                    visible: root.markVisible(row.index) && row.starred && row.meta.length === 0
+                                // UI-56/UI-60: the artist column carries no
+                                // meta, so the heart (and the rating count)
+                                // lead its album-count subtitle instead.
+                                Row {
+                                    id: subtitleMarks
                                     anchors.verticalCenter: parent.verticalCenter
-                                    width: subtitleLabel.font.pixelSize * 0.8
-                                    height: width
-                                    name: "baseline-favorite"
-                                    symbolColor: Theme.iconStrong
+                                    spacing: subtitleLabel.font.pixelSize * 0.15
+                                    visible: root.markVisible(row.index)
+                                        && row.meta.length === 0
+                                        && (row.starred || row.rating > 0)
+
+                                    Icon {
+                                        visible: row.starred
+                                        width: subtitleLabel.font.pixelSize * 0.8
+                                        height: width
+                                        name: "baseline-favorite"
+                                        symbolColor: Theme.iconStrong
+                                    }
+
+                                    RatingBadge {
+                                        width: subtitleLabel.font.pixelSize * 1.26
+                                        height: width
+                                        rating: row.rating
+                                    }
                                 }
 
                                 SearchText {
                                     id: subtitleLabel
                                     width: Math.max(0, parent.width
-                                        - (subtitleHeart.visible
-                                            ? subtitleHeart.width + parent.spacing : 0))
+                                        - (subtitleMarks.visible
+                                            ? subtitleMarks.width + parent.spacing : 0))
                                     text: row.subtitle
                                     color: (row.current && root.active) || row.selectedRow ? Palette.onSecondaryContainer : Palette.onSurfaceVariant
                                     font.pixelSize: Theme.clamp(row.height * 0.24, 10, 14)
@@ -407,6 +436,13 @@ Item {
                             songId: row.songId
                             albumId: row.albumId
                             starred: row.starred && row.meta.length > 0
+                            rating: row.rating
+                            // UI-60: song hits keep the heart only; the
+                            // meta-less artist column shows its count beside
+                            // the subtitle instead.
+                            showRating: root.quickActionKind === "album"
+                                || (root.quickActionKind === "artist"
+                                    && row.meta.length > 0)
                             base: metaLabel.font.pixelSize * 0.8
                         }
 

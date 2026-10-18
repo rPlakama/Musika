@@ -179,6 +179,25 @@ where
     )
     .await?;
 
+    // 1b. UI-60: the server's artist `userRating` snapshots seed the local
+    // `artist_user` overlay (a rating made elsewhere lands here).
+    let artist_ratings: Vec<(String, i64)> = indexes
+        .index
+        .iter()
+        .flat_map(|index| index.artist.iter())
+        .chain(indexes.shortcut.iter())
+        .filter_map(|artist| {
+            artist
+                .user_rating
+                .map(|rating| (artist.id.clone(), i64::from(rating)))
+        })
+        .collect();
+    best_effort(
+        "artist rating import failed",
+        crate::artist_user::import_ratings(&dbs.artist_user, &artist_ratings),
+    )
+    .await;
+
     // 2. search index
     rebuild_search(dbs).await?;
 

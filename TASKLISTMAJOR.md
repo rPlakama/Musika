@@ -2011,6 +2011,69 @@ Small, bounded, high-value changes.
     (unit 0.46× / 0.05× bar height). Open: the manual squeeze pass compact →
     narrow.
 
+- [x] **UI-60 · Merging Favorite System** — P2 · (reported)
+  - **Why:** favourite and rating are two grammars for one piece of user
+    state: every row wears a heart, but Navidrome's 0..5 stars are only
+    reachable by clicking `ArtistEntry`'s five-glyph cluster (UI-52/ARC-42)
+    — mouse-only on a keyboard-first player — and albums have no rating
+    affordance at all even though the server exposes `setRating` for songs,
+    albums and artists. The rating should ride the favourite mark itself.
+  - **Details:**
+    - one Favorite mark: the heart wears a small `number-0..5.svg` badge in
+      its bottom-right corner (0 = unrated, drawn with the number-0 glyph);
+      favourite and rating stay independent — unstarring keeps the rating,
+      rating never flips the favourite;
+    - the Alt-hold overlay's south slot (`QuickActions.song`/`album`/
+      `artist`, and `forSelection`) becomes rating-aware: releasing Alt over
+      it keeps today's mere favourite toggle (the normal action == release),
+      while aiming at it with Shift held turns `J`/`K` into rating down/up
+      (`k` = +1, `j` = -1, clamped 0..5) and the badge updates live; `J`/`K`
+      must not leak to the queue reorder while the overlay owns the hold;
+    - the same badge rides the stationary favourite marks that mirror the
+      state (`RowMarks` row heart, `ArtistEntry`'s Favorite chip,
+      `AlbumEntry` header / fullscreen keybar heart), so a rating is visible
+      while browsing, not only inside the overlay;
+    - merge (retire) `ArtistEntry`'s separate five-star cluster: the
+      Favorite chip becomes the single favourite + rating control; keep the
+      cluster's hover/click star preview only if it survives as a second
+      pointer path to the same state;
+    - backend: artists already store `rating` (`artist_user`) with
+      `rateArtist` + the `artist_user` payload; add the same 0..5 user
+      rating for albums (and songs, if the shared Favorite mark covers track
+      rows) — new `rateAlbum`/`rateSong` slots write the server through
+      Subsonic `setRating`, index locally, emit the affected row/user
+      payload on success and `errorRaised` on failure; album/song payloads
+      (browse, search, queue as needed) gain `rating` so rows re-render
+      without a full reload;
+    - domain: 0..=5, optimistic on the keypress and reconciled by the
+      emitted payload; no badge behaviour when the server user lacks the
+      `setRating` capability.
+  - **Verify:** keyboard-only pass: aim Alt south on an album/artist row,
+    tap `Shift-K` five times → the badge climbs 1..5, `Shift-J` walks it
+    back to 0 (the number-0 glyph) without unfavouriting; releasing Alt alone
+    toggles only the favourite; the value survives a restart (local index)
+    and matches Navidrome's `userRating`; the pointer path in `ArtistEntry`
+    still works if kept; `qmllint` clean and the overlay still cancels over
+    neutral.
+  - **Now:** landed — albums gain a `rating` column (migration) fed by
+    `AlbumID3.userRating` on sync; `rateAlbum` writes the server/local row and
+    emits the new `ratingChanged` per-row patch plus `album_state` (rating
+    included); artists reuse `artist_user`, with the index's `userRating`
+    imported on sync. `RatingBadge.qml` (`number-0..5.svg`) rides `RowMarks`
+    (album/artist rows only — song rows keep the heart alone), `MediaList`'s
+    grid cells, `ArtistEntry`'s favourite chip and album cards,
+    `AlbumEntry`'s header, the fullscreen keybar heart and all search rows;
+    `ArtistEntry`'s five-star cluster is retired (the chip's outline/filled
+    star is the one control). The Alt overlay's south slot carries the seed
+    rating + badge and Shift-J/K steps it (180 ms debounced, release flushes
+    and never double-fires the favourite); the Artists list now arms the
+    overlay too. The "bright" FX (`RatingBurst.qml`, QtQuick.Particles) fires
+    a few stars from the aimed heart on every step, above the overlay so the
+    burst outlives the tile collapse. `cargo test` 141 pass, icon check
+    clean, QML parses, an offscreen run opened the album/artist pages without
+    QML warnings. Open: the live keyboard pass on Navidrome and capability
+    gating for servers without `setRating`.
+
 - [x] **UI-56 · Microdesign: favorites lead with a heart before their meta** — P3 · **top priority** · (design microtask; P-2, ARC-42)
   - **Why:** every album, song and artist row shows its `<track amount>` /
     `<track duration>` / `<album quantity>` meta with no way to tell a

@@ -453,6 +453,10 @@ impl Backend {
     /// a heart write).
     #[qsignal(qml_name = "favoriteChanged")]
     fn favorite_changed(&mut self, kind: String, id: String, on: bool);
+    /// UI-60: a rating landed (or failed and reverted): surfaces patch the
+    /// matching row in place — the rating twin of `favoriteChanged`.
+    #[qsignal(qml_name = "ratingChanged")]
+    fn rating_changed(&mut self, kind: String, id: String, rating: i64);
     #[qsignal(qml_name = "dataReady")]
     fn data_ready(&mut self, channel: String, payload: String);
     #[qsignal(qml_name = "errorRaised")]
@@ -1487,6 +1491,21 @@ impl Backend {
             let result = apply_artist_user(&dbs, &artist_id, ArtistUserAction::Rate(rating)).await;
             let json = crate::artist_user::payload(&dbs.artist_user, &artist_id).await;
             emit(&invoker, "artist_user", json);
+            // UI-60: patch the artist rows in place (list/search), also on
+            // failure — the stored value reverts the optimistic badge.
+            let stored = crate::artist_user::get(&dbs.artist_user, &artist_id)
+                .await
+                .ok()
+                .flatten()
+                .map(|row| row.rating)
+                .unwrap_or(0);
+            qtbridge::invoke_method!(
+                invoker,
+                "ratingChanged",
+                "artist".to_string(),
+                artist_id.clone(),
+                stored
+            );
             if let Err(err) = result {
                 raise(
                     &error_invoker,
@@ -1723,7 +1742,64 @@ impl Backend {
             let starred = crate::library::album_starred(&dbs.library, &album_id)
                 .await
                 .unwrap_or(false);
-            Ok(album_state_payload(&album_id, starred))
+            let rating = crate::library::album_rating(&dbs.library, &album_id)
+                .await
+                .unwrap_or(0);
+            Ok(album_state_payload(&album_id, starred, rating))
+        });
+    }
+
+    /// UI-60: sets an album's 0..=5 user rating on the server, then indexes
+    /// it locally. The overlay updates the badge optimistically; the
+    /// `ratingChanged` signal patches every visible row and the
+    /// `album_state` payload reconciles the album header/keybar (also on
+    /// failure, with the stored value).
+    #[qslot(qml_name = "rateAlbum")]
+    fn rate_album(&mut self, album_id: String, rating: i32) {
+        let rating = match u8::try_from(rating) {
+            Ok(rating) if rating <= 5 => rating,
+            _ => {
+                eprintln!("album: rating {rating} is outside the 0..=5 domain");
+                return;
+            }
+        };
+        let error_invoker = self.get_qml_method_invoker();
+        let state_invoker = self.get_qml_method_invoker();
+        self.spawn_task(move |dbs| async move {
+            let result = async {
+                let client = client(&dbs).await?;
+                client.set_rating(&album_id, rating).await?;
+                crate::library::set_album_rating(&dbs.library, &album_id, rating).await
+            }
+            .await;
+            // Re-read the stored row: on failure this reverts the optimistic
+            // badge to the last accepted value.
+            let stored = crate::library::album_rating(&dbs.library, &album_id)
+                .await
+                .unwrap_or(0);
+            let starred = crate::library::album_starred(&dbs.library, &album_id)
+                .await
+                .unwrap_or(false);
+            qtbridge::invoke_method!(
+                state_invoker,
+                "ratingChanged",
+                "album".to_string(),
+                album_id.clone(),
+                stored
+            );
+            emit(
+                &state_invoker,
+                "album_state",
+                album_state_payload(&album_id, starred, stored),
+            );
+            if let Err(err) = result {
+                eprintln!("album: could not rate {album_id}: {err:#}");
+                raise(
+                    &error_invoker,
+                    "error",
+                    format!("Could not rate album: {err:#}"),
+                );
+            }
         });
     }
 
@@ -2680,7 +2756,10 @@ impl Backend {
             if result.is_ok() {
                 if kind == "album" {
                     // The fullscreen keybar heart reconciles through this.
-                    let json = album_state_payload(&id, on);
+                    let rating = crate::library::album_rating(&dbs.library, &id)
+                        .await
+                        .unwrap_or(0);
+                    let json = album_state_payload(&id, on, rating);
                     emit(&state_invoker, "album_state", json);
                 }
                 // Per-row reconcile: the queue patches every matching row in

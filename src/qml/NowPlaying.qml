@@ -55,6 +55,8 @@ Rectangle {
     // 1 = download) and the states the backend reconciles.
     property int actionScope: 0
     property bool albumStarred: false
+    // UI-60: the playing album's user rating (0..=5, 0 = unrated).
+    property int albumRating: 0
     property bool albumCacheOn: false
     property bool albumDownloading: false
     property bool albumCovered: false
@@ -642,8 +644,10 @@ Rectangle {
                     Backend.ResetRowMarks();
             } else if (channel === "album_state") {
                 var state = JSON.parse(payload);
-                if (state.id === Backend.currentAlbumId)
+                if (state.id === Backend.currentAlbumId) {
                     root.albumStarred = state.starred === true;
+                    root.albumRating = Number(state.rating) || 0;
+                }
             }
         }
         function onCurrent_album_id_changed() {
@@ -1473,11 +1477,23 @@ Rectangle {
                     // star reads the album's state, the overlay then picks
                     // the scope — track (note) or album.
                     unit: keybar.height * 0.72
-                    icon: "qrc:/app/icons/star.svg"
+                    icon: root.albumStarred
+                        ? "qrc:/app/icons/star.svg"
+                        : "qrc:/app/icons/star-outline.svg"
                     iconColor: root.albumStarred ? Theme.favoriteStar : Palette.onSurfaceVariant
                     onClicked: {
                         root.actionScope = 0;
                         root.armAlbumActions("favorite");
+                    }
+
+                    // UI-60: the playing album's rating rides the chip.
+                    RatingBadge {
+                        anchors.right: parent.right
+                        anchors.bottom: parent.bottom
+                        anchors.margins: parent.width * 0.04
+                        width: parent.width * 0.588
+                        height: width
+                        rating: root.albumRating
                     }
 
                     ScopeRing {

@@ -53,7 +53,8 @@ MediaList {
                 playlistId: list.id,
                 songId: "",
                 albumId: "",
-                starred: false
+                starred: false,
+                rating: 0
             });
         }
         root.setRows(rows);

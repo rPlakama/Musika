@@ -39,10 +39,33 @@ import "Theme.js" as Theme
 Item {
     id: root
 
+    /// UI-60: a rating step happened at (x, y) in this overlay's
+    /// coordinates — the host spawns the bright star burst there.
+    signal ratingStepped(real x, real y)
+
     property bool armed: false
     property Item targetItem: null
     property var config: null
     property string aimed: ""
+    /// UI-60: the live rating level while the favourite slot is adjusted
+    /// with Shift-J/K (seeded from the slot's own `rating` on arm).
+    property int ratingValue: 0
+    /// A rating step was taken in this hold: the release must not also
+    /// toggle the favourite underneath it.
+    property bool ratingTouched: false
+    /// The level is not on the server yet (the idle timer or the release
+    /// flushes it once).
+    property bool ratingDirty: false
+
+    // The steps commit on a short idle: a burst of Shift-K/J presses sends
+    // one request (the server cannot reorder parallel ratings), while the
+    // badge previews every step immediately.
+    Timer {
+        id: ratingCommit
+        interval: 180
+        repeat: false
+        onTriggered: root.commitRating()
+    }
     /// UI-55: the item behind the option tiles whose pixels feed the acrylic
     /// blur (the shell, or the fullscreen player when it is up).
     property Item backdrop: null
@@ -101,15 +124,51 @@ Item {
         config = cfg;
         sticky = cfg.sticky === true;
         aimed = "";
+        ratingValue = (cfg.south && typeof cfg.south.rate === "function")
+            ? (Number(cfg.south.rating) || 0) : 0;
+        ratingTouched = false;
+        ratingDirty = false;
         armed = true;
         pop.play();
     }
 
     function cancel() {
+        ratingCommit.stop();
         armed = false;
         aimed = "";
+        ratingTouched = false;
+        ratingDirty = false;
         sticky = false;
         pop.collapse();
+    }
+
+    /// UI-60: Shift-J/K over the aimed favourite slot steps its rating
+    /// (`delta` -1/+1, clamped 0..5). Returns false when the aim is not a
+    /// rating slot.
+    function adjustRating(delta) {
+        if (!armed || aimed !== "south" || !config || !config.south
+                || typeof config.south.rate !== "function")
+            return false;
+        ratingValue = Math.max(0, Math.min(5, ratingValue + delta));
+        ratingTouched = true;
+        ratingDirty = true;
+        ratingCommit.restart();
+        // UI-60 "bright": the burst leaves the heart's centre, which is the
+        // south tile's centre (the tile is aimed, so it is laid out).
+        var p = southBox.mapToItem(root, southBox.width / 2, southBox.height / 2);
+        root.ratingStepped(p.x, p.y);
+        return true;
+    }
+
+    /// Sends the pending rating step (the idle timer's landing pad and the
+    /// Alt release's flush).
+    function commitRating() {
+        ratingCommit.stop();
+        if (!ratingDirty || !config || !config.south
+                || typeof config.south.rate !== "function")
+            return;
+        ratingDirty = false;
+        config.south.rate(ratingValue);
     }
 
     /// IPC `quick_cancel`: retire the overlay for the rest of this Alt hold.
@@ -142,8 +201,12 @@ Item {
     }
 
     function confirm() {
+        // A rating step closes out with its own call: the Alt release must
+        // not also toggle the favourite underneath it.
+        var ratingAim = ratingTouched && aimed === "south";
+        commitRating();
         var slot = aimed.length > 0 && config ? config[aimed] : null;
-        if (slot && slot.invoke)
+        if (slot && slot.invoke && !ratingAim)
             slot.invoke();
         cancel();
     }
@@ -280,6 +343,10 @@ Item {
             // VI-4: a verb that does not apply to the current selection is
             // shown gray and cannot be aimed.
             readonly property bool isDisabled: !!box.slot && box.slot.disabled === true
+            // UI-60: the favourite slot carries a 0..=5 rating badge.
+            readonly property bool ratingSlot: !!box.slot
+                && typeof box.slot.rate === "function"
+            readonly property int shownRating: root.ratingValue
 
             width: board.boxSide
             height: board.boxSide
@@ -329,6 +396,17 @@ Item {
                     : (box.isAimed ? Palette.onPrimaryContainer : Palette.onSurfaceVariant)
                 font.family: "monospace"
                 font.pixelSize: board.boxFont
+            }
+
+            // UI-60: the rating count at the favourite glyph's bottom-right.
+            RatingBadge {
+                visible: box.ratingSlot
+                anchors.right: parent.right
+                anchors.bottom: parent.bottom
+                anchors.margins: parent.width * 0.07
+                width: parent.width * 0.448
+                height: width
+                rating: box.shownRating
             }
 
             // Mouse path: clicking a tile aims and fires it in one step.

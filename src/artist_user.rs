@@ -88,6 +88,30 @@ pub async fn get(pool: &SqlitePool, artist_id: &str) -> Result<Option<ArtistUser
     Ok(row)
 }
 
+/// UI-60: every stored artist rating above zero (id -> 0..=5), for the row
+/// payloads' `rating` field.
+pub async fn ratings(pool: &SqlitePool) -> Result<std::collections::HashMap<String, i64>> {
+    let rows: Vec<(String, i64)> =
+        sqlx::query_as("SELECT artist_id, rating FROM artist_user WHERE rating > 0")
+            .fetch_all(pool)
+            .await?;
+    Ok(rows.into_iter().collect())
+}
+
+/// UI-60: imports the server's `userRating` snapshots after a library sync
+/// (the server is the authority; a rating made elsewhere lands here).
+/// Out-of-domain values are ignored.
+pub async fn import_ratings(pool: &SqlitePool, ratings: &[(String, i64)]) -> Result<()> {
+    for (artist_id, rating) in ratings {
+        if let Ok(rating) = u8::try_from(*rating)
+            && rating <= 5
+        {
+            set_rating(pool, artist_id, rating).await?;
+        }
+    }
+    Ok(())
+}
+
 /// Every starred artist id, ordered for stable favourites listings.
 /// (P-2's favourites view is the consumer; exercised by the tests today.)
 #[allow(dead_code)]
@@ -161,6 +185,31 @@ mod tests {
         let pool = memory_pool().await;
         assert!(set_rating(&pool, "a1", 6).await.is_err());
         assert!(get(&pool, "a1").await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn ratings_map_and_import_skip_invalid_levels() {
+        let pool = memory_pool().await;
+        set_rating(&pool, "a1", 3).await.unwrap();
+        set_rating(&pool, "a2", 0).await.unwrap();
+
+        let map = ratings(&pool).await.unwrap();
+        assert_eq!(map.len(), 1);
+        assert_eq!(map.get("a1"), Some(&3));
+
+        import_ratings(
+            &pool,
+            &[
+                ("a1".to_string(), 5),
+                ("a2".to_string(), 2),
+                ("a3".to_string(), 9),
+            ],
+        )
+        .await
+        .unwrap();
+        assert_eq!(get(&pool, "a1").await.unwrap().unwrap().rating, 5);
+        assert_eq!(get(&pool, "a2").await.unwrap().unwrap().rating, 2);
+        assert!(get(&pool, "a3").await.unwrap().is_none());
     }
 
     #[tokio::test]

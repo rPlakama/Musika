@@ -47,7 +47,8 @@ MediaList {
                 cover: song.cover ? song.cover : "",
                 songId: song.id,
                 albumId: song.album_id ? song.album_id : "",
-                starred: song.starred === true
+                starred: song.starred === true,
+                rating: 0
             });
         }
         root.setRows(rows);

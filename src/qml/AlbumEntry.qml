@@ -45,6 +45,9 @@ Rectangle {
     /// ARC-I-2: the album's favourite state (header heart); fed by the
     /// opener from the album row and the ARC-43 page payload.
     property bool albumStarred: false
+    /// UI-60: the album's user rating (0..=5, 0 = unrated); the
+    /// `album_state` payload reconciles it on open.
+    property int albumRating: 0
     property string albumNotes: ""
     // UI-14: album notes clamp to three lines until clicked.
     property bool notesExpanded: false
@@ -165,6 +168,9 @@ Rectangle {
         root.loading = true;
         Backend.requestAlbumSongs(root.albumId);
         Backend.requestAlbumInfo(root.albumId);
+        // UI-60: the header's favourite + rating marks reconcile here (the
+        // opener's row flags may be stale).
+        Backend.requestAlbumState(root.albumId);
     }
 
     function applyInfo(payload) {
@@ -303,6 +309,13 @@ Rectangle {
                 root.apply(payload);
             else if (channel === "album_info")
                 root.applyInfo(payload);
+            else if (channel === "album_state") {
+                var state = JSON.parse(payload);
+                if (state.id === root.albumId) {
+                    root.albumStarred = state.starred === true;
+                    root.albumRating = Number(state.rating) || 0;
+                }
+            }
         }
         // A fetch finished: re-read this page's own window (forced).
         function onRowReload() {
@@ -470,14 +483,29 @@ Rectangle {
                     Layout.fillWidth: true
                     spacing: root.height * 0.008
 
-                    // ARC-I-2: the album's favourite leads the header meta.
-                    Icon {
-                        visible: root.albumStarred
+                    // ARC-I-2/UI-60: the album's favourite leads the header
+                    // meta, with the rating count at its corner (a rated but
+                    // unfavourited album still shows the badge).
+                    Item {
+                        visible: root.albumStarred || root.albumRating > 0
                         Layout.alignment: Qt.AlignVCenter
                         Layout.preferredWidth: root.height * 0.016
                         Layout.preferredHeight: width
-                        name: "baseline-favorite"
-                        symbolColor: Theme.iconStrong
+
+                        Icon {
+                            anchors.fill: parent
+                            visible: root.albumStarred
+                            name: "baseline-favorite"
+                            symbolColor: Theme.iconStrong
+                        }
+
+                        RatingBadge {
+                            anchors.right: parent.right
+                            anchors.bottom: parent.bottom
+                            width: parent.width * 0.952
+                            height: width
+                            rating: root.albumRating
+                        }
                     }
 
                     FadeText {

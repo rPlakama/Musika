@@ -30,6 +30,9 @@ MediaList {
     roundedArt: true
     orderText: Backend.artistOrder
     memoryKey: "artists"
+    // UI-60: artist rows carry the favourite + rating verbs in the Alt
+    // overlay (the rating rides the south slot).
+    quickActionKind: "artist"
 
     function reload() {
         root.loading = true;
@@ -52,7 +55,8 @@ MediaList {
                 artistCover: artist.cover ? artist.cover : "",
                 songId: "",
                 albumId: "",
-                starred: artist.starred === true
+                starred: artist.starred === true,
+                rating: Number(artist.rating) || 0
             });
         }
         root.setRows(rows);

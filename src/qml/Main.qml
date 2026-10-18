@@ -207,6 +207,16 @@ ApplicationWindow {
             // in the neutral center fires nothing — and Esc cancels. These
             // keys never reach the keymap.
             if (Backend.altHeld) {
+                // UI-60: Shift-J/K step the aimed favourite slot's rating.
+                // They fire once per press (key auto-repeat would flood the
+                // server); a non-rating aim simply ignores them.
+                if (!event.isAutoRepeat
+                        && (event.modifiers & Qt.ShiftModifier)
+                        && (event.key === Qt.Key_J || event.key === Qt.Key_K)) {
+                    dispatch("quick_rating "
+                        + (event.key === Qt.Key_K ? "up" : "down"));
+                    return;
+                }
                 var aim = "";
                 if (event.key === Qt.Key_H || event.key === Qt.Key_Left)
                     aim = "west";

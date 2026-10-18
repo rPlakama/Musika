@@ -87,6 +87,25 @@ Rectangle {
     /// card with the recycled album verb set; a visual selection swaps in the
     /// batch verb set (VI-4).
     function armQuickActions() {
+        // UI-60: a scoped header chip owns the gesture. The favourite chip
+        // rates the artist itself (the same south slot the row marks use);
+        // without that, Alt fell through to the album under the grid cursor.
+        if (root.chipScope === 2) {
+            var artist = {
+                artistId: root.artistId,
+                starred: root.artistStarred,
+                rating: root.artistRating
+            };
+            var artistActions = verbs.artist(artist);
+            var wantStar = artistActions.south.favorite === true;
+            var toggleStar = artistActions.south.invoke;
+            artistActions.south.invoke = function() {
+                toggleStar();
+                root.artistStarred = wantStar;
+            };
+            quickAction(favoriteChip, artistActions);
+            return;
+        }
         if (albums.count === 0 || wall.currentIndex < 0)
             return;
         var cell = wall.view.itemAtIndex(wall.currentIndex);
@@ -133,9 +152,6 @@ Rectangle {
     // CACHE-5: the fetch pass for this artist is running (the chip shows the
     // spinning loading loop while the ledger works through the songs).
     property bool artistDownloading: false
-    // UI-52: star under the cursor in the rating row, -1 = none. The row
-    // previews the level incrementally up to this index.
-    property int hoveredStar: -1
     // UI-54: per-artist scroll memory for the album grid.
     readonly property string memoryKey: "artist:" + root.artistId
     // Home uses this to send `Esc` straight to Main (P-8) instead of popping
@@ -236,7 +252,8 @@ Rectangle {
                 tracks: String(album.song_count),
                 meta: meta.join("   ·   "),
                 cover: album.cover ? album.cover : "",
-                starred: album.starred === true
+                starred: album.starred === true,
+                rating: Number(album.rating) || 0
             });
         }
         if (albums.count > 0 && (wall.currentIndex < 0 || wall.currentIndex >= albums.count))
@@ -371,6 +388,19 @@ Rectangle {
         }
         function onAlbum_order_changed() {
             root.reload();
+        }
+        // UI-60: patch the header rating or the matching album card.
+        function onRatingChanged(kind, id, rating) {
+            if (kind === "artist" && id === root.artistId) {
+                root.artistRating = rating;
+                return;
+            }
+            if (kind !== "album")
+                return;
+            for (var i = 0; i < albums.count; ++i) {
+                if (albums.get(i).albumId === id)
+                    albums.setProperty(i, "rating", rating);
+            }
         }
     }
 
@@ -546,84 +576,9 @@ Rectangle {
                 color: "transparent"
                 visible: !Theme.isNarrow(root.width)
 
-                Row {
-                    anchors.left: parent.left
-                    anchors.leftMargin: root.width * 0.015
-                    anchors.verticalCenter: parent.verticalCenter
-                    spacing: root.height * 0.010
-
-                    // UI-52: stars are glyphs, not a chip — five slots, the
-                    // first `artistRating` filled (Subsonic rating 1..5, 0 =
-                    // unrated; ARC-42 supplies the level). Hovering previews a
-                    // level incrementally (everything up to the cursor lights)
-                    // and gives the hovered star the shared press bounce.
-                    // Centred against the chip row.
-                    Row {
-                        anchors.verticalCenter: parent.verticalCenter
-                        spacing: root.height * 0.002
-
-                        Repeater {
-                            model: 5
-
-                            // UI-52: the slot is the hitbox (bigger than the
-                            // glyph), so the star is easier to hover/click
-                            // without growing the drawn star.
-                            delegate: Item {
-                                id: starSlot
-
-                                required property int index
-
-                                readonly property bool lit: index < root.artistRating
-                                    || index <= root.hoveredStar
-
-                                width: root.height * 0.05
-                                height: width
-
-                                SymbolIcon {
-                                    id: starGlyph
-                                    anchors.centerIn: parent
-                                    width: root.height * 0.032
-                                    height: width
-                                    source: starSlot.lit
-                                        ? "qrc:/app/icons/star.svg"
-                                        : "qrc:/app/icons/star-outline.svg"
-                                    symbolColor: starSlot.lit
-                                        ? Palette.primary
-                                        : Palette.onSurfaceVariant
-                                }
-
-                                PressBounce {
-                                    id: starPress
-                                    target: starGlyph
-                                }
-
-                                HoverHandler {
-                                    id: starHover
-                                    cursorShape: Qt.PointingHandCursor
-                                    onHoveredChanged: {
-                                        root.hoveredStar = starHover.hovered ? starSlot.index : -1;
-                                        if (starHover.hovered)
-                                            starPress.press();
-                                    }
-                                }
-
-                                TapHandler {
-                                    // ARC-42: optimistic level; clicking the
-                                    // lit top again clears it (rating 0). The
-                                    // `artist_user` payload reconciles.
-                                    onTapped: {
-                                        var level = starSlot.index + 1;
-                                        root.artistRating = root.artistRating === level ? 0 : level;
-                                        Backend.rateArtist(root.artistId, root.artistRating);
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-
-                // UI-53: stars hug the identity edge; the actions hug the
-                // right edge of the header.
+                // UI-53/UI-60: the merged favourite chip hugs the right edge
+                // of the header; its rating count is the badge below, so the
+                // old five-star cluster is gone.
                 Row {
                     anchors.right: parent.right
                     anchors.rightMargin: root.width * 0.015
@@ -668,17 +623,32 @@ Rectangle {
                     }
 
                     ActionChip {
+                        id: favoriteChip
                         unit: root.height * 0.06
                         // ARC-42: filled star, gray while not favourited and
                         // the Material yellow when it is. Clicks toggle
                         // optimistically; the backend reconciles through the
                         // `artist_user` payload (also on failure, alongside
                         // the error toast).
-                        icon: "qrc:/app/icons/star.svg"
+                        icon: root.artistStarred
+                            ? "qrc:/app/icons/star.svg"
+                            : "qrc:/app/icons/star-outline.svg"
                         iconColor: root.artistStarred ? Theme.favoriteStar : Palette.onSurfaceVariant
                         onClicked: {
                             root.chipScope = 2;
                             root.toggleFavorite();
+                        }
+
+                        // UI-60: the artist's rating count rides the
+                        // favourite chip (Shift-J/K in the Alt overlay sets
+                        // it; the list rows share the same badge).
+                        RatingBadge {
+                            anchors.right: parent.right
+                            anchors.bottom: parent.bottom
+                            anchors.margins: parent.width * 0.04
+                            width: parent.width * 0.588
+                            height: width
+                            rating: root.artistRating
                         }
 
                         ScopeRing {
@@ -745,6 +715,8 @@ Rectangle {
                         required property string meta
                         required property string cover
                         required property bool starred
+                        /// UI-60: 0..=5 album user rating.
+                        required property int rating
 
                         readonly property bool current: GridView.isCurrentItem
                         // UI-50: cursor or hover expands the cover + title,
@@ -803,20 +775,35 @@ Rectangle {
                                 sizeFactor: 2
                             }
 
-                            // UI-56/ARC-I-2: a favourited album carries its
-                            // mark inside the cover's bottom-right corner;
-                            // the download glyph (every track cached)
-                            // mirrors it on the other corner — the same
-                            // state marks the segments show.
-                            Icon {
-                                visible: root.markVisible(cell.index) && cell.starred
+                            // UI-56/ARC-I-2/UI-60: a favourited album carries
+                            // its mark inside the cover's bottom-right corner
+                            // with the rating count at its corner; the
+                            // download glyph (every track cached) mirrors it
+                            // on the other side — the same state marks the
+                            // segments show.
+                            Item {
+                                visible: root.markVisible(cell.index)
+                                    && (cell.starred || cell.rating > 0)
                                 anchors.right: parent.right
                                 anchors.bottom: parent.bottom
                                 anchors.margins: parent.width * 0.06
                                 width: parent.width * 0.085
                                 height: width
-                                name: "baseline-favorite"
-                                symbolColor: Theme.iconStrong
+
+                                Icon {
+                                    anchors.fill: parent
+                                    visible: cell.starred
+                                    name: "baseline-favorite"
+                                    symbolColor: Theme.iconStrong
+                                }
+
+                                RatingBadge {
+                                    anchors.right: parent.right
+                                    anchors.bottom: parent.bottom
+                                    width: parent.width * 0.84
+                                    height: width
+                                    rating: cell.rating
+                                }
                             }
 
                             Icon {
@@ -899,6 +886,7 @@ Rectangle {
                         required property string meta
                         required property string cover
                         required property bool starred
+                        required property int rating
 
                         readonly property bool current: ListView.isCurrentItem
                         readonly property bool selectedRow: wall.isSelected(row.index)
@@ -946,6 +934,8 @@ Rectangle {
                             index: row.index
                             albumId: row.albumId
                             starred: row.starred
+                            rating: row.rating
+                            showRating: true
                             base: row.height * 0.15
                         }
 

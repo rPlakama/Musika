@@ -73,7 +73,7 @@ pub async fn replace(
     crate::cache::insert_many(
         &mut tx,
         "INSERT INTO albums
-             (id, artist_id, name, artist, year, genre, song_count, duration, cover_art, starred) ",
+             (id, artist_id, name, artist, year, genre, song_count, duration, cover_art, starred, rating) ",
         albums,
         |mut row, album| {
             row.push_bind(&album.id)
@@ -85,7 +85,8 @@ pub async fn replace(
                 .push_bind(album.song_count)
                 .push_bind(album.duration)
                 .push_bind(&album.cover_art)
-                .push_bind(&album.starred);
+                .push_bind(&album.starred)
+                .push_bind(album.user_rating.unwrap_or(0).clamp(0, 5));
         },
     )
     .await?;
@@ -162,6 +163,27 @@ pub async fn album_starred(pool: &SqlitePool, id: &str) -> Result<bool> {
         .await?
         .flatten();
     Ok(starred.is_some())
+}
+
+/// UI-60: the album's user rating (0..=5, 0 = unrated).
+pub async fn album_rating(pool: &SqlitePool, id: &str) -> Result<i64> {
+    let rating: Option<i64> = sqlx::query_scalar("SELECT rating FROM albums WHERE id = ?1")
+        .bind(id)
+        .fetch_optional(pool)
+        .await?
+        .flatten();
+    Ok(rating.unwrap_or(0).clamp(0, 5))
+}
+
+/// UI-60: records the album rating locally; the optimistic write is
+/// reconciled by the next sync (the server row carries `userRating`).
+pub async fn set_album_rating(pool: &SqlitePool, id: &str, rating: u8) -> Result<()> {
+    sqlx::query("UPDATE albums SET rating = ?1 WHERE id = ?2")
+        .bind(i64::from(rating.min(5)))
+        .bind(id)
+        .execute(pool)
+        .await?;
+    Ok(())
 }
 
 /// Album twin of [`artist_song_ids`] — the container's ledger set.
@@ -422,6 +444,8 @@ pub struct AlbumRow {
     pub cover_art: Option<String>,
     /// Server `starred` timestamp; `Some` = favourited (UI-56).
     pub starred: Option<String>,
+    /// UI-60: user rating 0..=5 (0 = unrated).
+    pub rating: i64,
 }
 
 /// A row for an album's song list.
@@ -549,7 +573,8 @@ pub async fn artists(pool: &SqlitePool, order: &str) -> Result<Vec<ArtistRow>> {
     Ok(rows)
 }
 
-const ALBUM_SELECT: &str = "SELECT id, name AS title, artist, year, song_count, cover_art, starred
+const ALBUM_SELECT: &str =
+    "SELECT id, name AS title, artist, year, song_count, cover_art, starred, rating
      FROM albums";
 
 const ARTIST_SELECT: &str = "SELECT id, name, album_count, cover_art, starred FROM artists";
@@ -932,6 +957,23 @@ mod tests {
             .unwrap();
         assert_eq!(songs, 1);
         assert_eq!(last_modified(&pool).await.unwrap(), 42);
+    }
+
+    #[tokio::test]
+    async fn album_rating_round_trips_and_syncs_the_user_rating() {
+        let pool = memory_pool().await;
+        let album = AlbumID3 {
+            id: "al1".into(),
+            name: "Kid A".into(),
+            user_rating: Some(4),
+            ..AlbumID3::default()
+        };
+        replace(&pool, &[], &[album], &[], 1).await.unwrap();
+        assert_eq!(album_rating(&pool, "al1").await.unwrap(), 4);
+
+        set_album_rating(&pool, "al1", 2).await.unwrap();
+        assert_eq!(album_rating(&pool, "al1").await.unwrap(), 2);
+        assert_eq!(album_rating(&pool, "missing").await.unwrap(), 0);
     }
 
     #[tokio::test]

@@ -119,6 +119,7 @@ pub async fn load_artists_json(
             .await?
             .into_iter()
             .collect();
+    let user_ratings = crate::artist_user::ratings(&dbs.artist_user).await?;
     let rows: Vec<serde_json::Value> = artists
         .iter()
         .map(|artist| {
@@ -129,6 +130,7 @@ pub async fn load_artists_json(
                     .as_ref()
                     .and_then(|filter| filter.artists.get(&artist.id).copied()),
                 artist.starred.is_some() || user_starred.contains(&artist.id),
+                user_ratings.get(&artist.id).copied().unwrap_or(0),
             )
         })
         .collect();
@@ -156,6 +158,7 @@ pub async fn load_artist_json(
             .await?
             .into_iter()
             .collect();
+    let user_ratings = crate::artist_user::ratings(&dbs.artist_user).await?;
     let mut value = artist_json(
         &artist,
         &covers,
@@ -163,6 +166,7 @@ pub async fn load_artist_json(
             .as_ref()
             .and_then(|filter| filter.artists.get(&artist.id).copied()),
         artist.starred.is_some() || user_starred.contains(&artist.id),
+        user_ratings.get(&artist.id).copied().unwrap_or(0),
     );
     value["albums"] = serde_json::Value::Array(
         albums
@@ -186,6 +190,7 @@ pub(crate) fn artist_json(
     covers: &HashMap<String, String>,
     album_count: Option<i64>,
     starred: bool,
+    rating: i64,
 ) -> serde_json::Value {
     let cover = cover_url(artist.cover_art.as_deref(), covers);
     serde_json::json!({
@@ -195,6 +200,8 @@ pub(crate) fn artist_json(
         "cover": cover,
         // UI-56: server starred OR the local `artist_user` overlay.
         "starred": starred,
+        // UI-60: the local `artist_user` rating (0 = unrated).
+        "rating": rating,
     })
 }
 
@@ -214,6 +221,8 @@ pub(crate) fn album_json(
         "tracks": count,
         "cover": cover,
         "starred": album.starred.is_some(),
+        // UI-60: user rating 0..=5 (0 = unrated).
+        "rating": album.rating,
     })
 }
 
@@ -340,12 +349,14 @@ pub async fn search_json(
             .await?
             .into_iter()
             .collect();
+    let user_ratings = crate::artist_user::ratings(&dbs.artist_user).await?;
 
     let artist_rows: Vec<serde_json::Value> = artists
         .into_iter()
         .map(|artist| {
             let starred = artist.starred.is_some() || user_starred.contains(&artist.id);
-            artist_json(&artist, &covers, None, starred)
+            let rating = user_ratings.get(&artist.id).copied().unwrap_or(0);
+            artist_json(&artist, &covers, None, starred, rating)
         })
         .collect();
     let album_rows: Vec<serde_json::Value> = albums

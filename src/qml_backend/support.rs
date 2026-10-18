@@ -50,7 +50,7 @@ pub(super) fn album_cache_payload(album_id: &str, on: bool, active: bool, covere
         .to_string()
 }
 
-/// The album favourite flag for the fullscreen keybar's heart.
-pub(super) fn album_state_payload(album_id: &str, starred: bool) -> String {
-    serde_json::json!({ "id": album_id, "starred": starred }).to_string()
+/// The album favourite flag and user rating for the favourite marks.
+pub(super) fn album_state_payload(album_id: &str, starred: bool, rating: i64) -> String {
+    serde_json::json!({ "id": album_id, "starred": starred, "rating": rating }).to_string()
 }

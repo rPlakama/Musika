@@ -330,7 +330,8 @@ Item {
                 // ARC-I: the recycled Alt verbs key on these names.
                 songId: song.id,
                 albumId: song.album_id ? song.album_id : "",
-                starred: song.starred === true
+                starred: song.starred === true,
+                rating: 0
             });
         }
         for (i = 0; i < data.albums.length; i++) {
@@ -346,7 +347,8 @@ Item {
                 tracks: String(album.song_count),
                 albumId: album.id,
                 songId: "",
-                starred: album.starred === true
+                starred: album.starred === true,
+                rating: Number(album.rating) || 0
             });
         }
         for (i = 0; i < data.artists.length; i++) {
@@ -362,7 +364,8 @@ Item {
                 artistId: artist.id,
                 songId: "",
                 albumId: "",
-                starred: artist.starred === true
+                starred: artist.starred === true,
+                rating: Number(artist.rating) || 0
             });
         }
 

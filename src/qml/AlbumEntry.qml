@@ -103,13 +103,6 @@ Rectangle {
     readonly property bool hasSelection: content.hasSelection
     readonly property int selectionCount: content.selectionCount
 
-    /// VI-4: `v` toggles visual mode on the cursor row (the toolbar owns no
-    /// selection).
-    /// The state marks render only inside the song cursor's ±15-row window.
-    function markVisible(songIndex) {
-        return Math.abs(songIndex - Math.max(0, content.currentIndex)) <= 15;
-    }
-
     /// Ask the backend for the download state of that window only.
     function requestMarkWindow(force) {
         var ids = [];
@@ -127,6 +120,8 @@ Rectangle {
             Backend.requestDownloads(JSON.stringify(ids), "[]");
     }
 
+    /// VI-4: `v` toggles visual mode on the cursor row (the toolbar owns no
+    /// selection).
     function toggleSelection() {
         if (root.onToolbar)
             return;
@@ -291,10 +286,7 @@ Rectangle {
     property alias searchQuery: content.searchQuery
     property alias searchCurrentRow: content.searchCurrentRow
 
-    /// UI-58: the song-row baseline (0.055 of the page), captured on the
-    /// first real measure so the adaptive rule preserves the default size.
-    property real _rowBase: 0
-    onHeightChanged: if (_rowBase <= 0 && height > 0) _rowBase = height * 0.055
+
 
     function searchRows() {
         return content.searchRows();
@@ -691,120 +683,96 @@ Rectangle {
             visible: !(root.loading && songs.count === 0)
             // ARC-UI-2 M1: the rows paint track, title and duration.
             searchFields: ["track", "title", "duration"]
+            // UI-58: rows scale from the page height, not the song viewport
+            // (the header/notes reflow must not rescale every row). The
+            // precomputed extent keeps the shared glide off Qt's lazy
+            // estimate.
+            rowRatio: 0.055
+            rowRefHeight: root.height
+            contentHeightHint: songs.count * content.adaptiveRowHeight
 
             rowDelegate: Component {
                 Rectangle {
                     radius: Theme.radius
                     id: songRow
-                required property int index
-                required property string track
-                required property string title
-                required property string duration
-                required property string songId
-                required property bool starred
+                    required property int index
+                    required property string track
+                    required property string title
+                    required property string duration
+                    required property string songId
+                    required property string albumId
+                    required property bool starred
 
-                // VI-4: a row inside the visual selection wears the cursor fill.
-                readonly property bool selectedRow: content.selected(index)
+                    // VI-4: a row inside the visual selection wears the cursor fill.
+                    readonly property bool selectedRow: content.selected(index)
+                    readonly property bool emphasized: ListView.isCurrentItem
+                        || rowHover.hovered
 
-                width: ListView.view.width
-                // UI-58: adaptive — cut a row past the 18% squeeze.
-                height: Theme.adaptiveRow(root.height, 0.055, root._rowBase)
-                color: ((ListView.isCurrentItem && !root.onToolbar) || songRow.selectedRow)
-                    ? Palette.secondaryContainer
-                    : (index % 2 === 0 ? Palette.surface : Palette.surfaceContainerLowest)
+                    width: ListView.view ? ListView.view.width : 0
+                    // UI-58: the model's page-relative adaptive row.
+                    height: content.adaptiveRowHeight
+                    color: ((ListView.isCurrentItem && !root.onToolbar) || songRow.selectedRow)
+                        ? Palette.secondaryContainer
+                        : (rowHover.hovered
+                            ? Palette.surfaceContainerHigh
+                            : (index % 2 === 0 ? Palette.surface : Palette.surfaceContainerLowest))
 
-                Behavior on color {
-                    ColorAnimation {
-                        duration: Theme.motion.quick
-                        easing.type: Easing.Bezier
-                        easing.bezierCurve: Theme.ease.standard
-                    }
-                }
-
-                SearchText {
-                    anchors.verticalCenter: parent.verticalCenter
-                    anchors.left: parent.left
-                    width: songRow.height * 0.6
-                    text: songRow.track
-                    color: Palette.onSurfaceVariant
-                    font.pixelSize: songRow.height * 0.32
-                    horizontalAlignment: Text.AlignRight
-                    animated: false
-                    query: content.searchQuery
-                    currentMatch: songRow.index === content.searchCurrentRow
-                }
-                SearchText {
-                    anchors.verticalCenter: parent.verticalCenter
-                    anchors.left: parent.left
-                    anchors.leftMargin: songRow.height * 0.8
-                    anchors.right: songDurationBox.left
-                    anchors.rightMargin: root.width * 0.02
-                    text: songRow.title
-                    color: Palette.onSurface
-                    font.pixelSize: songRow.height * 0.36
-                    elide: Text.ElideRight
-                    animated: false
-                    query: content.searchQuery
-                    currentMatch: songRow.index === content.searchCurrentRow
-                }
-                // REC-UI-1: the right rail is two right-anchored rectangles
-                // — the length box reserves the widest timecode, the marks
-                // beside it never move as the seconds grow.
-                Rectangle {
-                    radius: Theme.radius
-                    id: songDurationBox
-                    anchors.verticalCenter: parent.verticalCenter
-                    anchors.right: parent.right
-                    anchors.rightMargin: root.width * 0.02
-                    width: songDurationMetrics.advanceWidth("00:00:00")
-                    height: songDuration.implicitHeight
-                    color: "transparent"
-
-                    FontMetrics {
-                        id: songDurationMetrics
-                        font.family: Theme.fonts.body
-                        font.pixelSize: songDuration.font.pixelSize
+                    Behavior on color {
+                        ColorAnimation {
+                            duration: Theme.motion.quick
+                            easing.type: Easing.Bezier
+                            easing.bezierCurve: Theme.ease.standard
+                        }
                     }
 
-                    SearchText {
-                        id: songDuration
+                    // The shared list row: AlbumEntry is the no-cover context.
+                    RowBody {
                         anchors.fill: parent
-                        text: songRow.duration
-                        color: Palette.onSurfaceVariant
-                        font.pixelSize: songRow.height * 0.32
-                        horizontalAlignment: Text.AlignRight
-                        animated: false
-                        query: content.searchQuery
-                        currentMatch: songRow.index === content.searchCurrentRow
+                        viewWidth: songRow.width
+                        rowHeight: songRow.height
+                        emphasized: songRow.emphasized
+                        showCover: false
+                        showSubtitle: false
+                        title: songRow.track.length > 0
+                            ? songRow.track + ". " + songRow.title
+                            : songRow.title
+                        meta: songRow.duration
+                        titlePixelSize: songRow.height * 0.34
+                        metaPixelSize: songRow.height * 0.30
+                        reserveMeta: true
+                        metaAlignRight: true
+                        leftMargin: songRow.width * 0.02
+                        textGap: songRow.width * 0.02
+                        rightMargin: songRow.width * 0.02
+                        marksMargin: songRow.width * 0.01275
+                        markCursor: content.currentIndex
+                        markIndex: songRow.index
+                        markSongId: songRow.songId
+                        markAlbumId: songRow.albumId
+                        markStarred: songRow.starred
+                        markRatingVisible: false
+                        searchQuery: content.searchQuery
+                        searchCurrent: songRow.index === content.searchCurrentRow
+                        expected: songRow.index !== content.currentIndex
+                            && content.isExpected(songRow.y)
+                        immediate: songRow.index === content.currentIndex
                     }
-                }
 
-                // REC-UI-1: the shared state-mark block.
-                RowMarks {
-                    anchors.verticalCenter: parent.verticalCenter
-                    anchors.right: songDurationBox.left
-                    anchors.rightMargin: songRow.height * 0.102
-                    cursor: content.currentIndex
-                    index: songRow.index
-                    songId: songRow.songId
-                    starred: songRow.starred
-                    base: songDuration.font.pixelSize * 0.8
-                }
-
-                HoverHandler {
-                    cursorShape: Qt.PointingHandCursor
-                }
-
-                TapHandler {
-                    onTapped: {
-                        // VI-4: direct play ends the visual selection.
-                        root.onCover = false;
-                        root.onToolbar = false;
-                        content.clearSelection();
-                        content.currentIndex = songRow.index;
-                        Backend.playAlbum(root.albumId, songRow.index);
+                    HoverHandler {
+                        id: rowHover
+                        cursorShape: Qt.PointingHandCursor
                     }
-                }
+
+                    TapHandler {
+                        onTapped: {
+                            // VI-4: direct play ends the visual selection.
+                            root.onCover = false;
+                            root.onToolbar = false;
+                            content.clearSelection();
+                            content.currentIndex = songRow.index;
+                            Backend.playAlbum(root.albumId, songRow.index);
+                        }
+                    }
                 }
             }
         }

@@ -177,12 +177,6 @@ Rectangle {
         });
     }
 
-    /// The state marks render only inside the queue cursor's ±15-row
-    /// window — long queues keep the bindings cheap.
-    function markVisible(index) {
-        return Math.abs(index - Math.max(0, root.queueCursor)) <= 15;
-    }
-
     /// Ask the backend for the download state of that window only.
     function requestMarkWindow(force) {
         var ids = [];

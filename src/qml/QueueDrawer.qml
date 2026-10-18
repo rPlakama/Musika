@@ -70,18 +70,6 @@ Item {
     property alias searchQuery: content.searchQuery
     property alias searchCurrentRow: content.searchCurrentRow
 
-    /// UI-58: the row baseline (0.06 of the panel), captured on the panel's
-    /// first real measure so the adaptive rule preserves the default size.
-    property real _rowBase: 0
-
-    Connections {
-        target: panel
-        function onHeightChanged() {
-            if (root._rowBase <= 0 && panel.height > 0)
-                root._rowBase = panel.height * 0.06;
-        }
-    }
-
     function searchRows() {
         return content.searchRows();
     }
@@ -104,7 +92,10 @@ Item {
             items.append({
                 title: track.title,
                 duration: Theme.formatTime(track.duration),
-                cover: track.cover
+                cover: track.cover,
+                songId: track.id,
+                albumId: track.album_id,
+                starred: track.starred === true
             });
         }
         nowPlaying = data.index;
@@ -163,6 +154,16 @@ Item {
         // the property instead (no cursor move — parity with later payloads).
         function onQueue_index_changed() {
             root.nowPlaying = Backend.queueIndex;
+        }
+        // The shared row's heart: patch the matching rows in place, like the
+        // fullscreen queue (a heart write must not rebuild the model).
+        function onFavoriteChanged(kind, id, on) {
+            if (kind !== "song")
+                return;
+            for (var i = 0; i < items.count; ++i) {
+                if (items.get(i).songId === id)
+                    items.setProperty(i, "starred", on === true);
+            }
         }
     }
 
@@ -230,6 +231,12 @@ Item {
                 memoryKey: "queue"
                 // ARC-UI-2 M1: the rendered cells.
                 searchFields: ["title", "duration"]
+                // UI-58: rows scale from the drawer panel height; the
+                // precomputed extent keeps the shared glide off Qt's lazy
+                // estimate.
+                rowRatio: 0.06
+                rowRefHeight: panel.height
+                contentHeightHint: items.count * content.adaptiveRowHeight
 
                 Behavior on opacity {
                     NumberAnimation { duration: Theme.motion.quick; easing.type: Easing.Bezier; easing.bezierCurve: Theme.ease.standard }
@@ -239,93 +246,72 @@ Item {
                     Rectangle {
                         radius: Theme.radius
                         id: row
-                    required property int index
-                    required property string title
-                    required property string duration
-                    required property string cover
+                        required property int index
+                        required property string title
+                        required property string duration
+                        required property string cover
+                        required property string songId
+                        required property string albumId
+                        required property bool starred
 
-                    readonly property bool emphasized: index === root.cursor || rowHover.hovered
+                        readonly property bool emphasized: index === root.cursor
+                            || rowHover.hovered
 
-                    width: ListView.view.width
-                    // UI-58: adaptive — cut a row past the 18% squeeze.
-                    height: Theme.adaptiveRow(panel.height, 0.06, root._rowBase)
-                    color: index === root.cursor
-                        ? Palette.secondaryContainer
-                        : (index === root.nowPlaying ? Palette.surfaceContainer : "transparent")
+                        width: ListView.view.width
+                        // UI-58: the model's panel-height adaptive row.
+                        height: content.adaptiveRowHeight
+                        color: index === root.cursor
+                            ? Palette.secondaryContainer
+                            : (index === root.nowPlaying ? Palette.surfaceContainer : "transparent")
 
-                    Rectangle {
-                        id: thumb
-                        anchors.left: parent.left
-                        anchors.verticalCenter: parent.verticalCenter
-                        width: row.height * 0.72
-                        height: row.height * 0.72
-                        radius: Theme.radius
-                        color: Palette.surfaceContainerHighest
-                        clip: true
-                        // UI-45: the art grows with the emphasized row (same
-                        // animation as the title, transform only).
-                        scale: (row.emphasized && !Theme.reduceMotion) ? Theme.selectionEmphasis : 1.0
-
-                        Behavior on scale {
-                            NumberAnimation { duration: Theme.motion.quick; easing.type: Easing.Bezier; easing.bezierCurve: Theme.ease.standard }
-                        }
-
-                        CoverImage {
+                        // The shared list row (cover context, like the tabs).
+                        RowBody {
                             anchors.fill: parent
-                            source: row.cover
-                            // ARC-40: ×2 headroom for the UI-45 hover scale.
-                            sizeFactor: 2
+                            viewWidth: row.width
+                            rowHeight: row.height
+                            emphasized: row.emphasized
+                            showCover: true
+                            showSubtitle: false
+                            cover: row.cover
+                            title: row.index === root.nowPlaying
+                                ? "▶ " + row.title
+                                : row.title
+                            meta: row.duration
+                            titlePixelSize: row.height * 0.34
+                            metaPixelSize: row.height * 0.28
+                            titleColor: row.index === root.cursor
+                                ? Palette.onSecondaryContainer
+                                : Palette.onSurface
+                            reserveMeta: true
+                            metaAlignRight: true
+                            leftMargin: row.width * 0.012
+                            textGap: row.height * 0.16
+                            rightMargin: row.height * 0.1
+                            marksMargin: row.width * 0.01275
+                            markCursor: root.cursor
+                            markIndex: row.index
+                            markSongId: row.songId
+                            markAlbumId: row.albumId
+                            markStarred: row.starred
+                            searchQuery: content.searchQuery
+                            searchCurrent: row.index === content.searchCurrentRow
+                            expected: row.index !== content.currentIndex
+                                && content.isExpected(row.y)
+                            immediate: row.index === content.currentIndex
+                        }
+
+                        HoverHandler {
+                            id: rowHover
+                            cursorShape: Qt.PointingHandCursor
+                        }
+
+                        TapHandler {
+                            onTapped: {
+                                root.cursor = row.index;
+                                Backend.queueJump(row.index);
+                            }
                         }
                     }
-
-                    SearchText {
-                        id: titleText
-                        anchors.left: thumb.right
-                        anchors.leftMargin: row.height * 0.16
-                        anchors.right: durationLabel.left
-                        anchors.rightMargin: row.height * 0.16
-                        anchors.verticalCenter: parent.verticalCenter
-                        text: index === root.nowPlaying ? "▶ " + row.title : row.title
-                        color: index === root.cursor ? Palette.onSecondaryContainer : Palette.onSurface
-                        font.pixelSize: row.height * 0.34
-                        elide: Text.ElideRight
-                        query: content.searchQuery
-                        currentMatch: index === content.searchCurrentRow
-                        transformOrigin: Item.Left
-                        // UI-45: the cursor/hover row leads, capped to its box.
-                        scale: (row.emphasized && !Theme.reduceMotion)
-                            ? Theme.fitScale(titleText.width, titleText.paintedWidth, Theme.selectionEmphasis)
-                            : 1.0
-
-                        Behavior on scale {
-                            NumberAnimation { duration: Theme.motion.quick; easing.type: Easing.Bezier; easing.bezierCurve: Theme.ease.standard }
-                        }
-                    }
-
-                    SearchText {
-                        id: durationLabel
-                        anchors.right: parent.right
-                        anchors.rightMargin: row.height * 0.1
-                        anchors.verticalCenter: parent.verticalCenter
-                        text: row.duration
-                        color: Palette.onSurfaceVariant
-                        font.pixelSize: row.height * 0.28
-                        query: content.searchQuery
-                        currentMatch: index === content.searchCurrentRow
-                    }
-
-                    HoverHandler {
-                        id: rowHover
-                        cursorShape: Qt.PointingHandCursor
-                    }
-
-                    TapHandler {
-                        onTapped: {
-                            root.cursor = row.index;
-                            Backend.queueJump(row.index);
-                        }
-                    }
-                }
                 }
             }
 

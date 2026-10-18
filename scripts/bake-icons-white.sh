@@ -20,18 +20,23 @@
 # partially colourised or uncolourised draw still shows. Handles attribute
 # fills/strokes and CSS `.cls { fill:#... }` rules.
 #
-#   scripts/bake-icons-white.sh                      # the svgrepo glyph set
+#   scripts/bake-icons-white.sh                      # every glyph asset
 #   scripts/bake-icons-white.sh src/icons/foo.svg    # explicit files
 #
 # Brand/provider assets (`musika.svg`, `P.svg`, `subsonic_94696.svg`,
-# `navidrome.svg`) are not svgrepo-named and stay untouched unless passed
-# explicitly.
+# `navidrome.svg`) are skipped by the default run and stay untouched unless
+# passed explicitly.
 set -eu
 
 cd "$(dirname "$0")/.."
 
 if [ "$#" -eq 0 ]; then
-    set -- src/icons/*-svgrepo-com.svg
+    brand="musika.svg SpinlogoMusika.svg P.svg subsonic_94696.svg navidrome.svg"
+    for f in src/icons/*.svg; do
+        name=${f##*/}
+        case " $brand " in *" $name "*) continue ;; esac
+        set -- "$@" "$f"
+    done
 fi
 
 for f in "$@"; do

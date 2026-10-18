@@ -37,6 +37,17 @@ Item {
     property bool nowPlayingExpanded: false
     property int currentSegment: 0
 
+    // ARC-45: bounded travel log, one row per visited place (2-D):
+    // [segment, fullscreen, pageCount, page×8...]. A page block is
+    // [kind, id, title/name, artist, meta, cover, starred, ""].
+    property var placeHistory: []
+    property int placeIndex: -1
+    property bool _placing: false
+    readonly property int placeMax: 32
+
+    onCurrentSegmentChanged: root.recordPlace()
+    onNowPlayingExpandedChanged: root.recordPlace()
+
     readonly property real barH: height * Theme.topBarRatio
     readonly property real playH: height * Theme.playerRatio
     // UI-32 R2: below `narrow` the sidebar is an icon strip.
@@ -65,6 +76,10 @@ Item {
     }
 
     function showSegment(index) {
+        // ARC-45: a segment switch pops every page; record the final place
+        // once, not each intermediate pop.
+        var restoring = _placing;
+        _placing = true;
         currentSegment = index;
         while (contentStack.depth > 1)
             contentStack.pop();
@@ -72,6 +87,132 @@ Item {
         // instance keeps its cursor, scroll memory and model — the return is
         // instant instead of remount + async reload + restore.
         activeRegion = 1;
+        _placing = restoring;
+        recordPlace();
+    }
+
+    // ARC-45: the travel log. Every place-changing navigation appends a row
+    // (segment/fullscreen/depth notify) unless this guard says a restore is
+    // rebuilding the stack; adjacent duplicates collapse and a fresh move
+    // after `[b` drops the forward rows, browser-style.
+    function snapshotPlace() {
+        var pages = [];
+        for (var i = 1; i < contentStack.depth; ++i) {
+            var page = contentStack.get(i);
+            if (!page)
+                continue;
+            if (page.albumId !== undefined) {
+                pages.push("album", page.albumId, page.albumTitle,
+                    page.albumArtist, page.albumMeta, page.albumCover,
+                    page.albumStarred === true ? 1 : 0, "");
+            } else if (page.artistId !== undefined) {
+                pages.push("artist", page.artistId, page.artistName, "",
+                    "", page.artistCover, 0, "");
+            }
+        }
+        var row = [root.currentSegment,
+            root.nowPlayingExpanded ? 1 : 0, pages.length / 8];
+        for (var p = 0; p < pages.length; ++p)
+            row.push(pages[p]);
+        return row;
+    }
+
+    function recordPlace() {
+        if (_placing || !contentStack || !placeHistory)
+            return;
+        var row = snapshotPlace();
+        var key = JSON.stringify(row);
+        if (placeIndex >= 0 && placeIndex < placeHistory.length) {
+            if (JSON.stringify(placeHistory[placeIndex]) === key)
+                return;
+            if (placeIndex < placeHistory.length - 1)
+                placeHistory = placeHistory.slice(0, placeIndex + 1);
+        }
+        var rows = placeHistory.slice();
+        rows.push(row);
+        while (rows.length > placeMax)
+            rows.shift();
+        placeHistory = rows;
+        placeIndex = rows.length - 1;
+    }
+
+    /// Transient overlays are not places: the first history press closes
+    /// them and the next one moves.
+    function closeTransientOverlays() {
+        var closed = false;
+        if (lineSearch.opened) {
+            lineSearch.close();
+            closed = true;
+        }
+        if (searchOverlay.opened) {
+            searchOverlay.close();
+            closed = true;
+        }
+        if (queueDrawer.opened) {
+            queueDrawer.close();
+            closed = true;
+        }
+        if (quickActions.armed) {
+            quickActions.cancel();
+            closed = true;
+        }
+        return closed;
+    }
+
+    function movePlace(delta) {
+        if (_placing)
+            return;
+        if (closeTransientOverlays())
+            return;
+        var target = placeIndex + delta;
+        if (target < 0 || target >= placeHistory.length)
+            return;
+        placeIndex = target;
+        applyPlace(placeHistory[target]);
+    }
+
+    function applyPlace(row) {
+        if (!row || row.length < 3)
+            return;
+        var pageCount = Number(row[2]) || 0;
+        _placing = true;
+        // One cut, not a cascade of push/pop animations.
+        if (contentStack.depth > 1)
+            contentStack.pop(null, StackView.Immediate);
+        currentSegment = Number(row[0]) || 0;
+        activeRegion = 1;
+        var at = 3;
+        for (var i = 0; i < pageCount; ++i) {
+            if (at + 7 >= row.length)
+                break;
+            var kind = row[at];
+            var id = row[at + 1];
+            var title = row[at + 2];
+            var artist = row[at + 3];
+            var meta = row[at + 4];
+            var cover = row[at + 5];
+            var starred = row[at + 6] === 1;
+            at += 8;
+            if (kind === "album") {
+                Backend.rememberAlbum(id);
+                contentStack.push(albumEntryComponent, {
+                    albumId: id,
+                    albumTitle: title,
+                    albumArtist: artist,
+                    albumMeta: meta,
+                    albumCover: cover,
+                    albumStarred: starred
+                }, StackView.Immediate);
+            } else if (kind === "artist") {
+                contentStack.push(artistEntryComponent, {
+                    artistId: id,
+                    artistName: title,
+                    artistCover: cover
+                }, StackView.Immediate);
+            }
+        }
+        nowPlayingExpanded = row[1] === 1;
+        _placing = false;
     }
 
     // Global fullscreen toggle (dispatched by the app-level handler before
@@ -305,6 +446,13 @@ Item {
         // (CACHE-8). Any future UI trigger goes through the same slot.
         if (action.indexOf("download_song ") === 0) {
             Backend.downloadSong(action.substring("download_song ".length));
+            return;
+        }
+
+        // ARC-45: previous/next place is global like Back. Overlays are not
+        // places, so the first press closes them and the second moves.
+        if (action === "prev_place" || action === "next_place") {
+            root.movePlace(action === "prev_place" ? -1 : 1);
             return;
         }
 
@@ -626,6 +774,9 @@ Item {
                     popExit: ExitView {}
                     replaceEnter: EnterView {}
                     replaceExit: ExitView {}
+
+                    // ARC-45: every page push/pop is a place change.
+                    onDepthChanged: root.recordPlace()
 
                     // The five segments stay alive once instantiated —
                     // switching is visibility, not a rebuild, so returning to
@@ -1134,4 +1285,7 @@ Item {
         repeat: false
         onTriggered: Backend.refreshLibraryStatus()
     }
+
+    // ARC-45: the travel log starts on the first place.
+    Component.onCompleted: root.recordPlace()
 }

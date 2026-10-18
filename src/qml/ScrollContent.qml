@@ -568,28 +568,40 @@ Item {
 
     // ── Rows (UI-58) ─────────────────────────────────────────────────────
 
-    /// The host's nominal row fraction of this viewport (0 = the delegates
-    /// own their heights and nothing adapts).
+    /// The host's nominal row fraction of the sizing height (0 = the
+    /// delegates own their heights and nothing adapts).
     property real rowRatio: 0
+    /// UI-58: host-supplied sizing height (0 = this body's own viewport).
+    /// Page-relative hosts (the album page, the stacked search sections, the
+    /// queue drawer) pass their parent Rectangle height, so inner reflows —
+    /// a growing header, a sibling section appearing — never rescale rows.
+    property real rowRefHeight: 0
+    readonly property real rowViewHeight: root.rowRefHeight > 0
+        ? root.rowRefHeight : root.height
+    /// Adjustable row-height multiplier for compact hosts (Search halves it);
+    /// the baseline/band still come from `Theme.adaptiveRow`.
+    property real rowHeightScale: 1.0
     /// The row baseline captured on the first real measure — the default
     /// window geometry (Main starts at `Screen.height * 0.72`).
     property real _rowBase: 0
-    /// The row height to paint — scales with the viewport inside the 18%
-    /// band (0.82, 40% sooner than the original), cuts whole rows past it
+    /// The row height to paint — scales with the sizing height inside the
+    /// 18% band (0.82, 40% sooner than the original), cuts whole rows past it
     /// (see `Theme.adaptiveRow`). Delegates must size from this, never from
     /// raw viewport fractions (§5).
-    readonly property real adaptiveRowHeight: Theme.adaptiveRow(height, root.rowRatio, root._rowBase)
+    readonly property real adaptiveRowHeight: Theme.adaptiveRow(
+        root.rowViewHeight, root.rowRatio, root._rowBase) * root.rowHeightScale
 
     Component.onCompleted: {
         captureRowBase();
         applySavedLayout();
     }
     onHeightChanged: captureRowBase()
+    onRowRefHeightChanged: captureRowBase()
     onMemoryKeyChanged: applySavedLayout()
 
     function captureRowBase() {
-        if (root._rowBase <= 0 && root.rowRatio > 0 && root.height > 0)
-            root._rowBase = root.height * root.rowRatio;
+        if (root._rowBase <= 0 && root.rowRatio > 0 && root.rowViewHeight > 0)
+            root._rowBase = root.rowViewHeight * root.rowRatio;
     }
 
     // Auto-fill inside Layout parents; anchor callers size it themselves.

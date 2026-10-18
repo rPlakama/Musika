@@ -20,8 +20,8 @@ import QtQuick.Layouts
 import musika
 import "Theme.js" as Theme
 
-// Floating global search (Shift Space F): one modal panel with Artists |
-// Albums | Songs columns (RowLayout weights 28/32/40), filtered live from the
+// Floating global search (Shift Space F): one modal panel with the Songs,
+// Albums and Artists sections stacked vertically, filtered live from the
 // library. Typing mode: keys type, Tab/arrows navigate, Esc -> normal mode.
 // Normal mode: hjkl navigates, i re-enters typing, Enter opens/plays, Esc
 // closes and returns focus to the previous region.
@@ -143,6 +143,10 @@ Item {
                 close();
         } else if (action === "insert_mode") {
             enterTyping();
+        } else if (action === "pane_cycle" || action === "pane_cycle_back") {
+            // Tab / Shift-Tab cycle the sections in normal mode too (typing
+            // mode routes them through SearchInput's own handlers).
+            moveColumn(action === "pane_cycle" ? 1 : -1);
         } else if (action === "move_left" || action === "move_right") {
             moveColumn(action === "move_left" ? -1 : 1);
         } else if (action === "move_up") {
@@ -309,7 +313,7 @@ Item {
             return;
 
         // UI-41: results crossfade in on payload swaps instead of flashing.
-        columnsRow.opacity = 0;
+        columnsStack.opacity = 0;
         songResults.clear();
         albumResults.clear();
         artistResults.clear();
@@ -382,7 +386,7 @@ Item {
 
         loading = false;
         Qt.callLater(function () {
-            columnsRow.opacity = 1;
+            columnsStack.opacity = 1;
         });
 
         // UI-49: the response landing on zero hits is denied input — once per
@@ -552,14 +556,14 @@ Item {
                 }
             }
 
-            // Column widths are RowLayout weights (38/40/22), not pixels:
-            // Albums gets the room its titles need, Artists is narrow since it
-            // only carries a name plus its count.
-            RowLayout {
-                id: columnsRow
+            // The three result surfaces stack vertically; each gets an equal
+            // share of the panel height (the empty-query Songs surface takes
+            // the whole stack once the other two are hidden).
+            ColumnLayout {
+                id: columnsStack
                 Layout.fillWidth: true
                 Layout.fillHeight: true
-                spacing: panel.width * 0.012
+                spacing: panel.height * 0.012
 
                 Behavior on opacity {
                     NumberAnimation {
@@ -572,14 +576,20 @@ Item {
                 SearchColumn {
                     id: songsColumn
                     Layout.fillWidth: true
-                    Layout.preferredWidth: 38
                     Layout.fillHeight: true
+                    Layout.preferredHeight: 1
                     // S-9: the empty-query surface uses this column alone.
                     title: field.text.length > 0 ? "Songs" : "Most played"
                     model: songResults
                     active: root.activeColumn === 0
                     loading: root.loading
                     hasQuery: field.text.length > 0
+                    // The whole panel sizes the rows; the stacked section
+                    // must not compress them.
+                    rowRefHeight: panel.height
+                    // The full stack area sizes every title, so the stacked
+                    // sections keep "Most played"'s type scale.
+                    headerRefHeight: columnsStack.height
                     quickActionKind: "song"
                     selectionField: "songId"
 
@@ -592,13 +602,11 @@ Item {
                     }
                 }
 
-                // Structural rule: keeps each column's header/count contained
-                // instead of bleeding into its neighbour. UI-47: above the
-                // next column's covers, which otherwise paint over it.
+                // Structural rule between the stacked sections (UI-47).
                 Rectangle {
                     radius: Theme.radius
-                    Layout.fillHeight: true
-                    Layout.preferredWidth: Math.max(1, panel.height * Theme.hairlineRatio)
+                    Layout.fillWidth: true
+                    Layout.preferredHeight: Math.max(1, panel.height * Theme.hairlineRatio)
                     color: Palette.outlineVariant
                     z: 1
                     visible: field.text.length > 0
@@ -607,14 +615,16 @@ Item {
                 SearchColumn {
                     id: albumsColumn
                     Layout.fillWidth: true
-                    Layout.preferredWidth: 40
                     Layout.fillHeight: true
+                    Layout.preferredHeight: 1
                     title: "Albums"
                     model: albumResults
                     active: root.activeColumn === 1
                     loading: root.loading
                     hasQuery: field.text.length > 0
                     visible: field.text.length > 0
+                    rowRefHeight: panel.height
+                    headerRefHeight: columnsStack.height
                     quickActionKind: "album"
                     selectionField: "albumId"
 
@@ -629,8 +639,8 @@ Item {
 
                 Rectangle {
                     radius: Theme.radius
-                    Layout.fillHeight: true
-                    Layout.preferredWidth: Math.max(1, panel.height * Theme.hairlineRatio)
+                    Layout.fillWidth: true
+                    Layout.preferredHeight: Math.max(1, panel.height * Theme.hairlineRatio)
                     color: Palette.outlineVariant
                     z: 1
                     visible: field.text.length > 0
@@ -639,8 +649,8 @@ Item {
                 SearchColumn {
                     id: artistsColumn
                     Layout.fillWidth: true
-                    Layout.preferredWidth: 22
                     Layout.fillHeight: true
+                    Layout.preferredHeight: 1
                     title: "Artists"
                     roundedArt: true
                     model: artistResults
@@ -648,6 +658,8 @@ Item {
                     loading: root.loading
                     hasQuery: field.text.length > 0
                     visible: field.text.length > 0
+                    rowRefHeight: panel.height
+                    headerRefHeight: columnsStack.height
                     quickActionKind: "artist"
                     selectionField: "artistId"
 
@@ -672,7 +684,7 @@ Item {
             // One cheat sheet, per mode (no duplicate Esc hint).
             FadeText {
                 Layout.fillWidth: true
-                text: root.typing ? "Type to filter  ·  Tab/↑/↓ navigate  ·  Enter open/play  ·  Esc normal mode" : "h/l columns  ·  j/k rows  ·  i type  ·  Enter open/play  ·  Esc close"
+                text: root.typing ? "Type to filter  ·  Tab/↑/↓ navigate  ·  Enter open/play  ·  Esc normal mode" : "Tab/h/l sections  ·  j/k rows  ·  i type  ·  Enter open/play  ·  Esc close"
                 color: Palette.onSurfaceVariant
                 font.pixelSize: Theme.fontSize("label", panel.height)
                 horizontalAlignment: Text.AlignHCenter

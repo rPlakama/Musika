@@ -62,6 +62,8 @@ pub enum Action {
     QueueUp,
     QueueDown,
     QueueRemove,
+    PrevPlace,
+    NextPlace,
 }
 
 impl Action {
@@ -101,6 +103,8 @@ impl Action {
             Self::QueueUp => "queue_up",
             Self::QueueDown => "queue_down",
             Self::QueueRemove => "queue_remove",
+            Self::PrevPlace => "prev_place",
+            Self::NextPlace => "next_place",
         }
     }
 }
@@ -128,6 +132,7 @@ pub enum Outcome {
 ///   on the album toolbar, sync in the status bar, commit in visual mode.
 /// - `Esc`, `q` and `Ctrl-[` are the same Back action; Esc additionally steps
 ///   out of typing/insert before leaving (the invariant cancel key).
+/// - `[b`/`]b` walk the session's previous/next place travel log (ARC-45).
 /// - `Space` is play/pause globally; `Shift-Enter` toggles fullscreen.
 /// - `,`/`.` seek back/forward 5 s globally (the transport is decoration:
 ///   it never owns a focus region, so seek cannot live inside it).
@@ -176,6 +181,9 @@ fn defaults() -> Vec<(&'static str, Action)> {
         ("shift-k", Action::QueueUp),
         ("shift-j", Action::QueueDown),
         ("d d", Action::QueueRemove),
+        // ARC-45: Vim's previous/next buffer motions over the travel log.
+        ("[ b", Action::PrevPlace),
+        ("] b", Action::NextPlace),
     ]
 }
 
@@ -377,7 +385,8 @@ pub fn token_from_qt(key: i32, modifiers: i32) -> Option<String> {
         0x2F => "/".to_string(),                               // slash (ARC-UI-2)
         0x2B => "+".to_string(),                               // keypad plus
         0x3D => "=".to_string(),                               // '+' on the main row (shifted)
-        0x5B => "[".to_string(),                               // Ctrl-[ == Escape
+        0x5B => "[".to_string(),                               // Ctrl-[ == Escape, `[b` history
+        0x5D => "]".to_string(),                               // `]b` history (ARC-45)
         _ => return None,
     };
 
@@ -445,7 +454,24 @@ mod tests {
         );
         assert_eq!(token_from_qt(0x0100_0009, 0), None); // unbound special key
         assert_eq!(token_from_qt(0x2F, 0).as_deref(), Some("/")); // Key_Slash
+        assert_eq!(token_from_qt(0x5B, 0).as_deref(), Some("[")); // Key_BracketLeft
+        assert_eq!(token_from_qt(0x5D, 0).as_deref(), Some("]")); // Key_BracketRight
         assert_eq!(token_from_qt(0x3F, 0), None); // `?` stays unbound until M4
+    }
+
+    #[test]
+    fn place_history_bindings() {
+        let mut keymap = Keymap::new();
+        assert_eq!(keymap.feed("["), Outcome::Pending);
+        assert_eq!(keymap.feed("b"), Outcome::Action(Action::PrevPlace));
+        assert_eq!(keymap.feed("]"), Outcome::Pending);
+        assert_eq!(keymap.feed("b"), Outcome::Action(Action::NextPlace));
+
+        // A lone prefix times out silently; Ctrl-[ keeps hierarchical Back.
+        let mut keymap = Keymap::new();
+        assert_eq!(keymap.feed("["), Outcome::Pending);
+        assert_eq!(keymap.feed_timeout(), Outcome::None);
+        assert_eq!(keymap.feed("ctrl-["), Outcome::Action(Action::Back));
     }
 
     #[test]

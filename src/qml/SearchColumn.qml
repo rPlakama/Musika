@@ -24,6 +24,14 @@ Item {
     id: root
 
     property string title: ""
+    /// The squeezed-title glyphs (the LeftBar's label → icon rule).
+    readonly property string titleIcon: root.title === "Songs"
+        ? "qrc:/app/icons/track-svgrepo-com.svg"
+        : root.title === "Albums"
+            ? "qrc:/app/icons/album.svg"
+            : root.title === "Artists"
+                ? "qrc:/app/icons/person-walking-svgrepo-com.svg"
+                : ""
     property bool roundedArt: false
     property var model: null
     property int cursor: -1
@@ -83,11 +91,6 @@ Item {
 
     function clearSelection() {
         content.clearSelection();
-    }
-
-    /// The state marks render only inside the cursor's ±15-row window.
-    function markVisible(index) {
-        return Math.abs(index - Math.max(0, root.cursor)) <= 15;
     }
 
     /// Ask the backend for the download state of that window only (album
@@ -199,16 +202,22 @@ Item {
     // UI-47 divider.
     readonly property real overflow: width * 0.012
 
-    readonly property real headerH: height * 0.10
-    /// UI-58: adaptive row height — inside the 18% band it scales, past it a
-    /// row is cut. The baseline (0.12 of the column) is captured on the
-    /// first real measure.
-    property real _rowBase: 0
-    onHeightChanged: if (_rowBase <= 0 && height > 0) _rowBase = height * 0.12
-    readonly property real rowH: Theme.adaptiveRow(height, 0.12, root._rowBase)
-    // Snap the viewport to full rows so the footer never slices one in half.
-    readonly property real listH: Math.max(rowH,
-        Math.floor((height - headerH) / rowH) * rowH)
+    /// The full (unstacked) column area: "Most played" uses it when it owns
+    /// the whole stack, and every section shares its title size.
+    property real headerRefHeight: 0
+    readonly property real titlePixelSize:
+        (root.headerRefHeight > 0 ? root.headerRefHeight : height) * 0.10 * 0.42
+    readonly property real headerH: Math.max(height * 0.10, titlePixelSize * 1.6)
+    /// UI-58: the overlay's height, shared by the three stacked sections —
+    /// rows scale from the whole panel, never from the thinner section the
+    /// row amount happens to leave (0 = this column's own height).
+    property real rowRefHeight: 0
+    /// The model owns the adaptive row; this column only snaps its viewport
+    /// to full rows so the footer never slices one in half.
+    readonly property real rowH: content.adaptiveRowHeight
+    readonly property real listH: rowH > 0
+        ? Math.max(rowH, Math.floor((height - headerH) / rowH) * rowH)
+        : 0
 
     Column {
         anchors.fill: parent
@@ -219,17 +228,42 @@ Item {
             width: parent.width
             height: root.headerH
 
+            // The title keeps the room left of the count pills; when that
+            // room can no longer hold it, a mapped title trades the word for
+            // its segment icon (the LeftBar's rule).
+            readonly property real titleRoom: Math.max(0,
+                width - countBadge.width - root.headerH * 0.2
+                - (selectionBadge.visible
+                    ? selectionBadge.width + root.headerH * 0.12 : 0))
+            readonly property bool titleFits: titleLabel.implicitWidth <= titleRoom
+
             FadeText {
+                id: titleLabel
                 anchors.left: parent.left
                 anchors.verticalCenter: parent.verticalCenter
+                width: header.titleRoom
+                visible: header.titleFits || root.titleIcon.length === 0
                 text: root.title
                 color: root.active ? Palette.primary : Palette.onSurfaceVariant
-                font.pixelSize: root.headerH * 0.42
+                font.pixelSize: root.titlePixelSize
                 font.bold: root.active
+                elide: Text.ElideRight
+                animated: false
+            }
+
+            SymbolIcon {
+                anchors.left: parent.left
+                anchors.verticalCenter: parent.verticalCenter
+                visible: !header.titleFits && root.titleIcon.length > 0
+                width: Math.min(root.headerH * 0.5, header.width * 0.25)
+                height: width
+                source: root.titleIcon
+                symbolColor: root.active ? Palette.primary : Palette.onSurfaceVariant
             }
 
             // VI-4: the selection count sits beside the result count.
             SelectionBadge {
+                id: selectionBadge
                 compact: true
                 anchors.right: countBadge.left
                 anchors.verticalCenter: parent.verticalCenter
@@ -272,8 +306,16 @@ Item {
         }
 
         Item {
+            id: listItem
             width: parent.width
             height: root.listH
+
+            // Empty state: when the column squeezes the sentence to a cut,
+            // trade it for the shared "no" glyph (the LeftBar's rule).
+            readonly property bool noMatches: root.hasQuery && !root.loading
+                && root.model !== null && root.model.count === 0
+            readonly property bool noMatchTextFits: noMatchText.implicitWidth
+                <= listItem.width * 0.9
 
             // UI-48: the shared scroll body carries the overflow stage, so
             // the highlight bleeds past the row (clipped at the gutter edge)
@@ -286,6 +328,17 @@ Item {
                 selectable: quickActionKind !== ""
                 // ARC-UI-2 M1: the columns paint the same three cells.
                 searchFields: ["title", "subtitle", "meta"]
+                // UI-58: rows scale from the shared panel height (not the
+                // section left over by the stack) and Search halves the
+                // normal row; the precomputed extent keeps the shared glide
+                // off Qt's lazy estimate.
+                rowRatio: 0.12
+                // Two-thirds of the normal row: a 1/3 cut for Search.
+                rowHeightScale: 2 / 3
+                rowRefHeight: root.rowRefHeight > 0
+                    ? root.rowRefHeight : root.height
+                contentHeightHint: root.model
+                    ? root.model.count * content.adaptiveRowHeight : 0
 
                 rowDelegate: Component {
                     Rectangle {
@@ -309,7 +362,7 @@ Item {
                         readonly property bool emphasized: (row.current && root.active) || rowHover.hovered
 
                         width: ListView.view.width
-                        height: root.rowH
+                        height: content.adaptiveRowHeight
                         // The row is a layout container only (UI-48): the block
                         // highlight lives in its own layer below, so it can
                         // overflow the row without touching the content geometry.
@@ -326,140 +379,49 @@ Item {
                             overflow: root.overflow
                         }
 
-                        Rectangle {
-                            id: thumb
-                            anchors.left: parent.left
-                            anchors.verticalCenter: parent.verticalCenter
-                            width: row.height * 0.72
-                            height: row.height * 0.72
-                            radius: root.roundedArt ? width * 0.5 : Theme.radius
-                            color: Palette.surfaceContainerHighest
-                            clip: true
-                            // UI-45: the art grows with the emphasized row (same
-                            // animation as the title, transform only).
-                            scale: (row.emphasized && !Theme.reduceMotion) ? Theme.selectionEmphasis : 1.0
-
-                            Behavior on scale {
-                                NumberAnimation { duration: Theme.motion.quick; easing.type: Easing.Bezier; easing.bezierCurve: Theme.ease.standard }
-                            }
-
-                            CoverImage {
-                                anchors.fill: parent
-                                source: row.cover
-                                // ARC-40: ×2 headroom for the UI-45 hover scale.
-                                sizeFactor: 2
-                            }
-                        }
-
-                        // Two-line cell: title over a muted subtitle, never one
-                        // string in one colour.
-                        Column {
-                            anchors.left: thumb.right
-                            anchors.leftMargin: row.height * 0.18
-                            anchors.right: metaLabel.left
-                            anchors.rightMargin: row.height * 0.18
-                            anchors.verticalCenter: parent.verticalCenter
-                            spacing: row.height * 0.04
-
-                            SearchText {
-                                id: titleText
-                                width: parent.width
-                                text: row.title
-                                color: (row.current && root.active) || row.selectedRow ? Palette.onSecondaryContainer : Palette.onSurface
-                                font.pixelSize: Theme.clamp(row.height * 0.3, 12, 18)
-                                elide: Text.ElideRight
-                                animated: false
-                                query: content.searchQuery
-                                currentMatch: row.index === content.searchCurrentRow
-                                transformOrigin: Item.Left
-                                scale: (row.emphasized && !Theme.reduceMotion)
-                                    ? Theme.fitScale(titleText.width, titleText.paintedWidth, Theme.selectionEmphasis)
-                                    : 1.0
-
-                                Behavior on scale {
-                                    NumberAnimation { duration: Theme.motion.quick; easing.type: Easing.Bezier; easing.bezierCurve: Theme.ease.standard }
-                                }
-                            }
-
-                            Row {
-                                width: parent.width
-                                spacing: row.height * 0.06
-                                visible: row.subtitle.length > 0
-
-                                // UI-56/UI-60: the artist column carries no
-                                // meta, so the heart (and the rating count)
-                                // lead its album-count subtitle instead.
-                                Row {
-                                    id: subtitleMarks
-                                    anchors.verticalCenter: parent.verticalCenter
-                                    spacing: subtitleLabel.font.pixelSize * 0.15
-                                    visible: root.markVisible(row.index)
-                                        && row.meta.length === 0
-                                        && (row.starred || row.rating > 0)
-
-                                    Icon {
-                                        visible: row.starred
-                                        width: subtitleLabel.font.pixelSize * 0.8
-                                        height: width
-                                        name: "baseline-favorite"
-                                        symbolColor: Theme.iconStrong
-                                    }
-
-                                    RatingBadge {
-                                        width: subtitleLabel.font.pixelSize * 1.26
-                                        height: width
-                                        rating: row.rating
-                                    }
-                                }
-
-                                SearchText {
-                                    id: subtitleLabel
-                                    width: Math.max(0, parent.width
-                                        - (subtitleMarks.visible
-                                            ? subtitleMarks.width + parent.spacing : 0))
-                                    text: row.subtitle
-                                    color: (row.current && root.active) || row.selectedRow ? Palette.onSecondaryContainer : Palette.onSurfaceVariant
-                                    font.pixelSize: Theme.clamp(row.height * 0.24, 10, 14)
-                                    elide: Text.ElideRight
-                                    animated: false
-                                    query: content.searchQuery
-                                    currentMatch: row.index === content.searchCurrentRow
-                                }
-                            }
-                        }
-
-                        // REC-UI-1: the shared state-mark block (download
-                        // then heart).
-                        RowMarks {
-                            anchors.verticalCenter: parent.verticalCenter
-                            anchors.right: metaLabel.left
-                            anchors.rightMargin: row.height * 0.051
-                            cursor: root.cursor
-                            index: row.index
-                            songId: row.songId
-                            albumId: row.albumId
-                            starred: row.starred && row.meta.length > 0
-                            rating: row.rating
-                            // UI-60: song hits keep the heart only; the
-                            // meta-less artist column shows its count beside
-                            // the subtitle instead.
-                            showRating: root.quickActionKind === "album"
-                                || (root.quickActionKind === "artist"
-                                    && row.meta.length > 0)
-                            base: metaLabel.font.pixelSize * 0.8
-                        }
-
-                        SearchText {
-                            id: metaLabel
-                            anchors.right: parent.right
-                            anchors.rightMargin: row.height * 0.18
-                            anchors.verticalCenter: parent.verticalCenter
-                            text: row.meta
-                            color: (row.current && root.active) || row.selectedRow ? Palette.onSecondaryContainer : Palette.onSurfaceVariant
-                            font.pixelSize: Theme.clamp(row.height * 0.26, 10, 14)
-                            animated: false
-                            query: content.searchQuery
-                            currentMatch: row.index === content.searchCurrentRow
+                        // The shared list row: the result columns are the
+                        // same cover/title/subtitle/meta/marks model as the
+                        // library tabs and the queues.
+                        RowBody {
+                            anchors.fill: parent
+                            viewWidth: row.width
+                            rowHeight: row.height
+                            emphasized: row.emphasized
+                            roundedArt: root.roundedArt
+                            showCover: true
+                            showSubtitle: row.subtitle.length > 0
+                            cover: row.cover
+                            title: row.title
+                            subtitle: row.subtitle
+                            meta: row.meta
+                            titlePixelSize: Theme.clamp(row.height * 0.3, 12, 18)
+                            subtitlePixelSize: Theme.clamp(row.height * 0.24, 10, 14)
+                            metaPixelSize: Theme.clamp(row.height * 0.26, 10, 14)
+                            titleColor: (row.current && root.active) || row.selectedRow
+                                ? Palette.onSecondaryContainer : Palette.onSurface
+                            subtitleColor: (row.current && root.active) || row.selectedRow
+                                ? Palette.onSecondaryContainer : Palette.onSurfaceVariant
+                            metaColor: (row.current && root.active) || row.selectedRow
+                                ? Palette.onSecondaryContainer : Palette.onSurfaceVariant
+                            reserveMeta: false
+                            metaAlignRight: true
+                            leftMargin: 0
+                            textGap: row.height * 0.18
+                            rightMargin: row.height * 0.18
+                            marksMargin: row.height * 0.051
+                            markCursor: root.cursor
+                            markIndex: row.index
+                            markSongId: row.songId
+                            markAlbumId: row.albumId
+                            markStarred: row.starred
+                            markRating: row.rating
+                            markRatingVisible: root.quickActionKind === "album"
+                                || root.quickActionKind === "artist"
+                            searchQuery: content.searchQuery
+                            searchCurrent: row.index === content.searchCurrentRow
+                            expected: row.index !== content.currentIndex
+                                && content.isExpected(row.y)
+                            immediate: row.index === content.currentIndex
                         }
 
                         // Hover only signals clickability (S-5); the cursor moves
@@ -477,11 +439,21 @@ Item {
             }
 
             FadeText {
+                id: noMatchText
                 anchors.centerIn: parent
-                visible: root.hasQuery && !root.loading && root.model && root.model.count === 0
+                visible: listItem.noMatches && listItem.noMatchTextFits
                 text: "no matches"
                 color: Palette.onSurfaceVariant
                 font.pixelSize: root.height * 0.055
+            }
+
+            SymbolIcon {
+                anchors.centerIn: parent
+                visible: listItem.noMatches && !listItem.noMatchTextFits
+                width: Math.max(14, Math.min(listItem.width * 0.3, root.height * 0.09))
+                height: width
+                source: "qrc:/app/icons/no.svg"
+                symbolColor: Palette.onSurfaceVariant
             }
 
             // Skeleton while the request is in flight (shared UI-22 pattern).

@@ -616,6 +616,111 @@ The product is incomplete without these.
     sync (`SyncReport.playlists` in the log line). The entry page/playback/
     verbs are M2; `getPlaylist` contents arrive with it.
 
+- [x] **ARC-45 · Previous/Next Place — a 32-step travel history (`[b`/`]b`, mouse Back/Forward)** — P2 · (reported; navigation review)
+  - **Why:** navigation is only hierarchical today: `Back` pops one page
+    (`Home.qml` `handleAction("back")`), a segment switch clears the page stack
+    (`showSegment`), and nothing remembers the places left behind. After
+    detouring through an artist, an album and a search hit, returning to the
+    previous view means reconstructing it by hand. Vim users expect `[b`/`]b`
+    (previous/next buffer) for exactly this, and the mouse's Back/Forward
+    buttons should do the same; a bounded travel log gives both without a new
+    persistence layer.
+  - **Storage (`Home.qml`, UI-only, not persisted):**
+    - a strict 2-D array, one row per visited place, `placeHistory[32][...]`,
+      plus `placeIndex` (the row the user is on). 32 is the cap: when the
+      33rd place lands the oldest row is dropped.
+    - row schema (flat, so the history stays 2-D):
+      `[segment, fullscreen, pageCount, kind, id, title, artist, meta, cover, starred, "", …]`
+      — the first three cells are the shell (segment 0–3, fullscreen 0/1,
+      page count), then one 8-cell block per pushed page, bottom→top. Album
+      pages fill title/artist/meta/cover/starred (the meta string carries
+      "year · tracks"); artist pages use `kind="artist"`, the id, name and
+      cover (remaining cells empty). The displayed arguments are stored so
+      restoring a place needs no new fetch endpoint.
+    - cursor, scroll offsets, search text, the floating search, the line
+      prompt, the queue drawer, the Alt overlay and the playhead are **not**
+      places: history is a route log, not a full UI snapshot.
+  - **Recording:**
+    - `recordPlace()` snapshots the shell + page stack after a navigation
+      mutation: `showSegment`, `openAlbum`, every
+      `Back` branch that actually changed the view (fullscreen close, stack
+      pop, artist detour; clearing a selection alone does not record), the
+      `song_album`/`open_album`/`open_artist` pumps, `toggleFullscreen` and
+      the `playbackStarted` auto-open.
+    - adjacent duplicates collapse (same row = no push); when `placeIndex` is
+      not at the end, a fresh navigation truncates the forward rows first
+      (browser history), then appends and clamps to 32.
+    - recording hangs off the state itself: `contentStack.onDepthChanged`
+      catches every page push/pop (no push site can bypass the log),
+      `onCurrentSegmentChanged` catches segment switches and
+      `onNowPlayingExpandedChanged` catches fullscreen; `showSegment` raises
+      the `_placing` guard around its multi-pop so it emits one row, not one
+      per popped page.
+    - seed with the initial segment at `Component.onCompleted`; the restored
+      P-6 album (`statusRestored` → `openAlbum`) becomes the second row.
+      `Home` is recreated on logout/wipe, so the log resets naturally.
+  - **Restoring (`movePlace(delta)`):**
+    - `prev_place`/`next_place` move `placeIndex` by one and replay that row;
+      at either end they are a no-op (no toast).
+    - close transient overlays first (search, line prompt, queue drawer, Alt
+      overlay): with one open, the first invocation only dismisses it and a
+      second moves. Then set `_placing` so `recordPlace()` is a no-op,
+      restore the segment, pop the stack to the segment host with
+      `StackView.Immediate`, re-create the stored album/artist pages from
+      their blocks (also Immediate), set `nowPlayingExpanded` from the row,
+      and clear the guard. A history jump is a cut, not a cascade of
+      push/pop animations.
+    - `Back`/Esc stays hierarchical and records its resulting place; `[b`
+      therefore returns to the page the user escaped from (travel-log
+      semantics, not an undo stack).
+  - **Keybind (`keybind.rs`):** `Action::PrevPlace`/`NextPlace` with names
+    `prev_place`/`next_place`; defaults `[ b` and `] b` (Vim buffer motions);
+    `Ctrl-[` remains Back. `token_from_qt` currently maps `[` (0x5B) only for
+    that chord — add `]` (0x5D). Counts are ignored (one step per press). Add
+    the token + binding tests (`[` defers, `[ b` fires, `] b` fires).
+  - **Mouse (`Main.qml`):** one window-level handler accepting only
+    `Qt.BackButton`/`Qt.ForwardButton` (buttons 8/9; X11 and Wayland),
+    dispatching `prev_place`/`next_place` through the same
+    `keyHandler.dispatch` path, so keys, IPC and the mouse cannot drift. It
+    must not steal left/right clicks or fight the per-row `MouseArea`s;
+    verify over lists, covers, fullscreen and the overlays. If a compositor
+    reports raw buttons instead of `Qt.BackButton`, fall back there and
+    document it.
+  - **IPC:** the existing command pump already forwards action names, so
+    `prev_place`/`next_place` work over the socket with no new command; add
+    them to the README grammar if it enumerates actions.
+  - **Verify (matrix):**
+    - Main → album A → artist B → album C, then `[b` ×3 walks back to Main
+      and `]b` ×3 replays C; both ends no-op.
+    - Esc from C lands on B and records it; `[b` returns to C (travel log).
+    - navigate back twice, then open a new album: forward rows are gone,
+      `]b` stays put; the 33rd navigation drops the oldest row and keeps the
+      index at the end.
+    - segment switch with pages open logs the segment root; restoring a row
+      with two pages rebuilds both headers without duplicate recording.
+    - a focused text field types `[b`; mouse Back/Forward still moves. With
+      the search/drawer/line prompt open the first mouse press closes the
+      overlay, the second moves.
+    - fullscreen auto-open on play is one place; `[b` returns to the list it
+      started from, `]b` reopens fullscreen.
+    - `cargo test` (new keymap cases) and `qmllint` clean; manual mouse test
+      on X11 and Wayland.
+  - **Now:** landed — `Action::PrevPlace`/`NextPlace` (`prev_place`/
+    `next_place`) with `[ b`/`] b` defaults and the `]` 0x5D token mapping;
+    `Home.qml` keeps the bounded 2-D log (`placeHistory`, `placeIndex`,
+    `placeMax: 32`), seeds on `Component.onCompleted`, records from
+    `onDepthChanged`/`onCurrentSegmentChanged`/`onNowPlayingExpandedChanged`
+    behind `_placing`, collapses adjacent duplicates, truncates the forward
+    tail on a fresh move and drops the oldest row at 33. `movePlace` dismisses
+    the open transient overlays first, then restores segment + page stack with
+    `StackView.Immediate` from the stored blocks and replays the fullscreen
+    flag; `Esc` still records its hierarchical result. `Main.qml` adds a
+    `TapHandler` for `Qt.BackButton`/`Qt.ForwardButton` dispatching the same
+    action names, so IPC/keyboard/mouse share one path. Keymap tests cover
+    the tokens, the deferred `[` prefix and both bindings; `cargo test` 144
+    pass; `scripts/check-qml.sh` clean. Open: the manual X11/Wayland mouse
+    pass (compositor button mapping).
+
 - [ ] **P-5 · Radio** — P2 · (M6, roadmap)
   - **Why:** sidebar segment is a placeholder; Subsonic radio endpoints exist.
 

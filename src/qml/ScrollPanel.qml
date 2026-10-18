@@ -180,6 +180,8 @@ Rectangle {
     property alias searchCurrentRow: content.searchCurrentRow
     /// UI-58: adaptive rows forward too (see `ScrollContent`).
     property alias rowRatio: content.rowRatio
+    property alias rowRefHeight: content.rowRefHeight
+    property alias rowHeightScale: content.rowHeightScale
     readonly property alias adaptiveRowHeight: content.adaptiveRowHeight
     /// ARC-UI-3: layout modes forward to the shared content (a single-entry
     /// `layouts` keeps the surface list-only).

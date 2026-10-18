@@ -272,6 +272,18 @@ ApplicationWindow {
             }
         }
 
+        // ARC-45: the mouse Back/Forward buttons walk the travel log. Only
+        // those two buttons are accepted, so clicks and wheel stay untouched.
+        TapHandler {
+            acceptedButtons: Qt.BackButton | Qt.ForwardButton
+            onTapped: (eventPoint, button) => {
+                if (button === Qt.BackButton)
+                    keyHandler.dispatch("prev_place");
+                else if (button === Qt.ForwardButton)
+                    keyHandler.dispatch("next_place");
+            }
+        }
+
         // Resolves deferred sequences once the inter-key timeout elapses
         // (e.g. `g g`, `shift-space f`); bare Space fires immediately.
         Timer {

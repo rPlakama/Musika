@@ -153,10 +153,12 @@ Item {
         ratingTouched = true;
         ratingDirty = true;
         ratingCommit.restart();
-        // UI-60 "bright": the burst leaves the heart's centre, which is the
-        // south tile's centre (the tile is aimed, so it is laid out).
-        var p = southBox.mapToItem(root, southBox.width / 2, southBox.height / 2);
-        root.ratingStepped(p.x, p.y);
+        // UI-60 "bright": only an increase earns the burst. The stars leave
+        // the heart's centre — the south tile is aimed, so it is laid out.
+        if (delta > 0) {
+            var p = southBox.mapToItem(root, southBox.width / 2, southBox.height / 2);
+            root.ratingStepped(p.x, p.y);
+        }
         return true;
     }
 

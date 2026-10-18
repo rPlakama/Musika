@@ -625,29 +625,20 @@ Rectangle {
                     ActionChip {
                         id: favoriteChip
                         unit: root.height * 0.06
-                        // ARC-42: filled star, gray while not favourited and
-                        // the Material yellow when it is. Clicks toggle
-                        // optimistically; the backend reconciles through the
-                        // `artist_user` payload (also on failure, alongside
-                        // the error toast).
-                        icon: root.artistStarred
-                            ? "qrc:/app/icons/star.svg"
-                            : "qrc:/app/icons/star-outline.svg"
-                        iconColor: root.artistStarred ? Theme.favoriteStar : Palette.onSurfaceVariant
+                        icon: ""
                         onClicked: {
                             root.chipScope = 2;
                             root.toggleFavorite();
                         }
 
-                        // UI-60: the artist's rating count rides the
-                        // favourite chip (Shift-J/K in the Alt overlay sets
-                        // it; the list rows share the same badge).
-                        RatingBadge {
-                            anchors.right: parent.right
-                            anchors.bottom: parent.bottom
-                            anchors.margins: parent.width * 0.04
-                            width: parent.width * 0.588
-                            height: width
+                        // UI-60: the shared favourite button carries the
+                        // artist's state + count (the Alt overlay's rating
+                        // step reconciles through `ratingChanged`).
+                        FavoriteButton {
+                            anchors.fill: parent
+                            variant: "chip"
+                            unit: parent.height * 0.42
+                            starred: root.artistStarred
                             rating: root.artistRating
                         }
 

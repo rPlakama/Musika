@@ -48,18 +48,13 @@ Rectangle {
         return Theme.clamp(full * root.widthScale, 18, full);
     }
 
-    // Keyboard pane: 1 = lyrics, 2 = queue, 3 = keybar actions. Transport is
-    // never a pane.
+    // Keyboard pane: 1 = lyrics, 2 = queue, 3 = album cover actions.
+    // Transport is never a pane.
     property int pane: 1
-    // Keybar actions (album scope): the focused chip (0 = favourite,
-    // 1 = download) and the states the backend reconciles.
-    property int actionScope: 0
     property bool albumStarred: false
     // UI-60: the playing album's user rating (0..=5, 0 = unrated).
     property int albumRating: 0
     property bool albumCacheOn: false
-    property bool albumDownloading: false
-    property bool albumCovered: false
     property int queueCursor: 0
     property int queueIndex: -1
     // One queue payload after a reorder keeps the moved cursor instead of
@@ -144,7 +139,7 @@ Rectangle {
         if (pane === 1)
             return "j/k scroll   ·   ,/. seek   ·   Ctrl-N/P track   ·   Tab queue   ·   Esc exit";
         if (pane === 3)
-            return "j/k select   ·   Enter options   ·   Tab lyrics   ·   Esc exit";
+            return "Enter cover actions   ·   Tab lyrics   ·   Esc exit";
         return "j/k select   ·   Shift-J/K move   ·   Enter jump   ·   ,/. seek   ·   Ctrl-N/P track   ·   Tab lyrics   ·   Esc exit";
     }
 
@@ -157,20 +152,17 @@ Rectangle {
         Backend.requestAlbumState(Backend.currentAlbumId);
     }
 
-    function toggleAlbumFavorite() {
-        if (Backend.currentAlbumId.length === 0)
-            return;
-        // Optimistic; the `album_state` payload reconciles (also on failure).
-        root.albumStarred = !root.albumStarred;
-        Backend.altFavorite("album", Backend.currentAlbumId, root.albumStarred);
+    function albumItem() {
+        return {
+            albumId: Backend.currentAlbumId,
+            starred: root.albumStarred,
+            rating: root.albumRating
+        };
     }
 
-    function toggleAlbumDownload() {
-        // An artist container already owns the album ("if the artist is
-        // already in download scope, don't").
-        if (Backend.currentAlbumId.length === 0 || root.albumCovered)
-            return;
-        Backend.downloadAlbum(Backend.currentAlbumId, !root.albumCacheOn);
+    /// The big cover owns the album verbs (favourite + count + download).
+    function coverActions() {
+        return verbs.album(root.albumItem(), root.albumCacheOn);
     }
 
     /// The state marks render only inside the queue cursor's ±15-row
@@ -218,59 +210,6 @@ Rectangle {
         var i = root.queueIndex;
         if (i >= 0 && i < queueItems.count && queueItems.get(i).songId === songId)
             queueItems.setProperty(i, "starred", on === true);
-    }
-
-    /// The keybar chips arm the shared Alt overlay instead of firing: two
-    /// options, left = track scope (note) and right = album scope, so the
-    /// user directs whether the verb lands on the track or the whole album.
-    function armAlbumActions(kind) {
-        var track = root.currentTrack();
-        var songId = track ? track.songId : Backend.currentSongId;
-        var actions = {
-            north: null,
-            south: null,
-            west: null,
-            east: null,
-            // A click/Enter arms with no Alt to release: sticky, like the
-            // trashcan's wipe chooser.
-            sticky: true
-        };
-        if (kind === "favorite") {
-            var starred = track ? track.starred === true : false;
-            actions.west = {
-                label: "Track",
-                icon: "qrc:/app/icons/track-svgrepo-com.svg",
-                favorite: !starred,
-                invoke: function() {
-                    if (songId.length > 0) {
-                        Backend.altFavorite("song", songId, !starred);
-                        root.markRowStarred(songId, !starred);
-                    }
-                }
-            };
-            actions.east = {
-                label: "Album",
-                icon: "qrc:/app/icons/album.svg",
-                favorite: !root.albumStarred,
-                invoke: function() { root.toggleAlbumFavorite() }
-            };
-            root.quickAction(favoriteChip, actions);
-        } else {
-            actions.west = {
-                label: "Track",
-                icon: "qrc:/app/icons/track-svgrepo-com.svg",
-                invoke: function() {
-                    if (songId.length > 0)
-                        Backend.downloadSong(songId);
-                }
-            };
-            actions.east = {
-                label: "Album",
-                icon: "qrc:/app/icons/album.svg",
-                invoke: function() { root.toggleAlbumDownload() }
-            };
-            root.quickAction(downloadChip, actions);
-        }
     }
 
     function scrollLyrics(delta) {
@@ -480,6 +419,14 @@ Rectangle {
     /// ARC-UI-1: Alt armed the gesture — anchor on the queue row under the
     /// cursor; the fullscreen queue reuses the shared track verb set.
     function armQuickActions() {
+        // UI-60: with the cover pane focused, Alt anchors on the big album
+        // cover (the keybar chips are gone); its album verbs carry the
+        // favourite + count + download.
+        if (root.pane === 3) {
+            if (Backend.currentAlbumId.length > 0)
+                root.quickAction(coverBox, root.coverActions());
+            return;
+        }
         if (queueItems.count === 0 || queueContent.currentIndex < 0)
             return;
         var item = queueItems.get(queueContent.currentIndex);
@@ -534,15 +481,12 @@ Rectangle {
         }
 
         if (pane === 3) {
-            if (action === "move_left" || action === "move_up")
-                actionScope = 0;
-            else if (action === "move_right" || action === "move_down")
-                actionScope = 1;
-            else if (action === "enter") {
-                if (root.actionScope === 0)
-                    root.armAlbumActions("favorite");
-                else
-                    root.armAlbumActions("download");
+            // The big cover is the action surface: Enter arms its album
+            // verbs (favourite, count, download) as a sticky menu.
+            if (action === "enter" && Backend.currentAlbumId.length > 0) {
+                var coverMenu = root.coverActions();
+                coverMenu.sticky = true;
+                root.quickAction(coverBox, coverMenu);
             }
             return;
         }
@@ -629,8 +573,6 @@ Rectangle {
                 var cache = JSON.parse(payload);
                 if (cache.id === Backend.currentAlbumId) {
                     root.albumCacheOn = cache.on === true;
-                    root.albumDownloading = cache.active === true;
-                    root.albumCovered = cache.covered === true;
                 }
                 // The pass' row updates travel per-id (the batch kick plus
                 // each song's completion); only an unselect must hard-reset
@@ -818,6 +760,26 @@ Rectangle {
                             font.pixelSize: Theme.fontSize("title", root.height)
                             font.letterSpacing: root.height * 0.006
                             visible: Backend.currentCoverUrl.length === 0
+                        }
+
+                        // UI-60: the cover is the album action surface.
+                        ScopeRing {
+                            shown: root.pane === 3
+                        }
+
+                        HoverHandler {
+                            cursorShape: Qt.PointingHandCursor
+                        }
+
+                        TapHandler {
+                            onTapped: {
+                                root.pane = 3;
+                                if (Backend.currentAlbumId.length === 0)
+                                    return;
+                                var menu = root.coverActions();
+                                menu.sticky = true;
+                                root.quickAction(coverBox, menu);
+                            }
                         }
                     }
                 }
@@ -1445,9 +1407,8 @@ Rectangle {
             }
         }
 
-        // Context-aware keybar: the key hints on the left; the free space on
-        // the right carries the album-scope actions — Tab cycles into them
-        // (pane 3), j/k (or h/l) picks the chip, Enter fires it.
+        // Context-aware keybar: the key hints; the album actions live on the
+        // big cover (pane 3), not on chips here.
         Rectangle {
             id: keybar
             Layout.fillWidth: true
@@ -1471,60 +1432,6 @@ Rectangle {
                     animated: false
                 }
 
-                ActionChip {
-                    id: favoriteChip
-                    // The favourite options (the shared Alt overlay): the
-                    // star reads the album's state, the overlay then picks
-                    // the scope — track (note) or album.
-                    unit: keybar.height * 0.72
-                    icon: root.albumStarred
-                        ? "qrc:/app/icons/star.svg"
-                        : "qrc:/app/icons/star-outline.svg"
-                    iconColor: root.albumStarred ? Theme.favoriteStar : Palette.onSurfaceVariant
-                    onClicked: {
-                        root.actionScope = 0;
-                        root.armAlbumActions("favorite");
-                    }
-
-                    // UI-60: the playing album's rating rides the chip.
-                    RatingBadge {
-                        anchors.right: parent.right
-                        anchors.bottom: parent.bottom
-                        anchors.margins: parent.width * 0.04
-                        width: parent.width * 0.588
-                        height: width
-                        rating: root.albumRating
-                    }
-
-                    ScopeRing {
-                        shown: root.pane === 3 && root.actionScope === 0
-                    }
-                }
-
-                ActionChip {
-                    id: downloadChip
-                    // The download options (the shared Alt overlay); the
-                    // visual is the shared ARC-UI-6 DownloadButton reading
-                    // the album container's state.
-                    unit: keybar.height * 0.72
-                    icon: ""
-                    onClicked: {
-                        root.actionScope = 1;
-                        root.armAlbumActions("download");
-                    }
-
-                    DownloadButton {
-                        anchors.centerIn: parent
-                        base: parent.height * 0.42
-                        fetching: root.albumDownloading
-                        done: root.albumCacheOn
-                        showIdle: true
-                    }
-
-                    ScopeRing {
-                        shown: root.pane === 3 && root.actionScope === 1
-                    }
-                }
             }
         }
     }

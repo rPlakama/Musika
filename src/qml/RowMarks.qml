@@ -104,30 +104,15 @@ Rectangle {
             }
         }
 
-        Rectangle {
-            radius: Theme.radius
-            visible: symbolsRow.windowed && root.starred
+        // UI-60: the shared favourite button owns the heart + count pairing.
+        FavoriteButton {
+            variant: "row"
+            unit: root.box * 1.2
             anchors.verticalCenter: parent.verticalCenter
-            width: root.box * 1.2
-            height: width
-            color: "transparent"
-
-            Icon {
-                anchors.centerIn: parent
-                width: root.box
-                height: width
-                name: "baseline-favorite"
-                symbolColor: Theme.iconStrong
-            }
-        }
-
-        RatingBadge {
-            visible: symbolsRow.ratingMark
-            anchors.verticalCenter: parent.verticalCenter
-            width: root.box * 1.89
-            height: width
-            glyphInset: 0.06
+            starred: root.starred
             rating: root.rating
+            showGlyph: symbolsRow.windowed && root.starred
+            showCount: symbolsRow.ratingMark
         }
     }
 }

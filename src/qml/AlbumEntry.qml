@@ -38,6 +38,9 @@ Rectangle {
 
     property string albumId: ""
     property bool onToolbar: false
+    /// UI-60: the big cover is a selectable album surface (Enter/click arms
+    /// its favourite + count + download verbs).
+    property bool onCover: false
     property string albumCover: ""
     property string albumTitle: ""
     property string albumArtist: ""
@@ -48,6 +51,9 @@ Rectangle {
     /// UI-60: the album's user rating (0..=5, 0 = unrated); the
     /// `album_state` payload reconciles it on open.
     property int albumRating: 0
+    /// CACHE-5/8: the album container's rule state (the cover's
+    /// Download/Remove verb).
+    property bool albumCacheOn: false
     property string albumNotes: ""
     // UI-14: album notes clamp to three lines until clicked.
     property bool notesExpanded: false
@@ -136,10 +142,37 @@ Rectangle {
         content.clearSelection();
     }
 
-    /// ARC-I-2: Alt armed the gesture — anchor on the song row under the
-    /// cursor (the toolbar is a no-op, like an empty list); a visual selection
-    /// swaps in the batch verb set (VI-4).
+    function albumItem() {
+        return {
+            albumId: root.albumId,
+            starred: root.albumStarred,
+            rating: root.albumRating
+        };
+    }
+
+    // UI-60: the album cover's verbs — the same favourite + count + download
+    // set the album rows use.
+    function coverActions() {
+        return verbs.album(root.albumItem(), root.albumCacheOn);
+    }
+
+    function armCoverActions(sticky) {
+        if (root.albumId.length === 0)
+            return;
+        var actions = root.coverActions();
+        actions.sticky = sticky === true;
+        root.quickAction(coverBox, actions);
+    }
+
+    /// ARC-I-2: Alt armed the gesture — on the cover it arms the album verbs;
+    /// otherwise anchor on the song row under the cursor (the toolbar is a
+    /// no-op, like an empty list). A visual selection swaps in the batch verb
+    /// set (VI-4).
     function armQuickActions() {
+        if (root.onCover) {
+            root.armCoverActions(false);
+            return;
+        }
         if (root.onToolbar || songs.count === 0 || content.currentIndex < 0)
             return;
         var row = content.view.itemAtIndex(content.currentIndex);
@@ -169,8 +202,10 @@ Rectangle {
         Backend.requestAlbumSongs(root.albumId);
         Backend.requestAlbumInfo(root.albumId);
         // UI-60: the header's favourite + rating marks reconcile here (the
-        // opener's row flags may be stale).
+        // opener's row flags may be stale); the cover's Download/Remove verb
+        // reads the container rule state.
         Backend.requestAlbumState(root.albumId);
+        Backend.requestAlbumCache(root.albumId);
     }
 
     function applyInfo(payload) {
@@ -263,22 +298,36 @@ Rectangle {
     }
 
     function handleAction(action) {
-        // VI-11: `gg`/`G` leave the toolbar for the first/last song; the
-        // toolbar stays a `k`-from-row-0 affordance only.
+        // VI-11: `gg`/`G` leave the cover/toolbar for the first/last song;
+        // the header stays a `k`-from-row-0 affordance only.
         if (action === "top" || action === "bottom") {
             if (songs.count === 0)
                 return;
+            root.onCover = false;
             root.onToolbar = false;
             content.edgeJump(action === "bottom");
             return;
         }
 
-        if (root.onToolbar) {
-            // Cursor is on the toolbar (Back). Down returns to the songs.
-            if (action === "move_down" && songs.count > 0) {
-                root.onToolbar = false;
-                // The view follows the cursor itself.
+        if (root.onCover) {
+            // UI-60: the cover sits between the Back chip and the first row.
+            if (action === "move_up") {
+                root.onCover = false;
+                root.onToolbar = true;
+            } else if (action === "move_down" && songs.count > 0) {
+                root.onCover = false;
                 content.currentIndex = 0;
+            } else if (action === "enter") {
+                root.armCoverActions(true);
+            }
+            return;
+        }
+
+        if (root.onToolbar) {
+            // Cursor is on the toolbar (Back). Down reaches the cover.
+            if (action === "move_down") {
+                root.onToolbar = false;
+                root.onCover = true;
             } else if (action === "enter") {
                 root.back();
             }
@@ -289,9 +338,9 @@ Rectangle {
             if (content.currentIndex > 0) {
                 content.currentIndex -= 1;
             } else {
-                // VI-4: leaving the rows for the toolbar ends the selection.
+                // VI-4: leaving the rows for the cover ends the selection.
                 content.clearSelection();
-                root.onToolbar = true;
+                root.onCover = true;
             }
         } else if (action === "move_down") {
             if (songs.count > 0)
@@ -315,6 +364,10 @@ Rectangle {
                     root.albumStarred = state.starred === true;
                     root.albumRating = Number(state.rating) || 0;
                 }
+            } else if (channel === "album_cache") {
+                var cache = JSON.parse(payload);
+                if (cache.id === root.albumId)
+                    root.albumCacheOn = cache.on === true;
             }
         }
         // A fetch finished: re-read this page's own window (forced).
@@ -455,6 +508,23 @@ Rectangle {
                     id: coverImage
                     anchors.fill: parent
                     source: root.albumCover
+                }
+
+                // UI-60: the cover is a selectable album action surface.
+                ScopeRing {
+                    shown: root.onCover
+                }
+
+                HoverHandler {
+                    cursorShape: Qt.PointingHandCursor
+                }
+
+                TapHandler {
+                    onTapped: {
+                        root.onToolbar = false;
+                        root.onCover = true;
+                        root.armCoverActions(true);
+                    }
                 }
             }
 
@@ -691,6 +761,8 @@ Rectangle {
                 TapHandler {
                     onTapped: {
                         // VI-4: direct play ends the visual selection.
+                        root.onCover = false;
+                        root.onToolbar = false;
                         content.clearSelection();
                         content.currentIndex = songRow.index;
                         Backend.playAlbum(root.albumId, songRow.index);

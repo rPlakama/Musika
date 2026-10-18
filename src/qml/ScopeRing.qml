@@ -25,7 +25,7 @@ Rectangle {
     id: root
 
     property bool shown: false
-    property real lineWidth: Math.max(1, root.height * Theme.hairlineRatio * 2.5)
+    property real lineWidth: Math.max(1, root.height * Theme.hairlineRatio * 3.25)
 
     anchors.fill: parent
     radius: Theme.radius

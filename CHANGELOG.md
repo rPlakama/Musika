@@ -3,6 +3,13 @@
 All notable changes to Musika, newest first. `TASKLISTMAJOR.md` tracks the
 open work; this file is the release history.
 
+## 0.3.3 — _Improve in Favorite System_
+
+All commits since `v0.3.2`:
+
+- `4beeacc` Merge favourite and rating into one system
+- `8f625a3` Fix album download mark erased at pass end
+
 ## 0.3.2 — _Extras and engine stuff_
 
 All commits since `v0.3.1`:

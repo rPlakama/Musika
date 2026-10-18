@@ -3,6 +3,15 @@
 All notable changes to Musika, newest first. `TASKLISTMAJOR.md` tracks the
 open work; this file is the release history.
 
+## 0.3.5 — _Performance and playback pass_
+
+All commits since `v0.3.4`:
+
+- `3ed4304` Launch mpv with safe hardware decoding
+- `de4b10b` PATH: index and chunk the DB paths, trim QML, cache offline, batch ratings
+- `a2cef7f` PATH: coalesce mark reads and trim queue, status and metadata paths
+- `0704fd8` PATH: share the API client, target maps, page Songs, bound marks
+
 ## 0.3.4 — _Local-first rating stars, cover actions and lenient search_
 
 All commits since `v0.3.3`:

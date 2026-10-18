@@ -2122,15 +2122,16 @@ The product is incomplete without these.
       until the next sync), matching today's "search is a disposable cache"
       contract. On logout/wipe, drop the index. Keep `search.db` untouched
       in M1–M3 as the fallback.
-    - **Engine switch.** `MUSIKA_SEARCH_ENGINE=fts|nucleo` (default `fts`
-      until parity; flipped to `nucleo` in M4; auto-fallback to `fts` when
-      the build fails or the catalog exceeds the measured memory cap). Remove
-      the FTS/LIKE hot paths only after the flag has shipped and the
-      benchmarks are green; update README/DBWIRING/CRITIQUE's stale
-      "tmpfs + fd" claim while there.
+    - **Engine switch.** `MUSIKA_SEARCH_ENGINE=fts|nucleo` — `nucleo` is the
+      default; `fts` opts back into the SQLite engine. `search_json`
+      auto-falls back to FTS whenever the in-memory build or query fails.
+      Remove the FTS/LIKE hot paths only after the fallback has proven
+      itself and the benchmarks are green; update README/DBWIRING/CRITIQUE's
+      stale "tmpfs + fd" claim while there.
     - **Threads/memory.** `Nucleo::new(Config::DEFAULT, noop_notify,
-      Some(1), 1)` — one worker thread for songs; the notify callback only
-      needs to wake the tick loop. Memory ≈ item structs + one UTF-32
+      Some(4), 1)` — a small worker pool for songs (the 100k bench measured
+      6 ms for a common prefix vs 19 ms on one thread); the notify callback
+      only needs to wake the tick loop. Memory ≈ item structs + one UTF-32
       haystack per song (~4 bytes/char): measure at 10k/50k/100k and record;
       if the 100k figure is unacceptable, cap the index (e.g. 150k songs) and
       fall back to FTS.
@@ -2169,6 +2170,21 @@ The product is incomplete without these.
     core is stable and widely used. Memory is the real trade; the cap and
     fallback keep a large library usable. All `tick` loops live in
     `spawn_blocking`, so the Qt thread never waits.
+  - **Now (partial):** M1 + M2 and the M4 default flip landed — `nucleo 0.5`
+    is in `Cargo.toml`; `src/search/index.rs` builds the catalog from
+    `library.db` (songs on a 4-thread Nucleo worker, artists/albums via
+    `nucleo-matcher`), keeps `most_played` and `by_album` sorted, and
+    `browse::search_json` routes to it by default; `MUSIKA_SEARCH_ENGINE=fts`
+    opts back to the FTS fallback, and `index::rebuild` refreshes the cache
+    after a sync. S-8 (`album_context` + track order) and S-9 (play boost +
+    Most played) ride the in-memory index; hearts/ratings are read live;
+    every wipe clears it. Tests cover fuzzy matching, smartcase/diacritics,
+    the play boost, Most-played order, track order and one end-to-end
+    `search_json` payload. M0 (index-only, release, 100k synthetic): build
+    38 ms, `rdo` 3.4 ms, `track` 6.0 ms, `radio` 3.1 ms on a 4-thread pool;
+    the FTS comparison baseline is still to record. Open: M3 highlight spans
+    (fuzzy hits still use the client-side literal `SearchMatch.spans`), FTS
+    cleanup.
 
 ### Incremental (ARC-I)
 

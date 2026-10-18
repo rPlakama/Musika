@@ -57,6 +57,9 @@ pub fn dbs() -> Option<&'static db::Dbs> {
 /// Swaps in a freshly initialised set (the full wipe deletes the files and
 /// re-inits; the old handle leaks, which is once-per-wipe).
 pub fn set_dbs(dbs: db::Dbs) {
+    // ARC-SEARCH: the in-memory catalog belongs to the database it was built
+    // from; a fresh set starts cold and rebuilds on first search/sync.
+    search::index::clear();
     let leaked: &'static db::Dbs = Box::leak(Box::new(dbs));
     match DBS.get() {
         Some(slot) => *slot.lock().expect("dbs lock") = leaked,

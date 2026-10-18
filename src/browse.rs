@@ -355,7 +355,56 @@ pub(crate) fn cover_url(id: Option<&str>, covers: &HashMap<String, String>) -> S
         .unwrap_or_default()
 }
 
+/// One song row in the search payload, independent of the engine that found
+/// it. The FTS path hydrates the extra fields with joins; the Nucleo index
+/// carries them from the catalog build.
+struct SearchSong {
+    id: String,
+    title: String,
+    artist: Option<String>,
+    album: Option<String>,
+    album_id: Option<String>,
+    track: Option<i32>,
+    duration: Option<i32>,
+    cover_art: Option<String>,
+    play_count: i64,
+}
+
+impl SearchSong {
+    fn from_index(hit: &crate::search::index::SongHit) -> Self {
+        Self {
+            id: hit.id.clone(),
+            title: hit.title.clone(),
+            artist: hit.artist.clone(),
+            album: hit.album.clone(),
+            album_id: hit.album_id.clone(),
+            track: hit.track,
+            duration: hit.duration,
+            cover_art: hit.cover_art.clone(),
+            play_count: hit.play_count,
+        }
+    }
+}
+
 pub async fn search_json(
+    dbs: &crate::db::Dbs,
+    query: &str,
+    offline: bool,
+) -> anyhow::Result<String> {
+    if crate::search::index::enabled() {
+        match search_json_index(dbs, query, offline).await {
+            Ok(json) => return Ok(json),
+            Err(err) => {
+                // The in-memory catalog is a cache: a build failure must not
+                // take the palette down while FTS is still available.
+                eprintln!("search: nucleo engine failed, using FTS: {err:#}");
+            }
+        }
+    }
+    search_json_fts(dbs, query, offline).await
+}
+
+async fn search_json_fts(
     dbs: &crate::db::Dbs,
     query: &str,
     offline: bool,
@@ -381,21 +430,21 @@ pub async fn search_json(
         let songs = crate::search::search(&dbs.search, &cleaned, limit).await?;
         (artists, albums, songs)
     };
-    let (artists, albums) = match &filter {
+    let (mut artists, mut albums) = match &filter {
         Some(filter) => (
             artists
                 .into_iter()
                 .filter(|artist| filter.artists.contains_key(&artist.id))
-                .take(20)
                 .collect(),
             albums
                 .into_iter()
                 .filter(|album| filter.albums.contains_key(&album.id))
-                .take(20)
                 .collect(),
         ),
         None => (artists, albums),
     };
+    artists.truncate(20);
+    albums.truncate(20);
     if let Some(filter) = &filter {
         songs.retain(|song| filter.songs.contains(&song.song_id));
     }
@@ -403,49 +452,172 @@ pub async fn search_json(
 
     let song_ids: Vec<String> = songs.iter().map(|song| song.song_id.clone()).collect();
     let song_covers = crate::library::song_cover_ids(&dbs.library, &song_ids).await?;
+    let song_albums = crate::library::song_album_ids(&dbs.library, &song_ids).await?;
+    let songs: Vec<SearchSong> = songs
+        .into_iter()
+        .map(|song| {
+            let cover_art = song_covers.get(&song.song_id).cloned();
+            let album_id = song_albums.get(&song.song_id).cloned();
+            SearchSong {
+                id: song.song_id,
+                title: song.title,
+                artist: song.artist,
+                album: song.album,
+                album_id,
+                track: None,
+                duration: song.duration,
+                cover_art,
+                play_count: song.play_count,
+            }
+        })
+        .collect();
+
+    search_payload(
+        dbs,
+        query,
+        most_played,
+        artists.into_iter().map(std::sync::Arc::new).collect(),
+        albums.into_iter().map(std::sync::Arc::new).collect(),
+        songs,
+        None,
+    )
+    .await
+}
+
+async fn search_json_index(
+    dbs: &crate::db::Dbs,
+    query: &str,
+    offline: bool,
+) -> anyhow::Result<String> {
+    let filter = offline_filter(dbs, offline).await?;
+    let limit = if filter.is_some() { 60 } else { 20 };
+    let cleaned = crate::search::clean_query(query);
+    let most_played = cleaned.is_empty();
+    let index = crate::search::index::ensure(&dbs.library).await?;
+    let (mut artists, mut albums, mut songs) = if most_played {
+        (
+            Vec::new(),
+            Vec::new(),
+            index
+                .most_played(limit)
+                .iter()
+                .map(|song| SearchSong::from_index(song))
+                .collect::<Vec<_>>(),
+        )
+    } else {
+        // Nucleo's tick blocks for the worker; keep it off the async workers.
+        let index = std::sync::Arc::clone(&index);
+        let cleaned = cleaned.clone();
+        let results = tokio::task::spawn_blocking(move || index.search(&cleaned, limit)).await?;
+        (
+            results.artists,
+            results.albums,
+            results
+                .songs
+                .iter()
+                .map(|song| SearchSong::from_index(song))
+                .collect(),
+        )
+    };
+    if let Some(filter) = &filter {
+        artists.retain(|artist| filter.artists.contains_key(&artist.id));
+        albums.retain(|album| filter.albums.contains_key(&album.id));
+        songs.retain(|song| filter.songs.contains(&song.id));
+    }
+    artists.truncate(20);
+    albums.truncate(20);
+    // S-8: one album match turns the Songs column into that album's
+    // tracklist. The index already keeps the tracks sorted by disc/track.
+    let album_context = (!most_played && albums.len() == 1).then(|| albums[0].id.clone());
+    if let Some(album_id) = &album_context {
+        songs = index
+            .album_tracks(album_id, limit)
+            .iter()
+            .map(|song| SearchSong::from_index(song))
+            .collect();
+        if let Some(filter) = &filter {
+            songs.retain(|song| filter.songs.contains(&song.id));
+        }
+    }
+    songs.truncate(20);
+
+    search_payload(
+        dbs,
+        query,
+        most_played,
+        artists,
+        albums,
+        songs,
+        album_context,
+    )
+    .await
+}
+
+async fn search_payload(
+    dbs: &crate::db::Dbs,
+    query: &str,
+    most_played: bool,
+    artists: Vec<std::sync::Arc<crate::library::ArtistRow>>,
+    albums: Vec<std::sync::Arc<crate::library::AlbumRow>>,
+    songs: Vec<SearchSong>,
+    album_context: Option<String>,
+) -> anyhow::Result<String> {
     let mut cover_ids: Vec<String> = albums
         .iter()
         .filter_map(|album| album.cover_art.clone())
         .collect();
     cover_ids.extend(artists.iter().filter_map(|artist| artist.cover_art.clone()));
-    cover_ids.extend(song_covers.values().cloned());
-    let covers = crate::covers::url_map_of(&dbs.covers, &cover_ids).await?;
-    let song_albums = crate::library::song_album_ids(&dbs.library, &song_ids).await?;
-    // UI-56: the search index carries no starred; join it back from the
-    // library, and OR artists with the local `artist_user` overlay.
-    let song_starred = crate::library::song_starred_ids(&dbs.library, &song_ids).await?;
-    let user_starred: std::collections::HashSet<String> =
-        crate::artist_user::starred_ids(&dbs.artist_user)
-            .await?
-            .into_iter()
-            .collect();
-    let user_ratings = crate::artist_user::ratings(&dbs.artist_user).await?;
+    cover_ids.extend(songs.iter().filter_map(|song| song.cover_art.clone()));
+    let covers = crate::covers::url_map_of(&dbs.covers, &cover_ids);
+    // UI-56: hearts/ratings are live library state, not the index's
+    // sync-time snapshot; read them for just this page.
+    let song_ids: Vec<String> = songs.iter().map(|song| song.id.clone()).collect();
+    let song_starred = crate::library::song_starred_ids(&dbs.library, &song_ids);
+    let album_ids: Vec<String> = albums.iter().map(|album| album.id.clone()).collect();
+    let album_states = crate::library::album_states(&dbs.library, &album_ids);
+    let user_starred = crate::artist_user::starred_ids(&dbs.artist_user);
+    let user_ratings = crate::artist_user::ratings(&dbs.artist_user);
+    let (covers, song_starred, album_states, user_starred, user_ratings) = tokio::try_join!(
+        covers,
+        song_starred,
+        album_states,
+        user_starred,
+        user_ratings
+    )?;
+    let user_starred: std::collections::HashSet<String> = user_starred.into_iter().collect();
 
     let artist_rows: Vec<serde_json::Value> = artists
-        .into_iter()
+        .iter()
         .map(|artist| {
             let starred = artist.starred.is_some() || user_starred.contains(&artist.id);
             let rating = user_ratings.get(&artist.id).copied().unwrap_or(0);
-            artist_json(&artist, &covers, None, starred, rating)
+            artist_json(artist, &covers, None, starred, rating)
         })
         .collect();
     let album_rows: Vec<serde_json::Value> = albums
-        .into_iter()
-        .map(|album| album_json(&album, &covers, None))
+        .iter()
+        .map(|album| {
+            let mut value = album_json(album, &covers, None);
+            if let Some((starred, rating)) = album_states.get(&album.id) {
+                value["starred"] = serde_json::json!(starred);
+                value["rating"] = serde_json::json!(rating);
+            }
+            value
+        })
         .collect();
     let song_rows: Vec<serde_json::Value> = songs
         .iter()
         .map(|song| {
             let mut value = song_json(
-                &song.song_id,
+                &song.id,
                 &song.title,
                 song.artist.as_deref(),
                 song.album.as_deref(),
-                song_albums.get(&song.song_id).map(String::as_str),
-                None,
+                song.album_id.as_deref(),
+                song.track,
                 song.duration,
-                cover_url(song_covers.get(&song.song_id).map(String::as_str), &covers),
-                song_starred.contains(&song.song_id),
+                cover_url(song.cover_art.as_deref(), &covers),
+                song_starred.contains(&song.id),
             );
             value["play_count"] = serde_json::json!(song.play_count);
             value
@@ -455,6 +627,7 @@ pub async fn search_json(
     Ok(serde_json::json!({
         "query": query,
         "most_played": most_played,
+        "album_context": album_context,
         "artists": artist_rows,
         "albums": album_rows,
         "songs": song_rows,
@@ -501,5 +674,59 @@ mod tests {
         let parsed: Vec<serde_json::Value> = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed[0]["starred"], true);
         assert_eq!(parsed[1]["starred"], false);
+    }
+
+    /// ARC-SEARCH: the Nucleo engine answers from the in-memory catalog and
+    /// keeps S-8 (one album match = track order) and S-9 (Most played).
+    #[tokio::test]
+    async fn nucleo_search_payload_follows_the_one_album_and_most_played() {
+        let library = crate::sqlite::memory_pool(sqlx::migrate!("./migrations_library")).await;
+        let covers = crate::sqlite::memory_pool(sqlx::migrate!("./migrations_covers")).await;
+        let dbs = crate::db::Dbs {
+            credentials: library.clone(),
+            library: library.clone(),
+            search: library.clone(),
+            covers,
+            media: library.clone(),
+            lyrics: library.clone(),
+            colors: library.clone(),
+            status: library.clone(),
+            artist_user: library.clone(),
+            download: library.clone(),
+            playlist: library.clone(),
+        };
+        sqlx::raw_sql(
+            "INSERT INTO artists (id, name, album_count) VALUES ('ar1', 'Radiohead', 1);
+             INSERT INTO albums (id, name, artist, song_count)
+                 VALUES ('al1', 'Kid A', 'Radiohead', 2);
+             INSERT INTO songs
+                 (id, album_id, title, artist, album, track, disc_number, duration, play_count)
+             VALUES
+                 ('s1', 'al1', 'Everything In Its Right Place', 'Radiohead', 'Kid A', 1, 1, 240, 0),
+                 ('s2', 'al1', 'Idioteque', 'Radiohead', 'Kid A', 2, 1, 300, 5);",
+        )
+        .execute(&dbs.library)
+        .await
+        .unwrap();
+
+        let json = search_json_index(&dbs, "rdo", false).await.unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed["most_played"], false);
+        assert_eq!(parsed["album_context"], "al1");
+        let ids: Vec<&str> = parsed["songs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|song| song["id"].as_str().unwrap())
+            .collect();
+        assert_eq!(ids, ["s1", "s2"], "one album match reads in track order");
+
+        let json = search_json_index(&dbs, "", false).await.unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed["most_played"], true);
+        assert!(parsed["album_context"].is_null());
+        assert_eq!(parsed["songs"][0]["id"], "s2");
+
+        crate::search::index::clear();
     }
 }

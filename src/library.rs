@@ -175,6 +175,32 @@ pub async fn album_rating(pool: &SqlitePool, id: &str) -> Result<i64> {
     Ok(rating.unwrap_or(0).clamp(0, 5))
 }
 
+/// Live starred/rating state for a search page's albums (ARC-SEARCH: the
+/// in-memory index carries the sync-time snapshot, but a heart or rating
+/// write must show on the very next keystroke).
+pub async fn album_states(
+    pool: &SqlitePool,
+    ids: &[String],
+) -> Result<HashMap<String, (bool, i64)>> {
+    if ids.is_empty() {
+        return Ok(HashMap::new());
+    }
+    let mut states = HashMap::with_capacity(ids.len());
+    for chunk in ids.chunks(500) {
+        let mut builder = sqlx::QueryBuilder::new(
+            "SELECT id, CASE WHEN starred IS NOT NULL THEN 1 ELSE 0 END AS starred, rating
+             FROM albums WHERE id IN (",
+        );
+        crate::cache::push_in_list(&mut builder, chunk);
+        let rows: Vec<(String, i64, i64)> = builder.build_query_as().fetch_all(pool).await?;
+        states.extend(
+            rows.into_iter()
+                .map(|(id, starred, rating)| (id, (starred != 0, rating))),
+        );
+    }
+    Ok(states)
+}
+
 /// UI-60: records the album rating locally; the optimistic write is
 /// reconciled by the next sync (the server row carries `userRating`).
 pub async fn set_album_rating(pool: &SqlitePool, id: &str, rating: u8) -> Result<()> {

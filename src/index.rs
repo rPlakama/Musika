@@ -284,11 +284,18 @@ where
     })
 }
 
-/// Rebuilds the FTS index from the current library rows (S-9: shared by the
-/// changed branch and the up-to-date self-heal).
+/// Rebuilds the derived search caches from the current library rows: the
+/// FTS5 mirror (kept as the fallback engine) and, when ARC-SEARCH is opted
+/// in, the in-memory Nucleo catalog.
 async fn rebuild_search(dbs: &Dbs) -> Result<()> {
     let rows = crate::library::song_search_rows(&dbs.library).await?;
-    crate::search::rebuild(&dbs.search, &rows).await
+    crate::search::rebuild(&dbs.search, &rows).await?;
+    if crate::search::index::enabled()
+        && let Err(err) = crate::search::index::rebuild(&dbs.library).await
+    {
+        eprintln!("search: could not rebuild the in-memory index: {err:#}");
+    }
+    Ok(())
 }
 
 /// Sync-time lyric pass: fetches songs without lyrics or past their miss TTL,

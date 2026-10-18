@@ -26,6 +26,8 @@ use sqlx::sqlite::SqlitePool;
 
 use crate::library::SongSearchRow;
 
+pub mod index;
+
 /// A full-text search result.
 #[derive(Debug, Clone, FromRow)]
 pub struct SearchHit {

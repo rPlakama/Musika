@@ -224,6 +224,7 @@ pub async fn wipe_library(dbs: &Dbs) -> Result<()> {
         &["songs", "albums", "artists", "artist_info", "meta"],
     )
     .await?;
+    crate::search::index::clear();
     remove_mirror();
     Ok(())
 }
@@ -232,6 +233,7 @@ pub async fn wipe_library(dbs: &Dbs) -> Result<()> {
 /// rebuild from the library on the next sync.
 pub async fn wipe_indexes(dbs: &Dbs) -> Result<()> {
     delete_tables(&dbs.search, &["song_search"]).await?;
+    crate::search::index::clear();
     remove_mirror();
     Ok(())
 }
@@ -275,6 +277,7 @@ fn remove_dir(dir: &Path) -> Result<()> {
 /// re-initialises the databases with fresh files and schemas. An old or
 /// foreign schema cannot survive this.
 pub async fn wipe_files(dbs: &Dbs) -> Result<()> {
+    crate::search::index::clear();
     // Close first: an open pool keeps the deleted inodes alive and the next
     // login would write into unlinked files.
     for pool in [&dbs.library, &dbs.media] {
@@ -318,6 +321,7 @@ pub async fn wipe_files(dbs: &Dbs) -> Result<()> {
 pub async fn wipe(dbs: &Dbs) -> Result<()> {
     wipe_and_migrate(&dbs.library, sqlx::migrate!("./migrations_library")).await?;
     wipe_and_migrate(&dbs.media, sqlx::migrate!("./migrations_media")).await?;
+    crate::search::index::clear();
 
     for dir in [covers_dir(), media_dir(), playback_dir()] {
         if let Ok(dir) = dir {

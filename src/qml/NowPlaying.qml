@@ -43,6 +43,8 @@ Rectangle {
     // UI-57: the track title ramps with the window width like the list
     // headers do (ScrollPanel), toward the headline floor — never below it.
     readonly property real widthScale: Theme.widthScale(root.width)
+    /// Star hitbox side under the playing cover (five slots total).
+    readonly property real starUnit: Math.max(14, Math.min(30, root.height * 0.045))
     readonly property real trackTitlePixelSize: {
         var full = Theme.fontSize("headline", root.height);
         return Theme.clamp(full * root.widthScale, 18, full);
@@ -162,7 +164,9 @@ Rectangle {
 
     /// The big cover owns the album verbs (favourite + count + download).
     function coverActions() {
-        return verbs.album(root.albumItem(), root.albumCacheOn);
+        return verbs.album(root.albumItem(), root.albumCacheOn, function(level) {
+            root.albumRating = level;
+        });
     }
 
     /// The state marks render only inside the queue cursor's ±15-row
@@ -737,48 +741,64 @@ Rectangle {
                     Layout.fillWidth: true
                     Layout.fillHeight: true
 
-                    Rectangle {
-                        id: coverBox
-                        readonly property real side: Math.max(96, Math.min(root.height * 0.42, 512, parent.width, parent.height))
+                    Column {
                         anchors.centerIn: parent
-                        width: side
-                        height: side
-                        radius: Theme.radius
-                        color: Palette.primaryContainer
-                        clip: true
+                        spacing: root.height * 0.008
 
-                        CoverImage {
-                            anchors.fill: parent
-                            source: Backend.currentCoverUrl
+                        Rectangle {
+                            id: coverBox
+                            readonly property real side: Math.max(96, Math.min(root.height * 0.42, 512, coverArea.width, coverArea.height - root.starUnit - root.height * 0.008))
+                            anchors.horizontalCenter: parent.horizontalCenter
+                            width: side
+                            height: side
+                            radius: Theme.radius
+                            color: Palette.primaryContainer
+                            clip: true
+
+                            CoverImage {
+                                anchors.fill: parent
+                                source: Backend.currentCoverUrl
+                            }
+
+                            FadeText {
+                                anchors.centerIn: parent
+                                text: "MUSIKA"
+                                color: Palette.onPrimaryContainer
+                                font.family: Theme.fonts.wordmark
+                                font.pixelSize: Theme.fontSize("title", root.height)
+                                font.letterSpacing: root.height * 0.006
+                                visible: Backend.currentCoverUrl.length === 0
+                            }
+
+                            // UI-60: the cover is the album action surface.
+                            ScopeRing {
+                                shown: root.pane === 3
+                            }
+
+                            HoverHandler {
+                                cursorShape: Qt.PointingHandCursor
+                            }
+
+                            TapHandler {
+                                onTapped: {
+                                    root.pane = 3;
+                                    if (Backend.currentAlbumId.length === 0)
+                                        return;
+                                    var menu = root.coverActions();
+                                    menu.sticky = true;
+                                    root.quickAction(coverBox, menu);
+                                }
+                            }
                         }
 
-                        FadeText {
-                            anchors.centerIn: parent
-                            text: "MUSIKA"
-                            color: Palette.onPrimaryContainer
-                            font.family: Theme.fonts.wordmark
-                            font.pixelSize: Theme.fontSize("title", root.height)
-                            font.letterSpacing: root.height * 0.006
-                            visible: Backend.currentCoverUrl.length === 0
-                        }
-
-                        // UI-60: the cover is the album action surface.
-                        ScopeRing {
-                            shown: root.pane === 3
-                        }
-
-                        HoverHandler {
-                            cursorShape: Qt.PointingHandCursor
-                        }
-
-                        TapHandler {
-                            onTapped: {
-                                root.pane = 3;
-                                if (Backend.currentAlbumId.length === 0)
-                                    return;
-                                var menu = root.coverActions();
-                                menu.sticky = true;
-                                root.quickAction(coverBox, menu);
+                        StarRating {
+                            anchors.horizontalCenter: parent.horizontalCenter
+                            unit: root.starUnit
+                            rating: root.albumRating
+                            onPicked: (level) => {
+                                root.albumRating = level;
+                                if (Backend.currentAlbumId.length > 0)
+                                    Backend.rateAlbum(Backend.currentAlbumId, level);
                             }
                         }
                     }

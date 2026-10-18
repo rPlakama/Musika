@@ -303,8 +303,10 @@ pub async fn search_json(
     // before truncating back to the visible 20.
     let limit = if filter.is_some() { 60 } else { 20 };
     // S-9: an empty query is the "Most played" surface, not three dead
-    // columns.
-    let most_played = query.trim().is_empty();
+    // columns. Punctuation is ignored for matching (`(hello` == `hello`),
+    // but the payload keeps the raw text so the field's stale check works.
+    let cleaned = crate::search::clean_query(query);
+    let most_played = cleaned.is_empty();
     let (artists, albums, mut songs) = if most_played {
         (
             Vec::new(),
@@ -313,8 +315,8 @@ pub async fn search_json(
         )
     } else {
         let (artists, albums) =
-            crate::library::search_artists_albums(&dbs.library, query, limit).await?;
-        let songs = crate::search::search(&dbs.search, query, limit).await?;
+            crate::library::search_artists_albums(&dbs.library, &cleaned, limit).await?;
+        let songs = crate::search::search(&dbs.search, &cleaned, limit).await?;
         (artists, albums, songs)
     };
     let (artists, albums) = match &filter {

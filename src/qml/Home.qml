@@ -242,8 +242,9 @@ Item {
 
         if (activeRegion === 1 && !listy) {
             // Surfaces with their own Tab stops keep them (ArtistEntry's
-            // chips); a plain page steps straight into the status bar.
-            if (view && view.chipScope !== undefined) {
+            // chips, AlbumEntry's cover/back cycle); a plain page steps
+            // straight into the status bar.
+            if (view && (view.chipScope !== undefined || view.tabStops === true)) {
                 host.handleAction(action);
                 return;
             }

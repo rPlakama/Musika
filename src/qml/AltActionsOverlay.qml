@@ -150,6 +150,10 @@ Item {
                 || typeof config.south.rate !== "function")
             return false;
         ratingValue = Math.max(0, Math.min(5, ratingValue + delta));
+        // Local-first: the anchored surface.s star array + count repaint on
+        // this step; `rate` only persists the level.
+        if (config.south.preview)
+            config.south.preview(ratingValue);
         ratingTouched = true;
         ratingDirty = true;
         ratingCommit.restart();

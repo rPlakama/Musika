@@ -41,6 +41,9 @@ Rectangle {
     /// UI-60: the big cover is a selectable album surface (Enter/click arms
     /// its favourite + count + download verbs).
     property bool onCover: false
+    /// Tab owns a local stop cycle (rows -> cover -> Back chip) instead of
+    /// falling straight to the status bar.
+    readonly property bool tabStops: true
     property string albumCover: ""
     property string albumTitle: ""
     property string albumArtist: ""
@@ -68,6 +71,8 @@ Rectangle {
     // and stacked over it on narrow panes.
     readonly property real headerHeight: Math.min(height * 0.44, 512 + height * 0.02)
     readonly property real coverSide: Math.max(160, Math.min(height * 0.42, 512))
+    /// Star hitbox side under the cover (five slots total).
+    readonly property real starUnit: Math.max(14, Math.min(28, root.coverSide * 0.075))
     readonly property bool sideBySide: width >= Theme.breakpoints.compact
 
     // The compact flip reflows the header: restart the cover's dip-and-blur
@@ -153,7 +158,9 @@ Rectangle {
     // UI-60: the album cover's verbs — the same favourite + count + download
     // set the album rows use.
     function coverActions() {
-        return verbs.album(root.albumItem(), root.albumCacheOn);
+        return verbs.album(root.albumItem(), root.albumCacheOn, function(level) {
+            root.albumRating = level;
+        });
     }
 
     function armCoverActions(sticky) {
@@ -298,6 +305,19 @@ Rectangle {
     }
 
     function handleAction(action) {
+        // UI-60: Tab cycles rows -> cover -> Back chip -> rows (Shift+Tab
+        // reverses), so the cover action surface is keyboard-reachable.
+        if (action === "pane_cycle" || action === "pane_cycle_back") {
+            var state = root.onCover ? 1 : (root.onToolbar ? 2 : 0);
+            state = (state + (action === "pane_cycle" ? 1 : 2)) % 3;
+            root.onCover = state === 1;
+            root.onToolbar = state === 2;
+            if (state !== 0)
+                content.clearSelection();
+            else if (songs.count > 0 && content.currentIndex < 0)
+                content.currentIndex = 0;
+            return;
+        }
         // VI-11: `gg`/`G` leave the cover/toolbar for the first/last song;
         // the header stays a `k`-from-row-0 affordance only.
         if (action === "top" || action === "bottom") {
@@ -438,92 +458,109 @@ Rectangle {
         GridLayout {
             id: header
             Layout.fillWidth: true
-            Layout.preferredHeight: root.sideBySide ? root.headerHeight : implicitHeight
+            Layout.preferredHeight: root.sideBySide ? Math.max(root.headerHeight, root.coverSide + root.height * 0.01 + root.starUnit) : implicitHeight
             columns: root.sideBySide ? 2 : 1
             columnSpacing: root.width * 0.025
             rowSpacing: root.height * 0.012
 
-            Rectangle {
-                id: coverBox
+            ColumnLayout {
                 Layout.preferredWidth: root.coverSide
-                Layout.preferredHeight: root.coverSide
+                Layout.preferredHeight: root.coverSide + root.height * 0.01 + root.starUnit
                 Layout.alignment: root.sideBySide ? (Qt.AlignLeft | Qt.AlignVCenter) : Qt.AlignHCenter
-                radius: Theme.radius
-                color: Palette.primaryContainer
-                clip: true
+                spacing: root.height * 0.01
 
-                // The reflow FX: the offscreen layer only exists while the
-                // blur is up. `layer.effect` is a Component — nothing inside
-                // it can carry a reachable id — so the blur value lives on
-                // the cover and the effect binds to it.
-                property real heroBlur: 0
-                layer.enabled: heroBlur > 0.001
-                layer.effect: MultiEffect {
-                    blurEnabled: true
-                    blur: coverBox.heroBlur
-                    blurMax: 48
-                    autoPaddingEnabled: false
-                }
+                Rectangle {
+                    id: coverBox
+                    Layout.preferredWidth: root.coverSide
+                    Layout.preferredHeight: root.coverSide
+                    Layout.alignment: root.sideBySide ? (Qt.AlignLeft | Qt.AlignVCenter) : Qt.AlignHCenter
+                    radius: Theme.radius
+                    color: Palette.primaryContainer
+                    clip: true
 
-                // Crossing the compact breakpoint reflows the hero: dim it to
-                // 70% and blur it in over 200 ms, then restore both over the
-                // emphasized tier — the reflow hides under the dip.
-                SequentialAnimation {
-                    id: coverAppear
-                    ParallelAnimation {
-                        NumberAnimation {
-                            target: coverBox
-                            property: "opacity"
-                            to: 0.7
-                            duration: 200
+                    // The reflow FX: the offscreen layer only exists while the
+                    // blur is up. `layer.effect` is a Component — nothing inside
+                    // it can carry a reachable id — so the blur value lives on
+                    // the cover and the effect binds to it.
+                    property real heroBlur: 0
+                    layer.enabled: heroBlur > 0.001
+                    layer.effect: MultiEffect {
+                        blurEnabled: true
+                        blur: coverBox.heroBlur
+                        blurMax: 48
+                        autoPaddingEnabled: false
+                    }
+
+                    // Crossing the compact breakpoint reflows the hero: dim it to
+                    // 70% and blur it in over 200 ms, then restore both over the
+                    // emphasized tier — the reflow hides under the dip.
+                    SequentialAnimation {
+                        id: coverAppear
+                        ParallelAnimation {
+                            NumberAnimation {
+                                target: coverBox
+                                property: "opacity"
+                                to: 0.7
+                                duration: 200
+                            }
+                            NumberAnimation {
+                                target: coverBox
+                                property: "heroBlur"
+                                to: 0.5
+                                duration: 200
+                            }
                         }
-                        NumberAnimation {
-                            target: coverBox
-                            property: "heroBlur"
-                            to: 0.5
-                            duration: 200
+                        ParallelAnimation {
+                            NumberAnimation {
+                                target: coverBox
+                                property: "opacity"
+                                to: 1
+                                duration: Theme.motion.emphasized
+                                easing.type: Easing.Bezier
+                                easing.bezierCurve: Theme.ease.decelerate
+                            }
+                            NumberAnimation {
+                                target: coverBox
+                                property: "heroBlur"
+                                to: 0
+                                duration: Theme.motion.emphasized
+                                easing.type: Easing.Bezier
+                                easing.bezierCurve: Theme.ease.decelerate
+                            }
                         }
                     }
-                    ParallelAnimation {
-                        NumberAnimation {
-                            target: coverBox
-                            property: "opacity"
-                            to: 1
-                            duration: Theme.motion.emphasized
-                            easing.type: Easing.Bezier
-                            easing.bezierCurve: Theme.ease.decelerate
-                        }
-                        NumberAnimation {
-                            target: coverBox
-                            property: "heroBlur"
-                            to: 0
-                            duration: Theme.motion.emphasized
-                            easing.type: Easing.Bezier
-                            easing.bezierCurve: Theme.ease.decelerate
+
+                    CoverImage {
+                        id: coverImage
+                        anchors.fill: parent
+                        source: root.albumCover
+                    }
+
+                    // UI-60: the cover is a selectable album action surface.
+                    ScopeRing {
+                        shown: root.onCover
+                    }
+
+                    HoverHandler {
+                        cursorShape: Qt.PointingHandCursor
+                    }
+
+                    TapHandler {
+                        onTapped: {
+                            root.onToolbar = false;
+                            root.onCover = true;
+                            root.armCoverActions(true);
                         }
                     }
                 }
 
-                CoverImage {
-                    id: coverImage
-                    anchors.fill: parent
-                    source: root.albumCover
-                }
-
-                // UI-60: the cover is a selectable album action surface.
-                ScopeRing {
-                    shown: root.onCover
-                }
-
-                HoverHandler {
-                    cursorShape: Qt.PointingHandCursor
-                }
-
-                TapHandler {
-                    onTapped: {
-                        root.onToolbar = false;
-                        root.onCover = true;
-                        root.armCoverActions(true);
+                StarRating {
+                    Layout.alignment: Qt.AlignHCenter
+                    unit: root.starUnit
+                    rating: root.albumRating
+                    onPicked: (level) => {
+                        root.albumRating = level;
+                        Backend.rateAlbum(root.albumId, level);
                     }
                 }
             }

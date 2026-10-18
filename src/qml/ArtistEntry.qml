@@ -96,7 +96,9 @@ Rectangle {
                 starred: root.artistStarred,
                 rating: root.artistRating
             };
-            var artistActions = verbs.artist(artist);
+            var artistActions = verbs.artist(artist, function(level) {
+                root.artistRating = level;
+            });
             var wantStar = artistActions.south.favorite === true;
             var toggleStar = artistActions.south.invoke;
             artistActions.south.invoke = function() {
@@ -111,13 +113,17 @@ Rectangle {
         var cell = wall.view.itemAtIndex(wall.currentIndex);
         if (!cell)
             return;
+        var albumItem = albums.get(wall.currentIndex);
+        var albumPreview = function(level) {
+            albums.setProperty(wall.currentIndex, "rating", level);
+        };
         var ids = wall.hasSelection
             ? wall.selectedIds("albumId")
-            : [albums.get(wall.currentIndex).albumId];
+            : [albumItem.albumId];
         var actions = wall.hasSelection
             ? verbs.forSelection("album", ids, wall.selectedStarred("albumId"))
-            : verbs.album(albums.get(wall.currentIndex),
-                Backend.cachedAlbumIds.indexOf(albums.get(wall.currentIndex).albumId) !== -1);
+            : verbs.album(albumItem,
+                Backend.cachedAlbumIds.indexOf(albumItem.albumId) !== -1, albumPreview);
         // ARC-I-4: the decoration rides the verb so the mark tracks the
         // action immediately — `south.favorite` is the state the verb leaves
         // every selected row in (the server call itself is unchanged).
@@ -576,9 +582,25 @@ Rectangle {
                 color: "transparent"
                 visible: !Theme.isNarrow(root.width)
 
-                // UI-53/UI-60: the merged favourite chip hugs the right edge
-                // of the header; its rating count is the badge below, so the
-                // old five-star cluster is gone.
+                // UI-60: the five-star array leads the strip (hover preview,
+                // click sets/clears); the favourite chip keeps the count
+                // badge on the right.
+                Row {
+                    anchors.left: parent.left
+                    anchors.leftMargin: root.width * 0.015
+                    anchors.verticalCenter: parent.verticalCenter
+
+                    StarRating {
+                        anchors.verticalCenter: parent.verticalCenter
+                        unit: root.height * 0.05
+                        rating: root.artistRating
+                        onPicked: (level) => {
+                            root.artistRating = level;
+                            Backend.rateArtist(root.artistId, level);
+                        }
+                    }
+                }
+
                 Row {
                     anchors.right: parent.right
                     anchors.rightMargin: root.width * 0.015

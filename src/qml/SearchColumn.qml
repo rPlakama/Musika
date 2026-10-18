@@ -168,10 +168,13 @@ Item {
                 content.selectionStarred(selectionField));
         } else {
             var item = model.get(cursor);
+            var preview = function(level) {
+                root.model.setProperty(cursor, "rating", level);
+            };
             actions = item
-                ? (quickActionKind === "artist" ? verbs.artist(item)
+                ? (quickActionKind === "artist" ? verbs.artist(item, preview)
                     : quickActionKind === "album"
-                        ? verbs.album(item, Backend.cachedAlbumIds.indexOf(item.albumId) !== -1)
+                        ? verbs.album(item, Backend.cachedAlbumIds.indexOf(item.albumId) !== -1, preview)
                         : verbs.song(item))
                 : null;
         }

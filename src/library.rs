@@ -329,6 +329,11 @@ pub async fn search_artists_albums(
     query: &str,
     limit: i64,
 ) -> Result<(Vec<ArtistRow>, Vec<AlbumRow>)> {
+    // Search is prose, not a pattern: ignore punctuation like the FTS side.
+    let query = crate::search::clean_query(query);
+    if query.is_empty() {
+        return Ok((Vec::new(), Vec::new()));
+    }
     let escaped = query
         .replace('\\', "\\\\")
         .replace('%', "\\%")

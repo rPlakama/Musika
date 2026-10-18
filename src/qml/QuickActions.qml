@@ -62,7 +62,7 @@ QtObject {
     /// album already holding its content removes it on the call (the
     /// ArtistEntry chip's toggle); anything else fires `downloadAlbum`
     /// (idempotent when a pass already covers it).
-    function album(item, cached) {
+    function album(item, cached, preview) {
         var fav = item.starred === true;
         return {
             north: {
@@ -80,6 +80,9 @@ QtObject {
                 // step it while the overlay aims here.
                 rating: Number(item.rating) || 0,
                 rate: function(level) { Backend.rateAlbum(item.albumId, level) },
+                // UI-60: the host.s local value drives the star colour
+                // immediately; only persistence waits for the server.
+                preview: preview,
                 invoke: function() { Backend.altFavorite("album", item.albumId, !fav) }
             },
             west: {
@@ -177,7 +180,7 @@ QtObject {
 
     /// Artist hit (search): queue the whole artist and favourite it; both
     /// jumps stay open ("—") — the artist page is the row's Enter already.
-    function artist(item) {
+    function artist(item, preview) {
         var fav = item.starred === true;
         return {
             north: {
@@ -195,6 +198,8 @@ QtObject {
                 // step it while the overlay aims here.
                 rating: Number(item.rating) || 0,
                 rate: function(level) { Backend.rateArtist(item.artistId, level) },
+                // UI-60: local-first fill; persistence is debounced.
+                preview: preview,
                 invoke: function() { Backend.altFavorite("artist", item.artistId, !fav) }
             },
             west: null,

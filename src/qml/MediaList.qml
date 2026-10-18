@@ -147,11 +147,16 @@ ScrollPanel {
                 root.selectedStarred(selectionField));
         } else {
             var item = mediaRows.get(currentIndex);
+            // UI-60: the overlay's rating step repaints the row from the
+            // local model immediately (persistence is separate).
+            var preview = function(level) {
+                mediaRows.setProperty(currentIndex, "rating", level);
+            };
             actions = item
                 ? (quickActionKind === "album"
-                    ? verbs.album(item, Backend.cachedAlbumIds.indexOf(item.albumId) !== -1)
+                    ? verbs.album(item, Backend.cachedAlbumIds.indexOf(item.albumId) !== -1, preview)
                     : (quickActionKind === "artist"
-                        ? verbs.artist(item)
+                        ? verbs.artist(item, preview)
                         : verbs.song(item)))
                 : null;
         }

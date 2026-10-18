@@ -131,8 +131,28 @@ pub async fn count(pool: &SqlitePool) -> Result<i64> {
     Ok(count.0)
 }
 
+/// Strips punctuation from the user's prose so `(hello`, `"kid a"` and
+/// `[1979]` narrow to the same words as the bare text. Letters and digits
+/// (Unicode-aware) and whitespace survive; every other character becomes a
+/// separator and the whitespace runs collapse.
+pub fn clean_query(raw: &str) -> String {
+    raw.chars()
+        .map(|ch| {
+            if ch.is_alphanumeric() || ch.is_whitespace() {
+                ch
+            } else {
+                ' '
+            }
+        })
+        .collect::<String>()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 fn fts_query(raw: &str) -> String {
-    raw.split_whitespace()
+    clean_query(raw)
+        .split_whitespace()
         .map(|token| format!("\"{}\"*", token.replace('"', "\"\"")))
         .collect::<Vec<_>>()
         .join(" ")
@@ -247,8 +267,22 @@ mod tests {
     }
 
     #[test]
-    fn query_quotes_every_token() {
+    fn query_quotes_every_token_and_ignores_punctuation() {
         assert_eq!(fts_query("hello world"), "\"hello\"* \"world\"*");
         assert_eq!(fts_query(""), "");
+        assert_eq!(clean_query("(hello) \"kid a\" [1979]"), "hello kid a 1979");
+        assert_eq!(fts_query("(hello)"), "\"hello\"*");
+    }
+
+    #[tokio::test]
+    async fn search_ignores_punctuation_in_the_query() {
+        let pool = memory_pool().await;
+        rebuild(&pool, &[row("1", "Hello World", 0)]).await.unwrap();
+
+        for query in ["(hello)", "\"world\"", "[hello] world"] {
+            let hits = search(&pool, query, 10).await.unwrap();
+            assert_eq!(hits.len(), 1, "query {query:?}");
+            assert_eq!(hits[0].song_id, "1");
+        }
     }
 }

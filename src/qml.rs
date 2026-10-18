@@ -1664,7 +1664,7 @@ impl Backend {
                 // The pass is now in flight: the chip shows its loading loop.
                 let json = artist_cache_payload(&artist_id, true, true);
                 emit(&invoker, "artist_cache", json);
-                fetch_marked(&dbs, &songs, &artist_id, fetch_invoker).await;
+                fetch_marked(&dbs, &songs, &artist_id, false, fetch_invoker).await;
                 // The albums that had nothing to fetch never emitted a
                 // completion: settle their rows here.
                 for album in &queued_albums {
@@ -1774,7 +1774,7 @@ impl Backend {
                 // The pass is now in flight: the chip shows its loading loop.
                 let json = album_cache_payload(&album_id, true, true, false);
                 emit(&invoker, "album_cache", json);
-                fetch_marked(&dbs, &songs, &album_id, fetch_invoker).await;
+                fetch_marked(&dbs, &songs, &album_id, true, fetch_invoker).await;
                 eprintln!("download: album {album_id} pass finished");
                 let json = album_cache_payload(&album_id, true, false, false);
                 emit(&invoker, "album_cache", json);

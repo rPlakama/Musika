@@ -97,6 +97,7 @@ pub(super) async fn fetch_marked(
     dbs: &crate::db::Dbs,
     songs: &[String],
     container_id: &str,
+    album_container: bool,
     invoker: qtbridge::QmlMethodInvoker,
 ) {
     for chunk in songs.chunks(crate::consts::DOWNLOAD_CONCURRENCY) {
@@ -156,15 +157,18 @@ pub(super) async fn fetch_marked(
             qtbridge::invoke_method!(invoker, "settleDownloadRequest", album.clone());
         }
     }
-    // The pass is over: the container row's loading glyph settles (the hold
-    // keeps it visible long enough either way).
+    // The pass is over: an album container is re-checked against its whole
+    // tracklist (the per-song path misses it when a track's library album
+    // changed) and flips to the filled mark; anything else just settles its
+    // loading glyph. The container id must never ride `noteDownloadState`:
+    // that path stamps it as a finished *song*, erasing the album's cached
+    // state.
     if !container_id.is_empty() {
-        qtbridge::invoke_method!(
-            invoker,
-            "noteDownloadState",
-            container_id.to_string(),
-            crate::download::DONE.to_string()
-        );
+        if album_container && album_complete(dbs, container_id).await {
+            qtbridge::invoke_method!(invoker, "markAlbumCached", container_id.to_string());
+        } else {
+            qtbridge::invoke_method!(invoker, "settleDownloadRequest", container_id.to_string());
+        }
     }
 }
 
@@ -278,7 +282,7 @@ pub(super) async fn selection_toggle(
                 eprintln!("download: selection (song) — removed {removed} blobs");
                 qtbridge::invoke_method!(invoker, "ResetRowMarks");
             } else {
-                fetch_marked(dbs, &missing, "", invoker).await;
+                fetch_marked(dbs, &missing, "", false, invoker).await;
             }
         }
         "album" => {
@@ -319,7 +323,7 @@ pub(super) async fn selection_toggle(
                     );
                     return Ok(());
                 }
-                fetch_marked(dbs, &songs, "", invoker).await;
+                fetch_marked(dbs, &songs, "", false, invoker).await;
             }
         }
         "artist" => {
@@ -379,12 +383,26 @@ pub(super) async fn selection_toggle(
                     );
                     return Ok(());
                 }
-                fetch_marked(dbs, &songs, "", invoker).await;
+                fetch_marked(dbs, &songs, "", false, invoker).await;
             }
         }
         other => return Err(anyhow::anyhow!("unknown download kind: {other}")),
     }
     Ok(())
+}
+
+/// True when every track of `album_id` is finished in the ledger.
+pub(super) async fn album_complete(dbs: &crate::db::Dbs, album_id: &str) -> bool {
+    let tracklist = crate::library::album_song_ids(&dbs.library, album_id)
+        .await
+        .unwrap_or_default();
+    if tracklist.is_empty() {
+        return false;
+    }
+    let done = crate::download::done_ids_of(&dbs.download, &tracklist)
+        .await
+        .unwrap_or_default();
+    done.len() == tracklist.len()
 }
 
 /// The song's album, when its tracklist is now completely cached — the
@@ -400,16 +418,7 @@ pub(super) async fn completed_album(dbs: &crate::db::Dbs, song_id: &str) -> Opti
     if album.is_empty() {
         return None;
     }
-    let tracklist = crate::library::album_song_ids(&dbs.library, &album)
-        .await
-        .unwrap_or_default();
-    if tracklist.is_empty() {
-        return None;
-    }
-    let done = crate::download::done_ids_of(&dbs.download, &tracklist)
-        .await
-        .unwrap_or_default();
-    (done.len() == tracklist.len()).then_some(album)
+    album_complete(dbs, &album).await.then_some(album)
 }
 
 /// Fetches one song into the media cache unless it is already available or a
@@ -512,5 +521,61 @@ pub(super) async fn downloaded_music_available() -> bool {
             .map(|counts| counts.done > 0)
             .unwrap_or(false),
         None => false,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    async fn dbs() -> crate::db::Dbs {
+        let pool = crate::sqlite::memory_pool(None).await;
+        sqlx::raw_sql(
+            "CREATE TABLE songs (id TEXT PRIMARY KEY, album_id TEXT);
+             CREATE TABLE download (
+                 song_id TEXT PRIMARY KEY,
+                 state TEXT NOT NULL,
+                 error TEXT,
+                 rule_id TEXT,
+                 requested_at INTEGER NOT NULL DEFAULT 0,
+                 updated_at INTEGER NOT NULL DEFAULT 0
+             );",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        crate::db::Dbs {
+            credentials: pool.clone(),
+            library: pool.clone(),
+            search: pool.clone(),
+            covers: pool.clone(),
+            media: pool.clone(),
+            lyrics: pool.clone(),
+            colors: pool.clone(),
+            status: pool.clone(),
+            artist_user: pool.clone(),
+            download: pool.clone(),
+            playlist: pool,
+        }
+    }
+
+    #[tokio::test]
+    async fn album_completion_requires_every_track() {
+        let dbs = dbs().await;
+        sqlx::raw_sql("INSERT INTO songs (id, album_id) VALUES ('s1', 'a1'), ('s2', 'a1')")
+            .execute(&dbs.library)
+            .await
+            .unwrap();
+
+        crate::download::set_state(&dbs.download, "s1", crate::download::DONE, None)
+            .await
+            .unwrap();
+        assert!(!album_complete(&dbs, "a1").await);
+
+        crate::download::set_state(&dbs.download, "s2", crate::download::DONE, None)
+            .await
+            .unwrap();
+        assert!(album_complete(&dbs, "a1").await);
+        assert!(!album_complete(&dbs, "missing").await);
     }
 }

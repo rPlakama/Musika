@@ -79,6 +79,12 @@ pub fn runtime() -> &'static Runtime {
 fn main() {
     dotenvy::dotenv().ok();
 
+    if std::env::var("QSG_RHI_BACKEND").is_err() {
+        unsafe {
+            std::env::set_var("QSG_RHI_BACKEND", "vulkan");
+        }
+    }
+
     let dbs = runtime()
         .block_on(db::init())
         .expect("failed to initialise the databases");

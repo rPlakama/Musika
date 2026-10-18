@@ -109,6 +109,7 @@ Rectangle {
     // re-requests when the track changed while the player was closed (no
     // reload, no "Loading lyrics…" flash, no re-centring flick).
     property string _lyricsSongId: ""
+    property var _lyricTimestamps: []
 
     // Lyrics type is sized from the pane itself (parent rectangle), never the
     // window, so lines can't outgrow the pane's walls; the stage caps the
@@ -118,14 +119,17 @@ Rectangle {
     readonly property real lyricPad: Math.max(6, lyricsPane.height * 0.04)
 
     // Active synced line, matched against the offset-corrected position.
+    // Zero-allocation: reads timestamps from flat JS array instead of querying
+    // lyricModel.get(i) on every sub-second position update.
     readonly property int activeLyric: {
-        var count = lyricModel.count;
+        var times = root._lyricTimestamps;
+        var count = times.length;
         if (!lyricsSynced || count === 0)
             return -1;
         var position = Math.round(Backend.position * 1000) - lyricsOffset;
         var active = -1;
         for (var i = 0; i < count; i++) {
-            var start = lyricModel.get(i).t;
+            var start = times[i];
             if (start >= 0 && start <= position)
                 active = i;
             else if (start > position)
@@ -429,12 +433,16 @@ Rectangle {
         // Quick fade so a track change does not snap the lines (LYR-9).
         lyricsView.opacity = 0;
         lyricModel.clear();
+        var times = [];
         for (var i = 0; i < data.lines.length; i++) {
+            var tVal = data.lines[i].t === null || data.lines[i].t === undefined ? -1 : data.lines[i].t;
+            times.push(tVal);
             lyricModel.append({
-                t: data.lines[i].t === null || data.lines[i].t === undefined ? -1 : data.lines[i].t,
+                t: tVal,
                 line: data.lines[i].text
             });
         }
+        root._lyricTimestamps = times;
         lyricsAvailable = lyricModel.count > 0 && data.source !== "none";
 
         lyricResume.stop();

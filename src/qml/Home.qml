@@ -212,7 +212,7 @@ Item {
             add(out, searchOverlay, noFocus);
             return out;
         }
-        if (nowPlayingExpanded) {
+        if (nowPlayingExpanded && nowPlaying) {
             add(out, nowPlaying, noFocus);
             return out;
         }
@@ -405,10 +405,12 @@ Item {
         // its own (modal routing above).
         if (action === "visual" || action === "visual_all") {
             if (nowPlayingExpanded) {
-                if (action === "visual")
-                    nowPlaying.toggleSelection();
-                else
-                    nowPlaying.selectAll();
+                if (nowPlaying) {
+                    if (action === "visual")
+                        nowPlaying.toggleSelection();
+                    else
+                        nowPlaying.selectAll();
+                }
                 return;
             }
             if (activeRegion !== 1)
@@ -467,7 +469,7 @@ Item {
             // Fullscreen is the topmost context: the first Esc ends a queue
             // selection, the next leaves the player.
             if (nowPlayingExpanded) {
-                if (nowPlaying.hasSelection) {
+                if (nowPlaying && nowPlaying.hasSelection) {
                     nowPlaying.clearSelection();
                     return;
                 }
@@ -490,7 +492,8 @@ Item {
         // Fullscreen is modal for navigation: pane and queue keys belong to
         // the player view while it is open (Esc, Space and ,/. stay global).
         if (nowPlayingExpanded) {
-            nowPlaying.handleAction(action);
+            if (nowPlaying && nowPlaying.handleAction)
+                nowPlaying.handleAction(action);
             return;
         }
 
@@ -635,12 +638,15 @@ Item {
                                 activeView.landCursor();
                         }
 
+                        property int _viewRevision: 0
+
                         // The `count` read is the dependency that re-evaluates
                         // this when the Repeater builds its delegates: a bare
                         // `itemAt()` lookup before they exist returns null and
                         // registers nothing, so the binding would stay null
                         // forever (the "scroll unavailable" bug).
                         readonly property Item activeView: {
+                            _viewRevision;
                             if (segmentLoaders.count === 0)
                                 return null;
                             var loader = segmentLoaders.itemAt(root.currentSegment);
@@ -716,13 +722,19 @@ Item {
                             delegate: Loader {
                                 required property int index
                                 anchors.fill: parent
-                                // "So light": instantiate every segment once
-                                // and keep it — no remount on return.
-                                active: true
+                                active: index === root.currentSegment
                                 visible: index === root.currentSegment
+                                onItemChanged: {
+                                    if (index === root.currentSegment)
+                                        segmentHost._viewRevision++;
+                                }
                                 // SCROLLMODELANALYSIS §3: a segment coming
                                 // back lands its cursor instantly.
                                 onVisibleChanged: {
+                                    if (visible && item && item.landCursor)
+                                        item.landCursor();
+                                }
+                                onLoaded: {
                                     if (visible && item && item.landCursor)
                                         item.landCursor();
                                 }
@@ -815,17 +827,20 @@ Item {
         }
     }
 
-    NowPlaying {
-        id: nowPlaying
+    Loader {
+        id: nowPlayingLoader
         anchors.fill: parent
+        active: root.nowPlayingExpanded || opacity > 0
         opacity: root.nowPlayingExpanded ? 1 : 0
         visible: opacity > 0
 
-        onExitRequested: root.nowPlayingExpanded = false
-
-        // ARC-UI-1: the fullscreen queue arms the same Alt overlay as the
-        // lists.
-        onQuickAction: (target, actions) => root.armQuickActions(target, actions)
+        sourceComponent: Component {
+            NowPlaying {
+                anchors.fill: parent
+                onExitRequested: root.nowPlayingExpanded = false
+                onQuickAction: (target, actions) => root.armQuickActions(target, actions)
+            }
+        }
 
         // Enter/leave is a scene change, not a highlight flip: the black
         // backdrop fades in/out (`emphasized`), decelerating in and
@@ -840,6 +855,8 @@ Item {
         }
     }
 
+    readonly property Item nowPlaying: nowPlayingLoader.item
+
     // ARC-43: the Alt-hold quick-action overlay. Alt anchors it on the active
     // view's cursor item through `armQuickActions`; h/j/k/l aim and the Alt
     // release fires. Acrylic tiles over the shell, below the toast so errors
@@ -850,7 +867,7 @@ Item {
         // ARC-I: while the search is open its column arms the same overlay,
         // which must paint above the search panel (search z = zOverlay).
         z: searchOverlay.opened ? Theme.zOverlay + 1 : Theme.zRegion + 1
-        backdrop: root.nowPlayingExpanded ? nowPlaying
+        backdrop: (root.nowPlayingExpanded && nowPlaying) ? nowPlaying
             : (searchOverlay.opened ? searchOverlay : shell)
     }
 
@@ -864,7 +881,7 @@ Item {
         maxHeight: root.height - root.playH - root.height * 0.06
         z: Theme.zToast
         // UI-55: blur whatever the toast actually floats over.
-        backdrop: root.nowPlayingExpanded ? nowPlaying : shell
+        backdrop: (root.nowPlayingExpanded && nowPlaying) ? nowPlaying : shell
         onRetry: {
             if (toast.kind === "sync")
                 Backend.syncLibrary();
@@ -913,7 +930,7 @@ Item {
         id: searchOverlay
         anchors.fill: parent
         // UI-55: blur the shell, or the fullscreen player when it is up.
-        backdrop: root.nowPlayingExpanded ? nowPlaying : shell
+        backdrop: (root.nowPlayingExpanded && nowPlaying) ? nowPlaying : shell
 
         // ARC-I: the active column arms the shared Alt overlay.
         onQuickAction: (target, actions) => root.armQuickActions(target, actions)

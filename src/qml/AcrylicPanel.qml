@@ -48,7 +48,7 @@ Rectangle {
         anchors.fill: parent
         visible: root.acrylic
         sourceItem: root.backdrop
-        live: true
+        live: root.acrylic && root.visible && root.opacity > 0.01
         textureSize: Qt.size(
             Math.max(1, Math.ceil(root.width * Theme.acrylic.downscale)),
             Math.max(1, Math.ceil(root.height * Theme.acrylic.downscale)))
@@ -59,7 +59,7 @@ Rectangle {
             return Qt.rect(p.x, p.y, root.width, root.height);
         }
 
-        layer.enabled: root.acrylic
+        layer.enabled: root.acrylic && root.visible && root.opacity > 0.01
         layer.effect: MultiEffect {
             blurEnabled: true
             blur: Theme.acrylic.blur

@@ -3,6 +3,12 @@
 All notable changes to Musika, newest first. `TASKLISTMAJOR.md` tracks the
 open work; this file is the release history.
 
+## 0.3.6 — _Navigation history and one scroll row model_
+
+All commits since `v0.3.5`:
+
+- `4bfa646` ARC-45 travel history and one scroll row model
+
 ## 0.3.5 — _Performance and playback pass_
 
 All commits since `v0.3.4`:

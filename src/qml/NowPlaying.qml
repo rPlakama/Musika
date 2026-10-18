@@ -413,6 +413,16 @@ Rectangle {
 
     onActiveLyricChanged: root.followLyric()
 
+    // A width change re-wraps the lyric rows, so their heights (and the
+    // active line's centre) move even though the text did not. Repair the
+    // centre quickly — this is layout maintenance, not the soothing 300 ms
+    // line-to-line follow — and never yank a manual scroll.
+    onWidthChanged: Qt.callLater(function() {
+        if (root.visible && root.lyricsSynced && root.activeLyric >= 0
+                && !root._lyricsHeld && lyricsView.currentIndex === root.activeLyric)
+            lyricsView.recenter(100);
+    })
+
     // LYR-8: re-arm the idle window when pane focus moves (5 s vs 2 s).
     onPaneChanged: if (root._lyricsHeld) root.holdLyrics()
 

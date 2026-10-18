@@ -128,12 +128,15 @@ Item {
         id: centerGlide
         target: root.view
         property: "contentY"
-        duration: root.followMs
+        duration: root.glideOverrideMs > 0 ? root.glideOverrideMs : root.followMs
         // Edge targets must not overshoot (see `_glideTo`); OutBack only in
         // the mid-list band where the spring is a deliberate affordance.
         easing.type: root._glideEdge ? Easing.OutCubic : Easing.OutBack
         easing.overshoot: 1.7
-        onFinished: root._settleGlide()
+        onFinished: {
+            root._settleGlide();
+            root.glideOverrideMs = 0;
+        }
     }
 
     /// Centre the cursor over `followMs` — the delegate itself is the target
@@ -194,6 +197,20 @@ Item {
     /// re-follows).
     function stopGlide() {
         centerGlide.stop();
+        root.glideOverrideMs = 0;
+    }
+
+    /// Re-run the centre follow for the current cursor. `duration` overrides
+    /// `followMs` for this pass — used when a layout change (a width change
+    /// re-wraps variable-height rows such as lyrics) moves the cursor off
+    /// centre and the host wants a quick repair, not the normal follow.
+    function recenter(duration) {
+        if (root.currentIndex < 0 || !root.view || root.isLanding)
+            return;
+        root.glideOverrideMs = Math.max(0, duration);
+        root._glideTo(root.view, root.currentIndex);
+        if (!centerGlide.running)
+            root.glideOverrideMs = 0;
     }
 
     /// The end-of-list settle: `ListView.contentHeight` is an estimate until
@@ -230,6 +247,10 @@ Item {
     /// cursor steps, and the pane fade binds to the same value. 0 snaps
     /// (`reduceMotion` also snaps, in `_glideTo`).
     property int followMs: Theme.motion.scroll
+    /// One-shot duration for the next centre glide (0 = `followMs`).
+    /// `recenter()` sets it for layout repairs (a width change re-wraps the
+    /// lyric rows); it clears when the glide finishes or is stopped.
+    property int glideOverrideMs: 0
     /// Extra spacing between list rows (0 = the delegate owns it); grid
     /// cells are placed by `cellHeight`.
     property real rowSpacing: 0

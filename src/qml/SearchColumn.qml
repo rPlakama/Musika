@@ -470,9 +470,6 @@ Item {
                                 || root.quickActionKind === "artist"
                             searchQuery: content.searchQuery
                             searchCurrent: row.index === content.searchCurrentRow
-                            expected: row.index !== content.currentIndex
-                                && content.isExpected(row.y)
-                            immediate: row.index === content.currentIndex
                         }
 
                         // Hover only signals clickability (S-5); the cursor moves

@@ -230,6 +230,10 @@ Item {
                 || item.y + item.height > v.contentY + v.height)
             v.positionViewAtIndex(root.currentIndex, ListView.Contain);
         root._clampY(v);
+        // The per-frame contentY updates during a glide are not memory
+        // writes; one coalesced save at the settle is enough.
+        if (root.memoryKey)
+            root._scheduleRemember();
     }
 
     /// The active view (itemAtIndex, positionViewAtIndex, …).
@@ -292,14 +296,25 @@ Item {
     function contentExtent(v) {
         if (root.contentHeightHint > 0)
             return root.contentHeightHint;
-        // Live geometry is authoritative once the view has measured it;
-        // the derived extent only covers the pre-layout beat (Qt may still
-        // report 0 there). Preferring the multiplication after layout made
-        // the Songs/Albums end extend past Qt's real bottom, so k from G
-        // glided into a gap under the last row.
-        if (v && v.contentHeight > 0)
-            return v.contentHeight;
-        return root._autoContentExtent();
+        var auto = root._autoContentExtent();
+        if (auto <= 0)
+            return v ? v.contentHeight : 0;
+        // The last screenful is fully realised, so Qt's live contentHeight is
+        // authoritative there (the derived count x row extent can run past
+        // the real bottom by the page-append/rounding remainder, which made
+        // `k` from `G` flick to the wrong scrolloff placement). Mid-list the
+        // derived extent keeps the follow alive while Qt is still estimating;
+        // the live value only grows as delegates realise.
+        var live = v ? v.contentHeight : 0;
+        if (live > 0) {
+            var rowH = root.layout === "grid"
+                ? Math.max(1, root.cellHeight > 0 ? root.cellHeight : root.cellWidth)
+                : Math.max(1, root.adaptiveRowHeight);
+            var tail = Math.ceil(v.height / rowH) + 1;
+            if (root.currentIndex >= Math.max(0, root.count - tail))
+                return Math.min(auto, live);
+        }
+        return auto;
     }
 
     /// True while a landing runs: the root index handler must not start a
@@ -334,15 +349,6 @@ Item {
     function _landUnrealised(v, index) {
         v.positionViewAtIndex(index, ListView.Beginning);
         root._clampY(v);
-    }
-
-    /// True when a cached row at `y` is outside the near viewport band:
-    /// hosts keep the cheap row shell and load its content lazily.
-    function isExpected(y) {
-        var v = root.view;
-        if (!v || v.height <= 0)
-            return false;
-        return y < v.contentY - v.height || y > v.contentY + v.height * 2;
     }
 
     /// The instant landing (semantic jumps: `gg`/`G`, search, restores, the
@@ -836,7 +842,9 @@ Item {
     Connections {
         target: root.view
         function onContentYChanged() {
-            if (root.memoryKey)
+            // A cursor follow paints every frame; save only once it settles,
+            // where `_settleGlide` schedules the coalesced remember.
+            if (root.memoryKey && !centerGlide.running)
                 root._scheduleRemember();
         }
         // A drag owns the viewport: kill any centre glide in flight.

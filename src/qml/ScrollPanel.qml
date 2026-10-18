@@ -113,12 +113,6 @@ Rectangle {
         content.toggleSelection();
     }
 
-    /// ARC-IDK: a cached row outside the near viewport band draws the cheap
-    /// shell only; its content loads when it comes close.
-    function isExpected(y) {
-        return content.isExpected(y);
-    }
-
     /// `V`: the cursor moves here (the panel owns it), the anchor widens.
     function selectAll() {
         if (!selectable || count === 0)

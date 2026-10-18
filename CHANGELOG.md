@@ -3,6 +3,17 @@
 All notable changes to Musika, newest first. `TASKLISTMAJOR.md` tracks the
 open work; this file is the release history.
 
+## 0.3.7 — _Rouding the Edge... Balling the steel... Run._
+
+All commits since `v0.3.6`:
+
+- `bb462b9` Re-centre lyrics quickly on width changes
+- `8da2a5b` ARC-SEARCH: default to the in-process Nucleo index
+- `5be6eda` Fix the G/k end-of-list gap in ScrollModal
+- `516ed0e` ScrollRevamp phases 1-3 and smoother search/glide feedback
+- `a4d95ea` Decouple search and finish the search empty state
+- `40c2a3f` Start ScrollRevamp: scroll quick wins and QML warning fixes
+
 ## 0.3.6 — _Navigation history and one scroll row model_
 
 All commits since `v0.3.5`:

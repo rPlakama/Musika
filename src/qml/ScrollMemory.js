@@ -63,7 +63,6 @@ function saveScroll(key, index, y, scope, layout) {
         layout: layout === undefined ? "" : layout,
         savedAt: now()
     }
-    prune()
 }
 
 // ARC-UI-3: update only the layout field — a body restore flips the layout
@@ -79,7 +78,6 @@ function saveLayout(key, layout) {
         scrollPositions[key].layout = layout
         scrollPositions[key].savedAt = now()
     }
-    prune()
 }
 
 function loadScroll(key) {

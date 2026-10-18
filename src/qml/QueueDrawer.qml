@@ -301,9 +301,6 @@ Item {
                             markStarred: row.starred
                             searchQuery: content.searchQuery
                             searchCurrent: row.index === content.searchCurrentRow
-                            expected: row.index !== content.currentIndex
-                                && content.isExpected(row.y)
-                            immediate: row.index === content.currentIndex
                         }
 
                         HoverHandler {

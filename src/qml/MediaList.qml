@@ -355,8 +355,6 @@ ScrollPanel {
                 markRatingVisible: root.ratingMarks
                 searchQuery: root.searchQuery
                 searchCurrent: row.index === root.searchCurrentRow
-                expected: row.index !== root.currentIndex && root.isExpected(row.y)
-                immediate: row.index === root.currentIndex
             }
 
             HoverHandler {

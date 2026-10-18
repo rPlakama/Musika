@@ -1188,10 +1188,14 @@ Rectangle {
                                                 return Theme.lyricsEmphasis;
                                             return Math.min(Theme.lyricsEmphasis, room / lyricLine.paintedWidth);
                                         }
-                                        // Grow the slot symmetrically so the big
-                                        // line stays centred and its neighbours
-                                        // make room instead of getting overlapped.
-                                        readonly property real emphasisPad: Math.max(0, lyricLine.paintedHeight * (lyricLine.emphasis - 1) / 2)
+                                        // Reserve the emphasis growth on every
+                                        // line, not only the active one: toggling
+                                        // `active` must not change row heights (a
+                                        // variable-height relayout on every phrase).
+                                        // The maximum scale is the safe reservation;
+                                        // the fit clamp can only make it smaller.
+                                        readonly property real emphasisPad: Math.max(0,
+                                            lyricLine.paintedHeight * (Theme.lyricsEmphasis - 1) / 2)
 
                                         width: lyricsView.width
                                         leftPadding: root.lyricPad
@@ -1403,9 +1407,6 @@ Rectangle {
                                             markStarred: row.starred
                                             searchQuery: queueContent.searchQuery
                                             searchCurrent: index === queueContent.searchCurrentRow
-                                            expected: row.index !== queueContent.currentIndex
-                                                && queueContent.isExpected(row.y)
-                                            immediate: row.index === queueContent.currentIndex
                                         }
 
                                         HoverHandler {

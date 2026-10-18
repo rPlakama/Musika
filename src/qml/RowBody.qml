@@ -64,28 +64,10 @@ Item {
 
     property string searchQuery: ""
     property bool searchCurrent: false
-    /// A predicted row: the cheap shell stays, the content is not built
-    /// until the row reaches the visible/cached band.
-    property bool expected: false
-    /// The cursor row is never a placeholder: its content loads with the
-    /// landing. Other rows build when they enter the band; an async Loader
-    /// in a recycled delegate can be destroyed mid-incubation
-    /// ("Object or context destroyed during incubation"), so the cheap
-    /// shell is the only deferral.
-    property bool immediate: false
 
-    Loader {
-        anchors.fill: parent
-        active: root.immediate || !root.expected
-        sourceComponent: body
-    }
-
-    Component {
-        id: body
-
-        Item {
-            width: root.width
-            height: root.height
+    Item {
+        width: root.width
+        height: root.height
 
             Rectangle {
                 id: cover
@@ -205,7 +187,6 @@ Item {
         rating: root.markRating
         showRating: root.markRatingVisible
         base: metaLabel.font.pixelSize * 0.8
-        }
         }
     }
 }

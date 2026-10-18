@@ -41,6 +41,9 @@ Rectangle {
     /// UI-60: the big cover is a selectable album surface (Enter/click arms
     /// its favourite + count + download verbs).
     property bool onCover: false
+    /// UI-14: the description is its own Tab stop; selecting it expands the
+    /// one-line notes into the scrollable reader.
+    property bool onNotes: false
     /// Tab owns a local stop cycle (rows -> cover -> Back chip) instead of
     /// falling straight to the status bar.
     readonly property bool tabStops: true
@@ -58,7 +61,8 @@ Rectangle {
     /// Download/Remove verb).
     property bool albumCacheOn: false
     property string albumNotes: ""
-    // UI-14: album notes clamp to three lines until clicked.
+    /// UI-14: one line by default; the Tab-selected description expands it
+    /// into a scrollable reader (no line cap, no cut).
     property bool notesExpanded: false
     // UI-22: true while the album's songs are in flight.
     property bool loading: false
@@ -201,6 +205,8 @@ Rectangle {
         if (root.albumId === "")
             return;
         root.loading = true;
+        root.onNotes = false;
+        root.setNotesExpanded(false);
         Backend.requestAlbumSongs(root.albumId);
         Backend.requestAlbumInfo(root.albumId);
         // UI-60: the header's favourite + rating marks reconcile here (the
@@ -213,6 +219,26 @@ Rectangle {
     function applyInfo(payload) {
         var info = JSON.parse(payload);
         root.albumNotes = info.notes ? info.notes : "";
+        if (root.albumNotes.length === 0) {
+            root.onNotes = false;
+            root.setNotesExpanded(false);
+        }
+    }
+
+    /// UI-14: expand/collapse the notes reader. The expanded block is a
+    /// Flickable capped to the header's share of the pane; short notes show
+    /// whole, long ones scroll without eliding.
+    function setNotesExpanded(expanded) {
+        root.notesExpanded = expanded === true;
+        if (notesView)
+            notesView.contentY = 0;
+    }
+
+    function scrollNotes(delta) {
+        if (!root.notesExpanded || !notesView)
+            return;
+        var max = Math.max(0, notesView.contentHeight - notesView.height);
+        notesView.contentY = Math.max(0, Math.min(max, notesView.contentY + delta));
     }
 
     function apply(payload) {
@@ -297,34 +323,48 @@ Rectangle {
     }
 
     function handleAction(action) {
-        // UI-60: Tab cycles rows -> cover -> Back chip -> rows (Shift+Tab
-        // reverses), so the cover action surface is keyboard-reachable.
+        // UI-60/UI-14: Tab cycles rows -> cover -> notes -> Back chip -> rows
+        // (Shift+Tab reverses). Selecting the notes expands the reader; the
+        // empty-notes albums skip that stop.
         if (action === "pane_cycle" || action === "pane_cycle_back") {
-            var state = root.onCover ? 1 : (root.onToolbar ? 2 : 0);
-            state = (state + (action === "pane_cycle" ? 1 : 2)) % 3;
+            var state = root.onCover ? 1 : (root.onNotes ? 2 : (root.onToolbar ? 3 : 0));
+            do {
+                state = (state + (action === "pane_cycle" ? 1 : 3)) % 4;
+            } while (state === 2 && root.albumNotes.length === 0);
             root.onCover = state === 1;
-            root.onToolbar = state === 2;
+            root.onNotes = state === 2;
+            root.onToolbar = state === 3;
+            root.setNotesExpanded(state === 2);
             if (state !== 0)
                 content.clearSelection();
             else if (songs.count > 0 && content.currentIndex < 0)
                 content.currentIndex = 0;
             return;
         }
-        // VI-11: `gg`/`G` leave the cover/toolbar for the first/last song;
+        // VI-11: `gg`/`G` leave the header for the first/last song;
         // the header stays a `k`-from-row-0 affordance only.
         if (action === "top" || action === "bottom") {
             if (songs.count === 0)
                 return;
             root.onCover = false;
+            root.onNotes = false;
             root.onToolbar = false;
+            root.setNotesExpanded(false);
             content.edgeJump(action === "bottom");
             return;
         }
         if (action === "page_up" || action === "page_down") {
+            if (root.onNotes && root.notesExpanded) {
+                root.scrollNotes(action === "page_up"
+                    ? -notesView.height * 0.9 : notesView.height * 0.9);
+                return;
+            }
             if (songs.count === 0)
                 return;
             root.onCover = false;
+            root.onNotes = false;
             root.onToolbar = false;
+            root.setNotesExpanded(false);
             content.pageJump(action === "page_down");
             return;
         }
@@ -332,8 +372,30 @@ Rectangle {
             if (songs.count === 0)
                 return;
             root.onCover = false;
+            root.onNotes = false;
             root.onToolbar = false;
+            root.setNotesExpanded(false);
             content.extendSelection("move_" + action.substring(7));
+            return;
+        }
+
+        if (root.onNotes) {
+            // UI-14: an expanded reader owns j/k and page keys for scrolling;
+            // Enter collapses it. When collapsed, up/down leave the stop.
+            if (action === "move_up" || action === "move_down") {
+                if (root.notesExpanded) {
+                    var line = Math.max(12, notesText.font.pixelSize * notesText.lineHeight);
+                    root.scrollNotes(action === "move_up" ? -line : line);
+                } else if (action === "move_up") {
+                    root.onNotes = false;
+                    root.onCover = true;
+                } else {
+                    root.onNotes = false;
+                    root.onToolbar = true;
+                }
+            } else if (action === "enter") {
+                root.setNotesExpanded(!root.notesExpanded);
+            }
             return;
         }
 
@@ -466,7 +528,9 @@ Rectangle {
         GridLayout {
             id: header
             Layout.fillWidth: true
-            Layout.preferredHeight: root.sideBySide ? Math.max(root.headerHeight, root.coverSide + root.height * 0.01 + root.starUnit) : implicitHeight
+            Layout.preferredHeight: root.sideBySide
+                ? Math.max(root.headerHeight, root.coverSide + root.height * 0.01 + root.starUnit, implicitHeight)
+                : implicitHeight
             columns: root.sideBySide ? 2 : 1
             columnSpacing: root.width * 0.025
             rowSpacing: root.height * 0.012
@@ -556,7 +620,9 @@ Rectangle {
                     TapHandler {
                         onTapped: {
                             root.onToolbar = false;
+                            root.onNotes = false;
                             root.onCover = true;
+                            root.setNotesExpanded(false);
                             root.armCoverActions(true);
                         }
                     }
@@ -631,19 +697,46 @@ Rectangle {
                         elide: Text.ElideRight
                     }
                 }
-                FadeText {
-                    id: notesText
+                // UI-14: one line by default; the Tab stop expands it into
+                // a reader. The expanded block is capped to the header's
+                // share of the pane and scrolls (wheel/trackpad or j/k while
+                // selected) instead of eliding the text.
+                Item {
+                    id: notesBox
                     Layout.fillWidth: true
                     Layout.topMargin: root.height * 0.008
+                    Layout.preferredHeight: root.notesExpanded
+                        ? Math.min(notesText.implicitHeight, root.height * 0.30)
+                        : notesText.implicitHeight
                     visible: root.albumNotes.length > 0
-                    text: root.albumNotes
-                    color: Palette.onSurfaceVariant
-                    font.pixelSize: root.height * 0.02
-                    lineHeight: 1.25
-                    wrapMode: Text.WordWrap
-                    // UI-14: clamped to three lines; click expands.
-                    maximumLineCount: root.notesExpanded ? 1000 : 3
-                    elide: root.notesExpanded ? Text.ElideNone : Text.ElideRight
+                    clip: true
+
+                    Flickable {
+                        id: notesView
+                        anchors.fill: parent
+                        contentWidth: width
+                        contentHeight: notesText.implicitHeight
+                        boundsBehavior: Flickable.StopAtBounds
+                        interactive: root.notesExpanded && contentHeight > height
+                        clip: true
+
+                        FadeText {
+                            id: notesText
+                            width: notesView.width
+                            text: root.albumNotes
+                            color: Palette.onSurfaceVariant
+                            font.pixelSize: root.height * 0.02
+                            lineHeight: 1.25
+                            wrapMode: Text.WordWrap
+                            maximumLineCount: root.notesExpanded ? 0 : 1
+                            elide: root.notesExpanded ? Text.ElideNone : Text.ElideRight
+                        }
+                    }
+
+                    ScopeRing {
+                        shown: root.onNotes
+                        anchors.fill: parent
+                    }
 
                     HoverHandler {
                         enabled: root.albumNotes.length > 0
@@ -651,7 +744,12 @@ Rectangle {
                     }
                     TapHandler {
                         enabled: root.albumNotes.length > 0
-                        onTapped: root.notesExpanded = !root.notesExpanded
+                        onTapped: {
+                            root.onCover = false;
+                            root.onToolbar = false;
+                            root.onNotes = true;
+                            root.setNotesExpanded(!root.notesExpanded);
+                        }
                     }
                 }
             }
@@ -768,9 +866,6 @@ Rectangle {
                         markRatingVisible: false
                         searchQuery: content.searchQuery
                         searchCurrent: songRow.index === content.searchCurrentRow
-                        expected: songRow.index !== content.currentIndex
-                            && content.isExpected(songRow.y)
-                        immediate: songRow.index === content.currentIndex
                     }
 
                     HoverHandler {
@@ -782,7 +877,9 @@ Rectangle {
                         acceptedModifiers: Qt.ShiftModifier
                         onTapped: {
                             root.onCover = false;
+                            root.onNotes = false;
                             root.onToolbar = false;
+                            root.setNotesExpanded(false);
                             content.extendSelectionTo(songRow.index);
                         }
                     }
@@ -791,7 +888,9 @@ Rectangle {
                         onTapped: {
                             // VI-4: direct play ends the visual selection.
                             root.onCover = false;
+                            root.onNotes = false;
                             root.onToolbar = false;
+                            root.setNotesExpanded(false);
                             content.clearSelection();
                             content.currentIndex = songRow.index;
                             Backend.playAlbum(root.albumId, songRow.index);

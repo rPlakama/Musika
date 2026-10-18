@@ -26,6 +26,12 @@ pub const DOWNLOAD_CONCURRENCY: usize = 3;
 /// Default player volume before mpv/UI overrides.
 pub const DEFAULT_VOLUME: f64 = 70.0;
 
+/// PATH-8: album and artist metadata is served from cache while this fresh.
+pub const INFO_TTL_SECS: i64 = 7 * 24 * 60 * 60;
+
+/// PATH-9: an unchanged sync revalidates covers at most this often.
+pub const COVER_CHECK_TTL_SECS: i64 = 24 * 60 * 60;
+
 /// Seconds since the Unix epoch (0 on clock errors), shared by every cache
 /// timestamp (ARC-36; replaces four local `now()` helpers).
 pub fn now_secs() -> i64 {

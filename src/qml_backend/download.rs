@@ -26,6 +26,7 @@ pub(super) async fn apply_window(
     dbs: &crate::db::Dbs,
     songs: &[String],
     albums: &[String],
+    generation: u64,
     invoker: qtbridge::QmlMethodInvoker,
 ) {
     // Two batched queries, never point-by-point: one library read for every
@@ -72,6 +73,11 @@ pub(super) async fn apply_window(
         albums.len(),
         songs_pending.len()
     );
+    // PATH-5: a newer request won while this read ran; its result lands
+    // instead (a stale snapshot would flip the marks backwards).
+    if super::MARK_WINDOW_GEN.load(std::sync::atomic::Ordering::Relaxed) != generation {
+        return;
+    }
     let json = serde_json::json!({
         "songs": songs_done,
         "albums": albums_done,

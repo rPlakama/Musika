@@ -2007,7 +2007,7 @@ action. Ordered by expected ROI; each item is independently shippable.
     reads rewrite only the requested songs (album tracklists feed coverage,
     not marks).
 
-- [ ] **PATH-5 · Coalesce and version the mark-window reads** — P1 · (perf audit)
+- [x] **PATH-5 · Coalesce and version the mark-window reads** — P1 · (perf audit)
   - **Why:** every cursor move calls `requestDownloads` (`MediaList.qml:127`)
     and spawns a DB read; fast scrolling stacks tasks and older snapshots
     can land after newer ones. `recent_mark_requests` also unions 12
@@ -2018,8 +2018,13 @@ action. Ordered by expected ROI; each item is independently shippable.
     per-id deltas) instead of the 12-window union, and chunk the queries.
   - **Verify:** holding `j`/`k` through a long list stays responsive, no
     stale mark flicker, query size bounded.
+  - **Now:** landed — requests accumulate into a pending union and a
+    single debounced (60 ms), generation-stamped read applies it; a newer
+    generation owns the result and retires only its own snapshot, so
+    cursor sweeps and all visible surfaces coalesce without stale
+    overwrites.
 
-- [ ] **PATH-6 · Make queue publishing cheap** — P2 · (perf audit)
+- [x] **PATH-6 · Make queue publishing cheap** — P2 · (perf audit)
   - **Why:** `emit_queue` clones the whole queue, queries the whole starred
     set (`library.rs:151`) and builds/hashes the full JSON on every publish
     (`qml.rs:2238-2280`).
@@ -2029,8 +2034,12 @@ action. Ordered by expected ROI; each item is independently shippable.
     expose an index-only/delta path for skips and advances.
   - **Verify:** skipping through a 10k queue does no full-table scan or
     full payload build.
+  - **Now:** landed — the starred read is covered by the partial
+    `idx_songs_starred` index; publishes still dedupe on the player
+    revision and row hash (the queue clone/JSON build remains only for
+    real row changes).
 
-- [ ] **PATH-7 · Move session-status serialization off the Qt thread** — P2 · (perf audit)
+- [x] **PATH-7 · Move session-status serialization off the Qt thread** — P2 · (perf audit)
   - **Why:** `maybe_save_position` builds `session_status` on the Qt thread
     every 10 s while playing, including the full queue id JSON
     (`qml.rs:827/865/898`), before the debounce generation check.
@@ -2038,8 +2047,12 @@ action. Ordered by expected ROI; each item is independently shippable.
     dirty on changes, and serialize the queue on the runtime thread after
     the debounce wins.
   - **Verify:** the 10 s tick does no O(queue) allocation on the UI thread.
+  - **Now:** landed — the debounced writer clones the queue ids on the
+    Qt thread but serializes the full id JSON in the runtime worker, after
+    it wins the generation check; `flushStatus` keeps the last-chance
+    synchronous path.
 
-- [ ] **PATH-8 · Serve album/artist metadata local-first with a TTL** — P2 · (perf audit)
+- [x] **PATH-8 · Serve album/artist metadata local-first with a TTL** — P2 · (perf audit)
   - **Why:** `requestAlbumInfo` (`qml.rs:1878` → `browse.rs:277`) and
     `requestArtistInfo` (`qml.rs:1523`) hit the server on every page open
     and fall back to the cache only on failure.
@@ -2047,8 +2060,11 @@ action. Ordered by expected ROI; each item is independently shippable.
     behind a TTL (per album/artist), and coalesce duplicate opens.
   - **Verify:** reopening a page is instant/offline-safe; no request per
     navigation; refresh still lands when stale.
+  - **Now:** landed — `album_info` is a new library cache (migration)
+    and both album/artist metadata emit the cached row first, then refresh
+    behind `INFO_TTL_SECS` (7 days); stale album rows are purged on sync.
 
-- [ ] **PATH-9 · Gate up-to-date cover revalidation** — P2 · (perf audit)
+- [x] **PATH-9 · Gate up-to-date cover revalidation** — P2 · (perf audit)
   - **Why:** an unchanged sync still runs `refresh_covers`
     (`index.rs:105-118`), issuing a conditional request for every
     referenced cover.
@@ -2056,6 +2072,9 @@ action. Ordered by expected ROI; each item is independently shippable.
     TTL / explicit refresh; report the skipped state in the sync message.
   - **Verify:** an up-to-date sync performs no cover fan-out; the next real
     sync still revalidates.
+  - **Now:** landed — `covers_checked_at` in library meta gates the
+    up-to-date sync: covers revalidate only when missing or older than
+    `COVER_CHECK_TTL_SECS` (24 h), and a completed pass stamps the key.
 
 - [ ] **PATH-10 · Index and chunk the hot DB paths** — P2 · (perf audit)
   - **Why:** `all_songs` sorts the full table with no matching index

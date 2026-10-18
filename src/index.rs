@@ -114,7 +114,15 @@ where
         // The library is unchanged, but the derived caches may still need
         // topping up (first run interrupted, or entries that previously
         // failed): covers, then a bounded lyric backfill.
-        let covers = refresh_covers(dbs, &client).await;
+        let covers =
+            if crate::library::cover_check_due(&dbs.library, crate::consts::COVER_CHECK_TTL_SECS)
+                .await
+                .unwrap_or(true)
+            {
+                refresh_covers(dbs, &client).await
+            } else {
+                CoverReport::default()
+            };
         let lyrics = refresh_lyrics(dbs, &client, &mut progress).await;
         return Ok(SyncReport {
             updated: false,
@@ -215,10 +223,16 @@ where
     // 5. lyric cache: drop entries for songs that left the library
     best_effort("lyric cache purge failed", crate::lyrics::purge(dbs)).await;
 
-    // 5b. artist biography cache: drop artists that left the library
+    // 5b. artist biography + album notes caches: drop rows that left the
+    // library
     best_effort(
         "artist info purge failed",
         crate::library::purge_stale_artist_info(&dbs.library),
+    )
+    .await;
+    best_effort(
+        "album info purge failed",
+        crate::library::purge_stale_album_info(&dbs.library),
     )
     .await;
 
@@ -306,7 +320,10 @@ async fn refresh_covers(dbs: &Dbs, client: &Arc<SubsonicClient>) -> CoverReport 
     };
 
     match crate::covers::refresh(&dbs.covers, client, &referenced).await {
-        Ok(report) => report,
+        Ok(report) => {
+            let _ = crate::library::touch_cover_check(&dbs.library).await;
+            report
+        }
         Err(err) => {
             eprintln!("index: cover sync failed: {err:#}");
             CoverReport::default()

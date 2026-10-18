@@ -1277,3 +1277,97 @@ mod tests {
         assert!(artists.is_empty());
     }
 }
+
+/// PATH-8: one album's cached description and fetch time.
+pub async fn album_info(pool: &SqlitePool, album_id: &str) -> Result<Option<(String, i64)>> {
+    let row: Option<(String, i64)> =
+        sqlx::query_as("SELECT notes, fetched_at FROM album_info WHERE album_id = ?1")
+            .bind(album_id)
+            .fetch_optional(pool)
+            .await?;
+    Ok(row)
+}
+
+/// PATH-8: stores an album description for the local-first read.
+pub async fn upsert_album_info(pool: &SqlitePool, album_id: &str, notes: &str) -> Result<()> {
+    sqlx::query(
+        "INSERT INTO album_info (album_id, notes, fetched_at)
+         VALUES (?1, ?2, ?3)
+         ON CONFLICT(album_id) DO UPDATE SET
+             notes = excluded.notes,
+             fetched_at = excluded.fetched_at",
+    )
+    .bind(album_id)
+    .bind(notes)
+    .bind(crate::consts::now_secs())
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+/// PATH-8: drops cached descriptions whose album left the library.
+pub async fn purge_stale_album_info(pool: &SqlitePool) -> Result<u64> {
+    let result = sqlx::query(
+        "DELETE FROM album_info
+         WHERE album_id NOT IN (SELECT id FROM albums)",
+    )
+    .execute(pool)
+    .await?;
+    Ok(result.rows_affected())
+}
+
+/// PATH-9: is the cover cache due for a revalidation pass?
+pub async fn cover_check_due(pool: &SqlitePool, ttl_secs: i64) -> Result<bool> {
+    let value: Option<String> =
+        sqlx::query_scalar("SELECT value FROM meta WHERE key = 'covers_checked_at'")
+            .fetch_optional(pool)
+            .await?;
+    let Some(value) = value else {
+        return Ok(true);
+    };
+    let Ok(checked_at) = value.parse::<i64>() else {
+        return Ok(true);
+    };
+    Ok(crate::consts::now_secs() - checked_at >= ttl_secs)
+}
+
+/// PATH-9: records a cover revalidation pass.
+pub async fn touch_cover_check(pool: &SqlitePool) -> Result<()> {
+    upsert_meta(
+        pool,
+        "covers_checked_at",
+        &crate::consts::now_secs().to_string(),
+    )
+    .await
+}
+
+#[cfg(test)]
+mod path_tests {
+    use super::*;
+
+    async fn memory_pool() -> SqlitePool {
+        crate::sqlite::memory_pool(sqlx::migrate!("./migrations_library")).await
+    }
+
+    #[tokio::test]
+    async fn album_info_cache_and_cover_check_gate_round_trip() {
+        let pool = memory_pool().await;
+        sqlx::query("INSERT INTO albums (id, name) VALUES ('al1', 'Kid A')")
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        assert!(album_info(&pool, "al1").await.unwrap().is_none());
+        upsert_album_info(&pool, "al1", "notes").await.unwrap();
+        let (notes, _) = album_info(&pool, "al1").await.unwrap().unwrap();
+        assert_eq!(notes, "notes");
+
+        upsert_album_info(&pool, "gone", "stale").await.unwrap();
+        assert_eq!(purge_stale_album_info(&pool).await.unwrap(), 1);
+        assert!(album_info(&pool, "gone").await.unwrap().is_none());
+
+        assert!(cover_check_due(&pool, 3600).await.unwrap());
+        touch_cover_check(&pool).await.unwrap();
+        assert!(!cover_check_due(&pool, 3600).await.unwrap());
+    }
+}

@@ -54,6 +54,19 @@ static STATUS_WRITE_GEN: AtomicU64 = AtomicU64::new(0);
 /// queue back to a stale index).
 static QUEUE_EMIT_GEN: AtomicU64 = AtomicU64::new(0);
 
+/// Bumped by every mark-window request; the debounced reader only applies
+/// when its generation is still the latest (fast scrolling coalesces into
+/// the final cursor window instead of stacking DB tasks).
+static MARK_WINDOW_GEN: AtomicU64 = AtomicU64::new(0);
+
+/// The union of ids requested since the last applied read: a cursor sweep
+/// and every visible surface coalesce into one query.
+#[derive(Default)]
+struct MarkPending {
+    songs: std::collections::HashSet<String>,
+    albums: std::collections::HashSet<String>,
+}
+
 /// One id's download mark (the `mark_states` map's values).
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum MarkState {
@@ -148,6 +161,8 @@ pub struct Backend {
     /// albums (a songs surface), which is why a finished album never
     /// re-evaluated until a reload re-requested its row's window.
     recent_mark_requests: std::collections::VecDeque<(Vec<String>, Vec<String>)>,
+    /// Pending mark ids waiting on the debounced reader (PATH-5).
+    mark_pending: std::sync::Arc<std::sync::Mutex<MarkPending>>,
     playback_state: String,
     position: f64,
     duration: f64,
@@ -842,13 +857,13 @@ impl Backend {
         self.queue_status_save();
     }
 
-    fn session_status(&self) -> crate::status::SessionStatus {
+    fn session_status(&self, queue: String) -> crate::status::SessionStatus {
         crate::status::SessionStatus {
             server_url: self.server_url.trim().to_string(),
             username: self.username.trim().to_string(),
             album_id: self.status_album.clone(),
             song_id: self.status_song.clone(),
-            queue: self.queue_ids_json(),
+            queue,
             queue_index: self.player.index() as i64,
             position: self.player.position(),
             volume: self.player.volume(),
@@ -867,12 +882,22 @@ impl Backend {
         let Some(dbs) = crate::dbs().cloned() else {
             return;
         };
-        let status = self.session_status();
+        // PATH-7: clone the ids here, but serialize the full queue in the
+        // worker after the debounce wins — never on the Qt thread.
+        let ids: Vec<String> = self
+            .player
+            .queue()
+            .iter()
+            .map(|track| track.id.clone())
+            .collect();
+        let status = self.session_status(String::new());
         crate::runtime().spawn(async move {
             tokio::time::sleep(std::time::Duration::from_millis(500)).await;
             if STATUS_WRITE_GEN.load(Ordering::Relaxed) != generation {
                 return;
             }
+            let mut status = status;
+            status.queue = serde_json::to_string(&ids).unwrap_or_default();
             if let Err(err) = crate::status::save(&dbs.status, &status).await {
                 eprintln!("status: could not save the session: {err:#}");
             }
@@ -903,7 +928,7 @@ impl Backend {
         };
         // Cancel a pending debounce so it cannot race (or overwrite) this.
         STATUS_WRITE_GEN.fetch_add(1, Ordering::Relaxed);
-        let status = self.session_status();
+        let status = self.session_status(self.queue_ids_json());
         if let Err(err) = crate::runtime().block_on(crate::status::save(&dbs.status, &status)) {
             eprintln!("status: could not flush the session: {err:#}");
         }
@@ -1549,6 +1574,27 @@ impl Backend {
     fn request_artist_info(&mut self, artist_id: String) {
         let invoker = self.get_qml_method_invoker();
         self.spawn_task(move |dbs| async move {
+            let cached = crate::library::artist_info(&dbs.library, &artist_id)
+                .await
+                .ok()
+                .flatten();
+            if let Some(row) = &cached {
+                emit(
+                    &invoker,
+                    "artist_info",
+                    serde_json::json!({
+                        "id": artist_id,
+                        "biography": row.biography,
+                        "url": row.url,
+                    })
+                    .to_string(),
+                );
+                if let Ok(fetched_at) = row.fetched_at.parse::<i64>()
+                    && crate::consts::now_secs() - fetched_at < crate::consts::INFO_TTL_SECS
+                {
+                    return;
+                }
+            }
             let fetched = async {
                 let client = client(&dbs).await?;
                 let (biography, url) =
@@ -1568,23 +1614,35 @@ impl Backend {
             }
             .await;
 
-            let (biography, url) = match fetched {
-                Ok(pair) => pair,
+            match fetched {
+                Ok((biography, url)) => {
+                    emit(
+                        &invoker,
+                        "artist_info",
+                        serde_json::json!({
+                            "id": artist_id,
+                            "biography": biography,
+                            "url": url,
+                        })
+                        .to_string(),
+                    );
+                }
                 Err(err) => {
                     eprintln!("artist: info fetch failed for {artist_id}: {err:#}");
-                    match crate::library::artist_info(&dbs.library, &artist_id).await {
-                        Ok(Some(row)) => (row.biography, row.url),
-                        _ => (String::new(), String::new()),
+                    if cached.is_none() {
+                        emit(
+                            &invoker,
+                            "artist_info",
+                            serde_json::json!({
+                                "id": artist_id,
+                                "biography": "",
+                                "url": "",
+                            })
+                            .to_string(),
+                        );
                     }
                 }
-            };
-            let json = serde_json::json!({
-                "id": artist_id,
-                "biography": biography,
-                "url": url,
-            })
-            .to_string();
-            emit(&invoker, "artist_info", json);
+            }
         });
     }
     /// CACHE-1/8: an explicit user download. Idempotent — a cached blob or an
@@ -1902,9 +1960,43 @@ impl Backend {
     /// Fetches an album's description ("notes") from the server.
     #[qslot(qml_name = "requestAlbumInfo")]
     fn request_album_info(&mut self, album_id: String) {
-        self.spawn_data("album_info", move |dbs| async move {
-            let notes = album_notes(&dbs, &album_id).await;
-            Ok(serde_json::json!({ "notes": notes }).to_string())
+        let invoker = self.get_qml_method_invoker();
+        self.spawn_task(move |dbs| async move {
+            let cached = crate::library::album_info(&dbs.library, &album_id)
+                .await
+                .ok()
+                .flatten();
+            if let Some((notes, fetched_at)) = &cached {
+                emit(
+                    &invoker,
+                    "album_info",
+                    serde_json::json!({ "notes": notes }).to_string(),
+                );
+                if crate::consts::now_secs() - fetched_at < crate::consts::INFO_TTL_SECS {
+                    return;
+                }
+            }
+            let fresh = album_notes(&dbs, &album_id).await;
+            if fresh.is_empty() {
+                if cached.is_none() {
+                    emit(
+                        &invoker,
+                        "album_info",
+                        serde_json::json!({ "notes": "" }).to_string(),
+                    );
+                }
+                return;
+            }
+            if let Err(err) =
+                crate::library::upsert_album_info(&dbs.library, &album_id, &fresh).await
+            {
+                eprintln!("album: could not cache notes for {album_id}: {err:#}");
+            }
+            emit(
+                &invoker,
+                "album_info",
+                serde_json::json!({ "notes": fresh }).to_string(),
+            );
         });
     }
 
@@ -2647,9 +2739,43 @@ impl Backend {
 
     /// One refresh read over explicit windows.
     fn refresh_window(&mut self, songs: Vec<String>, albums: Vec<String>) {
+        // PATH-5: accumulate every request in the debounce window and read
+        // their union once; the newest generation owns the apply.
+        let (songs_snapshot, albums_snapshot) = {
+            let mut pending = self
+                .mark_pending
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
+            pending.songs.extend(songs);
+            pending.albums.extend(albums);
+            (
+                pending.songs.iter().cloned().collect::<Vec<_>>(),
+                pending.albums.iter().cloned().collect::<Vec<_>>(),
+            )
+        };
         let invoker = self.get_qml_method_invoker();
-        self.spawn_task(move |dbs| async move {
-            apply_window(&dbs, &songs, &albums, invoker).await;
+        let Some(dbs) = crate::dbs().cloned() else {
+            return;
+        };
+        let pending = std::sync::Arc::clone(&self.mark_pending);
+        let generation = MARK_WINDOW_GEN.fetch_add(1, Ordering::Relaxed) + 1;
+        crate::runtime().spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_millis(60)).await;
+            if MARK_WINDOW_GEN.load(Ordering::Relaxed) != generation {
+                return;
+            }
+            apply_window(&dbs, &songs_snapshot, &albums_snapshot, generation, invoker).await;
+            // A newer request owns the rest; only a still-current apply
+            // retires its snapshot from the pending union.
+            if MARK_WINDOW_GEN.load(Ordering::Relaxed) == generation {
+                let mut pending = pending.lock().unwrap_or_else(|error| error.into_inner());
+                for id in &songs_snapshot {
+                    pending.songs.remove(id);
+                }
+                for id in &albums_snapshot {
+                    pending.albums.remove(id);
+                }
+            }
         });
     }
 

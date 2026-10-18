@@ -3,6 +3,13 @@
 All notable changes to Musika, newest first. `TASKLISTMAJOR.md` tracks the
 open work; this file is the release history.
 
+## 0.3.4 — _Local-first rating stars, cover actions and lenient search_
+
+All commits since `v0.3.3`:
+
+- `da196e8` Local-first rating stars, cover cycles and lenient search
+- `ac2b5c7` Share the favourite button and put album actions on the cover
+
 ## 0.3.3 — _Improve in Favorite System_
 
 All commits since `v0.3.2`:

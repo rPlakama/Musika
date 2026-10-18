@@ -116,6 +116,7 @@
             --prefix QT_PLUGIN_PATH : ${qt}/lib/qt-6/plugins \
             --prefix QML_IMPORT_PATH : ${qt}/lib/qt-6/qml \
             --prefix QML2_IMPORT_PATH : ${qt}/lib/qt-6/qml \
+            --set-default QSG_RHI_BACKEND vulkan \
             --set-default SSL_CERT_FILE ${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt
 
           # Desktop entry (PKG-1): launchers, docks, MIME data dirs.
@@ -178,6 +179,7 @@
         QT_VERSION_MAJOR = "6";
 
         shellHook = ''
+          	export QSG_RHI_BACKEND="''${QSG_RHI_BACKEND:-vulkan}"
           	export QML_IMPORT_PATH="${qt}/lib/qt-6/qml''${QML_IMPORT_PATH:+:$QML_IMPORT_PATH}"
           	export QML2_IMPORT_PATH="${qt}/lib/qt-6/qml''${QML2_IMPORT_PATH:+:$QML2_IMPORT_PATH}"
           	export QT_PLUGIN_PATH="${qt}/lib/qt-6/plugins''${QT_PLUGIN_PATH:+:$QT_PLUGIN_PATH}"

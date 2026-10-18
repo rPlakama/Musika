@@ -3,6 +3,14 @@
 All notable changes to Musika, newest first. `TASKLISTMAJOR.md` tracks the
 open work; this file is the release history.
 
+## 0.3.2 — _Extras and engine stuff_
+
+All commits since `v0.3.1`:
+
+- `cc14325` Engine optimizations: Vulkan default, lazy segments, NowPlaying loader and acrylic gating
+- `4c63971` ARC-IDK1: search UI breathing room and opaque acrylic tint
+- `8aa7fc5` Anchor album song title to the duration box
+
 ## 0.3.1 — _Optimizing and reducing_
 
 All commits since `v0.3.0`:

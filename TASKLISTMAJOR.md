@@ -1912,7 +1912,10 @@ The product is incomplete without these.
       adaptiveRowHeight` (+ row spacing) and the grid extent as whole rows ×
       cell size, adding the scrolloff margin. The manual hints were removed
       from SearchColumn, AlbumEntry, QueueDrawer and NowPlaying; the
-      explicit `contentHeightHint` override remains for variable rows.
+      explicit `contentHeightHint` override remains for variable rows. Live
+      `contentHeight` is authoritative once measured; the derived extent is
+      only the pre-layout fallback (the count multiplication overran the
+      real 558-album extent by ~223 px and let `k` glide past the bottom).
 
   - [x] **ARC-UI-7.8 · Grid scrolloff parity** — P3
     - **Why:** `unlimitedScrolloff` uses ListView `header`/`footer` spacers,
@@ -2027,6 +2030,145 @@ The product is incomplete without these.
       snapshot (<100 ms; visible cells only); `check-scroll.sh` runs it when
       the QML runtime is on PATH. Memory-write counting was not added (7.3's
       coalescing has its own teardown/restore checks).
+
+### Search revamp (ARC-SEARCH)
+
+- [ ] **ARC-SEARCH · SearchRevamp — an in-process Nucleo index for the global palette** — P2 · (reported; S-8, S-9, PATH-10; DEPCRITIQUE)
+  - **Why:** the palette still pays for three engines per keystroke: FTS5 over
+    `search.db` (`src/search.rs`), a `LIKE '%…%'` full scan for artists/albums
+    (`src/library.rs:335`), and a full scan of the FTS virtual table for the
+    empty-query "Most played" surface (`src/search.rs:109`). The FTS query
+    also sorts on an expression (`rank - play_count * 0.1`,
+    `src/search.rs:95`), so FTS5 cannot stop after the first N matches. None
+    of this involves files: `fd`/`fff` are filesystem walkers and have no
+    place here — the catalog is already in SQLite, and shelling out would
+    add a process, a sync mirror and stdout parsing for a worse result. The
+    next step is an in-process fuzzy index (Nucleo, the matcher behind
+    Helix) fed from `library.db`: ranked search over title/artist/album with
+    typo tolerance, smartcase and Unicode normalization, and no SQL or IPC in
+    the typing loop.
+  - **Why Nucleo (and not fd/fff/fzf):**
+    - `nucleo` 0.5 (`nucleo-matcher` 0.3 core) is the high-performance matcher
+      used by Helix. Its high-level worker matches on a background threadpool
+      and supports incremental matching (`MultiPattern::reparse(…, append)`),
+      so extending a query reuses the previous candidate set instead of
+      rescanning the catalog;
+    - it scores fuzzy matches with word-boundary/prefix bonuses and returns
+      match indices for highlighting; smartcase and diacritic folding are
+      built in (`CaseMatching::Smart`, `Normalization::Smart`);
+    - it is a library, not a subprocess: no tmpfs mirror, no `fd`/`fff`
+      spawning, no process lifecycle, no filesystem to keep in sync;
+    - license: MPL-2.0, compatible with this GPL-2.0-or-later project. The
+      lock cost is small (`nucleo-matcher`, `rayon`, `rayon-core`,
+      `crossbeam-deque/utils`; `parking_lot`/`memchr`/`either` are already in
+      the tree). Record it in DEPCRITIQUE with the marginal count.
+  - **Details:**
+    - **Index (`src/search/index.rs`, new).** `SearchIndex` owns:
+      - `Nucleo<Arc<SongHit>>` for songs (the only large list), one match
+        column per item holding a haystack `title · artist · album` (fields
+        joined by a separator; store each field's char range so match indices
+        can be mapped back for highlighting);
+      - `Vec<Arc<ArtistHit>>` / `Vec<Arc<AlbumHit>>` matched with
+        `Pattern::match_list` (those tables are small; one `Matcher` per
+        search thread, no extra worker threads);
+      - `most_played: Vec<Arc<SongHit>>` sorted once at build
+        (`play_count DESC, title`) so the empty query costs no scan;
+      - `by_album: HashMap<String, Vec<Arc<SongHit>>>` sorted by
+        `(disc_number, track, title)` for S-8;
+      - `epoch: u64`, bumped on every rebuild so a payload can never mix
+        catalogs.
+      `SongHit` carries everything `search_json` needs from `library.db`:
+      id/title/artist/album/duration/play_count/album_id/cover_art/starred/
+      disc/track. Build it in one blocking pass over `library.db`
+      (`song_search_rows` grows into a catalog query; artists/albums queried
+      once). Store `Arc`s: snapshots and payloads only clone pointers.
+    - **Query.** `Pattern::new(clean_query(raw), CaseMatching::Smart,
+      Normalization::Smart, AtomKind::Fuzzy)` — literal fuzzy over
+      whitespace tokens, preserving S-9's "punctuation is prose" contract;
+      fzf operators (`^`, `'`, `!`, `$`) can be an opt-in later. Reparse the
+      song worker with `append = true` only when the new text starts with the
+      previous text; `tick(10)` until `status.running` is false (`Status` is
+      a struct, not an enum), checking `SEARCH_GEN` between ticks so a
+      superseded keystroke stops within one tick. Run the whole operation in
+      `spawn_blocking`; `request_search` keeps its generation guard but no
+      longer touches SQLite. The `Mutex<Nucleo<…>>` is unavoidable
+      (`tick`/`reparse` take `&mut self`); artist/album matching is lock-free
+      over immutable `Arc` slices.
+    - **Ranking.** Songs: walk `snapshot.matched_items(..)` in score order;
+      effective score = `score + PLAY_BONUS * min(play_count, CAP)`, with
+      `PLAY_BONUS` calibrated so a strong text match still beats a heavily
+      played weak one (the S-9 rule). Stop at 20 after the offline filter.
+      Artists/albums: `Pattern::match_list` already returns score-ordered
+      rows; truncate to 20. Offline filtering happens while walking the
+      ordered hits (no rebuild on an offline toggle).
+    - **Most played.** Empty/whitespace query returns the pre-sorted
+      `most_played` prefix; no Nucleo tick, no SQLite read.
+    - **S-8.** If exactly one album matched, the Songs column switches to
+      `by_album[album_id]` (track order) instead of the fuzzy ranking; the
+      payload keeps `album_context`. No DB round-trip.
+    - **Payload.** Keep the existing `search_json` shape (`query`,
+      `most_played`, `artists`, `albums`, `songs`) so QML is untouched in
+      M1–M3. Only the cover URL join remains (`covers::url_map_of` over ≤20
+      ids) plus the tiny `artist_user` overlay reads; the per-keystroke
+      `LIKE`/FTS/most-played queries go away. Add an optional `spans` role
+      per row (character ranges per displayed cell, derived with
+      `Pattern::indices` on the top 20 only) so fuzzy matches still paint
+      `SearchText` blocks; `SearchText` keeps its literal
+      `SearchMatch.spans` as the fallback for the in-surface `/` search.
+    - **Build/refresh.** Build lazily on first palette use (startup stays
+      unblocked), then rebuild after every successful library sync in
+      `index::rebuild_search` (rename to `rebuild_search_index`) on a
+      blocking thread. A failed build logs and keeps the old index (stale
+      until the next sync), matching today's "search is a disposable cache"
+      contract. On logout/wipe, drop the index. Keep `search.db` untouched
+      in M1–M3 as the fallback.
+    - **Engine switch.** `MUSIKA_SEARCH_ENGINE=fts|nucleo` (default `fts`
+      until parity; flipped to `nucleo` in M4; auto-fallback to `fts` when
+      the build fails or the catalog exceeds the measured memory cap). Remove
+      the FTS/LIKE hot paths only after the flag has shipped and the
+      benchmarks are green; update README/DBWIRING/CRITIQUE's stale
+      "tmpfs + fd" claim while there.
+    - **Threads/memory.** `Nucleo::new(Config::DEFAULT, noop_notify,
+      Some(1), 1)` — one worker thread for songs; the notify callback only
+      needs to wake the tick loop. Memory ≈ item structs + one UTF-32
+      haystack per song (~4 bytes/char): measure at 10k/50k/100k and record;
+      if the 100k figure is unacceptable, cap the index (e.g. 150k songs) and
+      fall back to FTS.
+  - **Milestones:**
+    1. **M0 — baseline.** A `#[ignore]` Rust bench plus a small script over a
+       synthetic 10k/100k catalog records p50/p95 for `search_json`
+       (cold/warm), `most_played` and artist/album `LIKE`; record the numbers
+       in **Now**. No production change.
+    2. **M1 — index core.** Dependency + `SearchIndex` (build, query,
+       most_played, by_album, artist/album matching); unit tests for fuzzy
+       order, smartcase, diacritics, punctuation, play boost, S-8, offline
+       filtering and append-reparse correctness.
+    3. **M2 — wire behind the flag.** `request_search`/`search_json` read the
+       index; rebuild on startup/sync; parallelize the remaining hydration
+       reads (`try_join!`); smoke-test the overlay against `nucleo`.
+    4. **M3 — parity.** Highlight spans, S-8/S-9 parity, offline, empty
+       state, error fallback; lower the 120 ms debounce only if p95 says it
+       is safe.
+    5. **M4 — default + cleanup.** Flip the default, delete the dead FTS/LIKE
+       hot paths (keep the migrations for a later cleanup), update docs and
+       DEPCRITIQUE.
+  - **Verify:** `rdo`/`radiohd` finds Radiohead (fuzzy); `bjork` finds Björk
+    (normalization); `KID A` respects smartcase; punctuation still behaves as
+    prose; one-album queries list tracks in track order (S-8); an equal-text
+    tie is ordered by play count and a strong text match survives a small
+    boost (S-9); offline shows only downloaded songs; the empty query paints
+    the same Most-played rows with no DB read. At 100k songs, warm
+    `search_json` p95 < 10 ms and `most_played` < 1 ms (baseline recorded in
+    M0), with no work on the Qt thread and no `LIKE`/FTS query in the hot
+    path; memory recorded. `cargo test`, `qmllint`,
+    `scripts/check-scroll.sh` and the overlay smoke tests green;
+    `MUSIKA_SEARCH_ENGINE=fts` still works.
+  - **Risks:** fuzzy ranking changes habit (weak matches appear that FTS
+    never showed); mitigate with the M0/M3 comparison and a conservative
+    play boost. The high-level `nucleo` API is pre-1.0 (0.5), but the matcher
+    core is stable and widely used. Memory is the real trade; the cap and
+    fallback keep a large library usable. All `tick` loops live in
+    `spawn_blocking`, so the Qt thread never waits.
 
 ### Incremental (ARC-I)
 

@@ -142,6 +142,12 @@ Item {
     function _glideTo(v, index) {
         if (!v || v.count === 0 || index < 0 || root.isLanding)
             return;
+        // Qt can leave contentY on a stale (too large) contentHeight
+        // estimate after a landing; stop the old glide and repair it
+        // before deriving the target, or the follow glides into the gap
+        // under the last row.
+        centerGlide.stop();
+        root._clampY(v);
         var item = v.itemAtIndex(index);
         if (!item) {
             // Unrealised row (a far landing): iterative, height-aware reveal
@@ -263,10 +269,16 @@ Item {
         return extent;
     }
     function contentExtent(v) {
-        var auto = root._autoContentExtent();
-        if (auto > 0)
-            return auto;
-        return v ? v.contentHeight : 0;
+        if (root.contentHeightHint > 0)
+            return root.contentHeightHint;
+        // Live geometry is authoritative once the view has measured it;
+        // the derived extent only covers the pre-layout beat (Qt may still
+        // report 0 there). Preferring the multiplication after layout made
+        // the Songs/Albums end extend past Qt's real bottom, so k from G
+        // glided into a gap under the last row.
+        if (v && v.contentHeight > 0)
+            return v.contentHeight;
+        return root._autoContentExtent();
     }
 
     /// True while a landing runs: the root index handler must not start a
@@ -809,6 +821,13 @@ Item {
         // A drag owns the viewport: kill any centre glide in flight.
         function onMovementStarted() {
             root.stopGlide();
+        }
+        // A shrinking contentHeight estimate (finite-row lists) can leave
+        // the idle viewport past the real end; repair the gap once the
+        // estimate settles, never during a glide or landing.
+        function onContentHeightChanged() {
+            if (!centerGlide.running && !root.isLanding)
+                root._clampY(target);
         }
         function onCurrentIndexChanged() {
             // A landing owns the view while it runs.

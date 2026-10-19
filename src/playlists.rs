@@ -456,7 +456,6 @@ mod tests {
         Dbs {
             credentials: pools.clone(),
             library: pools.clone(),
-            search: pools.clone(),
             covers: pools.clone(),
             media: pools.clone(),
             lyrics: pools.clone(),

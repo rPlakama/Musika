@@ -12,7 +12,6 @@ image = { version = "0.25.10", default-features = false, features = ["png", "jpe
 libc = "0.2"
 material-colors = { version = "0.5", features = ["quantize"] }
 md-5 = "0.11"
-nucleo = "0.5.0"
 openssl = "0.10.81"
 qtbridge = "0.3.0"
 reqwest = { version = "0.13.5", features = [ "json" ] }
@@ -20,5 +19,6 @@ resvg = { version = "0.48.1", default-features = false, features = ["raster-imag
 serde = { version = "1.0", features = [ "derive" ] }
 serde_json = "1.0"
 sqlx = { version = "0.9", features = [ "sqlite", "runtime-tokio" ] }
+tantivy = "0.27.0"
 tokio = { version = "1.53.2", features = [ "rt", "macros", "rt-multi-thread"] }
 zbus = { version = "5", default-features = false, features = ["tokio"] }

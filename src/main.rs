@@ -28,6 +28,7 @@ mod consts;
 mod covers;
 mod crypto;
 mod db;
+mod debug;
 mod download;
 mod fanout;
 mod http_client;
@@ -57,9 +58,9 @@ pub fn dbs() -> Option<&'static db::Dbs> {
 /// Swaps in a freshly initialised set (the full wipe deletes the files and
 /// re-inits; the old handle leaks, which is once-per-wipe).
 pub fn set_dbs(dbs: db::Dbs) {
-    // ARC-SEARCH: the in-memory catalog belongs to the database it was built
+    // ARC-SEARCH: the search handle belongs to the database it was built
     // from; a fresh set starts cold and rebuilds on first search/sync.
-    search::index::clear();
+    search::tantivy_index::clear();
     let leaked: &'static db::Dbs = Box::leak(Box::new(dbs));
     match DBS.get() {
         Some(slot) => *slot.lock().expect("dbs lock") = leaked,
@@ -92,6 +93,16 @@ fn main() {
         .block_on(db::init())
         .expect("failed to initialise the databases");
     set_dbs(dbs);
+
+    // ARC-SEARCH: warm the persistent catalog in the background so the first
+    // palette open does not pay the index build. A later sync rebuilds it.
+    if let Some(dbs) = crate::dbs() {
+        runtime().spawn(async move {
+            if let Err(err) = search::tantivy_index::ensure(&dbs.library).await {
+                eprintln!("search: could not warm the Tantivy index: {err:#}");
+            }
+        });
+    }
 
     let mut app = QApp::new();
     qtbridge::include_bytes_qml!("qml", "app");

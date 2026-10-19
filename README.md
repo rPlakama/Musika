@@ -12,7 +12,7 @@ Musika is a Keyboard driven Navidrome/Subsonic Client made with AI assistance. W
 
 2 - Download System -- Local-first, two ledgers in `media.db` and two tiers: the artifact tables own the blobs + the container *rules*, the download ledger owns the intent and progress (queued → active → done/error). An explicit song download is `permanent`; selecting an album or an artist writes a rule, downloads every existing track and keeps catching new ones on sync — toggling it off removes the rule and its files. Permanent/rule blobs live under `~/.config/musika/media`, the purgeable playback tier under `~/.cache/musika/media`. Row glyphs show the state (outline → spinning loop → filled), and offline mode serves the downloaded catalog only.
 
-3 - Search -- `/` searches the surface in front of you (literal, smartcase, viewport-scoped) with in-place match blocks and `[i/N]` counts; Enter jumps, Esc abandons. The global overlay searches the whole indexed library with the in-process Nucleo fuzzy index (ARC-SEARCH); `MUSIKA_SEARCH_ENGINE=fts` falls back to the SQLite FTS engine.
+3 - Search -- `/` searches the surface in front of you (literal, smartcase, viewport-scoped) with in-place match blocks and `[i/N]` counts; Enter jumps, Esc abandons. The global overlay searches the whole indexed library with a persistent Tantivy index (ARC-SEARCH).
 
 4 - Playback -- MPV runs as the backend subprocess: gapless with prefetch, stream-error retry + auto-advance, native MPRIS, seek/volume, and synced lyrics (OpenSubsonic) that ride the shared scroll body.
 
@@ -39,8 +39,8 @@ inputs.musika.packages.${pkgs.system}.default
 
 It works with two databases:
 
-- `library.db` -- the server and account, artists/albums/songs, the FTS index,
-  artist stars and ratings, playlists, session resume and cover-derived colors
+- `library.db` -- the server and account, artists/albums/songs, artist stars
+  and ratings, playlists, session resume and cover-derived colors
 - `media.db` -- cover URLs + cached art, cached lyrics, download blobs + rules
   and the download ledger
 
@@ -49,7 +49,7 @@ It works with two databases:
 - Sidebar segments: Albums, Songs, Artists, Playlists (Radio is a placeholder for now).
 - Fullscreen player (Enter on a song): transport, seek, volume, and the queue + lyrics panes.
 - Queue drawer (`Ctrl-Q`): `j/k`, Enter jumps, `J/K` reorder, `dd` removes.
-- Search overlay: the global fuzzy browser over the indexed library (`MUSIKA_SEARCH_ENGINE=fts` uses the FTS fallback).
+- Search overlay: the global fuzzy browser over the persistent Tantivy index.
 
 # Building
 

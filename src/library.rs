@@ -29,17 +29,6 @@ use sqlx::sqlite::SqlitePool;
 
 use crate::api::{AlbumID3, ArtistID3, Child};
 
-/// A row shaped for the search index rebuild.
-#[derive(Debug, Clone, FromRow)]
-pub struct SongSearchRow {
-    pub id: String,
-    pub title: String,
-    pub artist: Option<String>,
-    pub album: Option<String>,
-    pub duration: Option<i32>,
-    pub play_count: Option<i64>,
-}
-
 /// Replaces all library tables in a single transaction and stores the sync
 /// bookkeeping values.
 pub async fn replace(
@@ -296,16 +285,6 @@ pub async fn song_ids(pool: &SqlitePool) -> Result<Vec<String>> {
         .fetch_all(pool)
         .await?;
     Ok(ids)
-}
-
-/// Returns the columns needed to rebuild the FTS index.
-pub async fn song_search_rows(pool: &SqlitePool) -> Result<Vec<SongSearchRow>> {
-    let rows = sqlx::query_as::<_, SongSearchRow>(
-        "SELECT id, title, artist, album, duration, play_count FROM songs",
-    )
-    .fetch_all(pool)
-    .await?;
-    Ok(rows)
 }
 
 /// CACHE-9: from the downloaded song ids, the album id -> downloaded-track

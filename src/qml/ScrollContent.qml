@@ -142,7 +142,7 @@ Item {
     /// Centre the cursor over `followMs` — the delegate itself is the target
     /// (lyric rows have variable heights); an unrealised line falls back to
     /// an instant `Center`.
-    function _glideTo(v, index) {
+    function _glideTo(v, index, instant) {
         if (!v || v.count === 0 || index < 0 || root.isLanding)
             return;
         // Qt can leave contentY on a stale (too large) contentHeight
@@ -163,7 +163,7 @@ Item {
             root._landUnrealised(v, index);
             Qt.callLater(function () {
                 if (root.currentIndex === index)
-                    root._glideTo(root.view, index);
+                    root._glideTo(root.view, index, instant);
             });
             return;
         }
@@ -178,7 +178,7 @@ Item {
         var target = Math.max(lo, Math.min(limit, ideal));
         if (Math.abs(target - v.contentY) < 1)
             return;
-        if (Theme.reduceMotion) {
+        if (instant || Theme.reduceMotion) {
             v.contentY = target;
             return;
         }
@@ -211,6 +211,16 @@ Item {
         root._glideTo(root.view, root.currentIndex);
         if (!centerGlide.running)
             root.glideOverrideMs = 0;
+    }
+
+    /// Resize repair: snap, never glide. A changing row unit invalidates the
+    /// in-flight target, and a glide toward a stale extent can leave the row
+    /// visibly stuck; the next user action resumes the normal follow.
+    function recenterNow() {
+        if (root.currentIndex < 0 || !root.view || root.isLanding)
+            return;
+        root.glideOverrideMs = 0;
+        root._glideTo(root.view, root.currentIndex, true);
     }
 
     /// The end-of-list settle: `ListView.contentHeight` is an estimate until
@@ -780,8 +790,12 @@ Item {
     onColumnsChanged: root._scheduleResizeRecenter()
 
     function _scheduleResizeRecenter() {
-        if (root.currentIndex >= 0)
-            resizeRecenter.restart();
+        if (root.currentIndex < 0)
+            return;
+        // A resize invalidates the glide target; keep the view still until
+        // the row unit settles, then snap to the cursor.
+        root.stopGlide();
+        resizeRecenter.restart();
     }
 
     Timer {
@@ -790,7 +804,7 @@ Item {
         repeat: false
         onTriggered: {
             if (root.currentIndex >= 0)
-                root.recenter(100);
+                root.recenterNow();
         }
     }
 

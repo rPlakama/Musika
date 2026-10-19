@@ -65,7 +65,7 @@ pub(super) async fn apply_window(
         .filter(|song| pending.contains(*song))
         .cloned()
         .collect();
-    eprintln!(
+    crate::debug_log!(
         "downloads: {} of {} visible songs cached; {} of {} albums fully cached; {} in flight",
         songs_done.len(),
         songs.len(),

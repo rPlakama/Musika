@@ -51,7 +51,7 @@ pub(super) fn online_authenticated(
     if announce_login {
         invoker.invoke_method("login_succeeded");
     }
-    eprintln!("login: online mode — server available");
+    crate::debug_log!("login: online mode — server available");
     spawn_sync(sync_finish, sync_progress, client, true);
 }
 
@@ -91,7 +91,7 @@ pub(super) fn spawn_sync(
 
         match crate::index::sync_library(&dbs, client, progress).await {
             Ok(report) => {
-                eprintln!(
+                crate::debug_log!(
                     "index: library updated: {} artists, {} albums, {} songs, {} lyrics, {} new covers, {} playlists",
                     report.artists,
                     report.albums,

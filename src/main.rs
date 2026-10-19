@@ -28,6 +28,7 @@ mod consts;
 mod covers;
 mod crypto;
 mod db;
+mod debug;
 mod download;
 mod fanout;
 mod http_client;

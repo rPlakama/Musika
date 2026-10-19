@@ -255,6 +255,11 @@ Item {
     /// `recenter()` sets it for layout repairs (a width change re-wraps the
     /// lyric rows); it clears when the glide finishes or is stopped.
     property int glideOverrideMs: 0
+    /// Host policy for width-triggered repair. A fixed-row list only changes
+    /// its elide on width, so it stays off; grids reflow by cell size and
+    /// opt in by default, while variable-row hosts (lyrics) bind their own
+    /// guard (synced, active, not held).
+    property bool recenterOnWidth: root.layout === "grid"
     /// Extra spacing between list rows (0 = the delegate owns it); grid
     /// cells are placed by `cellHeight`.
     property real rowSpacing: 0
@@ -761,10 +766,12 @@ Item {
     // A resize changes the row/cell unit while `contentY` stays put, so every
     // row's y moves under the cursor. Coalesce the resize ticks, then
     // re-centre the cursor once the new layout settles. This lives in the
-    // shared modal so every fixed-row host gets it, not just one tab.
+    // shared modal so every fixed-row host gets it, not just one tab. Width
+    // is host-gated: grids reflow by cell size, lyrics re-wrap their lines,
+    // while a fixed-row list only changes its elide on width.
+    onWidthChanged: if (root.recenterOnWidth) root._scheduleResizeRecenter()
     onAdaptiveRowHeightChanged: root._scheduleResizeRecenter()
     onCellHeightChanged: root._scheduleResizeRecenter()
-    onCellWidthChanged: root._scheduleResizeRecenter()
     onColumnsChanged: root._scheduleResizeRecenter()
 
     function _scheduleResizeRecenter() {

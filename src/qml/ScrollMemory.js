@@ -27,6 +27,17 @@
 var SCROLL_TTL_MS = 30 * 24 * 60 * 60 * 1000
 var SCROLL_MAX_ENTRIES = 200
 
+/// The main segments always open on row 0 after a restart, like an order
+/// reset. Their in-session memory still works; entry pages, the queue and
+/// the fullscreen panes keep their persisted spot. Only the cursor/offset is
+/// reset; the saved layout (list/grid) survives.
+var STARTUP_ROW_ZERO = {
+    albums: true,
+    songs: true,
+    artists: true,
+    playlists: true
+}
+
 var scrollPositions = ({})
 
 function now() {
@@ -117,13 +128,18 @@ function hydrate(raw) {
     if (!parsed || typeof parsed !== "object")
         return
     for (var key in parsed) {
+        // A live in-session value wins over the last persisted snapshot;
+        // re-hydrating a second body must not rewind the surface.
+        if (scrollPositions[key] !== undefined)
+            continue
         var entry = parsed[key]
         if (!entry || typeof entry.index !== "number"
                 || typeof entry.y !== "number")
             continue
+        var startup = STARTUP_ROW_ZERO[key] === true
         scrollPositions[key] = {
-            index: entry.index,
-            y: entry.y,
+            index: startup ? -1 : entry.index,
+            y: startup ? 0 : entry.y,
             scope: typeof entry.scope === "number" ? entry.scope : -1,
             layout: typeof entry.layout === "string" ? entry.layout : "",
             savedAt: typeof entry.savedAt === "number" ? entry.savedAt : now()

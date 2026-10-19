@@ -81,6 +81,16 @@ pub fn runtime() -> &'static Runtime {
 }
 
 fn main() {
+    // CLI probe before any Qt/database work, so `musika --version` also
+    // works on a headless host.
+    if std::env::args()
+        .skip(1)
+        .any(|arg| arg == "--version" || arg == "-V")
+    {
+        println!("musika {}", env!("CARGO_PKG_VERSION"));
+        return;
+    }
+
     dotenvy::dotenv().ok();
 
     if std::env::var("QSG_RHI_BACKEND").is_err() {

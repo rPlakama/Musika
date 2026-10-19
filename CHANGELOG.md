@@ -3,6 +3,16 @@
 All notable changes to Musika, newest first. `TASKLISTMAJOR.md` tracks the
 open work; this file is the release history.
 
+## 0.3.8 — _Improving general search and row conformity_
+
+All commits since `v0.3.7`:
+
+- `a588f7e` Scroll: re-centre the cursor after a row-unit resize
+- `659ea69` Search: default to the hybrid Nucleo + FTS engine
+- `81af5af` Restore the FTS table and keep debug logs gated
+- `43623b8` Revert "Search: make Tantivy the only engine"
+- `bf31f11` Search: make Tantivy the only engine
+
 ## 0.3.7 — _Rouding the Edge... Balling the steel... Run._
 
 All commits since `v0.3.6`:

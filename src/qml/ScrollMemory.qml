@@ -28,8 +28,10 @@ import "ScrollMemory.js" as Memory
 // here to fight teleports or user input.
 //
 // ARC-UI-7.5: the JS dict is the hot store; the QtCore.Settings copy makes
-// it survive a restart. Writes are coalesced (500 ms) and the store prunes
-// old surfaces on load/save.
+// the entry pages, queue and fullscreen panes survive a restart. The main
+// Albums/Songs/Artists/Playlists segments always reopen on row 0 (their
+// in-session memory still works); writes are coalesced (500 ms) and the
+// store prunes old surfaces on load/save.
 QtObject {
     id: root
 

@@ -211,10 +211,20 @@ impl Player {
         self.revision
     }
 
-    /// Re-resolves every queued track's cover URL from a fresh map: a wipe or
-    /// a cover sync invalidates the snapshot taken when the queue was built.
-    pub fn refresh_cover_urls(&mut self, covers: &std::collections::HashMap<String, String>) {
+    /// Re-resolves every queued track's cover id and URL: a wipe or a sync can
+    /// change the album's `coverArt` id under a queue built earlier.
+    pub fn refresh_cover_arts(
+        &mut self,
+        album_covers: &std::collections::HashMap<String, String>,
+        covers: &std::collections::HashMap<String, String>,
+    ) {
         for track in &mut self.queue {
+            if let Some(cover) = album_covers
+                .get(&track.album_id)
+                .filter(|cover| !cover.is_empty())
+            {
+                track.cover_art = cover.clone();
+            }
             track.cover_url = covers.get(&track.cover_art).cloned().unwrap_or_default();
         }
         self.revision += 1;

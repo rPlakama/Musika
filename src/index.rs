@@ -119,7 +119,7 @@ where
                 .await
                 .unwrap_or(true)
             {
-                refresh_covers(dbs, &client).await
+                refresh_covers(dbs, &client, &[]).await
             } else {
                 CoverReport::default()
             };
@@ -178,7 +178,7 @@ where
 
     // 1. library metadata
     report(&mut progress, "Indexing library…", 65);
-    crate::library::replace(
+    let changes = crate::library::replace(
         &dbs.library,
         &artists,
         &albums,
@@ -186,6 +186,29 @@ where
         indexes.last_modified,
     )
     .await?;
+
+    // The API changed these rows: drop their descriptions and lyrics so the
+    // next read fetches the current text instead of serving stale cache.
+    if !changes.albums.is_empty() {
+        best_effort(
+            "album info invalidation failed",
+            crate::library::invalidate_album_info(&dbs.library, &changes.albums),
+        )
+        .await;
+        best_effort("lyric invalidation failed", async {
+            let grouped = crate::library::album_song_ids_of(&dbs.library, &changes.albums).await?;
+            let ids: Vec<String> = grouped.into_values().flatten().collect();
+            crate::lyrics::invalidate_songs(&dbs.lyrics, &ids).await
+        })
+        .await;
+    }
+    if !changes.artists.is_empty() {
+        best_effort(
+            "artist info invalidation failed",
+            crate::library::invalidate_artist_info(&dbs.library, &changes.artists),
+        )
+        .await;
+    }
 
     // 1b. UI-60: the server's artist `userRating` snapshots seed the local
     // `artist_user` overlay (a rating made elsewhere lands here).
@@ -218,7 +241,7 @@ where
 
     // 4. cover cache, only now that the sync has otherwise succeeded
     report(&mut progress, "Caching covers…", 80);
-    let covers = refresh_covers(dbs, &client).await;
+    let covers = refresh_covers(dbs, &client, &changes.covers).await;
 
     // 5. lyric cache: drop entries for songs that left the library
     best_effort("lyric cache purge failed", crate::lyrics::purge(dbs)).await;
@@ -317,7 +340,7 @@ where
 ///
 /// Failures are logged and swallowed: the library and search databases are
 /// already consistent, and a cover cache problem is not fatal.
-async fn refresh_covers(dbs: &Dbs, client: &Arc<SubsonicClient>) -> CoverReport {
+async fn refresh_covers(dbs: &Dbs, client: &Arc<SubsonicClient>, forced: &[String]) -> CoverReport {
     let referenced = match crate::library::referenced_cover_ids(&dbs.library).await {
         Ok(referenced) => referenced,
         Err(err) => {
@@ -326,7 +349,7 @@ async fn refresh_covers(dbs: &Dbs, client: &Arc<SubsonicClient>) -> CoverReport 
         }
     };
 
-    match crate::covers::refresh(&dbs.covers, client, &referenced).await {
+    match crate::covers::refresh(&dbs.covers, client, &referenced, forced).await {
         Ok(report) => {
             let _ = crate::library::touch_cover_check(&dbs.library).await;
             report

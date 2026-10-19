@@ -316,6 +316,24 @@ pub async fn invalidate(lyrics: &SqlitePool, song_id: &str) -> Result<()> {
     crate::cache::delete_by(lyrics, "DELETE FROM lyrics WHERE song_id = ?1", song_id).await
 }
 
+/// Drops cached lyrics for songs the API just changed, so the next play and
+/// the sync backfill fetch them again.
+pub async fn invalidate_songs(lyrics: &SqlitePool, song_ids: &[String]) -> Result<()> {
+    if song_ids.is_empty() {
+        return Ok(());
+    }
+    let mut tx = lyrics.begin().await?;
+    crate::cache::delete_in(
+        &mut *tx,
+        "DELETE FROM lyric_line WHERE song_id IN (",
+        song_ids,
+    )
+    .await?;
+    crate::cache::delete_in(&mut *tx, "DELETE FROM lyrics WHERE song_id IN (", song_ids).await?;
+    tx.commit().await?;
+    Ok(())
+}
+
 // ---------------------------------------------------------------------------
 // Store / load
 // ---------------------------------------------------------------------------
@@ -923,6 +941,23 @@ mod tests {
 
         invalidate(&pool, "s9").await.unwrap();
         assert!(load_cached(&pool, "s9").await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn invalidate_songs_drops_only_the_changed_documents() {
+        let pool = lyrics_pool().await;
+        for id in ["s1", "s2", "s3"] {
+            store(&pool, &Document::plain(id, "subsonic", "text"))
+                .await
+                .unwrap();
+        }
+
+        invalidate_songs(&pool, &["s1".to_string(), "s3".to_string()])
+            .await
+            .unwrap();
+        assert!(load_cached(&pool, "s1").await.unwrap().is_none());
+        assert!(load_cached(&pool, "s2").await.unwrap().is_some());
+        assert!(load_cached(&pool, "s3").await.unwrap().is_none());
     }
 
     #[tokio::test]

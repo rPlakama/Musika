@@ -55,6 +55,20 @@ pub fn push_in_list(builder: &mut sqlx::QueryBuilder<sqlx::Sqlite>, ids: &[Strin
     separated.push_unseparated(")");
 }
 
+/// Deletes rows matched by an `... IN (` prefix and the bound ids.
+pub async fn delete_in<'e, E>(executor: E, sql: &'static str, ids: &[String]) -> Result<()>
+where
+    E: sqlx::Executor<'e, Database = sqlx::Sqlite>,
+{
+    if ids.is_empty() {
+        return Ok(());
+    }
+    let mut builder = sqlx::QueryBuilder::new(sql);
+    push_in_list(&mut builder, ids);
+    builder.build().execute(executor).await?;
+    Ok(())
+}
+
 /// Inserts `rows` under a static `INSERT ...` prefix, in bounded batches.
 pub async fn insert_many<T, F>(
     tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,

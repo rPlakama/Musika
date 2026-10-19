@@ -316,8 +316,13 @@ Item {
                 ? Math.max(1, root.cellHeight > 0 ? root.cellHeight : root.cellWidth)
                 : Math.max(1, root.adaptiveRowHeight);
             var tail = Math.ceil(v.height / rowH) + 1;
+            // Near the end the realised rows are authoritative: their
+            // accumulated per-row rounding can leave the live extent above
+            // the count x unit estimate. Taking the min there clamped the
+            // follow short, so the last rows could never centre (worse under
+            // the adaptive squeeze, where the unit is fractional).
             if (root.currentIndex >= Math.max(0, root.count - tail))
-                return Math.min(auto, live);
+                return live;
         }
         return auto;
     }

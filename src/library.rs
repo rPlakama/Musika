@@ -40,16 +40,86 @@ pub struct SongSearchRow {
     pub play_count: Option<i64>,
 }
 
+/// What an API refresh changed, so the derived caches can be invalidated.
+#[derive(Debug, Default, Clone)]
+pub struct SyncChanges {
+    pub albums: Vec<String>,
+    pub artists: Vec<String>,
+    /// Cover ids whose album art changed or appeared.
+    pub covers: Vec<String>,
+}
+
+#[derive(Debug, FromRow)]
+struct AlbumSnapshot {
+    id: String,
+    artist_id: Option<String>,
+    name: String,
+    artist: Option<String>,
+    year: Option<i32>,
+    genre: Option<String>,
+    song_count: i64,
+    duration: i64,
+    cover_art: Option<String>,
+}
+
+#[derive(Debug, FromRow)]
+struct ArtistSnapshot {
+    id: String,
+    name: String,
+    album_count: i32,
+    cover_art: Option<String>,
+    image_url: Option<String>,
+}
+
+fn album_changed(old: &AlbumSnapshot, new: &AlbumID3) -> bool {
+    old.artist_id != new.artist_id
+        || old.name != new.name
+        || old.artist != new.artist
+        || old.year != new.year
+        || old.genre != new.genre
+        || old.song_count != i64::from(new.song_count)
+        || old.duration != i64::from(new.duration)
+        || old.cover_art != new.cover_art
+}
+
+fn artist_changed(old: &ArtistSnapshot, new: &ArtistID3) -> bool {
+    old.name != new.name
+        || old.album_count != new.album_count
+        || old.cover_art != new.cover_art
+        || old.image_url != new.artist_image_url
+}
+
 /// Replaces all library tables in a single transaction and stores the sync
 /// bookkeeping values.
+///
+/// Returns the album/artist/cover ids that changed so the caller can refresh
+/// the derived caches (covers, lyrics, descriptions) for exactly those rows.
 pub async fn replace(
     pool: &SqlitePool,
     artists: &[ArtistID3],
     albums: &[AlbumID3],
     songs: &[Child],
     last_modified: i64,
-) -> Result<()> {
+) -> Result<SyncChanges> {
     let mut tx = pool.begin().await?;
+
+    let old_albums: HashMap<String, AlbumSnapshot> = sqlx::query_as::<_, AlbumSnapshot>(
+        "SELECT id, artist_id, name, artist, year, genre, song_count, duration, cover_art
+         FROM albums",
+    )
+    .fetch_all(&mut *tx)
+    .await?
+    .into_iter()
+    .map(|album| (album.id.clone(), album))
+    .collect();
+    let old_artists: HashMap<String, ArtistSnapshot> = sqlx::query_as::<_, ArtistSnapshot>(
+        "SELECT id, name, album_count, cover_art, image_url FROM artists",
+    )
+    .fetch_all(&mut *tx)
+    .await?
+    .into_iter()
+    .map(|artist| (artist.id.clone(), artist))
+    .collect();
 
     sqlx::query("DELETE FROM songs").execute(&mut *tx).await?;
     sqlx::query("DELETE FROM albums").execute(&mut *tx).await?;
@@ -129,7 +199,31 @@ pub async fn replace(
     .await?;
 
     tx.commit().await?;
-    Ok(())
+
+    let mut changes = SyncChanges::default();
+    for album in albums {
+        match old_albums.get(&album.id) {
+            Some(old) if !album_changed(old, album) => continue,
+            _ => {}
+        }
+        changes.albums.push(album.id.clone());
+        let cover_changed = old_albums
+            .get(&album.id)
+            .map(|old| old.cover_art != album.cover_art)
+            .unwrap_or(true);
+        if cover_changed
+            && let Some(cover) = album.cover_art.clone().filter(|cover| !cover.is_empty())
+        {
+            changes.covers.push(cover);
+        }
+    }
+    for artist in artists {
+        match old_artists.get(&artist.id) {
+            Some(old) if !artist_changed(old, artist) => {}
+            _ => changes.artists.push(artist.id.clone()),
+        }
+    }
+    Ok(changes)
 }
 
 /// ARC-I-4: the local half of the favourite toggle. The UI reads
@@ -219,6 +313,26 @@ pub async fn album_song_ids(pool: &SqlitePool, album_id: &str) -> Result<Vec<Str
         .fetch_all(pool)
         .await?;
     Ok(ids)
+}
+
+/// The current `coverArt` id of many albums in one query (queue refresh).
+pub async fn album_covers(
+    pool: &SqlitePool,
+    album_ids: &[String],
+) -> Result<std::collections::HashMap<String, String>> {
+    if album_ids.is_empty() {
+        return Ok(std::collections::HashMap::new());
+    }
+    let mut covers = std::collections::HashMap::new();
+    for chunk in album_ids.chunks(500) {
+        let mut builder = sqlx::QueryBuilder::new(
+            "SELECT id, cover_art FROM albums WHERE cover_art IS NOT NULL AND id IN (",
+        );
+        crate::cache::push_in_list(&mut builder, chunk);
+        let rows: Vec<(String, String)> = builder.build_query_as().fetch_all(pool).await?;
+        covers.extend(rows);
+    }
+    Ok(covers)
 }
 
 /// The tracklists of many albums in one query — the mark window's album
@@ -885,6 +999,12 @@ pub async fn artist_info(pool: &SqlitePool, artist_id: &str) -> Result<Option<Ar
     Ok(row)
 }
 
+/// Drops cached biographies for artists the API just changed, so the next
+/// open refetches the description.
+pub async fn invalidate_artist_info(pool: &SqlitePool, ids: &[String]) -> Result<()> {
+    crate::cache::delete_in(pool, "DELETE FROM artist_info WHERE artist_id IN (", ids).await
+}
+
 /// Drops cached biographies for artists that left the library. Only called
 /// after a fully successful sync (the covers/lyrics/colors rule).
 pub async fn purge_stale_artist_info(pool: &SqlitePool) -> Result<u64> {
@@ -991,6 +1111,49 @@ mod tests {
             .unwrap();
         assert_eq!(songs, 1);
         assert_eq!(last_modified(&pool).await.unwrap(), 42);
+    }
+
+    #[tokio::test]
+    async fn replace_reports_changed_albums_artists_and_covers() {
+        let pool = memory_pool().await;
+        let album = |cover: &str| AlbumID3 {
+            id: "al1".into(),
+            name: "Kid A".into(),
+            cover_art: Some(cover.into()),
+            ..AlbumID3::default()
+        };
+        let artist = |name: &str| ArtistID3 {
+            id: "ar1".into(),
+            name: name.into(),
+            ..ArtistID3::default()
+        };
+
+        let first = replace(&pool, &[artist("Radiohead")], &[album("cov-a")], &[], 1)
+            .await
+            .unwrap();
+        assert_eq!(first.albums, vec!["al1".to_string()]);
+        assert_eq!(first.artists, vec!["ar1".to_string()]);
+        assert_eq!(first.covers, vec!["cov-a".to_string()]);
+
+        let unchanged = replace(&pool, &[artist("Radiohead")], &[album("cov-a")], &[], 2)
+            .await
+            .unwrap();
+        assert!(unchanged.albums.is_empty());
+        assert!(unchanged.artists.is_empty());
+        assert!(unchanged.covers.is_empty());
+
+        let changed = replace(&pool, &[artist("Radiohead")], &[album("cov-b")], &[], 3)
+            .await
+            .unwrap();
+        assert_eq!(changed.albums, vec!["al1".to_string()]);
+        assert_eq!(changed.covers, vec!["cov-b".to_string()]);
+
+        let renamed = replace(&pool, &[artist("Radio Head")], &[album("cov-b")], &[], 4)
+            .await
+            .unwrap();
+        assert!(renamed.albums.is_empty());
+        assert_eq!(renamed.artists, vec!["ar1".to_string()]);
+        assert!(renamed.covers.is_empty());
     }
 
     #[tokio::test]
@@ -1228,7 +1391,15 @@ mod tests {
         assert_eq!(row.biography, "Updated bio.");
         assert_eq!(row.url, "");
 
+        invalidate_artist_info(&pool, &["a1".to_string()])
+            .await
+            .unwrap();
+        assert!(artist_info(&pool, "a1").await.unwrap().is_none());
+
         // The artist left the library: the cached biography goes with it.
+        upsert_artist_info(&pool, "a1", "Stale bio.", "")
+            .await
+            .unwrap();
         sqlx::query("DELETE FROM artists WHERE id = 'a1'")
             .execute(&pool)
             .await
@@ -1334,6 +1505,12 @@ pub async fn upsert_album_info(pool: &SqlitePool, album_id: &str, notes: &str) -
     Ok(())
 }
 
+/// PATH-8: drops cached descriptions for albums the API just changed, so the
+/// next open refetches the notes.
+pub async fn invalidate_album_info(pool: &SqlitePool, ids: &[String]) -> Result<()> {
+    crate::cache::delete_in(pool, "DELETE FROM album_info WHERE album_id IN (", ids).await
+}
+
 /// PATH-8: drops cached descriptions whose album left the library.
 pub async fn purge_stale_album_info(pool: &SqlitePool) -> Result<u64> {
     let result = sqlx::query(
@@ -1390,6 +1567,11 @@ mod path_tests {
         upsert_album_info(&pool, "al1", "notes").await.unwrap();
         let (notes, _) = album_info(&pool, "al1").await.unwrap().unwrap();
         assert_eq!(notes, "notes");
+
+        invalidate_album_info(&pool, &["al1".to_string()])
+            .await
+            .unwrap();
+        assert!(album_info(&pool, "al1").await.unwrap().is_none());
 
         upsert_album_info(&pool, "gone", "stale").await.unwrap();
         assert_eq!(purge_stale_album_info(&pool).await.unwrap(), 1);

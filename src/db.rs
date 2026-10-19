@@ -215,15 +215,25 @@ async fn delete_tables(pool: &SqlitePool, tables: &[&'static str]) -> Result<()>
     Ok(())
 }
 
-/// Wipes only the library metadata: artists, albums, songs, artist info and
-/// the sync bookkeeping. The next sync repopulates it; the derived
-/// `index.txt` mirror goes with it.
+/// Wipes only the library metadata: artists, albums, songs, artist/album
+/// descriptions and the sync bookkeeping. The next sync repopulates it; the
+/// derived cover, lyric and color caches and the `index.txt` mirror go with
+/// it.
 pub async fn wipe_library(dbs: &Dbs) -> Result<()> {
     delete_tables(
         &dbs.library,
-        &["songs", "albums", "artists", "artist_info", "meta"],
+        &[
+            "songs",
+            "albums",
+            "artists",
+            "artist_info",
+            "album_info",
+            "meta",
+        ],
     )
     .await?;
+    delete_tables(&dbs.lyrics, &["lyric_line", "lyrics"]).await?;
+    wipe_covers(dbs).await?;
     crate::search::index::clear();
     remove_mirror();
     Ok(())
@@ -241,11 +251,13 @@ pub async fn wipe_indexes(dbs: &Dbs) -> Result<()> {
 /// Wipes the cover-art cache: its index, the blob directory and the
 /// cover-derived color cache, all refetched on demand.
 pub async fn wipe_covers(dbs: &Dbs) -> Result<()> {
-    delete_tables(
-        &dbs.covers,
-        &["covers", "cover_color", "color_seed", "colors_meta"],
-    )
-    .await?;
+    delete_tables(&dbs.covers, &["covers"]).await?;
+    delete_tables(&dbs.library, &["cover_color", "color_seed", "colors_meta"]).await?;
+    // The next sync must refill the cache even when the library is unchanged
+    // (otherwise the 24 h revalidation gate would keep it empty).
+    sqlx::query("DELETE FROM meta WHERE key = 'covers_checked_at'")
+        .execute(&dbs.library)
+        .await?;
     remove_dir(&covers_dir()?)?;
     Ok(())
 }

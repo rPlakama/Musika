@@ -453,6 +453,8 @@ Rectangle {
                 if (state.id === root.albumId) {
                     root.albumStarred = state.starred === true;
                     root.albumRating = Number(state.rating) || 0;
+                    if (state.cover !== undefined)
+                        root.albumCover = state.cover;
                 }
             } else if (channel === "album_cache") {
                 var cache = JSON.parse(payload);

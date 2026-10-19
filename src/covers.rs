@@ -69,11 +69,16 @@ struct CoverRow {
 
 /// Revalidates/downloads every referenced cover and purges the rest.
 ///
+/// `forced` cover ids skip the conditional request and are downloaded again:
+/// the album update that produced them must replace the cached art, even if
+/// the server would answer `304` to a revalidation.
+///
 /// Must only be called at the end of a *successful* library sync.
 pub async fn refresh(
     pool: &SqlitePool,
     client: &Arc<SubsonicClient>,
     referenced: &BTreeSet<String>,
+    forced: &[String],
 ) -> Result<CoverReport> {
     let dir = crate::db::covers_dir()?;
     crate::db::ensure_dir(&dir)?;
@@ -90,6 +95,7 @@ pub async fn refresh(
     );
 
     let ids: Vec<String> = referenced.iter().cloned().collect();
+    let forced: Arc<HashSet<String>> = Arc::new(forced.iter().cloned().collect());
     let mut report = CoverReport::default();
 
     let client = Arc::clone(client);
@@ -97,11 +103,16 @@ pub async fn refresh(
     let results = crate::fanout::map_bounded(ids, move |id| {
         let client = Arc::clone(&client);
         let known = Arc::clone(&known_for_fetch);
+        let forced = Arc::clone(&forced);
         async move {
-            let (etag, last_modified) = known
-                .get(&id)
-                .map(|row| (row.etag.clone(), row.last_modified.clone()))
-                .unwrap_or((None, None));
+            let (etag, last_modified) = if forced.contains(&id) {
+                (None, None)
+            } else {
+                known
+                    .get(&id)
+                    .map(|row| (row.etag.clone(), row.last_modified.clone()))
+                    .unwrap_or((None, None))
+            };
             client
                 .get_cover_art(
                     &id,
@@ -137,7 +148,14 @@ pub async fn refresh(
                     continue;
                 }
 
-                let file = format!("{}.{}", md5_hex(id.as_bytes()), extension);
+                // Content-suffixed: changed art gets a new file/URL, so the
+                // UI can never keep painting the previous image at the old
+                // path (the cover id is not guaranteed to change with it).
+                let file = format!(
+                    "{}.{}",
+                    md5_hex(format!("{id}\0{hash}").as_bytes()),
+                    extension
+                );
                 crate::cache::write_atomic(&dir, &file, &bytes)?;
 
                 upsert(
@@ -380,7 +398,10 @@ pub async fn url_map_of(pool: &SqlitePool, ids: &[String]) -> Result<HashMap<Str
         );
         let rows: Vec<(String, String)> = builder.build_query_as().fetch_all(pool).await?;
         for (id, file) in rows {
-            if let Ok(url) = reqwest::Url::from_file_path(dir.join(&file)) {
+            let path = dir.join(&file);
+            if path.is_file()
+                && let Ok(url) = reqwest::Url::from_file_path(path)
+            {
                 map.insert(id, url.to_string());
             }
         }

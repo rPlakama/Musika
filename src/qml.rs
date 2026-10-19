@@ -1208,8 +1208,50 @@ impl Backend {
         self.sync_message_changed();
         self.refresh_library_status();
         if changed {
+            self.refresh_queue_covers();
             self.library_changed();
         }
+    }
+
+    /// Re-resolves the queue's cover ids and URLs, so replaced or wiped art
+    /// cannot keep rendering from the old file.
+    fn refresh_queue_covers(&mut self) {
+        let invoker = self.get_qml_method_invoker();
+        let tracks: Vec<(String, String)> = self
+            .player
+            .queue()
+            .iter()
+            .map(|track| (track.album_id.clone(), track.cover_art.clone()))
+            .collect();
+        let Some(dbs) = crate::dbs().cloned() else {
+            return;
+        };
+        crate::runtime().spawn(async move {
+            let album_ids: Vec<String> = tracks
+                .iter()
+                .map(|(album_id, _)| album_id.clone())
+                .filter(|id| !id.is_empty())
+                .collect();
+            let albums = crate::library::album_covers(&dbs.library, &album_ids)
+                .await
+                .unwrap_or_default();
+            let cover_ids: Vec<String> = tracks
+                .iter()
+                .map(|(album_id, cover)| {
+                    albums
+                        .get(album_id)
+                        .cloned()
+                        .unwrap_or_else(|| cover.clone())
+                })
+                .filter(|id| !id.is_empty())
+                .collect();
+            let covers = crate::covers::url_map_of(&dbs.covers, &cover_ids)
+                .await
+                .unwrap_or_default();
+            let json = serde_json::json!({ "covers": covers, "albums": albums }).to_string();
+            qtbridge::invoke_method!(invoker, "applyQueueCovers", json);
+        });
+        self.request_colors();
     }
 
     /// Destructive maintenance (the SuperiorBar trashcan's quadrant menu —
@@ -1290,41 +1332,26 @@ impl Backend {
         // palette are re-emitted here so nothing keeps rendering wiped data.
         self.library_sync_finished(
             match scope.as_str() {
-                "library" => "Library metadata wiped — run a sync to refetch.".to_string(),
+                "library" => {
+                    "Library, cover, lyric and description caches wiped — run a sync to refetch."
+                        .to_string()
+                }
                 "indexes" => "Search indexes wiped — rebuilt on the next sync.".to_string(),
                 "covers" => "Cover cache wiped — art refetches on demand.".to_string(),
                 other => format!("Wiped {other}."),
             },
             true,
         );
-        // Re-resolve the queue's cover URLs against the (possibly empty)
-        // covers index, then republish the queue and the palette.
-        let invoker = self.get_qml_method_invoker();
-        let cover_ids: Vec<String> = self
-            .player
-            .queue()
-            .iter()
-            .map(|track| track.cover_art.clone())
-            .filter(|id| !id.is_empty())
-            .collect();
-        if let Some(dbs) = crate::dbs().cloned() {
-            crate::runtime().spawn(async move {
-                let covers = crate::covers::url_map_of(&dbs.covers, &cover_ids)
-                    .await
-                    .unwrap_or_default();
-                let json = serde_json::to_string(&covers).unwrap_or_default();
-                qtbridge::invoke_method!(invoker, "applyQueueCovers", json);
-            });
-        }
-        self.request_colors();
     }
 
-    /// Applies re-resolved queue cover URLs (the wipe reload path).
+    /// Applies re-resolved queue cover ids and URLs (sync/wipe reload path).
     #[qslot(qml_name = "applyQueueCovers")]
     fn apply_queue_covers(&mut self, covers_json: String) {
-        let covers: std::collections::HashMap<String, String> =
-            serde_json::from_str(&covers_json).unwrap_or_default();
-        self.player.refresh_cover_urls(&covers);
+        let payload: serde_json::Value =
+            serde_json::from_str(&covers_json).unwrap_or(serde_json::Value::Null);
+        let covers = serde_json::from_value(payload["covers"].clone()).unwrap_or_default();
+        let albums = serde_json::from_value(payload["albums"].clone()).unwrap_or_default();
+        self.player.refresh_cover_arts(&albums, &covers);
         self.sync_player();
         self.emit_queue(false);
     }
@@ -1837,7 +1864,30 @@ impl Backend {
             let rating = crate::library::album_rating(&dbs.library, &album_id)
                 .await
                 .unwrap_or(0);
-            Ok(album_state_payload(&album_id, starred, rating))
+            // Re-resolve the header cover here too: a sync can replace the
+            // art (or a wipe can drop it) while the page stays open.
+            let cover_ids: Vec<String> = crate::library::album(&dbs.library, &album_id)
+                .await
+                .ok()
+                .flatten()
+                .and_then(|album| album.cover_art)
+                .into_iter()
+                .collect();
+            let covers = crate::covers::url_map_of(&dbs.covers, &cover_ids)
+                .await
+                .unwrap_or_default();
+            let cover = cover_ids
+                .first()
+                .and_then(|id| covers.get(id))
+                .cloned()
+                .unwrap_or_default();
+            Ok(serde_json::json!({
+                "id": album_id,
+                "starred": starred,
+                "rating": rating,
+                "cover": cover,
+            })
+            .to_string())
         });
     }
 

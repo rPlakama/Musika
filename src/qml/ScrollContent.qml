@@ -758,6 +758,30 @@ Item {
     onRowRefHeightChanged: captureRowBase()
     onMemoryKeyChanged: applySavedLayout()
 
+    // A resize changes the row/cell unit while `contentY` stays put, so every
+    // row's y moves under the cursor. Coalesce the resize ticks, then
+    // re-centre the cursor once the new layout settles. This lives in the
+    // shared modal so every fixed-row host gets it, not just one tab.
+    onAdaptiveRowHeightChanged: root._scheduleResizeRecenter()
+    onCellHeightChanged: root._scheduleResizeRecenter()
+    onCellWidthChanged: root._scheduleResizeRecenter()
+    onColumnsChanged: root._scheduleResizeRecenter()
+
+    function _scheduleResizeRecenter() {
+        if (root.currentIndex >= 0)
+            resizeRecenter.restart();
+    }
+
+    Timer {
+        id: resizeRecenter
+        interval: 100
+        repeat: false
+        onTriggered: {
+            if (root.currentIndex >= 0)
+                root.recenter(100);
+        }
+    }
+
     function captureRowBase() {
         if (root._rowBase <= 0 && root.rowRatio > 0 && root.rowViewHeight > 0)
             root._rowBase = root.rowViewHeight * root.rowRatio;

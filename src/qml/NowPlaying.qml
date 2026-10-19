@@ -221,9 +221,8 @@ Rectangle {
     function scrollLyrics(delta) {
         root.holdLyrics();
         var view = lyricsView.view;
-        // Origin-aware range: the unlimited-scrolloff spacers sit above and
-        // below the lines, so the manual scroll reaches them too (originY is
-        // negative with the top spacer).
+        // Origin-aware range (a header/footer would move `originY`); the pane
+        // has none, so this is the plain content range.
         var lo = Math.min(0, view.originY);
         var limit = Math.max(lo, lo + view.contentHeight - view.height);
         view.contentY = Math.max(lo, Math.min(limit, view.contentY + delta));
@@ -387,10 +386,9 @@ Rectangle {
         lyricsAvailable = lyricModel.count > 0 && data.source !== "none";
 
         lyricResume.stop();
-        // A new song carries no cursor: clear it, then centre the opening
-        // line right away — with unlimited scrolloff even row 0 sits at the
-        // pane centre (empty space above it) — and let the first
-        // `followLyric` glide take over once the active phrase moves.
+        // A new song carries no cursor: clear it, then bring the opening line
+        // into view — with the clamped follow row 0 pins to the top — and let
+        // the first `followLyric` glide take over once the active phrase moves.
         lyricsView.stopGlide();
         lyricsView.currentIndex = -1;
         lyricsView.goto(0);
@@ -1122,11 +1120,9 @@ Rectangle {
                                 visible: root.lyricsAvailable
                                 model: lyricModel
                                 rowSpacing: root.lyricSize * 0.9
-                                // Unlimited scrolloff: the active phrase is
-                                // always centred, the opening and closing
-                                // lines included — half a pane of empty
-                                // space sits above row 0 and below the last.
-                                unlimitedScrolloff: true
+                                // Centred follow, clamped at the pane ends:
+                                // the opening and closing lines pin to the
+                                // edge instead of leaving an empty gap.
                                 // LYR-8: the soothing lyrics follow — the
                                 // shared glide at 300 ms that centres the
                                 // phrase with the OutBack spring. The pane's

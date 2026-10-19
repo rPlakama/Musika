@@ -22,9 +22,9 @@ import "Theme.js" as Theme
 //
 // The model is a viewport (a Rectangle of variable width/height) holding rows
 // of variable height. The cursor is the single source of truth; the viewport
-// follows it by keeping the cursor row in the middle. Half a viewport of empty
-// space sits above row 0 and below the last row, so even the ends can sit in
-// the middle (Neovim `scrolloff=999`: the gap is allowed to happen).
+// follows it by keeping the cursor row in the middle, pinned at the ends: the
+// first row sits flush with the top and the last row flush with the bottom, so
+// no empty gap ever shows (Neovim `scrolloff=999`, clamped to the content).
 //
 // The follow is a frame loop, not a fixed animation: every frame re-reads the
 // live delegate and re-clamps against the current extent, so a resize, a late
@@ -110,12 +110,7 @@ Item {
     /// One-shot duration for the next glide (0 = `followMs`).
     property int glideOverrideMs: 0
 
-    /// Half a viewport of empty space at each end, so the first/last row can
-    /// sit in the middle. The list carries it as header/footer; the grid uses
-    /// the Flickable margins (GridView has no header).
-    readonly property real _edgeMargin: root.height * 0.5
-
-    /// Kept for host compatibility: every surface now uses the end spacers.
+    /// Kept for host compatibility; the follow is always centred now.
     property bool unlimitedScrolloff: false
 
     FrameAnimation {
@@ -127,15 +122,12 @@ Item {
     property real _followElapsed: 0
     property int _followDuration: 0
 
-    /// The scroll range of the viewpor. The half-viewport end spacers let
-    /// `contentY` run from `-margin` (end gap on screen) to the last row's
-    /// centre; a list folds both spacers into `contentHeight`, a grid keeps
-    /// them in the Flickable margins, hence the `+2m` below.
+    /// The scroll range: no end padding. `contentY` never leaves the content,
+    /// so near the top/bottom the viewport stops and the cursor moves inside
+    /// the edge instead of the view following it.
     function _bounds(v) {
-        var m = root._edgeMargin;
-        var extent = root.contentExtent(v) + (root.layout === "grid" ? 2 * m : 0);
-        var lo = -m;
-        return { lo: lo, hi: Math.max(lo, extent - v.height - m) };
+        var extent = root.contentExtent(v);
+        return { lo: 0, hi: Math.max(0, extent - v.height) };
     }
 
     /// The centre target, clamped to the scroll range. `null` when the
@@ -239,23 +231,26 @@ Item {
         root._resizeRepair = false;
     }
 
-    /// Centre the cursor through Qt's own geometry. A resize invalidates the
-    /// delegate positions for a few frames, so the caller ticks this until the
-    /// layout settles.
-    function _centerNow() {
-        var v = root.view;
-        if (!v || root.currentIndex < 0 || root.isLanding)
+    /// Re-run the centre follow for the current cursor. `duration` overrides
+    /// `followMs` for this pass — used when a layout change (a width change
+    /// re-wraps variable-height rows) moves the cursor off centre.
+    function recenter(duration) {
+        if (root.currentIndex < 0 || !root.view || root.isLanding)
             return;
-        if (!v.itemAtIndex(root.currentIndex))
-            root._landUnrealised(v, root.currentIndex);
-        v.positionViewAtIndex(root.currentIndex, ListView.Center);
-        if (root.memoryKey)
-            root._scheduleRemember();
+        root.glideOverrideMs = Math.max(0, duration);
+        root._glideTo(root.view, root.currentIndex);
+        if (!centerGlide.running)
+            root.glideOverrideMs = 0;
     }
 
-    /// Public re-centre seam (hosts/layout repairs).
-    function recenter(duration) {
-        root._centerNow();
+    /// Resize repair: snap, never glide. A changing row unit invalidates the
+    /// in-flight target, and a glide toward a stale extent can leave the row
+    /// visibly stuck; the next user action resumes the normal follow.
+    function recenterNow() {
+        if (root.currentIndex < 0 || !root.view || root.isLanding)
+            return;
+        root.glideOverrideMs = 0;
+        root._glideTo(root.view, root.currentIndex, true);
     }
 
     /// The end-of-list settle: `contentHeight` is an estimate until the last
@@ -621,28 +616,24 @@ Item {
     property real rowSpacing: 0
     property real contentHeightHint: 0
 
-    property int _resizeTicks: 0
-
     function _scheduleResizeRecenter() {
         if (root.currentIndex < 0)
             return;
+        // A resize invalidates the glide target; keep the view still until
+        // the row unit settles, then snap to the cursor.
         root.stopGlide();
         root._resizeRepair = true;
-        root._resizeTicks = 10;
-        root._centerNow();
+        root._glideTo(root.view, root.currentIndex, true);
         resizeRecenter.restart();
     }
 
     Timer {
         id: resizeRecenter
-        interval: 50
-        repeat: true
+        interval: 100
+        repeat: false
         onTriggered: {
-            root._centerNow();
-            if (--root._resizeTicks <= 0) {
-                root._resizeRepair = false;
-                resizeRecenter.stop();
-            }
+            if (root.currentIndex >= 0)
+                root.recenterNow();
         }
     }
 
@@ -659,16 +650,6 @@ Item {
 
     ScrollMemory {
         id: scroll
-    }
-
-    // Half a viewport above row 0 and below the last row: the cursor can be
-    // centred even at the ends, and the gap is intentional.
-    Component {
-        id: edgeSpacer
-        Item {
-            width: root.width
-            height: root._edgeMargin
-        }
     }
 
     // UI-48: the stage is the clip owner when bleed is on.
@@ -689,8 +670,6 @@ Item {
             model: root.layout === "grid" ? null : root.model
             delegate: root.rowDelegate
             spacing: root.rowSpacing
-            header: edgeSpacer
-            footer: edgeSpacer
             boundsBehavior: Flickable.StopAtBounds
             highlightFollowsCurrentItem: false
             reuseItems: true
@@ -707,8 +686,6 @@ Item {
             delegate: root.cellDelegate
             cellWidth: root.cellWidth
             cellHeight: root.cellHeight > 0 ? root.cellHeight : root.cellWidth
-            topMargin: root._edgeMargin
-            bottomMargin: root._edgeMargin
             boundsBehavior: Flickable.StopAtBounds
             highlightFollowsCurrentItem: false
             reuseItems: true
@@ -729,7 +706,7 @@ Item {
             if (centerGlide.running || root.isLanding)
                 return;
             if (root._resizeRepair && root.currentIndex >= 0)
-                root._centerNow();
+                root._glideTo(target, root.currentIndex, true);
             else
                 root._clampY(target);
         }

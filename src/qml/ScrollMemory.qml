@@ -127,10 +127,8 @@ QtObject {
         // so the clamp below would be wrong).
         var y = saved.y;
         var apply = function () {
-            // The end spacers let `contentY` go negative (the top gap); Qt
-            // clamps the upper bound itself.
-            view.contentY = Math.max(-view.height * 0.5,
-                Math.min(y, view.contentHeight));
+            view.contentY = Math.max(0, Math.min(y,
+                Math.max(0, view.contentHeight - view.height)));
         };
         apply();
         // Retry once when the list had no real geometry yet; on a laid-out

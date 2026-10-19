@@ -124,6 +124,34 @@ ScrollPanel {
         Backend.TriggerRowReload();
     }
 
+    // A width resize can leave Qt's row extent stale and flick at the list
+    // end. Reload the same order (the order-swap repair) but keep the cursor:
+    // the payload rebuild starts at row 0, so land it back on the saved row.
+    property int _reloadCursor: -1
+    property bool _reloadKeepState: false
+
+    function reloadKeepingCursor() {
+        if (root.currentIndex < 0) {
+            root.reload();
+            return;
+        }
+        root._reloadCursor = root.currentIndex;
+        root._reloadKeepState = true;
+        root.reload();
+    }
+
+    onWidthChanged: {
+        if (root.count > 0 && root.currentIndex >= 0)
+            widthReload.restart();
+    }
+
+    Timer {
+        id: widthReload
+        interval: 150
+        repeat: false
+        onTriggered: root.reloadKeepingCursor()
+    }
+
     Component.onCompleted: root.requestMarkWindow()
     onCurrentIndexChanged: {
         root.requestMarkWindow();
@@ -199,8 +227,14 @@ ScrollPanel {
     cellHeight: root.cellWidth * 0.78 + root.height * 0.085
 
     function setRows(rows) {
-        // VI-4: a reload invalidates the selected range.
-        root.clearSelection();
+        var keep = root._reloadKeepState;
+        var keepAt = root._reloadCursor;
+        root._reloadKeepState = false;
+        root._reloadCursor = -1;
+        // VI-4: a reload invalidates the selected range (a width reload keeps
+        // the same rows, so its range survives).
+        if (!keep)
+            root.clearSelection();
         mediaRows.clear();
         for (var i = 0; i < rows.length; i++)
             mediaRows.append(rows[i]);
@@ -211,6 +245,14 @@ ScrollPanel {
         if (root.resetPending) {
             root.resetPending = false;
             root.resetViewNow();
+            return;
+        }
+        if (keep) {
+            if (root.count > 0) {
+                var index = Math.max(0, Math.min(keepAt, root.count - 1));
+                root.currentIndex = index;
+                root.goto(index);
+            }
             return;
         }
         // UI-54: the first payload after a reopen restores the saved viewport

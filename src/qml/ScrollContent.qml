@@ -25,9 +25,10 @@ import "Theme.js" as Theme
 // memory hooks, the VI-4 selection, the `/` search fields and the adaptive
 // row height); `ScrollMemory` is the only persistent state.
 //
-// Follow: the viewport *is* animated to the cursor's centre — the glide
-// (`followMs`, `Theme.motion.scroll`) with a small OutBack spring, clamped
-// at the content ends (Neovim `'scrolloff': 0.5` semantics, no padding).
+// Follow: the viewport *is* animated to the cursor's centre — a frame-driven
+// glide (`followMs`, `Theme.motion.scroll`) retargeted from the live delegate
+// every frame, clamped at the content ends (Neovim `'scrolloff': 0.5`
+// semantics, no padding).
 // `unlimitedScrolloff` opts out of the edge rule: half a viewport of empty
 // space is reserved above the first row and below the last, so *every* row
 // can reach the centre (the lyrics pane: the active phrase is always
@@ -118,24 +119,41 @@ Item {
         }
     }
 
-    // LYR-8: the centred viewport glide — the one follow. It settles with
-    // a small OutBack overshoot (a spring at the stop) capped tight so a
-    // one-row step barely breathes past the line and retargets mid-flight
-    // stay stable. The content-end clamp eats the overshoot there (the
-    // scrolloff edge rule), so the spring is a mid-list effect; the
-    // `onFinished` settle covers `contentHeight` estimate growth.
-    NumberAnimation {
+    // LYR-8: the centred viewport glide — the one follow. A frame loop, not
+    // a fixed NumberAnimation target: every frame derives the centre from the
+    // live delegate and clamps against the current extent. Resizes, late
+    // delegate realisation and contentHeight estimate growth therefore
+    // retarget the glide instead of leaving it short of a stale position.
+    FrameAnimation {
         id: centerGlide
-        target: root.view
-        property: "contentY"
-        duration: root.glideOverrideMs > 0 ? root.glideOverrideMs : root.followMs
-        // Edge targets must not overshoot (see `_glideTo`); OutBack only in
-        // the mid-list band where the spring is a deliberate affordance.
-        easing.type: root._glideEdge ? Easing.OutCubic : Easing.OutBack
-        easing.overshoot: 1.7
-        onFinished: {
-            root._settleGlide();
+        onTriggered: root._followTick()
+    }
+
+    property real _followStartY: 0
+    property real _followElapsed: 0
+    property int _followDuration: 0
+
+    function _followTick() {
+        var v = root.view;
+        if (!v || root.currentIndex < 0 || root.isLanding) {
+            centerGlide.stop();
+            return;
+        }
+        var target = root._glideTarget(v, root.currentIndex);
+        if (target === null) {
+            centerGlide.stop();
+            return;
+        }
+        root._followElapsed += centerGlide.frameTime * 1000;
+        var t = root._followDuration > 0
+            ? Math.min(1, root._followElapsed / root._followDuration) : 1;
+        var eased = 1 - Math.pow(1 - t, 3);
+        v.contentY = root._followStartY + (target - root._followStartY) * eased;
+        if (t >= 1 || Math.abs(v.contentY - target) < 0.8) {
+            v.contentY = target;
+            centerGlide.stop();
             root.glideOverrideMs = 0;
+            root._settleGlide();
         }
     }
 
@@ -167,30 +185,36 @@ Item {
             });
             return;
         }
-        // The centre target in the same bounds `_clampY` uses. Only the
-        // lyrics scrolloff (opt-in, lyrics pane only) opens the range below
-        // 0, so row 0 and the last row can reach the centre; other hosts
-        // keep the old clamped-to-content behaviour.
+        var target = root._glideTarget(v, index);
+        if (target === null || Math.abs(target - v.contentY) < 1)
+            return;
+        if (instant || Theme.reduceMotion || root.followMs <= 0) {
+            v.contentY = target;
+            root._settleGlide();
+            return;
+        }
+        root._followStartY = v.contentY;
+        root._followElapsed = 0;
+        root._followDuration = root.glideOverrideMs > 0
+            ? root.glideOverrideMs : root.followMs;
+        centerGlide.stop();
+        centerGlide.start();
+    }
+
+    /// The live centre target, clamped to the same bounds as `_clampY`.
+    /// Only the lyrics scrolloff (opt-in, lyrics pane only) opens the range
+    /// below 0, so row 0 and the last row can reach the centre; other hosts
+    /// keep the old clamped-to-content behaviour. `null` when the row is not
+    /// realised yet.
+    function _glideTarget(v, index) {
+        var item = v ? v.itemAtIndex(index) : null;
+        if (!item)
+            return null;
         var lo = root.unlimitedScrolloff ? Math.min(0, v.originY) : 0;
         var extent = root.contentExtent(v);
         var limit = Math.max(lo, lo + extent - v.height);
         var ideal = item.y + item.height * 0.5 - v.height * 0.5;
-        var target = Math.max(lo, Math.min(limit, ideal));
-        if (Math.abs(target - v.contentY) < 1)
-            return;
-        if (instant || Theme.reduceMotion) {
-            v.contentY = target;
-            return;
-        }
-        // The spring is a mid-list affordance. At a content edge the target
-        // is the clamp itself, and an OutBack overshoot would paint past the
-        // last row (the k-from-G gap) before the settle snapped it back.
-        root._glideEdge = Math.abs(target - ideal) > 0.5
-            || target <= lo + 0.5 || target >= limit - 0.5;
-        centerGlide.stop();
-        centerGlide.from = v.contentY;
-        centerGlide.to = target;
-        centerGlide.start();
+        return Math.max(lo, Math.min(limit, ideal));
     }
 
     /// Stop the glide (a manual scroll owns the viewport until the host
@@ -340,9 +364,6 @@ Item {
     /// True while a landing runs: the root index handler must not start a
     /// glide the landing is already positioning (`land` owns the view).
     property bool _instantFollow: false
-    /// The last glide was clamped at a content edge, so it must not use the
-    /// OutBack spring (it would paint past the last row before settling).
-    property bool _glideEdge: false
     /// ARC-UI-7.12: the landing state as a public read-only seam, so outer
     /// chrome can react without polling the private flag.
     readonly property bool isLanding: root._instantFollow
@@ -774,6 +795,7 @@ Item {
     onHeightChanged: {
         if (root.rowRefHeight <= 0)
             captureRowBase();
+        root._scheduleResizeRecenter();
     }
     onRowRefHeightChanged: captureRowBase()
     onMemoryKeyChanged: applySavedLayout()

@@ -302,8 +302,8 @@ Item {
     property real rowSpacing: 0
     /// Fixed-row hosts can pre-calculate the content extent as
     /// `count * rowHeight` before Qt's lazy delegate estimate settles.
-    /// The follow/clamp math prefers this when non-zero; otherwise
-    /// ARC-UI-7.7 derives the same extent from the model count + row size.
+    /// The follow/clamp math prefers this when non-zero; otherwise Qt's own
+    /// contentHeight is the only extent authority (as in 0.3.1).
     property real contentHeightHint: 0
     /// Unlimited scrolloff: no edge rule — the view reserves half a
     /// viewport of empty space above the first row and below the last, so
@@ -312,61 +312,13 @@ Item {
     property bool unlimitedScrolloff: false
     readonly property real _edgeMargin: root.unlimitedScrolloff ? root.height * 0.5 : 0
 
-    /// ARC-UI-7.7: the extent the clamp/centre math should use. Fixed-row
-    /// bodies no longer have to subscribe this themselves; variable-row
-    /// hosts (lyrics) keep the live view estimate.
-    function _autoContentExtent() {
-        if (root.contentHeightHint > 0)
-            return root.contentHeightHint;
-        if (root.rowRatio <= 0 || root.count === 0)
-            return 0;
-        var rowH = root.layout === "grid"
-            ? (root.cellHeight > 0 ? root.cellHeight : root.cellWidth)
-            : root.adaptiveRowHeight;
-        if (rowH <= 0)
-            return 0;
-        var rows = root.layout === "grid"
-            ? Math.ceil(root.count / Math.max(1, root.columns))
-            : root.count;
-        var extent = rows * rowH;
-        if (root.layout !== "grid" && root.count > 1)
-            extent += (root.count - 1) * root.rowSpacing;
-        if (root.unlimitedScrolloff)
-            extent += 2 * root._edgeMargin;
-        return extent;
-    }
+    /// The clamp/centre extent: 0.3.1 used Qt's live contentHeight (or the
+    /// fixed-row hint) and was stable through scroll-up; the derived
+    /// count x row estimate that replaced it disagreed with Qt's own bounds.
     function contentExtent(v) {
         if (root.contentHeightHint > 0)
             return root.contentHeightHint;
-        var auto = root._autoContentExtent();
-        if (auto <= 0)
-            return v ? v.contentHeight : 0;
-        // The last screenful is fully realised, so its final item is
-        // authoritative there (the derived count x row extent can run past
-        // the real bottom by the page-append/rounding remainder, which made
-        // `k` from `G` flick to the wrong scrolloff placement). Mid-list the
-        // derived extent keeps the follow alive while Qt is still estimating;
-        // the live value only grows as delegates realise.
-        var live = v ? v.contentHeight : 0;
-        if (live > 0) {
-            var rowH = root.layout === "grid"
-                ? Math.max(1, root.cellHeight > 0 ? root.cellHeight : root.cellWidth)
-                : Math.max(1, root.adaptiveRowHeight);
-            var tail = Math.ceil(v.height / rowH) + 1;
-            // Near the end the last realised item is the authority: Qt's
-            // contentHeight can keep an inflated estimate after a row-unit
-            // change, which let the viewport scroll past the real bottom and
-            // leave a gap under the final row. The last item's bottom (plus
-            // the scrolloff spacer) glues the end to the viewport edge.
-            if (root.currentIndex >= Math.max(0, root.count - tail)) {
-                var last = v.itemAtIndex(root.count - 1);
-                if (last)
-                    return last.y + last.height
-                        + (root.unlimitedScrolloff ? root._edgeMargin : 0);
-                return live;
-            }
-        }
-        return auto;
+        return v ? v.contentHeight : 0;
     }
 
     /// True while a landing runs: the root index handler must not start a

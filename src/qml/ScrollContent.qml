@@ -186,6 +186,8 @@ Item {
             return;
         }
         var target = root._glideTarget(v, index);
+        if (!instant)
+            root._resizeRepair = false;
         if (target === null || Math.abs(target - v.contentY) < 1)
             return;
         if (instant || Theme.reduceMotion || root.followMs <= 0) {
@@ -222,6 +224,7 @@ Item {
     function stopGlide() {
         centerGlide.stop();
         root.glideOverrideMs = 0;
+        root._resizeRepair = false;
     }
 
     /// Re-run the centre follow for the current cursor. `duration` overrides
@@ -364,6 +367,10 @@ Item {
     /// True while a landing runs: the root index handler must not start a
     /// glide the landing is already positioning (`land` owns the view).
     property bool _instantFollow: false
+    /// A resize can update the row geometry over several frames. While this
+    /// is set, every contentHeight change re-snaps to the cursor instead of
+    /// leaving it one relayout behind.
+    property bool _resizeRepair: false
     /// ARC-UI-7.12: the landing state as a public read-only seam, so outer
     /// chrome can react without polling the private flag.
     readonly property bool isLanding: root._instantFollow
@@ -412,6 +419,7 @@ Item {
         if (index < 0)
             return;
         centerGlide.stop();
+        root._resizeRepair = false;
         root._instantFollow = true;
         root.currentIndex = index;
         var v = root.view;
@@ -817,6 +825,8 @@ Item {
         // A resize invalidates the glide target; keep the view still until
         // the row unit settles, then snap to the cursor.
         root.stopGlide();
+        root._resizeRepair = true;
+        root._glideTo(root.view, root.currentIndex, true);
         resizeRecenter.restart();
     }
 
@@ -927,7 +937,11 @@ Item {
         // the idle viewport past the real end; repair the gap once the
         // estimate settles, never during a glide or landing.
         function onContentHeightChanged() {
-            if (!centerGlide.running && !root.isLanding)
+            if (centerGlide.running || root.isLanding)
+                return;
+            if (root._resizeRepair && root.currentIndex >= 0)
+                root._glideTo(target, root.currentIndex, true);
+            else
                 root._clampY(target);
         }
         function onCurrentIndexChanged() {

@@ -88,15 +88,28 @@ Item {
         if (root.isLanding)
             return;
         var v = root.view;
-        if (v && v.count > 0 && v.currentIndex !== root.currentIndex) {
-            v.currentIndex = root.currentIndex;
-            root._glideTo(v, root.currentIndex, false);
+        if (!v || v.count === 0)
+            return;
+        // A host can write an index past a shrunken payload; the view would
+        // silently clamp its own copy while the body kept the stale one.
+        var index = Math.max(0, Math.min(v.count - 1, root.currentIndex));
+        if (index !== root.currentIndex) {
+            root.currentIndex = index;
+            return;
+        }
+        if (v.currentIndex !== index) {
+            v.currentIndex = index;
+            root._glideTo(v, index, false);
         }
     }
 
     /// The active view (itemAtIndex, positionViewAtIndex, …).
     readonly property var view: root.layout === "grid" ? grid : list
-    onViewChanged: Qt.callLater(root.landCursor)
+    onViewChanged: {
+        // The old view's glide must not write the new view's contentY.
+        root.stopGlide();
+        Qt.callLater(root.landCursor);
+    }
     onLayoutChanged: {
         if (root.memoryKey)
             scroll.rememberLayout(root.memoryKey, root.layout);
@@ -126,18 +139,31 @@ Item {
     /// so near the top/bottom the viewport stops and the cursor moves inside
     /// the edge instead of the view following it.
     function _bounds(v) {
+        if (!v)
+            return { lo: 0, hi: 0 };
         var extent = root.contentExtent(v);
-        return { lo: 0, hi: Math.max(0, extent - v.height) };
+        return { lo: 0, hi: Math.max(0, extent - Math.max(0, v.height)) };
     }
 
     /// The centre target, clamped to the scroll range. `null` when the
-    /// cursor row is not realised yet.
+    /// cursor row is not realised yet (or the view has no geometry).
     function _centerTarget(v, index) {
-        var item = v ? v.itemAtIndex(index) : null;
+        var item = v && v.height > 0 ? v.itemAtIndex(index) : null;
         if (!item)
             return null;
         var b = root._bounds(v);
-        return Math.max(b.lo, Math.min(b.hi,
+        var hi = b.hi;
+        // Qt's contentHeight can keep an inflated estimate after a row-unit
+        // change. Once the real tail is realised, clamp every cursor in the
+        // last screenful against it — not only the final row — so centring
+        // can never scroll past the last row and leave a gap.
+        var last = v.itemAtIndex(v.count - 1);
+        if (last) {
+            var tail = last.y + last.height - v.height;
+            if (tail >= b.lo)
+                hi = Math.min(hi, tail);
+        }
+        return Math.max(b.lo, Math.min(hi,
             item.y + item.height * 0.5 - v.height * 0.5));
     }
 
@@ -162,6 +188,8 @@ Item {
     /// then the caller centres it. Avoids Qt's async `Contain`/`Center`
     /// offsets on a scrolled list.
     function _landUnrealised(v, index) {
+        if (!v || index < 0 || index >= v.count)
+            return;
         v.positionViewAtIndex(index, ListView.Beginning);
         root._clampY(v);
     }
@@ -169,7 +197,8 @@ Item {
     /// Follow the cursor. `instant` snaps instead of gliding; an unrealised
     /// row falls back to an instant reveal first.
     function _glideTo(v, index, instant) {
-        if (!v || v.count === 0 || index < 0 || root.isLanding)
+        if (!v || v.count === 0 || index < 0 || index >= v.count
+                || root.isLanding)
             return;
         centerGlide.stop();
         root._clampY(v);
@@ -201,7 +230,8 @@ Item {
 
     function _followTick() {
         var v = root.view;
-        if (!v || root.currentIndex < 0 || root.isLanding) {
+        if (!v || root.currentIndex < 0 || root.currentIndex >= v.count
+                || root.isLanding) {
             centerGlide.stop();
             return;
         }
@@ -235,10 +265,12 @@ Item {
     /// `followMs` for this pass — used when a layout change (a width change
     /// re-wraps variable-height rows) moves the cursor off centre.
     function recenter(duration) {
-        if (root.currentIndex < 0 || !root.view || root.isLanding)
+        var v = root.view;
+        if (root.currentIndex < 0 || !v || root.currentIndex >= v.count
+                || root.isLanding)
             return;
         root.glideOverrideMs = Math.max(0, duration);
-        root._glideTo(root.view, root.currentIndex);
+        root._glideTo(v, root.currentIndex);
         if (!centerGlide.running)
             root.glideOverrideMs = 0;
     }
@@ -247,25 +279,34 @@ Item {
     /// in-flight target, and a glide toward a stale extent can leave the row
     /// visibly stuck; the next user action resumes the normal follow.
     function recenterNow() {
-        if (root.currentIndex < 0 || !root.view || root.isLanding)
+        var v = root.view;
+        if (root.currentIndex < 0 || !v || root.currentIndex >= v.count
+                || root.isLanding)
             return;
         root.glideOverrideMs = 0;
-        root._glideTo(root.view, root.currentIndex, true);
+        root._glideTo(v, root.currentIndex, true);
     }
 
     /// The end-of-list settle: `contentHeight` is an estimate until the last
-    /// delegates exist. If the cursor ended outside the viewport, let Qt's
-    /// `Contain` reveal it, then clamp and remember.
+    /// delegates exist. Reveal a cursor that ended outside the viewport with a
+    /// direct `contentY` write (Qt's `Contain` parks async offsets on an
+    /// already-scrolled list), then remember the final offset.
     function _settleGlide() {
         var v = root.view;
-        if (!v || root.currentIndex < 0)
+        if (!v || root.currentIndex < 0 || root.currentIndex >= v.count)
             return;
         var item = v.itemAtIndex(root.currentIndex);
-        if (!item)
-            return;
-        if (item.y < v.contentY
-                || item.y + item.height > v.contentY + v.height)
-            v.positionViewAtIndex(root.currentIndex, ListView.Contain);
+        if (!item) {
+            root._landUnrealised(v, root.currentIndex);
+        } else {
+            var b = root._bounds(v);
+            var y = Math.max(b.lo, Math.min(b.hi, v.contentY));
+            if (item.y < y)
+                y = item.y;
+            else if (item.y + item.height > y + v.height)
+                y = item.y + item.height - v.height;
+            v.contentY = Math.max(b.lo, Math.min(b.hi, y));
+        }
         root._clampY(v);
         if (root.memoryKey)
             root._scheduleRemember();
@@ -289,14 +330,18 @@ Item {
     function _land(index, withSettle) {
         if (index < 0)
             return;
+        var v = root.view;
+        if (v && v.count > 0)
+            index = Math.max(0, Math.min(index, v.count - 1));
         centerGlide.stop();
         root._resizeRepair = false;
+        root._modelReset = false;
         root._instantFollow = true;
         root.currentIndex = index;
-        var v = root.view;
+        var unrealised = v && v.count > 0 && !v.itemAtIndex(index);
         if (v && v.count > 0) {
             v.currentIndex = index;
-            if (!v.itemAtIndex(index))
+            if (unrealised)
                 root._landUnrealised(v, index);
             var target = root._centerTarget(v, index);
             if (target !== null)
@@ -306,6 +351,15 @@ Item {
         var settle = withSettle && v && v.count > 0 && index === v.count - 1;
         Qt.callLater(function () {
             root._instantFollow = false;
+            // An unrealised far jump only anchored at the top; re-centre once
+            // the delegate exists (a memory restore owns its own offset).
+            if (withSettle && unrealised && root.currentIndex === index) {
+                var w = root.view;
+                if (w && w.count > 0 && w.itemAtIndex(index))
+                    root._glideTo(w, index, true);
+                else if (w)
+                    root._clampY(w);
+            }
             if (settle)
                 root._settleGlide();
         });
@@ -322,6 +376,8 @@ Item {
         var i = index === undefined ? root.currentIndex : index;
         if (i < 0)
             return;
+        if (root.count > 0)
+            i = Math.max(0, Math.min(i, root.count - 1));
         root._pendingFollow = i;
         root.land(i);
         Qt.callLater(function () {
@@ -338,8 +394,59 @@ Item {
         });
     }
 
-    /// The `goto` intent that hit an empty view; consumed by `onCountChanged`.
+    /// The `goto` intent that hit an empty view; consumed by `_repairCount`.
     property int _pendingFollow: -1
+
+    /// A model rebuild emits `countChanged` per appended row. Coalesce the
+    /// cursor repair into one landing after the batch instead of one per row.
+    property bool _countRepairScheduled: false
+    /// The model was emptied: the host's payload fill follows, so the cursor
+    /// must be re-landed once — unless the host already did (`_land` clears).
+    property bool _modelReset: false
+
+    function _scheduleCountRepair() {
+        if (root._countRepairScheduled)
+            return;
+        root._countRepairScheduled = true;
+        Qt.callLater(root._repairCount);
+    }
+
+    function _repairCount() {
+        root._countRepairScheduled = false;
+        var v = root.view;
+        if (!v || v.count === 0 || root.resetPending)
+            return;
+        if (root.isLanding) {
+            root._scheduleCountRepair();
+            return;
+        }
+        var rebuilt = root._modelReset;
+        root._modelReset = false;
+        if (rebuilt && root.currentIndex >= 0) {
+            root._land(root.currentIndex, false);
+        } else if (root.currentIndex < 0) {
+            if (scroll.savedIndex(root.memoryKey) < 0)
+                root._land(0, false);
+        } else if (root.currentIndex > v.count - 1) {
+            root._land(v.count - 1, false);
+        } else if (v.currentIndex !== root.currentIndex) {
+            root._land(root.currentIndex, false);
+        }
+        if (root.memoryKey)
+            root.remember();
+        if (root._pendingFollow >= v.count)
+            root._pendingFollow = -1;
+        if (root._pendingFollow >= 0
+                && root._pendingFollow === root.currentIndex
+                && v.count > root._pendingFollow) {
+            var i = root._pendingFollow;
+            root._pendingFollow = -1;
+            Qt.callLater(function () {
+                if (root.currentIndex === i && root.view && root.view.count > 0)
+                    root._glideTo(root.view, i, false);
+            });
+        }
+    }
 
     /// Top the viewport without touching the cursor (a fresh payload).
     function resetTop() {
@@ -435,7 +542,13 @@ Item {
         var index = scroll.savedIndex(root.memoryKey);
         if (index < 0)
             return false;
-        root.land(index);
+        // The model may have shrunk since the memory was written; land on a
+        // valid row so the body and the view cannot disagree.
+        if (root.count > 0)
+            index = Math.max(0, Math.min(index, root.count - 1));
+        // The recall below writes the remembered offset; a landing settle
+        // would immediately overwrite it.
+        root._land(index, false);
         var recalled = scroll.recall(root.memoryKey, root.view);
         return recalled.ok || root.count === 0;
     }
@@ -617,8 +730,10 @@ Item {
     property real contentHeightHint: 0
 
     function _scheduleResizeRecenter() {
-        if (root.currentIndex < 0)
+        if (root.currentIndex < 0 || !root.view) {
+            root._resizeRepair = false;
             return;
+        }
         // A resize invalidates the glide target; keep the view still until
         // the row unit settles, then snap to the cursor.
         root.stopGlide();
@@ -632,6 +747,12 @@ Item {
         interval: 100
         repeat: false
         onTriggered: {
+            // A user move during the window ends the repair early.
+            if (!root._resizeRepair)
+                return;
+            // The repair window ends with the last geometry change; leaving
+            // it armed made every later contentHeight shift snap the view.
+            root._resizeRepair = false;
             if (root.currentIndex >= 0)
                 root.recenterNow();
         }
@@ -696,7 +817,7 @@ Item {
     Connections {
         target: root.view
         function onContentYChanged() {
-            if (root.memoryKey && !centerGlide.running)
+            if (root.memoryKey && !centerGlide.running && !root.isLanding)
                 root._scheduleRemember();
         }
         function onMovementStarted() {
@@ -705,10 +826,14 @@ Item {
         function onContentHeightChanged() {
             if (centerGlide.running || root.isLanding)
                 return;
-            if (root._resizeRepair && root.currentIndex >= 0)
+            if (root._resizeRepair && root.currentIndex >= 0) {
+                // Keep the repair armed while the layout keeps moving; it
+                // disarms on the first quiet tick after the last change.
                 root._glideTo(target, root.currentIndex, true);
-            else
+                resizeRecenter.restart();
+            } else {
                 root._clampY(target);
+            }
         }
         function onCurrentIndexChanged() {
             if (target.count === 0 || root.isLanding)
@@ -719,28 +844,11 @@ Item {
                 root.remember();
         }
         function onCountChanged() {
-            if (target.count === 0)
+            if (target.count === 0) {
+                root._modelReset = true;
                 return;
-            if (root.currentIndex < 0) {
-                if (scroll.savedIndex(root.memoryKey) < 0)
-                    root._land(0, false);
-            } else if (root.currentIndex > target.count - 1) {
-                root._land(target.count - 1, false);
-            } else if (target.currentIndex !== root.currentIndex) {
-                root._land(root.currentIndex, false);
             }
-            if (root.memoryKey)
-                root.remember();
-            if (root._pendingFollow >= 0
-                    && root._pendingFollow === root.currentIndex
-                    && target.count > root._pendingFollow) {
-                var i = root._pendingFollow;
-                root._pendingFollow = -1;
-                Qt.callLater(function () {
-                    if (root.currentIndex === i && root.view && root.view.count > 0)
-                        root._glideTo(root.view, i, false);
-                });
-            }
+            root._scheduleCountRepair();
         }
     }
 }

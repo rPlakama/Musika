@@ -61,8 +61,9 @@ while [ "$i" -lt 60 ]; do
 done
 
 sleep 0.5
-for cmd in search_action page_down extend_down escape page_up \
-        toggle_fullscreen page_down queue_toggle search; do
+for cmd in search_action page_down extend_down escape page_up bottom top \
+        layout_toggle move_down move_up layout_toggle \
+        toggle_fullscreen page_down bottom top queue_toggle search; do
     printf '%s\n' "$cmd" | nc -U -w 1 "$sock" 2>/dev/null || true
     sleep 0.2
 done

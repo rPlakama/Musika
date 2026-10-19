@@ -341,7 +341,7 @@ Item {
         var auto = root._autoContentExtent();
         if (auto <= 0)
             return v ? v.contentHeight : 0;
-        // The last screenful is fully realised, so Qt's live contentHeight is
+        // The last screenful is fully realised, so its final item is
         // authoritative there (the derived count x row extent can run past
         // the real bottom by the page-append/rounding remainder, which made
         // `k` from `G` flick to the wrong scrolloff placement). Mid-list the
@@ -353,13 +353,18 @@ Item {
                 ? Math.max(1, root.cellHeight > 0 ? root.cellHeight : root.cellWidth)
                 : Math.max(1, root.adaptiveRowHeight);
             var tail = Math.ceil(v.height / rowH) + 1;
-            // Near the end the realised rows are authoritative: their
-            // accumulated per-row rounding can leave the live extent above
-            // the count x unit estimate. Taking the min there clamped the
-            // follow short, so the last rows could never centre (worse under
-            // the adaptive squeeze, where the unit is fractional).
-            if (root.currentIndex >= Math.max(0, root.count - tail))
+            // Near the end the last realised item is the authority: Qt's
+            // contentHeight can keep an inflated estimate after a row-unit
+            // change, which let the viewport scroll past the real bottom and
+            // leave a gap under the final row. The last item's bottom (plus
+            // the scrolloff spacer) glues the end to the viewport edge.
+            if (root.currentIndex >= Math.max(0, root.count - tail)) {
+                var last = v.itemAtIndex(root.count - 1);
+                if (last)
+                    return last.y + last.height
+                        + (root.unlimitedScrolloff ? root._edgeMargin : 0);
                 return live;
+            }
         }
         return auto;
     }

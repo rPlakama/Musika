@@ -314,13 +314,14 @@ fn slot() -> &'static RwLock<Option<Arc<SearchIndex>>> {
 /// its catalog back into the fresh slot.
 static EPOCH: AtomicU64 = AtomicU64::new(0);
 
-/// Nucleo is the default catalog engine; `MUSIKA_SEARCH_ENGINE=fts` opts
-/// back into the SQLite FTS5 path. `search_json` falls back to FTS whenever
-/// the in-memory build or query fails.
+/// The in-memory catalog is built for the hybrid and Nucleo engines;
+/// `MUSIKA_SEARCH_ENGINE=fts` skips it. `search_json` falls back to FTS
+/// whenever the in-memory build or query fails.
 pub fn enabled() -> bool {
-    !std::env::var("MUSIKA_SEARCH_ENGINE")
-        .map(|value| value.eq_ignore_ascii_case("fts"))
-        .unwrap_or(false)
+    matches!(
+        crate::search::engine(),
+        crate::search::Engine::Hybrid | crate::search::Engine::Nucleo
+    )
 }
 
 /// Drops the in-memory catalog (wipe/logout). The next search rebuilds it.

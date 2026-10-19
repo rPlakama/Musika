@@ -391,17 +391,104 @@ pub async fn search_json(
     query: &str,
     offline: bool,
 ) -> anyhow::Result<String> {
-    if crate::search::index::enabled() {
-        match search_json_index(dbs, query, offline).await {
-            Ok(json) => return Ok(json),
-            Err(err) => {
-                // The in-memory catalog is a cache: a build failure must not
-                // take the palette down while FTS is still available.
-                eprintln!("search: nucleo engine failed, using FTS: {err:#}");
+    match crate::search::engine() {
+        crate::search::Engine::Hybrid => search_json_hybrid(dbs, query, offline).await,
+        crate::search::Engine::Nucleo => {
+            match search_json_index(dbs, query, offline).await {
+                Ok(json) => Ok(json),
+                Err(err) => {
+                    // The in-memory catalog is a cache: a build failure must
+                    // not take the palette down while FTS is still available.
+                    eprintln!("search: nucleo engine failed, using FTS: {err:#}");
+                    search_json_fts(dbs, query, offline).await
+                }
             }
         }
+        crate::search::Engine::Fts => search_json_fts(dbs, query, offline).await,
     }
-    search_json_fts(dbs, query, offline).await
+}
+
+/// Nucleo answers first; FTS fills any column that came back short (or steps
+/// in wholesale when the in-memory catalog fails). The merge is only paid for
+/// sparse queries — a broad hit set never touches SQLite.
+async fn search_json_hybrid(
+    dbs: &crate::db::Dbs,
+    query: &str,
+    offline: bool,
+) -> anyhow::Result<String> {
+    let nucleo_json = match search_json_index(dbs, query, offline).await {
+        Ok(json) => json,
+        Err(err) => {
+            eprintln!("search: nucleo engine failed, using FTS: {err:#}");
+            return search_json_fts(dbs, query, offline).await;
+        }
+    };
+    let Ok(nucleo) = serde_json::from_str::<serde_json::Value>(&nucleo_json) else {
+        return Ok(nucleo_json);
+    };
+    // The empty-query surface and S-8's single-album tracklist already own
+    // their result set; do not let FTS mix another album in.
+    if nucleo["most_played"].as_bool() == Some(true) || nucleo["album_context"].is_string() {
+        return Ok(nucleo_json);
+    }
+    const VISIBLE: usize = 20;
+    // The FTS fill is for sparse song sets (a rare/typo query, or an offline
+    // catalog); a broad hit set already fills the Songs column, and the
+    // artist/album lists are cheap Nucleo lookups.
+    let sparse_songs = nucleo
+        .get("songs")
+        .and_then(serde_json::Value::as_array)
+        .is_none_or(|rows| rows.len() < VISIBLE);
+    if !sparse_songs {
+        return Ok(nucleo_json);
+    }
+
+    let fts_json = match search_json_fts(dbs, query, offline).await {
+        Ok(json) => json,
+        Err(err) => {
+            eprintln!("search: FTS fill failed: {err:#}");
+            return Ok(nucleo_json);
+        }
+    };
+    let Ok(fts) = serde_json::from_str::<serde_json::Value>(&fts_json) else {
+        return Ok(nucleo_json);
+    };
+    let mut merged = nucleo;
+    for key in ["songs", "artists", "albums"] {
+        if let (Some(primary), Some(secondary)) = (merged.get_mut(key), fts.get(key)) {
+            merge_json_rows(primary, secondary, VISIBLE);
+        }
+    }
+    Ok(merged.to_string())
+}
+
+/// Append the FTS-only rows to the Nucleo array, keeping the Nucleo order and
+/// the visible cap. Rows are identified by their `id`.
+fn merge_json_rows(primary: &mut serde_json::Value, secondary: &serde_json::Value, limit: usize) {
+    let Some(primary_rows) = primary.as_array_mut() else {
+        return;
+    };
+    let mut seen: HashSet<String> = primary_rows.iter().filter_map(json_row_id).collect();
+    if let Some(secondary_rows) = secondary.as_array() {
+        for row in secondary_rows {
+            if primary_rows.len() >= limit {
+                break;
+            }
+            if let Some(id) = json_row_id(row)
+                && !seen.insert(id)
+            {
+                continue;
+            }
+            primary_rows.push(row.clone());
+        }
+    }
+    primary_rows.truncate(limit);
+}
+
+fn json_row_id(row: &serde_json::Value) -> Option<String> {
+    row.get("id")
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_string)
 }
 
 async fn search_json_fts(
@@ -728,5 +815,19 @@ mod tests {
         assert_eq!(parsed["songs"][0]["id"], "s2");
 
         crate::search::index::clear();
+    }
+
+    #[test]
+    fn hybrid_merge_keeps_primary_order_and_dedupes() {
+        let mut primary = serde_json::json!([{"id": "a"}, {"id": "b"}]);
+        let secondary = serde_json::json!([{"id": "b"}, {"id": "c"}, {"id": "d"}]);
+        merge_json_rows(&mut primary, &secondary, 3);
+        let ids: Vec<&str> = primary
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|row| row["id"].as_str().unwrap())
+            .collect();
+        assert_eq!(ids, ["a", "b", "c"]);
     }
 }

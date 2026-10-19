@@ -2033,7 +2033,7 @@ The product is incomplete without these.
 
 ### Search revamp (ARC-SEARCH)
 
-- [ ] **ARC-SEARCH · SearchRevamp — an in-process Nucleo index for the global palette** — P2 · (reported; S-8, S-9, PATH-10; DEPCRITIQUE)
+- [ ] **ARC-SEARCH · SearchRevamp — a hybrid Nucleo + FTS index for the global palette** — P2 · (reported; S-8, S-9, PATH-10; DEPCRITIQUE)
   - **Why:** the palette still pays for three engines per keystroke: FTS5 over
     `search.db` (`src/search.rs`), a `LIKE '%…%'` full scan for artists/albums
     (`src/library.rs:335`), and a full scan of the FTS virtual table for the
@@ -2122,12 +2122,11 @@ The product is incomplete without these.
       until the next sync), matching today's "search is a disposable cache"
       contract. On logout/wipe, drop the index. Keep `search.db` untouched
       in M1–M3 as the fallback.
-    - **Engine switch.** `MUSIKA_SEARCH_ENGINE=fts|nucleo` — `nucleo` is the
-      default; `fts` opts back into the SQLite engine. `search_json`
-      auto-falls back to FTS whenever the in-memory build or query fails.
-      Remove the FTS/LIKE hot paths only after the fallback has proven
-      itself and the benchmarks are green; update README/DBWIRING/CRITIQUE's
-      stale "tmpfs + fd" claim while there.
+    - **Engine switch.** `MUSIKA_SEARCH_ENGINE=hybrid|nucleo|fts` — `hybrid`
+      is the default: Nucleo answers first and FTS5 fills any column that
+      came back short; `nucleo` and `fts` pin one engine. `search_json` falls
+      back to FTS whenever the in-memory build or query fails. The merge is
+      paid only for sparse queries, never for a broad hit set.
     - **Threads/memory.** `Nucleo::new(Config::DEFAULT, noop_notify,
       Some(4), 1)` — a small worker pool for songs (the 100k bench measured
       6 ms for a common prefix vs 19 ms on one thread); the notify callback
@@ -2174,16 +2173,18 @@ The product is incomplete without these.
     is in `Cargo.toml`; `src/search/index.rs` builds the catalog from
     `library.db` (songs on a 4-thread Nucleo worker, artists/albums via
     `nucleo-matcher`), keeps `most_played` and `by_album` sorted, and
-    `browse::search_json` routes to it by default; `MUSIKA_SEARCH_ENGINE=fts`
-    opts back to the FTS fallback, and `index::rebuild` refreshes the cache
-    after a sync. S-8 (`album_context` + track order) and S-9 (play boost +
-    Most played) ride the in-memory index; hearts/ratings are read live;
-    every wipe clears it. Tests cover fuzzy matching, smartcase/diacritics,
-    the play boost, Most-played order, track order and one end-to-end
-    `search_json` payload. M0 (index-only, release, 100k synthetic): build
-    38 ms, `rdo` 3.4 ms, `track` 6.0 ms, `radio` 3.1 ms on a 4-thread pool;
-    the FTS comparison baseline is still to record. Open: M3 highlight spans
-    (fuzzy hits still use the client-side literal `SearchMatch.spans`), FTS
+    `browse::search_json` serves the hybrid by default: Nucleo answers
+    first, FTS5 fills any column that came back under 20, and
+    `MUSIKA_SEARCH_ENGINE=nucleo|fts` pins one engine. `index::rebuild`
+    refreshes the cache after a sync. S-8 (`album_context` + track order)
+    and S-9 (play boost + Most played) ride the in-memory index;
+    hearts/ratings are read live; every wipe clears it. Tests cover fuzzy
+    matching, smartcase/diacritics, the play boost, Most-played order,
+    track order, hybrid dedupe/order and one end-to-end `search_json`
+    payload. M0 (index-only, release, 100k synthetic): build 38 ms, `rdo`
+    3.4 ms, `track` 6.0 ms, `radio` 3.1 ms on a 4-thread pool; the FTS
+    comparison baseline is still to record. Open: M3 highlight spans (fuzzy
+    hits still use the client-side literal `SearchMatch.spans`), FTS
     cleanup.
 
 ### Incremental (ARC-I)

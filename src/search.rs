@@ -28,6 +28,30 @@ use crate::library::SongSearchRow;
 
 pub mod index;
 
+/// The active catalog engine (`MUSIKA_SEARCH_ENGINE`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Engine {
+    /// Nucleo answers first; FTS only fills the columns Nucleo left short.
+    Hybrid,
+    /// The in-process fuzzy matcher only.
+    Nucleo,
+    /// The SQLite FTS5 engine only.
+    Fts,
+}
+
+/// Hybrid is the default; `nucleo` and `fts` are the opt-outs.
+pub fn engine() -> Engine {
+    match std::env::var("MUSIKA_SEARCH_ENGINE")
+        .unwrap_or_default()
+        .to_ascii_lowercase()
+        .as_str()
+    {
+        "nucleo" => Engine::Nucleo,
+        "fts" => Engine::Fts,
+        _ => Engine::Hybrid,
+    }
+}
+
 /// A full-text search result.
 #[derive(Debug, Clone, FromRow)]
 pub struct SearchHit {

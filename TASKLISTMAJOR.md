@@ -1777,9 +1777,10 @@ The product is incomplete without these.
     and the offscreen warning/100k-row harness. The SearchColumn row-height
     loop and the RowBody incubation warning are fixed too. `qmllint`, the
     145-test suite and `scripts/check-scroll.sh` are green. Open: 7.10
-    (`searchAll`/fuzzy needs a user-facing toggle and ranking decision) and
+    (`searchAll`/fuzzy needs a user-facing toggle and ranking decision),
     7.11 (per-scope layouts/named sets need a command surface), both large
-    opt-ins.
+    opt-ins, and 7.14 (Vi scrolloff follow, the structural fix for the
+    centre-follow instabilities).
 
   - [x] **ARC-UI-7.1 · Sparse `SearchContract` viewport snapshot** — P2
     - **Why:** `rows()` allocates a dense array for every model row
@@ -2030,6 +2031,30 @@ The product is incomplete without these.
       snapshot (<100 ms; visible cells only); `check-scroll.sh` runs it when
       the QML runtime is on PATH. Memory-write counting was not added (7.3's
       coalescing has its own teardown/restore checks).
+
+  - [ ] **ARC-UI-7.14 · ScrollContent remake — scrolloff=999 (cursor always centred, end gaps)** — P1 · (reported; SCROLLMODELANALYSIS §3, v0.3.1 baseline)
+    - **Why:** the old body carried an edge-scrolloff experiment plus
+      derived-extent repairs; height changes and small viewports kept leaving
+      the cursor unfollowed.
+    - **Idea (user call):** rebuild the body around one rule — the cursor is
+      always centred. A half-viewport of empty space sits above row 0 and below
+      the last row, so the ends centre too: the gap is intentional.
+    - **Details:** the list uses header/footer spacers, the grid uses Flickable
+      top/bottom margins; the follow is a live frame retarget clamped to the
+      spacer range. Normal moves glide over `followMs`; `gg`/`G`, search,
+      restore and reset land instantly. A resize ticks
+      `positionViewAtIndex(Center)` until Qt's layout settles. Memory, search,
+      selection, adaptive rows and grid cursor movement are preserved.
+    - **Verify:** down from row 0 keeps the cursor centred with whitespace above
+      and below; tall/squeezed/variable-height lists and grids centre on every
+      step; a height change re-centres and keeps the cursor visible; `gg`/`G`,
+      search, memory restore, selection extension and grid columns still land.
+    - **Now:** rewritten from zero in `src/qml/ScrollContent.qml`; `check-qml`
+      and headless harnesses pass (list, grid, variable-height, small viewport,
+      resize at top/middle/bottom). Awaiting a live pass over the five segments,
+      album/artist pages, queue drawer and fullscreen queue. Memory still
+      recalls the raw saved `contentY`, so a re-opened row may not sit
+      dead-centre.
 
 ### Search revamp (ARC-SEARCH)
 

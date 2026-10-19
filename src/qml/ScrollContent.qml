@@ -18,39 +18,22 @@ import QtQuick
 import QtQuick.Layouts
 import "Theme.js" as Theme
 
-// The shared scroll body — SCROLLMODELANALYSIS.md is the spec.
+// The shared scroll body.
 //
-// Ownership: the host owns the cursor *semantics* through `currentIndex`;
-// this body owns the viewer (the active ListView/GridView, the follow, the
-// memory hooks, the VI-4 selection, the `/` search fields and the adaptive
-// row height); `ScrollMemory` is the only persistent state.
+// The model is a viewport (a Rectangle of variable width/height) holding rows
+// of variable height. The cursor is the single source of truth; the viewport
+// follows it by keeping the cursor row in the middle. Half a viewport of empty
+// space sits above row 0 and below the last row, so even the ends can sit in
+// the middle (Neovim `scrolloff=999`: the gap is allowed to happen).
 //
-// Follow: the viewport *is* animated to the cursor's centre — a frame-driven
-// glide (`followMs`, `Theme.motion.scroll`) retargeted from the live delegate
-// every frame, clamped at the content ends (Neovim `'scrolloff': 0.5`
-// semantics, no padding).
-// `unlimitedScrolloff` opts out of the edge rule: half a viewport of empty
-// space is reserved above the first row and below the last, so *every* row
-// can reach the centre (the lyrics pane: the active phrase is always
-// centred, even the opening and closing lines).
-// This is the only follow: the highlight-band/velocity era is gone —
-// `ApplyRange` enforced the band *instantly*, so a one-row move snapped
-// even with a 300 ms move duration (probed; CRITIQUESCROLL SC-1).
+// The follow is a frame loop, not a fixed animation: every frame re-reads the
+// live delegate and re-clamps against the current extent, so a resize, a late
+// delegate or a growing `contentHeight` estimate retargets the motion instead
+// of leaving it short.
 //
-// Landings: `goto(row)` (centre; the host-facing one) and `land(row)`
-// (instant `Contain`, the semantic jumps: `gg`/`G`, search, restores,
-// reset). **Hosts never touch `view.contentY`/`positionViewAtIndex`** —
-// the body is the only writer, and `_instantFollow` shields a landing
-// from the root index handler's glide.
-//
-// Guards: the view is a follower, never a source — its own refill/clamp
-// transients are overwritten with the body's cursor; a filter/order swap
-// raises `resetView()` and the payload consumes it as a top landing; an
-// empty view defers the carried cursor until `onCountChanged`.
-//
-// ARC-UI-3: `layout` picks the active view; both share the stage, memory,
-// selection, search contract and adaptive sizing. Drop it inside any
-// parent Rectangle/Item (Layout or anchors).
+// Semantic jumps (`gg`/`G`, search, restore, reset) land instantly; ordinary
+// cursor moves glide over `followMs`. Hosts never write `contentY` or call
+// `positionViewAtIndex` themselves — this body is the only writer.
 Item {
     id: root
 
@@ -63,23 +46,16 @@ Item {
     /// ARC-UI-3: the grid cell delegate (cover + caption, like ArtistEntry).
     property Component cellDelegate: null
 
-    /// ARC-UI-2 M1: the model roles `/` searches, in paint order (the
-    /// selectable-text contract, SEARCHACTIONSTUDY §3). Hosts override;
-    /// cells for absent roles come back empty. Chrome never matches.
+    /// ARC-UI-2 M1: the model roles `/` searches, in paint order.
     property var searchFields: ["title"]
-    /// ARC-UI-2 M2: the live `/` session — the query the row cells paint
-    /// their blocks for, and the current candidate row (for `CurSearch`).
-    /// Held by whoever owns the session (`LineSearch` pushes it down).
+    /// ARC-UI-2 M2: the live `/` session.
     property string searchQuery: ""
     property int searchCurrentRow: -1
 
     // ── Layout (list ⇄ grid) ─────────────────────────────────────────────
 
-    /// ARC-UI-3: supported layouts in toggle order ("list", "grid"); a single
-    /// entry means the surface never toggles.
+    /// ARC-UI-3: supported layouts in toggle order ("list", "grid").
     property var layouts: ["list"]
-    /// The active body. The host sets its default; the saved layout (below)
-    /// can override it on open.
     property string layout: "list"
     /// Grid geometry: columns per row and the cell height (0 = square).
     property int columns: 1
@@ -101,29 +77,47 @@ Item {
             root.layout = saved;
     }
 
-    // ── Cursor & follow ──────────────────────────────────────────────────
+    // ── Cursor ───────────────────────────────────────────────────────────
 
-    /// The cursor: the single source of truth (§1). Hosts write it; the
-    /// live view mirrors it (an alias cannot follow the active view).
+    /// The cursor: the single source of truth. Hosts write it; the live view
+    /// mirrors it.
     property int currentIndex: -1
     onCurrentIndexChanged: {
-        // A landing (`land`) owns the view: it positions and mirrors the
-        // index itself; starting a glide here would fight it and leave a
-        // corrupted contentY behind.
+        // A landing owns the view: it positions and mirrors the index itself;
+        // starting a glide here would fight it.
         if (root.isLanding)
             return;
         var v = root.view;
         if (v && v.count > 0 && v.currentIndex !== root.currentIndex) {
             v.currentIndex = root.currentIndex;
-            root._glideTo(v, root.currentIndex);
+            root._glideTo(v, root.currentIndex, false);
         }
     }
 
-    // LYR-8: the centred viewport glide — the one follow. A frame loop, not
-    // a fixed NumberAnimation target: every frame derives the centre from the
-    // live delegate and clamps against the current extent. Resizes, late
-    // delegate realisation and contentHeight estimate growth therefore
-    // retarget the glide instead of leaving it short of a stale position.
+    /// The active view (itemAtIndex, positionViewAtIndex, …).
+    readonly property var view: root.layout === "grid" ? grid : list
+    onViewChanged: Qt.callLater(root.landCursor)
+    onLayoutChanged: {
+        if (root.memoryKey)
+            scroll.rememberLayout(root.memoryKey, root.layout);
+    }
+    readonly property int count: root.view ? root.view.count : 0
+
+    // ── Follow ───────────────────────────────────────────────────────────
+
+    /// Follow duration (ms); 0 snaps. `reduceMotion` also snaps.
+    property int followMs: Theme.motion.scroll
+    /// One-shot duration for the next glide (0 = `followMs`).
+    property int glideOverrideMs: 0
+
+    /// Half a viewport of empty space at each end, so the first/last row can
+    /// sit in the middle. The list carries it as header/footer; the grid uses
+    /// the Flickable margins (GridView has no header).
+    readonly property real _edgeMargin: root.height * 0.5
+
+    /// Kept for host compatibility: every surface now uses the end spacers.
+    property bool unlimitedScrolloff: false
+
     FrameAnimation {
         id: centerGlide
         onTriggered: root._followTick()
@@ -133,13 +127,93 @@ Item {
     property real _followElapsed: 0
     property int _followDuration: 0
 
+    /// The scroll range of the viewpor. The half-viewport end spacers let
+    /// `contentY` run from `-margin` (end gap on screen) to the last row's
+    /// centre; a list folds both spacers into `contentHeight`, a grid keeps
+    /// them in the Flickable margins, hence the `+2m` below.
+    function _bounds(v) {
+        var m = root._edgeMargin;
+        var extent = root.contentExtent(v) + (root.layout === "grid" ? 2 * m : 0);
+        var lo = -m;
+        return { lo: lo, hi: Math.max(lo, extent - v.height - m) };
+    }
+
+    /// The centre target, clamped to the scroll range. `null` when the
+    /// cursor row is not realised yet.
+    function _centerTarget(v, index) {
+        var item = v ? v.itemAtIndex(index) : null;
+        if (!item)
+            return null;
+        var b = root._bounds(v);
+        return Math.max(b.lo, Math.min(b.hi,
+            item.y + item.height * 0.5 - v.height * 0.5));
+    }
+
+    /// Keep `contentY` inside the scroll range.
+    function _clampY(v) {
+        if (!v)
+            return;
+        var b = root._bounds(v);
+        if (v.contentY < b.lo || v.contentY > b.hi)
+            v.contentY = Math.max(b.lo, Math.min(b.hi, v.contentY));
+    }
+
+    /// The clamp/centre extent: Qt's live `contentHeight` (or the host's
+    /// fixed-row hint).
+    function contentExtent(v) {
+        if (root.contentHeightHint > 0)
+            return root.contentHeightHint;
+        return v ? v.contentHeight : 0;
+    }
+
+    /// Bring an unrealised row into view: `Beginning` anchors it at the top,
+    /// then the caller centres it. Avoids Qt's async `Contain`/`Center`
+    /// offsets on a scrolled list.
+    function _landUnrealised(v, index) {
+        v.positionViewAtIndex(index, ListView.Beginning);
+        root._clampY(v);
+    }
+
+    /// Follow the cursor. `instant` snaps instead of gliding; an unrealised
+    /// row falls back to an instant reveal first.
+    function _glideTo(v, index, instant) {
+        if (!v || v.count === 0 || index < 0 || root.isLanding)
+            return;
+        centerGlide.stop();
+        root._clampY(v);
+        var item = v.itemAtIndex(index);
+        if (!item) {
+            root._landUnrealised(v, index);
+            Qt.callLater(function () {
+                if (root.currentIndex === index)
+                    root._glideTo(root.view, index, instant);
+            });
+            return;
+        }
+        var target = root._centerTarget(v, index);
+        if (!instant)
+            root._resizeRepair = false;
+        if (target === null || Math.abs(target - v.contentY) < 1)
+            return;
+        if (instant || Theme.reduceMotion || root.followMs <= 0) {
+            v.contentY = target;
+            root._settleGlide();
+            return;
+        }
+        root._followStartY = v.contentY;
+        root._followElapsed = 0;
+        root._followDuration = root.glideOverrideMs > 0
+            ? root.glideOverrideMs : root.followMs;
+        centerGlide.start();
+    }
+
     function _followTick() {
         var v = root.view;
         if (!v || root.currentIndex < 0 || root.isLanding) {
             centerGlide.stop();
             return;
         }
-        var target = root._glideTarget(v, root.currentIndex);
+        var target = root._centerTarget(v, root.currentIndex);
         if (target === null) {
             centerGlide.stop();
             return;
@@ -157,68 +231,6 @@ Item {
         }
     }
 
-    /// Centre the cursor over `followMs` — the delegate itself is the target
-    /// (lyric rows have variable heights); an unrealised line falls back to
-    /// an instant `Center`.
-    function _glideTo(v, index, instant) {
-        if (!v || v.count === 0 || index < 0 || root.isLanding)
-            return;
-        // Qt can leave contentY on a stale (too large) contentHeight
-        // estimate after a landing; stop the old glide and repair it
-        // before deriving the target, or the follow glides into the gap
-        // under the last row.
-        centerGlide.stop();
-        root._clampY(v);
-        var item = v.itemAtIndex(index);
-        if (!item) {
-            // Unrealised row (a far landing): iterative, height-aware reveal
-            // (CRITIQUESCROLL SC-4/P3) — Qt's `Contain` on a scrolled list
-            // parks async offsets (`-4`, `-96`, `-920`; probed) and assumes
-            // fixed heights, so we step toward the row using the observed
-            // local row unit instead, then glide to the centre once the row
-            // exists.
-            centerGlide.stop();
-            root._landUnrealised(v, index);
-            Qt.callLater(function () {
-                if (root.currentIndex === index)
-                    root._glideTo(root.view, index, instant);
-            });
-            return;
-        }
-        var target = root._glideTarget(v, index);
-        if (!instant)
-            root._resizeRepair = false;
-        if (target === null || Math.abs(target - v.contentY) < 1)
-            return;
-        if (instant || Theme.reduceMotion || root.followMs <= 0) {
-            v.contentY = target;
-            root._settleGlide();
-            return;
-        }
-        root._followStartY = v.contentY;
-        root._followElapsed = 0;
-        root._followDuration = root.glideOverrideMs > 0
-            ? root.glideOverrideMs : root.followMs;
-        centerGlide.stop();
-        centerGlide.start();
-    }
-
-    /// The live centre target, clamped to the same bounds as `_clampY`.
-    /// Only the lyrics scrolloff (opt-in, lyrics pane only) opens the range
-    /// below 0, so row 0 and the last row can reach the centre; other hosts
-    /// keep the old clamped-to-content behaviour. `null` when the row is not
-    /// realised yet.
-    function _glideTarget(v, index) {
-        var item = v ? v.itemAtIndex(index) : null;
-        if (!item)
-            return null;
-        var lo = root.unlimitedScrolloff ? Math.min(0, v.originY) : 0;
-        var extent = root.contentExtent(v);
-        var limit = Math.max(lo, lo + extent - v.height);
-        var ideal = item.y + item.height * 0.5 - v.height * 0.5;
-        return Math.max(lo, Math.min(limit, ideal));
-    }
-
     /// Stop the glide (a manual scroll owns the viewport until the host
     /// re-follows).
     function stopGlide() {
@@ -227,35 +239,28 @@ Item {
         root._resizeRepair = false;
     }
 
-    /// Re-run the centre follow for the current cursor. `duration` overrides
-    /// `followMs` for this pass — used when a layout change (a width change
-    /// re-wraps variable-height rows such as lyrics) moves the cursor off
-    /// centre and the host wants a quick repair, not the normal follow.
+    /// Centre the cursor through Qt's own geometry. A resize invalidates the
+    /// delegate positions for a few frames, so the caller ticks this until the
+    /// layout settles.
+    function _centerNow() {
+        var v = root.view;
+        if (!v || root.currentIndex < 0 || root.isLanding)
+            return;
+        if (!v.itemAtIndex(root.currentIndex))
+            root._landUnrealised(v, root.currentIndex);
+        v.positionViewAtIndex(root.currentIndex, ListView.Center);
+        if (root.memoryKey)
+            root._scheduleRemember();
+    }
+
+    /// Public re-centre seam (hosts/layout repairs).
     function recenter(duration) {
-        if (root.currentIndex < 0 || !root.view || root.isLanding)
-            return;
-        root.glideOverrideMs = Math.max(0, duration);
-        root._glideTo(root.view, root.currentIndex);
-        if (!centerGlide.running)
-            root.glideOverrideMs = 0;
+        root._centerNow();
     }
 
-    /// Resize repair: snap, never glide. A changing row unit invalidates the
-    /// in-flight target, and a glide toward a stale extent can leave the row
-    /// visibly stuck; the next user action resumes the normal follow.
-    function recenterNow() {
-        if (root.currentIndex < 0 || !root.view || root.isLanding)
-            return;
-        root.glideOverrideMs = 0;
-        root._glideTo(root.view, root.currentIndex, true);
-    }
-
-    /// The end-of-list settle: `ListView.contentHeight` is an estimate until
-    /// the bottom delegates exist, so a glide *or an instant landing* toward
-    /// the last rows can stop short with the cursor under the viewport's end
-    /// (`G` with variable heights left the last row cut below the fold —
-    /// probed: y=1520, row bottom 1912, viewport bottom 1840). Qt's own
-    /// `Contain` uses the true item geometry; it only moves the shortfall.
+    /// The end-of-list settle: `contentHeight` is an estimate until the last
+    /// delegates exist. If the cursor ended outside the viewport, let Qt's
+    /// `Contain` reveal it, then clamp and remember.
     function _settleGlide() {
         var v = root.view;
         if (!v || root.currentIndex < 0)
@@ -267,111 +272,25 @@ Item {
                 || item.y + item.height > v.contentY + v.height)
             v.positionViewAtIndex(root.currentIndex, ListView.Contain);
         root._clampY(v);
-        // The per-frame contentY updates during a glide are not memory
-        // writes; one coalesced save at the settle is enough.
         if (root.memoryKey)
             root._scheduleRemember();
     }
 
-    /// The active view (itemAtIndex, positionViewAtIndex, …).
-    readonly property var view: root.layout === "grid" ? grid : list
-    onViewChanged: Qt.callLater(root.landCursor)
-    onLayoutChanged: {
-        // Only the layout field — a restore flips the layout before the
-        // cursor is back, and a full save here would clobber the memory.
-        if (root.memoryKey)
-            scroll.rememberLayout(root.memoryKey, root.layout);
-    }
-    readonly property int count: root.view ? root.view.count : 0
-
-    /// The follow duration (ms): the rows drift up/down softly as the
-    /// cursor steps, and the pane fade binds to the same value. 0 snaps
-    /// (`reduceMotion` also snaps, in `_glideTo`).
-    property int followMs: Theme.motion.scroll
-    /// One-shot duration for the next centre glide (0 = `followMs`).
-    /// `recenter()` sets it for layout repairs (a width change re-wraps the
-    /// lyric rows); it clears when the glide finishes or is stopped.
-    property int glideOverrideMs: 0
-    /// Host policy for width-triggered repair. A fixed-row list only changes
-    /// its elide on width, so it stays off; grids reflow by cell size and
-    /// opt in by default, while variable-row hosts (lyrics) bind their own
-    /// guard (synced, active, not held).
-    property bool recenterOnWidth: root.layout === "grid"
-    /// Extra spacing between list rows (0 = the delegate owns it); grid
-    /// cells are placed by `cellHeight`.
-    property real rowSpacing: 0
-    /// Fixed-row hosts can pre-calculate the content extent as
-    /// `count * rowHeight` before Qt's lazy delegate estimate settles.
-    /// The follow/clamp math prefers this when non-zero; otherwise Qt's own
-    /// contentHeight is the only extent authority (as in 0.3.1).
-    property real contentHeightHint: 0
-    /// Unlimited scrolloff: no edge rule — the view reserves half a
-    /// viewport of empty space above the first row and below the last, so
-    /// the follow can centre *any* row, first and last included. The list
-    /// carries header/footer spacers, the grid Flickable margins.
-    property bool unlimitedScrolloff: false
-    readonly property real _edgeMargin: root.unlimitedScrolloff ? root.height * 0.5 : 0
-
-    /// The clamp/centre extent: 0.3.1 used Qt's live contentHeight (or the
-    /// fixed-row hint) and was stable through scroll-up; the derived
-    /// count x row estimate that replaced it disagreed with Qt's own bounds.
-    function contentExtent(v) {
-        if (root.contentHeightHint > 0)
-            return root.contentHeightHint;
-        return v ? v.contentHeight : 0;
-    }
+    // ── Landings ─────────────────────────────────────────────────────────
 
     /// True while a landing runs: the root index handler must not start a
-    /// glide the landing is already positioning (`land` owns the view).
+    /// glide the landing is already positioning.
     property bool _instantFollow: false
-    /// A resize can update the row geometry over several frames. While this
-    /// is set, every contentHeight change re-snaps to the cursor instead of
-    /// leaving it one relayout behind.
-    property bool _resizeRepair: false
-    /// ARC-UI-7.12: the landing state as a public read-only seam, so outer
-    /// chrome can react without polling the private flag.
     readonly property bool isLanding: root._instantFollow
+    /// A resize can update the row geometry over several frames; every
+    /// contentHeight change re-centres instead of leaving the cursor behind.
+    property bool _resizeRepair: false
 
-    /// Keep `contentY` inside the content bounds (Qt's async `Contain`
-    /// layouts can park it outside; probed). The lyrics scrolloff is the
-    /// only case with a negative lower bound (`originY` drops below 0 when
-    /// its spacer header sits above row 0); every other host keeps the
-    /// plain [0, contentHeight - height] range.
-    function _clampY(v) {
-        var lo = root.unlimitedScrolloff ? Math.min(0, v.originY) : 0;
-        var extent = root.contentExtent(v);
-        var limit = Math.max(lo, lo + extent - v.height);
-        if (v.contentY < lo || v.contentY > limit)
-            v.contentY = Math.max(lo, Math.min(limit, v.contentY));
-    }
-
-    /// Bring an unrealised row into view without Qt's `Contain`/`Center`
-    /// (both park async offsets on a scrolled list — `-4`, `-96`, `-920`
-    /// probed): `Beginning` anchors the row at the viewport top, we clamp
-    /// the result into the content bounds, and the caller centres it. No
-    /// index→pixel estimation, so variable row heights are exact
-    /// (CRITIQUESCROLL SC-4/P3).
-    function _landUnrealised(v, index) {
-        v.positionViewAtIndex(index, ListView.Beginning);
-        root._clampY(v);
-    }
-
-    /// The instant landing (semantic jumps: `gg`/`G`, search, restores, the
-    /// filter reset). Positions and mirrors the cursor itself; the running
-    /// glide is killed first, and the `Contain` result is repaired when Qt
-    /// leaves a negative contentY on a scrolled list (probed). An empty
-    /// view carries the cursor and lands it on the next count change.
+    /// Instant landing (semantic jumps: `gg`/`G`, search, restores, reset).
     function land(index) {
         root._land(index, true);
     }
 
-    /// The landing core. `withSettle` arms the bottom-row settle: the
-    /// instant path has no glide to settle it, so the *last* row can stay
-    /// cut below an under-measured contentHeight (`G` with variable
-    /// heights). The payload churn (a rebuild's count climbing row by row,
-    /// each intermediate end momentarily "the last row") calls this with
-    /// `false` — settling every step nudged the viewport mid-refill, which
-    /// was the order/type-swap flicker (#bug 2).
     function _land(index, withSettle) {
         if (index < 0)
             return;
@@ -382,10 +301,11 @@ Item {
         var v = root.view;
         if (v && v.count > 0) {
             v.currentIndex = index;
-            if (v.itemAtIndex(index))
-                v.positionViewAtIndex(index, ListView.Contain);
-            else
+            if (!v.itemAtIndex(index))
                 root._landUnrealised(v, index);
+            var target = root._centerTarget(v, index);
+            if (target !== null)
+                v.contentY = target;
             root._clampY(v);
         }
         var settle = withSettle && v && v.count > 0 && index === v.count - 1;
@@ -396,26 +316,13 @@ Item {
         });
     }
 
-    /// A surface returning to screen (segment switch, page pop) calls this:
-    /// if the cursor is far from the viewport — or the view lost its place
-    /// while hidden — it lands instantly instead of walking back.
+    /// A surface returning to screen calls this: land on the cursor.
     function landCursor() {
         if (root.currentIndex >= 0)
             root.land(root.currentIndex);
     }
 
-    /// The host-facing landing: `goto(row)` lands exactly (`Contain`) and
-    /// then glides the row to the pane centre on the next tick, once the
-    /// layout is true. Use `land(row)` for semantic jumps that must stay
-    /// instant. **Hosts never touch `view.contentY`/`positionViewAtIndex`**
-    /// — the running glide would override the teleport (CRITIQUESCROLL
-    /// SC-2: the queue's current track ended up below the viewport that
-    /// way).
-    /// A payload rebuild (the queue's clear + refill) leaves the view empty
-    /// for a beat: the follow parks in `_pendingFollow` and the next count
-    /// finishes it — a skip into a not-yet-realised row must never be
-    /// swallowed by the rebuild (SC-5: the double-payload skip parked the
-    /// target unrealised at the clamped end, and nothing retried).
+    /// The host-facing landing: land exactly and centre the row.
     function goto(index) {
         var i = index === undefined ? root.currentIndex : index;
         if (i < 0)
@@ -432,12 +339,11 @@ Item {
             if (!v || v.count === 0)
                 return; // `onCountChanged` finishes the follow
             root._pendingFollow = -1;
-            root._glideTo(root.view, i);
+            root._glideTo(root.view, i, false);
         });
     }
 
-    /// The `goto` intent that hit an empty view (see `goto`); consumed by
-    /// `onCountChanged` once the payload is in.
+    /// The `goto` intent that hit an empty view; consumed by `onCountChanged`.
     property int _pendingFollow: -1
 
     /// Top the viewport without touching the cursor (a fresh payload).
@@ -447,10 +353,7 @@ Item {
             root.view.positionViewAtBeginning();
     }
 
-    /// `gg`/`G`: instant edge landing — the follow band has nothing to
-    /// animate once the target is already on screen.
-    /// `gg`/`G`. VI-7: a count turns it into a line jump (`5G`/`5gg` →
-    /// row 5), clamped into the list; a plain press keeps the semantic edge.
+    /// `gg`/`G`: instant landing. A count turns it into a line jump.
     function edgeJump(last, count) {
         if (root.count === 0)
             return;
@@ -462,11 +365,8 @@ Item {
         root.land(last ? root.count - 1 : 0);
     }
 
-    /// Shared cursor step: in grid mode the wall walks by `columns` (no
-    /// wrap-around — GridView's own moveCurrentIndex* crosses rows), in list
-    /// mode it is a plain ±1. VI-7: `count` steps at once, clamped at the
-    /// edges (a plain step keeps returning false at the edge, so Home can
-    /// hand `h` to the sidebar from the leftmost column).
+    /// Shared cursor step: in grid mode the wall walks by `columns`; in list
+    /// mode it is a plain ±1. `count` steps at once, clamped at the edges.
     function moveStep(action, count) {
         if (root.count === 0)
             return false;
@@ -486,7 +386,7 @@ Item {
             if (root.currentIndex - cols * n < 0) {
                 if (n === 1)
                     return false;
-                target = column; // the first row's same column
+                target = column;
             } else {
                 target -= cols * n;
             }
@@ -507,9 +407,7 @@ Item {
         return true;
     }
 
-    /// `Ctrl-D`/`Ctrl-U`: move by `fraction` of the viewport, in rows. The
-    /// step reuses `moveStep` so grid mode walks whole rows and both ends
-    /// clamp exactly like a counted move; the normal 300 ms follow glides.
+    /// `Ctrl-D`/`Ctrl-U`: move by `fraction` of the viewport, in rows.
     function pageJump(down, fraction) {
         if (root.count === 0 || !root.view)
             return false;
@@ -536,11 +434,7 @@ Item {
     property string memoryKey: ""
     property int memoryScope: -1
 
-    /// Restore the remembered cursor + offset (false when none). The saved
-    /// layout is applied first so the right view holds the offset; the
-    /// cursor lands instantly (a long return must not walk) and `recall`
-    /// then writes the exact offset. An empty view lands the cursor on the
-    /// next count change.
+    /// Restore the remembered cursor + offset (false when none).
     function restore() {
         applySavedLayout();
         var index = scroll.savedIndex(root.memoryKey);
@@ -548,8 +442,6 @@ Item {
             return false;
         root.land(index);
         var recalled = scroll.recall(root.memoryKey, root.view);
-        // An empty view defers the landing to `onCountChanged`; the saved
-        // index still owns it, so report the memory as consumed.
         return recalled.ok || root.count === 0;
     }
 
@@ -560,9 +452,6 @@ Item {
                 root.currentIndex);
     }
 
-    // A manual scroll emits `contentY` per pixel; coalesce the writes so a
-    // flick touches the memory once per event-loop batch, not once per pixel.
-    // Explicit host `remember()` calls stay immediate.
     property bool _rememberScheduled: false
     function _scheduleRemember() {
         if (!root.memoryKey || root._rememberScheduled)
@@ -577,18 +466,12 @@ Item {
     }
     Component.onDestruction: root._flushRemember()
 
-    /// §4.3: a filter/order swap rebuilds the rows under the same indices,
-    /// so the next payload must land on row 0 with the offset at the top.
-    /// Hosts raise this before reloading; the payload consumes it.
+    /// §4.3: a filter/order swap rebuilds the rows under the same indices, so
+    /// the next payload lands on row 0 with the offset at the top.
     property bool resetPending: false
 
-    /// The pre-payload half of a structural swap: a true reset of the body's
-    /// state *before* the model churns. The live cursor parks at -1, so the
-    /// count-climb runs as a fresh list — no per-append `Contain` landing can
-    /// realise stale rows (the race that left the view's window desynced from
-    /// the cursor near the scrolloff edge, repaired only by a fresh `G`);
-    /// the running glide and any parked follow die; the memory zeroes so no
-    /// restore can chase the old spot. `resetViewNow` finishes on the payload.
+    /// The pre-payload half of a structural swap: park the cursor and top the
+    /// view before the model churns.
     function resetView() {
         root.resetPending = true;
         centerGlide.stop();
@@ -603,14 +486,11 @@ Item {
                 root.layout, 0);
     }
 
-    /// The landing itself: row 0, top, and the memory agrees (so the next
-    /// restore cannot recall the old spot). Cursor and position land in the
-    /// same tick, or the follow would walk the whole list back (§4.2).
+    /// The landing itself: row 0 centred, and the memory agrees.
     function resetViewNow() {
         if (root.count === 0)
             return;
         root.land(0);
-        root.view.positionViewAtBeginning();
         if (root.memoryKey)
             scroll.remember(root.memoryKey, root.view, root.memoryScope,
                 root.layout, 0);
@@ -618,13 +498,7 @@ Item {
 
     // ── Row state (VI-4 / ARC-I-4) ───────────────────────────────────────
 
-    // The model owns the state; hosts gate it (e.g. only when the Alt verb
-    // kind exists) and keep their own cursor. The logic lives in `RowState`
-    // (CRITIQUESCROLL SC-7), fed by the body's cursor.
     property bool selectable: false
-
-    /// ARC-UI-7.9: the range changed (start/clear/all or a cursor move while
-    /// a range is live), so a badge/status can follow without polling.
     signal selectionChanged
 
     RowState {
@@ -641,26 +515,20 @@ Item {
     readonly property bool hasSelection: rowState.hasSelection
     readonly property int selectionCount: rowState.selectionCount
 
-    /// `v`: start a selection on the cursor row, or end the current one.
     function toggleSelection() {
         rowState.toggle();
     }
 
-    /// `V`: the whole list — the host moves the cursor first, this only
-    /// widens the anchor.
     function selectAllRows() {
         rowState.selectAllRows();
     }
 
-    /// Shift+motion: keep the anchor and move one step in `action`'s
-    /// direction (grid-aware through `moveStep`).
     function extendSelection(action) {
         if (!rowState.extendTo(root.currentIndex))
             return false;
         return root.moveStep(action, 1);
     }
 
-    /// Shift+Click: anchor on the old cursor, then move to `index`.
     function extendSelectionTo(index) {
         if (index < 0 || index >= root.count
                 || !rowState.extendTo(root.currentIndex))
@@ -677,25 +545,20 @@ Item {
         return rowState.selected(index);
     }
 
-    /// Ids of the selected rows ([] when there is no selection).
     function selectionIds(field) {
         return rowState.ids(field);
     }
 
-    /// The selected rows' `starred` flags, aligned with `selectionIds`.
     function selectionStarred(field) {
         return rowState.starred(field);
     }
 
-    /// ARC-I-4: the in-place favourite write (see `RowState`).
     function markStarred(on) {
         rowState.markStarred(on);
     }
 
     // ── Search (ARC-UI-2) ────────────────────────────────────────────────
 
-    // The viewport-scoped row snapshot lives in `SearchContract`
-    // (CRITIQUESCROLL SC-7); the session state and the jump stay here.
     SearchContract {
         id: searchContract
         model: root.model
@@ -703,13 +566,10 @@ Item {
         fields: root.searchFields
     }
 
-    /// The rendered rows the `/` prompt snapshots (see `SearchContract`).
     function searchRows() {
         return searchContract.rows();
     }
 
-    /// Land the view cursor on a matching row; the instant landing keeps
-    /// the jump from walking (the same path `gg`/`G` take).
     function searchJump(row) {
         if (row < 0 || row >= root.count)
             return;
@@ -718,45 +578,29 @@ Item {
 
     // ── Rows (UI-58) ─────────────────────────────────────────────────────
 
-    /// The host's nominal row fraction of the sizing height (0 = the
-    /// delegates own their heights and nothing adapts).
+    /// The host's nominal row fraction of the sizing height (0 = delegates
+    /// own their heights).
     property real rowRatio: 0
-    /// UI-58: host-supplied sizing height (0 = this body's own viewport).
-    /// Page-relative hosts (the album page, the stacked search sections, the
-    /// queue drawer) pass their parent Rectangle height, so inner reflows —
-    /// a growing header, a sibling section appearing — never rescale rows.
+    /// Host-supplied sizing height (0 = this body's own viewport).
     property real rowRefHeight: 0
     readonly property real rowViewHeight: root.rowRefHeight > 0
         ? root.rowRefHeight : root.height
-    /// Adjustable row-height multiplier for compact hosts (Search halves it);
-    /// the baseline/band still come from `Theme.adaptiveRow`.
+    /// Adjustable row-height multiplier for compact hosts.
     property real rowHeightScale: 1.0
-    /// The row baseline captured on the first real measure — the default
-    /// window geometry (Main starts at `Screen.height * 0.72`).
+    /// The row baseline captured on the first real measure.
     property real _rowBase: 0
-    /// The adaptive row for an explicit sizing height. Hosts whose viewport
-    /// height is itself derived from the row height (the search columns snap
-    /// to whole rows) call this with a stable external height, so the two
-    /// cannot feed each other through `adaptiveRowHeight`.
+
     function adaptiveRowFor(viewHeight) {
         return Theme.adaptiveRow(viewHeight, root.rowRatio, root._rowBase)
             * root.rowHeightScale;
     }
 
-    /// The row height to paint — scales with the sizing height inside the
-    /// 18% band (0.82, 40% sooner than the original), cuts whole rows past it
-    /// (see `Theme.adaptiveRow`). Delegates must size from this, never from
-    /// raw viewport fractions (§5).
     readonly property real adaptiveRowHeight: adaptiveRowFor(root.rowViewHeight)
 
     Component.onCompleted: {
         captureRowBase();
         applySavedLayout();
     }
-    // With an explicit sizing height, the baseline must come from it: a
-    // content-height capture is fed by the row height the baseline itself
-    // scales (`listH` → `height` → `_rowBase` → `rowH`), which is the
-    // SearchColumn binding loop.
     onHeightChanged: {
         if (root.rowRefHeight <= 0)
             captureRowBase();
@@ -765,35 +609,40 @@ Item {
     onRowRefHeightChanged: captureRowBase()
     onMemoryKeyChanged: applySavedLayout()
 
-    // A resize changes the row/cell unit while `contentY` stays put, so every
-    // row's y moves under the cursor. Coalesce the resize ticks, then
-    // re-centre the cursor once the new layout settles. This lives in the
-    // shared modal so every fixed-row host gets it, not just one tab. Width
-    // is host-gated: grids reflow by cell size, lyrics re-wrap their lines,
-    // while a fixed-row list only changes its elide on width.
+    // A resize changes the row/cell unit while `contentY` stays put; coalesce
+    // the ticks, then glide the cursor back to the centre once the row unit
+    // settles. Width is host-gated (fixed-row lists keep their elide).
     onWidthChanged: if (root.recenterOnWidth) root._scheduleResizeRecenter()
     onAdaptiveRowHeightChanged: root._scheduleResizeRecenter()
     onCellHeightChanged: root._scheduleResizeRecenter()
     onColumnsChanged: root._scheduleResizeRecenter()
 
+    property bool recenterOnWidth: root.layout === "grid"
+    property real rowSpacing: 0
+    property real contentHeightHint: 0
+
+    property int _resizeTicks: 0
+
     function _scheduleResizeRecenter() {
         if (root.currentIndex < 0)
             return;
-        // A resize invalidates the glide target; keep the view still until
-        // the row unit settles, then snap to the cursor.
         root.stopGlide();
         root._resizeRepair = true;
-        root._glideTo(root.view, root.currentIndex, true);
+        root._resizeTicks = 10;
+        root._centerNow();
         resizeRecenter.restart();
     }
 
     Timer {
         id: resizeRecenter
-        interval: 100
-        repeat: false
+        interval: 50
+        repeat: true
         onTriggered: {
-            if (root.currentIndex >= 0)
-                root.recenterNow();
+            root._centerNow();
+            if (--root._resizeTicks <= 0) {
+                root._resizeRepair = false;
+                resizeRecenter.stop();
+            }
         }
     }
 
@@ -812,11 +661,8 @@ Item {
         id: scroll
     }
 
-    // Unlimited scrolloff carriers: half a viewport of empty space above the
-    // first row and below the last. The list takes the spacer as a header/
-    // footer (its layout ignores Flickable margins); the grid uses the
-    // Flickable top/bottom margins. Either way the follow can centre row 0
-    // and the final row like any other.
+    // Half a viewport above row 0 and below the last row: the cursor can be
+    // centred even at the ends, and the gap is intentional.
     Component {
         id: edgeSpacer
         Item {
@@ -825,10 +671,7 @@ Item {
         }
     }
 
-    // UI-48: the stage is the clip owner when bleed is on — it overhangs the
-    // row edges by `bleed`, while both views inset by the same amount, so the
-    // highlight can paint into the gutter without the real rows resizing.
-    // With bleed 0 the stage is exactly the body and the view clips itself.
+    // UI-48: the stage is the clip owner when bleed is on.
     Item {
         id: stage
         x: -root.bleed
@@ -841,17 +684,15 @@ Item {
             anchors.fill: parent
             anchors.leftMargin: root.bleed
             anchors.rightMargin: root.bleed
-            // With bleed the stage clips for it; otherwise the view does.
             clip: root.bleed <= 0
             visible: root.layout !== "grid"
             model: root.layout === "grid" ? null : root.model
             delegate: root.rowDelegate
             spacing: root.rowSpacing
-            header: root.unlimitedScrolloff ? edgeSpacer : null
-            footer: root.unlimitedScrolloff ? edgeSpacer : null
+            header: edgeSpacer
+            footer: edgeSpacer
             boundsBehavior: Flickable.StopAtBounds
-            // QR-9: the delegates are stateless (every visual derives from
-            // model roles), so the view may pool and recycle them.
+            highlightFollowsCurrentItem: false
             reuseItems: true
         }
 
@@ -866,43 +707,33 @@ Item {
             delegate: root.cellDelegate
             cellWidth: root.cellWidth
             cellHeight: root.cellHeight > 0 ? root.cellHeight : root.cellWidth
-            // ARC-UI-7.8: GridView has no header/footer, so the unlimited
-            // scrolloff rides the Flickable margins instead.
-            topMargin: root.unlimitedScrolloff ? root._edgeMargin : 0
-            bottomMargin: root.unlimitedScrolloff ? root._edgeMargin : 0
+            topMargin: root._edgeMargin
+            bottomMargin: root._edgeMargin
             boundsBehavior: Flickable.StopAtBounds
-            // QR-9: same contract as the list above.
+            highlightFollowsCurrentItem: false
             reuseItems: true
         }
     }
 
-    // The view side of the cursor contract (§4.1/§4.2): the active view is
-    // a follower; its refill/clamp transients are never adopted.
+    // The view is a follower: its transients are never adopted.
     Connections {
         target: root.view
         function onContentYChanged() {
-            // A cursor follow paints every frame; save only once it settles,
-            // where `_settleGlide` schedules the coalesced remember.
             if (root.memoryKey && !centerGlide.running)
                 root._scheduleRemember();
         }
-        // A drag owns the viewport: kill any centre glide in flight.
         function onMovementStarted() {
             root.stopGlide();
         }
-        // A shrinking contentHeight estimate (finite-row lists) can leave
-        // the idle viewport past the real end; repair the gap once the
-        // estimate settles, never during a glide or landing.
         function onContentHeightChanged() {
             if (centerGlide.running || root.isLanding)
                 return;
             if (root._resizeRepair && root.currentIndex >= 0)
-                root._glideTo(target, root.currentIndex, true);
+                root._centerNow();
             else
                 root._clampY(target);
         }
         function onCurrentIndexChanged() {
-            // A landing owns the view while it runs.
             if (target.count === 0 || root.isLanding)
                 return;
             if (root.currentIndex >= 0 && target.currentIndex !== root.currentIndex)
@@ -910,23 +741,10 @@ Item {
             if (root.memoryKey)
                 root.remember();
         }
-        // A payload (re)load: a fresh list lands on row 0 (no memory, the
-        // cursor was never set), an index past the new end clamps, and a
-        // view that was empty a beat ago lands the carried cursor — all
-        // instantly, a reload must not walk the viewport. The row-0 case is
-        // the cursor-as-property replacement for the old alias accident
-        // (the view defaulted to 0 and the alias silently adopted it).
         function onCountChanged() {
             if (target.count === 0)
                 return;
-            // Churn lands carry no settle: during a rebuild the count climbs
-            // row by row and each intermediate end is momentarily the last
-            // row — settling those steps nudged the viewport mid-refill
-            // (the order/type-swap flicker, #bug 2).
             if (root.currentIndex < 0) {
-                // A fresh list lands on row 0 — unless a memory exists, in
-                // which case the host's `restore()` owns the first landing
-                // (and the guarded remember below never erases it with -1).
                 if (scroll.savedIndex(root.memoryKey) < 0)
                     root._land(0, false);
             } else if (root.currentIndex > target.count - 1) {
@@ -936,9 +754,6 @@ Item {
             }
             if (root.memoryKey)
                 root.remember();
-            // A `goto` that met the empty view: the payload is in, finish
-            // the follow (after the landing's `_instantFollow` release, so
-            // the glide is not shielded).
             if (root._pendingFollow >= 0
                     && root._pendingFollow === root.currentIndex
                     && target.count > root._pendingFollow) {
@@ -946,7 +761,7 @@ Item {
                 root._pendingFollow = -1;
                 Qt.callLater(function () {
                     if (root.currentIndex === i && root.view && root.view.count > 0)
-                        root._glideTo(root.view, i);
+                        root._glideTo(root.view, i, false);
                 });
             }
         }

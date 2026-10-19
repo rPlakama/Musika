@@ -2033,7 +2033,7 @@ The product is incomplete without these.
 
 ### Search revamp (ARC-SEARCH)
 
-- [ ] **ARC-SEARCH · SearchRevamp — a persistent Tantivy index for the global palette** — P2 · (reported; S-8, S-9, PATH-10; DEPCRITIQUE)
+- [ ] **ARC-SEARCH · SearchRevamp — an in-process Nucleo index for the global palette** — P2 · (reported; S-8, S-9, PATH-10; DEPCRITIQUE)
   - **Why:** the palette still pays for three engines per keystroke: FTS5 over
     `search.db` (`src/search.rs`), a `LIKE '%…%'` full scan for artists/albums
     (`src/library.rs:335`), and a full scan of the FTS virtual table for the
@@ -2122,20 +2122,19 @@ The product is incomplete without these.
       until the next sync), matching today's "search is a disposable cache"
       contract. On logout/wipe, drop the index. Keep `search.db` untouched
       in M1–M3 as the fallback.
-    - **Single engine.** Tantivy is the only catalog engine; the in-process
-      Nucleo matcher (`src/search/index.rs`) and the FTS5 path (the
-      `song_search` table, the `search` pool and the `MUSIKA_SEARCH_ENGINE`
-      switch) were removed. `search_json` queries the persistent index
-      directly and reports an empty payload only if the index cannot be
-      opened/built.
-    - **Tantivy (0.3.8).** `src/search/tantivy_index.rs` adds a persistent
-      index under `~/.config/musika/search-index`: BM25 over title/artist/
-      album with field boosts, prefix + one-edit fuzzy terms, ASCII-folded
-      lower-case terms (`bjork` -> `Björk`), fast play-count fields for Most
-      played and the S-9 re-rank, and S-8 album tracks read back from the
-      index. A rebuild writes `search-index.new`, commits, swaps the
-      directory and reopens; the `musika-meta.json` catalog key (`last_modified`)
-      lets startup reuse the index. Wipes remove the directory.
+    - **Engine switch.** `MUSIKA_SEARCH_ENGINE=fts|nucleo` — `nucleo` is the
+      default; `fts` opts back into the SQLite engine. `search_json`
+      auto-falls back to FTS whenever the in-memory build or query fails.
+      Remove the FTS/LIKE hot paths only after the fallback has proven
+      itself and the benchmarks are green; update README/DBWIRING/CRITIQUE's
+      stale "tmpfs + fd" claim while there.
+    - **Threads/memory.** `Nucleo::new(Config::DEFAULT, noop_notify,
+      Some(4), 1)` — a small worker pool for songs (the 100k bench measured
+      6 ms for a common prefix vs 19 ms on one thread); the notify callback
+      only needs to wake the tick loop. Memory ≈ item structs + one UTF-32
+      haystack per song (~4 bytes/char): measure at 10k/50k/100k and record;
+      if the 100k figure is unacceptable, cap the index (e.g. 150k songs) and
+      fall back to FTS.
   - **Milestones:**
     1. **M0 — baseline.** A `#[ignore]` Rust bench plus a small script over a
        synthetic 10k/100k catalog records p50/p95 for `search_json`
@@ -2154,35 +2153,38 @@ The product is incomplete without these.
     5. **M4 — default + cleanup.** Flip the default, delete the dead FTS/LIKE
        hot paths (keep the migrations for a later cleanup), update docs and
        DEPCRITIQUE.
-  - **Verify:** `radio`/`radiohd` finds Radiohead (prefix + one-edit fuzzy);
-    `bjork` finds Björk (ASCII folding); `KID A` respects smartcase;
-    punctuation still behaves as prose; one-album queries list tracks in
-    track order (S-8); an equal-text tie is ordered by play count and a
-    strong text match survives a small boost (S-9); offline shows only
-    downloaded songs; the empty query paints the same Most-played rows with
-    no DB scan. At 100k songs, warm Tantivy `search_json` p95 < 10 ms and
-    `most_played` < 5 ms (measured 1.8 ms / 0.5 ms), with no work on the Qt
-    thread and no `LIKE`/FTS query in the hot path; memory recorded.
-    `cargo test`, `qmllint`, `scripts/check-scroll.sh` and the overlay smoke
-    tests green.
-  - **Risks:** the word-based matcher means `rdo` no longer matches
-    Radiohead (`radio`/one-edit typos still do); ranking changes habit;
-    mitigate with the M0/M3 comparison and a conservative play boost.
-    Tantivy is a heavy compile-time dependency but its search/persistence
-    cost is measured above; the index is a disposable cache.
-  - **Now (partial):** Tantivy is the only engine (working tree):
-    `src/search/tantivy_index.rs` persists BM25 + prefix/fuzzy + fast-field
-    search under `search-index/`, and `browse::search_json` routes to it.
-    The Nucleo engine, the FTS5 path, `Dbs.search`, the `song_search` table
-    and the `MUSIKA_SEARCH_ENGINE` switch are gone. Index rebuilds happen
-    after sync and on a stale/missing catalog key; wipes remove the
-    directory; startup warms it in the background. S-8 (album track order),
-    S-9 (play boost + Most played), offline filtering, live hearts/ratings
-    and diacritic folding are wired; tests cover prefix/fuzzy, folding,
-    boosts, ordering, album tracks and persistence. 100k synthetic, release:
-    build + open 162 ms, `track` 1.8 ms, `radio` 1.7 ms, `most_played`
-    0.5 ms. Open: M3 highlight spans (matching remains client-side literal
-    spans) and a live GUI pass.
+  - **Verify:** `rdo`/`radiohd` finds Radiohead (fuzzy); `bjork` finds Björk
+    (normalization); `KID A` respects smartcase; punctuation still behaves as
+    prose; one-album queries list tracks in track order (S-8); an equal-text
+    tie is ordered by play count and a strong text match survives a small
+    boost (S-9); offline shows only downloaded songs; the empty query paints
+    the same Most-played rows with no DB read. At 100k songs, warm
+    `search_json` p95 < 10 ms and `most_played` < 1 ms (baseline recorded in
+    M0), with no work on the Qt thread and no `LIKE`/FTS query in the hot
+    path; memory recorded. `cargo test`, `qmllint`,
+    `scripts/check-scroll.sh` and the overlay smoke tests green;
+    `MUSIKA_SEARCH_ENGINE=fts` still works.
+  - **Risks:** fuzzy ranking changes habit (weak matches appear that FTS
+    never showed); mitigate with the M0/M3 comparison and a conservative
+    play boost. The high-level `nucleo` API is pre-1.0 (0.5), but the matcher
+    core is stable and widely used. Memory is the real trade; the cap and
+    fallback keep a large library usable. All `tick` loops live in
+    `spawn_blocking`, so the Qt thread never waits.
+  - **Now (partial):** M1 + M2 and the M4 default flip landed — `nucleo 0.5`
+    is in `Cargo.toml`; `src/search/index.rs` builds the catalog from
+    `library.db` (songs on a 4-thread Nucleo worker, artists/albums via
+    `nucleo-matcher`), keeps `most_played` and `by_album` sorted, and
+    `browse::search_json` routes to it by default; `MUSIKA_SEARCH_ENGINE=fts`
+    opts back to the FTS fallback, and `index::rebuild` refreshes the cache
+    after a sync. S-8 (`album_context` + track order) and S-9 (play boost +
+    Most played) ride the in-memory index; hearts/ratings are read live;
+    every wipe clears it. Tests cover fuzzy matching, smartcase/diacritics,
+    the play boost, Most-played order, track order and one end-to-end
+    `search_json` payload. M0 (index-only, release, 100k synthetic): build
+    38 ms, `rdo` 3.4 ms, `track` 6.0 ms, `radio` 3.1 ms on a 4-thread pool;
+    the FTS comparison baseline is still to record. Open: M3 highlight spans
+    (fuzzy hits still use the client-side literal `SearchMatch.spans`), FTS
+    cleanup.
 
 ### Incremental (ARC-I)
 

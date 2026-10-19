@@ -39,6 +39,7 @@ use sqlx::sqlite::{SqliteJournalMode, SqlitePool, SqlitePoolOptions};
 pub struct Dbs {
     pub credentials: SqlitePool,
     pub library: SqlitePool,
+    pub search: SqlitePool,
     pub covers: SqlitePool,
     pub media: SqlitePool,
     pub lyrics: SqlitePool,
@@ -60,10 +61,15 @@ pub async fn init() -> Result<Dbs> {
     .await?;
     let media = open_migrated(media_path()?, 3, sqlx::migrate!("./migrations_media"), false).await?;
     absorb_legacy(&library, &media).await?;
+    // Search gets its own connections over the same library file: a slow or
+    // cancelled query can never occupy the writer's pool (the search box
+    // stays responsive while a sync rebuilds the FTS table).
+    let search = open_pool(library_path()?, 2).await?;
 
     Ok(Dbs {
         credentials: library.clone(),
         library: library.clone(),
+        search,
         covers: media.clone(),
         media: media.clone(),
         lyrics: media.clone(),
@@ -94,6 +100,7 @@ async fn absorb_legacy(library: &SqlitePool, media: &SqlitePool) -> Result<()> {
     let mut conn = library.acquire().await?;
     let library_legacy = [
         (credentials_path()?, &["users"][..]),
+        (search_path()?, &["song_search"][..]),
         (artist_user_path()?, &["artist_user"][..]),
         (status_path()?, &["session_status"][..]),
         (
@@ -179,7 +186,15 @@ async fn import_file(
         .fetch_optional(&mut *conn)
         .await?;
         if exists.is_some() {
-            let sql = format!("INSERT OR IGNORE INTO main.{table} SELECT * FROM legacy.{table}");
+            let sql = if *table == "song_search" {
+                "INSERT OR IGNORE INTO main.song_search
+                     (rowid, title, artist, album, duration, song_id, play_count)
+                 SELECT rowid, title, artist, album, duration, song_id, play_count
+                 FROM legacy.song_search"
+                    .to_string()
+            } else {
+                format!("INSERT OR IGNORE INTO main.{table} SELECT * FROM legacy.{table}")
+            };
             sqlx::raw_sql(sqlx::AssertSqlSafe(sql))
                 .execute(&mut *conn)
                 .await?;
@@ -202,22 +217,23 @@ async fn delete_tables(pool: &SqlitePool, tables: &[&'static str]) -> Result<()>
 
 /// Wipes only the library metadata: artists, albums, songs, artist info and
 /// the sync bookkeeping. The next sync repopulates it; the derived
-/// `index.txt` mirror and the persistent search index go with it.
+/// `index.txt` mirror goes with it.
 pub async fn wipe_library(dbs: &Dbs) -> Result<()> {
     delete_tables(
         &dbs.library,
         &["songs", "albums", "artists", "artist_info", "meta"],
     )
     .await?;
-    crate::search::tantivy_index::wipe();
+    crate::search::index::clear();
     remove_mirror();
     Ok(())
 }
 
-/// Wipes the persistent search index and the `index.txt` mirror. Both
-/// rebuild from the library on the next sync/search.
-pub async fn wipe_indexes(_dbs: &Dbs) -> Result<()> {
-    crate::search::tantivy_index::wipe();
+/// Wipes the derived full-text index plus the `index.txt` mirror. Both
+/// rebuild from the library on the next sync.
+pub async fn wipe_indexes(dbs: &Dbs) -> Result<()> {
+    delete_tables(&dbs.search, &["song_search"]).await?;
+    crate::search::index::clear();
     remove_mirror();
     Ok(())
 }
@@ -261,7 +277,7 @@ fn remove_dir(dir: &Path) -> Result<()> {
 /// re-initialises the databases with fresh files and schemas. An old or
 /// foreign schema cannot survive this.
 pub async fn wipe_files(dbs: &Dbs) -> Result<()> {
-    crate::search::tantivy_index::wipe();
+    crate::search::index::clear();
     // Close first: an open pool keeps the deleted inodes alive and the next
     // login would write into unlinked files.
     for pool in [&dbs.library, &dbs.media] {
@@ -305,7 +321,7 @@ pub async fn wipe_files(dbs: &Dbs) -> Result<()> {
 pub async fn wipe(dbs: &Dbs) -> Result<()> {
     wipe_and_migrate(&dbs.library, sqlx::migrate!("./migrations_library")).await?;
     wipe_and_migrate(&dbs.media, sqlx::migrate!("./migrations_media")).await?;
-    crate::search::tantivy_index::wipe();
+    crate::search::index::clear();
 
     for dir in [covers_dir(), media_dir(), playback_dir()] {
         if let Ok(dir) = dir {
@@ -420,6 +436,7 @@ macro_rules! db_path {
 db_path! {
     credentials_path: "credentials.db", "MUSIKA_CREDENTIALS_FILE";
     library_path: "library.db", "MUSIKA_LIBRARY_FILE";
+    search_path: "search.db", "MUSIKA_SEARCH_FILE";
     covers_path: "covers.db", "MUSIKA_COVERS_FILE";
     media_path: "media.db", "MUSIKA_MEDIA_FILE";
     lyrics_path: "lyrics.db", "MUSIKA_LYRICS_FILE";
@@ -435,13 +452,6 @@ db_path! {
 /// Directory holding the cached cover-art blobs.
 pub fn covers_dir() -> Result<PathBuf> {
     dir_from_env("MUSIKA_COVERS_DIR", || Ok(config_dir()?.join("covers")))
-}
-
-/// Directory holding the persistent Tantivy search index (ARC-SEARCH).
-pub fn search_index_dir() -> Result<PathBuf> {
-    dir_from_env("MUSIKA_SEARCH_INDEX_DIR", || {
-        Ok(config_dir()?.join("search-index"))
-    })
 }
 
 /// Directory holding permanent/rule media blobs (CACHE-1): config root, never

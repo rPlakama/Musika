@@ -535,6 +535,7 @@ mod tests {
         crate::db::Dbs {
             credentials,
             library,
+            search: crate::sqlite::memory_pool(None).await,
             covers,
             media: crate::sqlite::memory_pool(None).await,
             lyrics: crate::sqlite::memory_pool(None).await,

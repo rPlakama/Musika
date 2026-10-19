@@ -764,7 +764,7 @@ impl Backend {
         self.remember_account(server_url, username);
         self.offline = true;
         self.offline_changed();
-        crate::debug_log!("login: offline mode — showing downloaded music only");
+        eprintln!("login: offline mode — showing downloaded music only");
         self.login_succeeded();
         self.status_message = "Offline — showing downloaded music only.".to_string();
         self.status_message_changed();
@@ -2447,7 +2447,7 @@ impl Backend {
             if !force && previous == rows_hash {
                 return;
             }
-            crate::debug_log!("queue: published {} rows", items.len());
+            eprintln!("queue: published {} rows", items.len());
             let json = serde_json::json!({
                 "index": index,
                 "items": items,

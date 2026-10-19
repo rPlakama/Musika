@@ -103,6 +103,14 @@ where
     if indexes.index.is_empty() && indexes.shortcut.is_empty() {
         crate::library::touch_last_sync(&dbs.library).await?;
         report(&mut progress, "Up to date", 100);
+        // S-9: the search schema migration recreates the FTS table, so an
+        // unchanged library can still have an empty index. Rebuild it here
+        // rather than waiting for the next library change.
+        if crate::search::count(&dbs.search).await.unwrap_or(0) == 0 {
+            if let Err(err) = rebuild_search(dbs).await {
+                eprintln!("search: could not rebuild the index: {err:#}");
+            }
+        }
         // The library is unchanged, but the derived caches may still need
         // topping up (first run interrupted, or entries that previously
         // failed): covers, then a bounded lyric backfill.
@@ -276,11 +284,16 @@ where
     })
 }
 
-/// Rebuilds the persistent Tantivy catalog from the current library rows.
-/// A failure is logged and swallowed: the next search rebuilds lazily.
+/// Rebuilds the derived search caches from the current library rows: the
+/// FTS5 mirror (kept as the fallback engine) and, when ARC-SEARCH is opted
+/// in, the in-memory Nucleo catalog.
 async fn rebuild_search(dbs: &Dbs) -> Result<()> {
-    if let Err(err) = crate::search::tantivy_index::rebuild(&dbs.library).await {
-        eprintln!("search: could not rebuild the Tantivy index: {err:#}");
+    let rows = crate::library::song_search_rows(&dbs.library).await?;
+    crate::search::rebuild(&dbs.search, &rows).await?;
+    if crate::search::index::enabled()
+        && let Err(err) = crate::search::index::rebuild(&dbs.library).await
+    {
+        eprintln!("search: could not rebuild the in-memory index: {err:#}");
     }
     Ok(())
 }

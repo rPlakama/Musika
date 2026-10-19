@@ -591,6 +591,7 @@ mod tests {
         let dbs = crate::db::Dbs {
             credentials: library.clone(),
             library: library.clone(),
+            search: library.clone(),
             covers: library.clone(),
             lyrics: library.clone(),
             colors: library.clone(),
@@ -792,6 +793,7 @@ mod tests {
         let dbs = crate::db::Dbs {
             credentials: library.clone(),
             library: library.clone(),
+            search: library.clone(),
             covers: library.clone(),
             lyrics: library.clone(),
             colors: library.clone(),

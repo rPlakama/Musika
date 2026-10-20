@@ -379,12 +379,13 @@ Item {
                 // ARC-UI-2 M1: the columns paint the same three cells.
                 searchFields: ["title", "subtitle", "meta"]
                 // UI-58: rows scale from the shared panel height (not the
-                // section left over by the stack) and Search halves the
+                // section left over by the stack) and Search trims the
                 // normal row; the precomputed extent keeps the shared glide
                 // off Qt's lazy estimate.
                 rowRatio: 0.12
-                // Two-thirds of the normal row: a 1/3 cut for Search.
-                rowHeightScale: 2 / 3
+                // 30% taller than the old two-thirds cut: 13/15 of the
+                // normal row.
+                rowHeightScale: 13 / 15
                 rowRefHeight: root._rowSizingHeight
 
                 rowDelegate: Component {

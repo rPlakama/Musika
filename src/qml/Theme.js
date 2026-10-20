@@ -254,15 +254,21 @@ function widthScale(width, floor) {
 // so the reduction initiates 40% sooner than the original 0.7 band (user
 // call). `ratio` is the host's nominal row fraction of its viewport;
 // `baseline` the row height captured on the first real measure (0 before
-// that: the nominal is returned untouched).
+// that: the nominal is quantised, never returned raw).
+//
+// The returned height always divides `viewHeight` into whole rows, so a
+// partial row can never sit at the bottom of the viewport (a half row used to
+// break the centred follow's visible-row math).
 function adaptiveRow(viewHeight, ratio, baseline) {
     var nominal = viewHeight * ratio
-    if (baseline <= 0 || nominal <= 0)
+    if (nominal <= 0 || viewHeight <= 0)
         return nominal
     var edge = 0.82
-    if (nominal >= edge * baseline)
-        return nominal
-    var rows = Math.max(1, Math.floor(viewHeight / (edge * baseline)))
+    var rows
+    if (baseline > 0 && nominal < edge * baseline)
+        rows = Math.max(1, Math.floor(viewHeight / (edge * baseline) + 1e-6))
+    else
+        rows = Math.max(1, Math.ceil(viewHeight / nominal - 1e-6))
     return viewHeight / rows
 }
 

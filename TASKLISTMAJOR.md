@@ -2742,7 +2742,9 @@ Small, bounded, high-value changes.
     MediaList 0.105, fullscreen queue 0.16), host-level baselines for
     AlbumEntry/SearchColumn/QueueDrawer; harness case + PTY smoke green;
     the band edge sits at 0.82 (ARC-UI-3, 40% sooner). Landed (`42e4a6a`,
-    `5a4cc4f`).
+    `5a4cc4f`). 2026-10-20: the row-count step (and its resize jump) was
+    removed — the row now clamps continuously at 0.82× and the panel snaps its
+    body to whole rows instead; guarded by `scripts/bench-adaptive-row.qml`.
 
 - [x] **UI-59 · Transport cluster: one horizontal row, squeeze-proof** — P1 · (design QuickWin; user-found while squeezing the bars)
   - **Why:** previous/pause/next must always read as one horizontal line. Today

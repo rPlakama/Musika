@@ -1416,8 +1416,8 @@ Rectangle {
                                         readonly property bool emphasized: index === root.queueCursor || rowHover.hovered
 
                                         width: ListView.view.width
-                                        // UI-58: adaptive — cut a row past the
-                                        // 18% squeeze instead of shrinking.
+                                        // UI-58: adaptive — stops shrinking at
+                                        // the 18% floor, never jumps a row.
                                         height: queueContent.adaptiveRowHeight
                                         // Playing-track tint stays on the row; the
                                         // cursor/hover block is the shared UI-48 layer.

@@ -224,8 +224,11 @@ ScrollPanel {
     model: mediaRows
     // ARC-UI-2 M1: the rows paint title, subtitle and meta; nothing else.
     searchFields: ["title", "subtitle", "meta"]
-    // UI-58: the row fraction the adaptive rule preserves.
+    // UI-58: the row fraction the adaptive rule preserves. Size from the
+    // panel's body room, not from the body itself, so snapping it cannot
+    // feed back into the row unit.
     rowRatio: 0.105
+    rowRefHeight: root.bodyAvail
     // ARC-UI-3: Shift-C flips every segment between the row list and a cover
     // wall — the same shared body ArtistEntry uses, with gg/G, the search
     // contract, selection and the scroll memory.
@@ -374,7 +377,7 @@ ScrollPanel {
             readonly property bool selectedRow: root.isSelected(index)
 
             width: viewWidth
-            // UI-58: adaptive — the 18% band scales, past it a row is cut.
+            // UI-58: adaptive — stops at the 18% floor instead of stepping.
             height: root.adaptiveRowHeight > 0
                 ? root.adaptiveRowHeight
                 : (ListView.view ? ListView.view.height * 0.105 : 0)

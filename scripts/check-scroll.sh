@@ -81,6 +81,10 @@ if command -v qml >/dev/null 2>&1; then
         echo "check-scroll: SearchContract large-model guard failed" >&2
         exit 1
     fi
+    if ! QT_QPA_PLATFORM=offscreen qml scripts/bench-adaptive-row.qml; then
+        echo "check-scroll: adaptive-row continuity guard failed" >&2
+        exit 1
+    fi
 fi
 
 echo "check-scroll: ok"

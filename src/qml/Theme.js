@@ -248,28 +248,19 @@ function widthScale(width, floor) {
 }
 
 // UI-58: adaptive rows. A row may lose at most 18% of its baseline
-// (default-window) height; past that the squeeze trades whole rows — the
-// count drops by one and the rest land back in [0.82, 1]× the baseline —
-// instead of shrinking every row further. ARC-UI-3: the edge sits at 0.82,
-// so the reduction initiates 40% sooner than the original 0.7 band (user
-// call). `ratio` is the host's nominal row fraction of its viewport;
-// `baseline` the row height captured on the first real measure (0 before
-// that: the nominal is quantised, never returned raw).
-//
-// The returned height always divides `viewHeight` into whole rows, so a
-// partial row can never sit at the bottom of the viewport (a half row used to
-// break the centred follow's visible-row math).
+// (default-window) height; past that it stops shrinking instead of trading a
+// whole row. The old row-count step made the row unit discontinuous, so a
+// 1 px resize could jump every row and the centred target by hundreds of
+// pixels. Whole rows are a viewport concern now: `ScrollPanel` and
+// `SearchColumn` snap their body heights, while this helper stays continuous.
+// `ratio` is the host's nominal row fraction of its reference; `baseline`
+// the row height captured on the first real measure.
 function adaptiveRow(viewHeight, ratio, baseline) {
     var nominal = viewHeight * ratio
     if (nominal <= 0 || viewHeight <= 0)
         return nominal
-    var edge = 0.82
-    var rows
-    if (baseline > 0 && nominal < edge * baseline)
-        rows = Math.max(1, Math.floor(viewHeight / (edge * baseline) + 1e-6))
-    else
-        rows = Math.max(1, Math.ceil(viewHeight / nominal - 1e-6))
-    return viewHeight / rows
+    var floor = baseline > 0 ? 0.82 * baseline : 0
+    return Math.max(nominal, floor)
 }
 
 // Speaker icon by volume tier: muted / silent / low (≤33) / high. Shared by

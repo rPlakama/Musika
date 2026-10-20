@@ -44,7 +44,8 @@ Rectangle {
 
     // --- Split geometry ------------------------------------------------------
     // A = this fraction of the height, B = the rest. Both bands are
-    // horizontal-centred; B is bottom-anchored to the surface.
+    // horizontal-centred. B is snapped down to whole adaptive rows so a
+    // partial row never sits at the bottom; the remainder stays surface.
     // UI-57: the band sits 30% below the original 0.2 (0.14) and
     // `widthScale` ramps it further as the window narrows.
     property real headerRatio: 0.14
@@ -64,6 +65,24 @@ Rectangle {
         return Theme.clamp(full * root.widthScale, 18, full);
     }
     readonly property real effectiveHeaderRatio: root.headerRatio * root.widthScale
+
+    /// The room the body would have without snapping; also the stable row
+    /// reference hosts pass to `ScrollContent` (never the body's own height).
+    readonly property real bodyAvail: Math.max(0, root.height - header.height)
+    /// The row height (and the resulting body height) use `rowStride`, which
+    /// is independent of this body. Snapping here, not in the row, keeps the
+    /// row unit continuous across a resize.
+    readonly property real bodyHeight: {
+        var stride = (content.count > 0 && content.adaptiveRows
+                && content.rowRefHeight > 0)
+            ? content.rowStride : 0;
+        if (stride <= 0)
+            return root.bodyAvail;
+        var gap = content.rowSpacing;
+        var rows = Math.max(1, Math.floor(
+            (root.bodyAvail + gap) / stride + 1e-6));
+        return Math.min(root.bodyAvail, rows * stride - gap);
+    }
 
     // --- Header (A) ----------------------------------------------------------
     // Children declared on the panel land in the title band.
@@ -285,14 +304,14 @@ Rectangle {
         }
     }
 
-    // B: the scroll body (the rest), bottom-anchored.
+    // B: the scroll body, a whole number of adaptive rows tall.
     Rectangle {
         radius: Theme.radius
         id: body
         anchors.top: header.bottom
-        anchors.bottom: parent.bottom
         anchors.horizontalCenter: parent.horizontalCenter
         width: parent.width
+        height: root.bodyHeight
         color: "transparent"
         clip: true
 

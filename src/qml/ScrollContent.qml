@@ -38,9 +38,9 @@ import "Theme.js" as Theme
 // destroys a delegate as soon as it leaves the viewport instead of keeping
 // an offscreen pool alive.
 //
-// The follow is a frame loop: it re-reads the target every frame, absorbs
-// geometry drift, and glides with OutCubic. Semantic jumps land instantly.
-// Hosts never write `contentY` or call `positionViewAtIndex` themselves.
+// The follow is a short OutCubic animation on `contentY`. Semantic jumps
+// land instantly. Hosts never write `contentY` or call
+// `positionViewAtIndex` themselves.
 Item {
     id: root
 
@@ -117,26 +117,24 @@ Item {
 
     // ── The follow ───────────────────────────────────────────────────────
 
-    FrameAnimation {
+    NumberAnimation {
         id: glide
-        onTriggered: root._tick()
+        target: root.view
+        property: "contentY"
+        easing.type: Easing.OutCubic
+        onFinished: root._settle()
     }
 
-    property real _startY: 0
-    property real _elapsed: 0
-    property int _duration: 0
-    property real _lastTarget: 0
     property int _revealTries: 0
 
-    /// Rows in the viewport: viewport height divided by the row stride. Rows
-    /// are fitted to whole counts, so rounding (not ceiling) keeps the
-    /// screenful exact and the centring band stable across float error.
+    /// Full rows in the viewport. A partial row at the bottom is clipped and
+    /// does not count as a row, so the centring band has one threshold.
     function visibleRows() {
         var v = root.view;
         var stride = root._stride(v);
         if (!v || stride <= 0 || v.height <= 0)
             return 1;
-        return Math.max(1, Math.round(v.height / stride));
+        return Math.max(1, Math.floor(v.height / stride + 1e-6));
     }
 
     /// The screenful as a reactive property (the render/mark cap).
@@ -176,6 +174,9 @@ Item {
     function _stride(v) {
         if (root.layout === "grid")
             return root.cellHeight > 0 ? root.cellHeight : root.cellWidth;
+        if (root.rowStride > 0)
+            return root.rowStride;
+        // Variable-height rows (lyrics) are measured, not derived.
         var i = root.currentIndex >= 0 ? root.currentIndex : 0;
         var item = v ? v.itemAtIndex(i) : null;
         if (item && item.height > 0)
@@ -235,15 +236,23 @@ Item {
             return 0;
         if (row >= rows - half)
             return maxY;
-        var item = v.itemAtIndex(index);
+        var stride = root._stride(v);
+        if (stride <= 0)
+            return null;
         var center;
-        if (item && item.height > 0) {
-            center = item.y + item.height * 0.5 - v.height * 0.5;
+        if (root.rowStride > 0) {
+            // Uniform rows: never read a delegate mid-reflow.
+            center = row * stride + root.adaptiveRowHeight * 0.5
+                - v.height * 0.5;
+        } else if (root.layout === "grid") {
+            center = row * stride + stride * 0.5 - v.height * 0.5;
         } else {
-            var stride = root._stride(v);
-            if (stride <= 0)
-                return null;
-            center = (row + 0.5) * stride - v.height * 0.5;
+            var item = v.itemAtIndex(index);
+            if (item && item.height > 0)
+                center = item.y + item.height * 0.5 - v.height * 0.5;
+            else
+                center = row * stride
+                    + (stride - root.rowSpacing) * 0.5 - v.height * 0.5;
         }
         return Math.max(0, Math.min(maxY, center));
     }
@@ -298,43 +307,10 @@ Item {
             root._settle();
             return;
         }
-        root._startY = v.contentY;
-        root._lastTarget = target;
-        root._elapsed = 0;
-        root._duration = override > 0 ? override : root.followMs;
+        glide.from = v.contentY;
+        glide.to = target;
+        glide.duration = override > 0 ? override : root.followMs;
         glide.start();
-    }
-
-    function _tick() {
-        var v = root.view;
-        if (!v || root.currentIndex < 0 || root.currentIndex >= v.count
-                || root.isLanding) {
-            glide.stop();
-            return;
-        }
-        var target = root._target(v, root.currentIndex);
-        if (target === null) {
-            glide.stop();
-            return;
-        }
-        // Dynamic rows re-measure under the cursor; absorb the drift into the
-        // start point so the interpolation never jumps.
-        var drift = target - root._lastTarget;
-        if (Math.abs(drift) > 0.5) {
-            root._startY += drift;
-            root._lastTarget = target;
-        }
-        root._elapsed += glide.frameTime * 1000;
-        var t = root._duration > 0
-            ? Math.min(1, root._elapsed / root._duration) : 1;
-        var eased = 1 - Math.pow(1 - t, 3);
-        v.contentY = root._startY + (target - root._startY) * eased;
-        if (t >= 1 || Math.abs(v.contentY - target) < 0.5) {
-            v.contentY = target;
-            glide.stop();
-            root.glideOverrideMs = 0;
-            root._settle();
-        }
     }
 
     function _settle() {
@@ -368,6 +344,7 @@ Item {
     function recenter(duration) {
         if (root.currentIndex < 0 || !root.view)
             return;
+        root._manualScroll = false;
         root.glideOverrideMs = Math.max(0, duration);
         root._follow(root.view, root.currentIndex, false);
     }
@@ -376,11 +353,13 @@ Item {
     function recenterNow() {
         if (root.currentIndex < 0 || !root.view)
             return;
+        root._manualScroll = false;
         root.glideOverrideMs = 0;
         root._follow(root.view, root.currentIndex, true);
     }
 
     function _cursorMoved() {
+        root._manualScroll = false;
         if (root.isLanding)
             return;
         var v = root.view;
@@ -418,6 +397,7 @@ Item {
     function _land(index, withSettle) {
         if (index < 0)
             return;
+        root._manualScroll = false;
         var v = root.view;
         if (v && v.count > 0)
             index = Math.max(0, Math.min(index, v.count - 1));
@@ -465,6 +445,7 @@ Item {
             return;
         if (root.count > 0)
             i = Math.max(0, Math.min(i, root.count - 1));
+        root._manualScroll = false;
         root._pendingFollow = i;
         root.currentIndex = i;
         var v = root.view;
@@ -655,33 +636,36 @@ Item {
 
     property real _rowBase: 0
 
-    /// Snap `row` so `viewHeight` holds a whole number of rows plus their
-    /// gaps. This is the last line of defence against a sliced row.
-    function _fitRows(viewHeight, row) {
-        if (viewHeight <= 0 || row <= 0)
-            return row;
-        var gap = root.rowSpacing;
-        var rows = Math.max(1, Math.ceil(
-            (viewHeight + gap) / (row + gap) - 1e-6));
-        return Math.max(0, (viewHeight - (rows - 1) * gap) / rows);
-    }
-
     function adaptiveRowFor(viewHeight) {
-        return root._fitRows(viewHeight,
-            Theme.adaptiveRow(viewHeight, root._rowRatio, root._rowBase)
-            * root.rowHeightScale);
+        return Theme.adaptiveRow(viewHeight, root._rowRatio, root._rowBase)
+            * root.rowHeightScale;
     }
 
-    /// Delegate height: snapped to this body's real viewport (not only the
-    /// host's reference), so no half row is ever left on screen.
+    /// Delegate height: continuous in `rowViewHeight`. The body is never
+    /// divided into this height; `ScrollPanel`/`SearchColumn` snap the
+    /// viewport instead.
     readonly property real adaptiveRowHeight:
         Math.max(root.minRowHeight,
-            root._fitRows(root.height, root.adaptiveRowFor(root.rowViewHeight)))
+            root.adaptiveRowFor(root.rowViewHeight))
+
+    /// A list with a uniform row unit (grids use their cell, variable-height
+    /// lists such as lyrics have none). The scroll math must not read a
+    /// delegate's transient `height` while these rows reflow.
+    readonly property bool adaptiveRows:
+        root.layout !== "grid" && root._rowRatio > 0
+    readonly property real rowStride:
+        root.adaptiveRows ? root.adaptiveRowHeight + root.rowSpacing : 0
 
     function captureRowBase() {
         if (root._rowBase <= 0 && root._rowRatio > 0 && root.rowViewHeight > 0)
             root._rowBase = root.rowViewHeight * root._rowRatio;
     }
+
+    property bool _manualScroll: false
+    property int _anchorRow: 0
+    property real _anchorFraction: 0
+    property bool _resizing: false
+    property bool _resizeApplyPending: false
 
     Component.onCompleted: {
         root.captureRowBase();
@@ -703,18 +687,73 @@ Item {
         id: resizeTimer
         interval: 100
         repeat: false
-        onTriggered: if (root.currentIndex >= 0) root.recenterNow()
+        onTriggered: root._settleResize()
+    }
+
+    /// Remember the visual top row when the user owns the viewport. A resize
+    /// then restores that row instead of yanking the view back to the
+    /// keyboard cursor.
+    function _captureAnchor() {
+        var v = root.view;
+        if (!v || v.count === 0)
+            return;
+        var stride = root._stride(v);
+        if (stride <= 0)
+            return;
+        var row = Math.max(0, Math.min(v.count - 1,
+            Math.floor(v.contentY / stride)));
+        root._anchorRow = row;
+        root._anchorFraction = Math.max(0, Math.min(0.999,
+            (v.contentY - row * stride) / stride));
+    }
+
+    function _applyResizeAnchor() {
+        if (root.isLanding)
+            return;
+        var v = root.view;
+        if (!v || v.count === 0)
+            return;
+        var target = null;
+        if (root.currentIndex >= 0 && !root._manualScroll)
+            target = root._target(v, root.currentIndex);
+        if (target === null) {
+            var stride = root._stride(v);
+            if (stride > 0) {
+                var row = Math.max(0, Math.min(v.count - 1,
+                    root._anchorRow));
+                target = (row + root._anchorFraction) * stride;
+            }
+        }
+        if (target !== null) {
+            var maxY = root._maxY(v);
+            v.contentY = Math.max(0, Math.min(maxY, target));
+        }
+        root._clampY(v);
     }
 
     function _scheduleResizeRecenter() {
-        if (root.currentIndex < 0 || !root.view)
+        if (!root.view)
             return;
-        // A resize invalidates the current target; snap once the geometry
+        // A resize invalidates the current target; snap once the row unit
         // settles instead of gliding toward stale row heights.
         root._revealTries = 0;
         root.stopGlide();
-        root.recenterNow();
+        root._resizing = true;
+        if (!root._resizeApplyPending) {
+            root._resizeApplyPending = true;
+            Qt.callLater(root._applyPendingResize);
+        }
         resizeTimer.restart();
+    }
+
+    function _applyPendingResize() {
+        root._resizeApplyPending = false;
+        root._applyResizeAnchor();
+    }
+
+    function _settleResize() {
+        root._applyResizeAnchor();
+        root._resizing = false;
     }
 
     // ── Row state (VI-4 / ARC-I-4) ───────────────────────────────────────
@@ -777,6 +816,9 @@ Item {
         root.resetPending = true;
         glide.stop();
         root._pendingFollow = -1;
+        root._manualScroll = false;
+        root._anchorRow = 0;
+        root._anchorFraction = 0;
         root.currentIndex = -1;
         if (root.view) {
             root.view.currentIndex = -1;
@@ -854,14 +896,17 @@ Item {
     Connections {
         target: root.view
         function onContentYChanged() {
+            if (root._manualScroll && !glide.running && !root.isLanding)
+                root._captureAnchor();
             if (root.memoryKey && !glide.running && !root.isLanding)
                 root._scheduleRemember();
         }
         function onMovementStarted() {
             root.stopGlide();
+            root._manualScroll = true;
         }
         function onContentHeightChanged() {
-            if (root.isLanding)
+            if (root.isLanding || root._resizing || root._resizeApplyPending)
                 return;
             // While a glide runs the target absorbs the shift; clamping here
             // would fight the interpolation.

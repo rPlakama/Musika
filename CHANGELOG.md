@@ -3,6 +3,13 @@
 All notable changes to Musika, newest first. `TASKLISTMAJOR.md` tracks the
 open work; this file is the release history.
 
+## 0.3.11 — _A prefetched scroll band and an invisible remainder_
+
+All commits since `v0.3.10`:
+
+- `104b171` Keep the snapped scroll remainder transparent
+- `5a4bb72` Prefetch the scroll band and break the row-unit resize loop
+
 ## 0.3.10 — _A continuous row unit and a plain scroll follow_
 
 All commits since `v0.3.9`:

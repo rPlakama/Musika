@@ -73,6 +73,10 @@ Item {
         root.rowRefHeight > 0 ? root.rowRefHeight : root.height
     property real rowHeightScale: 1.0
     property real rowSpacing: 0
+    /// A transient tiny viewport (the player's panes start at a few pixels
+    /// before the split settles) must not turn the rows microscopic: at 1.4 px
+    /// the visible band spanned ~130 rows and realised all of them.
+    property real minRowHeight: 18
     /// Host-supplied extent (0 = derive it from the row unit).
     property real contentHeightHint: 0
     property bool recenterOnWidth: root.layout === "grid"
@@ -671,7 +675,8 @@ Item {
     /// Delegate height: snapped to this body's real viewport (not only the
     /// host's reference), so no half row is ever left on screen.
     readonly property real adaptiveRowHeight:
-        root._fitRows(root.height, root.adaptiveRowFor(root.rowViewHeight))
+        Math.max(root.minRowHeight,
+            root._fitRows(root.height, root.adaptiveRowFor(root.rowViewHeight)))
 
     function captureRowBase() {
         if (root._rowBase <= 0 && root._rowRatio > 0 && root.rowViewHeight > 0)

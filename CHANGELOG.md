@@ -3,6 +3,23 @@
 All notable changes to Musika, newest first. `TASKLISTMAJOR.md` tracks the
 open work; this file is the release history.
 
+## 0.3.9 — _The scroll, rebuilt from the row up_
+
+All commits since `v0.3.8`:
+
+- `1b3c891` Lay the search results out in columns
+- `7c3fef3` Rebuild the scroll body around whole-row centring
+- `4dce9dc` Stabilise the scroll follow across rebuilds, resizes and the content end
+- `2ee3c85` Pin the scroll follow at the content ends instead of padding it
+- `d072d75` Remake the scroll body around an always-centred follow
+- `713fbe4` Restore Qt contentHeight as the scroll extent authority
+- `bab6e0f` Glue the end of the scroll to the last row
+- `a19b4f9` Re-snap the cursor through multi-frame resize relayouts
+- `4d4957f` Make the scroll follow a live frame retarget instead of a fixed animation
+- `e9ee8af` Snap the scroll position after a resize instead of gliding
+- `e23a005` Reload library lists on width changes, keeping the cursor
+- `abad2d3` Refresh derived caches with album changes; fix squeezed scroll tail
+
 ## 0.3.8 — _Improving general search and row conformity_
 
 All commits since `v0.3.7`:

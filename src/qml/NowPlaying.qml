@@ -177,12 +177,15 @@ Rectangle {
         });
     }
 
-    /// Ask the backend for the download state of that window only.
+    /// Ask the backend for the download state of the rendered rows only.
     function requestMarkWindow(force) {
         var ids = [];
-        var at = Math.max(0, root.queueCursor);
-        var lo = Math.max(0, at - 15);
-        var hi = Math.min(queueItems.count - 1, at + 15);
+        var lo = queueContent.firstVisibleIndex;
+        var hi = queueContent.lastVisibleIndex;
+        if (lo < 0 || hi < lo) {
+            lo = Math.max(0, root.queueCursor);
+            hi = Math.min(queueItems.count - 1, lo);
+        }
         for (var i = lo; i <= hi; ++i) {
             var row = queueItems.get(i);
             if (row && row.songId)
@@ -195,6 +198,12 @@ Rectangle {
     }
 
     onQueueCursorChanged: root.requestMarkWindow()
+
+    Connections {
+        target: queueContent
+        function onFirstVisibleIndexChanged() { root.requestMarkWindow(); }
+        function onLastVisibleIndexChanged() { root.requestMarkWindow(); }
+    }
 
     /// The playing track's row in the queue model (song id + favourite flag
     /// for the overlay's track-scoped options).
@@ -1394,6 +1403,8 @@ Rectangle {
                                             rightMargin: 0
                                             marksMargin: row.width * 0.00935
                                             markCursor: root.queueCursor
+                                            visibleStart: queueContent.firstVisibleIndex
+                                            visibleEnd: queueContent.lastVisibleIndex
                                             markIndex: row.index
                                             markSongId: row.songId
                                             markStarred: row.starred

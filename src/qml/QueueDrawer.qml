@@ -295,6 +295,8 @@ Item {
                             rightMargin: row.height * 0.1
                             marksMargin: row.width * 0.01275
                             markCursor: root.cursor
+                            visibleStart: content.firstVisibleIndex
+                            visibleEnd: content.lastVisibleIndex
                             markIndex: row.index
                             markSongId: row.songId
                             markAlbumId: row.albumId

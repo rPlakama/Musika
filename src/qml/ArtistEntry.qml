@@ -270,19 +270,24 @@ Rectangle {
         root.requestMarkWindow();
     }
 
-    /// The state marks (favourite hearts, download glyphs) render only
-    /// inside the wall cursor's ±15-row window — same rule as the segments.
+    /// The state marks (favourite hearts, download glyphs) render only for
+    /// the cards currently inside the wall — same rule as the segments.
     function markVisible(index) {
-        return Math.abs(index - Math.max(0, wall.currentIndex)) <= 15;
+        return wall.firstVisibleIndex >= 0
+            && index >= wall.firstVisibleIndex
+            && index <= wall.lastVisibleIndex;
     }
 
-    /// Ask the backend for the download state of that window only: album
-    /// cards are cached when every track of them is finished.
+    /// Ask the backend for the download state of the rendered cards only:
+    /// album cards are cached when every track of them is finished.
     function requestMarkWindow(force) {
         var albumsWindow = [];
-        var at = Math.max(0, wall.currentIndex);
-        var lo = Math.max(0, at - 15);
-        var hi = Math.min(albums.count - 1, at + 15);
+        var lo = wall.firstVisibleIndex;
+        var hi = wall.lastVisibleIndex;
+        if (lo < 0 || hi < lo) {
+            lo = Math.max(0, wall.currentIndex);
+            hi = Math.min(albums.count - 1, lo);
+        }
         for (var i = lo; i <= hi; ++i) {
             var album = albums.get(i);
             if (album && album.albumId)
@@ -297,6 +302,8 @@ Rectangle {
     Connections {
         target: wall
         function onCurrentIndexChanged() { root.requestMarkWindow(); }
+        function onFirstVisibleIndexChanged() { root.requestMarkWindow(); }
+        function onLastVisibleIndexChanged() { root.requestMarkWindow(); }
     }
 
     function activateCurrent() {
@@ -949,6 +956,8 @@ Rectangle {
                             anchors.right: parent.right
                             anchors.rightMargin: row.width * 0.017
                             cursor: wall.currentIndex
+                            firstVisible: wall.firstVisibleIndex
+                            lastVisible: wall.lastVisibleIndex
                             index: row.index
                             albumId: row.albumId
                             starred: row.starred

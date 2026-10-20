@@ -2090,8 +2090,11 @@ impl Backend {
 
     /// Global library search (artists > albums > songs) for the search bar.
     #[qslot(qml_name = "requestSearch")]
-    fn request_search(&mut self, query: String) {
+    fn request_search(&mut self, query: String, limit: i64) {
         let offline = self.offline;
+        // The UI passes the number of rows its columns can paint; keep a sane
+        // ceiling for a malformed caller.
+        let limit = limit.clamp(1, 100) as usize;
         let generation = SEARCH_GEN.fetch_add(1, Ordering::Relaxed) + 1;
         let invoker = self.get_qml_method_invoker();
         let Some(dbs) = crate::dbs().cloned() else {
@@ -2104,7 +2107,7 @@ impl Backend {
             if SEARCH_GEN.load(Ordering::Relaxed) != generation {
                 return;
             }
-            let json = search_json(&dbs, &query, offline)
+            let json = search_json(&dbs, &query, offline, limit)
                 .await
                 .unwrap_or_else(|err| {
                     eprintln!("search: {err:#}");
@@ -2513,8 +2516,7 @@ impl Backend {
     /// Re-reads the download ledger for the requested window (`songs` and
     /// `albums` are the JSON arrays of the currently visible rows) — the row
     /// marks' truth (the download twin of the hearts' library read). Called
-    /// whenever the mark window (the cursor ±15) changes, never for the
-    /// whole library.
+    /// whenever the rendered-row window changes, never for the whole library.
     #[qslot(qml_name = "requestDownloads")]
     fn request_downloads(&mut self, songs: String, albums: String) {
         let songs: Vec<String> = serde_json::from_str(&songs).unwrap_or_default();

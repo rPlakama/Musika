@@ -55,6 +55,9 @@ Item {
     property bool metaAlignRight: false
 
     property int markCursor: -1
+    /// The host viewport's rendered band (marks exist only inside it).
+    property int visibleStart: -1
+    property int visibleEnd: -1
     property int markIndex: 0
     property string markSongId: ""
     property string markAlbumId: ""
@@ -180,6 +183,8 @@ Item {
         anchors.right: root.showMeta ? metaBox.left : parent.right
         anchors.rightMargin: root.showMeta ? root.marksMargin : root.rightMargin
         cursor: root.markCursor
+        firstVisible: root.visibleStart
+        lastVisible: root.visibleEnd
         index: root.markIndex
         songId: root.markSongId
         albumId: root.markAlbumId

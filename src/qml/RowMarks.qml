@@ -22,15 +22,18 @@ import "Theme.js" as Theme
 // glyph (the windowed download.db sets: the song's id, or the album's when
 // every track of it is cached) followed by the favourite heart and, on
 // album/artist rows only, its UI-60 rating count (songs keep the heart
-// alone). Both marks render only inside the host cursor's ±15-row window
-// (`cursor`), and nothing renders when neither applies (the zero-alpha box
-// collapses), so hosts only anchor the block and size it with `base` (the
-// heart's box; the download glyph is 1.2× for even ink).
+// alone). Both marks render only for the rows inside the host viewport
+// (`firstVisible`/`lastVisible`), and nothing renders when neither applies
+// (the zero-alpha box collapses), so hosts only anchor the block and size it
+// with `base` (the heart's box; the download glyph is 1.2× for even ink).
 Rectangle {
     id: root
 
-    /// The host's cursor (the selector): the rendering window's reference.
+    /// The host's cursor (the selector): kept for fallback and identity.
     required property int cursor
+    /// The visible band the host is rendering. Marks exist only inside it.
+    property int firstVisible: -1
+    property int lastVisible: -1
     /// The row's index and identity — album rows carry `albumId` only.
     required property int index
     property string songId: ""
@@ -60,9 +63,13 @@ Rectangle {
         anchors.centerIn: parent
         spacing: root.box * 0.25
 
-        // The window's reference is the selector; a not-yet-landed cursor
-        // clamps to 0 (the same rule the hosts' request windows use).
-        readonly property bool windowed: Math.abs(root.index - Math.max(0, root.cursor)) <= 15
+        // Only the rows inside the host viewport may paint a mark. Before
+        // the host has a band (count/height not laid out yet) keep the row
+        // cheap instead of falling back to an offscreen window.
+        readonly property bool windowed: root.firstVisible >= 0
+            && root.lastVisible >= root.firstVisible
+            && root.index >= root.firstVisible
+            && root.index <= root.lastVisible
         /// The row's fetch is running (queued/active in the ledger): the row
         /// shows the shared loading loop, spinning, instead of the filled mark.
         /// Album rows ride the same set through their own id — a container pass

@@ -79,6 +79,10 @@ Rectangle {
     // --- Cursor / memory -----------------------------------------------------
     property alias currentIndex: content.currentIndex
     readonly property alias count: content.count
+    /// The rendered band: hosts cap marks and mark reads to these rows.
+    readonly property alias firstVisibleIndex: content.firstVisibleIndex
+    readonly property alias lastVisibleIndex: content.lastVisibleIndex
+    readonly property alias visibleRowCount: content.visibleRowCount
     /// Escape hatch for surfaces that need the view itself (lyrics follow).
     /// ARC-UI-3: the body can swap list ⇄ grid, so the alias is read-only.
     readonly property alias view: content.view

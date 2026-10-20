@@ -40,6 +40,14 @@ Item {
     property string _zeroQuery: ""
     /// The panel's stable height (chrome, row sizing and the panel itself).
     readonly property real panelRefHeight: root.height * 0.78
+    /// Only fetch the rows a column can actually paint. Before the layout has
+    /// a height (first open) ask for the old full screenful so the payload is
+    /// not starved to one row.
+    readonly property int resultLimit: {
+        if (!songsColumn || songsColumn.height <= 0)
+            return 20;
+        return Math.max(1, songsColumn.visibleRowCount);
+    }
     /// A live query with no hits in any of the three sections: the panel
     /// replaces the stack with one message.
     readonly property bool nothingFound: field.text.length > 0
@@ -85,6 +93,11 @@ Item {
         openWith("");
     }
 
+    /// Search asks for exactly the rows the columns can display.
+    function _requestSearch(text) {
+        Backend.requestSearch(text, root.resultLimit);
+    }
+
     /// Opens in typing mode with `text` already in the field. Paste (VI-21)
     /// uses this so the user sees the clipboard text and can correct it in
     /// place before choosing a result.
@@ -99,7 +112,7 @@ Item {
         // S-9: an empty field opens on the Most-played surface; a typed field
         // goes through the debounce.
         if (text.length === 0)
-            Backend.requestSearch("");
+            root._requestSearch("");
         typing = true;
         field.forceActiveFocus();
         field.cursorPosition = field.text.length;
@@ -439,10 +452,10 @@ Item {
                 // S-9: clearing the field returns to the Most-played surface
                 // (drop the typed hits first so only the surface swaps).
                 root.clearResults();
-                Backend.requestSearch("");
+                root._requestSearch("");
                 return;
             }
-            Backend.requestSearch(field.text);
+            root._requestSearch(field.text);
         }
     }
 

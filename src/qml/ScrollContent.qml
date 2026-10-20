@@ -33,8 +33,10 @@ import "Theme.js" as Theme
 //
 // The extent is derived from the row unit (count × row height) instead of
 // trusting Qt's lazy `contentHeight` estimate; a realised last row overrides
-// it with real geometry. Only rows inside the viewport are instantiated
-// (`cacheBuffer: 0`); `reuseItems` recycles them while the glide runs.
+// it with real geometry. The rendered set is capped to the rows actually on
+// screen: `cacheBuffer: 0` adds no prediction band and `reuseItems: false`
+// destroys a delegate as soon as it leaves the viewport instead of keeping
+// an offscreen pool alive.
 //
 // The follow is a frame loop: it re-reads the target every frame, absorbs
 // geometry drift, and glides with OutCubic. Semantic jumps land instantly.
@@ -127,6 +129,40 @@ Item {
             return 1;
         return Math.max(1, Math.round(v.height / stride));
     }
+
+    /// The screenful as a reactive property (the render/mark cap).
+    readonly property int visibleRowCount: root.visibleRows()
+
+    /// First and last *item* indices currently inside the viewport. List rows
+    /// are their own index; a grid returns the whole visible cell band. These
+    /// are the only rows whose marks are allowed to exist.
+    readonly property var _visibleBounds: {
+        var v = root.view;
+        if (!v || v.count === 0 || v.height <= 0)
+            return { first: -1, last: -1 };
+        if (root.layout === "grid") {
+            var cell = root.cellHeight > 0 ? root.cellHeight : root.cellWidth;
+            var stride = Math.max(1, cell);
+            var firstRow = Math.max(0, Math.floor(v.contentY / stride));
+            var lastRow = Math.max(firstRow,
+                Math.ceil((v.contentY + v.height) / stride) - 1);
+            var cols = Math.max(1, root.columns);
+            return {
+                first: Math.min(v.count - 1, firstRow * cols),
+                last: Math.min(v.count - 1, (lastRow + 1) * cols - 1)
+            };
+        }
+        var rowStride = root._stride(v);
+        if (rowStride <= 0)
+            return { first: 0, last: v.count - 1 };
+        return {
+            first: Math.max(0, Math.floor(v.contentY / rowStride)),
+            last: Math.min(v.count - 1,
+                Math.ceil((v.contentY + v.height) / rowStride) - 1)
+        };
+    }
+    readonly property int firstVisibleIndex: root._visibleBounds.first
+    readonly property int lastVisibleIndex: root._visibleBounds.last
 
     function _stride(v) {
         if (root.layout === "grid")
@@ -779,8 +815,10 @@ Item {
             spacing: root.rowSpacing
             boundsBehavior: Flickable.StopAtBounds
             highlightFollowsCurrentItem: false
-            reuseItems: true
+            reuseItems: false
             cacheBuffer: 0
+            displayMarginBeginning: 0
+            displayMarginEnd: 0
         }
 
         GridView {
@@ -796,8 +834,10 @@ Item {
             cellHeight: root.cellHeight > 0 ? root.cellHeight : root.cellWidth
             boundsBehavior: Flickable.StopAtBounds
             highlightFollowsCurrentItem: false
-            reuseItems: true
+            reuseItems: false
             cacheBuffer: 0
+            displayMarginBeginning: 0
+            displayMarginEnd: 0
         }
     }
 

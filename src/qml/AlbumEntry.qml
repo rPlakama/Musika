@@ -107,12 +107,15 @@ Rectangle {
     readonly property bool hasSelection: content.hasSelection
     readonly property int selectionCount: content.selectionCount
 
-    /// Ask the backend for the download state of that window only.
+    /// Ask the backend for the download state of the rendered rows only.
     function requestMarkWindow(force) {
         var ids = [];
-        var at = Math.max(0, content.currentIndex);
-        var lo = Math.max(0, at - 15);
-        var hi = Math.min(songs.count - 1, at + 15);
+        var lo = content.firstVisibleIndex;
+        var hi = content.lastVisibleIndex;
+        if (lo < 0 || hi < lo) {
+            lo = Math.max(0, content.currentIndex);
+            hi = Math.min(songs.count - 1, lo);
+        }
         for (var i = lo; i <= hi; ++i) {
             var row = songs.get(i);
             if (row && row.songId)
@@ -302,6 +305,8 @@ Rectangle {
     Connections {
         target: content
         function onCurrentIndexChanged() { root.requestMarkWindow(); }
+        function onFirstVisibleIndexChanged() { root.requestMarkWindow(); }
+        function onLastVisibleIndexChanged() { root.requestMarkWindow(); }
     }
     Connections {
         target: Backend
@@ -861,6 +866,8 @@ Rectangle {
                         rightMargin: songRow.width * 0.02
                         marksMargin: songRow.width * 0.01275
                         markCursor: content.currentIndex
+                        visibleStart: content.firstVisibleIndex
+                        visibleEnd: content.lastVisibleIndex
                         markIndex: songRow.index
                         markSongId: songRow.songId
                         markAlbumId: songRow.albumId

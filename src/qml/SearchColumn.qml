@@ -67,7 +67,7 @@ Item {
 
     /// ARC-UI-3: the column owns its cursor; the body mirrors it both ways
     /// (it cannot be an alias — the body's view swaps list ⇄ grid). The
-    /// mark window follows the selector.
+    /// mark window follows the rendered rows.
     onCursorChanged: {
         if (content.currentIndex !== cursor)
             content.currentIndex = cursor;
@@ -80,7 +80,12 @@ Item {
             if (root.cursor !== content.currentIndex)
                 root.cursor = content.currentIndex;
         }
+        function onFirstVisibleIndexChanged() { root.requestMarkWindow(); }
+        function onLastVisibleIndexChanged() { root.requestMarkWindow(); }
     }
+
+    /// The rows this column can actually display (the search fetch cap).
+    readonly property int visibleRowCount: content.visibleRowCount
 
     /// VI-4: the selection state lives in `ScrollContent` below; the column
     /// owns only its cursor and the id field.
@@ -106,16 +111,19 @@ Item {
         content.clearSelection();
     }
 
-    /// Ask the backend for the download state of that window only (album
-    /// rows included: cached = every track finished).
+    /// Ask the backend for the download state of the rendered rows only
+    /// (album rows included: cached = every track finished).
     function requestMarkWindow(force) {
         if (root.model === null)
             return;
         var songs = [];
         var albums = [];
-        var at = Math.max(0, root.cursor);
-        var lo = Math.max(0, at - 15);
-        var hi = Math.min(root.model.count - 1, at + 15);
+        var lo = content.firstVisibleIndex;
+        var hi = content.lastVisibleIndex;
+        if (lo < 0 || hi < lo) {
+            lo = Math.max(0, root.cursor);
+            hi = Math.min(root.model.count - 1, lo);
+        }
         for (var i = lo; i <= hi; ++i) {
             var row = root.model.get(i);
             if (!row)
@@ -449,6 +457,8 @@ Item {
                             rightMargin: row.height * 0.18
                             marksMargin: row.height * 0.051
                             markCursor: root.cursor
+                            visibleStart: content.firstVisibleIndex
+                            visibleEnd: content.lastVisibleIndex
                             markIndex: row.index
                             markSongId: row.songId
                             markAlbumId: row.albumId

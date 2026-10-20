@@ -57,23 +57,26 @@ ScrollPanel {
     hasHeaderChip: root.shuffleKind.length > 0
     onHeaderChipActivated: Backend.toggleShuffle(root.shuffleKind)
 
-    /// The state marks (heart/download) render only inside the cursor's
-    /// ±15-row window — long lists keep the bindings cheap, the selector
-    /// stays the reference.
+    /// The state marks (heart/download) render only for the rows currently
+    /// inside the viewport — offscreen rows do no mark work at all.
     function markVisible(index) {
-        return Math.abs(index - Math.max(0, root.currentIndex)) <= 15;
+        return root.firstVisibleIndex >= 0
+            && index >= root.firstVisibleIndex
+            && index <= root.lastVisibleIndex;
     }
 
-    /// Ask the backend for the download state of the visible window only —
-    /// ±15 rows around the selector, never the whole ledger. Album rows ride
-    /// the same call: the backend reports an album as cached when every
-    /// track of it is finished.
+    /// Ask the backend for the download state of the rendered rows only —
+    /// never the whole ledger. Album rows ride the same call: the backend
+    /// reports an album as cached when every track of it is finished.
     function requestMarkWindow(force) {
         var songs = [];
         var albums = [];
-        var at = Math.max(0, root.currentIndex);
-        var lo = Math.max(0, at - 15);
-        var hi = Math.min(mediaRows.count - 1, at + 15);
+        var lo = root.firstVisibleIndex;
+        var hi = root.lastVisibleIndex;
+        if (lo < 0 || hi < lo) {
+            lo = Math.max(0, root.currentIndex);
+            hi = Math.min(mediaRows.count - 1, lo);
+        }
         for (var i = lo; i <= hi; ++i) {
             var row = mediaRows.get(i);
             if (!row)
@@ -88,6 +91,9 @@ ScrollPanel {
         else
             Backend.requestDownloads(JSON.stringify(songs), JSON.stringify(albums));
     }
+
+    onFirstVisibleIndexChanged: root.requestMarkWindow()
+    onLastVisibleIndexChanged: root.requestMarkWindow()
 
     // A fetch finished: re-read this surface's own window (forced — the
     // dedupe must not swallow the update).
@@ -399,6 +405,8 @@ ScrollPanel {
                 reserveMeta: root.quickActionKind === "song"
                 metaAlignRight: root.quickActionKind === "song"
                 markCursor: root.currentIndex
+                visibleStart: root.firstVisibleIndex
+                visibleEnd: root.lastVisibleIndex
                 markIndex: row.index
                 markSongId: row.songId
                 markAlbumId: row.albumId

@@ -390,21 +390,22 @@ pub async fn search_json(
     dbs: &crate::db::Dbs,
     query: &str,
     offline: bool,
+    limit: usize,
 ) -> anyhow::Result<String> {
     match crate::search::engine() {
-        crate::search::Engine::Hybrid => search_json_hybrid(dbs, query, offline).await,
+        crate::search::Engine::Hybrid => search_json_hybrid(dbs, query, offline, limit).await,
         crate::search::Engine::Nucleo => {
-            match search_json_index(dbs, query, offline).await {
+            match search_json_index(dbs, query, offline, limit).await {
                 Ok(json) => Ok(json),
                 Err(err) => {
                     // The in-memory catalog is a cache: a build failure must
                     // not take the palette down while FTS is still available.
                     eprintln!("search: nucleo engine failed, using FTS: {err:#}");
-                    search_json_fts(dbs, query, offline).await
+                    search_json_fts(dbs, query, offline, limit).await
                 }
             }
         }
-        crate::search::Engine::Fts => search_json_fts(dbs, query, offline).await,
+        crate::search::Engine::Fts => search_json_fts(dbs, query, offline, limit).await,
     }
 }
 
@@ -415,12 +416,13 @@ async fn search_json_hybrid(
     dbs: &crate::db::Dbs,
     query: &str,
     offline: bool,
+    limit: usize,
 ) -> anyhow::Result<String> {
-    let nucleo_json = match search_json_index(dbs, query, offline).await {
+    let nucleo_json = match search_json_index(dbs, query, offline, limit).await {
         Ok(json) => json,
         Err(err) => {
             eprintln!("search: nucleo engine failed, using FTS: {err:#}");
-            return search_json_fts(dbs, query, offline).await;
+            return search_json_fts(dbs, query, offline, limit).await;
         }
     };
     let Ok(nucleo) = serde_json::from_str::<serde_json::Value>(&nucleo_json) else {
@@ -431,19 +433,18 @@ async fn search_json_hybrid(
     if nucleo["most_played"].as_bool() == Some(true) || nucleo["album_context"].is_string() {
         return Ok(nucleo_json);
     }
-    const VISIBLE: usize = 20;
     // The FTS fill is for sparse song sets (a rare/typo query, or an offline
     // catalog); a broad hit set already fills the Songs column, and the
     // artist/album lists are cheap Nucleo lookups.
     let sparse_songs = nucleo
         .get("songs")
         .and_then(serde_json::Value::as_array)
-        .is_none_or(|rows| rows.len() < VISIBLE);
+        .is_none_or(|rows| rows.len() < limit);
     if !sparse_songs {
         return Ok(nucleo_json);
     }
 
-    let fts_json = match search_json_fts(dbs, query, offline).await {
+    let fts_json = match search_json_fts(dbs, query, offline, limit).await {
         Ok(json) => json,
         Err(err) => {
             eprintln!("search: FTS fill failed: {err:#}");
@@ -456,7 +457,7 @@ async fn search_json_hybrid(
     let mut merged = nucleo;
     for key in ["songs", "artists", "albums"] {
         if let (Some(primary), Some(secondary)) = (merged.get_mut(key), fts.get(key)) {
-            merge_json_rows(primary, secondary, VISIBLE);
+            merge_json_rows(primary, secondary, limit);
         }
     }
     Ok(merged.to_string())
@@ -495,11 +496,13 @@ async fn search_json_fts(
     dbs: &crate::db::Dbs,
     query: &str,
     offline: bool,
+    limit: usize,
 ) -> anyhow::Result<String> {
     let filter = offline_filter(dbs, offline).await?;
+    let limit = limit.max(1);
     // Offline hits are filtered down to the downloaded catalog, so over-fetch
-    // before truncating back to the visible 20.
-    let limit = if filter.is_some() { 60 } else { 20 };
+    // before truncating back to the rendered rows.
+    let fetch = if filter.is_some() { limit * 3 } else { limit };
     // S-9: an empty query is the "Most played" surface, not three dead
     // columns. Punctuation is ignored for matching (`(hello` == `hello`),
     // but the payload keeps the raw text so the field's stale check works.
@@ -509,12 +512,12 @@ async fn search_json_fts(
         (
             Vec::new(),
             Vec::new(),
-            crate::search::most_played(&dbs.search, limit).await?,
+            crate::search::most_played(&dbs.search, fetch as i64).await?,
         )
     } else {
         let (artists, albums) =
-            crate::library::search_artists_albums(&dbs.library, &cleaned, limit).await?;
-        let songs = crate::search::search(&dbs.search, &cleaned, limit).await?;
+            crate::library::search_artists_albums(&dbs.library, &cleaned, fetch as i64).await?;
+        let songs = crate::search::search(&dbs.search, &cleaned, fetch as i64).await?;
         (artists, albums, songs)
     };
     let (mut artists, mut albums) = match &filter {
@@ -530,12 +533,12 @@ async fn search_json_fts(
         ),
         None => (artists, albums),
     };
-    artists.truncate(20);
-    albums.truncate(20);
+    artists.truncate(limit);
+    albums.truncate(limit);
     if let Some(filter) = &filter {
         songs.retain(|song| filter.songs.contains(&song.song_id));
     }
-    songs.truncate(20);
+    songs.truncate(limit);
 
     let song_ids: Vec<String> = songs.iter().map(|song| song.song_id.clone()).collect();
     let song_covers = crate::library::song_cover_ids(&dbs.library, &song_ids).await?;
@@ -575,9 +578,11 @@ async fn search_json_index(
     dbs: &crate::db::Dbs,
     query: &str,
     offline: bool,
+    limit: usize,
 ) -> anyhow::Result<String> {
     let filter = offline_filter(dbs, offline).await?;
-    let limit = if filter.is_some() { 60 } else { 20 };
+    let limit = limit.max(1);
+    let fetch = if filter.is_some() { limit * 3 } else { limit };
     let cleaned = crate::search::clean_query(query);
     let most_played = cleaned.is_empty();
     let index = crate::search::index::ensure(&dbs.library).await?;
@@ -586,7 +591,7 @@ async fn search_json_index(
             Vec::new(),
             Vec::new(),
             index
-                .most_played(limit)
+                .most_played(fetch)
                 .iter()
                 .map(|song| SearchSong::from_index(song))
                 .collect::<Vec<_>>(),
@@ -595,7 +600,7 @@ async fn search_json_index(
         // Nucleo's tick blocks for the worker; keep it off the async workers.
         let index = std::sync::Arc::clone(&index);
         let cleaned = cleaned.clone();
-        let results = tokio::task::spawn_blocking(move || index.search(&cleaned, limit)).await?;
+        let results = tokio::task::spawn_blocking(move || index.search(&cleaned, fetch)).await?;
         (
             results.artists,
             results.albums,
@@ -611,14 +616,14 @@ async fn search_json_index(
         albums.retain(|album| filter.albums.contains_key(&album.id));
         songs.retain(|song| filter.songs.contains(&song.id));
     }
-    artists.truncate(20);
-    albums.truncate(20);
+    artists.truncate(limit);
+    albums.truncate(limit);
     // S-8: one album match turns the Songs column into that album's
     // tracklist. The index already keeps the tracks sorted by disc/track.
     let album_context = (!most_played && albums.len() == 1).then(|| albums[0].id.clone());
     if let Some(album_id) = &album_context {
         songs = index
-            .album_tracks(album_id, limit)
+            .album_tracks(album_id, fetch)
             .iter()
             .map(|song| SearchSong::from_index(song))
             .collect();
@@ -626,7 +631,7 @@ async fn search_json_index(
             songs.retain(|song| filter.songs.contains(&song.id));
         }
     }
-    songs.truncate(20);
+    songs.truncate(limit);
 
     search_payload(
         dbs,
@@ -796,7 +801,7 @@ mod tests {
         .await
         .unwrap();
 
-        let json = search_json_index(&dbs, "rdo", false).await.unwrap();
+        let json = search_json_index(&dbs, "rdo", false, 20).await.unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed["most_played"], false);
         assert_eq!(parsed["album_context"], "al1");
@@ -808,7 +813,7 @@ mod tests {
             .collect();
         assert_eq!(ids, ["s1", "s2"], "one album match reads in track order");
 
-        let json = search_json_index(&dbs, "", false).await.unwrap();
+        let json = search_json_index(&dbs, "", false, 20).await.unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed["most_played"], true);
         assert!(parsed["album_context"].is_null());

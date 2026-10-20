@@ -48,7 +48,7 @@ It works with two databases:
 
 - Sidebar segments: Albums, Songs, Artists, Playlists (Radio is a placeholder for now).
 - Fullscreen player (Enter on a song): transport, seek, volume, and the queue + lyrics panes.
-- Queue drawer (`Ctrl-Q`): `j/k`, Enter jumps, `J/K` reorder, `dd` removes.
+- Queue (`Ctrl-Q` opens it in the fullscreen player): `j/k`, Enter jumps, `J/K` reorder, `dd` removes.
 - Search overlay: hybrid Nucleo + FTS5 browser (`MUSIKA_SEARCH_ENGINE=nucleo` or `fts` pins one engine).
 
 # Building

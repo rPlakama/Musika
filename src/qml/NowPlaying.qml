@@ -364,7 +364,7 @@ Rectangle {
         root._recallQueue = false;
         queueCursor = Math.max(0, Math.min(queueIndex, Math.max(0, queueItems.count - 1)));
         queueContent.currentIndex = queueCursor;
-        queueContent.goto(queueCursor);
+        queueContent.land(queueCursor);
     }
 
     function applyLyrics(payload) {
@@ -535,6 +535,10 @@ Rectangle {
             queueCursor += 1;
             queueContent.currentIndex = queueCursor;
             return;
+        } else if (action === "queue_remove" && queueCursor >= 0) {
+            // VI-4: removing a row ends the visual selection.
+            queueContent.clearSelection();
+            Backend.queueRemove(queueCursor);
         } else if (action === "enter") {
             // VI-4: jumping to a track ends the visual selection.
             queueContent.clearSelection();
@@ -1339,8 +1343,8 @@ Rectangle {
                                 // ARC-UI-2 M1: the queue rows paint title
                                 // and duration.
                                 searchFields: ["title", "duration"]
-                                // UI-58: adaptive rows for the queue pane.
-                                rowRatio: 0.16
+                                // UI-58: the shared queue row unit.
+                                rowPreset: "queue"
                                 // The fullscreen memory also stores the focused
                                 // pane; without this the continuous remembers
                                 // clobbered it to the default scope.
@@ -1370,9 +1374,7 @@ Rectangle {
                                         width: ListView.view.width
                                         // UI-58: adaptive — cut a row past the
                                         // 18% squeeze instead of shrinking.
-                                        height: queueContent.adaptiveRowHeight > 0
-                                            ? queueContent.adaptiveRowHeight
-                                            : ListView.view.height * 0.16
+                                        height: queueContent.adaptiveRowHeight
                                         // Playing-track tint stays on the row; the
                                         // cursor/hover block is the shared UI-48 layer.
                                         color: index === root.queueIndex ? Palette.surfaceContainer : "transparent"

@@ -148,10 +148,6 @@ Item {
             searchOverlay.close();
             closed = true;
         }
-        if (queueDrawer.opened) {
-            queueDrawer.close();
-            closed = true;
-        }
         if (quickActions.armed) {
             quickActions.cancel();
             closed = true;
@@ -265,9 +261,9 @@ Item {
 
     // ARC-43/ARC-UI-1/ARC-I: a surface arms the Alt-hold overlay through here;
     // the action closures come from the shared QuickActions verb sets. The
-    // search arms its own active column while open; only the drawer blocks.
+    // search arms its own active column while open; the command line blocks.
     function armQuickActions(target, actions) {
-        if (queueDrawer.opened || lineSearch.opened)
+        if (lineSearch.opened)
             return;
         quickActions.arm(target, actions);
     }
@@ -281,8 +277,8 @@ Item {
         // replace its config with the current view's verbs.
         if (quickActions.armed && quickActions.sticky)
             return;
-        // ARC-UI-2: the command line blocks arming too (the drawer's gate).
-        if (queueDrawer.opened || lineSearch.opened)
+        // ARC-UI-2: the command line blocks arming too.
+        if (lineSearch.opened)
             return;
         if (searchOverlay.opened) {
             searchOverlay.armQuickActions();
@@ -318,10 +314,9 @@ Item {
     // ARC-UI-2: `/` treats the whole window as the buffer. In the plain
     // context every visible row surface answers at once — status region,
     // sidebar, the main list — in window order; when a modal owns the
-    // context (the FTS overlay, fullscreen, the drawer) only it answers, as
-    // its routing owns Enter. Each entry is a tiny proxy so a jump can also
-    // move the region cursor that the following context-Enter (VI-16)
-    // routes to.
+    // context (the FTS overlay, fullscreen) only it answers, as its routing
+    // owns Enter. Each entry is a tiny proxy so a jump can also move the
+    // region cursor that the following context-Enter (VI-16) routes to.
     function lineSearchTargets() {
         function wrap(surface, focus) {
             if (!surface || !surface.searchRows)
@@ -355,10 +350,6 @@ Item {
         }
         if (nowPlayingExpanded && nowPlaying) {
             add(out, nowPlaying, noFocus);
-            return out;
-        }
-        if (queueDrawer.opened) {
-            add(out, queueDrawer, noFocus);
             return out;
         }
         add(out, topBar, function () { root.activeRegion = 2; });
@@ -514,11 +505,6 @@ Item {
             searchOverlay.handleAction(action);
             return;
         }
-        // The queue drawer is modal too.
-        if (queueDrawer.opened) {
-            queueDrawer.handleAction(action);
-            return;
-        }
         // Transport is global once the modals above have had their say:
         // the search overlay owns its input, so Space cannot leak through
         // (VI-18).
@@ -549,9 +535,17 @@ Item {
             }
             return;
         }
-        // Ctrl-Q toggles the queue drawer from anywhere.
+        // Ctrl-Q toggles the queue in the full player from anywhere.
         if (action === "queue_toggle") {
-            queueDrawer.toggle();
+            if (nowPlayingExpanded && nowPlaying && nowPlaying.pane === 2) {
+                nowPlayingExpanded = false;
+                return;
+            }
+            nowPlayingExpanded = true;
+            if (nowPlaying)
+                nowPlaying.pane = 2;
+            else
+                nowPlayingLoader.openQueue = true;
             return;
         }
 
@@ -997,12 +991,22 @@ Item {
         active: root.nowPlayingExpanded || opacity > 0
         opacity: root.nowPlayingExpanded ? 1 : 0
         visible: opacity > 0
+        // Ctrl-Q asks a freshly created player to open on the queue pane.
+        property bool openQueue: false
 
         sourceComponent: Component {
             NowPlaying {
                 anchors.fill: parent
                 onExitRequested: root.nowPlayingExpanded = false
                 onQuickAction: (target, actions) => root.armQuickActions(target, actions)
+            }
+        }
+
+        onLoaded: {
+            if (openQueue) {
+                openQueue = false;
+                if (item)
+                    item.pane = 2;
             }
         }
 
@@ -1120,13 +1124,6 @@ Item {
                 artistCover: artistCover
             });
         }
-    }
-
-    QueueDrawer {
-        id: queueDrawer
-        anchors.fill: parent
-        // UI-55: acrylic blurs the shell behind the drawer.
-        backdrop: shell
     }
 
     // ARC-UI-2 M0: the `/` in-surface search command line. `zCommand` rides

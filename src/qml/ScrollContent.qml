@@ -64,8 +64,13 @@ Item {
     /// own their heights, e.g. lyrics).
     property real rowRatio: 0
     property real rowRefHeight: 0
-    readonly property real rowViewHeight: root.rowRefHeight > 0
-        ? root.rowRefHeight : root.height
+    /// Built-in row unit for the fullscreen queue. Hosts that need a custom
+    /// unit leave this empty and use `rowRatio`/`rowRefHeight` instead.
+    property string rowPreset: ""
+    readonly property real _rowRatio:
+        root.rowPreset === "queue" ? 0.16 : root.rowRatio
+    readonly property real rowViewHeight:
+        root.rowRefHeight > 0 ? root.rowRefHeight : root.height
     property real rowHeightScale: 1.0
     property real rowSpacing: 0
     /// Host-supplied extent (0 = derive it from the row unit).
@@ -196,7 +201,7 @@ Item {
         if (last && last.height > 0)
             return last.y + last.height;
         var stride = root._stride(v);
-        var uniform = root.layout === "grid" || root.rowRatio > 0;
+        var uniform = root.layout === "grid" || root._rowRatio > 0;
         if (uniform && stride > 0) {
             if (root.layout === "grid")
                 return root._rowCount(v) * stride;
@@ -659,7 +664,7 @@ Item {
 
     function adaptiveRowFor(viewHeight) {
         return root._fitRows(viewHeight,
-            Theme.adaptiveRow(viewHeight, root.rowRatio, root._rowBase)
+            Theme.adaptiveRow(viewHeight, root._rowRatio, root._rowBase)
             * root.rowHeightScale);
     }
 
@@ -669,8 +674,8 @@ Item {
         root._fitRows(root.height, root.adaptiveRowFor(root.rowViewHeight))
 
     function captureRowBase() {
-        if (root._rowBase <= 0 && root.rowRatio > 0 && root.rowViewHeight > 0)
-            root._rowBase = root.rowViewHeight * root.rowRatio;
+        if (root._rowBase <= 0 && root._rowRatio > 0 && root.rowViewHeight > 0)
+            root._rowBase = root.rowViewHeight * root._rowRatio;
     }
 
     Component.onCompleted: {

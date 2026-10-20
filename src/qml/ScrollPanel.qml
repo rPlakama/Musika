@@ -40,7 +40,7 @@ Rectangle {
     id: root
 
     // --- Main rectangle ------------------------------------------------------
-    property alias background: root.color
+    property alias background: surface.color
 
     // --- Split geometry ------------------------------------------------------
     // A = this fraction of the height, B = the rest. Both bands are
@@ -120,7 +120,7 @@ Rectangle {
     /// ARC-UI-7.9: forwarded from the shared body for host badges/status.
     signal selectionChanged
 
-    color: Palette.surface
+    color: "transparent"
 
     /// UI-54: first payload after a reopen restores cursor + offset; later
     /// reloads keep the live state. Returns true when a memory was applied.
@@ -278,6 +278,21 @@ Rectangle {
             root.activate();
         else if (root.actionHandler)
             root.actionHandler(action);
+    }
+
+    // The fill stops at the snapped body edge. The remainder below is
+    // reserved layout only: alpha 0, never painted for the user.
+    Rectangle {
+        id: surface
+        anchors.top: parent.top
+        anchors.left: parent.left
+        anchors.right: parent.right
+        anchors.bottom: body.bottom
+        topLeftRadius: Theme.radius
+        topRightRadius: Theme.radius
+        bottomLeftRadius: 0
+        bottomRightRadius: 0
+        color: Palette.surface
     }
 
     // A: title band (20% of the panel by default; less while compressed,

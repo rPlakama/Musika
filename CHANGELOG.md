@@ -3,6 +3,17 @@
 All notable changes to Musika, newest first. `TASKLISTMAJOR.md` tracks the
 open work; this file is the release history.
 
+## 0.3.10 — _A continuous row unit and a plain scroll follow_
+
+All commits since `v0.3.9`:
+
+- `e920245` Cap rendering and marks to the visible rows
+- `abdcae7` Raise the search row height by 30%
+- `8a09736` Fold the queue drawer into the fullscreen player
+- `34eedd5` Floor adaptive rows during transient pane layout
+- `361bad4` Animate queue removals and keep the cursor steady
+- `8f75f72` Make adaptive rows continuous and simplify the scroll follow
+
 ## 0.3.9 — _The scroll, rebuilt from the row up_
 
 All commits since `v0.3.8`:

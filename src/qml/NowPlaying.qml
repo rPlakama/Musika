@@ -62,6 +62,10 @@ Rectangle {
     // One queue payload after a reorder keeps the moved cursor instead of
     // snapping back to the playing track (Q-9).
     property bool _reordering: false
+    // `dd` steps the cursor up (a phantom k) and slides the row out before
+    // the backend drops it; keep that cursor across the model rebuild.
+    property int _removingIndex: -1
+    property int _pendingQueueCursor: -1
     // The rows the queue model currently holds: a payload with the same
     // backend row hash is a skip/advance, not a queue change — no rebuild.
     property string _queueHash: ""
@@ -84,6 +88,13 @@ Rectangle {
             root._lyricsHeld = false;
             root.followLyric();
         }
+    }
+
+    Timer {
+        id: removeTimer
+        repeat: false
+        interval: Theme.reduceMotion ? 0 : Theme.motion.standard * 1.3
+        onTriggered: root.finishQueueRemove()
     }
 
     // The seek row's timecode metric: the widest timecode the labels can
@@ -265,6 +276,33 @@ Rectangle {
         queueContent.currentIndex = queueCursor;
     }
 
+    function removeQueueRow(index) {
+        if (root._removingIndex >= 0 || index < 0 || index >= queueItems.count)
+            return;
+        root._removingIndex = index;
+        queueContent.clearSelection();
+        // A real k: step the highlight up before the row disappears, so the
+        // rebuild never snaps it back to the playing track.
+        root.moveQueueCursor(-1);
+        root._pendingQueueCursor = root.queueCursor;
+        var row = queueContent.view.itemAtIndex(index);
+        if (row) {
+            row.removing = true;
+            removeTimer.restart();
+        } else {
+            root.finishQueueRemove();
+        }
+    }
+
+    function finishQueueRemove() {
+        if (root._removingIndex < 0)
+            return;
+        var index = root._removingIndex;
+        root._removingIndex = -1;
+        root._pendingQueueCursor = root.queueCursor;
+        Backend.queueRemove(index);
+    }
+
     // VI-4: visual selection over the fullscreen queue. The state lives in
     // `queueContent` (the shared scroll model); Home routes `v`/`V`/Esc here
     // while the player is up.
@@ -306,6 +344,7 @@ Rectangle {
 
     function applyQueue(payload) {
         var data = JSON.parse(payload);
+        var rowsChanged = data.hash !== root._queueHash;
 
         // A skip or an auto-advance re-delivers the exact same rows with a
         // new playing index. Rebuilding the model for that flicked the pane
@@ -313,7 +352,7 @@ Rectangle {
         // the view's layout (realised rows stopped at the old window and
         // later jumps inflated the item offsets — SC-5). So: rebuild only
         // when the rows really changed; a pure move just follows the index.
-        if (data.hash !== root._queueHash) {
+        if (rowsChanged) {
             root._queueHash = data.hash;
             // ARC-memory: a different row set is a new queue — drop the old
             // queue's remembered scroll/prefetch target before it can be
@@ -340,7 +379,14 @@ Rectangle {
         }
 
         queueIndex = data.index;
-        if (root._reordering) {
+        if (root._pendingQueueCursor >= 0 && rowsChanged) {
+            root._recallQueue = false;
+            queueCursor = Math.max(0, Math.min(queueItems.count - 1,
+                root._pendingQueueCursor));
+            root._pendingQueueCursor = -1;
+            queueContent.currentIndex = queueCursor;
+            queueContent.land(queueCursor);
+        } else if (root._reordering) {
             root._reordering = false;
             root._recallQueue = false;
             queueCursor = Math.max(0, Math.min(queueItems.count - 1, queueCursor));
@@ -536,9 +582,7 @@ Rectangle {
             queueContent.currentIndex = queueCursor;
             return;
         } else if (action === "queue_remove" && queueCursor >= 0) {
-            // VI-4: removing a row ends the visual selection.
-            queueContent.clearSelection();
-            Backend.queueRemove(queueCursor);
+            root.removeQueueRow(queueCursor);
         } else if (action === "enter") {
             // VI-4: jumping to a track ends the visual selection.
             queueContent.clearSelection();
@@ -1378,6 +1422,28 @@ Rectangle {
                                         // Playing-track tint stays on the row; the
                                         // cursor/hover block is the shared UI-48 layer.
                                         color: index === root.queueIndex ? Palette.surfaceContainer : "transparent"
+                                        property bool removing: false
+                                        opacity: removing ? 0 : 1
+
+                                        Behavior on opacity {
+                                            NumberAnimation {
+                                                duration: Theme.reduceMotion ? 0 : Theme.motion.standard * 1.3
+                                                easing.type: Easing.Bezier
+                                                easing.bezierCurve: Theme.ease.standard
+                                            }
+                                        }
+
+                                        transform: Translate {
+                                            x: row.removing ? -row.width : 0
+
+                                            Behavior on x {
+                                                NumberAnimation {
+                                                    duration: Theme.reduceMotion ? 0 : Theme.motion.standard * 1.3
+                                                    easing.type: Easing.Bezier
+                                                    easing.bezierCurve: Theme.ease.standard
+                                                }
+                                            }
+                                        }
 
                                         RowHighlight {
                                             current: index === root.queueCursor

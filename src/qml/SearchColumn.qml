@@ -239,20 +239,19 @@ Item {
     // UI-47 divider.
     readonly property real overflow: width * 0.012
 
-    /// The full (unstacked) column area: "Most played" uses it when it owns
-    /// the whole stack, and every section shares its title size.
+    /// The full column area: the overlay passes the row height so every
+    /// section shares its title size.
     property real headerRefHeight: 0
     readonly property real titlePixelSize:
         (root.headerRefHeight > 0 ? root.headerRefHeight : height) * 0.10 * 0.42
     readonly property real headerH: Math.max(height * 0.10, titlePixelSize * 1.6)
-    /// UI-58: the overlay's height, shared by the three stacked sections —
-    /// rows scale from the whole panel, never from the thinner section the
-    /// row amount happens to leave (0 = this column's own height).
+    /// Optional shared row reference: when a host wants rows to scale from a
+    /// common height instead of this column's own (0 = this column's height).
     property real rowRefHeight: 0
-    /// The stable sizing height for the rows: the shared panel height when
-    /// the overlay supplies one, else this column's own height. `listH`
-    /// derives from it directly — never from `content.adaptiveRowHeight`,
-    /// which depends on the content height `listH` sets (a binding loop).
+    /// The stable sizing height for the rows: the shared reference when the
+    /// host supplies one, else this column's own height. `listH` derives from
+    /// it directly — never from `content.adaptiveRowHeight`, which depends on
+    /// the content height `listH` sets (a binding loop).
     readonly property real _rowSizingHeight: root.rowRefHeight > 0
         ? root.rowRefHeight : root.height
     /// The model owns the adaptive row; this column only snaps its viewport
@@ -261,23 +260,12 @@ Item {
     readonly property real listH: rowH > 0
         ? Math.max(rowH, Math.floor((height - headerH) / rowH) * rowH)
         : 0
-    /// A live query with no result rows: collapse the body to the shared
-    /// "no" glyph so the other stacked columns keep the freed height.
+    /// A live query with no result rows: the full body centres the "no" glyph.
     readonly property bool noMatches: root.hasQuery && !root.loading
         && root.model !== null && root.model.count === 0
-    /// The collapsed column height, derived from the shared stack height
-    /// rather than this column's own height (which the layout is about to
-    /// shrink), so `Layout.preferredHeight` cannot feed back into itself.
-    readonly property real collapsedHeight: {
-        var ref = root.headerRefHeight > 0
-            ? root.headerRefHeight : root.height;
-        var title = ref * 0.10 * 0.42;
-        return title * 1.6 * 1.7;
-    }
-    readonly property real collapsedBodyHeight:
-        Math.max(1, root.collapsedHeight - root.headerH)
-    readonly property real bodyHeight: root.noMatches
-        ? root.collapsedBodyHeight : root.listH
+    /// The body keeps the full snapped row area; an empty column centres the
+    /// "no" glyph there instead of collapsing to it.
+    readonly property real bodyHeight: root.listH
 
     Column {
         anchors.fill: parent

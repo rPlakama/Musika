@@ -20,9 +20,9 @@ import QtQuick.Layouts
 import musika
 import "Theme.js" as Theme
 
-// Floating global search (Shift Space F): one modal panel with the Songs,
-// Albums and Artists sections stacked vertically, filtered live from the
-// library. Typing mode: keys type, Tab/arrows navigate, Esc -> normal mode.
+// Floating global search (Shift Space F): one modal panel with Songs | Albums |
+// Artists columns (RowLayout weights 38/40/22), filtered live from the library.
+// Typing mode: keys type, Tab/arrows navigate, Esc -> normal mode.
 // Normal mode: hjkl navigates, i re-enters typing, Enter opens/plays, Esc
 // closes and returns focus to the previous region.
 Item {
@@ -329,7 +329,7 @@ Item {
             return;
 
         // UI-41: results crossfade in on payload swaps instead of flashing.
-        columnsStack.opacity = 0;
+        columnsRow.opacity = 0;
         songResults.clear();
         albumResults.clear();
         artistResults.clear();
@@ -402,7 +402,7 @@ Item {
 
         loading = false;
         Qt.callLater(function () {
-            columnsStack.opacity = 1;
+            columnsRow.opacity = 1;
         });
 
         // UI-49: the response landing on zero hits is denied input — once per
@@ -594,11 +594,13 @@ Item {
                 }
             }
 
-            // The three result surfaces stack vertically; each gets an equal
-            // share of the panel height (the empty-query Songs surface takes
-            // the whole stack once the other two are hidden).
-            ColumnLayout {
-                id: columnsStack
+            // The 0.3.0 modal: three result columns side by side. Widths are
+            // RowLayout weights (38/40/22), not pixels: Albums gets the room
+            // its titles need, Artists is narrow since it only carries a name
+            // plus its count. The empty-query Songs surface takes the whole
+            // row once the other two are hidden.
+            RowLayout {
+                id: columnsRow
                 Layout.fillWidth: true
                 Layout.fillHeight: true
                 visible: !root.nothingFound
@@ -615,23 +617,15 @@ Item {
                 SearchColumn {
                     id: songsColumn
                     Layout.fillWidth: true
-                    // No matches collapse to the header + "no" glyph, so the
-                    // remaining columns share the freed stack height.
-                    Layout.fillHeight: !songsColumn.noMatches
-                    Layout.preferredHeight: songsColumn.noMatches
-                        ? songsColumn.collapsedHeight : 1
+                    Layout.preferredWidth: 38
+                    Layout.fillHeight: true
                     // S-9: the empty-query surface uses this column alone.
                     title: field.text.length > 0 ? "Songs" : "Most played"
                     model: songResults
                     active: root.activeColumn === 0
                     loading: root.loading
                     hasQuery: field.text.length > 0
-                    // The whole panel sizes the rows; the stacked section
-                    // must not compress them.
-                    rowRefHeight: root.panelRefHeight
-                    // The full stack area sizes every title, so the stacked
-                    // sections keep "Most played"'s type scale.
-                    headerRefHeight: columnsStack.height
+                    headerRefHeight: columnsRow.height
                     quickActionKind: "song"
                     selectionField: "songId"
 
@@ -644,11 +638,12 @@ Item {
                     }
                 }
 
-                // Structural rule between the stacked sections (UI-47).
+                // Structural rule: keeps each column's header/count contained
+                // instead of bleeding into its neighbour (UI-47).
                 Rectangle {
                     radius: Theme.radius
-                    Layout.fillWidth: true
-                    Layout.preferredHeight: Math.max(1, root.panelRefHeight * Theme.hairlineRatio)
+                    Layout.fillHeight: true
+                    Layout.preferredWidth: Math.max(1, root.panelRefHeight * Theme.hairlineRatio)
                     color: Palette.outlineVariant
                     z: 1
                     visible: field.text.length > 0
@@ -657,17 +652,15 @@ Item {
                 SearchColumn {
                     id: albumsColumn
                     Layout.fillWidth: true
-                    Layout.fillHeight: !albumsColumn.noMatches
-                    Layout.preferredHeight: albumsColumn.noMatches
-                        ? albumsColumn.collapsedHeight : 1
+                    Layout.preferredWidth: 40
+                    Layout.fillHeight: true
                     title: "Albums"
                     model: albumResults
                     active: root.activeColumn === 1
                     loading: root.loading
                     hasQuery: field.text.length > 0
                     visible: field.text.length > 0
-                    rowRefHeight: root.panelRefHeight
-                    headerRefHeight: columnsStack.height
+                    headerRefHeight: columnsRow.height
                     quickActionKind: "album"
                     selectionField: "albumId"
 
@@ -682,8 +675,8 @@ Item {
 
                 Rectangle {
                     radius: Theme.radius
-                    Layout.fillWidth: true
-                    Layout.preferredHeight: Math.max(1, root.panelRefHeight * Theme.hairlineRatio)
+                    Layout.fillHeight: true
+                    Layout.preferredWidth: Math.max(1, root.panelRefHeight * Theme.hairlineRatio)
                     color: Palette.outlineVariant
                     z: 1
                     visible: field.text.length > 0
@@ -692,9 +685,8 @@ Item {
                 SearchColumn {
                     id: artistsColumn
                     Layout.fillWidth: true
-                    Layout.fillHeight: !artistsColumn.noMatches
-                    Layout.preferredHeight: artistsColumn.noMatches
-                        ? artistsColumn.collapsedHeight : 1
+                    Layout.preferredWidth: 22
+                    Layout.fillHeight: true
                     title: "Artists"
                     roundedArt: true
                     model: artistResults
@@ -702,8 +694,7 @@ Item {
                     loading: root.loading
                     hasQuery: field.text.length > 0
                     visible: field.text.length > 0
-                    rowRefHeight: root.panelRefHeight
-                    headerRefHeight: columnsStack.height
+                    headerRefHeight: columnsRow.height
                     quickActionKind: "artist"
                     selectionField: "artistId"
 

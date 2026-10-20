@@ -57,8 +57,8 @@ ScrollPanel {
     hasHeaderChip: root.shuffleKind.length > 0
     onHeaderChipActivated: Backend.toggleShuffle(root.shuffleKind)
 
-    /// The state marks (heart/download) render only for the rows currently
-    /// inside the viewport — offscreen rows do no mark work at all.
+    /// The state marks (heart/download) render only for the rendered band —
+    /// the viewport plus the scroll body's overscan.
     function markVisible(index) {
         return root.firstVisibleIndex >= 0
             && index >= root.firstVisibleIndex

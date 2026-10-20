@@ -33,10 +33,13 @@ import "Theme.js" as Theme
 //
 // The extent is derived from the row unit (count × row height) instead of
 // trusting Qt's lazy `contentHeight` estimate; a realised last row overrides
-// it with real geometry. The rendered set is capped to the rows actually on
-// screen: `cacheBuffer: 0` adds no prediction band and `reuseItems: false`
-// destroys a delegate as soon as it leaves the viewport instead of keeping
-// an offscreen pool alive.
+// it with real geometry.
+//
+// The rendered set keeps an overscan of `renderOverscanRows` rows on each
+// side of the viewport (`cacheBuffer`) instead of capping to the visible
+// rows. Delegates therefore exist before they scroll in, so continuous
+// scrolling does not create/destroy them at the edge and flicker. Marks use
+// the same rendered band, so an incoming row arrives with its state.
 //
 // The follow is a short OutCubic animation on `contentY`. Semantic jumps
 // land instantly. Hosts never write `contentY` or call
@@ -69,10 +72,32 @@ Item {
     property string rowPreset: ""
     readonly property real _rowRatio:
         root.rowPreset === "queue" ? 0.16 : root.rowRatio
-    readonly property real rowViewHeight:
-        root.rowRefHeight > 0 ? root.rowRefHeight : root.height
+    // Cached reference, not a binding: a snap that sizes this body from
+    // `rowStride` would otherwise feed `height` back into the row unit and
+    // trip QML's binding-loop detector on every window resize.
+    property real _rowRefHeight: root.height
+    readonly property real rowViewHeight: root._rowRefHeight
+    onRowRefHeightChanged: {
+        root._rowRefHeight = root.rowRefHeight > 0
+            ? root.rowRefHeight : root.height;
+        root.captureRowBase();
+    }
+    onHeightChanged: {
+        if (root.rowRefHeight <= 0) {
+            root._rowRefHeight = root.height;
+            root.captureRowBase();
+        }
+        root._scheduleResizeRecenter();
+    }
     property real rowHeightScale: 1.0
     property real rowSpacing: 0
+    /// Extra rows kept alive above and below the viewport, so a continuous
+    /// scroll never has to create a delegate at the edge.
+    property int renderOverscanRows: 10
+    readonly property real renderOverscan: {
+        var stride = root._stride(root.view);
+        return stride > 0 ? stride * root.renderOverscanRows : 0;
+    }
     /// A transient tiny viewport (the player's panes start at a few pixels
     /// before the split settles) must not turn the rows microscopic: at 1.4 px
     /// the visible band spanned ~130 rows and realised all of them.
@@ -137,22 +162,26 @@ Item {
         return Math.max(1, Math.floor(v.height / stride + 1e-6));
     }
 
-    /// The screenful as a reactive property (the render/mark cap).
+    /// The screenful as a reactive property (page size, not the mark cap).
     readonly property int visibleRowCount: root.visibleRows()
 
-    /// First and last *item* indices currently inside the viewport. List rows
-    /// are their own index; a grid returns the whole visible cell band. These
-    /// are the only rows whose marks are allowed to exist.
+    /// First and last *item* indices in the rendered band: the viewport rows
+    /// plus `renderOverscanRows` on each side. List rows are their own index;
+    /// a grid returns whole cell rows. Marks and mark requests use this band,
+    /// so a row scrolling in already has its state.
     readonly property var _visibleBounds: {
         var v = root.view;
         if (!v || v.count === 0 || v.height <= 0)
             return { first: -1, last: -1 };
+        var overscan = root.renderOverscanRows;
         if (root.layout === "grid") {
             var cell = root.cellHeight > 0 ? root.cellHeight : root.cellWidth;
             var stride = Math.max(1, cell);
-            var firstRow = Math.max(0, Math.floor(v.contentY / stride));
-            var lastRow = Math.max(firstRow,
-                Math.ceil((v.contentY + v.height) / stride) - 1);
+            var rows = root._rowCount(v);
+            var firstRow = Math.max(0, Math.floor(v.contentY / stride)
+                - overscan);
+            var lastRow = Math.min(rows - 1,
+                Math.ceil((v.contentY + v.height) / stride) - 1 + overscan);
             var cols = Math.max(1, root.columns);
             return {
                 first: Math.min(v.count - 1, firstRow * cols),
@@ -163,9 +192,11 @@ Item {
         if (rowStride <= 0)
             return { first: 0, last: v.count - 1 };
         return {
-            first: Math.max(0, Math.floor(v.contentY / rowStride)),
+            first: Math.max(0, Math.floor(v.contentY / rowStride)
+                - overscan),
             last: Math.min(v.count - 1,
-                Math.ceil((v.contentY + v.height) / rowStride) - 1)
+                Math.ceil((v.contentY + v.height) / rowStride) - 1
+                + overscan)
         };
     }
     readonly property int firstVisibleIndex: root._visibleBounds.first
@@ -668,15 +699,11 @@ Item {
     property bool _resizeApplyPending: false
 
     Component.onCompleted: {
+        root._rowRefHeight = root.rowRefHeight > 0
+            ? root.rowRefHeight : root.height;
         root.captureRowBase();
         root.applySavedLayout();
     }
-    onHeightChanged: {
-        if (root.rowRefHeight <= 0)
-            root.captureRowBase();
-        root._scheduleResizeRecenter();
-    }
-    onRowRefHeightChanged: root.captureRowBase()
     onMemoryKeyChanged: root.applySavedLayout()
     onWidthChanged: if (root.recenterOnWidth) root._scheduleResizeRecenter()
     onAdaptiveRowHeightChanged: root._scheduleResizeRecenter()
@@ -868,7 +895,7 @@ Item {
             boundsBehavior: Flickable.StopAtBounds
             highlightFollowsCurrentItem: false
             reuseItems: false
-            cacheBuffer: 0
+            cacheBuffer: root.renderOverscan
             displayMarginBeginning: 0
             displayMarginEnd: 0
         }
@@ -887,7 +914,7 @@ Item {
             boundsBehavior: Flickable.StopAtBounds
             highlightFollowsCurrentItem: false
             reuseItems: false
-            cacheBuffer: 0
+            cacheBuffer: root.renderOverscan
             displayMarginBeginning: 0
             displayMarginEnd: 0
         }

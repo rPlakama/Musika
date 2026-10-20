@@ -271,7 +271,7 @@ Rectangle {
     }
 
     /// The state marks (favourite hearts, download glyphs) render only for
-    /// the cards currently inside the wall — same rule as the segments.
+    /// the cards in the rendered band — same rule as the segments.
     function markVisible(index) {
         return wall.firstVisibleIndex >= 0
             && index >= wall.firstVisibleIndex

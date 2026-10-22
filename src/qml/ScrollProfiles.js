@@ -39,7 +39,7 @@ var profiles = {
         bleedRatio: 0.012
     },
     queue: {
-        rowRatio: 0.16,
+        rowRatio: 0.10,
         bleedRatio: 0.012,
         flags: { reorder: true, remove: true }
     },

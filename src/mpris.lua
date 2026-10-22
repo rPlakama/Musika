@@ -21,11 +21,17 @@ local SOCKET = mp.get_opt("musika-mpris-socket")
 local state = nil
 local last_key = ""
 local last_position = 0
+local last_position_at = 0
+local last_position_emit = 0
+local last_track_id = ""
 local owned = false
 local connection = nil
 local inbuf = ""
 local serial = 0
 local replies = {}
+
+local POSITION_UPDATE_INTERVAL = 1.0
+local SEEK_JUMP_US = 2000000
 
 -- ---------------------------------------------------------------------------
 -- D-Bus wire format (little-endian)
@@ -693,6 +699,39 @@ local function emit_seeked(position)
     send_signal(ROOT_PATH, PLAYER_IFACE, "Seeked", "x", { position })
 end
 
+-- Track the playhead: signal real jumps and publish progress for clients that
+-- do not interpolate Position themselves.
+local function emit_progress(st)
+    local now = socket.gettime()
+    local position = st.position_us or 0
+    local track_id = str(st.track_id)
+    local expected = last_position
+    if last_position_at > 0 and st.playback_status == "Playing" then
+        expected = last_position + math.floor((now - last_position_at) * 1000000)
+    end
+
+    local seeked = last_position_at > 0
+        and now - last_position_at < 5
+        and track_id == last_track_id
+        and math.abs(position - expected) > SEEK_JUMP_US
+    last_position = position
+    last_position_at = now
+    last_track_id = track_id
+
+    if seeked then
+        emit_seeked(position)
+    end
+    if st.playback_status == "Playing"
+        and now - last_position_emit >= POSITION_UPDATE_INTERVAL then
+        last_position_emit = now
+        send_signal(ROOT_PATH, PROPS_IFACE, "PropertiesChanged", "sa{sv}as", {
+            PLAYER_IFACE,
+            { Position = { sig = "x", value = position } },
+            {},
+        })
+    end
+end
+
 -- ---------------------------------------------------------------------------
 -- Transport
 -- ---------------------------------------------------------------------------
@@ -1091,6 +1130,7 @@ local function tick()
     if connection then
         drain_socket(0)
         emit_changes()
+        emit_progress(current_state())
     end
     mp.add_timeout(0.05, tick)
 end

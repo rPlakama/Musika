@@ -15,7 +15,7 @@
 // along with this program; if not, see <https://www.gnu.org/licenses/>.
 
 use anyhow::{Context, Result, bail};
-use md5::{Digest, Md5};
+use openssl::hash::{Hasher, MessageDigest};
 use reqwest::Url;
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
@@ -310,10 +310,10 @@ fn generate_salt() -> String {
 }
 
 fn md5_token(password: &str, salt: &str) -> String {
-    let mut hasher = Md5::new();
-    hasher.update(password.as_bytes());
-    hasher.update(salt.as_bytes());
-    hex::encode(hasher.finalize())
+    let mut hasher = Hasher::new(MessageDigest::md5()).expect("openssl md5");
+    hasher.update(password.as_bytes()).expect("openssl md5");
+    hasher.update(salt.as_bytes()).expect("openssl md5");
+    crate::hex::encode(hasher.finish().expect("openssl md5"))
 }
 
 #[cfg(test)]
@@ -341,9 +341,8 @@ mod tests {
 
     #[test]
     fn token_is_md5_of_password_plus_salt() {
-        let mut expected = Md5::new();
-        expected.update(b"secretabc");
-        assert_eq!(md5_token("secret", "abc"), hex::encode(expected.finalize()));
+        let expected = openssl::hash::hash(MessageDigest::md5(), b"secretabc").unwrap();
+        assert_eq!(md5_token("secret", "abc"), crate::hex::encode(expected));
     }
 
     #[test]

@@ -34,7 +34,7 @@ use std::collections::{BTreeSet, HashMap, HashSet};
 use std::sync::Arc;
 
 use anyhow::Result;
-use md5::{Digest, Md5};
+use openssl::hash::MessageDigest;
 use sqlx::FromRow;
 use sqlx::sqlite::SqlitePool;
 
@@ -369,9 +369,7 @@ fn store_art(
 }
 
 fn md5_hex(bytes: &[u8]) -> String {
-    let mut hasher = Md5::new();
-    hasher.update(bytes);
-    hex::encode(hasher.finalize())
+    crate::hex::encode(openssl::hash::hash(MessageDigest::md5(), bytes).expect("openssl md5"))
 }
 
 /// Maps only the requested cover ids to `file://` URLs, in bounded batches.

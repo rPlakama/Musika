@@ -41,7 +41,7 @@ impl SecretKey {
         if path.exists() {
             let contents = fs::read_to_string(&path)
                 .with_context(|| format!("failed to read key file {}", path.display()))?;
-            let bytes = hex::decode(contents.trim())
+            let bytes = crate::hex::decode(contents.trim())
                 .with_context(|| format!("key file {} is not valid hex", path.display()))?;
             let key: [u8; KEY_LEN] = bytes.try_into().map_err(|_| {
                 anyhow!(
@@ -56,7 +56,7 @@ impl SecretKey {
         rand_bytes(&mut key).context("failed to generate a random key")?;
 
         crate::db::ensure_parent_dir(&path)?;
-        write_private(&path, hex::encode(key).as_bytes())?;
+        write_private(&path, crate::hex::encode(key).as_bytes())?;
 
         Ok(Self(key))
     }
@@ -88,12 +88,12 @@ impl SecretKey {
         blob.extend_from_slice(&tag);
         blob.extend_from_slice(&ciphertext);
 
-        Ok(hex::encode(blob))
+        Ok(crate::hex::encode(blob))
     }
 
     /// Decrypts a value produced by [`SecretKey::encrypt`].
     pub fn decrypt(&self, encoded: &str) -> Result<String> {
-        let blob = hex::decode(encoded).context("stored secret is not valid hex")?;
+        let blob = crate::hex::decode(encoded).context("stored secret is not valid hex")?;
         if blob.len() < NONCE_LEN + TAG_LEN {
             return Err(anyhow!("stored secret is truncated"));
         }
@@ -191,7 +191,7 @@ mod tests {
         let key = test_key();
         let encoded = key.encrypt("hunter2").unwrap();
 
-        assert!(hex::decode(&encoded).is_ok());
+        assert!(crate::hex::decode(&encoded).is_ok());
         assert_eq!(key.decrypt(&encoded).unwrap(), "hunter2");
     }
 

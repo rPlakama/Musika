@@ -31,6 +31,7 @@ mod db;
 mod debug;
 mod download;
 mod fanout;
+mod hex;
 mod http_client;
 mod index;
 mod ipc;
@@ -80,6 +81,29 @@ pub fn runtime() -> &'static Runtime {
     RT.get_or_init(|| Runtime::new().unwrap())
 }
 
+fn load_dotenv() {
+    let Ok(text) = std::fs::read_to_string(".env") else {
+        return;
+    };
+    for line in text.lines() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let line = line.strip_prefix("export ").unwrap_or(line);
+        let Some((key, value)) = line.split_once('=') else {
+            continue;
+        };
+        let key = key.trim();
+        let value = value.trim().trim_matches(['"', '\'']);
+        if !key.is_empty() && std::env::var_os(key).is_none() {
+            unsafe {
+                std::env::set_var(key, value);
+            }
+        }
+    }
+}
+
 fn main() {
     // CLI probe before any Qt/database work, so `musika --version` also
     // works on a headless host.
@@ -91,7 +115,7 @@ fn main() {
         return;
     }
 
-    dotenvy::dotenv().ok();
+    load_dotenv();
 
     if std::env::var("QSG_RHI_BACKEND").is_err() {
         unsafe {

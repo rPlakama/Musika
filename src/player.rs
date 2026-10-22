@@ -49,6 +49,19 @@ use std::time::{Duration, Instant};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
+mod sys {
+    use std::ffi::c_int;
+
+    pub const SIGTERM: c_int = 15;
+    pub const PR_SET_PDEATHSIG: c_int = 1;
+
+    unsafe extern "C" {
+        pub fn prctl(option: c_int, ...) -> c_int;
+        pub fn getppid() -> c_int;
+        pub fn kill(pid: c_int, sig: c_int) -> c_int;
+    }
+}
+
 /// A queued track, including the resolved `stream` URL.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Track {
@@ -732,12 +745,12 @@ impl Player {
         }
         unsafe {
             command.pre_exec(move || {
-                if libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGTERM) == -1 {
+                if sys::prctl(sys::PR_SET_PDEATHSIG, sys::SIGTERM) == -1 {
                     return Err(std::io::Error::last_os_error());
                 }
                 // The parent may have died between fork and prctl; PDEATHSIG
                 // would not fire then, so bail out instead of leaking.
-                if libc::getppid() as u32 != parent {
+                if sys::getppid() as u32 != parent {
                     return Err(std::io::Error::other("parent died before spawn"));
                 }
                 Ok(())
@@ -804,7 +817,7 @@ impl Drop for Player {
         self.ipc = None;
         if let Some(mut child) = self.child.take() {
             // mpv shuts down cleanly on TERM; `child.kill()` would SIGKILL it.
-            signal(child.id(), libc::SIGTERM);
+            signal(child.id(), sys::SIGTERM);
             let _ = child.wait();
         }
         if let Some(socket) = &self.socket {
@@ -826,10 +839,10 @@ fn connect_retry(path: &Path, timeout: Duration) -> Option<UnixStream> {
     }
 }
 
-fn signal(pid: u32, signal: libc::c_int) {
+fn signal(pid: u32, signal: std::ffi::c_int) {
     // Native kill(2), no `kill` binary spawn (ARC-16).
     unsafe {
-        libc::kill(pid as libc::pid_t, signal);
+        sys::kill(pid as std::ffi::c_int, signal);
     }
 }
 

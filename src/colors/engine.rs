@@ -25,7 +25,7 @@ use std::path::Path;
 
 use anyhow::{Context, Result};
 use material_colors::color::Rgb;
-use md5::{Digest, Md5};
+use openssl::hash::MessageDigest;
 use sqlx::FromRow;
 use sqlx::sqlite::SqlitePool;
 
@@ -328,7 +328,7 @@ pub async fn purge_with(colors: &SqlitePool, covers: &SqlitePool) -> Result<usiz
 /// an unchanged hash as "no work".
 pub fn hash_roles(roles: &BTreeMap<String, String>) -> String {
     let canonical = serde_json::to_string(roles).unwrap_or_default();
-    let mut hasher = Md5::new();
-    hasher.update(canonical.as_bytes());
-    hex::encode(hasher.finalize())
+    crate::hex::encode(
+        openssl::hash::hash(MessageDigest::md5(), canonical.as_bytes()).expect("openssl md5"),
+    )
 }

@@ -30,7 +30,7 @@ use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
 use anyhow::Result;
-use md5::{Digest, Md5};
+use openssl::hash::MessageDigest;
 use sqlx::sqlite::SqlitePool;
 
 /// Playback-tier blob: fetched around the current queue, purgeable.
@@ -460,9 +460,7 @@ fn remove_temp_files(dir: &std::path::Path) {
 }
 
 fn md5_hex(bytes: &[u8]) -> String {
-    let mut hasher = Md5::new();
-    hasher.update(bytes);
-    hex::encode(hasher.finalize())
+    crate::hex::encode(openssl::hash::hash(MessageDigest::md5(), bytes).expect("openssl md5"))
 }
 
 /// The cached paths for only `ids`, in bounded batches: a play action never

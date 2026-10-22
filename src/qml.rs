@@ -658,12 +658,13 @@ impl Backend {
             return;
         };
 
-        // Offline-first auto-login: with downloaded music the app opens right
-        // away as `offline` (filtered to the downloaded catalog) while the
-        // auth finishes in the background — on success the flag clears and
-        // the full streaming library loads. Without downloads the Login
-        // screen is the entry point and a failed login can still fall back
-        // into offline mode.
+        // Auto-login with the ping: the stored account always tries to
+        // complete the login on its own. With downloaded music the app opens
+        // right away as `offline` (filtered to the downloaded catalog) while
+        // the auth finishes in the background — on success the flag clears
+        // and the full streaming library loads. Without downloads it waits
+        // for the same ping and only returns to the Login form, prefilled,
+        // when the server is unreachable.
         crate::runtime().spawn(async move {
             match crate::sqlite::load_credentials(&pool).await {
                 Ok(Some(credentials)) => {
@@ -674,26 +675,20 @@ impl Backend {
                         "noteServerType",
                         credentials.server_type.clone()
                     );
-                    if !downloaded_music_available().await {
+
+                    let has_downloads = downloaded_music_available().await;
+                    if has_downloads {
                         qtbridge::invoke_method!(
                             invoker,
-                            "prefillCredentials",
-                            credentials.server_url,
-                            credentials.username,
-                            credentials.password
+                            "offlineLogin",
+                            credentials.server_url.clone(),
+                            credentials.username.clone()
                         );
-                        invoker.invoke_method("login_required");
-                        return;
                     }
 
-                    qtbridge::invoke_method!(
-                        invoker,
-                        "offlineLogin",
-                        credentials.server_url.clone(),
-                        credentials.username.clone()
-                    );
-
-                    // Finish the login inside the app.
+                    // Finish the login inside the app (the ping). A failure
+                    // with a cached catalog just stays offline; without one it
+                    // falls back to the Login form with the account prefilled.
                     match crate::http_client::authenticate(
                         &credentials.server_url,
                         &credentials.username,
@@ -712,13 +707,24 @@ impl Backend {
                                     &credentials.password,
                                 ),
                                 info.kind,
-                                false,
+                                !has_downloads,
                             );
                         }
-                        Err(err) => {
+                        Err(err) if has_downloads => {
                             // Stay offline; the auth is retried on the next
                             // sync/login.
                             eprintln!("login: background auth failed, staying offline: {err:#}");
+                        }
+                        Err(err) => {
+                            eprintln!("login: startup auth failed: {err:#}");
+                            qtbridge::invoke_method!(
+                                invoker,
+                                "prefillCredentials",
+                                credentials.server_url,
+                                credentials.username,
+                                credentials.password
+                            );
+                            invoker.invoke_method("login_required");
                         }
                     }
                 }

@@ -3,6 +3,12 @@
 All notable changes to Musika, newest first. `TASKLISTMAJOR.md` tracks the
 open work; this file is the release history.
 
+## 0.3.13 — _Better UI, and more general stuff_
+
+All commits since `v0.3.12`:
+
+- `7fbbbd2` Rework fullscreen playback layout and glide queue skips
+
 ## 0.3.12 — _Leaning, reducing, correcting_
 
 All commits since `v0.3.11`:

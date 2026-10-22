@@ -16,6 +16,7 @@
 
 import QtQuick
 import QtQuick.Layouts
+import "ScrollProfiles.js" as ScrollProfiles
 import "Theme.js" as Theme
 
 // The one scroll surface (the "ScrollModal").
@@ -47,31 +48,45 @@ import "Theme.js" as Theme
 Item {
     id: root
 
+    // ── Context profile ──────────────────────────────────────────────────
+
+    /// Context name selecting the metrics/flags defaults (SCROLLMODAL).
+    property string context: ""
+    readonly property var profile: ScrollProfiles.get(root.context)
+    /// Context-only keyboard permissions (e.g. queue reorder).
+    property var flags: root.profile.flags !== undefined
+        ? root.profile.flags : ({})
+
+    function allows(name) {
+        return root.flags[name] === true
+    }
+
     // ── Inputs ───────────────────────────────────────────────────────────
 
     property var model: null
     property Component rowDelegate: null
     property Component cellDelegate: null
     /// Gutter bleed on each side (UI-48); 0 clips at the list edge.
-    property real bleed: 0
+    property real bleed: root.profile.bleedRatio !== undefined
+        ? root.width * root.profile.bleedRatio : 0
 
     /// ARC-UI-3: supported layouts in toggle order ("list", "grid").
     property var layouts: ["list"]
     property string layout: "list"
     /// Grid geometry: columns per row and the cell height (0 = square).
-    property int columns: 1
-    property real cellHeight: 0
+    property int columns: root.profile.columns !== undefined
+        ? root.profile.columns : 1
+    property real cellHeight: root.profile.cellAspect !== undefined
+        ? root.cellWidth * root.profile.cellAspect
+          + root.height * (root.profile.cellExtra || 0)
+        : 0
     readonly property real cellWidth: Math.max(1, root.width / Math.max(1, root.columns))
 
     /// Row sizing: nominal fraction of the reference height (0 = delegates
     /// own their heights, e.g. lyrics).
-    property real rowRatio: 0
+    property real rowRatio: root.profile.rowRatio !== undefined
+        ? root.profile.rowRatio : 0
     property real rowRefHeight: 0
-    /// Built-in row unit for the fullscreen queue. Hosts that need a custom
-    /// unit leave this empty and use `rowRatio`/`rowRefHeight` instead.
-    property string rowPreset: ""
-    readonly property real _rowRatio:
-        root.rowPreset === "queue" ? 0.16 : root.rowRatio
     // Cached reference, not a binding: a snap that sizes this body from
     // `rowStride` would otherwise feed `height` back into the row unit and
     // trip QML's binding-loop detector on every window resize.
@@ -89,7 +104,8 @@ Item {
         }
         root._scheduleResizeRecenter();
     }
-    property real rowHeightScale: 1.0
+    property real rowHeightScale: root.profile.rowHeightScale !== undefined
+        ? root.profile.rowHeightScale : 1.0
     property real rowSpacing: 0
     /// Extra rows kept alive above and below the viewport, so a continuous
     /// scroll never has to create a delegate at the edge.
@@ -237,7 +253,7 @@ Item {
         if (last && last.height > 0)
             return last.y + last.height;
         var stride = root._stride(v);
-        var uniform = root.layout === "grid" || root._rowRatio > 0;
+        var uniform = root.layout === "grid" || root.rowRatio > 0;
         if (uniform && stride > 0) {
             if (root.layout === "grid")
                 return root._rowCount(v) * stride;
@@ -668,7 +684,7 @@ Item {
     property real _rowBase: 0
 
     function adaptiveRowFor(viewHeight) {
-        return Theme.adaptiveRow(viewHeight, root._rowRatio, root._rowBase)
+        return Theme.adaptiveRow(viewHeight, root.rowRatio, root._rowBase)
             * root.rowHeightScale;
     }
 
@@ -683,13 +699,13 @@ Item {
     /// lists such as lyrics have none). The scroll math must not read a
     /// delegate's transient `height` while these rows reflow.
     readonly property bool adaptiveRows:
-        root.layout !== "grid" && root._rowRatio > 0
+        root.layout !== "grid" && root.rowRatio > 0
     readonly property real rowStride:
         root.adaptiveRows ? root.adaptiveRowHeight + root.rowSpacing : 0
 
     function captureRowBase() {
-        if (root._rowBase <= 0 && root._rowRatio > 0 && root.rowViewHeight > 0)
-            root._rowBase = root.rowViewHeight * root._rowRatio;
+        if (root._rowBase <= 0 && root.rowRatio > 0 && root.rowViewHeight > 0)
+            root._rowBase = root.rowViewHeight * root.rowRatio;
     }
 
     property bool _manualScroll: false

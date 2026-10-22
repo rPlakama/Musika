@@ -808,7 +808,7 @@ Rectangle {
             // (the header/notes reflow must not rescale every row). The
             // precomputed extent keeps the shared glide off Qt's lazy
             // estimate.
-            rowRatio: 0.055
+            context: "album"
             rowRefHeight: root.height
 
             rowDelegate: Component {

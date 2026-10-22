@@ -164,8 +164,7 @@ Rectangle {
     // back to the Artists segment or a search result.
     readonly property bool exitsToMain: true
 
-    // ARC-UI-3: the grid columns; the scroll body derives the cell size.
-    readonly property int columns: 4
+    // ARC-UI-3: the wall geometry comes from the shared scroll profile.
     readonly property real avatarSide: Math.max(96, Math.min(height * 0.22, 256))
 
     // Study §2 "name+server tag": host only, never the full URL.
@@ -709,12 +708,11 @@ Rectangle {
                 id: wall
                 anchors.fill: parent
                 title: ""
+                context: "library"
                 headerRatio: 0
                 model: albums
                 layouts: ["grid", "list"]
                 layout: "list"
-                columns: root.columns
-                cellHeight: wall.cellWidth * 0.78 + wall.height * 0.085
                 selectable: true
                 memoryKey: root.memoryKey
                 searchFields: ["title", "meta"]

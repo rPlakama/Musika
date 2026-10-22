@@ -16,6 +16,7 @@
 
 import QtQuick
 import musika
+import "ScrollProfiles.js" as ScrollProfiles
 import "Theme.js" as Theme
 
 // Shared scroll panel — the standard shape of every scrollable segment:
@@ -48,7 +49,11 @@ Rectangle {
     // partial row never sits at the bottom; the remainder stays surface.
     // UI-57: the band sits 30% below the original 0.2 (0.14) and
     // `widthScale` ramps it further as the window narrows.
-    property real headerRatio: 0.14
+    // SCROLLMODAL: the context profile supplies the default split.
+    property string context: ""
+    readonly property var profile: ScrollProfiles.get(root.context)
+    property real headerRatio:
+        root.profile.headerRatio !== undefined ? root.profile.headerRatio : 0.14
     // UI-48: horizontal gutter the body overflows into (highlight bleed).
     property real bleed: 0
 
@@ -73,15 +78,11 @@ Rectangle {
     /// is independent of this body. Snapping here, not in the row, keeps the
     /// row unit continuous across a resize.
     readonly property real bodyHeight: {
-        var stride = (content.count > 0 && content.adaptiveRows
-                && content.rowRefHeight > 0)
-            ? content.rowStride : 0;
-        if (stride <= 0)
+        if (!(content.count > 0 && content.adaptiveRows
+                && content.rowRefHeight > 0))
             return root.bodyAvail;
-        var gap = content.rowSpacing;
-        var rows = Math.max(1, Math.floor(
-            (root.bodyAvail + gap) / stride + 1e-6));
-        return Math.min(root.bodyAvail, rows * stride - gap);
+        return ScrollProfiles.snapBody(root.bodyAvail, content.rowStride,
+            content.rowSpacing);
     }
 
     // --- Header (A) ----------------------------------------------------------
@@ -334,6 +335,7 @@ Rectangle {
         ScrollContent {
             id: content
             anchors.fill: parent
+            context: root.context
             bleed: root.bleed
             model: root.model
             rowDelegate: root.rowDelegate

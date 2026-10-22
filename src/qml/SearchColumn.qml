@@ -16,6 +16,7 @@
 
 import QtQuick
 import musika
+import "ScrollProfiles.js" as ScrollProfiles
 import "Theme.js" as Theme
 
 // One column of the floating search: a header (title + count) over the result
@@ -269,8 +270,9 @@ Item {
     /// The model owns the adaptive row; this column only snaps its viewport
     /// to full rows so the footer never slices one in half.
     readonly property real rowH: content.adaptiveRowFor(root._rowSizingHeight)
-    readonly property real listH: rowH > 0
-        ? Math.max(rowH, Math.floor((height - headerH) / rowH) * rowH)
+    readonly property real listH: root.rowH > 0
+        ? Math.max(root.rowH,
+            ScrollProfiles.snapBody(root.height - root.headerH, root.rowH, 0))
         : 0
     /// A live query with no result rows: the full body centres the "no" glyph.
     readonly property bool noMatches: root.hasQuery && !root.loading
@@ -377,20 +379,15 @@ Item {
             ScrollContent {
                 id: content
                 anchors.fill: parent
-                bleed: root.overflow
+                context: "search"
                 model: root.model
                 selectable: quickActionKind !== ""
                 onSelectionChanged: root.selectionChanged()
                 // ARC-UI-2 M1: the columns paint the same three cells.
                 searchFields: ["title", "subtitle", "meta"]
                 // UI-58: rows scale from the shared panel height (not the
-                // section left over by the stack) and Search trims the
-                // normal row; the precomputed extent keeps the shared glide
-                // off Qt's lazy estimate.
-                rowRatio: 0.12
-                // 20% taller than the previous 13/15 trim: 1.04 of the
-                // normal row.
-                rowHeightScale: 1.04
+                // section left over by the stack). The precomputed extent
+                // keeps the shared glide off Qt's lazy estimate.
                 rowRefHeight: root._rowSizingHeight
 
                 rowDelegate: Component {

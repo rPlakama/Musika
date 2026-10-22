@@ -566,7 +566,8 @@ Rectangle {
             queueContent.extendSelection("move_" + action.substring(7));
             queueCursor = queueContent.currentIndex;
         }
-        else if (action === "queue_up" && queueCursor > 0) {
+        else if (action === "queue_up" && queueContent.allows("reorder")
+                && queueCursor > 0) {
             root._reordering = true;
             // VI-4: a reorder shifts every anchored row; the range dies.
             queueContent.clearSelection();
@@ -574,14 +575,16 @@ Rectangle {
             queueCursor -= 1;
             queueContent.currentIndex = queueCursor;
             return;
-        } else if (action === "queue_down" && queueCursor < queueItems.count - 1) {
+        } else if (action === "queue_down" && queueContent.allows("reorder")
+                && queueCursor < queueItems.count - 1) {
             root._reordering = true;
             queueContent.clearSelection();
             Backend.queueMove(queueCursor, queueCursor + 1);
             queueCursor += 1;
             queueContent.currentIndex = queueCursor;
             return;
-        } else if (action === "queue_remove" && queueCursor >= 0) {
+        } else if (action === "queue_remove" && queueContent.allows("remove")
+                && queueCursor >= 0) {
             root.removeQueueRow(queueCursor);
         } else if (action === "enter") {
             // VI-4: jumping to a track ends the visual selection.
@@ -1174,6 +1177,7 @@ Rectangle {
                             ScrollContent {
                                 id: lyricsView
                                 anchors.fill: parent
+                                context: "lyrics"
                                 visible: root.lyricsAvailable
                                 model: lyricModel
                                 rowSpacing: root.lyricSize * 0.9
@@ -1380,15 +1384,13 @@ Rectangle {
                             ScrollContent {
                                 id: queueContent
                                 anchors.fill: parent
-                                bleed: width * 0.012
+                                context: "queue"
                                 model: queueItems
                                 selectable: true
                                 memoryKey: "fullscreen"
                                 // ARC-UI-2 M1: the queue rows paint title
                                 // and duration.
                                 searchFields: ["title", "duration"]
-                                // UI-58: the shared queue row unit.
-                                rowPreset: "queue"
                                 // The fullscreen memory also stores the focused
                                 // pane; without this the continuous remembers
                                 // clobbered it to the default scope.

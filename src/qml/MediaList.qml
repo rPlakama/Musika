@@ -198,14 +198,12 @@ ScrollPanel {
     // UI-58: the row fraction the adaptive rule preserves. Size from the
     // panel's body room, not from the body itself, so snapping it cannot
     // feed back into the row unit.
-    rowRatio: 0.105
+    context: "library"
     rowRefHeight: root.bodyAvail
     // ARC-UI-3: Shift-C flips every segment between the row list and a cover
     // wall — the same shared body ArtistEntry uses, with gg/G, the search
     // contract, selection and the scroll memory.
     layouts: ["list", "grid"]
-    columns: 4
-    cellHeight: root.cellWidth * 0.78 + root.height * 0.085
 
     function setRows(rows) {
         // VI-4: a reload invalidates the selected range.

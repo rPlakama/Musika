@@ -130,13 +130,9 @@ Rectangle {
                     color: Palette.primaryContainer
                     clip: true
 
-                    Image {
+                    CoverImage {
                         anchors.fill: parent
                         source: Backend.currentCoverUrl
-                        fillMode: Image.PreserveAspectCrop
-                        asynchronous: true
-                        cache: false
-                        visible: status === Image.Ready
                     }
                 }
 

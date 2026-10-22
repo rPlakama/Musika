@@ -30,7 +30,8 @@ import "Theme.js" as Theme
 // the painted size (list/grid thumbs 2 for the hover scale, hero covers 1),
 // the ambient backdrop decodes for the blur texture instead, and everything is
 // bound to device pixels (×DPR) on a 32 px grid so resizes do not reload the
-// image per pixel. Aspect ratio is preserved by `sourceSize`.
+// image per pixel. Aspect ratio is preserved by `sourceSize`, which Qt feeds
+// to QImageReader::setScaledSize (formats like JPEG decode at that scale).
 Image {
     id: root
 

@@ -454,8 +454,8 @@ ScrollPanel {
                 CoverImage {
                     anchors.fill: parent
                     source: cell.cover
-                    // ARC-40: ×2 headroom for the UI-50 hover scale.
-                    sizeFactor: 2
+                    // ARC-40: ×1.25 headroom for the UI-50 hover scale.
+                    sizeFactor: 1.25
                 }
 
                 // UI-56/UI-60: the favourite mark rides the cover corner with

@@ -31,9 +31,10 @@
 #![allow(dead_code)]
 
 use std::collections::{BTreeSet, HashMap, HashSet};
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use openssl::hash::MessageDigest;
 use sqlx::FromRow;
 use sqlx::sqlite::SqlitePool;
@@ -42,6 +43,14 @@ use crate::http_client::SubsonicClient;
 
 /// Cover size requested from the server (large enough for the mainscreen).
 const COVER_SIZE: u32 = 512;
+
+/// Longest edge of the thumbnail kept beside each cover; small surfaces load
+/// this instead of the full art (keep in sync with `CoverImage.thumbEdge`).
+const THUMB_EDGE: u32 = 320;
+/// JPEG quality for thumbnails; invisible at the painted row sizes.
+const THUMB_QUALITY: u8 = 82;
+/// Bounded worker count for lazy thumbnail generation.
+const THUMB_CONCURRENCY: usize = 4;
 
 /// ARC-39: remote SVG art is rasterized at ingest; the longest edge of the
 /// stored PNG never exceeds this (the palette and every surface are raster).
@@ -97,6 +106,7 @@ pub async fn refresh(
     let ids: Vec<String> = referenced.iter().cloned().collect();
     let forced: Arc<HashSet<String>> = Arc::new(forced.iter().cloned().collect());
     let mut report = CoverReport::default();
+    let mut thumb_jobs: Vec<(String, PathBuf)> = Vec::new();
 
     let client = Arc::clone(client);
     let known_for_fetch = Arc::clone(&known);
@@ -170,9 +180,14 @@ pub async fn refresh(
                 )
                 .await?;
 
+                // Generate here, off the UI path, so pages find the thumbnail
+                // ready when they first resolve the cover URL.
+                thumb_jobs.push((thumb_name(&file), dir.join(&file)));
+
                 if let Some(old) = known.get(&id) {
                     if old.file != file {
                         let _ = std::fs::remove_file(dir.join(&old.file));
+                        let _ = std::fs::remove_file(dir.join(thumb_name(&old.file)));
                     }
                 }
                 report.downloaded += 1;
@@ -185,11 +200,13 @@ pub async fn refresh(
     for (id, row) in known.iter() {
         if !referenced.contains(id) {
             let _ = std::fs::remove_file(dir.join(&row.file));
+            let _ = std::fs::remove_file(dir.join(thumb_name(&row.file)));
             crate::cache::delete_by(pool, "DELETE FROM covers WHERE id = ?1", id).await?;
             report.removed += 1;
         }
     }
 
+    ensure_thumbs(&dir, thumb_jobs).await;
     remove_orphans(pool, &dir).await?;
 
     Ok(report)
@@ -268,13 +285,14 @@ async fn remove_orphans(pool: &SqlitePool, dir: &std::path::Path) -> Result<()> 
         .fetch_all(pool)
         .await?;
     let kept: HashSet<String> = kept.into_iter().collect();
+    let kept_thumbs: HashSet<String> = kept.iter().map(|file| thumb_name(file)).collect();
 
     let Ok(entries) = std::fs::read_dir(dir) else {
         return Ok(());
     };
     for entry in entries.flatten() {
         let name = entry.file_name().to_string_lossy().to_string();
-        if name.ends_with(".tmp") || !kept.contains(&name) {
+        if name.ends_with(".tmp") || (!kept.contains(&name) && !kept_thumbs.contains(&name)) {
             let _ = std::fs::remove_file(entry.path());
         }
     }
@@ -372,6 +390,75 @@ fn md5_hex(bytes: &[u8]) -> String {
     crate::hex::encode(openssl::hash::hash(MessageDigest::md5(), bytes).expect("openssl md5"))
 }
 
+/// Derives the thumbnail file name from a cover file name. `CoverImage.qml`
+/// computes the same name from the resolved URL, so keep the two in sync.
+fn thumb_name(file: &str) -> String {
+    let stem = Path::new(file)
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .unwrap_or(file);
+    format!("{stem}.thumb.jpg")
+}
+
+fn build_thumb(source: &Path) -> Result<Vec<u8>> {
+    let image = image::ImageReader::open(source)
+        .with_context(|| format!("failed to open cover {}", source.display()))?
+        .with_guessed_format()
+        .with_context(|| format!("failed to sniff cover {}", source.display()))?
+        .decode()
+        .with_context(|| format!("failed to decode cover {}", source.display()))?;
+
+    // Small art is already cheap to decode; copy it rather than re-encode.
+    if image.width() <= THUMB_EDGE && image.height() <= THUMB_EDGE {
+        return std::fs::read(source)
+            .with_context(|| format!("failed to read cover {}", source.display()));
+    }
+
+    let thumb = image.resize(
+        THUMB_EDGE,
+        THUMB_EDGE,
+        image::imageops::FilterType::Lanczos3,
+    );
+    let mut bytes = Vec::new();
+    image::codecs::jpeg::JpegEncoder::new_with_quality(&mut bytes, THUMB_QUALITY)
+        .encode_image(&thumb.to_rgb8())
+        .with_context(|| format!("failed to encode thumbnail for {}", source.display()))?;
+    Ok(bytes)
+}
+
+fn write_thumb(source: &Path, dir: &Path, name: &str) -> Result<()> {
+    let bytes = build_thumb(source).or_else(|err| {
+        // A blob the decoder rejects still needs a file QML can request; the
+        // copy surfaces the same failure as the full-size path.
+        eprintln!(
+            "covers: thumbnail fallback for {}: {err:#}",
+            source.display()
+        );
+        std::fs::read(source).context("failed to read cover for thumbnail fallback")
+    })?;
+    crate::cache::write_atomic(dir, name, &bytes)?;
+    Ok(())
+}
+
+/// Generates missing thumbnails on a bounded blocking pool: decoding is CPU
+/// work, and the Qt image reader only decodes one file at a time.
+async fn ensure_thumbs(dir: &Path, jobs: Vec<(String, PathBuf)>) {
+    for chunk in jobs.chunks(THUMB_CONCURRENCY) {
+        let mut set = tokio::task::JoinSet::new();
+        for (name, source) in chunk {
+            let dir = dir.to_path_buf();
+            let name = name.clone();
+            let source = source.clone();
+            set.spawn_blocking(move || {
+                if let Err(err) = write_thumb(&source, &dir, &name) {
+                    eprintln!("covers: failed to thumbnail {}: {err:#}", source.display());
+                }
+            });
+        }
+        while set.join_next().await.is_some() {}
+    }
+}
+
 /// Maps only the requested cover ids to `file://` URLs, in bounded batches.
 /// Payload loaders use this so a page's cost follows
 /// the page, never the whole cover cache.
@@ -388,6 +475,7 @@ pub async fn url_map_of(pool: &SqlitePool, ids: &[String]) -> Result<HashMap<Str
     }
     let dir = crate::db::covers_dir()?;
     let mut map = HashMap::with_capacity(unique.len());
+    let mut thumb_jobs: Vec<(String, PathBuf)> = Vec::new();
     for chunk in unique.chunks(500) {
         let mut builder = sqlx::QueryBuilder::new("SELECT id, file FROM covers WHERE id IN (");
         crate::cache::push_in_list(
@@ -397,13 +485,18 @@ pub async fn url_map_of(pool: &SqlitePool, ids: &[String]) -> Result<HashMap<Str
         let rows: Vec<(String, String)> = builder.build_query_as().fetch_all(pool).await?;
         for (id, file) in rows {
             let path = dir.join(&file);
-            if path.is_file()
-                && let Ok(url) = reqwest::Url::from_file_path(path)
-            {
-                map.insert(id, url.to_string());
+            if path.is_file() {
+                let name = thumb_name(&file);
+                if !dir.join(&name).is_file() {
+                    thumb_jobs.push((name, path.clone()));
+                }
+                if let Ok(url) = reqwest::Url::from_file_path(&path) {
+                    map.insert(id, url.to_string());
+                }
             }
         }
     }
+    ensure_thumbs(&dir, thumb_jobs).await;
     Ok(map)
 }
 
@@ -474,5 +567,57 @@ mod tests {
         assert_eq!(bytes, png);
         assert_eq!(extension, "png");
         assert_eq!(content_type.as_deref(), Some("image/png"));
+    }
+
+    fn temp_thumb_dir() -> PathBuf {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!("musika-thumb-{}-{nanos}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        dir
+    }
+
+    #[test]
+    fn thumb_name_replaces_only_the_extension() {
+        assert_eq!(thumb_name("abc123.jpg"), "abc123.thumb.jpg");
+        assert_eq!(thumb_name("abc123"), "abc123.thumb.jpg");
+        assert_eq!(thumb_name("a.b.webp"), "a.b.thumb.jpg");
+    }
+
+    #[test]
+    fn thumb_is_bounded_and_written() {
+        let dir = temp_thumb_dir();
+        let source = dir.join("cover.png");
+        image::RgbaImage::from_pixel(640, 480, image::Rgba([10, 20, 30, 255]))
+            .save(&source)
+            .expect("write cover");
+
+        let bytes = build_thumb(&source).expect("build thumbnail");
+        let thumb = image::load_from_memory(&bytes).expect("thumbnail decodes");
+        assert_eq!((thumb.width(), thumb.height()), (THUMB_EDGE, 240));
+
+        let name = thumb_name("cover.png");
+        write_thumb(&source, &dir, &name).expect("write thumbnail");
+        assert!(dir.join(&name).is_file());
+
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn thumb_falls_back_to_the_original_blob() {
+        let dir = temp_thumb_dir();
+        let source = dir.join("broken.img");
+        std::fs::write(&source, b"not an image").expect("write blob");
+
+        let name = thumb_name("broken.img");
+        write_thumb(&source, &dir, &name).expect("fallback copy");
+        assert_eq!(
+            std::fs::read(dir.join(&name)).expect("read thumb"),
+            b"not an image"
+        );
+
+        let _ = std::fs::remove_dir_all(dir);
     }
 }

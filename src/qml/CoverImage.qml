@@ -27,33 +27,80 @@ import "Theme.js" as Theme
 // desaturates the art, and the caller lays a theme gradient on top.
 //
 // ARC-40: the decode is bounded per surface — `sizeFactor` adds headroom over
-// the painted size (list/grid thumbs 2 for the hover scale, hero covers 1),
-// the ambient backdrop decodes for the blur texture instead, and everything is
-// bound to device pixels (×DPR) on a 32 px grid so resizes do not reload the
-// image per pixel. Aspect ratio is preserved by `sourceSize`, which Qt feeds
-// to QImageReader::setScaledSize (formats like JPEG decode at that scale).
-Image {
+// the painted size (list/grid thumbs 1.25 for the UI-50 hover scale, hero
+// covers 1), the ambient backdrop decodes for the blur texture instead, and
+// everything is rounded to a 32 px grid so resizes do not reload the image per
+// pixel. `sourceSize` is in device-independent pixels; Qt multiplies it by the
+// window DPR before calling QImageReader::setScaledSize (which preserves the
+// aspect ratio). Small surfaces load the pre-scaled thumbnail Rust writes into
+// the cover cache, so the single Qt decode thread only touches a 320 px file.
+Item {
     id: root
 
+    /// Cover URL (`file://…`) as resolved by the Rust cover cache.
+    property url source
     property bool ambient: false
 
     /// Decode headroom over the painted size (1.0 = exactly the painted size).
     property real sizeFactor: 1.0
 
+    // Raster covers are at most 512 px (COVER_SIZE in src/covers.rs), so a
+    // larger request would only make Qt upscale on the decode thread.
+    readonly property int maxDecodeEdge: 512
     readonly property real decodeFactor: root.ambient ? 0.25 : root.sizeFactor
+    readonly property int decodeWidth: Math.min(root.maxDecodeEdge, Math.max(32,
+        Math.ceil(width * root.decodeFactor / 32) * 32))
+    readonly property int decodeHeight: Math.min(root.maxDecodeEdge, Math.max(32,
+        Math.ceil(height * root.decodeFactor / 32) * 32))
 
-    sourceSize.width: Math.max(32,
-        Math.ceil(width * Screen.devicePixelRatio * root.decodeFactor / 32) * 32)
-    sourceSize.height: Math.max(32,
-        Math.ceil(height * Screen.devicePixelRatio * root.decodeFactor / 32) * 32)
+    readonly property bool ready: image.status === Image.Ready
+    opacity: root.ready ? 1 : 0
+    visible: root.ready
 
-    asynchronous: true
-    cache: false
-    fillMode: Image.PreserveAspectCrop
-    opacity: status === Image.Ready ? 1 : 0
-    visible: opacity > 0
+    // A thumbnail the cache has not written yet falls back to the full cover.
+    property bool thumbFailed: false
+    onSourceChanged: root.thumbFailed = false
 
-    layer.enabled: visible && root.ambient
+    // Keep in sync with `THUMB_EDGE` in src/covers.rs.
+    readonly property int thumbEdge: 320
+
+    function thumbUrl(u) {
+        var text = u.toString()
+        var slash = text.lastIndexOf("/")
+        var dot = text.lastIndexOf(".")
+        return (dot <= slash ? text : text.substring(0, dot)) + ".thumb.jpg"
+    }
+
+    readonly property url imageSource: {
+        var text = root.source.toString()
+        if (text.length === 0)
+            return ""
+        if (text.indexOf("file:") !== 0)
+            return root.source
+        if (root.thumbFailed)
+            return root.source
+        var deviceEdge = Math.max(root.decodeWidth, root.decodeHeight) * Screen.devicePixelRatio
+        return deviceEdge <= root.thumbEdge ? root.thumbUrl(text) : root.source
+    }
+
+    Image {
+        id: image
+        anchors.fill: parent
+        source: root.imageSource
+        sourceSize.width: root.decodeWidth
+        sourceSize.height: root.decodeHeight
+        asynchronous: true
+        cache: true
+        fillMode: Image.PreserveAspectCrop
+        visible: root.ready
+        onStatusChanged: {
+            if (status === Image.Error && !root.thumbFailed
+                    && root.imageSource.toString() !== root.source.toString())
+                root.thumbFailed = true
+        }
+    }
+
+    layer.enabled: root.visible && root.ambient
     layer.effect: MultiEffect {
         blurEnabled: true
         blur: 1.0

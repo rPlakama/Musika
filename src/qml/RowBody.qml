@@ -97,7 +97,7 @@ Item {
         CoverImage {
             anchors.fill: parent
             source: root.cover
-            sizeFactor: 2
+            sizeFactor: 1.25
         }
     }
 

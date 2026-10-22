@@ -791,8 +791,8 @@ Rectangle {
                             CoverImage {
                                 anchors.fill: parent
                                 source: cell.cover
-                                // ARC-40: ×2 headroom for the UI-50 hover scale.
-                                sizeFactor: 2
+                                // ARC-40: ×1.25 headroom for the UI-50 hover scale.
+                                sizeFactor: 1.25
                             }
 
                             // UI-56/ARC-I-2/UI-60: a favourited album carries
@@ -944,7 +944,7 @@ Rectangle {
                             CoverImage {
                                 anchors.fill: parent
                                 source: row.cover
-                                sizeFactor: 2
+                                sizeFactor: 1.25
                             }
                         }
 

@@ -22,14 +22,22 @@
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use anyhow::{Context, Result};
 use sqlx::AssertSqlSafe;
 use sqlx::sqlite::SqlitePool;
 
+/// Makes concurrent writers of the same target use distinct temp files.
+static TMP_GEN: AtomicU64 = AtomicU64::new(0);
+
 pub fn write_atomic(dir: &Path, file: &str, bytes: &[u8]) -> Result<PathBuf> {
     let final_path = dir.join(file);
-    let tmp_path = dir.join(format!("{file}.tmp"));
+    let tmp_path = dir.join(format!(
+        "{file}.{}.{}.tmp",
+        std::process::id(),
+        TMP_GEN.fetch_add(1, Ordering::Relaxed)
+    ));
     std::fs::write(&tmp_path, bytes)
         .with_context(|| format!("failed to write {}", tmp_path.display()))?;
     std::fs::rename(&tmp_path, &final_path)

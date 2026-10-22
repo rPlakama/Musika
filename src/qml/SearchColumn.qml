@@ -24,6 +24,9 @@ Item {
     id: root
 
     property string title: ""
+    /// The unified search hides the column header; the scope strip carries
+    /// the title and count instead.
+    property bool showHeader: true
     /// The squeezed-title glyphs (the LeftBar's label → icon rule).
     readonly property string titleIcon: root.title === "Songs"
         ? "qrc:/app/icons/track-svgrepo-com.svg"
@@ -252,7 +255,8 @@ Item {
     property real headerRefHeight: 0
     readonly property real titlePixelSize:
         (root.headerRefHeight > 0 ? root.headerRefHeight : height) * 0.10 * 0.42
-    readonly property real headerH: Math.max(height * 0.10, titlePixelSize * 1.6)
+    readonly property real headerH: root.showHeader
+        ? Math.max(height * 0.10, titlePixelSize * 1.6) : 0
     /// Optional shared row reference: when a host wants rows to scale from a
     /// common height instead of this column's own (0 = this column's height).
     property real rowRefHeight: 0
@@ -283,6 +287,7 @@ Item {
             id: header
             width: parent.width
             height: root.headerH
+            visible: root.showHeader
 
             // The title keeps the room left of the count pills; when that
             // room can no longer hold it, a mapped title trades the word for
@@ -383,9 +388,9 @@ Item {
                 // normal row; the precomputed extent keeps the shared glide
                 // off Qt's lazy estimate.
                 rowRatio: 0.12
-                // 30% taller than the old two-thirds cut: 13/15 of the
+                // 20% taller than the previous 13/15 trim: 1.04 of the
                 // normal row.
-                rowHeightScale: 13 / 15
+                rowHeightScale: 1.04
                 rowRefHeight: root._rowSizingHeight
 
                 rowDelegate: Component {

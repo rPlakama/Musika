@@ -22,8 +22,10 @@ import "Theme.js" as Theme
 // ARC-UI-2: the shared search input — the FTS overlay's box and the `/`
 // command line — so their editing binds can never drift. Ctrl-W is
 // word-delete, paste/copy/select-all stay the TextInput's own; the context
-// keys surface as signals for the host to route. `flat` drops the chrome
-// for the `/` bar (the bar itself is the surface there).
+// keys surface as signals for the host to route. Ctrl-H / Ctrl-L mirror
+// Shift-Tab / Tab, so the host can change scope without leaving insert mode.
+// `flat` drops the chrome for the `/` bar (the bar itself is the surface
+// there).
 TextField {
     id: root
 
@@ -52,6 +54,17 @@ TextField {
     Keys.onPressed: event => {
         if (event.key === Qt.Key_W && (event.modifiers & Qt.ControlModifier)) {
             root.deleteWordBack();
+            event.accepted = true;
+        } else if (event.key === Qt.Key_H && (event.modifiers & Qt.ControlModifier)) {
+            root.stepPrevious();
+            event.accepted = true;
+        } else if (event.key === Qt.Key_L && (event.modifiers & Qt.ControlModifier)) {
+            root.stepNext();
+            event.accepted = true;
+        } else if (event.key === Qt.Key_Backspace && (event.modifiers & Qt.ControlModifier)) {
+            // X11/Qt commonly reports Ctrl-H as Backspace; keep it out of
+            // the text field so the scope motion wins.
+            root.stepPrevious();
             event.accepted = true;
         } else if (event.key === Qt.Key_Tab) {
             root.stepNext();

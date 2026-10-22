@@ -509,9 +509,14 @@ async fn search_json_fts(
     let cleaned = crate::search::clean_query(query);
     let most_played = cleaned.is_empty();
     let (artists, albums, mut songs) = if most_played {
+        // The unified search's empty-query surface browses every scope, so
+        // artists and albums are full name-ordered lists (songs stay Most
+        // played, S-9).
+        let artists = crate::library::artists(&dbs.library, "Name").await?;
+        let albums = crate::library::albums(&dbs.library, None, "Artist").await?;
         (
-            Vec::new(),
-            Vec::new(),
+            artists,
+            albums,
             crate::search::most_played(&dbs.search, fetch as i64).await?,
         )
     } else {
@@ -587,9 +592,22 @@ async fn search_json_index(
     let most_played = cleaned.is_empty();
     let index = crate::search::index::ensure(&dbs.library).await?;
     let (mut artists, mut albums, mut songs) = if most_played {
+        // The unified search's empty-query surface browses every scope:
+        // artists and albums are full name-ordered lists, songs stay Most
+        // played (S-9).
+        let artists = crate::library::artists(&dbs.library, "Name")
+            .await?
+            .into_iter()
+            .map(std::sync::Arc::new)
+            .collect();
+        let albums = crate::library::albums(&dbs.library, None, "Artist")
+            .await?
+            .into_iter()
+            .map(std::sync::Arc::new)
+            .collect();
         (
-            Vec::new(),
-            Vec::new(),
+            artists,
+            albums,
             index
                 .most_played(fetch)
                 .iter()
@@ -818,6 +836,9 @@ mod tests {
         assert_eq!(parsed["most_played"], true);
         assert!(parsed["album_context"].is_null());
         assert_eq!(parsed["songs"][0]["id"], "s2");
+        // The unified search browses every scope on an empty query.
+        assert_eq!(parsed["artists"][0]["id"], "ar1");
+        assert_eq!(parsed["albums"][0]["id"], "al1");
 
         crate::search::index::clear();
     }

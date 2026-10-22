@@ -20,8 +20,9 @@ import QtQuick.Layouts
 import musika
 import "Theme.js" as Theme
 
-// Floating global search (Shift Space F): one modal panel with Songs | Albums |
-// Artists columns (RowLayout weights 38/40/22), filtered live from the library.
+// Floating global search (Shift Space F): one unified result list with a
+// scope strip (Songs | Albums | Artists), filtered live from the library.
+// Shift-H/Shift-L (and Tab/h/l) switch the result scope; j/k walks rows.
 // Typing mode: keys type, Tab/arrows navigate, Esc -> normal mode.
 // Normal mode: hjkl navigates, i re-enters typing, Enter opens/plays, Esc
 // closes and returns focus to the previous region.
@@ -31,25 +32,30 @@ Item {
     property bool opened: false
     property bool loading: false
     property bool typing: true // false = search "normal mode" (hjkl navigates)
-    property int activeColumn: 0 // 0 songs, 1 albums, 2 artists (priority Songs > Albums > Artists)
+    // Unified result scope: 0 songs, 1 albums, 2 artists. Songs lead by
+    // default; a scope with no hits falls through to the next one.
+    property int scope: 0
+    // Per-scope cursor memory, so switching scope returns to the last row.
+    property var scopeCursors: [0, 0, 0]
     // UI-55: the item behind the floating panel whose pixels feed the acrylic
     // blur (the shell, or the fullscreen player when it is up).
     property Item backdrop: null
     // UI-49: last query that already got the denied cue, so one response (or
     // one Enter) lights it once and holding a zero query never strobes.
     property string _zeroQuery: ""
+    readonly property var scopeTitles: ["Songs", "Albums", "Artists"]
     /// The panel's stable height (chrome, row sizing and the panel itself).
     readonly property real panelRefHeight: root.height * 0.78
-    /// Only fetch the rows a column can actually paint. Before the layout has
+    /// Only fetch the rows the list can actually paint. Before the layout has
     /// a height (first open) ask for the old full screenful so the payload is
     /// not starved to one row.
     readonly property int resultLimit: {
-        if (!songsColumn || songsColumn.height <= 0)
+        if (!resultsColumn || resultsColumn.height <= 0)
             return 20;
-        return Math.max(1, songsColumn.visibleRowCount);
+        return Math.max(1, resultsColumn.visibleRowCount);
     }
-    /// A live query with no hits in any of the three sections: the panel
-    /// replaces the stack with one message.
+    /// A live query with no hits in any scope: the panel replaces the list
+    /// with one message.
     readonly property bool nothingFound: field.text.length > 0
         && !root.loading
         && songResults.count + albumResults.count + artistResults.count === 0
@@ -57,8 +63,8 @@ Item {
     signal songActivated(string id)
     signal albumActivated(string albumId, string title, string artist, string year, string tracks, string cover, bool starred)
     signal artistActivated(string artistId, string artistName, string artistCover)
-    /// ARC-I: Alt-hold quick actions armed on the active column's cursor row;
-    /// Home routes it to the shared overlay.
+    /// ARC-I: Alt-hold quick actions armed on the active cursor row; Home
+    /// routes it to the shared overlay.
     signal quickAction(var target, var actions)
 
     // Keep rendering while the close fade runs (the panel owns the opacity).
@@ -93,7 +99,7 @@ Item {
         openWith("");
     }
 
-    /// Search asks for exactly the rows the columns can display.
+    /// Search asks for exactly the rows the unified list can display.
     function _requestSearch(text) {
         Backend.requestSearch(text, root.resultLimit);
     }
@@ -106,11 +112,11 @@ Item {
         // Scope-switching keys (Ctrl-W) are unavailable while search is open.
         Backend.setSearchOpen(true);
         clearResults();
-        activeColumn = 0;
+        scope = 0;
         field.text = text;
         loading = true;
-        // S-9: an empty field opens on the Most-played surface; a typed field
-        // goes through the debounce.
+        // S-9: an empty field opens on the scope's browse surface; a typed
+        // field goes through the debounce.
         if (text.length === 0)
             root._requestSearch("");
         typing = true;
@@ -121,10 +127,8 @@ Item {
     function close() {
         opened = false;
         typing = false;
-        // VI-4: leaving the overlay clears every column's visual selection.
-        songsColumn.clearSelection();
-        albumsColumn.clearSelection();
-        artistsColumn.clearSelection();
+        // VI-4: leaving the overlay clears the list's visual selection.
+        resultsColumn.clearSelection();
         Backend.setSearchOpen(false);
         Backend.releaseFocus();
     }
@@ -142,7 +146,7 @@ Item {
 
     function enterTyping() {
         // VI-4: going back to typing ends the normal-mode selection.
-        columnFor(activeColumn).clearSelection();
+        resultsColumn.clearSelection();
         typing = true;
         field.forceActiveFocus();
         // Re-entry selects the whole query (qmllint cannot see TextInput's
@@ -150,25 +154,26 @@ Item {
         field.selectAll();
     }
 
-
-
     // Search normal mode: hjkl navigates, Enter opens/plays, i types again.
     function handleAction(action) {
         if (action === "back") {
-            // VI-4: the first Esc ends the active column's visual selection.
-            var column = columnFor(activeColumn);
-            if (column.hasSelection)
-                column.clearSelection();
+            // VI-4: the first Esc ends the active visual selection.
+            if (resultsColumn.hasSelection)
+                resultsColumn.clearSelection();
             else
                 close();
         } else if (action === "insert_mode") {
             enterTyping();
+        } else if (action === "order_next" || action === "order_prev") {
+            // Shift-L / Shift-H take over the library tabs' order keys here:
+            // in search they change the result scope instead.
+            moveScope(action === "order_next" ? 1 : -1);
         } else if (action === "pane_cycle" || action === "pane_cycle_back") {
-            // Tab / Shift-Tab cycle the sections in normal mode too (typing
+            // Tab / Shift-Tab cycle the scopes in normal mode too (typing
             // mode routes them through SearchInput's own handlers).
-            moveColumn(action === "pane_cycle" ? 1 : -1);
+            moveScope(action === "pane_cycle" ? 1 : -1);
         } else if (action === "move_left" || action === "move_right") {
-            moveColumn(action === "move_left" ? -1 : 1);
+            moveScope(action === "move_left" ? -1 : 1);
         } else if (action === "move_up") {
             moveRow(-1);
         } else if (action === "move_down") {
@@ -176,14 +181,13 @@ Item {
         } else if (action === "top" || action === "bottom") {
             moveEdge(action === "bottom");
         } else if (action === "page_up" || action === "page_down") {
-            columnFor(activeColumn).pageJump(action === "page_down");
+            resultsColumn.pageJump(action === "page_down");
         } else if (action.indexOf("extend_") === 0) {
-            columnFor(activeColumn).extendSelection(
-                "move_" + action.substring(7));
+            resultsColumn.extendSelection("move_" + action.substring(7));
         } else if (action === "visual") {
-            columnFor(activeColumn).toggleSelection();
+            resultsColumn.toggleSelection();
         } else if (action === "visual_all") {
-            columnFor(activeColumn).selectAll();
+            resultsColumn.selectAll();
         } else if (action === "enter") {
             activate();
         }
@@ -193,93 +197,74 @@ Item {
         songResults.clear();
         albumResults.clear();
         artistResults.clear();
-        songsColumn.cursor = -1;
-        albumsColumn.cursor = -1;
-        artistsColumn.cursor = -1;
+        resultsColumn.cursor = -1;
+        root.scopeCursors = [0, 0, 0];
         root._zeroQuery = "";
     }
 
-    function columnFor(column) {
-        if (column === 0)
-            return songsColumn;
-        if (column === 1)
-            return albumsColumn;
-        return artistsColumn;
+    function scopeModel(index) {
+        if (index === 0)
+            return songResults;
+        if (index === 1)
+            return albumResults;
+        return artistResults;
     }
 
-    /// ARC-UI-2: the overlay as one `/` surface — all three result columns,
-    /// in column order; a jump also activates the column it lands in, and
-    /// the session highlights follow the candidate's column.
-    function _searchColumns() {
-        return [songsColumn, albumsColumn, artistsColumn];
+    function scopeCount(index) {
+        var model = root.scopeModel(index);
+        return model ? model.count : 0;
     }
 
-    readonly property var searchCounts: [
-        songsColumn.model ? songsColumn.model.count : 0,
-        albumsColumn.model ? albumsColumn.model.count : 0,
-        artistsColumn.model ? artistsColumn.model.count : 0
-    ]
+    function setScope(index) {
+        if (index === root.scope)
+            return;
+        root.scopeCursors[root.scope] = resultsColumn.cursor;
+        root.scope = index;
+        var count = root.scopeCount(index);
+        var saved = root.scopeCursors[index];
+        resultsColumn.cursor = count > 0
+            ? Math.max(0, Math.min(count - 1, saved))
+            : -1;
+    }
+
+    function moveScope(delta) {
+        // VI-4: one scope's selection at a time.
+        resultsColumn.clearSelection();
+        setScope((root.scope + delta + 3) % 3);
+    }
+
+    /// ARC-UI-2: the overlay as one `/` surface — the visible scope's rows.
+    function searchRows() {
+        return resultsColumn.searchRows();
+    }
+
+    function searchJump(row) {
+        resultsColumn.searchJump(row);
+    }
 
     property string searchQuery: ""
     property int searchCurrentRow: -1
 
     onSearchQueryChanged: _applySearch()
     onSearchCurrentRowChanged: _applySearch()
-    onSearchCountsChanged: _applySearch()
-
-    function searchRows() {
-        var out = [];
-        var cols = _searchColumns();
-        var base = 0;
-        for (var c = 0; c < cols.length; ++c) {
-            var rows = cols[c].searchRows();
-            for (var i = 0; i < rows.length; ++i) {
-                if (rows[i] !== undefined)
-                    out[base + i] = rows[i];
-            }
-            base += rows.length;
-        }
-        return out;
-    }
-
-    function searchJump(row) {
-        var counts = root.searchCounts;
-        var cols = _searchColumns();
-        for (var c = 0; c < counts.length; ++c) {
-            if (row < counts[c]) {
-                root.activeColumn = c;
-                cols[c].searchJump(row);
-                return;
-            }
-            row -= counts[c];
-        }
-    }
 
     function _applySearch() {
-        var counts = root.searchCounts;
-        var cols = _searchColumns();
-        var run = 0;
-        for (var c = 0; c < cols.length; ++c) {
-            var here = root.searchCurrentRow >= run
-                && root.searchCurrentRow < run + counts[c];
-            cols[c].searchQuery = root.searchQuery;
-            cols[c].searchCurrentRow = here ? root.searchCurrentRow - run : -1;
-            run += counts[c];
-        }
+        resultsColumn.searchQuery = root.searchQuery;
+        resultsColumn.searchCurrentRow = root.searchCurrentRow;
     }
 
-    /// ARC-I: Alt armed — the active column anchors the overlay on its cursor
+    /// ARC-I: Alt armed — the active scope anchors the overlay on its cursor
     /// row with the recycled verb set for its kind (song/album/artist).
     function armQuickActions() {
-        columnFor(activeColumn).armQuickActions();
+        resultsColumn.armQuickActions();
     }
 
     function moveRow(delta) {
-        var column = columnFor(activeColumn);
-        if (!column.model || column.model.count === 0)
+        var model = root.scopeModel(root.scope);
+        if (!model || model.count === 0)
             return;
-        var next = Math.max(0, Math.min(column.model.count - 1, column.cursor + delta));
-        column.cursor = next;
+        var next = Math.max(0, Math.min(model.count - 1, resultsColumn.cursor + delta));
+        resultsColumn.cursor = next;
     }
 
     // S-9: the "Most played" right-hand meta.
@@ -288,44 +273,32 @@ Item {
         return n + (n === 1 ? " play" : " plays");
     }
 
-    function moveColumn(delta) {
-        // S-9: the empty-query surface has a single column.
-        if (field.text.length === 0)
-            return;
-        // VI-4: one column's selection at a time.
-        columnFor(activeColumn).clearSelection();
-        activeColumn = (activeColumn + delta + 3) % 3;
-        var column = columnFor(activeColumn);
-        if (column.cursor < 0 && column.model && column.model.count > 0)
-            column.cursor = 0;
-    }
-
-    // VI-11: `gg`/`G` on the active column only. The column list follows its
-    // cursor through the `currentIndex` binding, so only the cursor moves.
+    // VI-11: `gg`/`G` on the unified list. The list follows its cursor
+    // through the `currentIndex` binding, so only the cursor moves.
     function moveEdge(last) {
-        var column = columnFor(activeColumn);
-        if (!column.model || column.model.count === 0)
+        var model = root.scopeModel(root.scope);
+        if (!model || model.count === 0)
             return;
-        column.cursor = last ? column.model.count - 1 : 0;
+        resultsColumn.cursor = last ? model.count - 1 : 0;
         // Snap, don't scroll: a long edge jump must not play the follow
-        // animation all the way across the column (the lists snap too).
-        column.snapToCursor();
+        // animation all the way across the list (the lists snap too).
+        resultsColumn.snapToCursor();
     }
 
     function activate() {
-        var column = columnFor(activeColumn);
-        var hit = column.model ? column.model.get(column.cursor) : null;
+        var model = root.scopeModel(root.scope);
+        var hit = model ? model.get(resultsColumn.cursor) : null;
         if (!hit) {
             // UI-49: Enter on a query with no hits anywhere is denied input.
             if (songResults.count + albumResults.count + artistResults.count === 0)
                 root.denied();
             return;
         }
-        // VI-4: activating a row ends its column's visual selection.
-        column.clearSelection();
-        if (activeColumn === 0)
+        // VI-4: activating a row ends the visual selection.
+        resultsColumn.clearSelection();
+        if (root.scope === 0)
             root.songActivated(hit.id);
-        else if (activeColumn === 1)
+        else if (root.scope === 1)
             root.albumActivated(hit.id, hit.title, hit.artist, hit.year, hit.tracks, hit.cover, hit.starred === true);
         else
             root.artistActivated(hit.id, hit.title, hit.cover);
@@ -342,7 +315,7 @@ Item {
             return;
 
         // UI-41: results crossfade in on payload swaps instead of flashing.
-        columnsRow.opacity = 0;
+        resultsColumn.opacity = 0;
         songResults.clear();
         albumResults.clear();
         artistResults.clear();
@@ -386,8 +359,7 @@ Item {
         }
         for (i = 0; i < data.artists.length; i++) {
             var artist = data.artists[i];
-            // Count stacks under the name (two-line cell), so the narrow
-            // column needs no right-side meta gutter.
+            // Count stacks under the name (two-line cell).
             artistResults.append({
                 id: artist.id,
                 title: artist.name,
@@ -402,20 +374,27 @@ Item {
             });
         }
 
-        songsColumn.cursor = songResults.count > 0 ? 0 : -1;
-        albumsColumn.cursor = albumResults.count > 0 ? 0 : -1;
-        artistsColumn.cursor = artistResults.count > 0 ? 0 : -1;
+        // Fresh hits reset every scope's cursor; the active scope starts on
+        // its first row. An empty scope falls through to the next one, so a
+        // query with only song hits lands there instead of showing a blank
+        // artist list.
+        root.scopeCursors = [0, 0, 0];
+        if (root.scopeCount(root.scope) === 0) {
+            for (var step = 0; step < 3; ++step) {
+                var candidate = (root.scope + step) % 3;
+                if (root.scopeCount(candidate) > 0) {
+                    root.scope = candidate;
+                    break;
+                }
+            }
+        }
+        resultsColumn.cursor = root.scopeCount(root.scope) > 0 ? 0 : -1;
         // The mark window follows the fresh result set.
-        songsColumn.requestMarkWindow();
-        // Lookup priority picks the column the cursor starts in; the
-        // empty-query surface only has the Most-played column.
-        activeColumn = data.most_played
-            ? 0
-            : (songResults.count > 0 ? 0 : (albumResults.count > 0 ? 1 : 2));
+        resultsColumn.requestMarkWindow();
 
         loading = false;
         Qt.callLater(function () {
-            columnsRow.opacity = 1;
+            resultsColumn.opacity = 1;
         });
 
         // UI-49: the response landing on zero hits is denied input — once per
@@ -449,8 +428,8 @@ Item {
         onTriggered: {
             root.loading = true;
             if (field.text.length === 0) {
-                // S-9: clearing the field returns to the Most-played surface
-                // (drop the typed hits first so only the surface swaps).
+                // S-9: clearing the field returns to the scope's browse
+                // surface (drop the typed hits first so only the surface swaps).
                 root.clearResults();
                 root._requestSearch("");
                 return;
@@ -490,7 +469,7 @@ Item {
 
     AcrylicPanel {
         id: panel
-        width: root.width * 0.84
+        width: root.width * 0.714
         height: root.panelRefHeight
         x: (root.width - width) / 2
         // Slides up into place, back down on close (motion §3.1).
@@ -524,8 +503,8 @@ Item {
             anchors.margins: root.panelRefHeight * 0.042
             spacing: root.panelRefHeight * 0.032
 
-            // The search bar, full width: the old mode chip is gone — the
-            // bar's own focus highlight is the INSERT cue.
+            // The search bar, full width: the bar's own focus highlight is
+            // the INSERT cue.
             Rectangle {
                 radius: Theme.radius
                 id: searchRow
@@ -549,8 +528,8 @@ Item {
 
                     onTextChanged: debounce.restart()
 
-                    onStepNext: root.moveColumn(1)
-                    onStepPrevious: root.moveColumn(-1)
+                    onStepNext: root.moveScope(1)
+                    onStepPrevious: root.moveScope(-1)
                     onStepUp: root.moveRow(-1)
                     onStepDown: root.moveRow(1)
                     onSubmitted: root.activate()
@@ -563,7 +542,7 @@ Item {
                 FadeText {
                     anchors.fill: field
                     visible: field.text.length === 0
-                    text: "Search anything"
+                    text: "Search artists, albums, songs"
                     color: Palette.onSurfaceVariant
                     font.family: Theme.fonts.body
                     font.pixelSize: root.panelRefHeight * 0.030
@@ -584,8 +563,75 @@ Item {
                 }
             }
 
-            // All three sections empty: one message in the panel itself
-            // replaces the stack (and the panel shrinks to fit it).
+            // Noctalia's segmented filter: one centred pill per scope, the
+            // count inside it. The active scope is the only accented one.
+            Item {
+                Layout.fillWidth: true
+                implicitHeight: root.panelRefHeight * 0.052
+
+                Row {
+                    anchors.centerIn: parent
+                    spacing: root.panelRefHeight * 0.012
+
+                    Repeater {
+                        model: root.scopeTitles
+
+                        delegate: Rectangle {
+                            id: scopeChip
+                            required property int index
+                            required property string modelData
+
+                            readonly property bool selected: root.scope === index
+                            readonly property int count: root.scopeCount(index)
+
+                            implicitWidth: chipRow.implicitWidth + root.panelRefHeight * 0.032
+                            implicitHeight: root.panelRefHeight * 0.044
+                            radius: Theme.radius
+                            color: selected
+                                ? Palette.primaryContainer
+                                : (chipHover.hovered ? Palette.secondaryContainer : "transparent")
+                            border.width: Math.max(1, root.panelRefHeight * Theme.hairlineRatio)
+                            border.color: selected ? Palette.primary : Palette.outlineVariant
+
+                            Row {
+                                id: chipRow
+                                anchors.centerIn: parent
+                                spacing: root.panelRefHeight * 0.012
+
+                                FadeText {
+                                    anchors.verticalCenter: parent.verticalCenter
+                                    text: scopeChip.modelData
+                                    color: scopeChip.selected
+                                        ? Palette.onPrimaryContainer : Palette.onSurfaceVariant
+                                    font.pixelSize: root.panelRefHeight * 0.022
+                                    font.bold: scopeChip.selected
+                                    animated: false
+                                }
+
+                                FadeText {
+                                    anchors.verticalCenter: parent.verticalCenter
+                                    text: scopeChip.count
+                                    color: scopeChip.selected
+                                        ? Palette.onPrimaryContainer : Palette.onSurfaceVariant
+                                    font.pixelSize: root.panelRefHeight * 0.020
+                                    animated: false
+                                }
+                            }
+
+                            HoverHandler {
+                                id: chipHover
+                                cursorShape: Qt.PointingHandCursor
+                            }
+                            TapHandler {
+                                onTapped: root.setScope(scopeChip.index)
+                            }
+                        }
+                    }
+                }
+            }
+
+            // All scopes empty: one message in the panel itself replaces the
+            // list (and the panel shrinks to fit it).
             FadeText {
                 Layout.fillWidth: true
                 Layout.fillHeight: root.nothingFound
@@ -607,116 +653,36 @@ Item {
                 }
             }
 
-            // The 0.3.0 modal: three result columns side by side. Widths are
-            // RowLayout weights (38/40/22), not pixels: Albums gets the room
-            // its titles need, Artists is narrow since it only carries a name
-            // plus its count. The empty-query Songs surface takes the whole
-            // row once the other two are hidden.
-            RowLayout {
-                id: columnsRow
+            // One unified result list. The scope strip is the only section
+            // marker; the list itself is the shared result row anatomy.
+            SearchColumn {
+                id: resultsColumn
                 Layout.fillWidth: true
                 Layout.fillHeight: true
                 visible: !root.nothingFound
-                spacing: root.panelRefHeight * 0.012
+                title: root.scopeTitles[root.scope]
+                showHeader: false
+                roundedArt: root.scope === 2
+                model: root.scopeModel(root.scope)
+                active: true
+                loading: root.loading
+                hasQuery: field.text.length > 0
+                headerRefHeight: root.panelRefHeight
+                quickActionKind: root.scope === 0 ? "song" : (root.scope === 1 ? "album" : "artist")
+                selectionField: root.scope === 0 ? "songId" : (root.scope === 1 ? "albumId" : "artistId")
+
+                onQuickAction: (target, actions) => root.quickAction(target, actions)
+
+                onPicked: index => {
+                    resultsColumn.cursor = index;
+                    root.activate();
+                }
 
                 Behavior on opacity {
                     NumberAnimation {
                         duration: Theme.motion.quick
                         easing.type: Easing.Bezier
                         easing.bezierCurve: Theme.ease.standard
-                    }
-                }
-
-                SearchColumn {
-                    id: songsColumn
-                    Layout.fillWidth: true
-                    Layout.preferredWidth: 38
-                    Layout.fillHeight: true
-                    // S-9: the empty-query surface uses this column alone.
-                    title: field.text.length > 0 ? "Songs" : "Most played"
-                    model: songResults
-                    active: root.activeColumn === 0
-                    loading: root.loading
-                    hasQuery: field.text.length > 0
-                    headerRefHeight: columnsRow.height
-                    quickActionKind: "song"
-                    selectionField: "songId"
-
-                    onQuickAction: (target, actions) => root.quickAction(target, actions)
-
-                    onPicked: index => {
-                        songsColumn.cursor = index;
-                        root.activeColumn = 0;
-                        root.activate();
-                    }
-                }
-
-                // Structural rule: keeps each column's header/count contained
-                // instead of bleeding into its neighbour (UI-47).
-                Rectangle {
-                    radius: Theme.radius
-                    Layout.fillHeight: true
-                    Layout.preferredWidth: Math.max(1, root.panelRefHeight * Theme.hairlineRatio)
-                    color: Palette.outlineVariant
-                    z: 1
-                    visible: field.text.length > 0
-                }
-
-                SearchColumn {
-                    id: albumsColumn
-                    Layout.fillWidth: true
-                    Layout.preferredWidth: 40
-                    Layout.fillHeight: true
-                    title: "Albums"
-                    model: albumResults
-                    active: root.activeColumn === 1
-                    loading: root.loading
-                    hasQuery: field.text.length > 0
-                    visible: field.text.length > 0
-                    headerRefHeight: columnsRow.height
-                    quickActionKind: "album"
-                    selectionField: "albumId"
-
-                    onQuickAction: (target, actions) => root.quickAction(target, actions)
-
-                    onPicked: index => {
-                        albumsColumn.cursor = index;
-                        root.activeColumn = 1;
-                        root.activate();
-                    }
-                }
-
-                Rectangle {
-                    radius: Theme.radius
-                    Layout.fillHeight: true
-                    Layout.preferredWidth: Math.max(1, root.panelRefHeight * Theme.hairlineRatio)
-                    color: Palette.outlineVariant
-                    z: 1
-                    visible: field.text.length > 0
-                }
-
-                SearchColumn {
-                    id: artistsColumn
-                    Layout.fillWidth: true
-                    Layout.preferredWidth: 22
-                    Layout.fillHeight: true
-                    title: "Artists"
-                    roundedArt: true
-                    model: artistResults
-                    active: root.activeColumn === 2
-                    loading: root.loading
-                    hasQuery: field.text.length > 0
-                    visible: field.text.length > 0
-                    headerRefHeight: columnsRow.height
-                    quickActionKind: "artist"
-                    selectionField: "artistId"
-
-                    onQuickAction: (target, actions) => root.quickAction(target, actions)
-
-                    onPicked: index => {
-                        artistsColumn.cursor = index;
-                        root.activeColumn = 2;
-                        root.activate();
                     }
                 }
             }
@@ -732,7 +698,9 @@ Item {
             // One cheat sheet, per mode (no duplicate Esc hint).
             FadeText {
                 Layout.fillWidth: true
-                text: root.typing ? "Type to filter  ·  Tab/↑/↓ navigate  ·  Enter open/play  ·  Esc normal mode" : "Tab/h/l sections  ·  j/k rows  ·  i type  ·  Enter open/play  ·  Esc close"
+                text: root.typing
+                    ? "Type to filter  ·  Ctrl-H/L or Tab scope  ·  ↑/↓ rows  ·  Enter open/play  ·  Esc normal mode"
+                    : "Shift-H/L or Tab scope  ·  j/k rows  ·  i type  ·  Enter open/play  ·  Esc close"
                 color: Palette.onSurfaceVariant
                 font.pixelSize: Theme.fontSize("label", root.panelRefHeight)
                 horizontalAlignment: Text.AlignHCenter

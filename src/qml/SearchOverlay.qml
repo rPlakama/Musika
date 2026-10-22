@@ -704,6 +704,9 @@ Item {
                 color: Palette.onSurfaceVariant
                 font.pixelSize: Theme.fontSize("label", root.panelRefHeight)
                 horizontalAlignment: Text.AlignHCenter
+                // Vim's `wrap`: when the keybind tips do not fit the panel
+                // width, continue them on the next line instead of clipping.
+                wrapMode: Text.WordWrap
             }
         }
     }

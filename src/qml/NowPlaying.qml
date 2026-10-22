@@ -1457,6 +1457,7 @@ Rectangle {
                                             viewWidth: row.width
                                             rowHeight: row.height
                                             emphasized: row.emphasized
+                                            current: index === root.queueCursor
                                             showCover: false
                                             showSubtitle: false
                                             title: row.title

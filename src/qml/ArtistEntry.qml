@@ -983,6 +983,7 @@ Rectangle {
                                 color: Palette.onSurface
                                 elide: Text.ElideRight
                                 font.pixelSize: Theme.clamp(row.height * 0.26, 12, 18)
+                                font.bold: row.current
                                 animated: false
                                 query: wall.searchQuery
                                 currentMatch: row.index === wall.searchCurrentRow

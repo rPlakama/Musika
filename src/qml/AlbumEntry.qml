@@ -851,6 +851,7 @@ Rectangle {
                         viewWidth: songRow.width
                         rowHeight: songRow.height
                         emphasized: songRow.emphasized
+                        current: ListView.isCurrentItem && !root.onToolbar
                         showCover: false
                         showSubtitle: false
                         title: songRow.track.length > 0

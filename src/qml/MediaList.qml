@@ -400,6 +400,7 @@ ScrollPanel {
                 viewWidth: row.viewWidth
                 rowHeight: row.height
                 emphasized: row.emphasized
+                current: ListView.isCurrentItem
                 roundedArt: root.roundedArt
                 cover: row.cover
                 title: row.title

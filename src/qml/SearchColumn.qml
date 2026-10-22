@@ -435,6 +435,7 @@ Item {
                             viewWidth: row.width
                             rowHeight: row.height
                             emphasized: row.emphasized
+                            current: row.current && root.active
                             roundedArt: root.roundedArt
                             showCover: true
                             showSubtitle: row.subtitle.length > 0

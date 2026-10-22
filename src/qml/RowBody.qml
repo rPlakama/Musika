@@ -28,6 +28,7 @@ Item {
     required property real viewWidth
     required property real rowHeight
     property bool emphasized: false
+    property bool current: false
     property bool roundedArt: false
 
     property bool showCover: true
@@ -115,6 +116,7 @@ Item {
             text: root.title
             color: root.titleColor
             font.pixelSize: root.titlePixelSize
+            font.bold: root.current
             elide: Text.ElideRight
             animated: false
             query: root.searchQuery

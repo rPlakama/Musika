@@ -3,6 +3,22 @@
 All notable changes to Musika, newest first. `TASKLISTMAJOR.md` tracks the
 open work; this file is the release history.
 
+## 0.3.12 — _Leaning, reducing, correcting_
+
+All commits since `v0.3.11`:
+
+- `b13b00d` Keep the startup auto-login when no music is downloaded
+- `b8867ff` Wrap the search overlay keybind tips when the panel is narrow
+- `109f631` Drive scroll metrics and flags from context profiles
+- `a5e9939` Cache cover thumbnails and fix decode DPR
+- `653b70a` Use CoverImage in the inferior bar
+- `9bc2782` Track MPRIS playback progress and emit seeks
+- `bb9f899` Add an mpv Lua MPRIS service
+- `c81aaad` Fold four small dependencies into the source
+- `bdae1f9` Keep library scroll steady across resizes
+- `320b51c` Unify search into one scoped result list
+- `0a9d5ef` Bold the title of the cursor row
+
 ## 0.3.11 — _A prefetched scroll band and an invisible remainder_
 
 All commits since `v0.3.10`:

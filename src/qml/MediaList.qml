@@ -130,35 +130,6 @@ ScrollPanel {
         Backend.TriggerRowReload();
     }
 
-    // A width resize can leave Qt's row extent stale and flick at the list
-    // end. Reload the same order with a true reset (park the cursor, top the
-    // view before the model churns) and land back on the saved row — the
-    // reload equivalent of `gg`/`G` without asking the user for it.
-    property int _reloadCursor: -1
-    property bool _reloadKeepState: false
-
-    function reloadKeepingCursor() {
-        if (root.currentIndex < 0) {
-            root.reload();
-            return;
-        }
-        root._reloadCursor = root.currentIndex;
-        root._reloadKeepState = true;
-        root.reload();
-    }
-
-    onWidthChanged: {
-        if (root.count > 0 && root.currentIndex >= 0)
-            widthReload.restart();
-    }
-
-    Timer {
-        id: widthReload
-        interval: 150
-        repeat: false
-        onTriggered: root.reloadKeepingCursor()
-    }
-
     Component.onCompleted: root.requestMarkWindow()
     onCurrentIndexChanged: {
         root.requestMarkWindow();
@@ -237,35 +208,12 @@ ScrollPanel {
     cellHeight: root.cellWidth * 0.78 + root.height * 0.085
 
     function setRows(rows) {
-        var keep = root._reloadKeepState;
-        var keepAt = root._reloadCursor;
-        root._reloadKeepState = false;
-        root._reloadCursor = -1;
-        // VI-4: a reload invalidates the selected range (a width reload keeps
-        // the same rows, so its range survives).
-        if (!keep)
-            root.clearSelection();
-        if (keep) {
-            // Park the cursor and top the view before the rebuild so Qt
-            // recomputes the row map from scratch instead of carrying the
-            // stale width geometry into the new payload.
-            root.resetView();
-        }
+        // VI-4: a reload invalidates the selected range.
+        root.clearSelection();
         mediaRows.clear();
         for (var i = 0; i < rows.length; i++)
             mediaRows.append(rows[i]);
         root.requestMarkWindow();
-        // A width reload returns to its own cursor; the reset it raised is
-        // consumed here, not by the order-swap landing below.
-        if (keep) {
-            root.resetPending = false;
-            if (root.count > 0) {
-                var index = Math.max(0, Math.min(keepAt, root.count - 1));
-                root.currentIndex = index;
-                root.goto(index);
-            }
-            return;
-        }
         // UI-10: a filter/order swap lands on row 0 with the top pinned —
         // the old cursor/offset point at different rows now, so the restore
         // would chase a stale spot.

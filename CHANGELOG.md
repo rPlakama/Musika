@@ -3,6 +3,21 @@
 All notable changes to Musika, newest first. `TASKLISTMAJOR.md` tracks the
 open work; this file is the release history.
 
+## 0.3.15 — _A native scroll modal and covers on demand_
+
+All commits since `v0.3.14`:
+
+- `87a3895` Keep deferred scroll work alive with owned timers
+- `fbec9e0` Increase lyric fontSize(clamp)
+- `fd2becb` Start switched segments at the first row
+- `ce651aa` Drop the ambient cover vignette
+- `35b7f1b` Fill large list payloads in event-loop batches
+- `6fbcdfa` Rebuild the scroll modal on native Qt positioning
+- `592a689` Cache covers on demand and decouple the pass from sync
+- `28d536d` Rework the fullscreen player around the album name and a queue drawer
+- `566c9dc` non-ambient instead
+- `ab10402` Rm Q/ESc chip
+
 ## 0.3.14 — _Fixups and better AlbumEntry desing_
 
 All commits since `v0.3.13`:

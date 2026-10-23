@@ -29,8 +29,8 @@ import "Theme.js" as Theme
 //   footer — context-aware keybar for the focused pane.
 // Esc (or q) leaves fullscreen; Space stays the global play/pause.
 Rectangle {
-    radius: Theme.radius
     id: root
+    radius: Theme.radius
 
     color: Palette.background
 
@@ -51,13 +51,9 @@ Rectangle {
     }
     // The header owns the cover on the left and the controls on the right;
     // its height is computed first, then the cover is sized to fit inside.
-    readonly property real headerHeight:
-        Theme.clamp(root.height * 0.38, root.height * 0.32, root.height * 0.40)
+    readonly property real headerHeight: Theme.clamp(root.height * 0.38, root.height * 0.32, root.height * 0.40)
     readonly property real headerPad: root.height * 0.012
-    readonly property real coverSide: Math.max(96, Math.min(
-        root.headerHeight - root.starUnit - 2 * root.headerPad,
-        root.width * 0.5 - 2 * root.headerPad,
-        root.height * 0.36, 480))
+    readonly property real coverSide: Math.max(96, Math.min(root.headerHeight - root.starUnit - 2 * root.headerPad, root.width * 0.5 - 2 * root.headerPad, root.height * 0.36, 480))
 
     // Keyboard pane: 1 = lyrics, 2 = queue, 3 = album cover actions.
     // Transport is never a pane.
@@ -170,7 +166,7 @@ Rectangle {
 
     function keyHints() {
         if (pane === 1)
-            return "j/k scroll   ·   ,/. seek   ·   Ctrl-N/P track   ·   Tab queue   ·   Esc exit";
+            return "j/k scroll   ·   ,/. seek   ·   Ctrl-N/P track   ·   Tab queue   ·   Esc/Q exit";
         if (pane === 3)
             return "Enter cover actions   ·   Tab " + (lyricsVisible ? "lyrics" : "queue") + "   ·   Esc exit";
         return "j/k select   ·   Shift-J/K move   ·   Enter jump   ·   ,/. seek   ·   Ctrl-N/P track   ·   Tab cover   ·   Esc exit";
@@ -195,7 +191,7 @@ Rectangle {
 
     /// The big cover owns the album verbs (favourite + count + download).
     function coverActions() {
-        return verbs.album(root.albumItem(), root.albumCacheOn, function(level) {
+        return verbs.album(root.albumItem(), root.albumCacheOn, function (level) {
             root.albumRating = level;
         });
     }
@@ -224,16 +220,18 @@ Rectangle {
 
     Connections {
         target: queueContent
-        function onFirstVisibleIndexChanged() { root.requestMarkWindow(); }
-        function onLastVisibleIndexChanged() { root.requestMarkWindow(); }
+        function onFirstVisibleIndexChanged() {
+            root.requestMarkWindow();
+        }
+        function onLastVisibleIndexChanged() {
+            root.requestMarkWindow();
+        }
     }
 
     /// The playing track's row in the queue model (song id + favourite flag
     /// for the overlay's track-scoped options).
     function currentTrack() {
-        return root.queueIndex >= 0 && root.queueIndex < queueItems.count
-            ? queueItems.get(root.queueIndex)
-            : null;
+        return root.queueIndex >= 0 && root.queueIndex < queueItems.count ? queueItems.get(root.queueIndex) : null;
     }
 
     // ── Row download marks: the global ledger property --------------------
@@ -393,8 +391,7 @@ Rectangle {
         queueIndex = data.index;
         if (root._pendingQueueCursor >= 0 && rowsChanged) {
             root._recallQueue = false;
-            queueCursor = Math.max(0, Math.min(queueItems.count - 1,
-                root._pendingQueueCursor));
+            queueCursor = Math.max(0, Math.min(queueItems.count - 1, root._pendingQueueCursor));
             root._pendingQueueCursor = -1;
             queueContent.currentIndex = queueCursor;
             queueContent.land(queueCursor);
@@ -490,7 +487,8 @@ Rectangle {
     }
 
     // LYR-8: re-arm the idle window when pane focus moves (5 s vs 2 s).
-    onPaneChanged: if (root._lyricsHeld) root.holdLyrics()
+    onPaneChanged: if (root._lyricsHeld)
+        root.holdLyrics()
 
     /// ARC-UI-1: Alt armed the gesture — anchor on the queue row under the
     /// cursor; the fullscreen queue reuses the shared track verb set.
@@ -507,17 +505,14 @@ Rectangle {
             return;
         var item = queueItems.get(queueContent.currentIndex);
         var row = queueContent.view.itemAtIndex(queueContent.currentIndex);
-        var actions = root.hasSelection
-            ? verbs.forSelection("song", queueContent.selectionIds("songId"),
-                queueContent.selectionStarred("songId"))
-            : (item ? verbs.song(item) : null);
+        var actions = root.hasSelection ? verbs.forSelection("song", queueContent.selectionIds("songId"), queueContent.selectionStarred("songId")) : (item ? verbs.song(item) : null);
         if (!actions)
             return;
         // ARC-I-4: the heart tracks the verb immediately (see `MediaList`).
         if (actions.south && actions.south.invoke) {
             var want = actions.south.favorite === true;
             var star = actions.south.invoke;
-            actions.south.invoke = function() {
+            actions.south.invoke = function () {
                 star();
                 queueContent.markStarred(want);
             };
@@ -596,9 +591,7 @@ Rectangle {
         } else if (action.indexOf("extend_") === 0) {
             queueContent.extendSelection("move_" + action.substring(7));
             queueCursor = queueContent.currentIndex;
-        }
-        else if (action === "queue_up" && queueContent.allows("reorder")
-                && queueCursor > 0) {
+        } else if (action === "queue_up" && queueContent.allows("reorder") && queueCursor > 0) {
             root._reordering = true;
             // VI-4: a reorder shifts every anchored row; the range dies.
             queueContent.clearSelection();
@@ -606,16 +599,14 @@ Rectangle {
             queueCursor -= 1;
             queueContent.currentIndex = queueCursor;
             return;
-        } else if (action === "queue_down" && queueContent.allows("reorder")
-                && queueCursor < queueItems.count - 1) {
+        } else if (action === "queue_down" && queueContent.allows("reorder") && queueCursor < queueItems.count - 1) {
             root._reordering = true;
             queueContent.clearSelection();
             Backend.queueMove(queueCursor, queueCursor + 1);
             queueCursor += 1;
             queueContent.currentIndex = queueCursor;
             return;
-        } else if (action === "queue_remove" && queueContent.allows("remove")
-                && queueCursor >= 0) {
+        } else if (action === "queue_remove" && queueContent.allows("remove") && queueCursor >= 0) {
             root.removeQueueRow(queueCursor);
         } else if (action === "enter") {
             // VI-4: jumping to a track ends the visual selection.
@@ -864,7 +855,7 @@ Rectangle {
                         anchors.horizontalCenter: parent.horizontalCenter
                         unit: root.starUnit
                         rating: root.albumRating
-                        onPicked: (level) => {
+                        onPicked: level => {
                             root.albumRating = level;
                             if (Backend.currentAlbumId.length > 0)
                                 Backend.rateAlbum(Backend.currentAlbumId, level);
@@ -892,14 +883,6 @@ Rectangle {
                         font.pixelSize: root.trackTitlePixelSize
                         font.bold: true
                         elide: Text.ElideRight
-                    }
-
-                    // Exit chip: same shared control as the album/artist headers.
-                    ExitChip {
-                        host: root
-                        label: "ESC/Q"
-                        padRatio: 0.02
-                        onClicked: root.exitRequested()
                     }
                 }
 
@@ -1021,13 +1004,11 @@ Rectangle {
                     // The bar is the elastic part; the box clamps to whatever
                     // the transport is not using.
                     Rectangle {
-                        radius: Theme.radius
                         id: volumeBox
+                        radius: Theme.radius
                         anchors.right: parent.right
                         anchors.verticalCenter: parent.verticalCenter
-                        width: Math.max(root.height * 0.04,
-                            Math.min(volumeRow.implicitWidth,
-                                transportBar.width - transportBox.width - root.width * 0.012))
+                        width: Math.max(root.height * 0.04, Math.min(volumeRow.implicitWidth, transportBar.width - transportBox.width - root.width * 0.012))
                         height: parent.height
                         color: "transparent"
 
@@ -1090,16 +1071,13 @@ Rectangle {
                     // box would touch it — the transport yields, the volume
                     // stays put.
                     Rectangle {
-                        radius: Theme.radius
                         id: transportBox
+                        radius: Theme.radius
                         anchors.verticalCenter: parent.verticalCenter
                         width: transportRow.implicitWidth
                         height: parent.height
                         color: "transparent"
-                        x: Math.max(0, Math.min(
-                            (transportBar.width - width) / 2,
-                            transportBar.width - volumeBox.width
-                                - root.width * 0.012 - width))
+                        x: Math.max(0, Math.min((transportBar.width - width) / 2, transportBar.width - volumeBox.width - root.width * 0.012 - width))
 
                         // UI-59: the shared transport cluster (same one as
                         // the player bar).
@@ -1194,8 +1172,8 @@ Rectangle {
                     // the grown line never reaches these walls; `clip` is
                     // the last-resort containment.
                     Rectangle {
-                        radius: Theme.radius
                         id: lyricsStage
+                        radius: Theme.radius
                         Layout.fillWidth: true
                         Layout.fillHeight: true
                         color: "transparent"
@@ -1219,15 +1197,15 @@ Rectangle {
                             // A width change re-wraps the lyric rows;
                             // let the shared resize repair recentre the
                             // active line, but never yank a manual scroll.
-                            recenterOnWidth: root.visible && root.lyricsSynced
-                                && root.activeLyric >= 0 && !root._lyricsHeld
-                                && lyricsView.currentIndex === root.activeLyric
+                            recenterOnWidth: root.visible && root.lyricsSynced && root.activeLyric >= 0 && !root._lyricsHeld && lyricsView.currentIndex === root.activeLyric
 
                             // A hand on the pane owns it until the next
                             // track.
                             Connections {
                                 target: lyricsView.view
-                                function onMovementStarted() { root.holdLyrics(); }
+                                function onMovementStarted() {
+                                    root.holdLyrics();
+                                }
                             }
 
                             // LYR-8: the fade in/out shares the follow's
@@ -1274,8 +1252,7 @@ Rectangle {
                                     // variable-height relayout on every phrase).
                                     // The maximum scale is the safe reservation;
                                     // the fit clamp can only make it smaller.
-                                    readonly property real emphasisPad: Math.max(0,
-                                        lyricLine.paintedHeight * (Theme.lyricsEmphasis - 1) / 2)
+                                    readonly property real emphasisPad: Math.max(0, lyricLine.paintedHeight * (Theme.lyricsEmphasis - 1) / 2)
 
                                     width: lyricsView.width
                                     leftPadding: root.lyricPad
@@ -1439,8 +1416,8 @@ Rectangle {
 
                             rowDelegate: Component {
                                 Rectangle {
-                                    radius: Theme.radius
                                     id: row
+                                    radius: Theme.radius
                                     required property int index
                                     required property string title
                                     required property string duration
@@ -1575,9 +1552,7 @@ Rectangle {
                     elide: Text.ElideRight
                     animated: false
                 }
-
             }
         }
     }
-
 }

@@ -71,5 +71,8 @@ MediaList {
             if (channel === "playlists")
                 root.apply(payload);
         }
+        function onLibrary_changed() {
+            root.reload();
+        }
     }
 }

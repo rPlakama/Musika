@@ -542,9 +542,9 @@ async fn ensure_thumbs(dir: &Path, jobs: Vec<(String, PathBuf)>) {
 /// Payload loaders use this so a page's cost follows
 /// the page, never the whole cover cache.
 ///
-/// Cache first: a missing cover is fetched from the provider on demand, then
-/// resolved from the just-written cache. Offline/no-credentials simply keeps
-/// the cache-only result.
+/// Cache first: a missing cover is resolved to the provider URL right away
+/// and cached in the background, so library pages never wait on artwork.
+/// Offline/no-credentials simply keeps the cache-only result.
 pub async fn url_map_of(
     dbs: &crate::db::Dbs,
     ids: &[String],
@@ -562,11 +562,21 @@ pub async fn url_map_of(
     let Ok(client) = crate::qml::client(dbs).await else {
         return Ok(map);
     };
-    let client = Arc::new(client);
-    if let Err(err) = fetch_ids(&dbs.covers, &client, &missing).await {
-        eprintln!("covers: on-demand fetch failed: {err:#}");
+    for id in &missing {
+        if let Ok(url) = client.endpoint_url("getCoverArt", &[("id", id.clone())]) {
+            map.insert(id.clone(), url.to_string());
+        }
     }
-    map = cached_urls(&dbs.covers, ids).await?;
+
+    // Keep the library responsive: the remote URL is already usable, so the
+    // cache write is a detached follow-up for the next request.
+    let pool = dbs.covers.clone();
+    let client = Arc::new(client);
+    crate::runtime().spawn(async move {
+        if let Err(err) = fetch_ids(&pool, &client, &missing).await {
+            eprintln!("covers: on-demand fetch failed: {err:#}");
+        }
+    });
     Ok(map)
 }
 
@@ -612,7 +622,15 @@ async fn cached_urls(
             }
         }
     }
-    ensure_thumbs(&dir, thumb_jobs).await;
+    // Never make a library page wait on thumbnail decoding: raw covers are
+    // large, and `CoverImage` falls back to the full file until the thumb
+    // lands on disk.
+    if !thumb_jobs.is_empty() {
+        let dir = dir.clone();
+        crate::runtime().spawn(async move {
+            ensure_thumbs(&dir, thumb_jobs).await;
+        });
+    }
     Ok(map)
 }
 

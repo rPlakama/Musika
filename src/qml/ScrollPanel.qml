@@ -45,8 +45,7 @@ Rectangle {
 
     // --- Split geometry ------------------------------------------------------
     // A = this fraction of the height, B = the rest. Both bands are
-    // horizontal-centred. B is snapped down to whole adaptive rows so a
-    // partial row never sits at the bottom; the remainder stays surface.
+    // horizontal-centred. B fills the remainder; Qt clips any partial row.
     // UI-57: the band sits 30% below the original 0.2 (0.14) and
     // `widthScale` ramps it further as the window narrows.
     // SCROLLMODAL: the context profile supplies the default split.
@@ -71,19 +70,13 @@ Rectangle {
     }
     readonly property real effectiveHeaderRatio: root.headerRatio * root.widthScale
 
-    /// The room the body would have without snapping; also the stable row
-    /// reference hosts pass to `ScrollContent` (never the body's own height).
+    /// The room the body has under the header; also the stable row reference
+    /// hosts pass to `ScrollContent` (never the body's own height).
     readonly property real bodyAvail: Math.max(0, root.height - header.height)
-    /// The row height (and the resulting body height) use `rowStride`, which
-    /// is independent of this body. Snapping here, not in the row, keeps the
-    /// row unit continuous across a resize.
-    readonly property real bodyHeight: {
-        if (!(content.count > 0 && content.adaptiveRows
-                && content.rowRefHeight > 0))
-            return root.bodyAvail;
-        return ScrollProfiles.snapBody(root.bodyAvail, content.rowStride,
-            content.rowSpacing);
-    }
+    /// Qt owns the scroll extent now; the body simply fills its room. A
+    /// partial row may clip at the bottom instead of feeding a snapped height
+    /// back into the row unit.
+    readonly property real bodyHeight: root.bodyAvail
 
     // --- Header (A) ----------------------------------------------------------
     // Children declared on the panel land in the title band.
@@ -281,8 +274,7 @@ Rectangle {
             root.actionHandler(action);
     }
 
-    // The fill stops at the snapped body edge. The remainder below is
-    // reserved layout only: alpha 0, never painted for the user.
+    // The fill stops at the body edge; the remainder is reserved layout only.
     Rectangle {
         id: surface
         anchors.top: parent.top
@@ -320,7 +312,7 @@ Rectangle {
         }
     }
 
-    // B: the scroll body, a whole number of adaptive rows tall.
+    // B: the scroll body, filling the room under the header.
     Rectangle {
         radius: Theme.radius
         id: body

@@ -444,6 +444,12 @@ Item {
             if (channel === "search" && root.opened)
                 root.apply(payload);
         }
+        // A finished sync changes the library under an open overlay: re-ask
+        // for the current query instead of leaving pre-sync empty results.
+        function onLibrary_changed() {
+            if (root.opened)
+                root._requestSearch(field.text);
+        }
     }
 
     // Dim backdrop (the one sanctioned scrim); click outside to dismiss.

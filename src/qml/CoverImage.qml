@@ -16,7 +16,6 @@
 
 import QtQuick
 import QtQuick.Effects
-import QtQuick.Shapes
 import QtQuick.Window
 import "Theme.js" as Theme
 
@@ -112,33 +111,6 @@ Item {
         blurMax: 64
         saturation: 0.6
         autoPaddingEnabled: false
-    }
-
-    // Soft vignette on the ambient backdrop, inside the same blurred layer, so
-    // the cover melts into the edges instead of holding a hard presence. The
-    // radial falloff starts well past the centre (half-diagonal radius puts
-    // the corners at the last stop) and stays subtle.
-    Shape {
-        anchors.fill: parent
-        visible: root.ambient
-        preferredRendererType: Shape.CurveRenderer
-
-        ShapePath {
-            strokeWidth: 0
-            fillGradient: RadialGradient {
-                centerX: root.width * 0.5
-                centerY: root.height * 0.5
-                centerRadius: Math.hypot(root.width, root.height) * 0.5
-                GradientStop { position: 0.0; color: "transparent" }
-                GradientStop { position: 0.45; color: "transparent" }
-                GradientStop { position: 1.0; color: Qt.rgba(0, 0, 0, 0.35) }
-            }
-            startX: 0
-            startY: 0
-            PathLine { x: root.width; y: 0 }
-            PathLine { x: root.width; y: root.height }
-            PathLine { x: 0; y: root.height }
-        }
     }
 
     Behavior on opacity {

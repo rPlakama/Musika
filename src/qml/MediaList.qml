@@ -205,13 +205,34 @@ ScrollPanel {
     // contract, selection and the scroll memory.
     layouts: ["list", "grid"]
 
+    /// PATH: fill the model in small event-loop batches, so a large payload
+    /// (the album library) cannot block input or the compositor.
+    readonly property int fillBatch: 64
+    property int _fillGeneration: 0
+
     function setRows(rows) {
         // VI-4: a reload invalidates the selected range.
         root.clearSelection();
         mediaRows.clear();
-        for (var i = 0; i < rows.length; i++)
+        root.loading = true;
+        root._fillGeneration++;
+        root._appendFill(rows, 0, root._fillGeneration);
+    }
+
+    function _appendFill(rows, start, generation) {
+        if (generation !== root._fillGeneration)
+            return;
+        var end = Math.min(rows.length, start + root.fillBatch);
+        for (var i = start; i < end; i++)
             mediaRows.append(rows[i]);
         root.requestMarkWindow();
+        if (end < rows.length) {
+            Qt.callLater(function() {
+                root._appendFill(rows, end, generation);
+            });
+            return;
+        }
+        root.loading = false;
         // UI-10: a filter/order swap lands on row 0 with the top pinned —
         // the old cursor/offset point at different rows now, so the restore
         // would chase a stale spot.

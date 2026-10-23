@@ -74,14 +74,17 @@ MediaList {
         var rows = [];
         for (var i = 0; i < data.rows.length; i++)
             rows.push(root.mapRow(data.rows[i]));
-        if (data.offset === 0)
+        if (data.offset === 0) {
+            // MediaList owns the loading state while it fills the model in
+            // batches.
             root.setRows(rows);
-        else
+        } else {
             root.appendRows(rows);
+            root.loading = false;
+        }
         root._nextOffset = data.next;
         root._allLoaded = data.has_more !== true;
         root._loadingPage = false;
-        root.loading = false;
         if (root.count > 0 && root.currentIndex < 0)
             root.currentIndex = 0;
         if (rows.length === 0 && data.has_more === true)

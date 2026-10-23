@@ -58,7 +58,6 @@ MediaList {
             });
         }
         root.setRows(rows);
-        root.loading = false;
     }
 
     onActivated: (item) => root.playlistActivated(item.playlistId)

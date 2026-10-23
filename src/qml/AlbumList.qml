@@ -59,7 +59,6 @@ MediaList {
             });
         }
         root.setRows(rows);
-        root.loading = false;
     }
 
     onActivated: (item) => root.albumActivated(item.albumId, item.title, item.artist, item.year, item.tracks, item.cover, item.starred === true)

@@ -60,7 +60,6 @@ MediaList {
             });
         }
         root.setRows(rows);
-        root.loading = false;
     }
 
     onActivated: (item) => root.artistActivated(item.artistId, item.artistName, item.artistCover)

@@ -247,19 +247,15 @@ Rectangle {
                 spacing: root.width * 0.015
 
                 // Determinate progress across the last reported stage.
-                // Collapsed to a 2px tick when idle, expanding while a sync
-                // runs.
+                // Always collapsed to a 2px tick; the sync glyph carries
+                // the running state.
                 Rectangle {
                     radius: Theme.radius
                     id: track
-                    Layout.preferredWidth: Backend.librarySyncing ? root.width * 0.12 : 2
+                    Layout.preferredWidth: 2
                     Layout.preferredHeight: Math.max(2, root.height * 0.16)
                     color: Palette.outlineVariant
                     clip: true
-
-                    Behavior on Layout.preferredWidth {
-                        NumberAnimation { duration: Theme.motion.standard; easing.type: Easing.Bezier; easing.bezierCurve: Theme.ease.standard }
-                    }
 
                     Rectangle {
                         radius: Theme.radius

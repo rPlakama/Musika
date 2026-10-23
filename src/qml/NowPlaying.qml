@@ -130,7 +130,7 @@ Rectangle {
     // window, so lines can't outgrow the pane's walls; the stage caps the
     // active emphasis to the padded room, so the grown line never reaches the
     // margin (see the delegate's `emphasis`).
-    readonly property real lyricSize: Theme.clamp(lyricsPane.height * 0.055, 10, 18)
+    readonly property real lyricSize: Theme.clamp(lyricsPane.height * 0.055, 13, 22)
     readonly property real lyricPad: Math.max(6, lyricsPane.height * 0.04)
 
     // Active synced line, matched against the offset-corrected position.
@@ -1265,7 +1265,6 @@ Rectangle {
                     }
                 }
             }
-
         }
 
         Rectangle {

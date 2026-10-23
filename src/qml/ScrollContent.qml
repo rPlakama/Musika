@@ -242,16 +242,16 @@ Item {
             ? Math.ceil(v.count / Math.max(1, root.columns)) : v.count;
     }
 
-    /// The content extent. Uniform rows are solved from count × row unit; a
-    /// realised last row supplies the exact tail.
+    /// The content extent. Uniform rows are solved from the expected count and
+    /// row unit, never from a realised delegate: after a height change those
+    /// delegates may still carry the previous geometry, which would make the
+    /// cursor correction chase a stale tail. Only variable-height rows (e.g.
+    /// lyrics) consult the realised last row.
     function _extent(v) {
         if (!v)
             return 0;
         if (root.contentHeightHint > 0)
             return root.contentHeightHint;
-        var last = v.count > 0 ? v.itemAtIndex(v.count - 1) : null;
-        if (last && last.height > 0)
-            return last.y + last.height;
         var stride = root._stride(v);
         var uniform = root.layout === "grid" || root.rowRatio > 0;
         if (uniform && stride > 0) {
@@ -259,6 +259,9 @@ Item {
                 return root._rowCount(v) * stride;
             return Math.max(0, v.count * stride - root.rowSpacing);
         }
+        var last = v.count > 0 ? v.itemAtIndex(v.count - 1) : null;
+        if (last && last.height > 0)
+            return last.y + last.height;
         return v.contentHeight;
     }
 

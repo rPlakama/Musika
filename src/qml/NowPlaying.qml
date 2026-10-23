@@ -756,7 +756,7 @@ Rectangle {
             id: coverBackdrop
             anchors.fill: parent
             source: Backend.currentCoverUrl
-            ambient: true
+            ambient: false
         }
 
         Rectangle {

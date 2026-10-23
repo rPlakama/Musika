@@ -243,6 +243,28 @@ impl Player {
         self.revision += 1;
     }
 
+    /// Replaces the queued tracks' metadata from the refreshed library rows:
+    /// a provider sync can rename or re-album a track under a queue built
+    /// earlier. The resolved URL and cover URLs are intentionally left to
+    /// their own refresh paths.
+    pub fn refresh_track_metadata(&mut self, songs: &[crate::library::SongRow]) {
+        let by_id: std::collections::HashMap<&str, &crate::library::SongRow> =
+            songs.iter().map(|song| (song.id.as_str(), song)).collect();
+        for track in &mut self.queue {
+            let Some(song) = by_id.get(track.id.as_str()) else {
+                continue;
+            };
+            track.title = song.title.clone();
+            track.artist = song.artist.clone().unwrap_or_default();
+            track.album = song.album.clone().unwrap_or_default();
+            track.album_id = song.album_id.clone().unwrap_or_default();
+            track.favorite = song.starred.is_some();
+            track.duration = song.duration.unwrap_or(0) as f64;
+            track.cover_art = song.cover_art.clone().unwrap_or_default();
+        }
+        self.revision += 1;
+    }
+
     /// Ids of the next `count` tracks after the current one (LYR-5 prefetch).
     pub fn upcoming(&self, count: usize) -> Vec<String> {
         self.queue

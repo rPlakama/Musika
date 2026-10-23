@@ -41,8 +41,10 @@ use sqlx::sqlite::SqlitePool;
 
 use crate::http_client::SubsonicClient;
 
-/// Cover size requested from the server (large enough for the mainscreen).
-const COVER_SIZE: u32 = 512;
+/// File-name prefix for the provider's original art. Older cache entries used
+/// the server-downscaled 512 px variant; their missing prefix forces one raw
+/// refetch on the next pass.
+const RAW_PREFIX: &str = "raw-";
 
 /// Longest edge of the thumbnail kept beside each cover; small surfaces load
 /// this instead of the full art (keep in sync with `CoverImage.thumbEdge`).
@@ -63,6 +65,8 @@ const SVG_MAX_OUTPUT: usize = 8 * 1024 * 1024;
 #[derive(Debug, Default, Clone, Copy)]
 pub struct CoverReport {
     pub downloaded: usize,
+    /// Same bytes moved to the canonical raw file name (legacy cache entry).
+    pub upgraded: usize,
     pub unchanged: usize,
     pub removed: usize,
 }
@@ -88,6 +92,30 @@ pub async fn refresh(
     client: &Arc<SubsonicClient>,
     referenced: &BTreeSet<String>,
     forced: &[String],
+) -> Result<CoverReport> {
+    refresh_inner(pool, client, referenced, forced, true).await
+}
+
+/// Fetches specific covers without purging the rest: the on-demand path for
+/// a surface that needs art the sync has not cached yet.
+pub(crate) async fn fetch_ids(
+    pool: &SqlitePool,
+    client: &Arc<SubsonicClient>,
+    ids: &[String],
+) -> Result<CoverReport> {
+    let ids: BTreeSet<String> = ids.iter().filter(|id| !id.is_empty()).cloned().collect();
+    if ids.is_empty() {
+        return Ok(CoverReport::default());
+    }
+    refresh_inner(pool, client, &ids, &[], false).await
+}
+
+async fn refresh_inner(
+    pool: &SqlitePool,
+    client: &Arc<SubsonicClient>,
+    referenced: &BTreeSet<String>,
+    forced: &[String],
+    purge_unreferenced: bool,
 ) -> Result<CoverReport> {
     let dir = crate::db::covers_dir()?;
     crate::db::ensure_dir(&dir)?;
@@ -115,21 +143,19 @@ pub async fn refresh(
         let known = Arc::clone(&known_for_fetch);
         let forced = Arc::clone(&forced);
         async move {
-            let (etag, last_modified) = if forced.contains(&id) {
+            let cached = known.get(&id);
+            let needs_raw = cached.is_some_and(|row| !is_raw_file(&row.file));
+            let (etag, last_modified) = if forced.contains(&id) || needs_raw {
                 (None, None)
             } else {
-                known
-                    .get(&id)
+                cached
                     .map(|row| (row.etag.clone(), row.last_modified.clone()))
                     .unwrap_or((None, None))
             };
+            // No `size`: keep the provider's original art for the large
+            // surfaces (fullscreen, album page); small ones use the thumbnail.
             client
-                .get_cover_art(
-                    &id,
-                    Some(COVER_SIZE),
-                    etag.as_deref(),
-                    last_modified.as_deref(),
-                )
+                .get_cover_art(&id, None, etag.as_deref(), last_modified.as_deref())
                 .await
         }
     })
@@ -152,20 +178,56 @@ pub async fn refresh(
                 };
 
                 let hash = md5_hex(&bytes);
-                if known.get(&id).and_then(|row| row.hash.as_deref()) == Some(hash.as_str()) {
-                    touch(pool, &id).await?;
-                    report.unchanged += 1;
-                    continue;
-                }
-
                 // Content-suffixed: changed art gets a new file/URL, so the
                 // UI can never keep painting the previous image at the old
                 // path (the cover id is not guaranteed to change with it).
-                let file = format!(
-                    "{}.{}",
-                    md5_hex(format!("{id}\0{hash}").as_bytes()),
-                    extension
-                );
+                // The raw prefix also marks the source resolution.
+                let file = cover_file_name(&id, &hash, extension);
+
+                if let Some(old) = known.get(&id)
+                    && old.hash.as_deref() == Some(hash.as_str())
+                {
+                    if old.file == file {
+                        // The provider revalidated the art and reported the
+                        // same bytes: keep the file, but store the date it now
+                        // carries so the next conditional request compares
+                        // against it.
+                        upsert(
+                            pool,
+                            &id,
+                            &old.file,
+                            &hash,
+                            content_type.as_deref(),
+                            bytes.len() as i64,
+                            art.etag.as_deref(),
+                            art.last_modified.as_deref(),
+                        )
+                        .await?;
+                        report.unchanged += 1;
+                    } else {
+                        // Same bytes, legacy filename: move the entry to the
+                        // canonical raw name now, or the raw upgrade would
+                        // force a full download on every pass forever.
+                        crate::cache::write_atomic(&dir, &file, &bytes)?;
+                        thumb_jobs.push((thumb_name(&file), dir.join(&file)));
+                        upsert(
+                            pool,
+                            &id,
+                            &file,
+                            &hash,
+                            content_type.as_deref(),
+                            bytes.len() as i64,
+                            art.etag.as_deref(),
+                            art.last_modified.as_deref(),
+                        )
+                        .await?;
+                        let _ = std::fs::remove_file(dir.join(&old.file));
+                        let _ = std::fs::remove_file(dir.join(thumb_name(&old.file)));
+                        report.upgraded += 1;
+                    }
+                    continue;
+                }
+
                 crate::cache::write_atomic(&dir, &file, &bytes)?;
 
                 upsert(
@@ -184,11 +246,11 @@ pub async fn refresh(
                 // ready when they first resolve the cover URL.
                 thumb_jobs.push((thumb_name(&file), dir.join(&file)));
 
-                if let Some(old) = known.get(&id) {
-                    if old.file != file {
-                        let _ = std::fs::remove_file(dir.join(&old.file));
-                        let _ = std::fs::remove_file(dir.join(thumb_name(&old.file)));
-                    }
+                if let Some(old) = known.get(&id)
+                    && old.file != file
+                {
+                    let _ = std::fs::remove_file(dir.join(&old.file));
+                    let _ = std::fs::remove_file(dir.join(thumb_name(&old.file)));
                 }
                 report.downloaded += 1;
             }
@@ -196,13 +258,16 @@ pub async fn refresh(
         }
     }
 
-    // Purge entries the library no longer references.
-    for (id, row) in known.iter() {
-        if !referenced.contains(id) {
-            let _ = std::fs::remove_file(dir.join(&row.file));
-            let _ = std::fs::remove_file(dir.join(thumb_name(&row.file)));
-            crate::cache::delete_by(pool, "DELETE FROM covers WHERE id = ?1", id).await?;
-            report.removed += 1;
+    // Purge entries the library no longer references. The on-demand path
+    // fetches a subset and must leave every other cached cover alone.
+    if purge_unreferenced {
+        for (id, row) in known.iter() {
+            if !referenced.contains(id) {
+                let _ = std::fs::remove_file(dir.join(&row.file));
+                let _ = std::fs::remove_file(dir.join(thumb_name(&row.file)));
+                crate::cache::delete_by(pool, "DELETE FROM covers WHERE id = ?1", id).await?;
+                report.removed += 1;
+            }
         }
     }
 
@@ -390,6 +455,20 @@ fn md5_hex(bytes: &[u8]) -> String {
     crate::hex::encode(openssl::hash::hash(MessageDigest::md5(), bytes).expect("openssl md5"))
 }
 
+/// Canonical content-suffixed cover filename. The raw prefix is what makes the
+/// one-shot legacy upgrade terminate: once written, the next pass sees it.
+fn cover_file_name(id: &str, hash: &str, extension: &str) -> String {
+    format!(
+        "{RAW_PREFIX}{}.{}",
+        md5_hex(format!("{id}\0{hash}").as_bytes()),
+        extension
+    )
+}
+
+fn is_raw_file(name: &str) -> bool {
+    name.starts_with(RAW_PREFIX)
+}
+
 /// Derives the thumbnail file name from a cover file name. `CoverImage.qml`
 /// computes the same name from the resolved URL, so keep the two in sync.
 fn thumb_name(file: &str) -> String {
@@ -462,7 +541,36 @@ async fn ensure_thumbs(dir: &Path, jobs: Vec<(String, PathBuf)>) {
 /// Maps only the requested cover ids to `file://` URLs, in bounded batches.
 /// Payload loaders use this so a page's cost follows
 /// the page, never the whole cover cache.
-pub async fn url_map_of(pool: &SqlitePool, ids: &[String]) -> Result<HashMap<String, String>> {
+///
+/// Cache first: a missing cover is fetched from the provider on demand, then
+/// resolved from the just-written cache. Offline/no-credentials simply keeps
+/// the cache-only result.
+pub async fn url_map_of(
+    dbs: &crate::db::Dbs,
+    ids: &[String],
+) -> Result<HashMap<String, String>> {
+    let mut map = cached_urls(&dbs.covers, ids).await?;
+    let missing: Vec<String> = unique_ids(ids)
+        .into_iter()
+        .filter(|id| !map.contains_key(*id))
+        .map(str::to_string)
+        .collect();
+    if missing.is_empty() || !crate::qml::online() {
+        return Ok(map);
+    }
+
+    let Ok(client) = crate::qml::client(dbs).await else {
+        return Ok(map);
+    };
+    let client = Arc::new(client);
+    if let Err(err) = fetch_ids(&dbs.covers, &client, &missing).await {
+        eprintln!("covers: on-demand fetch failed: {err:#}");
+    }
+    map = cached_urls(&dbs.covers, ids).await?;
+    Ok(map)
+}
+
+fn unique_ids(ids: &[String]) -> Vec<&str> {
     let mut unique: Vec<&str> = ids
         .iter()
         .map(String::as_str)
@@ -470,6 +578,14 @@ pub async fn url_map_of(pool: &SqlitePool, ids: &[String]) -> Result<HashMap<Str
         .collect();
     unique.sort_unstable();
     unique.dedup();
+    unique
+}
+
+async fn cached_urls(
+    pool: &SqlitePool,
+    ids: &[String],
+) -> Result<HashMap<String, String>> {
+    let unique = unique_ids(ids);
     if unique.is_empty() {
         return Ok(HashMap::new());
     }
@@ -517,6 +633,17 @@ mod tests {
     fn md5_is_stable_and_distinct() {
         assert_eq!(md5_hex(b"same"), md5_hex(b"same"));
         assert_ne!(md5_hex(b"a"), md5_hex(b"b"));
+    }
+
+    #[test]
+    fn raw_file_name_ends_the_upgrade_task() {
+        let file = cover_file_name("cov", "hash", "jpg");
+        assert!(is_raw_file(&file));
+        assert!(file.ends_with(".jpg"));
+        // A second pass resolves the same canonical name, so the legacy
+        // upgrade no longer forces an unconditional fetch.
+        assert_eq!(file, cover_file_name("cov", "hash", "jpg"));
+        assert!(!is_raw_file("legacy-cover.jpg"));
     }
 
     #[test]

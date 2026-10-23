@@ -248,7 +248,7 @@ pub async fn song_album_payload(
     let album = match crate::library::album(&dbs.library, album_id).await? {
         Some(album) => {
             let cover_ids: Vec<String> = album.cover_art.clone().into_iter().collect();
-            let covers = crate::covers::url_map_of(&dbs.covers, &cover_ids).await?;
+            let covers = crate::covers::url_map_of(dbs, &cover_ids).await?;
             queue_album_json(&album, &covers)
         }
         None => serde_json::Value::Null,
@@ -333,7 +333,7 @@ pub async fn song_album_page_json(dbs: &crate::db::Dbs, song_id: &str) -> anyhow
         .await?
         .ok_or_else(|| anyhow::anyhow!("album not found in index"))?;
     let cover_ids: Vec<String> = album.cover_art.clone().into_iter().collect();
-    let covers = crate::covers::url_map_of(&dbs.covers, &cover_ids).await?;
+    let covers = crate::covers::url_map_of(dbs, &cover_ids).await?;
     Ok(queue_album_json(&album, &covers).to_string())
 }
 
@@ -349,7 +349,7 @@ pub async fn album_artist_page_json(
         .await?
         .ok_or_else(|| anyhow::anyhow!("artist not found in index"))?;
     let cover_ids: Vec<String> = artist.cover_art.clone().into_iter().collect();
-    let covers = crate::covers::url_map_of(&dbs.covers, &cover_ids).await?;
+    let covers = crate::covers::url_map_of(dbs, &cover_ids).await?;
     let cover = crate::browse::cover_url(artist.cover_art.as_deref(), &covers);
     Ok(serde_json::json!({
         "id": artist.id,
@@ -394,7 +394,7 @@ pub async fn resume_payload(
             match crate::library::album(&dbs.library, album_id).await? {
                 Some(album) => {
                     let cover_ids: Vec<String> = album.cover_art.clone().into_iter().collect();
-                    let covers = crate::covers::url_map_of(&dbs.covers, &cover_ids).await?;
+                    let covers = crate::covers::url_map_of(dbs, &cover_ids).await?;
                     Some(queue_album_json(&album, &covers))
                 }
                 None => None,
@@ -466,7 +466,7 @@ async fn tracks_json(
         .iter()
         .filter_map(|song| song.cover_art.clone())
         .collect();
-    let covers = crate::covers::url_map_of(&dbs.covers, &cover_ids).await?;
+    let covers = crate::covers::url_map_of(dbs, &cover_ids).await?;
     let song_ids: Vec<String> = songs.iter().map(|song| song.id.clone()).collect();
     let media = crate::media::path_map_of(&dbs.media, &song_ids)
         .await

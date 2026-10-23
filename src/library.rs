@@ -45,6 +45,8 @@ pub struct SongSearchRow {
 pub struct SyncChanges {
     pub albums: Vec<String>,
     pub artists: Vec<String>,
+    /// Song ids whose indexed metadata changed or appeared.
+    pub songs: Vec<String>,
     /// Cover ids whose album art changed or appeared.
     pub covers: Vec<String>,
 }
@@ -71,6 +73,49 @@ struct ArtistSnapshot {
     image_url: Option<String>,
 }
 
+#[derive(Debug, FromRow, PartialEq)]
+struct SongSnapshot {
+    id: String,
+    album_id: Option<String>,
+    artist_id: Option<String>,
+    title: String,
+    album: Option<String>,
+    artist: Option<String>,
+    track: Option<i32>,
+    disc_number: Option<i32>,
+    year: Option<i32>,
+    genre: Option<String>,
+    duration: Option<i32>,
+    bit_rate: Option<i32>,
+    suffix: Option<String>,
+    size: Option<i64>,
+    path: Option<String>,
+    cover_art: Option<String>,
+}
+
+impl SongSnapshot {
+    fn from_child(song: &Child) -> Self {
+        Self {
+            id: song.id.clone(),
+            album_id: song.album_id.clone(),
+            artist_id: song.artist_id.clone(),
+            title: song.title.clone(),
+            album: song.album.clone(),
+            artist: song.artist.clone(),
+            track: song.track,
+            disc_number: song.disc_number,
+            year: song.year,
+            genre: song.genre.clone(),
+            duration: song.duration,
+            bit_rate: song.bit_rate,
+            suffix: song.suffix.clone(),
+            size: song.size,
+            path: song.path.clone(),
+            cover_art: song.cover_art.clone(),
+        }
+    }
+}
+
 fn album_changed(old: &AlbumSnapshot, new: &AlbumID3) -> bool {
     old.artist_id != new.artist_id
         || old.name != new.name
@@ -92,8 +137,9 @@ fn artist_changed(old: &ArtistSnapshot, new: &ArtistID3) -> bool {
 /// Replaces all library tables in a single transaction and stores the sync
 /// bookkeeping values.
 ///
-/// Returns the album/artist/cover ids that changed so the caller can refresh
-/// the derived caches (covers, lyrics, descriptions) for exactly those rows.
+/// Returns the song/album/artist/cover ids that changed so the caller can
+/// refresh the derived caches (covers, lyrics, descriptions) for exactly
+/// those rows.
 pub async fn replace(
     pool: &SqlitePool,
     artists: &[ArtistID3],
@@ -119,6 +165,16 @@ pub async fn replace(
     .await?
     .into_iter()
     .map(|artist| (artist.id.clone(), artist))
+    .collect();
+    let old_songs: HashMap<String, SongSnapshot> = sqlx::query_as::<_, SongSnapshot>(
+        "SELECT id, album_id, artist_id, title, album, artist, track, disc_number, year,
+                genre, duration, bit_rate, suffix, size, path, cover_art
+         FROM songs",
+    )
+    .fetch_all(&mut *tx)
+    .await?
+    .into_iter()
+    .map(|song| (song.id.clone(), song))
     .collect();
 
     sqlx::query("DELETE FROM songs").execute(&mut *tx).await?;
@@ -201,6 +257,12 @@ pub async fn replace(
     tx.commit().await?;
 
     let mut changes = SyncChanges::default();
+    for song in songs {
+        match old_songs.get(&song.id) {
+            Some(old) if *old == SongSnapshot::from_child(song) => {}
+            _ => changes.songs.push(song.id.clone()),
+        }
+    }
     for album in albums {
         match old_albums.get(&album.id) {
             Some(old) if !album_changed(old, album) => continue,
@@ -597,7 +659,7 @@ pub struct AlbumRow {
 }
 
 /// A row for an album's song list.
-#[derive(Debug, Clone, FromRow, serde::Serialize)]
+#[derive(Debug, Clone, FromRow, serde::Serialize, serde::Deserialize)]
 pub struct SongRow {
     pub id: String,
     pub title: String,
@@ -1005,6 +1067,16 @@ pub async fn invalidate_artist_info(pool: &SqlitePool, ids: &[String]) -> Result
     crate::cache::delete_in(pool, "DELETE FROM artist_info WHERE artist_id IN (", ids).await
 }
 
+/// Drops cached biographies fetched before the provider's last library
+/// update: the provider has newer metadata, so the old text must not win.
+pub async fn invalidate_artist_info_before(pool: &SqlitePool, before: i64) -> Result<u64> {
+    let result = sqlx::query("DELETE FROM artist_info WHERE CAST(fetched_at AS INTEGER) < ?1")
+        .bind(before)
+        .execute(pool)
+        .await?;
+    Ok(result.rows_affected())
+}
+
 /// Drops cached biographies for artists that left the library. Only called
 /// after a fully successful sync (the covers/lyrics/colors rule).
 pub async fn purge_stale_artist_info(pool: &SqlitePool) -> Result<u64> {
@@ -1154,6 +1226,33 @@ mod tests {
         assert!(renamed.albums.is_empty());
         assert_eq!(renamed.artists, vec!["ar1".to_string()]);
         assert!(renamed.covers.is_empty());
+    }
+
+    #[tokio::test]
+    async fn replace_reports_changed_songs() {
+        let pool = memory_pool().await;
+        let song = |title: &str| Child {
+            id: "s1".into(),
+            album_id: Some("al1".into()),
+            title: title.into(),
+            duration: Some(30),
+            ..Child::default()
+        };
+
+        let first = replace(&pool, &[], &[], &[song("Everything")], 1)
+            .await
+            .unwrap();
+        assert_eq!(first.songs, vec!["s1".to_string()]);
+
+        let unchanged = replace(&pool, &[], &[], &[song("Everything")], 2)
+            .await
+            .unwrap();
+        assert!(unchanged.songs.is_empty());
+
+        let retitled = replace(&pool, &[], &[], &[song("Everything in Its Right Place")], 3)
+            .await
+            .unwrap();
+        assert_eq!(retitled.songs, vec!["s1".to_string()]);
     }
 
     #[tokio::test]
@@ -1509,6 +1608,16 @@ pub async fn upsert_album_info(pool: &SqlitePool, album_id: &str, notes: &str) -
 /// next open refetches the notes.
 pub async fn invalidate_album_info(pool: &SqlitePool, ids: &[String]) -> Result<()> {
     crate::cache::delete_in(pool, "DELETE FROM album_info WHERE album_id IN (", ids).await
+}
+
+/// Drops cached album notes fetched before the provider's last library
+/// update: the provider has newer metadata, so the old text must not win.
+pub async fn invalidate_album_info_before(pool: &SqlitePool, before: i64) -> Result<u64> {
+    let result = sqlx::query("DELETE FROM album_info WHERE fetched_at < ?1")
+        .bind(before)
+        .execute(pool)
+        .await?;
+    Ok(result.rows_affected())
 }
 
 /// PATH-8: drops cached descriptions whose album left the library.

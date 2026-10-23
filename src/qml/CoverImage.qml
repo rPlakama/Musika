@@ -34,7 +34,8 @@ import "Theme.js" as Theme
 // pixel. `sourceSize` is in device-independent pixels; Qt multiplies it by the
 // window DPR before calling QImageReader::setScaledSize (which preserves the
 // aspect ratio). Small surfaces load the pre-scaled thumbnail Rust writes into
-// the cover cache, so the single Qt decode thread only touches a 320 px file.
+// the cover cache, so the single Qt decode thread only touches a 320 px file;
+// large surfaces decode the provider's original art at their painted size.
 Item {
     id: root
 
@@ -47,9 +48,9 @@ Item {
     /// Decode headroom over the painted size (1.0 = exactly the painted size).
     property real sizeFactor: 1.0
 
-    // Raster covers are at most 512 px (COVER_SIZE in src/covers.rs), so a
-    // larger request would only make Qt upscale on the decode thread.
-    readonly property int maxDecodeEdge: 512
+    // The cache keeps the provider's original art, so large surfaces can
+    // decode at their painted size. Cap pathological uploads to a sane edge.
+    readonly property int maxDecodeEdge: 4096
     readonly property real decodeFactor:
         root.ambient && root.ambientBlur ? 0.25 : root.sizeFactor
     readonly property int decodeWidth: Math.min(root.maxDecodeEdge, Math.max(32,

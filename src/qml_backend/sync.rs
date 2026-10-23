@@ -79,6 +79,7 @@ pub(super) fn spawn_sync(
         }
 
         let client = Arc::new(client);
+        let cover_client = Arc::clone(&client);
         let progress = move |update: crate::index::SyncProgress| {
             qtbridge::invoke_method!(
                 progress_invoker,
@@ -92,12 +93,11 @@ pub(super) fn spawn_sync(
         match crate::index::sync_library(&dbs, client, progress).await {
             Ok(report) => {
                 crate::debug_log!(
-                    "index: library updated: {} artists, {} albums, {} songs, {} lyrics, {} new covers, {} playlists",
+                    "index: library updated: {} artists, {} albums, {} songs, {} lyrics, {} playlists",
                     report.artists,
                     report.albums,
                     report.songs,
                     report.lyrics,
-                    report.covers.downloaded,
                     report.playlists
                 );
                 // CACHE-9: a successful sync means the server is back.
@@ -110,6 +110,26 @@ pub(super) fn spawn_sync(
                     sync_summary(&report),
                     report.updated
                 );
+
+                // Cover caching is a secondary task: the library sync is
+                // already complete, so this never holds up the finish state.
+                if report.covers_due {
+                    let cover_dbs = dbs.clone();
+                    let forced = report.forced_covers.clone();
+                    crate::runtime().spawn(async move {
+                        let result =
+                            crate::index::cache_covers(&cover_dbs, &cover_client, &forced).await;
+                        crate::debug_log!(
+                            "index: cover cache: {} new, {} upgraded, {} unchanged, {} removed",
+                            result.downloaded,
+                            result.upgraded,
+                            result.unchanged,
+                            result.removed
+                        );
+                        let changed = result.downloaded > 0 || result.upgraded > 0;
+                        qtbridge::invoke_method!(finish_invoker, "coversCached", changed);
+                    });
+                }
             }
             Err(err) => {
                 eprintln!("index: library sync failed: {err:#}");

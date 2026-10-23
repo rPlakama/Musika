@@ -14,7 +14,7 @@
 // You should have received a copy of the GNU General Public License
 // along with this program; if not, see <https://www.gnu.org/licenses/>.
 
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use qtbridge::{QmlObject, qobject};
 
@@ -44,6 +44,14 @@ use download::{
 pub(crate) use support::client;
 use support::{album_cache_payload, album_state_payload, artist_cache_payload, emit, raise};
 use sync::{index_value, online_authenticated, spawn_sync};
+
+/// Whether the server is reachable for on-demand work outside the sync (cover
+/// misses): offline logins and the pre-login state keep it false.
+static ONLINE: AtomicBool = AtomicBool::new(false);
+
+pub(crate) fn online() -> bool {
+    ONLINE.load(Ordering::Relaxed)
+}
 
 /// Bumped by every status change; the debounced writer only persists when its
 /// captured generation is still the latest (P-6 / roadmap "Session status").
@@ -768,6 +776,7 @@ impl Backend {
     #[qslot(qml_name = "offlineLogin")]
     fn offline_login(&mut self, server_url: String, username: String) {
         self.remember_account(server_url, username);
+        ONLINE.store(false, Ordering::Relaxed);
         self.offline = true;
         self.offline_changed();
         crate::debug_log!("login: offline mode — showing downloaded music only");
@@ -781,6 +790,7 @@ impl Backend {
     /// refreshes it right after.
     #[qslot(qml_name = "noteOnline")]
     fn note_online(&mut self) {
+        ONLINE.store(true, Ordering::Relaxed);
         if self.offline {
             self.offline = false;
             self.offline_changed();
@@ -1214,20 +1224,39 @@ impl Backend {
         self.sync_message_changed();
         self.refresh_library_status();
         if changed {
-            self.refresh_queue_covers();
+            self.refresh_queue();
+            self.library_changed();
+            // Changed songs/albums dropped their lyric cache above: reload the
+            // open lyrics surface, not only on the next track change.
+            self.request_lyrics();
+        }
+    }
+
+    /// The secondary cover-cache pass finished (`cache_covers`): re-resolve
+    /// the open queue and pages only when it actually replaced art.
+    #[qslot(qml_name = "coversCached")]
+    fn covers_cached(&mut self, changed: bool) {
+        if changed {
+            self.refresh_queue();
             self.library_changed();
         }
     }
 
-    /// Re-resolves the queue's cover ids and URLs, so replaced or wiped art
-    /// cannot keep rendering from the old file.
-    fn refresh_queue_covers(&mut self) {
+    /// Re-resolves the queue's track metadata, cover ids and URLs, so a sync
+    /// that replaced rows or art cannot keep rendering the old snapshot.
+    fn refresh_queue(&mut self) {
         let invoker = self.get_qml_method_invoker();
-        let tracks: Vec<(String, String)> = self
+        let tracks: Vec<(String, String, String)> = self
             .player
             .queue()
             .iter()
-            .map(|track| (track.album_id.clone(), track.cover_art.clone()))
+            .map(|track| {
+                (
+                    track.album_id.clone(),
+                    track.cover_art.clone(),
+                    track.id.clone(),
+                )
+            })
             .collect();
         let Some(dbs) = crate::dbs().cloned() else {
             return;
@@ -1235,15 +1264,19 @@ impl Backend {
         crate::runtime().spawn(async move {
             let album_ids: Vec<String> = tracks
                 .iter()
-                .map(|(album_id, _)| album_id.clone())
+                .map(|(album_id, _, _)| album_id.clone())
                 .filter(|id| !id.is_empty())
                 .collect();
             let albums = crate::library::album_covers(&dbs.library, &album_ids)
                 .await
                 .unwrap_or_default();
+            let song_ids: Vec<String> = tracks.iter().map(|(_, _, id)| id.clone()).collect();
+            let songs = crate::library::songs_by_ids(&dbs.library, &song_ids)
+                .await
+                .unwrap_or_default();
             let cover_ids: Vec<String> = tracks
                 .iter()
-                .map(|(album_id, cover)| {
+                .map(|(album_id, cover, _)| {
                     albums
                         .get(album_id)
                         .cloned()
@@ -1251,10 +1284,11 @@ impl Backend {
                 })
                 .filter(|id| !id.is_empty())
                 .collect();
-            let covers = crate::covers::url_map_of(&dbs.covers, &cover_ids)
+            let covers = crate::covers::url_map_of(&dbs, &cover_ids)
                 .await
                 .unwrap_or_default();
-            let json = serde_json::json!({ "covers": covers, "albums": albums }).to_string();
+            let json = serde_json::json!({ "covers": covers, "albums": albums, "songs": songs })
+                .to_string();
             qtbridge::invoke_method!(invoker, "applyQueueCovers", json);
         });
         self.request_colors();
@@ -1323,6 +1357,7 @@ impl Backend {
             self.player.stop();
             self.sync_player();
             self.reset_colors();
+            ONLINE.store(false, Ordering::Relaxed);
             self.offline = false;
             self.offline_changed();
             self.logged_in = false;
@@ -1339,7 +1374,7 @@ impl Backend {
         self.library_sync_finished(
             match scope.as_str() {
                 "library" => {
-                    "Library, cover, lyric and description caches wiped — run a sync to refetch."
+                    "Albums, songs, covers, lyrics and descriptions wiped — run a sync to refetch."
                         .to_string()
                 }
                 "indexes" => "Search indexes wiped — rebuilt on the next sync.".to_string(),
@@ -1357,6 +1392,9 @@ impl Backend {
             serde_json::from_str(&covers_json).unwrap_or(serde_json::Value::Null);
         let covers = serde_json::from_value(payload["covers"].clone()).unwrap_or_default();
         let albums = serde_json::from_value(payload["albums"].clone()).unwrap_or_default();
+        let songs: Vec<crate::library::SongRow> =
+            serde_json::from_value(payload["songs"].clone()).unwrap_or_default();
+        self.player.refresh_track_metadata(&songs);
         self.player.refresh_cover_arts(&albums, &covers);
         self.sync_player();
         self.emit_queue(false);
@@ -1879,7 +1917,7 @@ impl Backend {
                 .and_then(|album| album.cover_art)
                 .into_iter()
                 .collect();
-            let covers = crate::covers::url_map_of(&dbs.covers, &cover_ids)
+            let covers = crate::covers::url_map_of(&dbs, &cover_ids)
                 .await
                 .unwrap_or_default();
             let cover = cover_ids

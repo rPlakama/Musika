@@ -161,7 +161,8 @@ QtObject {
                 invoke: function() { Backend.wipeDatabases("all") }
             },
             south: {
-                label: "Wipe albums!",
+                // Songs and albums live in the same library wipe.
+                label: "Album Wipe",
                 icon: "qrc:/app/icons/album.svg",
                 invoke: function() { Backend.wipeDatabases("library") }
             },
@@ -171,8 +172,8 @@ QtObject {
                 invoke: function() { Backend.wipeDatabases("indexes") }
             },
             west: {
-                label: "Wipe covers!",
-                icon: "qrc:/app/icons/album-2-svgrepo-com.svg",
+                label: "Cover Wipe",
+                icon: "qrc:/app/icons/image-outline.svg",
                 invoke: function() { Backend.wipeDatabases("covers") }
             }
         };

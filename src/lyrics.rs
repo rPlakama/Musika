@@ -316,6 +316,25 @@ pub async fn invalidate(lyrics: &SqlitePool, song_id: &str) -> Result<()> {
     crate::cache::delete_by(lyrics, "DELETE FROM lyrics WHERE song_id = ?1", song_id).await
 }
 
+/// Drops cached lyrics fetched before the provider's last library update:
+/// the provider has newer data, so the old documents must not win.
+pub async fn invalidate_before(lyrics: &SqlitePool, before: i64) -> Result<u64> {
+    let mut tx = lyrics.begin().await?;
+    sqlx::query(
+        "DELETE FROM lyric_line
+         WHERE song_id IN (SELECT song_id FROM lyrics WHERE fetched_at < ?1)",
+    )
+    .bind(before)
+    .execute(&mut *tx)
+    .await?;
+    let result = sqlx::query("DELETE FROM lyrics WHERE fetched_at < ?1")
+        .bind(before)
+        .execute(&mut *tx)
+        .await?;
+    tx.commit().await?;
+    Ok(result.rows_affected())
+}
+
 /// Drops cached lyrics for songs the API just changed, so the next play and
 /// the sync backfill fetch them again.
 pub async fn invalidate_songs(lyrics: &SqlitePool, song_ids: &[String]) -> Result<()> {

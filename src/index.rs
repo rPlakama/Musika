@@ -21,7 +21,7 @@
 //!
 //!   library.db  ← metadata (artists/albums/songs)
 //!   search.db   ← FTS5 rebuild, right after the library write
-//!   covers.db   ← cover cache, only after the sync has otherwise succeeded
+//!   covers.db   ← cover cache, run as a secondary task after the sync returns
 //!
 //! The sync is incremental at the top level: `getIndexes` is asked for changes
 //! since the last `lastModified`, and an empty answer is a no-op.
@@ -36,7 +36,7 @@ use crate::db::Dbs;
 use crate::http_client::SubsonicClient;
 
 /// Outcome of a [`sync_library`] run.
-#[derive(Debug, Default, Clone, Copy)]
+#[derive(Debug, Default, Clone)]
 #[allow(dead_code)]
 pub struct SyncReport {
     /// `false` when the server reported no changes and nothing was fetched.
@@ -44,7 +44,10 @@ pub struct SyncReport {
     pub artists: usize,
     pub albums: usize,
     pub songs: usize,
-    pub covers: CoverReport,
+    /// The caller starts the asynchronous cover pass after the sync returns.
+    pub covers_due: bool,
+    /// Covers whose album art changed, forced past the conditional request.
+    pub forced_covers: Vec<String>,
     /// Lyrics fetched by the bounded sync backfill.
     pub lyrics: usize,
     /// ARC-44: server playlists refreshed by this run.
@@ -65,6 +68,16 @@ fn report(progress: &mut impl FnMut(SyncProgress), message: impl Into<String>, d
         done,
         total: 100,
     });
+}
+
+/// `getIndexes.lastModified` is milliseconds on Subsonic/Navidrome, but the
+/// cache `fetched_at` columns are seconds. Normalise before comparing.
+fn provider_secs(ts: i64) -> i64 {
+    if ts > 1_000_000_000_000 {
+        ts / 1000
+    } else {
+        ts
+    }
 }
 
 async fn best_effort<T>(
@@ -113,20 +126,16 @@ where
         }
         // The library is unchanged, but the derived caches may still need
         // topping up (first run interrupted, or entries that previously
-        // failed): covers, then a bounded lyric backfill.
-        let covers =
-            if crate::library::cover_check_due(&dbs.library, crate::consts::COVER_CHECK_TTL_SECS)
+        // failed): the caller starts the cover pass asynchronously after this
+        // returns; the bounded lyric backfill stays in the sync.
+        let covers_due =
+            crate::library::cover_check_due(&dbs.library, crate::consts::COVER_CHECK_TTL_SECS)
                 .await
-                .unwrap_or(true)
-            {
-                refresh_covers(dbs, &client, &[]).await
-            } else {
-                CoverReport::default()
-            };
+                .unwrap_or(true);
         let lyrics = refresh_lyrics(dbs, &client, &mut progress).await;
         return Ok(SyncReport {
             updated: false,
-            covers,
+            covers_due,
             lyrics,
             ..SyncReport::default()
         });
@@ -187,8 +196,30 @@ where
     )
     .await?;
 
-    // The API changed these rows: drop their descriptions and lyrics so the
-    // next read fetches the current text instead of serving stale cache.
+    // The provider date moved: any description or lyric document cached
+    // before that update is older than the provider's copy. Drop it so the
+    // next read fetches the current text instead of serving the stale cache.
+    let provider_secs = provider_secs(indexes.last_modified);
+    if provider_secs > 0 {
+        best_effort(
+            "album info invalidation failed",
+            crate::library::invalidate_album_info_before(&dbs.library, provider_secs),
+        )
+        .await;
+        best_effort(
+            "artist info invalidation failed",
+            crate::library::invalidate_artist_info_before(&dbs.library, provider_secs),
+        )
+        .await;
+        best_effort(
+            "lyric invalidation failed",
+            crate::lyrics::invalidate_before(&dbs.lyrics, provider_secs),
+        )
+        .await;
+    }
+
+    // The API also changed rows that may carry a cache fetched after the
+    // provider date: drop those too, so changed rows always refetch.
     if !changes.albums.is_empty() {
         best_effort(
             "album info invalidation failed",
@@ -200,6 +231,13 @@ where
             let ids: Vec<String> = grouped.into_values().flatten().collect();
             crate::lyrics::invalidate_songs(&dbs.lyrics, &ids).await
         })
+        .await;
+    }
+    if !changes.songs.is_empty() {
+        best_effort(
+            "lyric invalidation failed",
+            crate::lyrics::invalidate_songs(&dbs.lyrics, &changes.songs),
+        )
         .await;
     }
     if !changes.artists.is_empty() {
@@ -239,9 +277,8 @@ where
     )
     .await;
 
-    // 4. cover cache, only now that the sync has otherwise succeeded
-    report(&mut progress, "Caching covers…", 80);
-    let covers = refresh_covers(dbs, &client, &changes.covers).await;
+    // 4. the cover cache is no longer part of the sync proper: it is a
+    // secondary task the caller starts once this library pass has succeeded.
 
     // 5. lyric cache: drop entries for songs that left the library
     best_effort("lyric cache purge failed", crate::lyrics::purge(dbs)).await;
@@ -301,7 +338,8 @@ where
         artists: artists.len(),
         albums: albums.len(),
         songs: songs.len(),
-        covers,
+        covers_due: true,
+        forced_covers: changes.covers,
         lyrics,
         playlists,
     })
@@ -338,9 +376,14 @@ where
 
 /// Revalidates/downloads referenced covers and purges the rest.
 ///
-/// Failures are logged and swallowed: the library and search databases are
-/// already consistent, and a cover cache problem is not fatal.
-async fn refresh_covers(dbs: &Dbs, client: &Arc<SubsonicClient>, forced: &[String]) -> CoverReport {
+/// Runs as the sync's secondary, asynchronous task: failures are logged and
+/// swallowed, because the library and search databases are already
+/// consistent and a cover cache problem is not fatal.
+pub(crate) async fn cache_covers(
+    dbs: &Dbs,
+    client: &Arc<SubsonicClient>,
+    forced: &[String],
+) -> CoverReport {
     let referenced = match crate::library::referenced_cover_ids(&dbs.library).await {
         Ok(referenced) => referenced,
         Err(err) => {
@@ -431,6 +474,13 @@ async fn fetch_albums(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn provider_date_normalises_milliseconds() {
+        assert_eq!(provider_secs(1_700_000_000), 1_700_000_000);
+        assert_eq!(provider_secs(1_700_000_000_123), 1_700_000_000);
+        assert_eq!(provider_secs(0), 0);
+    }
 
     #[test]
     fn complete_fetches_pass_and_partial_ones_fail() {

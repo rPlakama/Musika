@@ -143,10 +143,12 @@ impl SubsonicClient {
 
     /// Fetches cover art, optionally conditionally.
     ///
-    /// When `etag`/`last_modified` are supplied they are sent as
-    /// `If-None-Match` / `If-Modified-Since`; the server may then answer
-    /// `304 Not Modified`, in which case [`CoverArt::not_modified`] is `true`
-    /// and no bytes are transferred.
+    /// The cached provider date (`last_modified`) is preferred as
+    /// `If-Modified-Since`; when it is absent the `etag` is sent as
+    /// `If-None-Match`. Sending both would let an unchanged ETag hide a newer
+    /// provider date (RFC 9110 evaluates `If-None-Match` first). The server may
+    /// answer `304 Not Modified`, in which case [`CoverArt::not_modified`] is
+    /// `true` and no bytes are transferred.
     pub async fn get_cover_art(
         &self,
         id: &str,
@@ -161,11 +163,10 @@ impl SubsonicClient {
         let url = self.endpoint_url("getCoverArt", &params)?;
 
         let mut request = self.http.get(url);
-        if let Some(etag) = etag {
-            request = request.header(reqwest::header::IF_NONE_MATCH, etag);
-        }
         if let Some(last_modified) = last_modified {
             request = request.header(reqwest::header::IF_MODIFIED_SINCE, last_modified);
+        } else if let Some(etag) = etag {
+            request = request.header(reqwest::header::IF_NONE_MATCH, etag);
         }
 
         let response = self.send_checked(request).await?;

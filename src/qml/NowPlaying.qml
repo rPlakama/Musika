@@ -1096,17 +1096,11 @@ Rectangle {
             anchors.bottomMargin: root.height * 0.018
             spacing: root.width * 0.012
 
-            AcrylicPanel {
+            Item {
                 id: lyricsPane
                 Layout.fillWidth: true
                 Layout.fillHeight: true
-                Layout.preferredWidth: body.width * 0.5
                 visible: root.lyricsVisible
-                tint: Palette.surfaceContainerLow
-                backdrop: coverBackdrop.visible ? ambience : null
-                radius: Theme.radius
-                border.width: root.pane === 1 ? Math.max(1, root.width * Theme.hairlineRatio) : 0
-                border.color: Palette.primary
 
                 TapHandler {
                     onTapped: root.pane = 1
@@ -1114,55 +1108,7 @@ Rectangle {
 
                 ColumnLayout {
                     anchors.fill: parent
-                    anchors.margins: root.width * 0.012
                     spacing: root.height * 0.006
-
-                    RowLayout {
-                        Layout.fillWidth: true
-
-                        FadeText {
-                            text: "Lyrics"
-                            color: root.pane === 1 ? Palette.primary : Palette.onSurfaceVariant
-                            font.pixelSize: Theme.fontSize("title", root.height)
-                            font.bold: true
-                        }
-
-                        Item {
-                            Layout.fillWidth: true
-                        }
-
-                        FadeText {
-                            text: root.lyricsTag()
-                            color: Palette.onSurfaceVariant
-                            font.pixelSize: Theme.fontSize("label", root.height)
-                        }
-
-                        // Synced as a small MY3 chip in `label` type.
-                        Rectangle {
-                            visible: root.lyricsAvailable && root.lyricsSynced
-                            implicitWidth: syncedLabel.implicitWidth + root.height * 0.02
-                            implicitHeight: root.height * 0.026
-                            radius: Theme.radius
-                            color: Palette.secondaryContainer
-
-                            FadeText {
-                                id: syncedLabel
-                                anchors.centerIn: parent
-                                text: "SYNCED"
-                                color: Palette.onSecondaryContainer
-                                font.pixelSize: Theme.fontSize("label", root.height)
-                                font.letterSpacing: root.height * 0.001
-                                animated: false
-                            }
-                        }
-                    }
-
-                    Rectangle {
-                        radius: Theme.radius
-                        Layout.fillWidth: true
-                        Layout.preferredHeight: Math.max(1, root.height * Theme.hairlineRatio)
-                        color: root.pane === 1 ? Palette.primary : Palette.outlineVariant
-                    }
 
                     // The stage: an inner rectangle inside the pane that
                     // contains every lyric line, the scaled active one

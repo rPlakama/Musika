@@ -50,11 +50,8 @@ Item {
 
     readonly property real barH: height * Theme.topBarRatio
     readonly property real playH: height * Theme.playerRatio
-    // UI-32 R2: below `narrow` the sidebar is an icon strip.
-    readonly property bool narrow: Theme.isNarrow(width)
-    readonly property real sideW: narrow
-        ? Math.max(40, width * 0.08)
-        : width * Theme.sidebarRatio
+    // The sidebar is always the collapsed icon rail.
+    readonly property real sideW: Math.max(40, width * 0.08)
     readonly property real bodyH: height - barH - playH
 
     // View transitions (motion §3.1): fade in with decelerate, fade out with
@@ -745,7 +742,7 @@ Item {
                 id: sideBar
                 Layout.preferredWidth: root.sideW
                 Layout.fillHeight: true
-                narrow: root.narrow
+                narrow: true
 
                 onSegmentActivated: (index) => root.showSegment(index)
             }

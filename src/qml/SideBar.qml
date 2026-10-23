@@ -20,16 +20,15 @@ import musika
 import "Theme.js" as Theme
 
 // Left sidebar: the library segments. `selected` is this region's cursor and is
-// only moved while the sidebar is the active region. Below the narrow
-// breakpoint it collapses to an icon strip (UI-32 R2): same segments, same
-// cursor, labels and stats out of the way.
+// only moved while the sidebar is the active region. It stays collapsed to an
+// icon rail: same segments, same cursor, labels and stats out of the way.
 Rectangle {
     radius: Theme.radius
     id: root
 
     signal segmentActivated(int index)
 
-    /// Icon-only strip (set by Home from the window width).
+    /// Icon-only rail (Home keeps this true while the sidebar is collapsed).
     property bool narrow: false
 
     property int selected: 0
@@ -184,6 +183,7 @@ Rectangle {
                     width: Math.min(root.width * 0.5, segment.height * 0.5)
                     height: width
                     source: segment.modelData.icon
+                    opacity: segment.index === root.selected ? 1.0 : 0.6
                     symbolColor: !segment.usable
                         ? Theme.stateDisabledContent
                         : (segment.index === root.selected ? Palette.onSecondaryContainer : Palette.onSurfaceVariant)

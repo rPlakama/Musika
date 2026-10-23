@@ -134,7 +134,7 @@ Item {
     readonly property var view: root.layout === "grid" ? grid : list
     onViewChanged: {
         root.stopGlide();
-        Qt.callLater(root.landCursor);
+        viewLandTimer.restart();
     }
     onLayoutChanged: {
         if (root.memoryKey)
@@ -362,7 +362,7 @@ Item {
         if (root._countRepairScheduled)
             return;
         root._countRepairScheduled = true;
-        Qt.callLater(root._repairCount);
+        countRepairTimer.restart();
     }
 
     function _repairCount() {
@@ -501,7 +501,7 @@ Item {
         if (!root.memoryKey || root._rememberScheduled)
             return;
         root._rememberScheduled = true;
-        Qt.callLater(root._flushRemember);
+        rememberTimer.restart();
     }
     function _flushRemember() {
         root._rememberScheduled = false;
@@ -536,7 +536,7 @@ Item {
         if (!root.view || root._resizeScheduled)
             return;
         root._resizeScheduled = true;
-        Qt.callLater(root._resizeSettle);
+        resizeTimer.restart();
     }
 
     function _resizeSettle() {
@@ -550,6 +550,34 @@ Item {
                 v.currentIndex = root.currentIndex;
             root._follow(v, root.currentIndex, true);
         }
+    }
+
+    // Timers, not Qt.callLater: a Loader can destroy this ScrollContent
+    // between scheduling and delivery, and a destroyed object must not try to
+    // evaluate a queued function in its dead context.
+    Timer {
+        id: resizeTimer
+        interval: 0
+        repeat: false
+        onTriggered: root._resizeSettle()
+    }
+    Timer {
+        id: viewLandTimer
+        interval: 0
+        repeat: false
+        onTriggered: root.landCursor()
+    }
+    Timer {
+        id: countRepairTimer
+        interval: 0
+        repeat: false
+        onTriggered: root._repairCount()
+    }
+    Timer {
+        id: rememberTimer
+        interval: 0
+        repeat: false
+        onTriggered: root._flushRemember()
     }
 
     Component.onCompleted: root.applySavedLayout()

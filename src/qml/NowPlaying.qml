@@ -774,10 +774,9 @@ Rectangle {
         id: lyricModel
     }
 
-    // D-5 ambience: the playing cover through the shared `CoverImage.ambient`
-    // mode (blurred and washed into the theme background, same rule as
-    // AlbumEntry), so the lyrics and the queue drawer float on their own
-    // colours. Hidden without art; the surfaces stay opaque.
+    // D-5 ambience: the playing cover painted sharp and washed into the theme
+    // background by the gradient below, so the lyrics and the queue drawer
+    // float on their own colours. Hidden without art; the surfaces stay opaque.
     // UI-55: one item for cover + wash, so the panes' acrylic samples exactly
     // what is painted behind them.
     Item {
@@ -788,7 +787,6 @@ Rectangle {
             id: coverBackdrop
             anchors.fill: parent
             source: Backend.currentCoverUrl
-            ambient: false
         }
 
         Rectangle {

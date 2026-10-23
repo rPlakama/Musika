@@ -27,8 +27,8 @@ import "Theme.js" as Theme
 // queues the album at that track. The descriptive fields are still placeholders
 // until album metadata is passed in.
 Rectangle {
-    radius: Theme.radius
     id: root
+    radius: Theme.radius
 
     signal back
     /// ARC-I-2: Alt-hold quick actions on the song row under the cursor;
@@ -146,7 +146,7 @@ Rectangle {
     // UI-60: the album cover's verbs — the same favourite + count + download
     // set the album rows use.
     function coverActions() {
-        return verbs.album(root.albumItem(), root.albumCacheOn, function(level) {
+        return verbs.album(root.albumItem(), root.albumCacheOn, function (level) {
             root.albumRating = level;
         });
     }
@@ -171,17 +171,14 @@ Rectangle {
         if (root.onToolbar || songs.count === 0 || content.currentIndex < 0)
             return;
         var row = content.view.itemAtIndex(content.currentIndex);
-        var actions = root.hasSelection
-            ? verbs.forSelection("song", content.selectionIds("songId"),
-                content.selectionStarred("songId"))
-            : (songs.get(content.currentIndex) ? verbs.song(songs.get(content.currentIndex)) : null);
+        var actions = root.hasSelection ? verbs.forSelection("song", content.selectionIds("songId"), content.selectionStarred("songId")) : (songs.get(content.currentIndex) ? verbs.song(songs.get(content.currentIndex)) : null);
         if (!actions)
             return;
         // ARC-I-4: the heart tracks the verb immediately (see `MediaList`).
         if (actions.south && actions.south.invoke) {
             var want = actions.south.favorite === true;
             var star = actions.south.invoke;
-            actions.south.invoke = function() {
+            actions.south.invoke = function () {
                 star();
                 content.markStarred(want);
             };
@@ -290,20 +287,26 @@ Rectangle {
     // playing track while this album is the one playing.
     Connections {
         target: content
-        function onCurrentIndexChanged() { root.requestMarkWindow(); }
-        function onFirstVisibleIndexChanged() { root.requestMarkWindow(); }
-        function onLastVisibleIndexChanged() { root.requestMarkWindow(); }
+        function onCurrentIndexChanged() {
+            root.requestMarkWindow();
+        }
+        function onFirstVisibleIndexChanged() {
+            root.requestMarkWindow();
+        }
+        function onLastVisibleIndexChanged() {
+            root.requestMarkWindow();
+        }
     }
     Connections {
         target: Backend
-        function onCurrent_song_id_changed() { root.followCurrentTrack(true); }
+        function onCurrent_song_id_changed() {
+            root.followCurrentTrack(true);
+        }
     }
 
     /// ARC-UI-2 M1: the search contract (see `ScrollContent`).
     property alias searchQuery: content.searchQuery
     property alias searchCurrentRow: content.searchCurrentRow
-
-
 
     function searchRows() {
         return content.searchRows();
@@ -321,7 +324,7 @@ Rectangle {
             var state = root.onCover ? 1 : (root.onNotes ? 2 : (root.onToolbar ? 3 : 0));
             do {
                 state = (state + (action === "pane_cycle" ? 1 : 3)) % 4;
-            } while (state === 2 && root.albumNotes.length === 0);
+            } while (state === 2 && root.albumNotes.length === 0)
             root.onCover = state === 1;
             root.onNotes = state === 2;
             root.onToolbar = state === 3;
@@ -346,8 +349,7 @@ Rectangle {
         }
         if (action === "page_up" || action === "page_down") {
             if (root.onNotes && root.notesExpanded) {
-                root.scrollNotes(action === "page_up"
-                    ? -notesView.height * 0.9 : notesView.height * 0.9);
+                root.scrollNotes(action === "page_up" ? -notesView.height * 0.9 : notesView.height * 0.9);
                 return;
             }
             if (songs.count === 0)
@@ -462,16 +464,12 @@ Rectangle {
         }
     }
 
-    // Ambience (D-5): the album art itself through the shared
-    // `CoverImage.ambient` mode — the GPU layer blurs and desaturates it, then
-    // the gradient below washes it into the theme surface. This is the one
-    // non-modal blur: content-derived ambience, never elevation (R2 amended).
+    // Ambience (D-5): the album art itself, painted sharp, then washed into the
+    // theme surface by the gradient below.
     CoverImage {
         id: coverBackdrop
         anchors.fill: parent
         source: root.albumCover
-        ambient: true
-        ambientBlur: false
     }
 
     Rectangle {
@@ -521,7 +519,8 @@ Rectangle {
         ColumnLayout {
             id: header
             Layout.fillWidth: true
-            Layout.bottomMargin: root.height * 0.006
+            // Controls header margin
+            Layout.bottomMargin: root.height * 0.25
             spacing: root.height * 0.008
 
             // Description.
@@ -564,7 +563,7 @@ Rectangle {
                     Layout.alignment: Qt.AlignLeft
                     unit: root.starUnit
                     rating: root.albumRating
-                    onPicked: (level) => {
+                    onPicked: level => {
                         root.albumRating = level;
                         Backend.rateAlbum(root.albumId, level);
                     }
@@ -612,9 +611,7 @@ Rectangle {
                     id: notesBox
                     Layout.fillWidth: true
                     Layout.topMargin: root.height * 0.008
-                    Layout.preferredHeight: root.notesExpanded
-                        ? Math.min(notesText.implicitHeight, root.height * 0.30)
-                        : notesText.implicitHeight
+                    Layout.preferredHeight: root.notesExpanded ? Math.min(notesText.implicitHeight, root.height * 0.30) : notesText.implicitHeight
                     visible: root.albumNotes.length > 0
                     clip: true
 
@@ -713,8 +710,8 @@ Rectangle {
 
             rowDelegate: Component {
                 Rectangle {
-                    radius: Theme.radius
                     id: songRow
+                    radius: Theme.radius
                     required property int index
                     required property string track
                     required property string title
@@ -725,17 +722,12 @@ Rectangle {
 
                     // VI-4: a row inside the visual selection wears the cursor fill.
                     readonly property bool selectedRow: content.selected(index)
-                    readonly property bool emphasized: ListView.isCurrentItem
-                        || rowHover.hovered
+                    readonly property bool emphasized: ListView.isCurrentItem || rowHover.hovered
 
                     width: ListView.view ? ListView.view.width : 0
                     // UI-58: the model's page-relative adaptive row.
                     height: content.adaptiveRowHeight
-                    color: ((ListView.isCurrentItem && !root.onToolbar) || songRow.selectedRow)
-                        ? Palette.secondaryContainer
-                        : (rowHover.hovered
-                            ? Palette.surfaceContainerHigh
-                            : (index % 2 === 0 ? Palette.surface : Palette.surfaceContainerLowest))
+                    color: ((ListView.isCurrentItem && !root.onToolbar) || songRow.selectedRow) ? Palette.secondaryContainer : (rowHover.hovered ? Palette.surfaceContainerHigh : (index % 2 === 0 ? Palette.surface : Palette.surfaceContainerLowest))
 
                     Behavior on color {
                         ColorAnimation {
@@ -754,9 +746,7 @@ Rectangle {
                         current: ListView.isCurrentItem && !root.onToolbar
                         showCover: false
                         showSubtitle: false
-                        title: songRow.track.length > 0
-                            ? songRow.track + ". " + songRow.title
-                            : songRow.title
+                        title: songRow.track.length > 0 ? songRow.track + ". " + songRow.title : songRow.title
                         meta: songRow.duration
                         titlePixelSize: songRow.height * 0.34
                         metaPixelSize: songRow.height * 0.30
@@ -828,5 +818,4 @@ Rectangle {
             verticalAlignment: Text.AlignVCenter
         }
     }
-
 }

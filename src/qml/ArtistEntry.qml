@@ -417,13 +417,11 @@ Rectangle {
     }
 
     // Ambience (D-5): same rule as AlbumEntry/NowPlaying — the artist art
-    // through `CoverImage.ambient`, blurred and washed into the surface by the
-    // gradient; the one non-modal blur (content ambience, never elevation).
+    // painted sharp and washed into the surface by the gradient.
     CoverImage {
         id: coverBackdrop
         anchors.fill: parent
         source: root.artistCover
-        ambient: true
     }
 
     Rectangle {

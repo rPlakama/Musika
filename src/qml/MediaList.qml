@@ -209,6 +209,16 @@ ScrollPanel {
     /// (the album library) cannot block input or the compositor.
     readonly property int fillBatch: 64
     property int _fillGeneration: 0
+    property var _fillRows: null
+    property int _fillStart: 0
+
+    Timer {
+        id: fillTimer
+        interval: 0
+        repeat: false
+        onTriggered: root._appendFill(root._fillRows, root._fillStart,
+            root._fillGeneration)
+    }
 
     function setRows(rows) {
         // VI-4: a reload invalidates the selected range.
@@ -216,6 +226,9 @@ ScrollPanel {
         mediaRows.clear();
         root.loading = true;
         root._fillGeneration++;
+        root._fillRows = rows;
+        root._fillStart = 0;
+        fillTimer.stop();
         root._appendFill(rows, 0, root._fillGeneration);
     }
 
@@ -227,11 +240,12 @@ ScrollPanel {
             mediaRows.append(rows[i]);
         root.requestMarkWindow();
         if (end < rows.length) {
-            Qt.callLater(function() {
-                root._appendFill(rows, end, generation);
-            });
+            root._fillRows = rows;
+            root._fillStart = end;
+            fillTimer.restart();
             return;
         }
+        root._fillRows = null;
         root.loading = false;
         // UI-10: a filter/order swap lands on row 0 with the top pinned —
         // the old cursor/offset point at different rows now, so the restore

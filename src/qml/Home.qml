@@ -532,17 +532,18 @@ Item {
             }
             return;
         }
-        // Ctrl-Q toggles the queue in the full player from anywhere.
+        // Ctrl-Q toggles the queue drawer from anywhere: enter the player if
+        // needed, then slide the queue in or out.
         if (action === "queue_toggle") {
-            if (nowPlayingExpanded && nowPlaying && nowPlaying.pane === 2) {
-                nowPlayingExpanded = false;
-                return;
+            if (!nowPlayingExpanded) {
+                nowPlayingExpanded = true;
+                if (nowPlaying)
+                    nowPlaying.openQueue();
+                else
+                    nowPlayingLoader.openQueue = true;
+            } else if (nowPlaying) {
+                nowPlaying.toggleQueue();
             }
-            nowPlayingExpanded = true;
-            if (nowPlaying)
-                nowPlaying.pane = 2;
-            else
-                nowPlayingLoader.openQueue = true;
             return;
         }
 
@@ -551,7 +552,7 @@ Item {
         // its own (modal routing above).
         if (action === "visual" || action === "visual_all") {
             if (nowPlayingExpanded) {
-                if (nowPlaying) {
+                if (nowPlaying && nowPlaying.queueOpen) {
                     if (action === "visual")
                         nowPlaying.toggleSelection();
                     else
@@ -612,9 +613,13 @@ Item {
         }
 
         if (action === "back") {
-            // Fullscreen is the topmost context: the first Esc ends a queue
-            // selection, the next leaves the player.
+            // Fullscreen is the topmost context: Esc first closes the queue
+            // drawer, then ends a queue selection, then leaves the player.
             if (nowPlayingExpanded) {
+                if (nowPlaying && nowPlaying.queueOpen) {
+                    nowPlaying.closeQueue();
+                    return;
+                }
                 if (nowPlaying && nowPlaying.hasSelection) {
                     nowPlaying.clearSelection();
                     return;
@@ -988,7 +993,7 @@ Item {
         active: root.nowPlayingExpanded || opacity > 0
         opacity: root.nowPlayingExpanded ? 1 : 0
         visible: opacity > 0
-        // Ctrl-Q asks a freshly created player to open on the queue pane.
+        // Ctrl-Q asks a freshly created player to open the queue drawer.
         property bool openQueue: false
 
         sourceComponent: Component {
@@ -1003,7 +1008,7 @@ Item {
             if (openQueue) {
                 openQueue = false;
                 if (item)
-                    item.pane = 2;
+                    item.openQueue();
             }
         }
 

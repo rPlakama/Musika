@@ -22,11 +22,12 @@ import "ScrollMemory.js" as Memory
 import "Theme.js" as Theme
 
 // Fullscreen player ("mainscreen"):
-//   header — cover on the left 50%, identity/seek/transport on the right;
-//            the star rating always sits directly under the cover;
-//   body   — Lyrics and Queue side by side at full body height (Queue takes
-//            the whole width when the track has no lyrics);
-//   footer — context-aware keybar for the focused pane.
+//   body   — lyrics own the space above the header;
+//   header — identity/seek/transport anchored left, above the key hints;
+//            the album name is the action surface and the star rating sits
+//            directly under it;
+//   footer — context-aware keybar for the focused pane;
+//   drawer — Ctrl-Q slides the play queue in from the right.
 // Esc (or q) leaves fullscreen; Space stays the global play/pause.
 Rectangle {
     id: root
@@ -43,21 +44,17 @@ Rectangle {
     // UI-57: the track title ramps with the window width like the list
     // headers do (ScrollPanel), toward the headline floor — never below it.
     readonly property real widthScale: Theme.widthScale(root.width)
-    /// Star hitbox side under the playing cover (five slots total).
+    /// Star hitbox side under the album name (five slots total).
     readonly property real starUnit: Math.max(14, Math.min(30, root.height * 0.045))
     readonly property real trackTitlePixelSize: {
         var full = Theme.fontSize("headline", root.height);
         return Theme.clamp(full * root.widthScale, 18, full);
     }
-    // The header owns the cover on the left and the controls on the right;
-    // its height is computed first, then the cover is sized to fit inside.
-    readonly property real headerHeight: Theme.clamp(root.height * 0.38, root.height * 0.32, root.height * 0.40)
-    readonly property real headerPad: root.height * 0.012
-    readonly property real coverSide: Math.max(96, Math.min(root.headerHeight - root.starUnit - 2 * root.headerPad, root.width * 0.5 - 2 * root.headerPad, root.height * 0.36, 480))
-
-    // Keyboard pane: 1 = lyrics, 2 = queue, 3 = album cover actions.
+    // Keyboard pane: 1 = lyrics, 3 = album actions. The queue is a drawer.
     // Transport is never a pane.
     property int pane: 1
+    // Ctrl-Q slides the queue in over the player.
+    property bool queueOpen: false
     property bool albumStarred: false
     // UI-60: the playing album's user rating (0..=5, 0 = unrated).
     property int albumRating: 0
@@ -165,11 +162,13 @@ Rectangle {
     }
 
     function keyHints() {
+        if (root.queueOpen)
+            return "j/k select   ·   Shift-J/K move   ·   Enter jump   ·   J/K reorder   ·   dd remove   ·   Ctrl-Q close";
         if (pane === 1)
-            return "j/k scroll   ·   ,/. seek   ·   Ctrl-N/P track   ·   Tab queue   ·   Esc/Q exit";
+            return "j/k scroll   ·   ,/. seek   ·   Ctrl-N/P track   ·   Tab album   ·   Esc/Q exit";
         if (pane === 3)
-            return "Enter cover actions   ·   Tab " + (lyricsVisible ? "lyrics" : "queue") + "   ·   Esc exit";
-        return "j/k select   ·   Shift-J/K move   ·   Enter jump   ·   ,/. seek   ·   Ctrl-N/P track   ·   Tab cover   ·   Esc exit";
+            return "Enter album actions" + (lyricsVisible ? "   ·   Tab lyrics" : "") + "   ·   Esc exit";
+        return "j/k scroll   ·   ,/. seek   ·   Ctrl-N/P track   ·   Tab album   ·   Esc/Q exit";
     }
 
     /// The keybar's album-scope state (favourite + container download) for
@@ -189,7 +188,7 @@ Rectangle {
         };
     }
 
-    /// The big cover owns the album verbs (favourite + count + download).
+    /// The album name owns the album verbs (favourite + count + download).
     function coverActions() {
         return verbs.album(root.albumItem(), root.albumCacheOn, function (level) {
             root.albumRating = level;
@@ -336,8 +335,35 @@ Rectangle {
         queueContent.clearSelection();
     }
 
+    /// Ctrl-Q: slide the queue drawer in on the playing track (or the
+    /// remembered highlight) and keep it live while it is closed.
+    function openQueue() {
+        root.queueOpen = true;
+        root._recallQueue = true;
+        if (queueItems.count === 0)
+            Backend.requestQueue();
+        else
+            root.recallQueueCursor();
+        Backend.releaseFocus();
+    }
+
+    function closeQueue() {
+        if (queueItems.count > 0)
+            queueContent.remember();
+        queueContent.clearSelection();
+        root.queueOpen = false;
+        Backend.releaseFocus();
+    }
+
+    function toggleQueue() {
+        if (root.queueOpen)
+            root.closeQueue();
+        else
+            root.openQueue();
+    }
+
     /// ARC-UI-2 M1: the search contract (see `ScrollContent`) — the
-    /// fullscreen surface is its queue pane, so a jump focuses it and the
+    /// fullscreen surface is its queue drawer, so a jump focuses it and the
     /// context-Enter that follows lands on the matched row.
     property alias searchQuery: queueContent.searchQuery
     property alias searchCurrentRow: queueContent.searchCurrentRow
@@ -347,7 +373,7 @@ Rectangle {
     }
 
     function searchJump(row) {
-        pane = 2;
+        root.openQueue();
         queueContent.searchJump(row);
         queueCursor = queueContent.currentIndex;
     }
@@ -483,47 +509,46 @@ Rectangle {
     // When a fetch settles with no lyrics, pane 1 no longer exists.
     onLyricsVisibleChanged: {
         if (!root.lyricsVisible && root.pane === 1)
-            root.pane = 2;
+            root.pane = 3;
     }
 
     // LYR-8: re-arm the idle window when pane focus moves (5 s vs 2 s).
     onPaneChanged: if (root._lyricsHeld)
         root.holdLyrics()
 
-    /// ARC-UI-1: Alt armed the gesture — anchor on the queue row under the
-    /// cursor; the fullscreen queue reuses the shared track verb set.
+    /// ARC-UI-1: Alt armed the gesture — the open queue drawer anchors on the
+    /// row under the cursor; otherwise the album name owns the album verbs.
     function armQuickActions() {
-        // UI-60: with the cover pane focused, Alt anchors on the big album
-        // cover (the keybar chips are gone); its album verbs carry the
-        // favourite + count + download.
-        if (root.pane === 3) {
-            if (Backend.currentAlbumId.length > 0)
-                root.quickAction(coverBox, root.coverActions());
+        if (root.queueOpen) {
+            if (queueItems.count === 0 || queueContent.currentIndex < 0)
+                return;
+            var item = queueItems.get(queueContent.currentIndex);
+            var row = queueContent.view.itemAtIndex(queueContent.currentIndex);
+            var actions = root.hasSelection ? verbs.forSelection("song", queueContent.selectionIds("songId"), queueContent.selectionStarred("songId")) : (item ? verbs.song(item) : null);
+            if (!actions)
+                return;
+            // ARC-I-4: the heart tracks the verb immediately (see `MediaList`).
+            if (actions.south && actions.south.invoke) {
+                var want = actions.south.favorite === true;
+                var star = actions.south.invoke;
+                actions.south.invoke = function () {
+                    star();
+                    queueContent.markStarred(want);
+                };
+            }
+            if (row)
+                quickAction(row, actions);
             return;
         }
-        if (queueItems.count === 0 || queueContent.currentIndex < 0)
-            return;
-        var item = queueItems.get(queueContent.currentIndex);
-        var row = queueContent.view.itemAtIndex(queueContent.currentIndex);
-        var actions = root.hasSelection ? verbs.forSelection("song", queueContent.selectionIds("songId"), queueContent.selectionStarred("songId")) : (item ? verbs.song(item) : null);
-        if (!actions)
-            return;
-        // ARC-I-4: the heart tracks the verb immediately (see `MediaList`).
-        if (actions.south && actions.south.invoke) {
-            var want = actions.south.favorite === true;
-            var star = actions.south.invoke;
-            actions.south.invoke = function () {
-                star();
-                queueContent.markStarred(want);
-            };
-        }
-        if (row)
-            quickAction(row, actions);
+        // UI-60: with the album pane focused, Alt anchors on the album name;
+        // its verbs carry the favourite + count + download.
+        if (root.pane === 3 && Backend.currentAlbumId.length > 0)
+            root.quickAction(albumTitleBox, root.coverActions());
     }
 
     /// Tab walks the surfaces that exist: lyrics is skipped while hidden.
     function cyclePane(forward) {
-        var order = root.lyricsVisible ? [1, 2, 3] : [2, 3];
+        var order = root.lyricsVisible ? [1, 3] : [3];
         var i = order.indexOf(root.pane);
         if (i < 0)
             i = 0;
@@ -532,12 +557,8 @@ Rectangle {
         root.pane = order[i];
     }
 
-    // Fullscreen keys, scoped to the focused pane. Esc/back stays with Home.
+    // Fullscreen keys, scoped to the focused surface. Esc/back stays with Home.
     function handleAction(action) {
-        if (action === "pane_cycle" || action === "pane_cycle_back") {
-            root.cyclePane(action === "pane_cycle");
-            return;
-        }
         if (action === "next_track") {
             Backend.playerNext();
             return;
@@ -547,82 +568,91 @@ Rectangle {
             return;
         }
 
-        if (pane === 1) {
-            // VI-7: the count scales the lyric scroll.
-            var lyricSteps = Math.max(1, Backend.keyCount);
+        // The open drawer owns navigation; Tab and h/l stay inside it.
+        if (root.queueOpen) {
+            if (action === "back" || action === "queue_toggle") {
+                root.closeQueue();
+                return;
+            }
+            // VI-7: the count walks the queue cursor by that many rows.
+            var queueSteps = Math.max(1, Backend.keyCount);
+            if (action === "top" || action === "bottom") {
+                queueContent.edgeJump(action === "bottom", queueSteps);
+                queueCursor = queueContent.currentIndex;
+                return;
+            }
             if (action === "move_up")
-                scrollLyrics(-lyricsView.height * 0.3 * lyricSteps);
+                moveQueueCursor(-queueSteps);
             else if (action === "move_down")
-                scrollLyrics(lyricsView.height * 0.3 * lyricSteps);
-            else if (action === "page_up")
-                scrollLyrics(-lyricsView.height * 0.5);
-            else if (action === "page_down")
-                scrollLyrics(lyricsView.height * 0.5);
-            else if (action === "move_left" || action === "move_right")
-                pane = 2;
-            return;
-        }
-
-        if (pane === 3) {
-            // The big cover is the action surface: Enter arms its album
-            // verbs (favourite, count, download) as a sticky menu.
-            if (action === "enter" && Backend.currentAlbumId.length > 0) {
-                var coverMenu = root.coverActions();
-                coverMenu.sticky = true;
-                root.quickAction(coverBox, coverMenu);
+                moveQueueCursor(queueSteps);
+            else if (action === "page_up" || action === "page_down") {
+                queueContent.pageJump(action === "page_down");
+                queueCursor = queueContent.currentIndex;
+            } else if (action.indexOf("extend_") === 0) {
+                queueContent.extendSelection("move_" + action.substring(7));
+                queueCursor = queueContent.currentIndex;
+            } else if (action === "queue_up" && queueContent.allows("reorder") && queueCursor > 0) {
+                root._reordering = true;
+                // VI-4: a reorder shifts every anchored row; the range dies.
+                queueContent.clearSelection();
+                Backend.queueMove(queueCursor, queueCursor - 1);
+                queueCursor -= 1;
+                queueContent.currentIndex = queueCursor;
+            } else if (action === "queue_down" && queueContent.allows("reorder") && queueCursor < queueItems.count - 1) {
+                root._reordering = true;
+                queueContent.clearSelection();
+                Backend.queueMove(queueCursor, queueCursor + 1);
+                queueCursor += 1;
+                queueContent.currentIndex = queueCursor;
+            } else if (action === "queue_remove" && queueContent.allows("remove") && queueCursor >= 0) {
+                root.removeQueueRow(queueCursor);
+            } else if (action === "enter") {
+                // VI-4: jumping to a track ends the visual selection.
+                queueContent.clearSelection();
+                if (queueCursor >= 0)
+                    Backend.queueJump(queueCursor);
             }
             return;
         }
 
-        // VI-7: the count walks the queue cursor by that many rows.
-        var queueSteps = Math.max(1, Backend.keyCount);
-        if (action === "top" || action === "bottom") {
-            queueContent.edgeJump(action === "bottom", queueSteps);
-            queueCursor = queueContent.currentIndex;
+        if (action === "pane_cycle" || action === "pane_cycle_back") {
+            root.cyclePane(action === "pane_cycle");
             return;
         }
+
+        if (pane === 3) {
+            // The album name is the action surface: Enter arms its album
+            // verbs (favourite, count, download) as a sticky menu.
+            if (action === "enter" && Backend.currentAlbumId.length > 0) {
+                var coverMenu = root.coverActions();
+                coverMenu.sticky = true;
+                root.quickAction(albumTitleBox, coverMenu);
+            } else if ((action === "move_left" || action === "move_right") && root.lyricsVisible) {
+                root.pane = 1;
+            }
+            return;
+        }
+
+        // VI-7: the count scales the lyric scroll.
+        var lyricSteps = Math.max(1, Backend.keyCount);
         if (action === "move_up")
-            moveQueueCursor(-queueSteps);
+            scrollLyrics(-lyricsView.height * 0.3 * lyricSteps);
         else if (action === "move_down")
-            moveQueueCursor(queueSteps);
-        else if (action === "page_up" || action === "page_down") {
-            queueContent.pageJump(action === "page_down");
-            queueCursor = queueContent.currentIndex;
-        } else if (action.indexOf("extend_") === 0) {
-            queueContent.extendSelection("move_" + action.substring(7));
-            queueCursor = queueContent.currentIndex;
-        } else if (action === "queue_up" && queueContent.allows("reorder") && queueCursor > 0) {
-            root._reordering = true;
-            // VI-4: a reorder shifts every anchored row; the range dies.
-            queueContent.clearSelection();
-            Backend.queueMove(queueCursor, queueCursor - 1);
-            queueCursor -= 1;
-            queueContent.currentIndex = queueCursor;
-            return;
-        } else if (action === "queue_down" && queueContent.allows("reorder") && queueCursor < queueItems.count - 1) {
-            root._reordering = true;
-            queueContent.clearSelection();
-            Backend.queueMove(queueCursor, queueCursor + 1);
-            queueCursor += 1;
-            queueContent.currentIndex = queueCursor;
-            return;
-        } else if (action === "queue_remove" && queueContent.allows("remove") && queueCursor >= 0) {
-            root.removeQueueRow(queueCursor);
-        } else if (action === "enter") {
-            // VI-4: jumping to a track ends the visual selection.
-            queueContent.clearSelection();
-            if (queueCursor >= 0)
-                Backend.queueJump(queueCursor);
-        } else if (action === "move_left" || action === "move_right")
-            pane = 1;
+            scrollLyrics(lyricsView.height * 0.3 * lyricSteps);
+        else if (action === "page_up")
+            scrollLyrics(-lyricsView.height * 0.5);
+        else if (action === "page_down")
+            scrollLyrics(lyricsView.height * 0.5);
+        else if (action === "move_left" || action === "move_right")
+            root.pane = 3;
     }
 
     onVisibleChanged: {
         if (visible) {
-            // UI-54: re-entering restores the last fullscreen scope (pane) and
-            // queue highlight; the first queue payload lands them.
+            // UI-54: re-entering restores the last fullscreen scope (pane).
+            // Scope 2 was the queue pane before it became a drawer.
             var saved = Memory.loadScroll("fullscreen");
-            pane = saved && saved.scope >= 1 ? saved.scope : 1;
+            pane = saved && (saved.scope === 1 || saved.scope === 3) ? saved.scope : 1;
             root._recallQueue = true;
             // Queue and lyrics stay alive while the player is closed: the
             // queue model (fed by the hidden payloads) only needs the first
@@ -640,13 +670,15 @@ Rectangle {
                 Backend.requestLyrics();
             }
             if (root.pane === 1 && !root.lyricsVisible)
-                root.pane = 2;
+                root.pane = 3;
             // The keybar's album actions reconcile on entry too.
             root.requestAlbumActions();
             // The row download marks read only the visible window.
             root.requestMarkWindow();
         } else if (queueItems.count > 0) {
-            queueContent.remember(pane);
+            if (root.queueOpen)
+                root.closeQueue();
+            queueContent.remember();
             // VI-4: leaving fullscreen ends the queue selection.
             queueContent.clearSelection();
         }
@@ -744,8 +776,8 @@ Rectangle {
 
     // D-5 ambience: the playing cover through the shared `CoverImage.ambient`
     // mode (blurred and washed into the theme background, same rule as
-    // AlbumEntry), so the square floats on its own colours without competing
-    // with the lyrics/queue panes. Hidden without art; the panes stay opaque.
+    // AlbumEntry), so the lyrics and the queue drawer float on their own
+    // colours. Hidden without art; the surfaces stay opaque.
     // UI-55: one item for cover + wash, so the panes' acrylic samples exactly
     // what is painted behind them.
     Item {
@@ -780,96 +812,24 @@ Rectangle {
         }
     }
 
-    ColumnLayout {
+    Item {
         anchors.fill: parent
         anchors.margins: root.width * 0.025
-        spacing: root.height * 0.018
 
-        // Header: cover on the left 50%, identity and controls on the right.
+        // Header: identity, controls and transport anchored to the left,
+        // sitting just above the key hints.
         RowLayout {
             id: header
-            Layout.fillWidth: true
-            Layout.fillHeight: false
-            Layout.preferredHeight: root.headerHeight
-            Layout.minimumHeight: root.headerHeight
-            Layout.maximumHeight: root.headerHeight
+            anchors.left: parent.left
+            anchors.right: parent.right
+            anchors.bottom: keybar.top
+            anchors.bottomMargin: root.height * 0.018
             spacing: root.width * 0.012
 
-            // ---- Cover half: the square and its rating, always together ----
-            Item {
-                id: coverHalf
-                Layout.preferredWidth: header.width * 0.5
-                Layout.fillHeight: true
-
-                Column {
-                    anchors.centerIn: parent
-                    spacing: root.height * 0.008
-
-                    Rectangle {
-                        id: coverBox
-                        readonly property real side: root.coverSide
-                        anchors.horizontalCenter: parent.horizontalCenter
-                        width: side
-                        height: side
-                        radius: Theme.radius
-                        color: Palette.primaryContainer
-                        clip: true
-
-                        CoverImage {
-                            anchors.fill: parent
-                            source: Backend.currentCoverUrl
-                        }
-
-                        FadeText {
-                            anchors.centerIn: parent
-                            text: "MUSIKA"
-                            color: Palette.onPrimaryContainer
-                            font.family: Theme.fonts.wordmark
-                            font.pixelSize: Theme.fontSize("title", root.height)
-                            font.letterSpacing: root.height * 0.006
-                            visible: Backend.currentCoverUrl.length === 0
-                        }
-
-                        // UI-60: the cover is the album action surface.
-                        ScopeRing {
-                            shown: root.pane === 3
-                        }
-
-                        HoverHandler {
-                            cursorShape: Qt.PointingHandCursor
-                        }
-
-                        TapHandler {
-                            onTapped: {
-                                root.pane = 3;
-                                if (Backend.currentAlbumId.length === 0)
-                                    return;
-                                var menu = root.coverActions();
-                                menu.sticky = true;
-                                root.quickAction(coverBox, menu);
-                            }
-                        }
-                    }
-
-                    StarRating {
-                        anchors.horizontalCenter: parent.horizontalCenter
-                        unit: root.starUnit
-                        rating: root.albumRating
-                        onPicked: level => {
-                            root.albumRating = level;
-                            if (Backend.currentAlbumId.length > 0)
-                                Backend.rateAlbum(Backend.currentAlbumId, level);
-                        }
-                    }
-                }
-            }
-
-            // ---- Info half: identity, seek and transport ----
             ColumnLayout {
                 id: infoHalf
-                Layout.preferredWidth: header.width * 0.5
-                Layout.fillHeight: false
-                Layout.alignment: Qt.AlignVCenter
+                Layout.fillWidth: true
+                Layout.alignment: Qt.AlignLeft | Qt.AlignVCenter
                 spacing: root.height * 0.008
 
                 RowLayout {
@@ -895,13 +855,47 @@ Rectangle {
                     visible: text.length > 0
                 }
 
+                // UI-60: the album name is the album action surface now that
+                // the hero cover is gone; the rating sits directly under it.
                 FadeText {
+                    id: albumTitleBox
                     Layout.fillWidth: true
                     text: Backend.currentAlbum
                     color: Palette.onSurfaceVariant
                     font.pixelSize: Theme.fontSize("body", root.height)
                     elide: Text.ElideRight
                     visible: text.length > 0
+
+                    ScopeRing {
+                        anchors.fill: parent
+                        shown: root.pane === 3
+                    }
+
+                    HoverHandler {
+                        cursorShape: Qt.PointingHandCursor
+                    }
+
+                    TapHandler {
+                        onTapped: {
+                            root.pane = 3;
+                            if (Backend.currentAlbumId.length === 0)
+                                return;
+                            var menu = root.coverActions();
+                            menu.sticky = true;
+                            root.quickAction(albumTitleBox, menu);
+                        }
+                    }
+                }
+
+                StarRating {
+                    Layout.alignment: Qt.AlignLeft
+                    unit: root.starUnit
+                    rating: root.albumRating
+                    onPicked: level => {
+                        root.albumRating = level;
+                        if (Backend.currentAlbumId.length > 0)
+                            Backend.rateAlbum(Backend.currentAlbumId, level);
+                    }
                 }
 
                 // Seek row: elapsed, bar, duration. The row fills whatever
@@ -1091,11 +1085,15 @@ Rectangle {
             }
         }
 
-        // Body: Lyrics and Queue side by side, each at full body height.
+        // Body: the lyrics own the space above the header now that the queue
+        // is a slide-in drawer.
         RowLayout {
             id: body
-            Layout.fillWidth: true
-            Layout.fillHeight: true
+            anchors.left: parent.left
+            anchors.right: parent.right
+            anchors.top: parent.top
+            anchors.bottom: header.top
+            anchors.bottomMargin: root.height * 0.018
             spacing: root.width * 0.012
 
             AcrylicPanel {
@@ -1322,218 +1320,14 @@ Rectangle {
                 }
             }
 
-            AcrylicPanel {
-                id: queuePane
-                Layout.fillWidth: true
-                Layout.fillHeight: true
-                Layout.preferredWidth: body.width * 0.5
-                tint: Palette.surfaceContainerLow
-                backdrop: coverBackdrop.visible ? ambience : null
-                radius: Theme.radius
-                border.width: root.pane === 2 ? Math.max(1, root.width * Theme.hairlineRatio) : 0
-                border.color: Palette.primary
-                clip: true
-
-                TapHandler {
-                    onTapped: root.pane = 2
-                }
-
-                ColumnLayout {
-                    anchors.fill: parent
-                    anchors.margins: root.width * 0.012
-                    spacing: root.height * 0.006
-
-                    RowLayout {
-                        Layout.fillWidth: true
-
-                        FadeText {
-                            text: "Queue"
-                            color: root.pane === 2 ? Palette.primary : Palette.onSurfaceVariant
-                            font.pixelSize: Theme.fontSize("title", root.height)
-                            font.bold: true
-                        }
-
-                        Item {
-                            Layout.fillWidth: true
-                        }
-
-                        // VI-4: the selection count while a range is up.
-                        SelectionBadge {
-                            Layout.alignment: Qt.AlignVCenter
-                            count: root.selectionCount
-                            pixelSize: Theme.fontSize("label", root.height)
-                        }
-
-                        FadeText {
-                            text: Backend.queueLength > 0 ? (Backend.queueIndex + 1) + " / " + Backend.queueLength : ""
-                            color: Palette.onSurfaceVariant
-                            font.pixelSize: Theme.fontSize("label", root.height)
-                        }
-                    }
-
-                    Rectangle {
-                        radius: Theme.radius
-                        Layout.fillWidth: true
-                        Layout.preferredHeight: Math.max(1, root.height * Theme.hairlineRatio)
-                        color: root.pane === 2 ? Palette.primary : Palette.outlineVariant
-                    }
-
-                    Item {
-                        Layout.fillWidth: true
-                        Layout.fillHeight: true
-
-                        // UI-48: the shared scroll body carries the
-                        // overflow stage — the highlight bleeds into the
-                        // gutters while rows still clip vertically at the
-                        // list bounds.
-                        ScrollContent {
-                            id: queueContent
-                            anchors.fill: parent
-                            context: "queue"
-                            // The body pane is far taller than the old bottom
-                            // slot; pin the row unit to a window-stable
-                            // reference instead of the pane height.
-                            rowRefHeight: root.height * 0.45
-                            model: queueItems
-                            selectable: true
-                            memoryKey: "fullscreen"
-                            // ARC-UI-2 M1: the queue rows paint title
-                            // and duration.
-                            searchFields: ["title", "duration"]
-                            // The fullscreen memory also stores the focused
-                            // pane; without this the continuous remembers
-                            // clobbered it to the default scope.
-                            memoryScope: root.pane
-                            visible: queueItems.count > 0
-
-                            Behavior on opacity {
-                                NumberAnimation {
-                                    duration: Theme.motion.quick
-                                    easing.type: Easing.Bezier
-                                    easing.bezierCurve: Theme.ease.standard
-                                }
-                            }
-
-                            rowDelegate: Component {
-                                Rectangle {
-                                    id: row
-                                    radius: Theme.radius
-                                    required property int index
-                                    required property string title
-                                    required property string duration
-                                    required property string songId
-                                    required property bool starred
-
-                                    readonly property bool emphasized: index === root.queueCursor || rowHover.hovered
-
-                                    width: ListView.view.width
-                                    // UI-58: adaptive — stops shrinking at
-                                    // the 18% floor, never jumps a row.
-                                    height: queueContent.adaptiveRowHeight
-                                    // Playing-track tint stays on the row; the
-                                    // cursor/hover block is the shared UI-48 layer.
-                                    color: index === root.queueIndex ? Palette.surfaceContainer : "transparent"
-                                    property bool removing: false
-                                    opacity: removing ? 0 : 1
-
-                                    Behavior on opacity {
-                                        NumberAnimation {
-                                            duration: Theme.reduceMotion ? 0 : Theme.motion.standard * 1.3
-                                            easing.type: Easing.Bezier
-                                            easing.bezierCurve: Theme.ease.standard
-                                        }
-                                    }
-
-                                    transform: Translate {
-                                        x: row.removing ? -row.width : 0
-
-                                        Behavior on x {
-                                            NumberAnimation {
-                                                duration: Theme.reduceMotion ? 0 : Theme.motion.standard * 1.3
-                                                easing.type: Easing.Bezier
-                                                easing.bezierCurve: Theme.ease.standard
-                                            }
-                                        }
-                                    }
-
-                                    RowHighlight {
-                                        current: index === root.queueCursor
-                                        hovered: rowHover.hovered
-                                        selected: queueContent.selected(index)
-                                        overflow: queueContent.bleed
-                                    }
-
-                                    RowBody {
-                                        anchors.fill: parent
-                                        viewWidth: row.width
-                                        rowHeight: row.height
-                                        emphasized: row.emphasized
-                                        current: index === root.queueCursor
-                                        showCover: false
-                                        showSubtitle: false
-                                        title: row.title
-                                        meta: row.duration
-                                        titlePixelSize: Theme.fontSize("body", root.height)
-                                        titleColor: index === root.queueCursor ? Palette.onSecondaryContainer : Palette.onSurface
-                                        metaPixelSize: Theme.fontSize("mono", root.height)
-                                        reserveMeta: true
-                                        metaAlignRight: true
-                                        leftMargin: row.width * 0.01
-                                        textGap: row.width * 0.01
-                                        rightMargin: 0
-                                        marksMargin: row.width * 0.00935
-                                        markCursor: root.queueCursor
-                                        visibleStart: queueContent.firstVisibleIndex
-                                        visibleEnd: queueContent.lastVisibleIndex
-                                        markIndex: row.index
-                                        markSongId: row.songId
-                                        markStarred: row.starred
-                                        searchQuery: queueContent.searchQuery
-                                        searchCurrent: index === queueContent.searchCurrentRow
-                                    }
-
-                                    HoverHandler {
-                                        id: rowHover
-                                        cursorShape: Qt.PointingHandCursor
-                                    }
-
-                                    TapHandler {
-                                        acceptedModifiers: Qt.ShiftModifier
-                                        onTapped: {
-                                            queueContent.extendSelectionTo(row.index);
-                                            root.queueCursor = queueContent.currentIndex;
-                                        }
-                                    }
-                                    TapHandler {
-                                        acceptedModifiers: Qt.NoModifier
-                                        onTapped: {
-                                            root.queueCursor = row.index;
-                                            Backend.queueJump(row.index);
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-
-                    FadeText {
-                        Layout.fillWidth: true
-                        Layout.fillHeight: true
-                        visible: queueItems.count === 0
-                        text: "Queue is empty"
-                        color: Palette.onSurfaceVariant
-                        font.pixelSize: Theme.fontSize("label", root.height)
-                        horizontalAlignment: Text.AlignHCenter
-                        verticalAlignment: Text.AlignVCenter
-                    }
-                }
-            }
         }
 
         Rectangle {
             id: keybar
-            Layout.fillWidth: true
-            Layout.preferredHeight: root.height * 0.055
+            anchors.left: parent.left
+            anchors.right: parent.right
+            anchors.bottom: parent.bottom
+            height: root.height * 0.055
             color: Palette.surfaceContainer
             radius: Theme.radius
 
@@ -1552,6 +1346,236 @@ Rectangle {
                     elide: Text.ElideRight
                     animated: false
                 }
+            }
+        }
+    }
+
+    // Queue drawer (Ctrl-Q): the play queue slides in from the right, like the
+    // old separate drawer, instead of holding a permanent body pane.
+    Rectangle {
+        id: queueScrim
+        anchors.fill: parent
+        color: Palette.scrim
+        opacity: root.queueOpen ? Theme.scrimOpacity : 0
+        visible: opacity > 0
+        z: 18
+
+        Behavior on opacity {
+            NumberAnimation {
+                duration: Theme.motion.standard
+                easing.type: Easing.Bezier
+                easing.bezierCurve: Theme.ease.standard
+            }
+        }
+
+        TapHandler {
+            enabled: root.queueOpen
+            onTapped: root.closeQueue()
+        }
+    }
+
+    AcrylicPanel {
+        id: queueDrawer
+        anchors.top: parent.top
+        anchors.bottom: parent.bottom
+        width: root.width * 0.36
+        tint: Palette.surfaceContainerHigh
+        backdrop: coverBackdrop.visible ? ambience : null
+        border.color: Palette.primary
+        border.width: Math.max(1, root.width * Theme.hairlineRatio)
+        radius: Theme.radius
+        clip: true
+        visible: root.queueOpen || x < root.width
+        x: root.queueOpen ? root.width - width : root.width
+        z: 20
+
+        Behavior on x {
+            NumberAnimation {
+                duration: Theme.motion.standard
+                easing.type: Easing.Bezier
+                easing.bezierCurve: root.queueOpen ? Theme.ease.decelerate : Theme.ease.accelerate
+            }
+        }
+
+        ColumnLayout {
+            anchors.fill: parent
+            anchors.margins: root.width * 0.012
+            spacing: root.height * 0.006
+
+            RowLayout {
+                Layout.fillWidth: true
+
+                FadeText {
+                    text: "Queue"
+                    color: Palette.primary
+                    font.pixelSize: Theme.fontSize("title", root.height)
+                    font.bold: true
+                }
+
+                Item {
+                    Layout.fillWidth: true
+                }
+
+                // VI-4: the selection count while a range is up.
+                SelectionBadge {
+                    Layout.alignment: Qt.AlignVCenter
+                    count: root.selectionCount
+                    pixelSize: Theme.fontSize("label", root.height)
+                }
+
+                FadeText {
+                    text: Backend.queueLength > 0 ? (Backend.queueIndex + 1) + " / " + Backend.queueLength : ""
+                    color: Palette.onSurfaceVariant
+                    font.pixelSize: Theme.fontSize("label", root.height)
+                }
+            }
+
+            Rectangle {
+                radius: Theme.radius
+                Layout.fillWidth: true
+                Layout.preferredHeight: Math.max(1, root.height * Theme.hairlineRatio)
+                color: Palette.primary
+            }
+
+            Item {
+                Layout.fillWidth: true
+                Layout.fillHeight: true
+
+                // UI-48: the shared scroll body carries the overflow stage —
+                // the highlight bleeds into the gutters while rows still clip
+                // vertically at the list bounds.
+                ScrollContent {
+                    id: queueContent
+                    anchors.fill: parent
+                    context: "queue"
+                    rowRatio: 0.06
+                    rowRefHeight: queueDrawer.height
+                    model: queueItems
+                    selectable: true
+                    memoryKey: "queue"
+                    // ARC-UI-2 M1: the queue rows paint title and duration.
+                    searchFields: ["title", "duration"]
+                    visible: queueItems.count > 0
+
+                    Behavior on opacity {
+                        NumberAnimation {
+                            duration: Theme.motion.quick
+                            easing.type: Easing.Bezier
+                            easing.bezierCurve: Theme.ease.standard
+                        }
+                    }
+
+                    rowDelegate: Component {
+                        Rectangle {
+                            id: row
+                            radius: Theme.radius
+                            required property int index
+                            required property string title
+                            required property string duration
+                            required property string songId
+                            required property bool starred
+
+                            readonly property bool emphasized: index === root.queueCursor || rowHover.hovered
+
+                            width: ListView.view.width
+                            // UI-58: adaptive — stops shrinking at the 18%
+                            // floor, never jumps a row.
+                            height: queueContent.adaptiveRowHeight
+                            // Playing-track tint stays on the row; the
+                            // cursor/hover block is the shared UI-48 layer.
+                            color: index === root.queueIndex ? Palette.surfaceContainer : "transparent"
+                            property bool removing: false
+                            opacity: removing ? 0 : 1
+
+                            Behavior on opacity {
+                                NumberAnimation {
+                                    duration: Theme.reduceMotion ? 0 : Theme.motion.standard * 1.3
+                                    easing.type: Easing.Bezier
+                                    easing.bezierCurve: Theme.ease.standard
+                                }
+                            }
+
+                            transform: Translate {
+                                x: row.removing ? -row.width : 0
+
+                                Behavior on x {
+                                    NumberAnimation {
+                                        duration: Theme.reduceMotion ? 0 : Theme.motion.standard * 1.3
+                                        easing.type: Easing.Bezier
+                                        easing.bezierCurve: Theme.ease.standard
+                                    }
+                                }
+                            }
+
+                            RowHighlight {
+                                current: index === root.queueCursor
+                                hovered: rowHover.hovered
+                                selected: queueContent.selected(index)
+                                overflow: queueContent.bleed
+                            }
+
+                            RowBody {
+                                anchors.fill: parent
+                                viewWidth: row.width
+                                rowHeight: row.height
+                                emphasized: row.emphasized
+                                current: index === root.queueCursor
+                                showCover: false
+                                showSubtitle: false
+                                title: row.title
+                                meta: row.duration
+                                titlePixelSize: Theme.fontSize("body", root.height)
+                                titleColor: index === root.queueCursor ? Palette.onSecondaryContainer : Palette.onSurface
+                                metaPixelSize: Theme.fontSize("mono", root.height)
+                                reserveMeta: true
+                                metaAlignRight: true
+                                leftMargin: row.width * 0.01
+                                textGap: row.width * 0.01
+                                rightMargin: 0
+                                marksMargin: row.width * 0.00935
+                                markCursor: root.queueCursor
+                                visibleStart: queueContent.firstVisibleIndex
+                                visibleEnd: queueContent.lastVisibleIndex
+                                markIndex: row.index
+                                markSongId: row.songId
+                                markStarred: row.starred
+                                searchQuery: queueContent.searchQuery
+                                searchCurrent: index === queueContent.searchCurrentRow
+                            }
+
+                            HoverHandler {
+                                id: rowHover
+                                cursorShape: Qt.PointingHandCursor
+                            }
+
+                            TapHandler {
+                                acceptedModifiers: Qt.ShiftModifier
+                                onTapped: {
+                                    queueContent.extendSelectionTo(row.index);
+                                    root.queueCursor = queueContent.currentIndex;
+                                }
+                            }
+                            TapHandler {
+                                acceptedModifiers: Qt.NoModifier
+                                onTapped: {
+                                    root.queueCursor = row.index;
+                                    Backend.queueJump(row.index);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            FadeText {
+                Layout.fillWidth: true
+                Layout.fillHeight: true
+                visible: queueItems.count === 0
+                text: "Queue is empty"
+                color: Palette.onSurfaceVariant
+                font.pixelSize: Theme.fontSize("label", root.height)
+                horizontalAlignment: Text.AlignHCenter
+                verticalAlignment: Text.AlignVCenter
             }
         }
     }

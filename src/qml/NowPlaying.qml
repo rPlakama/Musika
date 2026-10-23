@@ -163,7 +163,7 @@ Rectangle {
 
     function keyHints() {
         if (root.queueOpen)
-            return "j/k select   ·   Shift-J/K move   ·   Enter jump   ·   J/K reorder   ·   dd remove   ·   Ctrl-Q close";
+            return "j/k select   ·   Ctrl-Shift-J/K move   ·   Enter jump   ·   dd remove   ·   Ctrl-Q close";
         if (pane === 1)
             return "j/k scroll   ·   ,/. seek   ·   Ctrl-N/P track   ·   Tab album   ·   Esc/Q exit";
         if (pane === 3)

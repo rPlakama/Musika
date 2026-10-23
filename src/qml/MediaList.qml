@@ -193,6 +193,7 @@ ScrollPanel {
     }
 
     model: mediaRows
+    titleHint: "(Shift-J/K) cycle filter"
     // ARC-UI-2 M1: the rows paint title, subtitle and meta; nothing else.
     searchFields: ["title", "subtitle", "meta"]
     // UI-58: the row fraction the adaptive rule preserves. Size from the

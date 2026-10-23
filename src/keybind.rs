@@ -53,6 +53,8 @@ pub enum Action {
     VolumeDown,
     OrderPrev,
     OrderNext,
+    ScopePrev,
+    ScopeNext,
     LayoutToggle,
     InsertMode,
     NextTrack,
@@ -100,6 +102,8 @@ impl Action {
             Self::VolumeDown => "volume_down",
             Self::OrderPrev => "order_prev",
             Self::OrderNext => "order_next",
+            Self::ScopePrev => "scope_prev",
+            Self::ScopeNext => "scope_next",
             Self::LayoutToggle => "layout_toggle",
             Self::InsertMode => "insert_mode",
             Self::NextTrack => "next_track",
@@ -200,8 +204,10 @@ fn defaults() -> Vec<(&'static str, Action)> {
         ("ctrl-[", Action::Back),
         ("q", Action::Back),
         ("ctrl-q", Action::QueueToggle),
-        ("shift-k", Action::QueueUp),
-        ("shift-j", Action::QueueDown),
+        ("shift-k", Action::ScopePrev),
+        ("shift-j", Action::ScopeNext),
+        ("ctrl-shift-k", Action::QueueUp),
+        ("ctrl-shift-j", Action::QueueDown),
         ("d d", Action::QueueRemove),
         // ARC-45: Vim's previous/next buffer motions over the travel log.
         ("[ b", Action::PrevPlace),
@@ -413,7 +419,11 @@ pub fn token_from_qt(key: i32, modifiers: i32) -> Option<String> {
     };
 
     let token = if modifiers & QT_CTRL != 0 {
-        format!("ctrl-{base}")
+        if modifiers & QT_SHIFT != 0 || backtab {
+            format!("ctrl-shift-{base}")
+        } else {
+            format!("ctrl-{base}")
+        }
     } else if modifiers & QT_ALT != 0 {
         format!("alt-{base}")
     } else if modifiers & QT_SHIFT != 0 || backtab {
@@ -565,8 +575,8 @@ mod tests {
     fn queue_bindings() {
         let mut keymap = Keymap::new();
         assert_eq!(keymap.feed("ctrl-q"), Outcome::Action(Action::QueueToggle));
-        assert_eq!(keymap.feed("shift-j"), Outcome::Action(Action::QueueDown));
-        assert_eq!(keymap.feed("shift-k"), Outcome::Action(Action::QueueUp));
+        assert_eq!(keymap.feed("ctrl-shift-j"), Outcome::Action(Action::QueueDown));
+        assert_eq!(keymap.feed("ctrl-shift-k"), Outcome::Action(Action::QueueUp));
 
         let mut keymap = Keymap::new();
         assert_eq!(keymap.feed("d"), Outcome::Pending);
@@ -633,6 +643,7 @@ mod tests {
         assert_eq!(keymap.feed("shift-="), Outcome::Action(Action::VolumeUp));
         assert_eq!(keymap.feed("+"), Outcome::Action(Action::VolumeUp));
 
+        assert_eq!(token_from_qt(0x4A, QT_CTRL | QT_SHIFT).as_deref(), Some("ctrl-shift-j"));
         assert_eq!(token_from_qt(0x2D, 0).as_deref(), Some("-"));
         assert_eq!(token_from_qt(0x3D, QT_SHIFT).as_deref(), Some("shift-="));
         assert_eq!(token_from_qt(0x2B, 0).as_deref(), Some("+"));
@@ -641,8 +652,10 @@ mod tests {
     #[test]
     fn queue_reorder_keys() {
         let mut keymap = Keymap::new();
-        assert_eq!(keymap.feed("shift-j"), Outcome::Action(Action::QueueDown));
-        assert_eq!(keymap.feed("shift-k"), Outcome::Action(Action::QueueUp));
+        assert_eq!(keymap.feed("ctrl-shift-j"), Outcome::Action(Action::QueueDown));
+        assert_eq!(keymap.feed("ctrl-shift-k"), Outcome::Action(Action::QueueUp));
+        assert_eq!(keymap.feed("shift-j"), Outcome::Action(Action::ScopeNext));
+        assert_eq!(keymap.feed("shift-k"), Outcome::Action(Action::ScopePrev));
         // ARC-43: Alt chords belong to the quick-action overlay; the keymap
         // must not claim them.
         assert_eq!(keymap.feed("alt-j"), Outcome::None);

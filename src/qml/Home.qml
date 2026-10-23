@@ -21,22 +21,22 @@ import QtQuick.Effects
 import musika
 import "Theme.js" as Theme
 
-// Library shell: status bar on top, sidebar | main below it, player bar at the
+// Library shell: status bar on top, the scoped library below it, player bar at the
 // bottom.
 //
 // Focus model (vi-like): `activeRegion` is the cursor and its border stays lit
 // at all times. Cross-region reach is `/` (ARC-UI-2): a search jump moves the
-// cursor between the sidebar, main and the status region, so the old Ctrl-W
+// cursor between the main list and the status region, so the old Ctrl-W
 // region picker is retired.
 Item {
     id: root
 
-    // 0 = sidebar, 1 = main, 2 = status (top). The player bar is decoration
-    // driven by global binds (UI-51), never a keyboard destination.
+    // 1 = main, 2 = status (top). The player bar is decoration driven by
+    // global binds (UI-51), never a keyboard destination.
     property int activeRegion: 1
     property bool nowPlayingExpanded: false
     property int currentSegment: 0
-    // A sidebar switch starts the target segment at row 0 instead of
+    // A scope switch starts the target segment at row 0 instead of
     // restoring/settling toward its previous cursor.
     property bool _resetSegmentOnShow: false
 
@@ -53,8 +53,6 @@ Item {
 
     readonly property real barH: height * Theme.topBarRatio
     readonly property real playH: height * Theme.playerRatio
-    // The sidebar is always the collapsed icon rail.
-    readonly property real sideW: Math.max(40, width * 0.08)
     readonly property real bodyH: height - barH - playH
 
     // View transitions (motion §3.1): fade in with decelerate, fade out with
@@ -85,7 +83,7 @@ Item {
         currentSegment = index;
         while (contentStack.depth > 1)
             contentStack.pop();
-        // A sidebar switch starts the target segment at row 0; a page pop
+        // A scope switch starts the target segment at row 0; a page pop
         // still lands on the cursor it left behind.
         activeRegion = 1;
         _placing = restoring;
@@ -93,7 +91,7 @@ Item {
     }
 
     /// A segment becoming visible either lands where it was (page return) or
-    /// starts at row 0 (sidebar switch). The reset also clears the segment's
+    /// starts at row 0 (scope switch). The reset also clears the segment.s
     /// saved offset, so the next payload cannot restore the old position.
     function _landOrResetSegment(v) {
         if (!v)
@@ -243,7 +241,7 @@ Item {
         searchOverlay.openWith(text);
     }
 
-    // VI-4: entering another surface (search, sidebar) ends the main list's
+    // VI-4: entering another surface (search) ends the main list.s
     // visual selection.
     function clearMainSelection() {
         var view = contentStack.currentItem;
@@ -331,8 +329,8 @@ Item {
     }
 
     // ARC-UI-2: `/` treats the whole window as the buffer. In the plain
-    // context every visible row surface answers at once — status region,
-    // sidebar, the main list — in window order; when a modal owns the
+    // context every visible row surface answers at once — status region and
+    // the main list — in window order; when a modal owns the
     // context (the FTS overlay, fullscreen) only it answers, as its routing
     // owns Enter. Each entry is a tiny proxy so a jump can also move the
     // region cursor that the following context-Enter (VI-16) routes to.
@@ -372,7 +370,6 @@ Item {
             return out;
         }
         add(out, topBar, function () { root.activeRegion = 2; });
-        add(out, sideBar, function () { root.activeRegion = 0; });
         add(out, contentStack.currentItem, function () { root.activeRegion = 1; });
         return out;
     }
@@ -438,8 +435,6 @@ Item {
             return;
         }
 
-        // The sidebar: Tab passes through as before.
-        sideBar.handleAction(action);
     }
 
     // Actions dispatched from the global key handler, scoped to the active
@@ -522,6 +517,16 @@ Item {
         // The floating search is modal: while open, all keys go to it.
         if (searchOverlay.opened) {
             searchOverlay.handleAction(action);
+            return;
+        }
+        // Scope switching (Shift-J/K) walks the unified library types.
+        if (action === "scope_next" || action === "scope_prev") {
+            if (nowPlayingExpanded)
+                return;
+            var scopeCount = 5;
+            var nextScope = (currentSegment
+                + (action === "scope_next" ? 1 : -1) + scopeCount) % scopeCount;
+            root.showSegment(nextScope);
             return;
         }
         // Transport is global once the modals above have had their say:
@@ -677,22 +682,6 @@ Item {
             return;
         }
 
-        // Between the left bar and main, h/l move directionally. A grid
-        // surface (ArtistEntry, P-8) consumes `h` until its left edge: only
-        // then does the cursor leave for the sidebar.
-        if (action === "move_left" && activeRegion === 1) {
-            var content = contentStack.currentItem;
-            if (content && content.moveWithinGrid && content.moveWithinGrid(action))
-                return;
-            clearMainSelection();
-            activeRegion = 0;
-            return;
-        }
-        if (action === "move_right" && activeRegion === 0) {
-            activeRegion = 1;
-            return;
-        }
-
         // The status bar is a real surface (VI-17): Enter fires the scoped
         // control, h/l cycle the scope (sync ↔ wipe — Tab's assignment with
         // the hands still on hjkl), down returns to the main list.
@@ -708,15 +697,9 @@ Item {
         }
 
         // Up at the very top of a surface hands the cursor to the status
-        // region — the vertical twin of h/l crossing sidebar ↔ main. This is
-        // what replaces Ctrl-W's region picker: nothing above the first row
-        // (or the album toolbar, or the first segment) means the up motion
-        // reaches further up.
+        // region: nothing above the first row (or the album toolbar) means
+        // the up motion reaches further up.
         if (action === "move_up") {
-            if (activeRegion === 0 && sideBar.selected <= 0) {
-                activeRegion = 2;
-                return;
-            }
             if (activeRegion === 1) {
                 var top = contentStack.currentItem;
                 if (top && top.onToolbar !== undefined && top.onToolbar) {
@@ -734,9 +717,6 @@ Item {
         }
 
         switch (activeRegion) {
-        case 0:
-            sideBar.handleAction(action);
-            break;
         case 1:
             if (contentStack.currentItem && contentStack.currentItem.handleAction)
                 contentStack.currentItem.handleAction(action);
@@ -764,15 +744,6 @@ Item {
             Layout.fillWidth: true
             Layout.fillHeight: true
             spacing: 0
-
-            SideBar {
-                id: sideBar
-                Layout.preferredWidth: root.sideW
-                Layout.fillHeight: true
-                narrow: true
-
-                onSegmentActivated: (index) => root.showSegment(index)
-            }
 
             ColumnLayout {
                 id: mainArea
@@ -1265,24 +1236,24 @@ Item {
         }
     }
 
-    // Region borders = the vi cursor, positioned from the layout ratios.
-    // 0 = sidebar, 1 = main, 2 = status (top). The player bar has no region:
-    // it is decoration driven by global binds (UI-51).
+    // Region borders = the vi cursor. 1 = main, 2 = status (top); the
+    // player bar has no region: it is decoration driven by global binds.
     Repeater {
-        model: 3
+        model: 2
 
         delegate: Rectangle {
             radius: Theme.radius
             id: regionBox
             required property int index
 
-            readonly property bool active: index === root.activeRegion
+            readonly property int region: index + 1
+            readonly property bool active: region === root.activeRegion
             readonly property real unit: Math.max(1, root.width * 0.0015)
 
-            x: index === 1 ? root.sideW : 0
-            y: index === 2 ? 0 : root.barH
-            width: index === 2 ? root.width : (index === 1 ? root.width - root.sideW : root.sideW)
-            height: index === 2 ? root.barH : root.bodyH
+            x: 0
+            y: region === 2 ? 0 : root.barH
+            width: root.width
+            height: region === 2 ? root.barH : root.bodyH
             z: Theme.zRegion
             color: "transparent"
             // Only the active (cursor) region is outlined. Fullscreen is an

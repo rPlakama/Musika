@@ -46,9 +46,9 @@ It works with two databases:
 
 # Sections
 
-- Sidebar segments: Albums, Songs, Artists, Playlists (Radio is a placeholder for now).
+- Library scopes: Albums, Songs, Artists, Playlists (Radio is a placeholder). Shift-J/K cycles the scope; Shift-H/L cycles the ordering.
 - Fullscreen player (Enter on a song): transport, seek, volume, and the lyrics pane.
-- Queue drawer (`Ctrl-Q` slides it in over the fullscreen player): `j/k`, Enter jumps, `J/K` reorder, `dd` removes.
+- Queue drawer (`Ctrl-Q` slides it in over the fullscreen player): `j/k`, Enter jumps, `Ctrl-Shift-J/K` reorder, `dd` removes.
 - Search overlay: hybrid Nucleo + FTS5 browser (`MUSIKA_SEARCH_ENGINE=nucleo` or `fts` pins one engine).
 
 # Building

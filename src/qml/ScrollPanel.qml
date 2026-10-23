@@ -82,6 +82,8 @@ Rectangle {
     // Children declared on the panel land in the title band.
     default property alias headerContent: header.data
     property string title: ""
+    /// Dim key hint beside the title (e.g. the scope-cycle chord).
+    property string titleHint: ""
 
     // --- Body (B) ------------------------------------------------------------
     property Component rowDelegate
@@ -300,6 +302,7 @@ Rectangle {
         color: "transparent"
 
         FadeText {
+            id: titleLabel
             visible: root.title.length > 0
             anchors.verticalCenter: parent.verticalCenter
             anchors.left: parent.left
@@ -308,6 +311,19 @@ Rectangle {
             color: Palette.onSurface
             font.pixelSize: root.titlePixelSize
             font.bold: true
+            animated: false
+        }
+
+        FadeText {
+            visible: root.titleHint.length > 0 && titleLabel.visible
+            anchors.left: titleLabel.right
+            anchors.leftMargin: root.width * 0.012
+            anchors.verticalCenter: parent.verticalCenter
+            width: Math.max(0, parent.width * 0.36)
+            text: root.titleHint
+            color: Palette.onSurfaceVariant
+            font.pixelSize: Theme.fontSize("label", root.height)
+            elide: Text.ElideRight
             animated: false
         }
     }

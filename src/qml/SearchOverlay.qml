@@ -164,10 +164,12 @@ Item {
                 close();
         } else if (action === "insert_mode") {
             enterTyping();
-        } else if (action === "order_next" || action === "order_prev") {
-            // Shift-L / Shift-H take over the library tabs' order keys here:
-            // in search they change the result scope instead.
-            moveScope(action === "order_next" ? 1 : -1);
+        } else if (action === "order_next" || action === "order_prev"
+                || action === "scope_next" || action === "scope_prev") {
+            // The library order keys and the unified scope keys both walk
+            // search scopes here.
+            var forward = action === "order_next" || action === "scope_next";
+            moveScope(forward ? 1 : -1);
         } else if (action === "pane_cycle" || action === "pane_cycle_back") {
             // Tab / Shift-Tab cycle the scopes in normal mode too (typing
             // mode routes them through SearchInput's own handlers).

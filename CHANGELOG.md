@@ -3,6 +3,15 @@
 All notable changes to Musika, newest first. `TASKLISTMAJOR.md` tracks the
 open work; this file is the release history.
 
+## 0.3.14 — _Fixups and better AlbumEntry desing_
+
+All commits since `v0.3.13`:
+
+- `111dac4` Make the album art the full-page ambience
+- `440bde6` Keep the sync progress bar collapsed
+- `e01649c` Keep the sidebar as a collapsed icon rail
+- `34a771e` Compute uniform scroll extent from expected rows
+
 ## 0.3.13 — _Better UI, and more general stuff_
 
 All commits since `v0.3.12`:

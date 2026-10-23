@@ -20,9 +20,8 @@ import QtQuick.Effects
 import musika
 import "Theme.js" as Theme
 
-// Album entry: hero cover beside the album description, then its songs.
-// The art doubles as the ambience: a blurred copy fades into the theme
-// surface behind the header (roadmap D-5).
+// Album entry: the album art is the page ambience, with the identity and
+// track list laid over it instead of a second hero cover (roadmap D-5).
 //
 // Set `albumId` to load the real track list from library.db; clicking a song
 // queues the album at that track. The descriptive fields are still placeholders
@@ -70,21 +69,8 @@ Rectangle {
     readonly property string memoryKey: "album:" + root.albumId
     property bool _restored: false
 
-    // Header geometry (roadmap "Album page cover" D-3): the hero cover is
-    // sized from the pane height, beside the description when there is room
-    // and stacked over it on narrow panes.
-    readonly property real headerHeight: Math.min(height * 0.44, 512 + height * 0.02)
-    readonly property real coverSide: Math.max(160, Math.min(height * 0.42, 512))
-    /// Star hitbox side under the cover (five slots total).
-    readonly property real starUnit: Math.max(14, Math.min(28, root.coverSide * 0.075))
-    readonly property bool sideBySide: width >= Theme.breakpoints.compact
-
-    // The compact flip reflows the header: restart the cover's dip-and-blur
-    // (below) so the reflow does not read as a flick.
-    onSideBySideChanged: {
-        if (!Theme.reduceMotion)
-            coverAppear.restart();
-    }
+    /// Star hitbox side in the header (five slots total).
+    readonly property real starUnit: Math.max(14, Math.min(28, root.height * 0.025))
 
     color: Palette.surface
 
@@ -485,6 +471,7 @@ Rectangle {
         anchors.fill: parent
         source: root.albumCover
         ambient: true
+        ambientBlur: false
     }
 
     Rectangle {
@@ -529,94 +516,32 @@ Rectangle {
             }
         }
 
-        // Header (D-3): cover hero + description. The grid collapses to one
-        // column on narrow panes, which stacks the description under the
-        // centered cover without a second layout.
-        GridLayout {
+        // Header: the album art is only the page ambience now; the identity
+        // gets the full width.
+        ColumnLayout {
             id: header
             Layout.fillWidth: true
-            Layout.preferredHeight: root.sideBySide
-                ? Math.max(root.headerHeight, root.coverSide + root.height * 0.01 + root.starUnit, implicitHeight)
-                : implicitHeight
-            columns: root.sideBySide ? 2 : 1
-            columnSpacing: root.width * 0.025
-            rowSpacing: root.height * 0.012
+            Layout.bottomMargin: root.height * 0.006
+            spacing: root.height * 0.008
 
+            // Description.
             ColumnLayout {
-                Layout.preferredWidth: root.coverSide
-                Layout.preferredHeight: root.coverSide + root.height * 0.01 + root.starUnit
-                Layout.alignment: root.sideBySide ? (Qt.AlignLeft | Qt.AlignVCenter) : Qt.AlignHCenter
-                spacing: root.height * 0.01
+                Layout.fillWidth: true
+                spacing: root.height * 0.006
 
-                Rectangle {
+                // UI-60: the title is the album action surface now that the
+                // hero cover only lives in the background.
+                FadeText {
                     id: coverBox
-                    Layout.preferredWidth: root.coverSide
-                    Layout.preferredHeight: root.coverSide
-                    Layout.alignment: root.sideBySide ? (Qt.AlignLeft | Qt.AlignVCenter) : Qt.AlignHCenter
-                    radius: Theme.radius
-                    color: Palette.primaryContainer
-                    clip: true
+                    Layout.fillWidth: true
+                    text: root.albumTitle
+                    color: Palette.onSurface
+                    font.pixelSize: root.height * 0.04
+                    font.bold: true
+                    elide: Text.ElideRight
 
-                    // The reflow FX: the offscreen layer only exists while the
-                    // blur is up. `layer.effect` is a Component — nothing inside
-                    // it can carry a reachable id — so the blur value lives on
-                    // the cover and the effect binds to it.
-                    property real heroBlur: 0
-                    layer.enabled: heroBlur > 0.001
-                    layer.effect: MultiEffect {
-                        blurEnabled: true
-                        blur: coverBox.heroBlur
-                        blurMax: 48
-                        autoPaddingEnabled: false
-                    }
-
-                    // Crossing the compact breakpoint reflows the hero: dim it to
-                    // 70% and blur it in over 200 ms, then restore both over the
-                    // emphasized tier — the reflow hides under the dip.
-                    SequentialAnimation {
-                        id: coverAppear
-                        ParallelAnimation {
-                            NumberAnimation {
-                                target: coverBox
-                                property: "opacity"
-                                to: 0.7
-                                duration: 200
-                            }
-                            NumberAnimation {
-                                target: coverBox
-                                property: "heroBlur"
-                                to: 0.5
-                                duration: 200
-                            }
-                        }
-                        ParallelAnimation {
-                            NumberAnimation {
-                                target: coverBox
-                                property: "opacity"
-                                to: 1
-                                duration: Theme.motion.emphasized
-                                easing.type: Easing.Bezier
-                                easing.bezierCurve: Theme.ease.decelerate
-                            }
-                            NumberAnimation {
-                                target: coverBox
-                                property: "heroBlur"
-                                to: 0
-                                duration: Theme.motion.emphasized
-                                easing.type: Easing.Bezier
-                                easing.bezierCurve: Theme.ease.decelerate
-                            }
-                        }
-                    }
-
-                    CoverImage {
-                        id: coverImage
-                        anchors.fill: parent
-                        source: root.albumCover
-                    }
-
-                    // UI-60: the cover is a selectable album action surface.
                     ScopeRing {
+                        anchors.fill: parent
                         shown: root.onCover
                     }
 
@@ -636,7 +561,7 @@ Rectangle {
                 }
 
                 StarRating {
-                    Layout.alignment: Qt.AlignHCenter
+                    Layout.alignment: Qt.AlignLeft
                     unit: root.starUnit
                     rating: root.albumRating
                     onPicked: (level) => {
@@ -644,22 +569,7 @@ Rectangle {
                         Backend.rateAlbum(root.albumId, level);
                     }
                 }
-            }
 
-            // Description.
-            ColumnLayout {
-                Layout.fillWidth: true
-                Layout.alignment: Qt.AlignVCenter
-                spacing: root.height * 0.006
-
-                FadeText {
-                    Layout.fillWidth: true
-                    text: root.albumTitle
-                    color: Palette.onSurface
-                    font.pixelSize: root.height * 0.036
-                    font.bold: true
-                    elide: Text.ElideRight
-                }
                 FadeText {
                     Layout.fillWidth: true
                     text: root.albumArtist
@@ -672,27 +582,17 @@ Rectangle {
                     spacing: root.height * 0.008
 
                     // ARC-I-2/UI-60: the album's favourite leads the header
-                    // meta, with the rating count at its corner (a rated but
-                    // unfavourited album still shows the badge).
+                    // meta (the star row above owns the rating now).
                     Item {
-                        visible: root.albumStarred || root.albumRating > 0
+                        visible: root.albumStarred
                         Layout.alignment: Qt.AlignVCenter
                         Layout.preferredWidth: root.height * 0.016
                         Layout.preferredHeight: width
 
                         Icon {
                             anchors.fill: parent
-                            visible: root.albumStarred
                             name: "baseline-favorite"
                             symbolColor: Theme.iconStrong
-                        }
-
-                        RatingBadge {
-                            anchors.right: parent.right
-                            anchors.bottom: parent.bottom
-                            width: parent.width * 0.952
-                            height: width
-                            rating: root.albumRating
                         }
                     }
 

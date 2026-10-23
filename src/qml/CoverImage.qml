@@ -25,6 +25,7 @@ import "Theme.js" as Theme
 // owns the rounded/clipped container, this owns the pixels and the fade.
 // `ambient` is the shared D-5 backdrop mode: the GPU layer blurs and
 // desaturates the art, and the caller lays a theme gradient on top.
+// `ambientBlur: false` keeps the vignette but paints the art sharp.
 //
 // ARC-40: the decode is bounded per surface — `sizeFactor` adds headroom over
 // the painted size (list/grid thumbs 1.25 for the UI-50 hover scale, hero
@@ -40,6 +41,8 @@ Item {
     /// Cover URL (`file://…`) as resolved by the Rust cover cache.
     property url source
     property bool ambient: false
+    /// Keep the ambient vignette but show the art sharp instead of blurred.
+    property bool ambientBlur: true
 
     /// Decode headroom over the painted size (1.0 = exactly the painted size).
     property real sizeFactor: 1.0
@@ -47,7 +50,8 @@ Item {
     // Raster covers are at most 512 px (COVER_SIZE in src/covers.rs), so a
     // larger request would only make Qt upscale on the decode thread.
     readonly property int maxDecodeEdge: 512
-    readonly property real decodeFactor: root.ambient ? 0.25 : root.sizeFactor
+    readonly property real decodeFactor:
+        root.ambient && root.ambientBlur ? 0.25 : root.sizeFactor
     readonly property int decodeWidth: Math.min(root.maxDecodeEdge, Math.max(32,
         Math.ceil(width * root.decodeFactor / 32) * 32))
     readonly property int decodeHeight: Math.min(root.maxDecodeEdge, Math.max(32,
@@ -100,7 +104,7 @@ Item {
         }
     }
 
-    layer.enabled: root.visible && root.ambient
+    layer.enabled: root.visible && root.ambient && root.ambientBlur
     layer.effect: MultiEffect {
         blurEnabled: true
         blur: 1.0

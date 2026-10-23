@@ -36,6 +36,9 @@ Item {
     property int activeRegion: 1
     property bool nowPlayingExpanded: false
     property int currentSegment: 0
+    // A sidebar switch starts the target segment at row 0 instead of
+    // restoring/settling toward its previous cursor.
+    property bool _resetSegmentOnShow: false
 
     // ARC-45: bounded travel log, one row per visited place (2-D):
     // [segment, fullscreen, pageCount, page×8...]. A page block is
@@ -77,15 +80,34 @@ Item {
         // once, not each intermediate pop.
         var restoring = _placing;
         _placing = true;
+        if (currentSegment !== index)
+            root._resetSegmentOnShow = true;
         currentSegment = index;
         while (contentStack.depth > 1)
             contentStack.pop();
-        // The segment host stays mounted: switching is visibility, so the
-        // instance keeps its cursor, scroll memory and model — the return is
-        // instant instead of remount + async reload + restore.
+        // A sidebar switch starts the target segment at row 0; a page pop
+        // still lands on the cursor it left behind.
         activeRegion = 1;
         _placing = restoring;
         recordPlace();
+    }
+
+    /// A segment becoming visible either lands where it was (page return) or
+    /// starts at row 0 (sidebar switch). The reset also clears the segment's
+    /// saved offset, so the next payload cannot restore the old position.
+    function _landOrResetSegment(v) {
+        if (!v)
+            return;
+        if (root._resetSegmentOnShow) {
+            root._resetSegmentOnShow = false;
+            if (v.count > 0 && v.resetViewNow)
+                v.resetViewNow();
+            else if (v.resetView)
+                v.resetView();
+            return;
+        }
+        if (v.landCursor)
+            v.landCursor();
     }
 
     // ARC-45: the travel log. Every place-changing navigation appends a row
@@ -788,8 +810,8 @@ Item {
                         // its cursor instantly — a page pop must not walk a
                         // far cursor back from wherever the view sat.
                         onVisibleChanged: {
-                            if (visible && activeView && activeView.landCursor)
-                                activeView.landCursor();
+                            if (visible)
+                                root._landOrResetSegment(activeView);
                         }
 
                         property int _viewRevision: 0
@@ -885,12 +907,12 @@ Item {
                                 // SCROLLMODELANALYSIS §3: a segment coming
                                 // back lands its cursor instantly.
                                 onVisibleChanged: {
-                                    if (visible && item && item.landCursor)
-                                        item.landCursor();
+                                    if (visible)
+                                        root._landOrResetSegment(item);
                                 }
                                 onLoaded: {
-                                    if (visible && item && item.landCursor)
-                                        item.landCursor();
+                                    if (visible)
+                                        root._landOrResetSegment(item);
                                 }
                                 sourceComponent: index === 1 ? songListComponent
                                     : index === 2 ? artistListComponent

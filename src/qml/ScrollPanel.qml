@@ -157,6 +157,32 @@ Rectangle {
         return content.selectionStarred(field);
     }
 
+    /// VI-8a: the universal row clipboard — hosts name the row kind
+    /// (`song`/`album`/`artist`); paste only ever targets the queue.
+    property string yankKind: ""
+
+    function yankRows(rowOnly) {
+        if (root.yankKind.length === 0 || !root.model || root.model.count === 0
+                || root.currentIndex < 0)
+            return;
+        var field = root.yankKind === "album"
+            ? "albumId"
+            : (root.yankKind === "artist" ? "artistId" : "songId");
+        var indices = (rowOnly || !root.hasSelection)
+            ? [root.currentIndex]
+            : content.selectionIndices();
+        var ids = [];
+        for (var i = 0; i < indices.length; ++i) {
+            var item = root.model.get(indices[i]);
+            if (item && item[field])
+                ids.push(item[field]);
+        }
+        if (ids.length === 0)
+            return;
+        root.clearSelection();
+        Backend.yankRows(root.yankKind, JSON.stringify(ids));
+    }
+
     /// ARC-I-4: the in-place favourite write (see `ScrollContent`).
     function markStarred(on) {
         content.markStarred(on);
@@ -250,6 +276,11 @@ Rectangle {
             }
             // Any other grammar leaves the chip and runs on the list.
             root.headerScope = -1;
+        }
+        // VI-8a: yank the cursor row (Y) or the visual range (y).
+        if (action === "yank" || action === "yank_row") {
+            root.yankRows(action === "yank_row");
+            return;
         }
         // ARC-UI-3: the layout toggle arms on an empty list too (the view
         // swap is independent of the payload).

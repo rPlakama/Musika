@@ -379,6 +379,11 @@ Rectangle {
         wall.handleAction(action);
     }
 
+    /// VI-8a: the artist page's shared wall owns the album rows.
+    function yankRows(rowOnly) {
+        wall.yankRows(rowOnly);
+    }
+
     Connections {
         target: Backend
         function onDataReady(channel, payload) {
@@ -709,6 +714,7 @@ Rectangle {
                 context: "library"
                 headerRatio: 0
                 model: albums
+                yankKind: "album"
                 layouts: ["grid", "list"]
                 layout: "list"
                 selectable: true

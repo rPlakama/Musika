@@ -65,7 +65,10 @@ pub enum Action {
     PaneCycle,
     PaneCycleBack,
     Yank,
+    YankRow,
     Paste,
+    PasteBelow,
+    PasteAbove,
     QueueToggle,
     QueueUp,
     QueueDown,
@@ -114,7 +117,10 @@ impl Action {
             Self::PaneCycle => "pane_cycle",
             Self::PaneCycleBack => "pane_cycle_back",
             Self::Yank => "yank",
+            Self::YankRow => "yank_row",
             Self::Paste => "paste",
+            Self::PasteBelow => "paste_below",
+            Self::PasteAbove => "paste_above",
             Self::QueueToggle => "queue_toggle",
             Self::QueueUp => "queue_up",
             Self::QueueDown => "queue_down",
@@ -139,8 +145,13 @@ pub enum Outcome {
 /// The default binding table.
 /// The default binding table (VI-10/VI-16 semantics):
 ///
-/// - `j`/`k` keep the list cursor (and scrolling); `n`/`p` and `Ctrl-N`/
-///   `Ctrl-P` skip tracks wherever a list owns focus (VI-10).
+/// - `j`/`k` keep the list cursor (and scrolling); `Ctrl-N`/`Ctrl-P` skip
+///   tracks wherever a list owns focus (VI-10). Bare `n`/`p` are free: `p`
+///   is queue paste-below from VI-8a, `n` is reserved for VI-14's next match.
+/// - `y`/`Y` yank the queue cursor row / visual range and `p`/`P` paste it
+///   below/above the queue cursor while the drawer is open (VI-8a); with the
+///   drawer closed `y` keeps VI-21's playing-track text copy and the row
+///   verbs are inert.
 /// - `Shift-J`/`Shift-K` move the selected queue track down/up (bare `Alt`
 ///   opens the quick-action menu, ARC-43; its chords stay out of the keymap).
 /// - `i` starts typing: it opens the floating search in INSERT mode.
@@ -193,12 +204,12 @@ fn defaults() -> Vec<(&'static str, Action)> {
         ("enter", Action::Enter),
         ("shift-enter", Action::ToggleFullscreen),
         ("i", Action::InsertMode),
-        ("n", Action::NextTrack),
-        ("p", Action::PrevTrack),
         ("tab", Action::PaneCycle),
         ("shift-tab", Action::PaneCycleBack),
         ("y", Action::Yank),
-        ("shift-p", Action::Paste),
+        ("shift-y", Action::YankRow),
+        ("p", Action::PasteBelow),
+        ("shift-p", Action::PasteAbove),
         ("ctrl-v", Action::Paste),
         ("escape", Action::Back),
         ("ctrl-[", Action::Back),
@@ -596,8 +607,10 @@ mod tests {
     #[test]
     fn transport_and_pane_keys() {
         let mut keymap = Keymap::new();
-        assert_eq!(keymap.feed("n"), Outcome::Action(Action::NextTrack));
-        assert_eq!(keymap.feed("p"), Outcome::Action(Action::PrevTrack));
+        assert_eq!(keymap.feed("n"), Outcome::None, "bare n is free (VI-8a/VI-14)");
+        assert_eq!(keymap.feed("p"), Outcome::Action(Action::PasteBelow));
+        assert_eq!(keymap.feed("ctrl-n"), Outcome::Action(Action::NextTrack));
+        assert_eq!(keymap.feed("ctrl-p"), Outcome::Action(Action::PrevTrack));
         assert_eq!(keymap.feed("tab"), Outcome::Action(Action::PaneCycle));
         assert_eq!(
             keymap.feed("shift-tab"),
@@ -625,12 +638,14 @@ mod tests {
     fn clipboard_verbs() {
         let mut keymap = Keymap::new();
         assert_eq!(keymap.feed("y"), Outcome::Action(Action::Yank));
-        assert_eq!(keymap.feed("shift-p"), Outcome::Action(Action::Paste));
+        assert_eq!(keymap.feed("shift-y"), Outcome::Action(Action::YankRow));
+        assert_eq!(keymap.feed("p"), Outcome::Action(Action::PasteBelow));
+        assert_eq!(keymap.feed("shift-p"), Outcome::Action(Action::PasteAbove));
         assert_eq!(keymap.feed("ctrl-v"), Outcome::Action(Action::Paste));
         assert_eq!(
             token_from_qt(0x56, QT_CTRL).as_deref(),
             Some("ctrl-v"),
-            "system paste (Ctrl-V) must map to the clipboard action"
+            "system paste (Ctrl-V) must map to the text clipboard action"
         );
     }
 

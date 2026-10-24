@@ -49,6 +49,7 @@ It works with two databases:
 - Library scopes: Albums, Songs, Artists, Playlists (Radio is a placeholder). Shift-J/K cycles the scope; Shift-H/L cycles the ordering.
 - Fullscreen player (Enter on a song): transport, seek, volume, and the lyrics pane.
 - Queue drawer (`Ctrl-Q` slides it in from any view, library or fullscreen): `j/k`, Enter jumps, `Ctrl-Shift-J/K` reorder, `dd` removes.
+- Clipboard: `y`/`Y` yank the cursor row (or the visual range) from any list — Albums, Songs, Artists, album/artist pages, search and the queue — into the row clipboard; `p`/`P` paste it below/above the cursor in the open queue drawer. `Ctrl-N`/`Ctrl-P` skip tracks anywhere.
 - Search overlay: hybrid Nucleo + FTS5 browser (`MUSIKA_SEARCH_ENGINE=nucleo` or `fts` pins one engine).
 
 # Building

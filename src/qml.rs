@@ -141,6 +141,11 @@ fn add_mark_id(ids: &mut Vec<String>, id: &str) -> bool {
     }
 }
 
+/// Plural word for the queue clipboard toasts.
+fn rows(count: usize) -> &'static str {
+    if count == 1 { "row" } else { "rows" }
+}
+
 /// The hash of the last published queue rows ("RowAlreadyPublished"): the
 /// automatic emits dedupe on it so skips don't republish the same rows.
 static QUEUE_ROWS_HASH: AtomicU64 = AtomicU64::new(0);
@@ -234,6 +239,13 @@ pub struct Backend {
     shuffling: bool,
     shuffle_kind: String,
     queue_length: i64,
+    /// VI-8a: rows in the queue clipboard (0 = nothing yanked).
+    clipboard_count: i64,
+    /// VI-8a: the universal row clipboard — kind (`song`/`album`/`artist`)
+    /// and ids in yank order (duplicates preserved). Paste resolves it into
+    /// the queue only.
+    clipboard_kind: String,
+    clipboard_ids: Vec<String>,
     album_order: String,
     song_order: String,
     artist_order: String,
@@ -391,6 +403,11 @@ impl Backend {
         "queueLength",
         Member = queue_length,
         Notify = queue_length_changed
+    );
+    qproperty!(
+        "clipboardCount",
+        Member = clipboard_count,
+        Notify = clipboard_count_changed
     );
     qproperty!(
         "albumOrder",
@@ -556,6 +573,10 @@ impl Backend {
     fn data_ready(&mut self, channel: String, payload: String);
     #[qsignal(qml_name = "errorRaised")]
     fn error_raised(&mut self, kind: String, message: String);
+    /// VI-8a: neutral log line (the `ToastModal` banner): queue yank/paste
+    /// and future informational notices. Errors keep `errorRaised`.
+    #[qsignal(qml_name = "noticeRaised")]
+    fn notice_raised(&mut self, message: String);
     #[qsignal(qml_name = "commandIssued")]
     fn command_issued(&mut self, command: String);
     #[qsignal(qml_name = "loginRequired")]
@@ -578,6 +599,8 @@ impl Backend {
     fn queue_index_changed(&mut self);
     #[qsignal]
     fn queue_length_changed(&mut self);
+    #[qsignal]
+    fn clipboard_count_changed(&mut self);
     #[qsignal]
     fn album_order_changed(&mut self);
     #[qsignal]
@@ -3008,20 +3031,116 @@ impl Backend {
 
     #[qslot(qml_name = "queueRemove")]
     fn queue_remove(&mut self, index: i64) {
-        self.player.remove(index_value(index));
+        let index = index_value(index);
+        if index >= self.player.len() {
+            return;
+        }
+        self.player.remove(index);
         self.sync_player();
         self.emit_queue(false);
+        self.notice_raised(format!("(Deleted!) 1 {}", rows(1)));
     }
 
     /// VI-4: removes a visual selection in one pass, one payload.
     #[qslot(qml_name = "queueRemoveMany")]
     fn queue_remove_many(&mut self, indices_json: String) {
-        match serde_json::from_str::<Vec<usize>>(&indices_json) {
+        let removed = match serde_json::from_str::<Vec<usize>>(&indices_json) {
             Ok(indices) => self.player.remove_many(&indices),
-            Err(err) => eprintln!("queue: bad remove selection: {err}"),
+            Err(err) => {
+                eprintln!("queue: bad remove selection: {err}");
+                return;
+            }
+        };
+        if removed == 0 {
+            return;
         }
         self.sync_player();
         self.emit_queue(false);
+        self.notice_raised(format!("(Deleted!) {removed} {}", rows(removed)));
+    }
+
+    /// VI-8a: yanks a list/queue row range into the universal clipboard.
+    /// `kind` is `song`/`album`/`artist`; ids keep their order and duplicates.
+    #[qslot(qml_name = "yankRows")]
+    fn yank_rows(&mut self, kind: String, ids_json: String) {
+        if !matches!(kind.as_str(), "song" | "album" | "artist") {
+            eprintln!("queue: bad yank kind: {kind}");
+            return;
+        }
+        let ids: Vec<String> = match serde_json::from_str(&ids_json) {
+            Ok(ids) => ids,
+            Err(err) => {
+                eprintln!("queue: bad yank selection: {err}");
+                return;
+            }
+        };
+        let ids: Vec<String> = ids.into_iter().filter(|id| !id.is_empty()).collect();
+        if ids.is_empty() {
+            return;
+        }
+        let count = ids.len();
+        self.clipboard_kind = kind;
+        self.clipboard_ids = ids;
+        self.clipboard_count = count as i64;
+        self.clipboard_count_changed();
+        self.notice_raised(format!("(Yanked!) {count} {}", rows(count)));
+    }
+
+    /// VI-8a: resolves the row clipboard and pastes it at the queue cursor
+    /// (`above` = vim `P`). Paste targets only the queue drawer; resolution
+    /// is the same kind expansion the Alt "Add to Queue" verb uses.
+    #[qslot(qml_name = "pasteQueueRows")]
+    fn paste_queue_rows(&mut self, cursor: i64, above: bool) {
+        if self.clipboard_ids.is_empty() {
+            return;
+        }
+        let kind = self.clipboard_kind.clone();
+        let ids = self.clipboard_ids.clone();
+        let offline = self.offline;
+        let invoker = self.get_qml_method_invoker();
+        let error_invoker = self.get_qml_method_invoker();
+        let Some(dbs) = crate::dbs() else {
+            return;
+        };
+        crate::runtime().spawn(async move {
+            match crate::queue::quick_tracks_json_many(&dbs, &kind, &ids, offline).await {
+                Ok(json) => {
+                    qtbridge::invoke_method!(
+                        invoker,
+                        "pasteQueueTracks",
+                        cursor,
+                        above,
+                        json
+                    );
+                }
+                Err(err) => raise(
+                    &error_invoker,
+                    "playback",
+                    format!("Could not paste: {err:#}"),
+                ),
+            }
+        });
+    }
+
+    /// Completes a queue paste once the clipboard rows resolved to tracks.
+    #[qslot(qml_name = "pasteQueueTracks")]
+    fn paste_queue_tracks(&mut self, cursor: i64, above: bool, tracks_json: String) {
+        let tracks: Vec<crate::player::Track> = match serde_json::from_str(&tracks_json) {
+            Ok(tracks) => tracks,
+            Err(err) => {
+                eprintln!("queue: bad paste payload: {err}");
+                return;
+            }
+        };
+        if tracks.is_empty() {
+            return;
+        }
+        let count = tracks.len();
+        let at = index_value(cursor) + usize::from(!above);
+        self.player.insert_many(at, tracks);
+        self.sync_player();
+        self.emit_queue(false);
+        self.notice_raised(format!("(Pasted!) {count} {}", rows(count)));
     }
 
     #[qslot(qml_name = "queueMove")]

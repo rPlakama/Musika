@@ -38,6 +38,8 @@ AcrylicPanel {
     property real compactWidth: parent ? parent.width * 0.42 : 0
 
     readonly property bool syncing: kind === "sync"
+    // VI-8a/logs: informational notices — neutral tint, no retry.
+    readonly property bool notice: kind === "log" || kind === "clipboard"
     // UI-23: playback errors get a retry too.
     readonly property bool retryable: kind === "sync" || kind === "playback"
 
@@ -64,10 +66,12 @@ AcrylicPanel {
         Math.max(root.compactWidth, metrics.advanceWidth(root.message) + root.chrome))
     implicitHeight: Math.min(root.maxHeight, scroller.contentHeight + root.pad * 2)
 
-    tint: syncing ? Palette.tertiaryContainer : Palette.errorContainer
+    tint: notice ? Palette.secondaryContainer
+        : (syncing ? Palette.tertiaryContainer : Palette.errorContainer)
     radius: Theme.radius
     border.width: Math.max(1, root.unit * 0.08)
-    border.color: syncing ? Palette.tertiary : Palette.error
+    border.color: notice ? Palette.secondary
+        : (syncing ? Palette.tertiary : Palette.error)
     opacity: shown ? 1 : 0
     visible: opacity > 0
 
@@ -110,8 +114,9 @@ AcrylicPanel {
             spacing: root.gap
 
             FadeText {
-                text: "⚠"
-                color: root.syncing ? Palette.onTertiaryContainer : Palette.onErrorContainer
+                text: root.notice ? "✓" : "⚠"
+                color: root.notice ? Palette.onSecondaryContainer
+                    : (root.syncing ? Palette.onTertiaryContainer : Palette.onErrorContainer)
                 font.pixelSize: root.unit * 1.15
                 animated: false
             }
@@ -120,7 +125,8 @@ AcrylicPanel {
                 id: messageText
                 Layout.fillWidth: true
                 text: root.message
-                color: root.syncing ? Palette.onTertiaryContainer : Palette.onErrorContainer
+                color: root.notice ? Palette.onSecondaryContainer
+                    : (root.syncing ? Palette.onTertiaryContainer : Palette.onErrorContainer)
                 font.pixelSize: root.unit
                 wrapMode: Text.WordWrap
                 animated: false

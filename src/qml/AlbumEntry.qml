@@ -316,6 +316,25 @@ Rectangle {
         content.searchJump(row);
     }
 
+    /// VI-8a: yank the cursor song row (`Y`) or the visual range (`y`).
+    function yankRows(rowOnly) {
+        if (songs.count === 0 || content.currentIndex < 0)
+            return;
+        var indices = (rowOnly || !root.hasSelection)
+            ? [content.currentIndex]
+            : content.selectionIndices();
+        var ids = [];
+        for (var i = 0; i < indices.length; ++i) {
+            var item = songs.get(indices[i]);
+            if (item && item.songId)
+                ids.push(item.songId);
+        }
+        if (ids.length === 0)
+            return;
+        content.clearSelection();
+        Backend.yankRows("song", JSON.stringify(ids));
+    }
+
     function handleAction(action) {
         // UI-60/UI-14: Tab cycles rows -> cover -> notes -> (dropped)Back chip -> rows
         // (Shift+Tab reverses). Selecting the notes expands the reader; the
@@ -414,6 +433,12 @@ Rectangle {
             } else if (action === "enter") {
                 root.back();
             }
+            return;
+        }
+
+        // VI-8a: yank the song rows into the universal clipboard.
+        if (action === "yank" || action === "yank_row") {
+            root.yankRows(action === "yank_row");
             return;
         }
 

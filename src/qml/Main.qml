@@ -121,9 +121,15 @@ ApplicationWindow {
             }
 
             // Clipboard verbs (VI-21): `y` yanks the playing track to the
-            // system clipboard, `P` pastes a track reference back into
-            // playback.
+            // system clipboard. VI-8a: any focused row surface (or the queue
+            // drawer) takes `y`/`Y` for the universal row clipboard; the
+            // text copy is the fallback only when nothing can be yanked.
             if (action === "yank") {
+                var yankTarget = stack.currentItem;
+                if (yankTarget && yankTarget["canYankRows"] === true) {
+                    yankTarget.handleAction(action);
+                    return;
+                }
                 var yanked = Backend.currentArtist.length > 0
                     ? Backend.currentArtist + " - " + Backend.currentTitle
                     : Backend.currentTitle;
@@ -135,6 +141,8 @@ ApplicationWindow {
                 return;
             }
             if (action === "paste") {
+                // Ctrl-V stays the system text paste (VI-21); the queue row
+                // clipboard rides `p`/`P` (VI-8a).
                 clipboard.text = "";
                 clipboard.selectAll();
                 clipboard.paste();

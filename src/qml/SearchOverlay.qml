@@ -190,6 +190,9 @@ Item {
             resultsColumn.toggleSelection();
         } else if (action === "visual_all") {
             resultsColumn.selectAll();
+        } else if (action === "yank" || action === "yank_row") {
+            // VI-8a: the active result column feeds the universal clipboard.
+            resultsColumn.yankRows(action === "yank_row");
         } else if (action === "enter") {
             activate();
         }

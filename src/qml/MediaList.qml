@@ -141,6 +141,8 @@ ScrollPanel {
     /// list only gates it on the Alt verb kind and names the id field batch
     /// actions resolve to.
     selectable: quickActionKind !== ""
+    /// VI-8a: the shared yank verb reads the same row kind.
+    yankKind: quickActionKind
     readonly property string selectionField: quickActionKind === "album"
         ? "albumId"
         : (quickActionKind === "artist" ? "artistId" : "songId")

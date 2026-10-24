@@ -184,6 +184,25 @@ Item {
         content.goto(row);
     }
 
+    /// VI-8a: yank this column's cursor row (`Y`) or visual range (`y`).
+    function yankRows(rowOnly) {
+        if (quickActionKind === "" || !model || model.count === 0 || root.cursor < 0)
+            return;
+        var indices = (rowOnly || !root.hasSelection)
+            ? [root.cursor]
+            : content.selectionIndices();
+        var ids = [];
+        for (var i = 0; i < indices.length; ++i) {
+            var item = model.get(indices[i]);
+            if (item && item[selectionField])
+                ids.push(item[selectionField]);
+        }
+        if (ids.length === 0)
+            return;
+        content.clearSelection();
+        Backend.yankRows(quickActionKind, JSON.stringify(ids));
+    }
+
     /// `Ctrl-D`/`Ctrl-U` in the active result column.
     function pageJump(down) {
         if (!root.model || root.model.count === 0)

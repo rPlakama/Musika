@@ -468,6 +468,108 @@ The product is incomplete without these.
   - **Why:** queue editing is the musical equivalent of buffer editing.
   - **Details:** `dd` dequeues, `yy` yanks a track/album, `p`/`P` append/play-next,
     `.` repeats; requires the queue view (Q-1).
+  - **Now:** the row half landed as VI-8a M0 below (yank/paste over the
+    standalone `QueueDrawer`); `.` repeat and the generalized operator state
+    machine stay here.
+
+- [ ] **VI-8a · Row yank/paste (`y`/`Y`, `p`/`P`) — yank universal, paste queue-only** — P2 · (VI-8, VI-21, VI-4)
+  - **Why:** "Rows can be 'Yanked' and 'Pasted' (Y/P) in queue and other
+    selections besides just pushing it queue." Today the only row transfer
+    verb is Alt "Add to Queue" (append-only), and VI-21's `y`/`P` only move
+    the *playing track's text*. The queue drawer is the working document:
+    yanking a row (or a visual range) and pasting it above/below the cursor
+    makes duplication and queue editing positional instead of append-only.
+  - **Gate:** paste is gated by `queueDrawerIsOpen` (`readonly property bool
+    queueDrawerIsOpen: queueDrawer.open` in `Home.qml`): with the drawer
+    closed `p`/`P` are inert ("nothing happens"). **Yank is universal** —
+    every row surface exposes `yankRows`, and `Home.canYankRows` lets Main
+    choose the row verb over the VI-21 text fallback. A yank made anywhere
+    survives until the drawer opens; `QueueDrawer` exposes `yankRows()` /
+    `pasteRows(above)` / `canPaste`.
+  - **Semantics (paste positioning is the point):**
+    - `y` yanks the cursor row, or the whole range while a visual selection
+      is live (`v`/`V` on any list or in the drawer); `Y` is the cursor-row
+      shorthand (vim line-yank).
+    - `p` pastes **below** the cursor, `P` pastes **above** it (vim
+      after/before), preserving clipboard order and duplicates.
+    - The clipboard stores rows, not text: `{kind, ids[]}` in selection order
+      (`song`/`album`/`artist`), duplicates preserved. Paste expands album/
+      artist rows through `queue::quick_tracks_json_many` (online/offline
+      aware), so a selection from Albums inserts its tracks — the same
+      resolver as Alt "Add to Queue".
+    - Paste never autoplays. An empty queue loads stopped (the append
+      contract); the cursor lands on the first pasted row through the
+      existing `_pendingQueueCursor` path.
+    - Feedback is mandatory: every yank/paste/delete **raises the shared log
+      banner** — `(Yanked!) N rows` / `(Pasted!) N rows` / `(Deleted!) N
+      rows` — through the new `noticeRaised` channel into `ToastModal.qml`
+      (the neutral sibling of the error `Toast`, fixed to the log style:
+      secondary tint, `✓`, no retry). Empty targets stay silent; a failed
+      insert reuses the error toast. `Backend.clipboardCount` feeds a future
+      chip/hint.
+  - **Key decisions (settled):**
+    - Bare `n`/`p` track skips are **removed**; `Ctrl-N`/`Ctrl-P` are the
+      standard (VI-10 already maps them). `p` becomes paste-below, `P`
+      paste-above, and `n` is freed (reserved for VI-14's in-list
+      next-match). Update `keybind.rs` `defaults()` + its doc comment,
+      README, key hints and the VI-10 note/tests.
+    - `y`/`Y` act on rows on every list and in the drawer (yank is
+      universal); with nothing yankable, `y` keeps the VI-21 playing-track
+      text copy as a fallback, and `Ctrl-V` stays the system **text** paste.
+      `p`/`P` are inert outside the open queue drawer.
+  - **Backend:**
+    - `player.rs`: `insert_many(at, tracks)` — insert at a queue position;
+      when the insert touches the mpv window, re-anchor like `move_item`
+      (play_current + seek) so the playhead stays put; bump `revision`.
+    - `qml.rs`: the universal clipboard (`clipboard_kind`/`clipboard_ids`,
+      `clipboardCount`), `yankRows(kind, idsJson)` (logs `(Yanked!)`), and
+      `pasteQueueRows(cursor, above)` → `queue::quick_tracks_json_many` →
+      `pasteQueueTracks(...)` (logs `(Pasted!)`, re-emits the queue). Actions
+      ride the key/IPC action stream; no extra IPC verb names needed.
+    - `queue.rs`: reuse `quick_tracks_json_many` unchanged; duplicate ids are
+      preserved by its id-ordered expansion.
+  - **QML:** `y`/`Y` are handled by every row surface — the shared
+    `ScrollPanel` (`yankKind` + `yankRows`), `MediaList` (binds the kind),
+    `AlbumEntry`, `ArtistEntry` (wall), `SearchColumn`/`SearchOverlay`, and
+    `QueueDrawer`; `Home.canYankRows` picks the row verb over the VI-21
+    text fallback. `p`/`P` are consumed only by `QueueDrawer` through the
+    `queueDrawerIsOpen` gate; `ToastModal.qml` is the log banner. Key hints
+    + README.
+  - **Milestones:**
+    - **M0 queue-internal paste:** `insert_many` + drawer `p`/`P`
+      (cursor and range) behind `queueDrawerIsOpen`, the
+      `(Yanked!)`/`(Pasted!)` log, and tests for insert positioning,
+      duplicate rows, empty queue, the window re-anchor, and the closed-gate
+      no-op. *Landed.*
+    - **M1 universal yank:** every list/search surface yanks by kind through
+      the resolver; paste into the queue works from any yank (the drawer
+      only supplies the cursor). *Landed with M0.*
+    - **M2 polish/targets:** cut (`x`/`dd` yank+delete), `Alt` overlay
+      "Paste here" verb, clipboard chip/hint, playlists (ARC-44 M3); `.`
+      repeat stays VI-8.
+  - **Open questions:** whether paste should ever target playlists directly
+    (M2 target enum) and whether `Alt-y` should keep copying the playing
+    track text while a list can yank rows instead.
+  - **Now:** M0 + the universal yank half landed. The clipboard
+    (`clipboard_kind`/`clipboard_ids` + `clipboardCount`) is Backend-wide:
+    `yankRows(kind, idsJson)` accepts `song`/`album`/`artist` from any
+    surface, preserves order and duplicates, and logs `(Yanked!)`. `p`/`P`
+    (`paste_below`/`paste_above`) work only while the queue drawer is open:
+    `pasteQueueRows` resolves the clipboard through
+    `queue::quick_tracks_json_many`, then `pasteQueueTracks` inserts at the
+    cursor (`Player::insert_many`: index shift for inserts at/above the
+    current track, mpv-window re-anchor at the same playhead) and logs
+    `(Pasted!)`. Yank surfaces: `ScrollPanel` (`yankKind`) / `MediaList`
+    (Albums/Songs/Artists), `AlbumEntry`, `ArtistEntry`'s wall,
+    `SearchColumn`/`SearchOverlay`, and `QueueDrawer`; `Home.canYankRows`
+    gates the VI-21 text fallback. Logs ride `noticeRaised` →
+    `ToastModal.qml`: yank/paste plus the queue deletions —
+    `queueRemove`/`queueRemoveMany` log `(Deleted!) 1 row` / `(Deleted!) N
+    rows` (only when a row actually left; `remove_many` returns its count).
+    Keybind: bare `n`/`p` track aliases removed
+    (`Ctrl-N`/`Ctrl-P` standard), `p`/`P`/`Y` bound; README + keybind docs
+    updated. Remaining: M2 (cut, Alt "Paste here", clipboard chip/hint,
+    playlists).
 
 - [ ] **VI-9 · Space latency / leader decision** — P1 · (N6, CRITIQUE §3.1, MY3 QW9)
   - **Why:** whether Space is play/pause or leader, it must not be ambiguous or
@@ -3553,6 +3655,8 @@ Small, bounded, high-value changes.
     both actions globally (after the modals and visual mode, before region
     routing), so main lists, sidebar and fullscreen all skip; `NowPlaying`
     hints say `Ctrl-N/P`; AlbumEntry's old `scroll_*` aliases are now inert.
+    VI-8a removed the bare `n`/`p` aliases (`p` is queue paste-below now,
+    `n` is reserved for VI-14); `Ctrl-N`/`Ctrl-P` are the standard.
 
 - [x] **VI-16 · Key overload disambiguation (`Enter`, `q`)** — P2 · (N9)
   - **Why:** `Enter` means play/open/confirm depending on context; `q` and Esc
@@ -4231,6 +4335,9 @@ Kept for rationale; the tree already carries these.
     text fields still consume Ctrl-V themselves); `Home.pasteSearch` opens
     the search overlay with the text in the field via
     `SearchOverlay.openWith`; unit tests for the binding.
+  - **Follow-up:** VI-8a takes the row verbs — outside text fields `y`/`Y`/
+    `p`/`P` operate on row selections; the system clipboard bridge and
+    `Ctrl-V` text paste stay as landed here.
 
 
 - [x] **Q-1 · Queue view (drawer) with reorder/remove** — P2 · (M1, CRITIQUE Ph2.1)

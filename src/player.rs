@@ -568,8 +568,9 @@ impl Player {
 
     /// Removes several tracks in one pass (VI-4 batch delete). Indices are
     /// queue positions as of the call; they are removed from the highest
-    /// down so the remaining ones stay valid.
-    pub fn remove_many(&mut self, indices: &[usize]) {
+    /// down so the remaining ones stay valid. Returns how many rows were
+    /// actually removed (invalid indices and duplicates ignored).
+    pub fn remove_many(&mut self, indices: &[usize]) -> usize {
         let mut indices: Vec<usize> = indices
             .iter()
             .copied()
@@ -577,9 +578,41 @@ impl Player {
             .collect();
         indices.sort_unstable();
         indices.dedup();
+        let count = indices.len();
         for index in indices.into_iter().rev() {
             self.remove(index);
         }
+        count
+    }
+
+    /// VI-8a: inserts cloned rows at `at` (clamped), the vim `p`/`P` paste.
+    /// The current track keeps playing: its cursor shifts when the insert is
+    /// at or above it, and an insert inside the mpv window re-anchors the
+    /// window at the same playhead (the `move_item` contract).
+    pub fn insert_many(&mut self, at: usize, tracks: Vec<Track>) {
+        if tracks.is_empty() {
+            return;
+        }
+        let at = at.min(self.queue.len());
+        let count = tracks.len();
+        let playing = self.state != State::Stopped;
+        let window_end = self.window_base + self.window_len;
+        let touched = playing && (at < window_end || at <= self.index);
+        let position = self.position();
+        let paused = self.state == State::Paused;
+
+        self.queue.splice(at..at, tracks);
+        if at <= self.index {
+            self.index += count;
+        }
+        if touched {
+            self.play_current();
+            if paused {
+                self.pause();
+            }
+            self.seek(position);
+        }
+        self.revision += 1;
     }
 
     /// Moves the track at `from` to position `to`.
@@ -1205,16 +1238,39 @@ mod tests {
         let mut player = Player::new();
         player.queue = (0..=5).map(|i| track(&format!("s{i}"))).collect();
         player.index = 0;
-        // Unsorted, with a duplicate and an out-of-range index.
-        player.remove_many(&[5, 2, 1, 4, 1, 9]);
+        // Unsorted, with a duplicate and an out-of-range index: four rows
+        // actually leave the queue.
+        assert_eq!(player.remove_many(&[5, 2, 1, 4, 1, 9]), 4);
         assert_eq!(player.len(), 2);
         assert_eq!(player.current().map(|t| t.id.as_str()), Some("s0"));
         assert_eq!(player.index(), 0);
-        player.remove_many(&[1]);
+        assert_eq!(player.remove_many(&[1]), 1);
         assert_eq!(player.len(), 1);
-        player.remove_many(&[0]);
+        assert_eq!(player.remove_many(&[1, 9]), 0, "nothing valid to remove");
+        assert_eq!(player.remove_many(&[0]), 1);
         assert!(player.queue.is_empty());
         assert_eq!(player.state(), State::Stopped);
+    }
+
+    fn ids(player: &Player) -> Vec<&str> {
+        player.queue().iter().map(|track| track.id.as_str()).collect()
+    }
+
+    /// VI-8a: inserting above the current track shifts its index with it;
+    /// the insert point clamps to the queue length.
+    #[test]
+    fn paste_above_the_current_track_keeps_it_current() {
+        let mut player = Player::new();
+        player.queue = vec![track("s0"), track("s1"), track("s2")];
+        player.index = 1;
+        player.insert_many(0, vec![track("x"), track("y")]);
+        assert_eq!(player.index(), 3);
+        assert_eq!(player.current().map(|t| t.id.as_str()), Some("s1"));
+        player.insert_many(99, vec![track("z")]);
+        assert_eq!(ids(&player), ["x", "y", "s0", "s1", "s2", "z"]);
+        assert_eq!(player.index(), 3);
+        player.insert_many(0, Vec::new());
+        assert_eq!(player.len(), 6, "an empty clipboard is a no-op");
     }
 
     /// FIX-1: reaping takes ownership of the spawned child (TERM + wait)

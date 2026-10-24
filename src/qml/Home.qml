@@ -1015,6 +1015,19 @@ Item {
 
     readonly property Item nowPlaying: nowPlayingLoader.item
 
+    /// VI-8a: the row yank/paste verbs are gated on the queue drawer — when
+    /// it is closed the row verbs are inert (the status of the row clipboard
+    /// still lives in `Backend.clipboardCount`). Yank is universal, though:
+    /// list surfaces expose `yankRows`, and Main uses `canYankRows` to decide
+    /// between the row verb and the VI-21 text copy.
+    readonly property bool queueDrawerIsOpen: queueDrawer.open
+    readonly property var focusedView: contentStack.currentItem
+        && contentStack.currentItem.activeView !== undefined
+        ? contentStack.currentItem.activeView
+        : contentStack.currentItem
+    readonly property bool canYankRows: queueDrawerIsOpen || searchOverlay.opened
+        || (activeRegion === 1 && focusedView && focusedView.yankRows !== undefined)
+
     // Ctrl-Q: the standalone play-queue drawer, hosted here so it slides over
     // the library and the fullscreen player alike. The Alt overlay, search,
     // command line and toast keep their higher stacking order.
@@ -1065,6 +1078,18 @@ Item {
             else
                 Backend.retryPlayback();
         }
+    }
+
+    // VI-8a: the neutral log banner (queue yank/paste and future notices).
+    // It sits under the error toast when both are up.
+    ToastModal {
+        id: toastModal
+        anchors.horizontalCenter: parent.horizontalCenter
+        anchors.bottom: parent.bottom
+        anchors.bottomMargin: root.playH + root.height * 0.02
+        maxHeight: root.height - root.playH - root.height * 0.06
+        z: Theme.zToast - 1
+        backdrop: (root.nowPlayingExpanded && nowPlaying) ? nowPlaying : shell
     }
 
     // VI-7: the count register's chip — the number being typed (`3` before
@@ -1142,6 +1167,11 @@ Item {
         target: Backend
         function onErrorRaised(kind, message) {
             toast.show(kind, message);
+        }
+        // VI-8a: informational logs (queue yank/paste, future notices) use
+        // the neutral banner instead of the error surface.
+        function onNoticeRaised(message) {
+            toastModal.log(message);
         }
         // ARC-43: holding Alt opens the quick-action overlay on the active
         // view's keyboard cursor item.

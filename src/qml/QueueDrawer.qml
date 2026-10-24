@@ -98,6 +98,38 @@ Item {
         queueContent.currentIndex = queueCursor;
     }
 
+    /// VI-8a: yanks the cursor row (`rowOnly`, vim `Y`) or the visual range
+    /// (`y` with a selection). The range ends like vim's visual `y`.
+    function yankRows(rowOnly) {
+        var indices = (rowOnly || !root.hasSelection)
+            ? [root.queueCursor]
+            : queueContent.selectionIndices();
+        if (indices.length === 0)
+            return;
+        var ids = [];
+        for (var i = 0; i < indices.length; ++i) {
+            var item = queueItems.get(indices[i]);
+            if (item && item.songId)
+                ids.push(item.songId);
+        }
+        if (ids.length === 0)
+            return;
+        queueContent.clearSelection();
+        Backend.yankRows("song", JSON.stringify(ids));
+    }
+
+    /// VI-8a: pastes the row clipboard above (`P`) or below (`p`) the
+    /// cursor. The payload rebuild lands the cursor on the first pasted row;
+    /// an empty clipboard is a silent no-op.
+    function pasteRows(above) {
+        if (Backend.clipboardCount <= 0)
+            return;
+        var at = root.queueCursor + (above ? 0 : 1);
+        root._pendingQueueCursor = Math.max(0, Math.min(queueItems.count, at));
+        queueContent.clearSelection();
+        Backend.pasteQueueRows(root.queueCursor, above);
+    }
+
     function removeQueueRow(index) {
         if (root._removingIndex >= 0 || index < 0 || index >= queueItems.count)
             return;
@@ -293,6 +325,23 @@ Item {
     function handleAction(action) {
         if (action === "back" || action === "queue_toggle") {
             root.closeQueue();
+            return;
+        }
+        // VI-8a row clipboard (only reachable while the drawer is open).
+        if (action === "yank") {
+            root.yankRows(false);
+            return;
+        }
+        if (action === "yank_row") {
+            root.yankRows(true);
+            return;
+        }
+        if (action === "paste_below") {
+            root.pasteRows(false);
+            return;
+        }
+        if (action === "paste_above") {
+            root.pasteRows(true);
             return;
         }
         // VI-7: the count walks the queue cursor by that many rows.

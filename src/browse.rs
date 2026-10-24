@@ -807,8 +807,8 @@ mod tests {
         };
         sqlx::raw_sql(
             "INSERT INTO artists (id, name, album_count) VALUES ('ar1', 'Radiohead', 1);
-             INSERT INTO albums (id, name, artist, song_count)
-                 VALUES ('al1', 'Kid A', 'Radiohead', 2);
+             INSERT INTO albums (id, artist_id, name, artist, song_count)
+                 VALUES ('al1', 'ar1', 'Kid A', 'Radiohead', 2);
              INSERT INTO songs
                  (id, album_id, title, artist, album, track, disc_number, duration, play_count)
              VALUES

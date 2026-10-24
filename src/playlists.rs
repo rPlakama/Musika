@@ -424,6 +424,7 @@ pub async fn list_json(dbs: &Dbs) -> Result<String> {
     let rows = sqlx::query_as::<_, (String, String, String, i64, i64, Option<String>)>(
         "SELECT id, source, name, song_count, duration, owner
          FROM playlist
+         WHERE song_count > 0
          ORDER BY lower(name)",
     )
     .fetch_all(&dbs.playlist)
@@ -466,6 +467,30 @@ mod tests {
             download: pools.clone(),
             playlist: playlist.clone(),
         }
+    }
+
+    #[tokio::test]
+    async fn list_skips_empty_playlists() {
+        let library = memory_pool().await;
+        let playlist = memory_pool().await;
+        sqlx::migrate!("./migrations_playlist")
+            .run(&playlist)
+            .await
+            .unwrap();
+        sqlx::query(
+            "INSERT INTO playlist (id, source, name, song_count, fetched_at) VALUES
+             ('p0', 'subsonic', 'Empty', 0, 0),
+             ('p1', 'subsonic', 'Mix', 2, 0)",
+        )
+        .execute(&playlist)
+        .await
+        .unwrap();
+
+        let json = list_json(&test_dbs(&library, &playlist)).await.unwrap();
+        let rows: serde_json::Value = serde_json::from_str(&json).unwrap();
+        let rows = rows.as_array().unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0]["id"], "p1");
     }
 
     #[tokio::test]

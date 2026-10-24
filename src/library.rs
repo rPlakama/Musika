@@ -546,8 +546,9 @@ pub async fn search_artists_albums(
     let like = format!("%{escaped}%");
 
     let artist_sql = format!(
-        "{ARTIST_SELECT} WHERE album_count > 0 AND name LIKE ?1 ESCAPE '\\'
-         ORDER BY name LIMIT ?2"
+        "{ARTIST_SELECT} WHERE EXISTS (
+             SELECT 1 FROM albums WHERE albums.artist_id = artists.id)
+         AND name LIKE ?1 ESCAPE '\\' ORDER BY name LIMIT ?2"
     );
     let artists = sqlx::query_as::<_, ArtistRow>(sqlx::AssertSqlSafe(artist_sql))
         .bind(&like)
@@ -778,7 +779,10 @@ pub async fn artists(pool: &SqlitePool, order: &str) -> Result<Vec<ArtistRow>> {
         "Albums" => " ORDER BY album_count DESC, name",
         _ => " ORDER BY name",
     };
-    let sql = format!("{ARTIST_SELECT} WHERE album_count > 0{order}");
+    let sql = format!(
+        "{ARTIST_SELECT} WHERE EXISTS (
+             SELECT 1 FROM albums WHERE albums.artist_id = artists.id){order}"
+    );
     let rows = sqlx::query_as::<_, ArtistRow>(sqlx::AssertSqlSafe(sql))
         .fetch_all(pool)
         .await?;
@@ -1334,6 +1338,17 @@ mod tests {
                 .bind(id)
                 .bind(name)
                 .bind(count)
+                .execute(&pool)
+                .await
+                .unwrap();
+        }
+        // The list is driven by real album rows, not the provider's
+        // album_count snapshot.
+        for (album, artist) in [("al1", "a1"), ("al2", "a2"), ("al3", "a3")] {
+            sqlx::query("INSERT INTO albums (id, artist_id, name) VALUES (?1, ?2, ?3)")
+                .bind(album)
+                .bind(artist)
+                .bind(artist)
                 .execute(&pool)
                 .await
                 .unwrap();

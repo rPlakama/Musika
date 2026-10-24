@@ -366,7 +366,7 @@ pub async fn rebuild(pool: &SqlitePool) -> Result<()> {
     let artists: Vec<ArtistRow> =
         sqlx::query_as(
             "SELECT id, name, album_count, cover_art, starred FROM artists
-             WHERE album_count > 0",
+             WHERE EXISTS (SELECT 1 FROM albums WHERE albums.artist_id = artists.id)",
         )
             .fetch_all(pool)
             .await?;

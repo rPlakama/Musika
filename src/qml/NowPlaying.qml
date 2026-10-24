@@ -1113,13 +1113,26 @@ Rectangle {
                     // included. Delegates pre-calculate their emphasis so
                     // the grown line never reaches these walls; `clip` is
                     // the last-resort containment.
-                    Rectangle {
-                        id: lyricsStage
-                        radius: Theme.radius
+                    Item {
+                        id: lyricsStageHost
                         Layout.fillWidth: true
                         Layout.fillHeight: true
+
+                    Rectangle {
+                        id: lyricsStage
+                        anchors.fill: parent
+                        radius: Theme.radius
                         color: "transparent"
                         clip: true
+                        layer.enabled: true
+                        layer.effect: MultiEffect {
+                            maskEnabled: true
+                            maskSource: lyricsMaskTexture
+                            maskThresholdMin: 0.0
+                            maskThresholdMax: 1.0
+                            maskSpreadAtMin: 0.0
+                            maskSpreadAtMax: 0.0
+                        }
 
                         ScrollContent {
                             id: lyricsView
@@ -1236,6 +1249,29 @@ Rectangle {
                                 }
                             }
                         }
+                    }
+
+                    // Mask sources live outside the masked stage: MultiEffect
+                    // only sees a valid texture when the source is not itself
+                    // part of the layer being rendered.
+                    ShaderEffectSource {
+                        id: lyricsMaskTexture
+                        sourceItem: lyricsMask
+                        hideSource: true
+                        live: true
+                    }
+
+                    Rectangle {
+                        id: lyricsMask
+                        anchors.fill: parent
+                        readonly property real fade: 0.25
+                        gradient: Gradient {
+                            GradientStop { position: 0.0; color: "transparent" }
+                            GradientStop { position: lyricsMask.fade; color: "white" }
+                            GradientStop { position: 1.0 - lyricsMask.fade; color: "white" }
+                            GradientStop { position: 1.0; color: "transparent" }
+                        }
+                    }
                     }
 
                     FadeText {

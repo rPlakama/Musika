@@ -545,8 +545,10 @@ pub async fn search_artists_albums(
         .replace('_', "\\_");
     let like = format!("%{escaped}%");
 
-    let artist_sql =
-        format!("{ARTIST_SELECT} WHERE name LIKE ?1 ESCAPE '\\' ORDER BY name LIMIT ?2");
+    let artist_sql = format!(
+        "{ARTIST_SELECT} WHERE album_count > 0 AND name LIKE ?1 ESCAPE '\\'
+         ORDER BY name LIMIT ?2"
+    );
     let artists = sqlx::query_as::<_, ArtistRow>(sqlx::AssertSqlSafe(artist_sql))
         .bind(&like)
         .bind(limit)
@@ -776,7 +778,7 @@ pub async fn artists(pool: &SqlitePool, order: &str) -> Result<Vec<ArtistRow>> {
         "Albums" => " ORDER BY album_count DESC, name",
         _ => " ORDER BY name",
     };
-    let sql = format!("{ARTIST_SELECT}{order}");
+    let sql = format!("{ARTIST_SELECT} WHERE album_count > 0{order}");
     let rows = sqlx::query_as::<_, ArtistRow>(sqlx::AssertSqlSafe(sql))
         .fetch_all(pool)
         .await?;
@@ -1322,7 +1324,12 @@ mod tests {
     #[tokio::test]
     async fn artist_orders_switch_between_name_and_album_count() {
         let pool = memory_pool().await;
-        for (id, name, count) in [("a1", "Zed", 3), ("a2", "Alpha", 1), ("a3", "Beta", 5)] {
+        for (id, name, count) in [
+            ("a0", "Empty", 0),
+            ("a1", "Zed", 3),
+            ("a2", "Alpha", 1),
+            ("a3", "Beta", 5),
+        ] {
             sqlx::query("INSERT INTO artists (id, name, album_count) VALUES (?1, ?2, ?3)")
                 .bind(id)
                 .bind(name)
@@ -1345,6 +1352,9 @@ mod tests {
             .map(|artist| artist.name.clone())
             .collect();
         assert_eq!(by_albums, ["Beta", "Zed", "Alpha"]);
+
+        let (found, _) = search_artists_albums(&pool, "Empty", 10).await.unwrap();
+        assert!(found.is_empty(), "empty artists must not be searchable");
     }
 
     #[tokio::test]

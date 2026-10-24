@@ -3,6 +3,14 @@
 All notable changes to Musika, newest first. `TASKLISTMAJOR.md` tracks the
 open work; this file is the release history.
 
+## 0.4.0 — _Now its quite charming, how cute_
+
+All commits since `v0.3.16`:
+
+- `0445f61` Add the VI-8a row clipboard: yank anywhere, paste in the queue
+- `5ac2d56` Decouple the queue drawer from the fullscreen player
+- `a48a215` Close the FIX-UPS audit: reap mpv, dedupe async work
+
 ## 0.3.16 — _Scopes, masks and seated headers_
 
 All commits since `v0.3.15`:

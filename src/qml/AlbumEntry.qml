@@ -503,8 +503,8 @@ Rectangle {
         ColumnLayout {
             id: header
             Layout.fillWidth: true
-            // Controls header margin
-            Layout.bottomMargin: root.height * 0.25
+            // The notes reader owns the band that used to be blank margin.
+            Layout.bottomMargin: 0
             spacing: root.height * 0.008
 
             // Description.
@@ -587,15 +587,14 @@ Rectangle {
                         elide: Text.ElideRight
                     }
                 }
-                // UI-14: one line by default; the Tab stop expands it into
-                // a reader. The expanded block is capped to the header's
-                // share of the pane and scrolls (wheel/trackpad or j/k while
-                // selected) instead of eliding the text.
+                // UI-14: the notes fill the band that used to be blank header
+                // margin. Text wraps inside it; long notes scroll (wheel/trackpad
+                // or j/k while the notes stop is selected) instead of eliding.
                 Item {
                     id: notesBox
                     Layout.fillWidth: true
                     Layout.topMargin: root.height * 0.008
-                    Layout.preferredHeight: root.notesExpanded ? Math.min(notesText.implicitHeight, root.height * 0.30) : notesText.implicitHeight
+                    Layout.preferredHeight: root.height * 0.325
                     visible: root.albumNotes.length > 0
                     clip: true
 
@@ -605,7 +604,7 @@ Rectangle {
                         contentWidth: width
                         contentHeight: notesText.implicitHeight
                         boundsBehavior: Flickable.StopAtBounds
-                        interactive: root.notesExpanded && contentHeight > height
+                        interactive: contentHeight > height
                         clip: true
 
                         FadeText {
@@ -616,8 +615,8 @@ Rectangle {
                             font.pixelSize: root.height * 0.02
                             lineHeight: 1.25
                             wrapMode: Text.WordWrap
-                            maximumLineCount: root.notesExpanded ? 0 : 1
-                            elide: root.notesExpanded ? Text.ElideNone : Text.ElideRight
+                            maximumLineCount: 0
+                            elide: Text.ElideNone
                         }
                     }
 

@@ -7,6 +7,7 @@ open work; this file is the release history.
 
 All commits since `v0.3.15`:
 
+- `34def41` rm quit chip
 - `d05b142` Seat the album Tracks header against its rows
 - `9da668b` Hide artists and playlists with no rows
 - `a50fc34` Fade the lyrics edges and hide empty artists

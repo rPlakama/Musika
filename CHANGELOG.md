@@ -3,6 +3,15 @@
 All notable changes to Musika, newest first. `TASKLISTMAJOR.md` tracks the
 open work; this file is the release history.
 
+## 0.3.16 — _Scopes, masks and seated headers_
+
+All commits since `v0.3.15`:
+
+- `d05b142` Seat the album Tracks header against its rows
+- `9da668b` Hide artists and playlists with no rows
+- `a50fc34` Fade the lyrics edges and hide empty artists
+- `61e7a79` Unify library scopes behind Shift-J/K
+
 ## 0.3.15 — _A native scroll modal and covers on demand_
 
 All commits since `v0.3.14`:

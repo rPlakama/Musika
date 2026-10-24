@@ -317,7 +317,7 @@ Rectangle {
     }
 
     function handleAction(action) {
-        // UI-60/UI-14: Tab cycles rows -> cover -> notes -> Back chip -> rows
+        // UI-60/UI-14: Tab cycles rows -> cover -> notes -> (dropped)Back chip -> rows
         // (Shift+Tab reverses). Selecting the notes expands the reader; the
         // empty-notes albums skip that stop.
         if (action === "pane_cycle" || action === "pane_cycle_back") {
@@ -498,22 +498,6 @@ Rectangle {
         spacing: root.height * 0.02
 
         // Toolbar: back.
-        RowLayout {
-            Layout.fillWidth: true
-            spacing: root.width * 0.02
-
-            ExitChip {
-                host: root
-                label: "ESC/Q"
-                highlighted: root.onToolbar
-                onClicked: root.back()
-            }
-
-            Item {
-                Layout.fillWidth: true
-            }
-        }
-
         // Header: the album art is only the page ambience now; the identity
         // gets the full width.
         ColumnLayout {

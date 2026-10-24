@@ -42,6 +42,9 @@ pub const OBJECT_PATH: &str = "/org/mpris/MediaPlayer2";
 const PLAYER_INTERFACE: &str = "org.mpris.MediaPlayer2.Player";
 /// Don't emit PropertiesChanged faster than this (roadmap robustness rule).
 const RATE_LIMIT: std::time::Duration = std::time::Duration::from_millis(250);
+/// FIX-8: how many queued panel commands the 500 ms tick may have to drain
+/// before further sends are dropped.
+const COMMAND_CAP: usize = 64;
 
 /// What the Qt thread publishes for the service to read.
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -82,8 +85,12 @@ impl Snapshot {
 
 static SNAPSHOT: OnceLock<Mutex<Snapshot>> = OnceLock::new();
 static NOTIFY: OnceLock<Notify> = OnceLock::new();
-static COMMAND_TX: OnceLock<mpsc::UnboundedSender<String>> = OnceLock::new();
-static COMMAND_RX: OnceLock<Mutex<mpsc::UnboundedReceiver<String>>> = OnceLock::new();
+/// FIX-8: a *bounded* command channel — a D-Bus control burst between two
+/// 500 ms ticks coalesces by dropping instead of growing the queue; a full
+/// buffer simply discards the excess (the newest panel intent matters, a
+/// stale `SetVolume`/`SetPosition` under a flood is harmless to lose).
+static COMMAND_TX: OnceLock<mpsc::Sender<String>> = OnceLock::new();
+static COMMAND_RX: OnceLock<Mutex<mpsc::Receiver<String>>> = OnceLock::new();
 
 fn snapshot() -> Snapshot {
     SNAPSHOT
@@ -105,10 +112,16 @@ pub fn publish(state: Snapshot) {
 }
 
 /// Sends one control command to the Qt thread (`mpris_*` vocabulary).
+/// FIX-8: `try_send` drops when the bounded queue is full.
 fn submit(command: String) {
     if let Some(tx) = COMMAND_TX.get() {
-        let _ = tx.send(command);
+        queue_command(tx, command);
     }
+}
+
+/// The non-blocking send policy, split out so the bound is testable.
+fn queue_command(tx: &mpsc::Sender<String>, command: String) {
+    let _ = tx.try_send(command);
 }
 
 fn submit_action(action: &str) {
@@ -144,7 +157,7 @@ pub fn drain() -> Vec<String> {
 
 /// Starts the service (idempotent; safe without a session bus).
 pub fn init() {
-    let (tx, rx) = mpsc::unbounded_channel();
+    let (tx, rx) = mpsc::channel(COMMAND_CAP);
     let _ = COMMAND_TX.set(tx);
     let _ = COMMAND_RX.set(Mutex::new(rx));
     let _ = SNAPSHOT.set(Mutex::new(Snapshot::default()));
@@ -541,5 +554,18 @@ mod tests {
 
         state.volume = 0.5;
         assert_ne!(before, state.signal_key());
+    }
+
+    /// FIX-8: a flood beyond the capacity drops commands instead of growing
+    /// the queue or blocking the bus thread.
+    #[test]
+    fn a_full_command_queue_drops_instead_of_blocking() {
+        let (tx, mut rx) = mpsc::channel(2);
+        queue_command(&tx, "mpris_play".to_string());
+        queue_command(&tx, "mpris_next".to_string());
+        queue_command(&tx, "mpris_previous".to_string());
+        assert_eq!(rx.try_recv().as_deref(), Ok("mpris_play"));
+        assert_eq!(rx.try_recv().as_deref(), Ok("mpris_next"));
+        assert!(rx.try_recv().is_err(), "the excess command was dropped");
     }
 }

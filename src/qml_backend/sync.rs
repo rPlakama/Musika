@@ -68,7 +68,7 @@ pub(super) fn spawn_sync(
     client: SubsonicClient,
     emit_started: bool,
 ) {
-    let Some(dbs) = crate::dbs().cloned() else {
+    let Some(dbs) = crate::dbs() else {
         eprintln!("index: databases are not initialised");
         return;
     };

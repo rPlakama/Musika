@@ -330,9 +330,14 @@ pub fn clear() {
     *slot().write().unwrap_or_else(|error| error.into_inner()) = None;
 }
 
-/// The current index, built lazily from `library.db` on first use. Two
-/// concurrent first searches may build twice; the last swap wins, which is
-/// harmless for a disposable cache.
+/// FIX-6: serialises the catalog build — concurrent first searches (or a
+/// first search racing a post-sync rebuild) wait for the running build
+/// instead of reading the library and building a second catalog in parallel.
+static BUILD: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+/// The current index, built lazily from `library.db` on first use. FIX-6:
+/// concurrent builds wait for the in-flight one (the epoch guard already
+/// handles wipe races).
 pub async fn ensure(pool: &SqlitePool) -> Result<Arc<SearchIndex>> {
     if let Some(index) = slot()
         .read()
@@ -341,7 +346,17 @@ pub async fn ensure(pool: &SqlitePool) -> Result<Arc<SearchIndex>> {
     {
         return Ok(index);
     }
-    rebuild(pool).await?;
+    let build = BUILD.lock().await;
+    // Double-check: the wait may already have paid for the build.
+    if let Some(index) = slot()
+        .read()
+        .unwrap_or_else(|error| error.into_inner())
+        .clone()
+    {
+        return Ok(index);
+    }
+    rebuild_locked(pool).await?;
+    drop(build);
     slot()
         .read()
         .unwrap_or_else(|error| error.into_inner())
@@ -350,8 +365,16 @@ pub async fn ensure(pool: &SqlitePool) -> Result<Arc<SearchIndex>> {
 }
 
 /// Rebuilds the whole catalog from `library.db` (after a sync or on first
-/// use). The Nucleo injection runs on a blocking worker.
+/// use). Serialized with [`ensure`] through [`BUILD`]. The Nucleo injection
+/// runs on a blocking worker.
 pub async fn rebuild(pool: &SqlitePool) -> Result<()> {
+    let build = BUILD.lock().await;
+    let result = rebuild_locked(pool).await;
+    drop(build);
+    result
+}
+
+async fn rebuild_locked(pool: &SqlitePool) -> Result<()> {
     let epoch = EPOCH.load(Ordering::Relaxed);
     let songs: Vec<SongHit> = sqlx::query_as(
         "SELECT s.id, s.title, s.artist, s.album, s.duration,

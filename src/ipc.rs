@@ -66,11 +66,22 @@ where
     }
 }
 
-/// Serves commands on `path` from a dedicated thread, one connection at a time.
-pub fn serve<F>(path: PathBuf, handler: F)
+/// Serves commands on `path` from a dedicated thread. FIX-9: each accepted
+/// stream gets its own short-lived reader thread, so one silent client that
+/// keeps its socket open can no longer block every later client on the
+/// accept loop. Lines from every client funnel through one dispatcher
+/// thread, so the handler stays single-threaded (and need not be `Sync`).
+pub fn serve<F>(path: PathBuf, mut handler: F)
 where
-    F: Fn(String) + Send + 'static,
+    F: FnMut(String) + Send + 'static,
 {
+    let (tx, rx) = std::sync::mpsc::channel::<String>();
+    std::thread::spawn(move || {
+        for line in rx {
+            handler(line);
+        }
+    });
+
     std::thread::spawn(move || {
         remove_stale_socket(&path);
         if let Some(parent) = path.parent() {
@@ -85,12 +96,64 @@ where
             }
         };
 
-        let mut handler = handler;
         for stream in listener.incoming() {
             let Ok(stream) = stream else {
                 continue;
             };
-            read_lines(stream, &mut handler);
+            let tx = tx.clone();
+            spawn_line_reader(stream, move |line| {
+                let _ = tx.send(line);
+            });
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use std::time::{Duration, Instant};
+
+    fn wait_connect(path: &Path) -> UnixStream {
+        let start = Instant::now();
+        loop {
+            match UnixStream::connect(path) {
+                Ok(stream) => return stream,
+                Err(err) => {
+                    assert!(
+                        start.elapsed() < Duration::from_secs(2),
+                        "ipc socket never came up: {err}"
+                    );
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+            }
+        }
+    }
+
+    /// FIX-9: a client that connects and stays silent must not block a
+    /// second client's command.
+    #[test]
+    fn a_silent_client_does_not_block_later_commands() {
+        let dir = std::env::temp_dir().join(format!("musika-ipc-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let path = dir.join("test.sock");
+
+        let (tx, rx) = std::sync::mpsc::channel::<String>();
+        serve(path.clone(), move |line| {
+            let _ = tx.send(line);
+        });
+
+        let silent = wait_connect(&path);
+        let mut second = wait_connect(&path);
+        second.write_all(b"ping\n").expect("write command");
+
+        let received = rx
+            .recv_timeout(Duration::from_secs(2))
+            .expect("the second client's command ran");
+        assert_eq!(received, "ping");
+
+        drop(silent);
+        drop(second);
+        let _ = std::fs::remove_dir_all(dir);
+    }
 }

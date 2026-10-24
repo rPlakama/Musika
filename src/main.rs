@@ -16,7 +16,7 @@
 
 use qtbridge::QApp;
 use sqlx::SqlitePool;
-use std::sync::OnceLock;
+use std::sync::{Arc, OnceLock, PoisonError, RwLock};
 use tokio::runtime::Runtime;
 
 mod api;
@@ -49,31 +49,53 @@ mod search;
 mod sqlite;
 mod status;
 
-static DBS: OnceLock<std::sync::Mutex<&'static db::Dbs>> = OnceLock::new();
+static DBS: OnceLock<RwLock<Arc<db::Dbs>>> = OnceLock::new();
 
-/// The five databases opened at start-up.
-pub fn dbs() -> Option<&'static db::Dbs> {
-    DBS.get().map(|slot| *slot.lock().expect("dbs lock"))
+/// The five databases opened at start-up. FIX-3: an owned handle over a
+/// swappable slot — repeated wipes no longer leak a leaked database set per
+/// pass; the old set is dropped and its pools closed.
+pub fn dbs() -> Option<Arc<db::Dbs>> {
+    let slot = DBS.get()?;
+    let guard = slot.read().unwrap_or_else(PoisonError::into_inner);
+    Some(Arc::clone(&guard))
 }
 
 /// Swaps in a freshly initialised set (the full wipe deletes the files and
-/// re-inits; the old handle leaks, which is once-per-wipe).
+/// re-inits). The previous set's pools — including the separate `search`
+/// pool `wipe_files` never closed — are closed on the runtime afterwards, so
+/// repeated wipes do not accumulate stale connections over unlinked files.
 pub fn set_dbs(dbs: db::Dbs) {
     // ARC-SEARCH: the in-memory catalog belongs to the database it was built
     // from; a fresh set starts cold and rebuilds on first search/sync.
     search::index::clear();
-    let leaked: &'static db::Dbs = Box::leak(Box::new(dbs));
+    let dbs = Arc::new(dbs);
     match DBS.get() {
-        Some(slot) => *slot.lock().expect("dbs lock") = leaked,
+        Some(slot) => {
+            let mut guard = slot.write().unwrap_or_else(PoisonError::into_inner);
+            let old = std::mem::replace(&mut *guard, Arc::clone(&dbs));
+            drop(guard);
+            drop_dbs(old);
+        }
         None => {
-            let _ = DBS.set(std::sync::Mutex::new(leaked));
+            let _ = DBS.set(RwLock::new(dbs));
         }
     }
 }
 
+/// Closes the distinct pools of an old database set off the Qt/DB threads.
+/// `library`/`credentials` share one pool, so do `media`/`covers`/…; only
+/// `search` is separate (FIX-3).
+fn drop_dbs(old: Arc<db::Dbs>) {
+    runtime().spawn(async move {
+        for pool in [&old.library, &old.search, &old.media] {
+            pool.clone().close().await;
+        }
+    });
+}
+
 /// Convenience accessor for the credentials database.
-pub fn pool() -> Option<&'static SqlitePool> {
-    dbs().map(|dbs| &dbs.credentials)
+pub fn pool() -> Option<SqlitePool> {
+    dbs().map(|dbs| dbs.credentials.clone())
 }
 
 pub fn runtime() -> &'static Runtime {

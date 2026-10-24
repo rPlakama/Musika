@@ -41,7 +41,7 @@
 use std::io::Write;
 use std::os::unix::net::UnixStream;
 use std::os::unix::process::CommandExt;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -150,6 +150,22 @@ const MAX_RETRIES: u32 = 2;
 /// Backoff before a retry (the first retry is immediate).
 const RETRY_BACKOFF: Duration = Duration::from_secs(1);
 
+/// FIX-11: how long a spawned mpv may take to expose its IPC socket before
+/// the child is reaped and the next start re-spawns it.
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(3);
+
+/// FIX-1/FIX-11: outcome of [`Player::ensure_ready`].
+enum Ready {
+    /// The IPC socket is connected; commands can flow.
+    Connected,
+    /// mpv is spawned (or resurrected from the previous attempt); its socket
+    /// is not up yet. The start is deferred to the pump.
+    Connecting,
+    /// The spawn failed, or the connect deadline passed and the child was
+    /// reaped. Nothing is attached; a later start re-spawns.
+    Failed,
+}
+
 /// Playback queue plus the running `mpv` process and its IPC connection.
 pub struct Player {
     queue: Vec<Track>,
@@ -172,6 +188,11 @@ pub struct Player {
     retries: u32,
     /// When the next retry is due (backoff between attempts).
     retry_at: Option<Instant>,
+    /// FIX-11: when the current deferred connect attempt times out; `None`
+    /// once connected or reaped.
+    connect_deadline: Option<Instant>,
+    /// FIX-11: `play_current` is waiting for the socket; rebuild on the pump.
+    deferred_start: bool,
     /// Row revision (QUEUEROWSTUDY QR-1): bumped by every mutation of the
     /// queue's rows, so `emit_queue` can skip its O(N) clone/read/serialize
     /// when only the index moved (a skip or an advance).
@@ -202,6 +223,8 @@ impl Player {
             window_len: 0,
             retries: 0,
             retry_at: None,
+            connect_deadline: None,
+            deferred_start: false,
             revision: 0,
         }
     }
@@ -338,11 +361,37 @@ impl Player {
             self.state = State::Stopped;
             return;
         }
-        if !self.ensure_ready() {
-            self.state = State::Stopped;
-            return;
+        match self.ensure_ready() {
+            Ready::Connected => {
+                self.deferred_start = false;
+                self.rebuild();
+            }
+            Ready::Connecting => {
+                // FIX-11: the socket is still coming up; the rebuild rides
+                // the pump instead of sleeping here (UI pumping).
+                self.state = State::Playing;
+                self.deferred_start = true;
+                *self.shared() = Shared::default();
+            }
+            Ready::Failed => self.state = State::Stopped,
         }
+    }
+
+    /// Resolves a deferred start now that the socket is live. While the
+    /// connect was pending, `pause`/`seek` commands were dropped with no
+    /// socket — replay that intent after the rebuild, so a restored session
+    /// still comes up paused at its saved playhead instead of autoplaying.
+    fn finish_deferred_start(&mut self) {
+        let paused = self.state == State::Paused;
+        let position = self.shared().position;
+        self.deferred_start = false;
         self.rebuild();
+        if paused {
+            self.pause();
+        }
+        if position > 0.0 {
+            self.seek(position);
+        }
     }
 
     /// Loads the current track as a fresh one-entry playlist window. A
@@ -421,6 +470,7 @@ impl Player {
         self.window_len = 0;
         self.retries = 0;
         self.retry_at = None;
+        self.deferred_start = false;
         self.state = State::Stopped;
     }
 
@@ -587,6 +637,22 @@ impl Player {
     /// failed loads (retry in place, then advance) and keeps the window's
     /// one-entry lookahead. Returns a user-facing toast when a track failed.
     pub fn pump(&mut self) -> Option<String> {
+        // FIX-11: finish a deferred start once the IPC socket is up; the
+        // rebuild waits for readiness instead of the Qt thread.
+        if self.deferred_start && self.state != State::Stopped {
+            match self.ensure_ready() {
+                Ready::Connected => {
+                    self.finish_deferred_start();
+                    return None;
+                }
+                Ready::Failed => {
+                    self.deferred_start = false;
+                    self.state = State::Stopped;
+                    return None;
+                }
+                Ready::Connecting => return None,
+            }
+        }
         if self.state == State::Stopped {
             return None;
         }
@@ -726,78 +792,128 @@ impl Player {
         self.shared().error = None;
     }
 
-    fn ensure_ready(&mut self) -> bool {
+    /// FIX-1: reaps a spawned mpv whose IPC socket never came up (or was
+    /// replaced by a later attempt), so a retried start cannot orphan the
+    /// process and its reader thread.
+    fn reap_child(&mut self) {
+        if let Some(mut child) = self.child.take() {
+            // mpv shuts down cleanly on TERM; `child.kill()` would SIGKILL it.
+            signal(child.id(), sys::SIGTERM);
+            let _ = child.wait();
+        }
+        if let Some(socket) = self.socket.take() {
+            crate::ipc::remove_stale_socket(&socket);
+        }
+        self.connect_deadline = None;
+    }
+
+    /// Readiness state machine (FIX-1/FIX-11): the child is stored only
+    /// once its socket connects, a failed spawn/connect inverts to no
+    /// child, and the sleeping retry loop is gone — one connect attempt
+    /// per call, deferred to the pump.
+    ///
+    /// mpv is our direct child and the kernel TERMs it if we die (even on
+    /// SIGKILL, where Drop never runs): PR_SET_PDEATHSIG in `pre_exec`, no
+    /// supervisor shell. PDEATHSIG follows the spawning thread, and
+    /// `ensure_ready` runs on the Qt thread, which lives for the process.
+    fn ensure_ready(&mut self) -> Ready {
         if self.ipc.is_some() {
-            return true;
+            return Ready::Connected;
         }
 
         let socket = crate::db::config_socket("mpv.sock");
-        crate::ipc::remove_stale_socket(&socket);
 
-        // mpv is our direct child and the kernel TERMs it if we die (even on
-        // SIGKILL, where Drop never runs): PR_SET_PDEATHSIG in `pre_exec`, no
-        // supervisor shell. PDEATHSIG follows the spawning thread, and
-        // `ensure_ready` runs on the Qt thread, which lives for the process.
-        let parent = std::process::id();
-        let socket_arg = format!("--input-ipc-server={}", socket.display());
+        if self.child.is_none() {
+            crate::ipc::remove_stale_socket(&socket);
+            let parent = std::process::id();
+            let socket_arg = format!("--input-ipc-server={}", socket.display());
 
-        let mut command = Command::new("mpv");
-        command
-            .arg("--no-video")
-            .arg("--idle=yes")
-            .arg("--no-terminal")
-            .arg("--really-quiet")
-            // Hardware decode when the backend/source supports it; the safe
-            // variant falls back to software instead of failing playback.
-            // (The player is audio-only, so this matters for video-bearing
-            // streams and codecs with a hw path; audio keeps FFmpeg.)
-            .arg("--hwdec=auto-safe")
-            // Q-5: gap-free playlist transitions and HTTP drop recovery
-            // (`PLAYBACKSTUDY.md` §2/§4). The prefetch is capped: the
-            // demuxer caches default to 150+50 MiB per demuxer, and the
-            // prefetched entry is a second one.
-            .arg("--gapless-audio=yes")
-            .arg("--prefetch-playlist=yes")
-            .arg("--demuxer-max-bytes=32MiB")
-            .arg("--demuxer-max-back-bytes=8MiB")
-            .arg("--stream-lavf-o=reconnect=1,reconnect_streamed=1,reconnect_delay_max=5")
-            .arg(&socket_arg);
-        if let Some(script) = crate::mpris::mpris_script() {
-            command.arg(format!("--script={script}"));
-        }
-        unsafe {
-            command.pre_exec(move || {
-                if sys::prctl(sys::PR_SET_PDEATHSIG, sys::SIGTERM) == -1 {
-                    return Err(std::io::Error::last_os_error());
+            let mut command = Command::new("mpv");
+            command
+                .arg("--no-video")
+                .arg("--idle=yes")
+                .arg("--no-terminal")
+                .arg("--really-quiet")
+                // Hardware decode when the backend/source supports it; the
+                // safe variant falls back to software instead of failing
+                // playback. (The player is audio-only, so this matters for
+                // video-bearing streams and codecs with a hw path; audio
+                // keeps FFmpeg.)
+                .arg("--hwdec=auto-safe")
+                // Q-5: gap-free playlist transitions and HTTP drop recovery
+                // (`PLAYBACKSTUDY.md` §2/§4). The prefetch is capped: the
+                // demuxer caches default to 150+50 MiB per demuxer, and the
+                // prefetched entry is a second one.
+                .arg("--gapless-audio=yes")
+                .arg("--prefetch-playlist=yes")
+                .arg("--demuxer-max-bytes=32MiB")
+                .arg("--demuxer-max-back-bytes=8MiB")
+                .arg("--stream-lavf-o=reconnect=1,reconnect_streamed=1,reconnect_delay_max=5")
+                .arg(&socket_arg);
+            if let Some(script) = crate::mpris::mpris_script() {
+                command.arg(format!("--script={script}"));
+            }
+            unsafe {
+                command.pre_exec(move || {
+                    if sys::prctl(sys::PR_SET_PDEATHSIG, sys::SIGTERM) == -1 {
+                        return Err(std::io::Error::last_os_error());
+                    }
+                    // The parent may have died between fork and prctl;
+                    // PDEATHSIG would not fire then, so bail out instead of
+                    // leaking.
+                    if sys::getppid() as u32 != parent {
+                        return Err(std::io::Error::other("parent died before spawn"));
+                    }
+                    Ok(())
+                });
+            }
+
+            match command
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn()
+            {
+                Ok(child) => {
+                    // Stored before the connect, but never orphaned: the
+                    // deadline path reaps it (FIX-1) and `Drop` covers the
+                    // rest of the lifetime.
+                    self.child = Some(child);
+                    self.socket = Some(socket.clone());
+                    self.connect_deadline = Some(Instant::now() + CONNECT_TIMEOUT);
                 }
-                // The parent may have died between fork and prctl; PDEATHSIG
-                // would not fire then, so bail out instead of leaking.
-                if sys::getppid() as u32 != parent {
-                    return Err(std::io::Error::other("parent died before spawn"));
+                Err(err) => {
+                    eprintln!("player: could not start mpv: {err}");
+                    return Ready::Failed;
                 }
-                Ok(())
-            });
-        }
-
-        let spawn = command
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn();
-
-        match spawn {
-            Ok(child) => self.child = Some(child),
-            Err(err) => {
-                eprintln!("player: could not start mpv: {err}");
-                return false;
             }
         }
 
-        let Some(stream) = connect_retry(&socket, Duration::from_secs(3)) else {
-            eprintln!("player: could not connect to mpv IPC socket");
-            return false;
-        };
+        // FIX-11: one connect attempt per call — a Unix socket connect on
+        // a missing socket file returns immediately (ENOENT), so this never
+        // blocks the Qt thread.
+        match UnixStream::connect(&socket) {
+            Ok(stream) => {
+                self.connect_deadline = None;
+                self.finish_connect(stream);
+                Ready::Connected
+            }
+            Err(_) => {
+                let deadline_exceeded = self
+                    .connect_deadline
+                    .is_some_and(|deadline| Instant::now() >= deadline);
+                if deadline_exceeded {
+                    self.reap_child();
+                    return Ready::Failed;
+                }
+                Ready::Connecting
+            }
+        }
+    }
 
+    /// Finishes the connect: the reader thread, the observed properties and
+    /// the volume/mute carried over from the previous session.
+    fn finish_connect(&mut self, stream: UnixStream) {
         if let Ok(reader) = stream.try_clone() {
             let shared = Arc::clone(&self.shared);
             crate::ipc::spawn_line_reader(reader, move |line| {
@@ -809,7 +925,6 @@ impl Player {
             });
         }
         self.ipc = Some(stream);
-        self.socket = Some(socket);
 
         // Observe the properties the UI needs, then apply volume and mute.
         self.observe(1, "time-pos");
@@ -818,7 +933,6 @@ impl Player {
         self.observe(4, "playlist-pos");
         self.set_volume(self.volume);
         self.set_muted(self.muted);
-        true
     }
 
     fn command(&mut self, args: Vec<Value>) -> bool {
@@ -837,27 +951,7 @@ impl Player {
 impl Drop for Player {
     fn drop(&mut self) {
         self.ipc = None;
-        if let Some(mut child) = self.child.take() {
-            // mpv shuts down cleanly on TERM; `child.kill()` would SIGKILL it.
-            signal(child.id(), sys::SIGTERM);
-            let _ = child.wait();
-        }
-        if let Some(socket) = &self.socket {
-            crate::ipc::remove_stale_socket(socket);
-        }
-    }
-}
-
-fn connect_retry(path: &Path, timeout: Duration) -> Option<UnixStream> {
-    let start = Instant::now();
-    loop {
-        if let Ok(stream) = UnixStream::connect(path) {
-            return Some(stream);
-        }
-        if start.elapsed() >= timeout {
-            return None;
-        }
-        std::thread::sleep(Duration::from_millis(50));
+        self.reap_child();
     }
 }
 
@@ -1052,5 +1146,76 @@ mod tests {
         player.append(vec![track("s3")]);
         assert_eq!(player.len(), 3);
         assert_eq!(player.index(), 0);
+    }
+
+    #[test]
+    fn request_ids_increase_by_one_per_command() {
+        let mut player = Player::new();
+        player.command(vec![json!("stop")]);
+        player.command(vec![json!("stop")]);
+        assert_eq!(player.request_id, 2);
+    }
+
+    /// FIX-11 regression: `load_paused` pauses while the socket is still
+    /// connecting (the command is dropped). Resolving the deferred start
+    /// must not autoplay the restored queue.
+    #[test]
+    fn a_deferred_paused_start_stays_paused() {
+        let mut player = Player::new();
+        player.queue = vec![track("s1")];
+        player.deferred_start = true;
+        player.state = State::Paused;
+        player.finish_deferred_start();
+        assert_eq!(player.state(), State::Paused);
+        assert!(!player.deferred_start);
+    }
+
+    /// FIX-11 regression: a seek issued while connecting (restored playhead)
+    /// survives the deferred rebuild.
+    #[test]
+    fn a_deferred_start_keeps_the_pending_playhead() {
+        let mut player = Player::new();
+        player.queue = vec![track("s1")];
+        player.deferred_start = true;
+        player.state = State::Playing;
+        player.shared().position = 42.0;
+        player.finish_deferred_start();
+        assert_eq!(player.state(), State::Playing);
+        assert_eq!(player.position(), 42.0);
+    }
+
+    /// FIX-1: reaping takes ownership of the spawned child (TERM + wait)
+    /// and clears the recorded socket, so a retried start cannot orphan
+    /// the process.
+    #[test]
+    fn reap_child_takes_the_child_and_the_down() {
+        let mut player = Player::new();
+        player.child = Some(Command::new("sleep").arg("1").spawn().unwrap());
+        player.socket = Some(PathBuf::from("/tmp/nonexistent-musika.sock"));
+        player.connect_deadline = Some(Instant::now() + Duration::from_secs(1));
+        player.reap_child();
+        assert!(player.child.is_none());
+        assert!(player.socket.is_none());
+        assert!(player.connect_deadline.is_none());
+    }
+
+    /// FIX-11: while the socket is coming up the start defers instead of
+    /// sleeping on the caller; the same calendar retry never re-spawns,
+    /// and `stop` during the deferral aborts the start.
+    #[test]
+    fn stop_during_a_deferred_start_aborts_it() {
+        let mut player = Player::new();
+        // Spawn mpv (connect pending) without connecting.
+        if !matches!(player.ensure_ready(), Ready::Connecting) {
+            return; // mpv not testable here; the live verify covers it.
+        }
+        player.state = State::Playing;
+        player.deferred_start = true;
+        player.stop();
+        assert!(player.child.is_some(), "stop reuses the spawned child");
+        assert!(!player.deferred_start);
+        assert_eq!(player.state(), State::Stopped);
+        player.pump();
+        assert_eq!(player.state(), State::Stopped);
     }
 }

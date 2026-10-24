@@ -379,7 +379,25 @@ where
 /// Runs as the sync's secondary, asynchronous task: failures are logged and
 /// swallowed, because the library and search databases are already
 /// consistent and a cover cache problem is not fatal.
+/// FIX-7: one cover pass may run at a time — the sync returns before its
+/// detached cover task, so a back-to-back sync would otherwise start a
+/// second pass while the first is still revalidating/rewriting rows. An
+/// overlapping pass just waits for the lock (the next TTL/sync would repeat
+/// the check anyway).
+static COVER_PASS: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
 pub(crate) async fn cache_covers(
+    dbs: &Dbs,
+    client: &Arc<SubsonicClient>,
+    forced: &[String],
+) -> CoverReport {
+    let pass = COVER_PASS.lock().await;
+    let result = cache_covers_locked(dbs, client, forced).await;
+    drop(pass);
+    result
+}
+
+async fn cache_covers_locked(
     dbs: &Dbs,
     client: &Arc<SubsonicClient>,
     forced: &[String],

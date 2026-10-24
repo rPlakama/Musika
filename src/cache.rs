@@ -40,8 +40,11 @@ pub fn write_atomic(dir: &Path, file: &str, bytes: &[u8]) -> Result<PathBuf> {
     ));
     std::fs::write(&tmp_path, bytes)
         .with_context(|| format!("failed to write {}", tmp_path.display()))?;
-    std::fs::rename(&tmp_path, &final_path)
-        .with_context(|| format!("failed to replace {}", final_path.display()))?;
+    if let Err(err) = std::fs::rename(&tmp_path, &final_path) {
+        // FIX-10: a failed replace must not litter the cache directory.
+        let _ = std::fs::remove_file(&tmp_path);
+        return Err(err).with_context(|| format!("failed to replace {}", final_path.display()));
+    }
     Ok(final_path)
 }
 
@@ -168,5 +171,21 @@ mod tests {
                 .unwrap(),
             0
         );
+    }
+
+    /// FIX-10: a replace that cannot rename (the destination is a directory)
+    /// leaves no `*.tmp` behind.
+    #[test]
+    fn a_failed_replace_removes_the_temp_file() {
+        let dir = std::env::temp_dir().join(format!("musika-atomic-{}", std::process::id()));
+        std::fs::create_dir_all(dir.join("cover.jpg")).expect("blocking dir");
+        assert!(write_atomic(&dir, "cover.jpg", b"bytes").is_err());
+        let leftovers: Vec<_> = std::fs::read_dir(&dir)
+            .expect("temp dir")
+            .flatten()
+            .filter(|entry| entry.file_name().to_string_lossy().ends_with(".tmp"))
+            .collect();
+        assert!(leftovers.is_empty(), "temp files must be cleaned up");
+        let _ = std::fs::remove_dir_all(dir);
     }
 }

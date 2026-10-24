@@ -43,6 +43,185 @@ Order = trust/correctness > unblocking > user value > effort.
 
 The app is unsafe or misleading without these.
 
+### FIX-UPS — Rust audit (0.3.16)
+
+- [x] **FIX-1 · Reap mpv when the IPC connect fails** — P0 · (process/thread leak)
+  - **Why:** `Player::ensure_ready` stores the spawned `Child` before
+    `connect_retry`. A failed connect returns `false` with the child still
+    live; the next retry spawns another mpv and overwrites the old `Child`
+    without TERM/wait, orphaning the process and its reader thread.
+  - **Details:** store the child only after the socket connects; on failure
+    TERM/wait it and clear `self.child`. Also clear a stale `self.socket`.
+  - **Verify:** force a connect timeout (dead `mpv.sock`) and confirm no
+    `mpv` process survives after the failed retry.
+  - **Now:** `ensure_ready` is a `Ready` state machine (Connected /
+    Connecting / Failed) and owns a `reap_child` (TERM + wait + stale-socket
+    removal + `connect_deadline` clear) shared with `Drop`. The child is
+    stored at spawn but is never orphaned — the connect deadline reaps it
+    exactly once, and a later start re-spawns clean (covered by the
+    `reap_child_takes_the_child_and_the_down` unit test).
+
+- [x] **FIX-2 · Dedupe on-demand cover fetches and thumb jobs** — P1 · (task storm)
+  - **Why:** every `covers::url_map_of` miss spawns a detached `fetch_ids`
+    task, and every `cached_urls` call spawns detached thumbnail jobs. A
+    page reload/scroll while the cover is still missing starts the same work
+    again.
+  - **Details:** keep an in-flight `HashSet<String>` per work kind (cover id
+    for fetches, thumb file name for thumbs); skip ids already running and
+    remove them when the task ends. Do not hold the set across await points.
+  - **Verify:** request the same missing cover / thumb repeatedly; only one
+    fetch/thumb job runs per id.
+  - **Now:** process-global `LazyLock` claim registries (`ONGOING_FETCHES`
+    keyed by cover id, `ONGOING_THUMBS` keyed by thumb file name) with
+    short-lock claim/release (poison-safe, never held across an await).
+    `url_map_of` claims ids before spawning the fetch task and releases
+    when it ends (a failure is retryable by the next request);
+    `cached_urls` filters its detached thumb jobs through the thumb
+    registry, and `ensure_thumbs` returns the names it processed for the
+    release. The sync pass (`covers::refresh`) is untouched. Pinned by
+    `a_claimed_id_blocks_until_released`.
+
+- [x] **FIX-3 · Do not leak the previous `Dbs` on wipe** — P2 · (memory/FD leak)
+  - **Why:** `main::set_dbs` `Box::leak`s every new database set and drops
+    only the pointer to the old one; `db::wipe_files` closes `library` and
+    `media` but not the separate `search` pool. Repeated full wipes
+    accumulate closed pools and stale connections.
+  - **Details:** replace the leak with an owned swappable slot (e.g.
+    `OnceLock<RwLock<Dbs>>` or `ArcSwap`), or explicitly close `search` and
+    drop the old set when swapping.
+  - **Verify:** wipe repeatedly; process FD/RSS count stays flat.
+  - **Now:** `DBS` is a `OnceLock<RwLock<Arc<db::Dbs>>>`; `dbs()` returns an
+    owned `Arc<db::Dbs>` and `pool()` an owned `SqlitePool` clone — no
+    `Box::leak` anywhere. `set_dbs` swaps the slot and hands the previous
+    set to `drop_dbs`, which closes the three distinct pools (`library`,
+    `search`, `media`) on the runtime afterwards — the search pool wipe
+    never closed is closed here. The 21 `crate::dbs().cloned()` call sites
+    became `crate::dbs()` (the `spawn_task`/`spawn_data` bounds now take
+    `FnOnce(Arc<db::Dbs>)`).
+
+- [x] **FIX-4 · Generate/cancel library page loads** — P2 · (stale pumping)
+  - **Why:** `qml::spawn_data` starts a task per albums/artists/songs/
+    playlists request; old loads keep running and can emit after a newer
+    order/filter/page request.
+  - **Details:** mirror the `SEARCH_GEN` pattern: one generation per channel,
+    increment on each request, drop the payload when the generation moved.
+    Optionally coalesce identical in-flight requests.
+  - **Verify:** hammer order keys/pages while a slow load is in flight; only
+    the latest payload lands and old tasks are short-lived.
+  - **Now:** `DATA_GEN` — one `u64` generation per channel in a
+    poison-safe `LazyLock<Mutex<HashMap<&'static str, u64>>>`, bumped on
+    every `spawn_data` request; the spawned task re-checks before starting
+    its load and before emitting, so a superseded load is short-lived and
+    never lands. Emit stays on the channel; coalescing intentionally not
+    built (identical requests are rare and each misses are cheap).
+
+- [x] **FIX-5 · Coalesce lyric requests** — P2 · (duplicate network work)
+  - **Why:** `requestLyrics` starts a fetch plus three prefetches every
+    call; there is no in-flight key, unlike `requestColors`.
+  - **Details:** keep `lyrics_in_flight` (current song id) and skip repeated
+    requests while it matches; clear it on delivery. Prefetch ids can use the
+    same set.
+  - **Verify:** repeated `requestLyrics` for one song starts one fetch.
+  - **Now:** `lyrics_in_flight: Option<String>` mirrors the colors marker —
+    `request_lyrics` skips while it matches, clearing happens on delivery
+    (the fetch task invokes the new `lyricsReady` slot on the invoker after
+    the emit), and `refresh_lyrics` drops the marker so a manual pass can
+    re-request. The prefetches ride the same single task, so one request per
+    beat owns them too.
+
+- [x] **FIX-6 · Serialize the first search-index build** — P2 · (duplicate CPU)
+  - **Why:** `search::index::ensure` allows concurrent first builds; each
+    one reads the library and builds a full Nucleo catalog in
+    `spawn_blocking`.
+  - **Details:** add a build mutex/once-in-flight; the second caller waits
+    for the slot instead of starting another build (the epoch guard already
+    handles wipe races).
+  - **Verify:** two simultaneous first searches produce one catalog build.
+  - **Now:** a process-global `BUILD` `tokio::sync::Mutex` serialises `ensure`
+    and `rebuild`; `ensure` double-checks the slot after acquiring the lock
+    (the waiter may already have paid for the build), and both route through
+    `rebuild_locked` — the last-swap-wins pathology is gone, the wipe-epoch
+    guard is unchanged.
+
+- [x] **FIX-7 · Guard overlapping sync cover passes** — P2 · (task overlap)
+  - **Why:** the sync finishes before its detached cover task; a new sync
+    can start a second cover pass while the first is still touching/writing
+    rows.
+  - **Details:** one in-flight cover-pass flag; a new pass either waits,
+    merges its forced ids into the running pass, or skips (next TTL/sync
+    covers it).
+  - **Verify:** trigger two syncs back-to-back; only one cover pass runs.
+  - **Now:** a process-global `COVER_PASS` `tokio::sync::Mutex` taken at the
+    head of `index::cache_covers` (`cache_covers_locked` holds the body) —
+    an overlapping pass waits instead of revalidating/rewriting rows
+    concurrently; a skipping/merging policy was not needed since a queued
+    pass is correct and self-expiring.
+
+- [x] **FIX-8 · Cap/coalesce MPRIS commands** — P3 · (unbounded channel)
+  - **Why:** `mpris::COMMAND_TX` is an unbounded `mpsc`; the 500 ms tick
+    drains it, so a D-Bus burst between ticks grows memory without a cap.
+  - **Details:** use a bounded channel (drop/coalesce when full) or a small
+    pending-command set keyed by action.
+  - **Verify:** flood MPRIS controls faster than the tick; queue length stays
+    bounded.
+  - **Now:** the channel is `mpsc::channel(COMMAND_CAP)` (64) and `submit`
+    uses `try_send` through a small `queue_command` helper — a full queue
+    drops the excess instead of growing or blocking the bus thread. Pinned
+    by `a_full_command_queue_drops_instead_of_blocking`.
+
+- [x] **FIX-9 · Serve IPC clients without blocking accept** — P3 · (liveness)
+  - **Why:** `ipc::serve` calls `read_lines` on its accept thread; one client
+    that keeps the socket open blocks every later client.
+  - **Details:** hand each stream to `spawn_line_reader` (a short-lived
+    thread/task) and keep the accept loop free, or use a single non-blocking
+    reader with per-connection state.
+  - **Verify:** open a silent IPC client, then send a real command from a
+    second client; it still runs.
+  - **Now:** the accept loop only accepts; each stream gets a
+    `spawn_line_reader` thread that funnels lines into an `mpsc` channel,
+    drained by one dispatcher thread that owns the handler (so the handler
+    stays single-threaded and `Send`-only — `QmlMethodInvoker` is not
+    `Sync`). Pinned by
+    `a_silent_client_does_not_block_later_commands`.
+
+- [x] **FIX-10 · Remove temp files after a failed atomic rename** — P3 · (temp litter)
+  - **Why:** `cache::write_atomic` writes `*.tmp` then renames; if rename
+    fails the temp file is left behind.
+  - **Details:** on rename error remove the temp path before returning the
+    error.
+  - **Verify:** simulate a failed rename; no `*.tmp` remains.
+  - **Now:** the rename error path removes the temp file before returning
+    (context preserved). Pinned by `a_failed_replace_removes_the_temp_file`
+    (rename onto a directory forces the failure).
+
+- [x] **FIX-11 · Move `connect_retry` off the Qt thread** — P1 · (UI pumping)
+  - **Why:** starting mpv sleeps 50 ms at a time for up to 3 s on the Qt
+    thread (`player::connect_retry`), freezing the tick and input.
+  - **Details:** poll the socket from the runtime (or a short-lived worker)
+    and deliver readiness back to the player pump; or use an async connect.
+  - **Verify:** start playback with a slow mpv; the UI stays responsive.
+  - **Now:** `connect_retry` is gone. `ensure_ready` spawns on the first
+    call and does exactly one per-call connect attempt — a Unix socket
+    connect on a missing socket file returns immediately (ENOENT), nothing
+    sleeps. `play_current` defers the rebuild (`deferred_start`, state
+    Playing with a zeroed `Shared`), and `pump` resolves it on the next
+    tick; `stop` during the deferral aborts it (and reuses the spawned
+    child for the next start) — covered by
+    `stop_during_a_deferred_start_aborts_it`. `finish_deferred_start`
+    replays the intent issued while connecting (a `pause` from
+    `load_paused` and the restored playhead `seek`), so a restored session
+    still opens paused instead of autoplaying — pinned by
+    `a_deferred_paused_start_stays_paused` and
+    `a_deferred_start_keeps_the_pending_playhead`.
+
+- [x] **FIX-12 · Remove the double `request_id` increment** — P3 · (cleanup)
+  - **Why:** `Player::command` increments `request_id` twice per command;
+    harmless but misleading for the mpv request/response mapping.
+  - **Details:** keep one increment.
+  - **Verify:** request ids increase by one per command in the player tests.
+  - **Now:** the audit found a single increment (`player.rs` `command`);
+    nothing to change. Pinned by `request_ids_increase_by_one_per_command`.
+
 - [x] **#bug 2 · Order (type) swaps flicker the top rows** — P0 · (reported)
   - **Why:** changing the list order/type made the first rows (the top
     three) visibly flicker.

@@ -32,7 +32,7 @@
 
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock, Mutex, MutexGuard, PoisonError};
 
 use anyhow::{Context, Result};
 use openssl::hash::MessageDigest;
@@ -45,6 +45,51 @@ use crate::http_client::SubsonicClient;
 /// the server-downscaled 512 px variant; their missing prefix forces one raw
 /// refetch on the next pass.
 const RAW_PREFIX: &str = "raw-";
+
+/// FIX-2: in-flight registries — a repeated page reload/scroll while a cover
+/// is still missing (or its thumbnail is not generated yet) must not start
+/// the same background work again. Claimed ids are held only inside the
+/// spawned task's life; the lock is taken briefly, never across an await.
+static ONGOING_FETCHES: LazyLock<Mutex<HashSet<String>>> =
+    LazyLock::new(|| Mutex::new(HashSet::new()));
+static ONGOING_THUMBS: LazyLock<Mutex<HashSet<String>>> =
+    LazyLock::new(|| Mutex::new(HashSet::new()));
+
+fn claim_fetch(id: &str) -> bool {
+    claim(&ONGOING_FETCHES, id)
+}
+
+fn release_fetch(id: String) {
+    release(&ONGOING_FETCHES, id);
+}
+
+fn claim_thumb(name: &str) -> bool {
+    claim(&ONGOING_THUMBS, name)
+}
+
+fn release_thumb(name: String) {
+    release(&ONGOING_THUMBS, name);
+}
+
+fn claim(set: &Mutex<HashSet<String>>, key: &str) -> bool {
+    set.lock_unguarded().insert(key.to_string())
+}
+
+fn release(set: &Mutex<HashSet<String>>, key: String) {
+    set.lock_unguarded().remove(&key);
+}
+
+/// Mutex helper that never panics on a poisoned lock (a claim registry
+/// carries no invariant worth aborting for).
+trait LockUnguarded {
+    fn lock_unguarded(&self) -> MutexGuard<'_, HashSet<String>>;
+}
+
+impl LockUnguarded for Mutex<HashSet<String>> {
+    fn lock_unguarded(&self) -> MutexGuard<'_, HashSet<String>> {
+        self.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+}
 
 /// Longest edge of the thumbnail kept beside each cover; small surfaces load
 /// this instead of the full art (keep in sync with `CoverImage.thumbEdge`).
@@ -271,7 +316,7 @@ async fn refresh_inner(
         }
     }
 
-    ensure_thumbs(&dir, thumb_jobs).await;
+    let _ = ensure_thumbs(&dir, thumb_jobs).await;
     remove_orphans(pool, &dir).await?;
 
     Ok(report)
@@ -520,8 +565,10 @@ fn write_thumb(source: &Path, dir: &Path, name: &str) -> Result<()> {
 }
 
 /// Generates missing thumbnails on a bounded blocking pool: decoding is CPU
-/// work, and the Qt image reader only decodes one file at a time.
-async fn ensure_thumbs(dir: &Path, jobs: Vec<(String, PathBuf)>) {
+/// work, and the Qt image reader only decodes one file at a time. Returns
+/// the thumb names it processed so the caller can release its claims.
+async fn ensure_thumbs(dir: &Path, jobs: Vec<(String, PathBuf)>) -> Vec<String> {
+    let processed: Vec<String> = jobs.iter().map(|(name, _)| name.clone()).collect();
     for chunk in jobs.chunks(THUMB_CONCURRENCY) {
         let mut set = tokio::task::JoinSet::new();
         for (name, source) in chunk {
@@ -536,6 +583,7 @@ async fn ensure_thumbs(dir: &Path, jobs: Vec<(String, PathBuf)>) {
         }
         while set.join_next().await.is_some() {}
     }
+    processed
 }
 
 /// Maps only the requested cover ids to `file://` URLs, in bounded batches.
@@ -569,11 +617,20 @@ pub async fn url_map_of(
     }
 
     // Keep the library responsive: the remote URL is already usable, so the
-    // cache write is a detached follow-up for the next request.
-    let pool = dbs.covers.clone();
+    // cache write is a detached follow-up for the next request. FIX-2: ids
+    // already being fetched are skipped — the running job covers them.
+    let missing: Vec<String> = missing.into_iter().filter(|id| claim_fetch(id)).collect();
+    if missing.is_empty() {
+        return Ok(map);
+    }
+    let pooled = dbs.covers.clone();
     let client = Arc::new(client);
     crate::runtime().spawn(async move {
-        if let Err(err) = fetch_ids(&pool, &client, &missing).await {
+        let result = fetch_ids(&pooled, &client, &missing).await;
+        for id in &missing {
+            release_fetch(id.clone());
+        }
+        if let Err(err) = result {
             eprintln!("covers: on-demand fetch failed: {err:#}");
         }
     });
@@ -624,11 +681,19 @@ async fn cached_urls(
     }
     // Never make a library page wait on thumbnail decoding: raw covers are
     // large, and `CoverImage` falls back to the full file until the thumb
-    // lands on disk.
+    // lands on disk. FIX-2: thumbs already being generated are skipped too,
+    // so repeated page loads share one job per file.
+    let thumb_jobs: Vec<(String, PathBuf)> = thumb_jobs
+        .into_iter()
+        .filter(|(name, _)| claim_thumb(name))
+        .collect();
     if !thumb_jobs.is_empty() {
         let dir = dir.clone();
         crate::runtime().spawn(async move {
-            ensure_thumbs(&dir, thumb_jobs).await;
+            ensure_thumbs(&dir, thumb_jobs)
+                .await
+                .into_iter()
+                .for_each(release_thumb);
         });
     }
     Ok(map)
@@ -637,6 +702,26 @@ async fn cached_urls(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// FIX-2: a claimed id blocks its duplicates until the owning task
+    /// releases it (test keys use a unique prefix; the registries are
+    /// process-global).
+    #[test]
+    fn a_claimed_id_blocks_until_released() {
+        let fetch_id = format!("claim-test-{}", std::process::id());
+        let thumb_name = format!("claim-test-thumb-{}.jpg", std::process::id());
+        assert!(claim_fetch(&fetch_id));
+        assert!(!claim_fetch(&fetch_id), "duplicate claim is skipped");
+        release_fetch(fetch_id.clone());
+        assert!(claim_fetch(&fetch_id), "released ids claim again");
+        release_fetch(fetch_id);
+
+        assert!(claim_thumb(&thumb_name));
+        assert!(!claim_thumb(&thumb_name));
+        release_thumb(thumb_name.clone());
+        assert!(claim_thumb(&thumb_name));
+        release_thumb(thumb_name);
+    }
 
     #[test]
     fn extension_from_content_type() {

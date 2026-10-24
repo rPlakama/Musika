@@ -78,6 +78,19 @@ QtObject {
         return out;
     }
 
+    /// Row indices of the selected range, in list order ([] without a
+    /// selection).
+    function indices(model, cursor) {
+        var out = [];
+        if (!root.hasSelection || !model)
+            return out;
+        var first = Math.min(root.anchor, cursor);
+        var last = Math.max(root.anchor, cursor);
+        for (var i = first; i <= last; i++)
+            out.push(i);
+        return out;
+    }
+
     /// `starred` flags of the selected rows, aligned with `ids()` (same field
     /// filter, same order) — the Alt batch favourite reads the selection's
     /// state from this.

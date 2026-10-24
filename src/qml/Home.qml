@@ -303,6 +303,10 @@ Item {
         }
         // Reusable gate: any surface opts out of the Alt menu with
         // `altActionsAvailable: false` (the status bar's sync scope does).
+        if (queueDrawer.open) {
+            queueDrawer.armQuickActions();
+            return;
+        }
         var view = root.activeRegion === 2
             ? topBar
             : (root.nowPlayingExpanded ? nowPlaying : contentStack.currentItem);
@@ -363,6 +367,12 @@ Item {
         var out = [];
         if (searchOverlay.opened) {
             add(out, searchOverlay, noFocus);
+            return out;
+        }
+        // The open queue drawer owns `/` (its own row search), whether it
+        // floats over the library or the fullscreen player.
+        if (queueDrawer.open) {
+            add(out, queueDrawer, noFocus);
             return out;
         }
         if (nowPlayingExpanded && nowPlaying) {
@@ -521,7 +531,7 @@ Item {
         }
         // Scope switching (Shift-J/K) walks the unified library types.
         if (action === "scope_next" || action === "scope_prev") {
-            if (nowPlayingExpanded)
+            if (nowPlayingExpanded || queueDrawer.open)
                 return;
             var scopeCount = 5;
             var nextScope = (currentSegment
@@ -559,34 +569,26 @@ Item {
             }
             return;
         }
-        // Ctrl-Q toggles the queue drawer from anywhere: enter the player if
-        // needed, then slide the queue in or out.
+        // Ctrl-Q toggles the standalone queue drawer from anywhere: it slides
+        // over the library or the fullscreen player, no pane switch needed.
         if (action === "queue_toggle") {
-            if (!nowPlayingExpanded) {
-                nowPlayingExpanded = true;
-                if (nowPlaying)
-                    nowPlaying.openQueue();
-                else
-                    nowPlayingLoader.openQueue = true;
-            } else if (nowPlaying) {
-                nowPlaying.toggleQueue();
-            }
+            queueDrawer.toggleQueue();
             return;
         }
 
         // VI-4: `v`/`V` start visual row selection on the focused list — the
-        // fullscreen queue when the player is up. The search overlay handles
-        // its own (modal routing above).
+        // queue drawer when it is open. The search overlay handles its own
+        // (modal routing above).
         if (action === "visual" || action === "visual_all") {
-            if (nowPlayingExpanded) {
-                if (nowPlaying && nowPlaying.queueOpen) {
-                    if (action === "visual")
-                        nowPlaying.toggleSelection();
-                    else
-                        nowPlaying.selectAll();
-                }
+            if (queueDrawer.open) {
+                if (action === "visual")
+                    queueDrawer.toggleSelection();
+                else
+                    queueDrawer.selectAll();
                 return;
             }
+            if (nowPlayingExpanded)
+                return;
             if (activeRegion !== 1)
                 return;
             var listView = contentStack.currentItem;
@@ -640,17 +642,13 @@ Item {
         }
 
         if (action === "back") {
-            // Fullscreen is the topmost context: Esc first closes the queue
-            // drawer, then ends a queue selection, then leaves the player.
+            // The queue drawer is the topmost context: Esc closes it first.
+            if (queueDrawer.open) {
+                queueDrawer.closeQueue();
+                return;
+            }
+            // Fullscreen is the next context down: Esc leaves the player.
             if (nowPlayingExpanded) {
-                if (nowPlaying && nowPlaying.queueOpen) {
-                    nowPlaying.closeQueue();
-                    return;
-                }
-                if (nowPlaying && nowPlaying.hasSelection) {
-                    nowPlaying.clearSelection();
-                    return;
-                }
                 nowPlayingExpanded = false;
                 return;
             }
@@ -667,8 +665,15 @@ Item {
             return;
         }
 
-        // Fullscreen is modal for navigation: pane and queue keys belong to
-        // the player view while it is open (Esc, Space and ,/. stay global).
+        // The open queue drawer owns navigation (the same contract the
+        // fullscreen player had while the drawer lived inside it).
+        if (queueDrawer.open) {
+            queueDrawer.handleAction(action);
+            return;
+        }
+
+        // Fullscreen is modal for navigation: pane keys belong to the player
+        // view while it is open (Esc, Space and ,/. stay global).
         if (nowPlayingExpanded) {
             if (nowPlaying && nowPlaying.handleAction)
                 nowPlaying.handleAction(action);
@@ -986,22 +991,12 @@ Item {
         active: root.nowPlayingExpanded || opacity > 0
         opacity: root.nowPlayingExpanded ? 1 : 0
         visible: opacity > 0
-        // Ctrl-Q asks a freshly created player to open the queue drawer.
-        property bool openQueue: false
 
         sourceComponent: Component {
             NowPlaying {
                 anchors.fill: parent
                 onExitRequested: root.nowPlayingExpanded = false
                 onQuickAction: (target, actions) => root.armQuickActions(target, actions)
-            }
-        }
-
-        onLoaded: {
-            if (openQueue) {
-                openQueue = false;
-                if (item)
-                    item.openQueue();
             }
         }
 
@@ -1020,6 +1015,16 @@ Item {
 
     readonly property Item nowPlaying: nowPlayingLoader.item
 
+    // Ctrl-Q: the standalone play-queue drawer, hosted here so it slides over
+    // the library and the fullscreen player alike. The Alt overlay, search,
+    // command line and toast keep their higher stacking order.
+    QueueDrawer {
+        id: queueDrawer
+        anchors.fill: parent
+        backdrop: (root.nowPlayingExpanded && nowPlaying) ? nowPlaying : shell
+        onQuickAction: (target, actions) => root.armQuickActions(target, actions)
+    }
+
     // ARC-43: the Alt-hold quick-action overlay. Alt anchors it on the active
     // view's cursor item through `armQuickActions`; h/j/k/l aim and the Alt
     // release fires. Acrylic tiles over the shell, below the toast so errors
@@ -1031,7 +1036,8 @@ Item {
         // which must paint above the search panel (search z = zOverlay).
         z: searchOverlay.opened ? Theme.zOverlay + 1 : Theme.zRegion + 1
         backdrop: (root.nowPlayingExpanded && nowPlaying) ? nowPlaying
-            : (searchOverlay.opened ? searchOverlay : shell)
+            : (searchOverlay.opened ? searchOverlay
+            : (queueDrawer.open ? queueDrawer : shell))
         // UI-60 "bright": the rating step's stars outlive the tile collapse.
         onRatingStepped: (x, y) => ratingBurst.burstAt(x, y)
     }
@@ -1256,10 +1262,12 @@ Item {
             height: region === 2 ? root.barH : root.bodyH
             z: Theme.zRegion
             color: "transparent"
-            // Only the active (cursor) region is outlined. Fullscreen is an
-            // overlay, so no region highlight may show above it; the modal
-            // search owns the focus border while it is up.
-            visible: !root.nowPlayingExpanded && !searchOverlay.opened && active
+            // Only the active (cursor) region is outlined. Fullscreen and the
+            // queue drawer are overlays, so no region highlight may show
+            // above them; the modal search owns the focus border while it is
+            // up.
+            visible: !root.nowPlayingExpanded && !queueDrawer.open
+                && !searchOverlay.opened && active
             border.width: 2 * unit
             border.color: Palette.primary
 

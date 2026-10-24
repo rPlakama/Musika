@@ -26,8 +26,8 @@ import "Theme.js" as Theme
 //   header — identity/seek/transport anchored left, above the key hints;
 //            the album name is the action surface and the star rating sits
 //            directly under it;
-//   footer — context-aware keybar for the focused pane;
-//   drawer — Ctrl-Q slides the play queue in from the right.
+//   footer — context-aware keybar for the focused pane.
+// The play queue is a standalone drawer hosted by Home (Ctrl-Q).
 // Esc (or q) leaves fullscreen; Space stays the global play/pause.
 Rectangle {
     id: root
@@ -37,8 +37,8 @@ Rectangle {
 
     /// Click/tap on the exit button (the header chip); Home leaves fullscreen.
     signal exitRequested
-    /// ARC-UI-1: Alt-hold quick actions on the queue row under the cursor;
-    /// Home routes it to the shared overlay.
+    /// ARC-UI-1: Alt-hold quick actions on the album surface; Home routes it
+    /// to the shared overlay.
     signal quickAction(var target, var actions)
 
     // UI-57: the track title ramps with the window width like the list
@@ -50,29 +50,12 @@ Rectangle {
         var full = Theme.fontSize("headline", root.height);
         return Theme.clamp(full * root.widthScale, 18, full);
     }
-    // Keyboard pane: 1 = lyrics, 3 = album actions. The queue is a drawer.
-    // Transport is never a pane.
+    // Keyboard pane: 1 = lyrics, 3 = album actions. Transport is never a pane.
     property int pane: 1
-    // Ctrl-Q slides the queue in over the player.
-    property bool queueOpen: false
     property bool albumStarred: false
     // UI-60: the playing album's user rating (0..=5, 0 = unrated).
     property int albumRating: 0
     property bool albumCacheOn: false
-    property int queueCursor: 0
-    property int queueIndex: -1
-    // One queue payload after a reorder keeps the moved cursor instead of
-    // snapping back to the playing track (Q-9).
-    property bool _reordering: false
-    // `dd` steps the cursor up (a phantom k) and slides the row out before
-    // the backend drops it; keep that cursor across the model rebuild.
-    property int _removingIndex: -1
-    property int _pendingQueueCursor: -1
-    // The rows the queue model currently holds: a payload with the same
-    // backend row hash is a skip/advance, not a queue change — no rebuild.
-    property string _queueHash: ""
-    // UI-54: first queue payload after entering restores the saved highlight.
-    property bool _recallQueue: false
 
     // The active lyric glides to the pane centre through the shared scroll
     // modal (LYR-8): a soothing fixed-duration follow (`followMs`) inside the
@@ -90,13 +73,6 @@ Rectangle {
             root._lyricsHeld = false;
             root.followLyric();
         }
-    }
-
-    Timer {
-        id: removeTimer
-        repeat: false
-        interval: Theme.reduceMotion ? 0 : Theme.motion.standard * 1.3
-        onTriggered: root.finishQueueRemove()
     }
 
     // The seek row's timecode metric: the widest timecode the labels can
@@ -162,8 +138,6 @@ Rectangle {
     }
 
     function keyHints() {
-        if (root.queueOpen)
-            return "j/k select   ·   Ctrl-Shift-J/K move   ·   Enter jump   ·   dd remove   ·   Ctrl-Q close";
         if (pane === 1)
             return "j/k scroll   ·   ,/. seek   ·   Ctrl-N/P track   ·   Tab album   ·   Esc/Q exit";
         if (pane === 3)
@@ -195,58 +169,6 @@ Rectangle {
         });
     }
 
-    /// Ask the backend for the download state of the rendered rows only.
-    function requestMarkWindow(force) {
-        var ids = [];
-        var lo = queueContent.firstVisibleIndex;
-        var hi = queueContent.lastVisibleIndex;
-        if (lo < 0 || hi < lo) {
-            lo = Math.max(0, root.queueCursor);
-            hi = Math.min(queueItems.count - 1, lo);
-        }
-        for (var i = lo; i <= hi; ++i) {
-            var row = queueItems.get(i);
-            if (row && row.songId)
-                ids.push(row.songId);
-        }
-        if (force)
-            Backend.refreshDownloads(JSON.stringify(ids), "[]");
-        else
-            Backend.requestDownloads(JSON.stringify(ids), "[]");
-    }
-
-    onQueueCursorChanged: root.requestMarkWindow()
-
-    Connections {
-        target: queueContent
-        function onFirstVisibleIndexChanged() {
-            root.requestMarkWindow();
-        }
-        function onLastVisibleIndexChanged() {
-            root.requestMarkWindow();
-        }
-    }
-
-    /// The playing track's row in the queue model (song id + favourite flag
-    /// for the overlay's track-scoped options).
-    function currentTrack() {
-        return root.queueIndex >= 0 && root.queueIndex < queueItems.count ? queueItems.get(root.queueIndex) : null;
-    }
-
-    // ── Row download marks: the global ledger property --------------------
-    // `Backend.downloadedIds` (download.db's finished songs) is the single
-    // truth every row binds to by song id — the download twin of the hearts'
-    // library read. Refreshed on entry and after container changes.
-
-    /// The favourite heart, patched in place on the acted row (the playing
-    /// track the keybar verbs target). QR-8: no whole-model scan — duplicate
-    /// rows reconcile on the next queue payload.
-    function markRowStarred(songId, on) {
-        var i = root.queueIndex;
-        if (i >= 0 && i < queueItems.count && queueItems.get(i).songId === songId)
-            queueItems.setProperty(i, "starred", on === true);
-    }
-
     function scrollLyrics(delta) {
         root.holdLyrics();
         var view = lyricsView.view;
@@ -275,182 +197,6 @@ Rectangle {
     // A color with a replaced alpha, for the ambience gradient stops.
     function withAlpha(color, alpha) {
         return Qt.rgba(color.r, color.g, color.b, alpha);
-    }
-
-    function moveQueueCursor(delta) {
-        if (queueItems.count === 0)
-            return;
-        queueCursor = Math.max(0, Math.min(queueItems.count - 1, queueCursor + delta));
-        // The view follows cursor changes itself (SCROLLCONTENTSTUDY.md).
-        queueContent.currentIndex = queueCursor;
-    }
-
-    function removeQueueRow(index) {
-        if (root._removingIndex >= 0 || index < 0 || index >= queueItems.count)
-            return;
-        root._removingIndex = index;
-        queueContent.clearSelection();
-        // A real k: step the highlight up before the row disappears, so the
-        // rebuild never snaps it back to the playing track.
-        root.moveQueueCursor(-1);
-        root._pendingQueueCursor = root.queueCursor;
-        var row = queueContent.view.itemAtIndex(index);
-        if (row) {
-            row.removing = true;
-            removeTimer.restart();
-        } else {
-            root.finishQueueRemove();
-        }
-    }
-
-    function finishQueueRemove() {
-        if (root._removingIndex < 0)
-            return;
-        var index = root._removingIndex;
-        root._removingIndex = -1;
-        root._pendingQueueCursor = root.queueCursor;
-        Backend.queueRemove(index);
-    }
-
-    // VI-4: visual selection over the fullscreen queue. The state lives in
-    // `queueContent` (the shared scroll model); Home routes `v`/`V`/Esc here
-    // while the player is up.
-    readonly property bool hasSelection: queueContent.hasSelection
-    readonly property int selectionCount: queueContent.selectionCount
-
-    function toggleSelection() {
-        queueContent.toggleSelection();
-    }
-
-    function selectAll() {
-        if (queueItems.count === 0)
-            return;
-        queueCursor = queueItems.count - 1;
-        queueContent.currentIndex = queueCursor;
-        queueContent.selectAllRows();
-        queueContent.goto(queueCursor);
-    }
-
-    function clearSelection() {
-        queueContent.clearSelection();
-    }
-
-    /// Ctrl-Q: slide the queue drawer in on the playing track (or the
-    /// remembered highlight) and keep it live while it is closed.
-    function openQueue() {
-        root.queueOpen = true;
-        root._recallQueue = true;
-        if (queueItems.count === 0)
-            Backend.requestQueue();
-        else
-            root.recallQueueCursor();
-        Backend.releaseFocus();
-    }
-
-    function closeQueue() {
-        if (queueItems.count > 0)
-            queueContent.remember();
-        queueContent.clearSelection();
-        root.queueOpen = false;
-        Backend.releaseFocus();
-    }
-
-    function toggleQueue() {
-        if (root.queueOpen)
-            root.closeQueue();
-        else
-            root.openQueue();
-    }
-
-    /// ARC-UI-2 M1: the search contract (see `ScrollContent`) — the
-    /// fullscreen surface is its queue drawer, so a jump focuses it and the
-    /// context-Enter that follows lands on the matched row.
-    property alias searchQuery: queueContent.searchQuery
-    property alias searchCurrentRow: queueContent.searchCurrentRow
-
-    function searchRows() {
-        return queueContent.searchRows();
-    }
-
-    function searchJump(row) {
-        root.openQueue();
-        queueContent.searchJump(row);
-        queueCursor = queueContent.currentIndex;
-    }
-
-    function applyQueue(payload) {
-        var data = JSON.parse(payload);
-        var rowsChanged = data.hash !== root._queueHash;
-
-        // A skip or an auto-advance re-delivers the exact same rows with a
-        // new playing index. Rebuilding the model for that flicked the pane
-        // (clear + fade) and, when the follow raced the refill, corrupted
-        // the view's layout (realised rows stopped at the old window and
-        // later jumps inflated the item offsets — SC-5). So: rebuild only
-        // when the rows really changed; a pure move just follows the index.
-        if (rowsChanged) {
-            root._queueHash = data.hash;
-            // ARC-memory: a different row set is a new queue — drop the old
-            // queue's remembered scroll/prefetch target before it can be
-            // restored.
-            Memory.clearScroll("fullscreen");
-            root._recallQueue = false;
-            // UI-41: payload swaps fade in quickly; a reorder keeps the list live.
-            if (!root._reordering)
-                queueContent.opacity = 0;
-            queueItems.clear();
-            for (var i = 0; i < data.items.length; i++) {
-                var track = data.items[i];
-                queueItems.append({
-                    title: track.title,
-                    duration: Theme.formatTime(track.duration),
-                    songId: track.id,
-                    albumId: track.album_id ? track.album_id : "",
-                    starred: track.starred === true
-                });
-            }
-            Qt.callLater(function () {
-                queueContent.opacity = 1;
-            });
-        }
-
-        queueIndex = data.index;
-        if (root._pendingQueueCursor >= 0 && rowsChanged) {
-            root._recallQueue = false;
-            queueCursor = Math.max(0, Math.min(queueItems.count - 1, root._pendingQueueCursor));
-            root._pendingQueueCursor = -1;
-            queueContent.currentIndex = queueCursor;
-            queueContent.land(queueCursor);
-        } else if (root._reordering) {
-            root._reordering = false;
-            root._recallQueue = false;
-            queueCursor = Math.max(0, Math.min(queueItems.count - 1, queueCursor));
-            queueContent.currentIndex = queueCursor;
-            queueContent.goto(queueCursor);
-        } else {
-            // A pure index move is a skip/advance: glide to the new playing
-            // row instead of snapping. A rebuilt payload lands instantly.
-            root.recallQueueCursor(!rowsChanged);
-        }
-        root.requestMarkWindow();
-    }
-
-    /// The queue cursor for a fresh payload (UI-54 re-entry remembers; a
-    /// live payload follows the playing track). Shared by `applyQueue` and
-    /// the keep-alive re-entry in `onVisibleChanged`.
-    function recallQueueCursor(animate) {
-        if (root._recallQueue && queueContent.restore()) {
-            root._recallQueue = false;
-            queueCursor = queueContent.currentIndex;
-            return;
-        }
-        root._recallQueue = false;
-        queueCursor = Math.max(0, Math.min(queueIndex, Math.max(0, queueItems.count - 1)));
-        queueContent.currentIndex = queueCursor;
-        if (animate)
-            queueContent.goto(queueCursor);
-        else
-            queueContent.land(queueCursor);
     }
 
     function applyLyrics(payload) {
@@ -516,30 +262,9 @@ Rectangle {
     onPaneChanged: if (root._lyricsHeld)
         root.holdLyrics()
 
-    /// ARC-UI-1: Alt armed the gesture — the open queue drawer anchors on the
-    /// row under the cursor; otherwise the album name owns the album verbs.
+    /// ARC-UI-1: Alt armed the gesture — with the album pane focused, the
+    /// album name owns the album verbs.
     function armQuickActions() {
-        if (root.queueOpen) {
-            if (queueItems.count === 0 || queueContent.currentIndex < 0)
-                return;
-            var item = queueItems.get(queueContent.currentIndex);
-            var row = queueContent.view.itemAtIndex(queueContent.currentIndex);
-            var actions = root.hasSelection ? verbs.forSelection("song", queueContent.selectionIds("songId"), queueContent.selectionStarred("songId")) : (item ? verbs.song(item) : null);
-            if (!actions)
-                return;
-            // ARC-I-4: the heart tracks the verb immediately (see `MediaList`).
-            if (actions.south && actions.south.invoke) {
-                var want = actions.south.favorite === true;
-                var star = actions.south.invoke;
-                actions.south.invoke = function () {
-                    star();
-                    queueContent.markStarred(want);
-                };
-            }
-            if (row)
-                quickAction(row, actions);
-            return;
-        }
         // UI-60: with the album pane focused, Alt anchors on the album name;
         // its verbs carry the favourite + count + download.
         if (root.pane === 3 && Backend.currentAlbumId.length > 0)
@@ -565,53 +290,6 @@ Rectangle {
         }
         if (action === "prev_track") {
             Backend.playerPrevious();
-            return;
-        }
-
-        // The open drawer owns navigation; Tab and h/l stay inside it.
-        if (root.queueOpen) {
-            if (action === "back" || action === "queue_toggle") {
-                root.closeQueue();
-                return;
-            }
-            // VI-7: the count walks the queue cursor by that many rows.
-            var queueSteps = Math.max(1, Backend.keyCount);
-            if (action === "top" || action === "bottom") {
-                queueContent.edgeJump(action === "bottom", queueSteps);
-                queueCursor = queueContent.currentIndex;
-                return;
-            }
-            if (action === "move_up")
-                moveQueueCursor(-queueSteps);
-            else if (action === "move_down")
-                moveQueueCursor(queueSteps);
-            else if (action === "page_up" || action === "page_down") {
-                queueContent.pageJump(action === "page_down");
-                queueCursor = queueContent.currentIndex;
-            } else if (action.indexOf("extend_") === 0) {
-                queueContent.extendSelection("move_" + action.substring(7));
-                queueCursor = queueContent.currentIndex;
-            } else if (action === "queue_up" && queueContent.allows("reorder") && queueCursor > 0) {
-                root._reordering = true;
-                // VI-4: a reorder shifts every anchored row; the range dies.
-                queueContent.clearSelection();
-                Backend.queueMove(queueCursor, queueCursor - 1);
-                queueCursor -= 1;
-                queueContent.currentIndex = queueCursor;
-            } else if (action === "queue_down" && queueContent.allows("reorder") && queueCursor < queueItems.count - 1) {
-                root._reordering = true;
-                queueContent.clearSelection();
-                Backend.queueMove(queueCursor, queueCursor + 1);
-                queueCursor += 1;
-                queueContent.currentIndex = queueCursor;
-            } else if (action === "queue_remove" && queueContent.allows("remove") && queueCursor >= 0) {
-                root.removeQueueRow(queueCursor);
-            } else if (action === "enter") {
-                // VI-4: jumping to a track ends the visual selection.
-                queueContent.clearSelection();
-                if (queueCursor >= 0)
-                    Backend.queueJump(queueCursor);
-            }
             return;
         }
 
@@ -650,21 +328,12 @@ Rectangle {
     onVisibleChanged: {
         if (visible) {
             // UI-54: re-entering restores the last fullscreen scope (pane).
-            // Scope 2 was the queue pane before it became a drawer.
+            // Only lyrics/album are panes — the queue is Home's drawer.
             var saved = Memory.loadScroll("fullscreen");
             pane = saved && (saved.scope === 1 || saved.scope === 3) ? saved.scope : 1;
-            root._recallQueue = true;
-            // Queue and lyrics stay alive while the player is closed: the
-            // queue model (fed by the hidden payloads) only needs the first
-            // ever fetch, and the highlight is recalled from the live model.
-            // No re-request, no rebuild, no fade on every enter.
-            if (queueItems.count === 0)
-                Backend.requestQueue();
-            else
-                root.recallQueueCursor();
-            // Lyrics are the same: fetch only when the track changed behind
-            // the curtain, otherwise the lines stay exactly where they were
-            // (no reload, no flick).
+            // Lyrics stay alive while the player is closed: fetch only when
+            // the track changed behind the curtain, otherwise the lines stay
+            // exactly where they were (no reload, no flick).
             if (root._lyricsSongId !== Backend.currentSongId) {
                 lyricsLoading = true;
                 Backend.requestLyrics();
@@ -673,26 +342,13 @@ Rectangle {
                 root.pane = 3;
             // The keybar's album actions reconcile on entry too.
             root.requestAlbumActions();
-            // The row download marks read only the visible window.
-            root.requestMarkWindow();
-        } else if (queueItems.count > 0) {
-            if (root.queueOpen)
-                root.closeQueue();
-            queueContent.remember();
-            // VI-4: leaving fullscreen ends the queue selection.
-            queueContent.clearSelection();
         }
     }
 
     Connections {
         target: Backend
         function onDataReady(channel, payload) {
-            // The queue applies even while hidden: the backend emits on every
-            // mutation and track advance, so the model is already current
-            // when the player reopens (no reload on entry).
-            if (channel === "queue")
-                root.applyQueue(payload);
-            else if (channel === "lyrics" && root.visible)
+            if (channel === "lyrics" && root.visible)
                 root.applyLyrics(payload);
             else if (channel === "album_cache") {
                 var cache = JSON.parse(payload);
@@ -721,30 +377,6 @@ Rectangle {
             if (root.visible)
                 root.requestAlbumActions();
         }
-        // A fetch finished: re-read the queue's own window (forced).
-        function onRowReload() {
-            root.requestMarkWindow(true);
-        }
-        // A favourite landed (per row, no payload): patch every matching
-        // queue row in place. The cursor stays where the user left it — a
-        // heart write must never re-follow the playing track.
-        function onFavoriteChanged(kind, id, on) {
-            if (kind !== "song")
-                return;
-            for (var i = 0; i < queueItems.count; ++i) {
-                if (queueItems.get(i).songId === id)
-                    queueItems.setProperty(i, "starred", on === true);
-            }
-        }
-        // A skip/advance is deduped backend-side (the rows are already
-        // published): the index property carries the move — adopt it and
-        // follow exactly like a fresh payload would.
-        function onQueue_index_changed() {
-            if (root.queueIndex === Backend.queueIndex)
-                return;
-            root.queueIndex = Backend.queueIndex;
-            root.recallQueueCursor(true);
-        }
         function onCurrent_song_id_changed() {
             if (root.visible) {
                 root.lyricsLoading = true;
@@ -761,11 +393,7 @@ Rectangle {
         }
     }
 
-    ListModel {
-        id: queueItems
-    }
-
-    // ARC-UI-1: the recycled Alt verb set; fullscreen queue rows are tracks.
+    // ARC-UI-1: the recycled Alt verb set.
     QuickActions {
         id: verbs
     }
@@ -775,8 +403,8 @@ Rectangle {
     }
 
     // D-5 ambience: the playing cover painted sharp and washed into the theme
-    // background by the gradient below, so the lyrics and the queue drawer
-    // float on their own colours. Hidden without art; the surfaces stay opaque.
+    // background by the gradient below, so the lyrics float on their own
+    // colours. Hidden without art; the surfaces stay opaque.
     // UI-55: one item for cover + wash, so the panes' acrylic samples exactly
     // what is painted behind them.
     Item {
@@ -1083,8 +711,7 @@ Rectangle {
             }
         }
 
-        // Body: the lyrics own the space above the header now that the queue
-        // is a slide-in drawer.
+        // Body: the lyrics own the space above the header.
         RowLayout {
             id: body
             anchors.left: parent.left
@@ -1325,236 +952,6 @@ Rectangle {
                     elide: Text.ElideRight
                     animated: false
                 }
-            }
-        }
-    }
-
-    // Queue drawer (Ctrl-Q): the play queue slides in from the right, like the
-    // old separate drawer, instead of holding a permanent body pane.
-    Rectangle {
-        id: queueScrim
-        anchors.fill: parent
-        color: Palette.scrim
-        opacity: root.queueOpen ? Theme.scrimOpacity : 0
-        visible: opacity > 0
-        z: 18
-
-        Behavior on opacity {
-            NumberAnimation {
-                duration: Theme.motion.standard
-                easing.type: Easing.Bezier
-                easing.bezierCurve: Theme.ease.standard
-            }
-        }
-
-        TapHandler {
-            enabled: root.queueOpen
-            onTapped: root.closeQueue()
-        }
-    }
-
-    AcrylicPanel {
-        id: queueDrawer
-        anchors.top: parent.top
-        anchors.bottom: parent.bottom
-        width: root.width * 0.36
-        tint: Palette.surfaceContainerHigh
-        backdrop: coverBackdrop.visible ? ambience : null
-        border.color: Palette.primary
-        border.width: Math.max(1, root.width * Theme.hairlineRatio)
-        radius: Theme.radius
-        clip: true
-        visible: root.queueOpen || x < root.width
-        x: root.queueOpen ? root.width - width : root.width
-        z: 20
-
-        Behavior on x {
-            NumberAnimation {
-                duration: Theme.motion.standard
-                easing.type: Easing.Bezier
-                easing.bezierCurve: root.queueOpen ? Theme.ease.decelerate : Theme.ease.accelerate
-            }
-        }
-
-        ColumnLayout {
-            anchors.fill: parent
-            anchors.margins: root.width * 0.012
-            spacing: root.height * 0.006
-
-            RowLayout {
-                Layout.fillWidth: true
-
-                FadeText {
-                    text: "Queue"
-                    color: Palette.primary
-                    font.pixelSize: Theme.fontSize("title", root.height)
-                    font.bold: true
-                }
-
-                Item {
-                    Layout.fillWidth: true
-                }
-
-                // VI-4: the selection count while a range is up.
-                SelectionBadge {
-                    Layout.alignment: Qt.AlignVCenter
-                    count: root.selectionCount
-                    pixelSize: Theme.fontSize("label", root.height)
-                }
-
-                FadeText {
-                    text: Backend.queueLength > 0 ? (Backend.queueIndex + 1) + " / " + Backend.queueLength : ""
-                    color: Palette.onSurfaceVariant
-                    font.pixelSize: Theme.fontSize("label", root.height)
-                }
-            }
-
-            Rectangle {
-                radius: Theme.radius
-                Layout.fillWidth: true
-                Layout.preferredHeight: Math.max(1, root.height * Theme.hairlineRatio)
-                color: Palette.primary
-            }
-
-            Item {
-                Layout.fillWidth: true
-                Layout.fillHeight: true
-
-                // UI-48: the shared scroll body carries the overflow stage —
-                // the highlight bleeds into the gutters while rows still clip
-                // vertically at the list bounds.
-                ScrollContent {
-                    id: queueContent
-                    anchors.fill: parent
-                    context: "queue"
-                    rowRatio: 0.06
-                    rowRefHeight: queueDrawer.height
-                    model: queueItems
-                    selectable: true
-                    memoryKey: "queue"
-                    // ARC-UI-2 M1: the queue rows paint title and duration.
-                    searchFields: ["title", "duration"]
-                    visible: queueItems.count > 0
-
-                    Behavior on opacity {
-                        NumberAnimation {
-                            duration: Theme.motion.quick
-                            easing.type: Easing.Bezier
-                            easing.bezierCurve: Theme.ease.standard
-                        }
-                    }
-
-                    rowDelegate: Component {
-                        Rectangle {
-                            id: row
-                            radius: Theme.radius
-                            required property int index
-                            required property string title
-                            required property string duration
-                            required property string songId
-                            required property bool starred
-
-                            readonly property bool emphasized: index === root.queueCursor || rowHover.hovered
-
-                            width: ListView.view.width
-                            // UI-58: adaptive — stops shrinking at the 18%
-                            // floor, never jumps a row.
-                            height: queueContent.adaptiveRowHeight
-                            // Playing-track tint stays on the row; the
-                            // cursor/hover block is the shared UI-48 layer.
-                            color: index === root.queueIndex ? Palette.surfaceContainer : "transparent"
-                            property bool removing: false
-                            opacity: removing ? 0 : 1
-
-                            Behavior on opacity {
-                                NumberAnimation {
-                                    duration: Theme.reduceMotion ? 0 : Theme.motion.standard * 1.3
-                                    easing.type: Easing.Bezier
-                                    easing.bezierCurve: Theme.ease.standard
-                                }
-                            }
-
-                            transform: Translate {
-                                x: row.removing ? -row.width : 0
-
-                                Behavior on x {
-                                    NumberAnimation {
-                                        duration: Theme.reduceMotion ? 0 : Theme.motion.standard * 1.3
-                                        easing.type: Easing.Bezier
-                                        easing.bezierCurve: Theme.ease.standard
-                                    }
-                                }
-                            }
-
-                            RowHighlight {
-                                current: index === root.queueCursor
-                                hovered: rowHover.hovered
-                                selected: queueContent.selected(index)
-                                overflow: queueContent.bleed
-                            }
-
-                            RowBody {
-                                anchors.fill: parent
-                                viewWidth: row.width
-                                rowHeight: row.height
-                                emphasized: row.emphasized
-                                current: index === root.queueCursor
-                                showCover: false
-                                showSubtitle: false
-                                title: row.title
-                                meta: row.duration
-                                titlePixelSize: Theme.fontSize("body", root.height)
-                                titleColor: index === root.queueCursor ? Palette.onSecondaryContainer : Palette.onSurface
-                                metaPixelSize: Theme.fontSize("mono", root.height)
-                                reserveMeta: true
-                                metaAlignRight: true
-                                leftMargin: row.width * 0.01
-                                textGap: row.width * 0.01
-                                rightMargin: 0
-                                marksMargin: row.width * 0.00935
-                                markCursor: root.queueCursor
-                                visibleStart: queueContent.firstVisibleIndex
-                                visibleEnd: queueContent.lastVisibleIndex
-                                markIndex: row.index
-                                markSongId: row.songId
-                                markStarred: row.starred
-                                searchQuery: queueContent.searchQuery
-                                searchCurrent: index === queueContent.searchCurrentRow
-                            }
-
-                            HoverHandler {
-                                id: rowHover
-                                cursorShape: Qt.PointingHandCursor
-                            }
-
-                            TapHandler {
-                                acceptedModifiers: Qt.ShiftModifier
-                                onTapped: {
-                                    queueContent.extendSelectionTo(row.index);
-                                    root.queueCursor = queueContent.currentIndex;
-                                }
-                            }
-                            TapHandler {
-                                acceptedModifiers: Qt.NoModifier
-                                onTapped: {
-                                    root.queueCursor = row.index;
-                                    Backend.queueJump(row.index);
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-
-            FadeText {
-                Layout.fillWidth: true
-                Layout.fillHeight: true
-                visible: queueItems.count === 0
-                text: "Queue is empty"
-                color: Palette.onSurfaceVariant
-                font.pixelSize: Theme.fontSize("label", root.height)
-                horizontalAlignment: Text.AlignHCenter
-                verticalAlignment: Text.AlignVCenter
             }
         }
     }

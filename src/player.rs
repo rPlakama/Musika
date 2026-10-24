@@ -566,6 +566,22 @@ impl Player {
         }
     }
 
+    /// Removes several tracks in one pass (VI-4 batch delete). Indices are
+    /// queue positions as of the call; they are removed from the highest
+    /// down so the remaining ones stay valid.
+    pub fn remove_many(&mut self, indices: &[usize]) {
+        let mut indices: Vec<usize> = indices
+            .iter()
+            .copied()
+            .filter(|&index| index < self.queue.len())
+            .collect();
+        indices.sort_unstable();
+        indices.dedup();
+        for index in indices.into_iter().rev() {
+            self.remove(index);
+        }
+    }
+
     /// Moves the track at `from` to position `to`.
     ///
     /// Reordering re-anchors the window when the move touches it (or the
@@ -1182,6 +1198,23 @@ mod tests {
         player.finish_deferred_start();
         assert_eq!(player.state(), State::Playing);
         assert_eq!(player.position(), 42.0);
+    }
+
+    #[test]
+    fn remove_many_drops_the_selection_and_keeps_the_current_track() {
+        let mut player = Player::new();
+        player.queue = (0..=5).map(|i| track(&format!("s{i}"))).collect();
+        player.index = 0;
+        // Unsorted, with a duplicate and an out-of-range index.
+        player.remove_many(&[5, 2, 1, 4, 1, 9]);
+        assert_eq!(player.len(), 2);
+        assert_eq!(player.current().map(|t| t.id.as_str()), Some("s0"));
+        assert_eq!(player.index(), 0);
+        player.remove_many(&[1]);
+        assert_eq!(player.len(), 1);
+        player.remove_many(&[0]);
+        assert!(player.queue.is_empty());
+        assert_eq!(player.state(), State::Stopped);
     }
 
     /// FIX-1: reaping takes ownership of the spawned child (TERM + wait)

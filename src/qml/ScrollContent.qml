@@ -648,6 +648,7 @@ Item {
     function clearSelection() { rowState.clear(); }
     function selected(index) { return rowState.selected(index); }
     function selectionIds(field) { return rowState.ids(field); }
+    function selectionIndices() { return rowState.indices(); }
     function selectionStarred(field) { return rowState.starred(field); }
     function markStarred(on) { rowState.markStarred(on); }
 

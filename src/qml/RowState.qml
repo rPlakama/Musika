@@ -89,6 +89,11 @@ QtObject {
         return sel.ids(root.model, root.cursor, field);
     }
 
+    /// Row indices of the selected range ([] when there is no selection).
+    function indices() {
+        return sel.indices(root.model, root.cursor);
+    }
+
     /// The selected rows' `starred` flags, aligned with `ids()`.
     function starred(field) {
         return sel.starred(root.model, root.cursor, field);

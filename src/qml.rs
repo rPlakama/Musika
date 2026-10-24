@@ -3013,6 +3013,17 @@ impl Backend {
         self.emit_queue(false);
     }
 
+    /// VI-4: removes a visual selection in one pass, one payload.
+    #[qslot(qml_name = "queueRemoveMany")]
+    fn queue_remove_many(&mut self, indices_json: String) {
+        match serde_json::from_str::<Vec<usize>>(&indices_json) {
+            Ok(indices) => self.player.remove_many(&indices),
+            Err(err) => eprintln!("queue: bad remove selection: {err}"),
+        }
+        self.sync_player();
+        self.emit_queue(false);
+    }
+
     #[qslot(qml_name = "queueMove")]
     fn queue_move(&mut self, from: i64, to: i64) {
         self.player.move_item(index_value(from), index_value(to));

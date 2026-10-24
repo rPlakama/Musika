@@ -27,9 +27,9 @@
 #![allow(dead_code)]
 
 use std::collections::{HashMap, HashSet};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use openssl::hash::MessageDigest;
 use sqlx::sqlite::SqlitePool;
 
@@ -140,9 +140,31 @@ pub async fn record(
     Ok(())
 }
 
-/// Writes a fetched blob (atomic `.part` → rename) and records it. Returns
-/// the final path. A previous blob for the same song is replaced, never
-/// orphaned.
+/// A unique `.part` path in the blob's tier directory.
+///
+/// A download streams into this file and [`store_streamed`] renames it into
+/// place. Staying on the same filesystem keeps the rename atomic, and an
+/// aborted fetch leaves only a `.part`, which [`purge`] already sweeps.
+pub fn temp_path(kind: &str) -> Result<PathBuf> {
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static TEMP_GEN: AtomicU64 = AtomicU64::new(0);
+    let dir = tier_dir(kind)?;
+    crate::db::ensure_dir(&dir)?;
+    Ok(dir.join(format!(
+        ".{}.{}.{}.part",
+        std::process::id(),
+        crate::consts::now_nanos(),
+        TEMP_GEN.fetch_add(1, Ordering::Relaxed)
+    )))
+}
+
+/// Writes a fetched blob (atomic rename) and records it. Returns the final
+/// path. A previous blob for the same song is replaced, never orphaned.
+///
+/// Kept for callers that already hold the bytes (tests and the future
+/// playback prefetch); the download path uses [`temp_path`] +
+/// [`store_streamed`] so a whole song is never resident.
 #[allow(clippy::too_many_arguments)]
 pub async fn store(
     pool: &SqlitePool,
@@ -154,24 +176,103 @@ pub async fn store(
     extension: &str,
     rule_id: Option<&str>,
 ) -> Result<PathBuf> {
+    let temp = temp_path(kind)?;
+    if let Err(err) = std::fs::write(&temp, bytes) {
+        let _ = std::fs::remove_file(&temp);
+        return Err(err).with_context(|| format!("failed to write {}", temp.display()));
+    }
+    store_streamed(
+        pool,
+        song_id,
+        &temp,
+        bytes.len() as i64,
+        kind,
+        quality,
+        fingerprint,
+        extension,
+        rule_id,
+    )
+    .await
+}
+
+/// Adopts an already-streamed temporary blob: renames it to the canonical
+/// name and records the row. The source must live in the same tier directory
+/// (see [`temp_path`]).
+#[allow(clippy::too_many_arguments)]
+pub async fn store_streamed(
+    pool: &SqlitePool,
+    song_id: &str,
+    source: &Path,
+    size: i64,
+    kind: &str,
+    quality: &str,
+    fingerprint: &str,
+    extension: &str,
+    rule_id: Option<&str>,
+) -> Result<PathBuf> {
     let dir = tier_dir(kind)?;
     crate::db::ensure_dir(&dir)?;
+    store_in_dir(
+        pool,
+        &dir,
+        song_id,
+        source,
+        size,
+        kind,
+        quality,
+        fingerprint,
+        extension,
+        rule_id,
+    )
+    .await
+}
 
+/// The directory-taking half of [`store_streamed`] (also the test seam).
+#[allow(clippy::too_many_arguments)]
+async fn store_in_dir(
+    pool: &SqlitePool,
+    dir: &Path,
+    song_id: &str,
+    source: &Path,
+    size: i64,
+    kind: &str,
+    quality: &str,
+    fingerprint: &str,
+    extension: &str,
+    rule_id: Option<&str>,
+) -> Result<PathBuf> {
     let file = format!("{}.{}", md5_hex(song_id.as_bytes()), extension);
-    let final_path = crate::cache::write_atomic(&dir, &file, bytes)?;
-
+    let final_path = dir.join(&file);
     let previous = get(pool, song_id).await?;
-    record(
+
+    if let Err(err) = std::fs::rename(source, &final_path) {
+        let _ = std::fs::remove_file(source);
+        return Err(err).with_context(|| format!("failed to move {}", final_path.display()));
+    }
+
+    if let Err(err) = record(
         pool,
         song_id,
         kind,
         &file,
-        bytes.len() as i64,
+        size,
         quality,
         fingerprint,
         rule_id,
     )
-    .await?;
+    .await
+    {
+        // The row did not land. Drop the new blob unless it replaced the
+        // previous row's own file (then the old row still names these bytes).
+        if previous
+            .as_ref()
+            .is_none_or(|old| old.file != file || old.kind != kind)
+        {
+            let _ = std::fs::remove_file(&final_path);
+        }
+        return Err(err);
+    }
+
     if let Some(old) = previous {
         if old.file != file || old.kind != kind {
             if let Ok(old_dir) = tier_dir(&old.kind) {
@@ -396,14 +497,26 @@ fn remove_blob(row: &Stored) {
 /// Only called after a fully successful sync (the covers/lyrics/colors rule);
 /// tier caps are CACHE-3. Returns the number of removed rows.
 pub async fn purge(dbs: &crate::db::Dbs) -> Result<usize> {
-    let known: HashSet<String> = crate::library::song_ids(&dbs.library)
-        .await?
-        .into_iter()
-        .collect();
+    #[derive(Debug, sqlx::FromRow)]
+    struct PurgeRow {
+        song_id: String,
+        kind: String,
+        file: String,
+        rule_id: Option<String>,
+    }
 
-    let rows: Vec<Stored> = sqlx::query_as("SELECT song_id, kind, file FROM media")
+    // MEMORY: one query carries the rule id too (the old code loaded the
+    // whole media table a second time into a `song_id -> rule_id` map), and
+    // the library is asked only about the ids this cache actually holds.
+    let rows: Vec<PurgeRow> = sqlx::query_as("SELECT song_id, kind, file, rule_id FROM media")
         .fetch_all(&dbs.media)
         .await?;
+    if rows.is_empty() {
+        remove_temp_files_all();
+        return Ok(0);
+    }
+    let media_ids: Vec<&str> = rows.iter().map(|row| row.song_id.as_str()).collect();
+    let known = crate::library::existing_song_ids(&dbs.library, &media_ids).await?;
 
     // Rule-orphans: the row's rule no longer exists.
     let live_rules: HashSet<String> = sqlx::query_scalar("SELECT id FROM media_rule")
@@ -411,24 +524,22 @@ pub async fn purge(dbs: &crate::db::Dbs) -> Result<usize> {
         .await?
         .into_iter()
         .collect();
-    let rule_of: HashMap<String, Option<String>> =
-        sqlx::query_as::<_, (String, Option<String>)>("SELECT song_id, rule_id FROM media")
-            .fetch_all(&dbs.media)
-            .await?
-            .into_iter()
-            .collect();
 
     let mut removed = 0;
     for row in rows {
         let vanished = !known.contains(&row.song_id);
-        let orphaned = rule_of
-            .get(&row.song_id)
-            .and_then(|rule| rule.as_ref())
+        let orphaned = row
+            .rule_id
+            .as_ref()
             .is_some_and(|rule| !live_rules.contains(rule));
         if !vanished && !orphaned {
             continue;
         }
-        remove_blob(&row);
+        remove_blob(&Stored {
+            song_id: row.song_id.clone(),
+            kind: row.kind,
+            file: row.file,
+        });
         crate::cache::delete_by(
             &dbs.media,
             "DELETE FROM media WHERE song_id = ?1",
@@ -438,12 +549,16 @@ pub async fn purge(dbs: &crate::db::Dbs) -> Result<usize> {
         removed += 1;
     }
 
+    remove_temp_files_all();
+    Ok(removed)
+}
+
+fn remove_temp_files_all() {
     for kind in [KIND_PERMANENT, KIND_PLAYBACK] {
         if let Ok(dir) = tier_dir(kind) {
             remove_temp_files(&dir);
         }
     }
-    Ok(removed)
 }
 
 fn remove_temp_files(dir: &std::path::Path) {
@@ -478,10 +593,9 @@ pub async fn path_map_of(pool: &SqlitePool, ids: &[String]) -> Result<HashMap<St
     }
     let mut map = HashMap::with_capacity(unique.len());
     for chunk in unique.chunks(500) {
-        let owned: Vec<String> = chunk.iter().map(|id| id.to_string()).collect();
         let mut builder =
             sqlx::QueryBuilder::new("SELECT song_id, kind, file FROM media WHERE song_id IN (");
-        crate::cache::push_in_list(&mut builder, &owned);
+        crate::cache::push_in_list_refs(&mut builder, chunk);
         let rows: Vec<Stored> = builder.build_query_as().fetch_all(pool).await?;
         for row in rows {
             if let Ok(dir) = tier_dir(&row.kind) {
@@ -509,6 +623,77 @@ mod tests {
 
     async fn library_pool() -> SqlitePool {
         pool_with("library").await
+    }
+
+    fn temp_dir(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("musika-media-{}-{name}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        dir
+    }
+
+    /// The streamed-download adoption: the `.part` file is renamed into the
+    /// tier, its size recorded from the stream (not from a buffer) and a
+    /// failed adopt leaves no ledger row behind.
+    #[tokio::test]
+    async fn streamed_blob_is_adopted_and_recorded() {
+        let pool = media_pool().await;
+        let dir = temp_dir("adopt");
+        let temp = dir.join("download.part");
+        std::fs::write(&temp, b"audio bytes").expect("part file");
+
+        let path = store_in_dir(
+            &pool,
+            &dir,
+            "s1",
+            &temp,
+            11,
+            KIND_PERMANENT,
+            "original",
+            "fp",
+            "flac",
+            None,
+        )
+        .await
+        .expect("adopt");
+
+        let file = format!("{}.flac", md5_hex(b"s1"));
+        assert_eq!(path, dir.join(&file));
+        assert!(!temp.exists(), "the .part is consumed by the rename");
+        assert_eq!(std::fs::read(&path).expect("blob"), b"audio bytes");
+
+        let (size, kind, recorded): (i64, String, String) =
+            sqlx::query_as("SELECT size, kind, file FROM media WHERE song_id = 's1'")
+                .fetch_one(&pool)
+                .await
+                .expect("row");
+        assert_eq!(size, 11);
+        assert_eq!(kind, KIND_PERMANENT);
+        assert_eq!(recorded, file);
+
+        assert!(
+            store_in_dir(
+                &pool,
+                &dir,
+                "s2",
+                &dir.join("absent.part"),
+                0,
+                KIND_PERMANENT,
+                "original",
+                "fp",
+                "flac",
+                None,
+            )
+            .await
+            .is_err()
+        );
+        let rows: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM media WHERE song_id = 's2'")
+            .fetch_one(&pool)
+            .await
+            .expect("count");
+        assert_eq!(rows, 0, "a failed adopt must not record a row");
+
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]

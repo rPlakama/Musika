@@ -24,6 +24,7 @@
 use std::collections::{HashMap, HashSet};
 
 use anyhow::{Context, Result};
+use futures_util::TryStreamExt;
 use sqlx::FromRow;
 use sqlx::sqlite::SqlitePool;
 
@@ -51,7 +52,7 @@ pub struct SyncChanges {
     pub covers: Vec<String>,
 }
 
-#[derive(Debug, FromRow)]
+#[derive(Debug, FromRow, PartialEq, Hash)]
 struct AlbumSnapshot {
     id: String,
     artist_id: Option<String>,
@@ -64,7 +65,23 @@ struct AlbumSnapshot {
     cover_art: Option<String>,
 }
 
-#[derive(Debug, FromRow)]
+impl AlbumSnapshot {
+    fn from_album(album: &AlbumID3) -> Self {
+        Self {
+            id: album.id.clone(),
+            artist_id: album.artist_id.clone(),
+            name: album.name.clone(),
+            artist: album.artist.clone(),
+            year: album.year,
+            genre: album.genre.clone(),
+            song_count: i64::from(album.song_count),
+            duration: i64::from(album.duration),
+            cover_art: album.cover_art.clone(),
+        }
+    }
+}
+
+#[derive(Debug, FromRow, PartialEq, Hash)]
 struct ArtistSnapshot {
     id: String,
     name: String,
@@ -73,7 +90,19 @@ struct ArtistSnapshot {
     image_url: Option<String>,
 }
 
-#[derive(Debug, FromRow, PartialEq)]
+impl ArtistSnapshot {
+    fn from_artist(artist: &ArtistID3) -> Self {
+        Self {
+            id: artist.id.clone(),
+            name: artist.name.clone(),
+            album_count: artist.album_count,
+            cover_art: artist.cover_art.clone(),
+            image_url: artist.artist_image_url.clone(),
+        }
+    }
+}
+
+#[derive(Debug, FromRow, PartialEq, Hash)]
 struct SongSnapshot {
     id: String,
     album_id: Option<String>,
@@ -116,22 +145,17 @@ impl SongSnapshot {
     }
 }
 
-fn album_changed(old: &AlbumSnapshot, new: &AlbumID3) -> bool {
-    old.artist_id != new.artist_id
-        || old.name != new.name
-        || old.artist != new.artist
-        || old.year != new.year
-        || old.genre != new.genre
-        || old.song_count != i64::from(new.song_count)
-        || old.duration != i64::from(new.duration)
-        || old.cover_art != new.cover_art
-}
+/// A compact, order-free identity for an unchanged row. The sync diff only
+/// needs "same or different", so the old catalog is held as `id -> hash`
+/// instead of one full snapshot per row: a 100k-track library drops from
+/// tens of MB of strings to a few MB of ids and hashes while the new rows
+/// are inserted.
+fn snapshot_hash<T: std::hash::Hash>(value: &T) -> u64 {
+    use std::hash::Hasher;
 
-fn artist_changed(old: &ArtistSnapshot, new: &ArtistID3) -> bool {
-    old.name != new.name
-        || old.album_count != new.album_count
-        || old.cover_art != new.cover_art
-        || old.image_url != new.artist_image_url
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    value.hash(&mut hasher);
+    hasher.finish()
 }
 
 /// Replaces all library tables in a single transaction and stores the sync
@@ -149,33 +173,91 @@ pub async fn replace(
 ) -> Result<SyncChanges> {
     let mut tx = pool.begin().await?;
 
-    let old_albums: HashMap<String, AlbumSnapshot> = sqlx::query_as::<_, AlbumSnapshot>(
-        "SELECT id, artist_id, name, artist, year, genre, song_count, duration, cover_art
-         FROM albums",
-    )
-    .fetch_all(&mut *tx)
-    .await?
-    .into_iter()
-    .map(|album| (album.id.clone(), album))
-    .collect();
-    let old_artists: HashMap<String, ArtistSnapshot> = sqlx::query_as::<_, ArtistSnapshot>(
-        "SELECT id, name, album_count, cover_art, image_url FROM artists",
-    )
-    .fetch_all(&mut *tx)
-    .await?
-    .into_iter()
-    .map(|artist| (artist.id.clone(), artist))
-    .collect();
-    let old_songs: HashMap<String, SongSnapshot> = sqlx::query_as::<_, SongSnapshot>(
-        "SELECT id, album_id, artist_id, title, album, artist, track, disc_number, year,
-                genre, duration, bit_rate, suffix, size, path, cover_art
-         FROM songs",
-    )
-    .fetch_all(&mut *tx)
-    .await?
-    .into_iter()
-    .map(|song| (song.id.clone(), song))
-    .collect();
+    // MEMORY: hold an `id -> hash` (plus the album cover id, the one field the
+    // cover-refresh decision still needs) instead of a full snapshot per row.
+    // Albums/artists are few compared with songs, but the same compact shape
+    // keeps the diff's peak flat and one row at a time crosses the boundary.
+    struct AlbumSeen {
+        hash: u64,
+        cover_art: Option<String>,
+    }
+    let mut old_albums: HashMap<String, AlbumSeen> = HashMap::new();
+    {
+        let mut rows = sqlx::query_as::<_, AlbumSnapshot>(
+            "SELECT id, artist_id, name, artist, year, genre, song_count, duration, cover_art
+             FROM albums",
+        )
+        .fetch(&mut *tx);
+        while let Some(album) = rows.try_next().await? {
+            let hash = snapshot_hash(&album);
+            old_albums.insert(
+                album.id.clone(),
+                AlbumSeen {
+                    hash,
+                    cover_art: album.cover_art,
+                },
+            );
+        }
+    }
+    let mut old_artists: HashMap<String, u64> = HashMap::new();
+    {
+        let mut rows = sqlx::query_as::<_, ArtistSnapshot>(
+            "SELECT id, name, album_count, cover_art, image_url FROM artists",
+        )
+        .fetch(&mut *tx);
+        while let Some(artist) = rows.try_next().await? {
+            old_artists.insert(artist.id.clone(), snapshot_hash(&artist));
+        }
+    }
+    // MEMORY: stream the old songs instead of collecting them. Only the hash
+    // survives each row, so the peak stays one row plus the compact map.
+    let mut old_songs: HashMap<String, u64> = HashMap::new();
+    {
+        let mut rows = sqlx::query_as::<_, SongSnapshot>(
+            "SELECT id, album_id, artist_id, title, album, artist, track, disc_number, year,
+                    genre, duration, bit_rate, suffix, size, path, cover_art
+             FROM songs",
+        )
+        .fetch(&mut *tx);
+        while let Some(song) = rows.try_next().await? {
+            old_songs.insert(song.id.clone(), snapshot_hash(&song));
+        }
+    }
+
+    // MEMORY: resolve the diff before the destructive write, then drop the old
+    // catalog. The insert phase is the peak (new rows + SQLite pages), so the
+    // old ids/hashes must not ride along through it.
+    let mut changes = SyncChanges::default();
+    for song in songs {
+        match old_songs.get(&song.id) {
+            Some(old) if *old == snapshot_hash(&SongSnapshot::from_child(song)) => {}
+            _ => changes.songs.push(song.id.clone()),
+        }
+    }
+    for album in albums {
+        let seen = old_albums.get(&album.id);
+        if seen.is_some_and(|old| old.hash == snapshot_hash(&AlbumSnapshot::from_album(album))) {
+            continue;
+        }
+        changes.albums.push(album.id.clone());
+        let cover_changed = seen.is_none_or(|old| old.cover_art != album.cover_art);
+        if cover_changed
+            && let Some(cover) = album.cover_art.clone().filter(|cover| !cover.is_empty())
+        {
+            changes.covers.push(cover);
+        }
+    }
+    for artist in artists {
+        let changed = old_artists
+            .get(&artist.id)
+            .is_none_or(|old| *old != snapshot_hash(&ArtistSnapshot::from_artist(artist)));
+        if changed {
+            changes.artists.push(artist.id.clone());
+        }
+    }
+    drop(old_songs);
+    drop(old_albums);
+    drop(old_artists);
 
     sqlx::query("DELETE FROM songs").execute(&mut *tx).await?;
     sqlx::query("DELETE FROM albums").execute(&mut *tx).await?;
@@ -256,35 +338,6 @@ pub async fn replace(
 
     tx.commit().await?;
 
-    let mut changes = SyncChanges::default();
-    for song in songs {
-        match old_songs.get(&song.id) {
-            Some(old) if *old == SongSnapshot::from_child(song) => {}
-            _ => changes.songs.push(song.id.clone()),
-        }
-    }
-    for album in albums {
-        match old_albums.get(&album.id) {
-            Some(old) if !album_changed(old, album) => continue,
-            _ => {}
-        }
-        changes.albums.push(album.id.clone());
-        let cover_changed = old_albums
-            .get(&album.id)
-            .map(|old| old.cover_art != album.cover_art)
-            .unwrap_or(true);
-        if cover_changed
-            && let Some(cover) = album.cover_art.clone().filter(|cover| !cover.is_empty())
-        {
-            changes.covers.push(cover);
-        }
-    }
-    for artist in artists {
-        match old_artists.get(&artist.id) {
-            Some(old) if !artist_changed(old, artist) => {}
-            _ => changes.artists.push(artist.id.clone()),
-        }
-    }
     Ok(changes)
 }
 
@@ -382,6 +435,16 @@ pub async fn album_covers(
     pool: &SqlitePool,
     album_ids: &[String],
 ) -> Result<std::collections::HashMap<String, String>> {
+    let refs: Vec<&str> = album_ids.iter().map(String::as_str).collect();
+    album_covers_refs(pool, &refs).await
+}
+
+/// Borrowed twin of [`album_covers`] for callers that already hold `&str`
+/// ids (a queue snapshot), avoiding one `String` clone per album.
+pub async fn album_covers_refs(
+    pool: &SqlitePool,
+    album_ids: &[&str],
+) -> Result<std::collections::HashMap<String, String>> {
     if album_ids.is_empty() {
         return Ok(std::collections::HashMap::new());
     }
@@ -390,7 +453,7 @@ pub async fn album_covers(
         let mut builder = sqlx::QueryBuilder::new(
             "SELECT id, cover_art FROM albums WHERE cover_art IS NOT NULL AND id IN (",
         );
-        crate::cache::push_in_list(&mut builder, chunk);
+        crate::cache::push_in_list_refs(&mut builder, chunk);
         let rows: Vec<(String, String)> = builder.build_query_as().fetch_all(pool).await?;
         covers.extend(rows);
     }
@@ -472,6 +535,26 @@ pub async fn song_ids(pool: &SqlitePool) -> Result<Vec<String>> {
         .fetch_all(pool)
         .await?;
     Ok(ids)
+}
+
+/// Which of `ids` still exist in `songs`, in 500-id chunks.
+///
+/// The purge paths use this instead of materializing every library song: a
+/// 100k-song catalog answering a 5k-row cache check should cost 5k ids, not
+/// 100k.
+pub async fn existing_song_ids(
+    pool: &SqlitePool,
+    ids: &[&str],
+) -> Result<std::collections::HashSet<String>> {
+    let mut existing = std::collections::HashSet::with_capacity(ids.len());
+    for chunk in ids.chunks(500) {
+        let mut builder =
+            sqlx::QueryBuilder::<sqlx::Sqlite>::new("SELECT id FROM songs WHERE id IN (");
+        crate::cache::push_in_list_refs(&mut builder, chunk);
+        let found: Vec<String> = builder.build_query_scalar().fetch_all(pool).await?;
+        existing.extend(found);
+    }
+    Ok(existing)
 }
 
 /// Returns the columns needed to rebuild the FTS index.
@@ -933,17 +1016,24 @@ pub async fn artist(pool: &SqlitePool, id: &str) -> Result<Option<ArtistRow>> {
 /// unknown ids dropped — the P-6 S3 queue snapshot restore path. Unknown ids
 /// are stale rows from a resynced server, not an error.
 pub async fn songs_by_ids(pool: &SqlitePool, ids: &[String]) -> Result<Vec<SongRow>> {
+    let refs: Vec<&str> = ids.iter().map(String::as_str).collect();
+    songs_by_ids_refs(pool, &refs).await
+}
+
+/// Borrowed twin of [`songs_by_ids`] (queue refresh against a COW snapshot):
+/// binding `&str` ids directly avoids a `String` clone per track.
+pub async fn songs_by_ids_refs(pool: &SqlitePool, ids: &[&str]) -> Result<Vec<SongRow>> {
     if ids.is_empty() {
         return Ok(Vec::new());
     }
 
     let mut builder = sqlx::QueryBuilder::new(format!("{SONG_SELECT} WHERE s.id IN ("));
-    crate::cache::push_in_list(&mut builder, ids);
+    crate::cache::push_in_list_refs(&mut builder, ids);
 
     let rows: Vec<SongRow> = builder.build_query_as().fetch_all(pool).await?;
     let mut by_id: std::collections::HashMap<String, SongRow> =
         rows.into_iter().map(|row| (row.id.clone(), row)).collect();
-    Ok(ids.iter().filter_map(|id| by_id.remove(id)).collect())
+    Ok(ids.iter().filter_map(|id| by_id.remove(*id)).collect())
 }
 
 /// Songs of one album, in disc/track order. Covers come from the album.
@@ -1096,23 +1186,49 @@ pub async fn purge_stale_artist_info(pool: &SqlitePool) -> Result<u64> {
 }
 
 /// Writes the tab-separated `index.txt` mirror, one line per song.
+///
+/// MEMORY: streamed in ~64 KiB chunks instead of collecting every row and then
+/// a second full-size `String`: a 100k-song index used to hold the row set and
+/// its rendered text at the same time.
 pub async fn write_mirror(pool: &SqlitePool) -> Result<()> {
-    let rows: Vec<(String, String, String, String)> = sqlx::query_as(
+    use std::fmt::Write as _;
+    use tokio::io::AsyncWriteExt as _;
+
+    let path = crate::db::mirror_path()?;
+    crate::db::ensure_parent_dir(&path)?;
+    let file = tokio::fs::File::create(&path)
+        .await
+        .with_context(|| format!("failed to create {}", path.display()))?;
+    let mut writer = tokio::io::BufWriter::new(file);
+
+    let mut rows = sqlx::query_as::<_, (String, String, String, String)>(
         "SELECT id, COALESCE(artist, ''), COALESCE(album, ''), title
          FROM songs
          ORDER BY artist, album, disc_number, track, title",
     )
-    .fetch_all(pool)
-    .await?;
-
-    let mut text = String::new();
-    for (id, artist, album, title) in rows {
-        text.push_str(&format!("{artist}\t{album}\t{title}\t{id}\n"));
+    .fetch(pool);
+    let mut chunk = String::with_capacity(64 * 1024);
+    while let Some((id, artist, album, title)) = rows.try_next().await? {
+        // Writing to a String cannot fail; the heap is the only cost.
+        let _ = writeln!(chunk, "{artist}\t{album}\t{title}\t{id}");
+        if chunk.len() >= 64 * 1024 {
+            writer
+                .write_all(chunk.as_bytes())
+                .await
+                .with_context(|| format!("failed to write {}", path.display()))?;
+            chunk.clear();
+        }
     }
-
-    let path = crate::db::mirror_path()?;
-    crate::db::ensure_parent_dir(&path)?;
-    std::fs::write(&path, text).with_context(|| format!("failed to write {}", path.display()))?;
+    if !chunk.is_empty() {
+        writer
+            .write_all(chunk.as_bytes())
+            .await
+            .with_context(|| format!("failed to write {}", path.display()))?;
+    }
+    writer
+        .flush()
+        .await
+        .with_context(|| format!("failed to flush {}", path.display()))?;
     Ok(())
 }
 
@@ -1599,6 +1715,58 @@ mod tests {
         let (albums, artists) = downloaded_owners(&pool, &[]).await.unwrap();
         assert!(albums.is_empty());
         assert!(artists.is_empty());
+    }
+
+    /// Memory probe: the purge owner check at 100k library songs with a 5k-row
+    /// cache — full catalog materialization vs `existing_song_ids`.
+    ///
+    /// `cargo test library::tests::bench_existing_song_ids -- --ignored --nocapture`
+    #[test]
+    #[ignore = "memory probe, run explicitly"]
+    fn bench_existing_song_ids() {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("probe runtime");
+        let pool = rt.block_on(memory_pool());
+        rt.block_on(async {
+            sqlx::raw_sql(
+                "INSERT INTO songs (id, title, artist, album, duration, play_count)
+                 SELECT printf('s%06d', x), 'Track ' || x, 'Artist', 'Album', 180, 0
+                 FROM (WITH RECURSIVE c(x) AS (
+                           VALUES(1) UNION ALL SELECT x + 1 FROM c WHERE x < 100000
+                       ) SELECT x FROM c);",
+            )
+            .execute(&pool)
+            .await
+            .expect("seed songs");
+        });
+
+        let derived: Vec<String> = (0..5_000).map(|i| format!("s{:06}", i * 20 + 1)).collect();
+        let refs: Vec<&str> = derived.iter().map(String::as_str).collect();
+
+        let (_, full_peak) = crate::test_alloc::measure(|| {
+            rt.block_on(async {
+                let ids = song_ids(&pool).await.expect("all ids");
+                let owners: std::collections::HashSet<String> = ids.into_iter().collect();
+                owners.len()
+            })
+        });
+        let (found, derived_peak) = crate::test_alloc::measure(|| {
+            rt.block_on(existing_song_ids(&pool, &refs))
+                .expect("existing ids")
+        });
+
+        eprintln!(
+            "owner-set lookup (100k songs, 5k cache): derived-only {} KiB | full catalog {} KiB",
+            derived_peak / 1024,
+            full_peak / 1024,
+        );
+        assert_eq!(found.len(), 5_000);
+        assert!(
+            derived_peak < full_peak,
+            "the derived-only lookup must not load the whole catalog"
+        );
     }
 }
 

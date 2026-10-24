@@ -419,7 +419,14 @@ async fn open_pool(path: PathBuf, max_connections: u32) -> Result<SqlitePool> {
         // page cache and memory-backed sorts keep search/gather reads off
         // the disk after the first touch. `mmap_size` is virtual address
         // space, not committed RAM.
-        .pragma("cache_size", "-32768")
+        //
+        // MEMORY: `cache_size` is per *connection*, and `init` opens ten of
+        // them (5 library + 3 media + 2 search). The old -32768 was therefore
+        // a ~320 MiB ceiling for a library that fits in a fraction of that;
+        // -8192 keeps a comfortable per-connection cache while capping the
+        // guaranteed worst case near 80 MiB. The file-backed mmap window
+        // still shares hot pages between connections.
+        .pragma("cache_size", "-8192")
         .pragma("mmap_size", "268435456")
         .pragma("temp_store", "MEMORY");
 

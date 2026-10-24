@@ -130,15 +130,38 @@ impl SubsonicClient {
         Ok(response)
     }
 
-    /// Fetches the original media file (`download`) as raw bytes (CACHE-1/8).
-    pub async fn download_media(&self, id: &str) -> Result<Vec<u8>> {
+    /// Streams the original media file (`download`) into `dest`, returning the
+    /// number of bytes written (CACHE-1/8).
+    ///
+    /// The body is never buffered whole: downloads run several at a time
+    /// ([`crate::consts::DOWNLOAD_CONCURRENCY`]) and a long lossless track can
+    /// be tens of megabytes, so a `Vec<u8>` per fetch would multiply straight
+    /// into the resident set. The caller supplies a `.part` path and adopts it
+    /// atomically once the body is complete.
+    pub async fn download_media_to(&self, id: &str, dest: &std::path::Path) -> Result<u64> {
+        use tokio::io::AsyncWriteExt;
+
         let url = self.endpoint_url("download", &[("id", id.to_string())])?;
-        let response = self.get_checked(url).await?;
-        let bytes = response
-            .bytes()
+        let mut response = self.get_checked(url).await?;
+        let mut file = tokio::fs::File::create(dest)
             .await
-            .context("Could not read the media body")?;
-        Ok(bytes.to_vec())
+            .with_context(|| format!("Could not create {}", dest.display()))?;
+
+        let mut written = 0u64;
+        while let Some(chunk) = response
+            .chunk()
+            .await
+            .context("Could not read the media body")?
+        {
+            file.write_all(&chunk)
+                .await
+                .with_context(|| format!("Could not write {}", dest.display()))?;
+            written += chunk.len() as u64;
+        }
+        file.flush()
+            .await
+            .with_context(|| format!("Could not flush {}", dest.display()))?;
+        Ok(written)
     }
 
     /// Fetches cover art, optionally conditionally.
@@ -169,7 +192,7 @@ impl SubsonicClient {
             request = request.header(reqwest::header::IF_NONE_MATCH, etag);
         }
 
-        let response = self.send_checked(request).await?;
+        let mut response = self.send_checked(request).await?;
 
         if response.status() == reqwest::StatusCode::NOT_MODIFIED {
             return Ok(CoverArt {
@@ -191,11 +214,16 @@ impl SubsonicClient {
         let etag = header(reqwest::header::ETAG);
         let last_modified = header(reqwest::header::LAST_MODIFIED);
         let content_type = header(reqwest::header::CONTENT_TYPE);
-        let bytes = response
-            .bytes()
+        // Chunks into one owned buffer: `bytes().to_vec()` held the whole body
+        // twice at the peak, and a provider's original art can be several MB.
+        let mut bytes = Vec::new();
+        while let Some(chunk) = response
+            .chunk()
             .await
             .context("Could not read cover art body")?
-            .to_vec();
+        {
+            bytes.extend_from_slice(&chunk);
+        }
 
         Ok(CoverArt {
             not_modified: false,
@@ -386,5 +414,46 @@ mod tests {
         let err = envelope.response.into_result().unwrap_err();
         assert!(err.to_string().contains("code 70"));
         assert!(!err.to_string().contains("username"));
+    }
+
+    /// The download path streams the body to a file instead of collecting it:
+    /// a multi-chunk body must arrive intact and the byte count must match.
+    #[tokio::test]
+    async fn media_download_streams_chunks_to_the_target_file() {
+        use std::io::{Read, Write};
+
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind loopback");
+        let addr = listener.local_addr().expect("local addr");
+        let body: Vec<u8> = (0..200_000).map(|index| (index % 251) as u8).collect();
+        let served = body.clone();
+        let server = std::thread::spawn(move || {
+            let (mut socket, _) = listener.accept().expect("accept");
+            let mut request = [0u8; 4096];
+            let _ = socket.read(&mut request);
+            let head = format!(
+                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nContent-Type: application/octet-stream\r\nConnection: close\r\n\r\n",
+                served.len()
+            );
+            socket.write_all(head.as_bytes()).expect("head");
+            for chunk in served.chunks(16 * 1024) {
+                socket.write_all(chunk).expect("chunk");
+            }
+            socket.flush().expect("flush");
+        });
+
+        let dir = std::env::temp_dir().join(format!("musika-download-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let dest = dir.join("song.part");
+
+        let client = SubsonicClient::new(&format!("http://{addr}"), "alice", "secret");
+        let written = client
+            .download_media_to("song-1", &dest)
+            .await
+            .expect("stream the body");
+        server.join().expect("server thread");
+
+        assert_eq!(written as usize, body.len());
+        assert_eq!(std::fs::read(&dest).expect("read back"), body);
+        let _ = std::fs::remove_dir_all(dir);
     }
 }

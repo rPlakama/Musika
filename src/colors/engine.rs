@@ -143,8 +143,11 @@ impl CoverScheme {
 /// Returns the scheme for a cached cover, generating and storing it when the
 /// row is missing or stale. `None` when the cover itself is not cached (no art
 /// → static palette).
+///
+/// The decoder is handed the cached thumbnail, not the original: the seed is
+/// sampled at 112 px, so the extra resolution is only peak memory and CPU.
 pub async fn fetch(dbs: &Dbs, cover_art: &str) -> Result<Option<CoverScheme>> {
-    let Some(path) = crate::covers::cached_path(&dbs.covers, cover_art).await? else {
+    let Some(path) = crate::covers::palette_path(&dbs.covers, cover_art).await? else {
         return Ok(None);
     };
     let Some(hash) = crate::covers::hash(&dbs.covers, cover_art).await? else {

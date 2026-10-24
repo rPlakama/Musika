@@ -187,6 +187,62 @@ mod tests {
         assert_ne!(dominant, colorful, "colorful must not equal dominant");
     }
 
+    // ------------------------------------------------------------------
+    // Memory probe (design evidence for `covers::palette_path`)
+    // ------------------------------------------------------------------
+
+    /// Palette decode peaks: 320 px thumbnail vs the 2400 px original, as
+    /// measured by the test-only heap counter. Run explicitly:
+    ///
+    /// `cargo test colors::tests::bench_palette_decode_peak -- --ignored --nocapture`
+    #[test]
+    #[ignore = "memory probe, run explicitly"]
+    fn bench_palette_decode_peak() {
+        use image::{ImageFormat, Rgb, RgbImage};
+
+        let dir = std::env::temp_dir().join(format!("musika-palette-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let raw = dir.join("cover.jpg");
+        let thumb = dir.join("cover.thumb.jpg");
+
+        // A gradient, not a flat color, so the encoder cannot collapse it.
+        let image = RgbImage::from_fn(2400, 2400, |x, y| {
+            Rgb([(x % 256) as u8, (y % 256) as u8, ((x + y) % 256) as u8])
+        });
+        image
+            .save_with_format(&raw, ImageFormat::Jpeg)
+            .expect("raw");
+
+        let small = image::open(&raw)
+            .expect("decode raw for thumb")
+            .thumbnail(320, 320);
+        small
+            .save_with_format(&thumb, ImageFormat::Jpeg)
+            .expect("thumb");
+        drop(small);
+        drop(image);
+
+        let ((thumb_seed, _), thumb_peak) = crate::test_alloc::measure(|| {
+            seed::extract(&thumb, SourceMode::Dominant).expect("thumb seed")
+        });
+        let ((raw_seed, _), raw_peak) = crate::test_alloc::measure(|| {
+            seed::extract(&raw, SourceMode::Dominant).expect("raw seed")
+        });
+
+        eprintln!(
+            "palette decode heap peak: 320 px thumb {} KiB | 2400 px original {} KiB \
+             (thumb colour {thumb_seed:?}, original colour {raw_seed:?})",
+            thumb_peak / 1024,
+            raw_peak / 1024,
+        );
+        assert!(
+            thumb_peak * 4 < raw_peak,
+            "the thumbnail path must cost a fraction of the original decode"
+        );
+
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
     #[test]
     fn seed_schemes_are_deterministic_and_serializable() {
         let seed = Rgb::new(58, 95, 205);

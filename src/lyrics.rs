@@ -458,12 +458,9 @@ async fn store(pool: &SqlitePool, document: &Document) -> Result<()> {
 
 /// Removes lyric rows whose song id is absent from `library`.
 pub async fn purge_with(lyrics: &SqlitePool, library: &SqlitePool) -> Result<usize> {
-    let existing: std::collections::HashSet<String> = sqlx::query_scalar("SELECT id FROM songs")
-        .fetch_all(library)
-        .await?
-        .into_iter()
-        .collect();
-    crate::cache::purge_missing(lyrics, "lyrics", "song_id", &existing).await
+    // Only the cached lyric ids are queried against `songs`, never the whole
+    // catalog (a 100k-song library is much larger than the lyric cache).
+    crate::cache::purge_missing_against(lyrics, "lyrics", "song_id", library, "songs", "id").await
 }
 
 // ---------------------------------------------------------------------------

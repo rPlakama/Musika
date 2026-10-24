@@ -68,6 +68,26 @@ pub struct SearchHit {
 /// Rank leads: a strong text match still beats a heavily played weak one.
 const PLAY_BOOST: f64 = 0.1;
 
+const INSERT_SEARCH: &str =
+    "INSERT INTO song_search (title, artist, album, duration, song_id, play_count) ";
+
+/// Binds one page of library rows into `song_search`.
+async fn insert_search_rows(
+    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    rows: &[SongSearchRow],
+) -> Result<()> {
+    crate::cache::insert_many(tx, INSERT_SEARCH, rows, |mut values, row| {
+        values
+            .push_bind(&row.title)
+            .push_bind(row.artist.as_deref().unwrap_or(""))
+            .push_bind(row.album.as_deref().unwrap_or(""))
+            .push_bind(row.duration.map(|value| value.to_string()))
+            .push_bind(&row.id)
+            .push_bind(row.play_count.unwrap_or(0));
+    })
+    .await
+}
+
 /// Rebuilds the whole FTS index from library rows.
 ///
 /// There is no cross-database transaction, so this runs right after a
@@ -80,21 +100,45 @@ pub async fn rebuild(pool: &SqlitePool, rows: &[SongSearchRow]) -> Result<()> {
         .execute(&mut *tx)
         .await?;
 
-    crate::cache::insert_many(
-        &mut tx,
-        "INSERT INTO song_search (title, artist, album, duration, song_id, play_count) ",
-        rows,
-        |mut values, row| {
-            values
-                .push_bind(&row.title)
-                .push_bind(row.artist.as_deref().unwrap_or(""))
-                .push_bind(row.album.as_deref().unwrap_or(""))
-                .push_bind(row.duration.map(|value| value.to_string()))
-                .push_bind(&row.id)
-                .push_bind(row.play_count.unwrap_or(0));
-        },
-    )
-    .await?;
+    insert_search_rows(&mut tx, rows).await?;
+
+    tx.commit().await?;
+    Ok(())
+}
+
+/// Rebuilds the FTS index straight from `library.db`, one bounded page at a
+/// time.
+///
+/// The sync used to load every indexed row into a `Vec<SongSearchRow>` before
+/// opening the search transaction (tens of MB on a large library). Keyset
+/// pagination on the primary key keeps the same transaction but holds only one
+/// page (plus the insert batch) at once.
+pub async fn rebuild_from_library(pool: &SqlitePool) -> Result<()> {
+    /// Rows per keyset page; the insert helper batches again at 32.
+    const PAGE: i64 = 500;
+
+    let mut tx = pool.begin().await?;
+    sqlx::query("DELETE FROM song_search")
+        .execute(&mut *tx)
+        .await?;
+
+    let mut after = String::new();
+    loop {
+        let rows: Vec<SongSearchRow> = sqlx::query_as(
+            "SELECT id, title, artist, album, duration, play_count
+             FROM songs WHERE id > ?1 ORDER BY id LIMIT ?2",
+        )
+        .bind(&after)
+        .bind(PAGE)
+        .fetch_all(&mut *tx)
+        .await?;
+        let Some(last) = rows.last() else {
+            break;
+        };
+        after.clear();
+        after.push_str(&last.id);
+        insert_search_rows(&mut tx, &rows).await?;
+    }
 
     tx.commit().await?;
     Ok(())
@@ -263,6 +307,31 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn rebuild_from_library_pages_every_song() {
+        // 600 rows spans more than one 500-row keyset page.
+        let pool = crate::sqlite::memory_pool(sqlx::migrate!("./migrations_library")).await;
+        sqlx::raw_sql(
+            "INSERT INTO songs (id, title, artist, album, duration, play_count)
+             SELECT printf('s%04d', x), 'Track ' || x, 'Artist', 'Album', 180, x % 5
+             FROM (WITH RECURSIVE c(x) AS (
+                       VALUES(1) UNION ALL SELECT x + 1 FROM c WHERE x < 600
+                   ) SELECT x FROM c);",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        rebuild_from_library(&pool).await.unwrap();
+        assert_eq!(count(&pool).await.unwrap(), 600);
+        let hits = search(&pool, "599", 10).await.unwrap();
+        assert_eq!(hits[0].song_id, "s0599");
+
+        // A second pass replaces the table instead of appending to it.
+        rebuild_from_library(&pool).await.unwrap();
+        assert_eq!(count(&pool).await.unwrap(), 600);
+    }
+
+    #[tokio::test]
     async fn text_rank_leads_until_plays_are_large() {
         let pool = memory_pool().await;
         // bm25 magnitudes collapse to ~1e-6 in a two-row corpus, so use a
@@ -310,5 +379,58 @@ mod tests {
             assert_eq!(hits.len(), 1, "query {query:?}");
             assert_eq!(hits[0].song_id, "1");
         }
+    }
+
+    /// Memory probe: the paged FTS rebuild vs the old
+    /// `song_search_rows()` + `rebuild(&rows)` path at 20k songs.
+    ///
+    /// `cargo test search::tests::bench_fts_rebuild_peak -- --ignored --nocapture`
+    #[test]
+    #[ignore = "memory probe, run explicitly"]
+    fn bench_fts_rebuild_peak() {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("test runtime");
+        let pool = rt.block_on(crate::sqlite::memory_pool(sqlx::migrate!(
+            "./migrations_library"
+        )));
+        rt.block_on(async {
+            sqlx::raw_sql(
+                "INSERT INTO songs (id, title, artist, album, duration, play_count)
+                 SELECT printf('s%06d', x), 'Track ' || x, 'Artist ' || (x % 200),
+                        'Album ' || (x % 2000), 180, x % 5
+                 FROM (WITH RECURSIVE c(x) AS (
+                           VALUES(1) UNION ALL SELECT x + 1 FROM c WHERE x < 20000
+                       ) SELECT x FROM c);",
+            )
+            .execute(&pool)
+            .await
+            .expect("seed songs");
+        });
+
+        let (_, old_peak) = crate::test_alloc::measure(|| {
+            rt.block_on(async {
+                let rows = crate::library::song_search_rows(&pool)
+                    .await
+                    .expect("collect rows");
+                rebuild(&pool, &rows).await.expect("rebuild from vec");
+            })
+        });
+        let (_, paged_peak) = crate::test_alloc::measure(|| {
+            rt.block_on(rebuild_from_library(&pool))
+                .expect("paged rebuild")
+        });
+
+        eprintln!(
+            "FTS rebuild (20k songs): paged peak {} KiB | Vec + rebuild peak {} KiB",
+            paged_peak / 1024,
+            old_peak / 1024,
+        );
+        assert!(
+            paged_peak < old_peak,
+            "the paged rebuild must not hold the whole row set"
+        );
+        assert_eq!(rt.block_on(count(&pool)).unwrap(), 20_000);
     }
 }

@@ -21,6 +21,7 @@ use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use qtbridge::{QmlObject, qobject};
+use serde::ser::{Serialize, SerializeSeq, SerializeStruct, Serializer};
 
 use crate::browse::{
     album_notes, load_album_songs_json, load_albums_json, load_artist_json, load_artists_json,
@@ -149,6 +150,86 @@ fn rows(count: usize) -> &'static str {
 /// The hash of the last published queue rows ("RowAlreadyPublished"): the
 /// automatic emits dedupe on it so skips don't republish the same rows.
 static QUEUE_ROWS_HASH: AtomicU64 = AtomicU64::new(0);
+
+/// One queue row, streamed straight from the player's queue. The queue can
+/// hold the whole library, so building a `Value` map per track before
+/// serializing doubled the transient payload cost.
+struct QueueRow<'a> {
+    track: &'a crate::player::Track,
+    starred: bool,
+}
+
+impl Serialize for QueueRow<'_> {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        let mut state = serializer.serialize_struct("queue_row", 6)?;
+        state.serialize_field("id", &self.track.id)?;
+        state.serialize_field("title", &self.track.title)?;
+        state.serialize_field("album_id", &self.track.album_id)?;
+        state.serialize_field("starred", &self.starred)?;
+        state.serialize_field("duration", &self.track.duration)?;
+        state.serialize_field("cover", &self.track.cover_url)?;
+        state.end()
+    }
+}
+
+struct QueueRows<'a> {
+    queue: &'a [crate::player::Track],
+    starred: &'a std::collections::HashSet<String>,
+}
+
+impl Serialize for QueueRows<'_> {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        let mut seq = serializer.serialize_seq(Some(self.queue.len()))?;
+        for track in self.queue {
+            seq.serialize_element(&QueueRow {
+                track,
+                starred: self.starred.contains(&track.id),
+            })?;
+        }
+        seq.end()
+    }
+}
+
+/// The `applyQueueCovers` payload, deserialized straight into its final
+/// collections.
+///
+/// The old handler parsed a `Value` and then cloned its `covers`/`albums`/
+/// `songs` subtrees before deserializing them; for a library-wide queue that
+/// meant three extra copies of the whole payload on the UI thread.
+#[derive(Default, serde::Deserialize)]
+struct QueueCoversPayload {
+    #[serde(default)]
+    covers: HashMap<String, String>,
+    #[serde(default)]
+    albums: HashMap<String, String>,
+    #[serde(default)]
+    songs: Vec<crate::library::SongRow>,
+}
+
+/// Producer twin of [`QueueCoversPayload`]: writes the three collections
+/// straight into the payload string instead of building a `Value` tree of the
+/// whole queue first.
+#[derive(serde::Serialize)]
+struct QueueCoversEnvelope<'a> {
+    covers: &'a HashMap<String, String>,
+    albums: &'a HashMap<String, String>,
+    songs: &'a [crate::library::SongRow],
+}
+
+/// The download-window payload (`applyDownloadedIds`), same rationale.
+#[derive(Default, serde::Deserialize)]
+struct DownloadedIdsPayload {
+    #[serde(default)]
+    songs: Vec<String>,
+    #[serde(default)]
+    albums: Vec<String>,
+    #[serde(default)]
+    downloading: Vec<String>,
+    #[serde(default)]
+    queried_songs: Vec<String>,
+    #[serde(default)]
+    queried_albums: Vec<String>,
+}
 
 #[derive(Default)]
 pub struct Backend {
@@ -984,14 +1065,10 @@ impl Backend {
         let Some(dbs) = crate::dbs() else {
             return;
         };
-        // PATH-7: clone the ids here, but serialize the full queue in the
-        // worker after the debounce wins — never on the Qt thread.
-        let ids: Vec<String> = self
-            .player
-            .queue()
-            .iter()
-            .map(|track| track.id.clone())
-            .collect();
+        // PATH-7: take a COW snapshot here and serialize it in the worker
+        // after the debounce wins — never on the Qt thread, and never one
+        // `String` clone per queued id on every status write (FIX-25).
+        let queue = self.player.queue_snapshot();
         let status = self.session_status(String::new());
         crate::runtime().spawn(async move {
             tokio::time::sleep(std::time::Duration::from_millis(500)).await;
@@ -999,6 +1076,7 @@ impl Backend {
                 return;
             }
             let mut status = status;
+            let ids: Vec<&str> = queue.iter().map(|track| track.id.as_str()).collect();
             status.queue = serde_json::to_string(&ids).unwrap_or_default();
             if let Err(err) = crate::status::save(&dbs.status, &status).await {
                 eprintln!("status: could not save the session: {err:#}");
@@ -1324,49 +1402,44 @@ impl Backend {
     /// that replaced rows or art cannot keep rendering the old snapshot.
     fn refresh_queue(&mut self) {
         let invoker = self.get_qml_method_invoker();
-        let tracks: Vec<(String, String, String)> = self
-            .player
-            .queue()
-            .iter()
-            .map(|track| {
-                (
-                    track.album_id.clone(),
-                    track.cover_art.clone(),
-                    track.id.clone(),
-                )
-            })
-            .collect();
+        // COW snapshot: the task borrows the rows instead of cloning three
+        // strings per queued track on the Qt thread.
+        let queue = self.player.queue_snapshot();
         let Some(dbs) = crate::dbs() else {
             return;
         };
         crate::runtime().spawn(async move {
-            let album_ids: Vec<String> = tracks
+            let album_ids: Vec<&str> = queue
                 .iter()
-                .map(|(album_id, _, _)| album_id.clone())
+                .map(|track| track.album_id.as_str())
                 .filter(|id| !id.is_empty())
                 .collect();
-            let albums = crate::library::album_covers(&dbs.library, &album_ids)
+            let albums = crate::library::album_covers_refs(&dbs.library, &album_ids)
                 .await
                 .unwrap_or_default();
-            let song_ids: Vec<String> = tracks.iter().map(|(_, _, id)| id.clone()).collect();
-            let songs = crate::library::songs_by_ids(&dbs.library, &song_ids)
+            let song_ids: Vec<&str> = queue.iter().map(|track| track.id.as_str()).collect();
+            let songs = crate::library::songs_by_ids_refs(&dbs.library, &song_ids)
                 .await
                 .unwrap_or_default();
-            let cover_ids: Vec<String> = tracks
+            let cover_ids: Vec<String> = queue
                 .iter()
-                .map(|(album_id, cover, _)| {
+                .map(|track| {
                     albums
-                        .get(album_id)
+                        .get(track.album_id.as_str())
                         .cloned()
-                        .unwrap_or_else(|| cover.clone())
+                        .unwrap_or_else(|| track.cover_art.clone())
                 })
                 .filter(|id| !id.is_empty())
                 .collect();
             let covers = crate::covers::url_map_of(&dbs, &cover_ids)
                 .await
                 .unwrap_or_default();
-            let json = serde_json::json!({ "covers": covers, "albums": albums, "songs": songs })
-                .to_string();
+            let json = serde_json::to_string(&QueueCoversEnvelope {
+                covers: &covers,
+                albums: &albums,
+                songs: &songs,
+            })
+            .unwrap_or_default();
             qtbridge::invoke_method!(invoker, "applyQueueCovers", json);
         });
         self.request_colors();
@@ -1466,14 +1539,12 @@ impl Backend {
     /// Applies re-resolved queue cover ids and URLs (sync/wipe reload path).
     #[qslot(qml_name = "applyQueueCovers")]
     fn apply_queue_covers(&mut self, covers_json: String) {
-        let payload: serde_json::Value =
-            serde_json::from_str(&covers_json).unwrap_or(serde_json::Value::Null);
-        let covers = serde_json::from_value(payload["covers"].clone()).unwrap_or_default();
-        let albums = serde_json::from_value(payload["albums"].clone()).unwrap_or_default();
-        let songs: Vec<crate::library::SongRow> =
-            serde_json::from_value(payload["songs"].clone()).unwrap_or_default();
-        self.player.refresh_track_metadata(&songs);
-        self.player.refresh_cover_arts(&albums, &covers);
+        // One deserialization into the final maps/rows: no intermediate
+        // `Value`, no subtree clones (FIX-33).
+        let payload: QueueCoversPayload = serde_json::from_str(&covers_json).unwrap_or_default();
+        self.player.refresh_track_metadata(&payload.songs);
+        self.player
+            .refresh_cover_arts(&payload.albums, &payload.covers);
         self.sync_player();
         self.emit_queue(false);
     }
@@ -2578,7 +2649,7 @@ impl Backend {
         // missing DB must leave the next call free to retry.
         self.queue_revision = Some(revision);
         self.queue_rows_dirty = false;
-        let queue: Vec<crate::player::Track> = self.player.queue().to_vec();
+        let queue = self.player.queue_snapshot();
         let index = self.player.index();
         let generation = QUEUE_EMIT_GEN.fetch_add(1, Ordering::Relaxed) + 1;
         crate::runtime().spawn(async move {
@@ -2588,30 +2659,23 @@ impl Backend {
                     .unwrap_or_default()
                     .into_iter()
                     .collect();
-            let items: Vec<serde_json::Value> = queue
-                .iter()
-                .map(|track| {
-                    // QR-4: only the roles the queue delegates paint —
-                    // `artist`/`album` fed the drawer's never-painted
-                    // `subtitle` and are gone.
-                    serde_json::json!({
-                        "id": track.id,
-                        "title": track.title,
-                        "album_id": track.album_id,
-                        "starred": starred.contains(&track.id),
-                        "duration": track.duration,
-                        "cover": track.cover_url,
-                    })
-                })
-                .collect();
-            // A newer emit already went out: this one is stale.
+            // A newer emit already went out: this one is stale. Check before
+            // the serialization, not after it: a stale pass used to build the
+            // whole row tree and only then discover it had lost.
             if QUEUE_EMIT_GEN.load(Ordering::Relaxed) != generation {
                 return;
             }
-            // RowAlreadyPublished: the same row set is already out — a skip
-            // or an advance only moved the index, and the `queueIndex`
-            // property carries that. No payload, no parse, no model pass.
-            let rows_json = serde_json::to_string(&items).unwrap_or_default();
+            // Stream the row set once: the queue can hold the entire library,
+            // and this string doubles as the dedupe hash input.
+            let row_count = queue.len();
+            let rows = QueueRows {
+                queue: queue.as_slice(),
+                starred: &starred,
+            };
+            let Ok(rows_json) = serde_json::to_string(&rows) else {
+                eprintln!("queue: could not serialize the queue rows");
+                return;
+            };
             let mut hasher = std::collections::hash_map::DefaultHasher::new();
             std::hash::Hash::hash(&rows_json, &mut hasher);
             let rows_hash = std::hash::Hasher::finish(&hasher);
@@ -2622,15 +2686,14 @@ impl Backend {
             if !force && previous == rows_hash {
                 return;
             }
-            crate::debug_log!("queue: published {} rows", items.len());
-            let json = serde_json::json!({
-                "index": index,
-                "items": items,
-                // PATH-11: the QML row-set check compares this revision string
-                // instead of concatenating every row again in JS.
-                "hash": rows_hash.to_string(),
-            })
-            .to_string();
+            crate::debug_log!("queue: published {row_count} rows");
+            // The rows were just serialized for the hash; splice that string
+            // into the envelope instead of serializing the whole row set a
+            // second time (the queue can hold the entire library).
+            let json = format!(
+                r#"{{"index":{},"items":{},"hash":"{}"}}"#,
+                index, rows_json, rows_hash
+            );
             emit(&invoker, "queue", json);
         });
     }
@@ -2691,20 +2754,14 @@ impl Backend {
     /// that, e.g. a favourite's reload hiding a finished download).
     #[qslot(qml_name = "applyDownloadedIds")]
     fn apply_downloaded_ids(&mut self, ids_json: String) {
-        let value: serde_json::Value = serde_json::from_str(&ids_json).unwrap_or_default();
-        let songs: Vec<String> = serde_json::from_value(value["songs"].clone()).unwrap_or_default();
-        let albums: Vec<String> =
-            serde_json::from_value(value["albums"].clone()).unwrap_or_default();
-        let downloading: Vec<String> =
-            serde_json::from_value(value["downloading"].clone()).unwrap_or_default();
-        let queried_songs: Vec<String> =
-            serde_json::from_value(value["queried_songs"].clone()).unwrap_or_default();
-        let queried_albums: Vec<String> =
-            serde_json::from_value(value["queried_albums"].clone()).unwrap_or_default();
-        let songs: std::collections::HashSet<String> = songs.into_iter().collect();
-        let downloading: std::collections::HashSet<String> = downloading.into_iter().collect();
-        let albums: std::collections::HashSet<String> = albums.into_iter().collect();
-        for id in queried_songs {
+        // One typed deserialization: a window can be a page of ids, and this
+        // runs per reload — no `Value` tree and no per-array clone (FIX-33).
+        let payload: DownloadedIdsPayload = serde_json::from_str(&ids_json).unwrap_or_default();
+        let songs: std::collections::HashSet<String> = payload.songs.into_iter().collect();
+        let downloading: std::collections::HashSet<String> =
+            payload.downloading.into_iter().collect();
+        let albums: std::collections::HashSet<String> = payload.albums.into_iter().collect();
+        for id in payload.queried_songs {
             let state = if songs.contains(&id) {
                 Some(MarkState::SongDone)
             } else if downloading.contains(&id) {
@@ -2714,7 +2771,7 @@ impl Backend {
             };
             self.set_mark_state(&id, state);
         }
-        for id in queried_albums {
+        for id in payload.queried_albums {
             let state = albums.contains(&id).then_some(MarkState::AlbumCached);
             self.set_mark_state(&id, state);
         }
@@ -3699,5 +3756,162 @@ impl Backend {
             can_prev: self.queue_index > 0,
             art_url: self.current_cover_url.clone(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The queue-covers payload goes straight into its final collections:
+    /// all three subtrees, and missing keys default to empty.
+    #[test]
+    fn queue_covers_payload_deserializes_directly() {
+        let song = crate::library::SongRow {
+            id: "s1".to_string(),
+            title: "Everything In Its Right Place".to_string(),
+            artist: Some("Radiohead".to_string()),
+            album: Some("Kid A".to_string()),
+            album_id: Some("al1".to_string()),
+            track: Some(1),
+            duration: Some(240),
+            cover_art: Some("c1".to_string()),
+            starred: None,
+        };
+        let json = serde_json::json!({
+            "covers": {"c1": "file:///c1.jpg"},
+            "albums": {"al1": "c1"},
+            "songs": [song],
+        })
+        .to_string();
+
+        let payload: QueueCoversPayload = serde_json::from_str(&json).unwrap();
+        assert_eq!(
+            payload.covers.get("c1").map(String::as_str),
+            Some("file:///c1.jpg")
+        );
+        assert_eq!(payload.albums.get("al1").map(String::as_str), Some("c1"));
+        assert_eq!(payload.songs.len(), 1);
+        assert_eq!(payload.songs[0].id, "s1");
+
+        let empty: QueueCoversPayload = serde_json::from_str("{}").unwrap();
+        assert!(empty.covers.is_empty() && empty.albums.is_empty() && empty.songs.is_empty());
+    }
+
+    /// Memory probe: the old `Value` + three subtree clones vs the typed
+    /// `QueueCoversPayload` for a 20k-row queue payload.
+    ///
+    /// `cargo test qml::tests::bench_queue_covers_payload -- --ignored --nocapture`
+    #[test]
+    #[ignore = "memory probe, run explicitly"]
+    fn bench_queue_covers_payload() {
+        let songs: Vec<crate::library::SongRow> = (0..20_000)
+            .map(|i| crate::library::SongRow {
+                id: format!("s{i}"),
+                title: format!("Track {i}"),
+                artist: Some("Radiohead".to_string()),
+                album: Some("Kid A".to_string()),
+                album_id: Some(format!("al{}", i % 2000)),
+                track: Some((i % 10) as i32 + 1),
+                duration: Some(180 + i % 120),
+                cover_art: Some(format!("c{}", i % 2000)),
+                starred: None,
+            })
+            .collect();
+        let covers: HashMap<String, String> = (0..2000)
+            .map(|i| (format!("c{i}"), format!("file:///covers/c{i}.jpg")))
+            .collect();
+        let albums: HashMap<String, String> = (0..2000)
+            .map(|i| (format!("al{i}"), format!("c{i}")))
+            .collect();
+        let json = serde_json::json!({
+            "covers": &covers,
+            "albums": &albums,
+            "songs": &songs,
+        })
+        .to_string();
+
+        let envelope = QueueCoversEnvelope {
+            covers: &covers,
+            albums: &albums,
+            songs: &songs,
+        };
+        let (_, value_tree_peak) = crate::test_alloc::measure(|| {
+            serde_json::to_value(&envelope)
+                .expect("envelope value")
+                .to_string()
+        });
+        let (_, direct_peak) =
+            crate::test_alloc::measure(|| serde_json::to_string(&envelope).expect("envelope json"));
+        eprintln!(
+            "queue covers envelope (20k songs): direct {} KiB | Value tree {} KiB",
+            direct_peak / 1024,
+            value_tree_peak / 1024,
+        );
+        assert!(
+            direct_peak < value_tree_peak,
+            "the typed envelope must not build a Value tree first"
+        );
+
+        let (_, clone_peak) = crate::test_alloc::measure(|| {
+            let value: serde_json::Value = serde_json::from_str(&json).unwrap();
+            let covers: HashMap<String, String> =
+                serde_json::from_value(value["covers"].clone()).unwrap_or_default();
+            let albums: HashMap<String, String> =
+                serde_json::from_value(value["albums"].clone()).unwrap_or_default();
+            let songs: Vec<crate::library::SongRow> =
+                serde_json::from_value(value["songs"].clone()).unwrap_or_default();
+            covers.len() + albums.len() + songs.len()
+        });
+        let (_, typed_peak) = crate::test_alloc::measure(|| {
+            let payload: QueueCoversPayload = serde_json::from_str(&json).unwrap();
+            payload.covers.len() + payload.albums.len() + payload.songs.len()
+        });
+
+        eprintln!(
+            "queue covers payload (20k songs): typed {} KiB | Value + clones {} KiB",
+            typed_peak / 1024,
+            clone_peak / 1024,
+        );
+        assert!(
+            typed_peak < clone_peak,
+            "direct deserialization must beat the Value tree plus subtree clones"
+        );
+    }
+
+    /// The queue stream must publish exactly the roles the drawer paints
+    /// (QR-4) and the live favourite flag, without the old `Value` tree.
+    #[test]
+    fn queue_rows_stream_the_published_shape() {
+        let track = crate::player::Track {
+            id: "s1".to_string(),
+            title: "Everything In Its Right Place".to_string(),
+            artist: "Radiohead".to_string(),
+            album: "Kid A".to_string(),
+            album_id: "al1".to_string(),
+            favorite: true,
+            duration: 240.0,
+            url: "https://server/stream?id=s1".to_string(),
+            cover_art: "cov1".to_string(),
+            cover_url: "file:///c.jpg".to_string(),
+        };
+        let starred: std::collections::HashSet<String> = ["s1".to_string()].into_iter().collect();
+        let rows = QueueRows {
+            queue: std::slice::from_ref(&track),
+            starred: &starred,
+        };
+
+        let parsed: serde_json::Value =
+            serde_json::from_str(&serde_json::to_string(&rows).unwrap()).unwrap();
+        assert_eq!(parsed[0]["id"], "s1");
+        assert_eq!(parsed[0]["title"], "Everything In Its Right Place");
+        assert_eq!(parsed[0]["album_id"], "al1");
+        assert_eq!(parsed[0]["starred"], true);
+        assert_eq!(parsed[0]["duration"], 240.0);
+        assert_eq!(parsed[0]["cover"], "file:///c.jpg");
+        assert!(
+            parsed[0].get("artist").is_none() && parsed[0].get("album").is_none(),
+            "QR-4: the drawer never painted subtitle roles"
+        );
     }
 }

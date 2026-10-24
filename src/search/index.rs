@@ -26,7 +26,8 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, RwLock};
 
-use anyhow::{Context, Result};
+use anyhow::Result;
+use futures_util::TryStreamExt;
 use nucleo::pattern::{AtomKind, CaseMatching, Normalization, Pattern};
 use nucleo::{Config, Matcher, Nucleo, Utf32Str, Utf32String};
 use sqlx::FromRow;
@@ -113,8 +114,17 @@ pub struct SearchIndex {
 
 impl SearchIndex {
     fn new(songs: Vec<SongHit>, artists: Vec<ArtistRow>, albums: Vec<AlbumRow>) -> Self {
-        let songs: Vec<Arc<SongHit>> = songs.into_iter().map(Arc::new).collect();
+        Self::from_shared(songs.into_iter().map(Arc::new).collect(), artists, albums)
+    }
 
+    /// Builds from already-shared hits. The sync path streams rows straight
+    /// into `Arc<SongHit>`s, so it never allocates the intermediate
+    /// `Vec<SongHit>` buffer (≈17 MB at 100k tracks) on top of the catalog.
+    fn from_shared(
+        songs: Vec<Arc<SongHit>>,
+        artists: Vec<ArtistRow>,
+        albums: Vec<AlbumRow>,
+    ) -> Self {
         let nucleo = Nucleo::new(Config::DEFAULT, Arc::new(|| {}), Some(4), 1);
         {
             let injector = nucleo.injector();
@@ -314,6 +324,31 @@ fn slot() -> &'static RwLock<Option<Arc<SearchIndex>>> {
 /// its catalog back into the fresh slot.
 static EPOCH: AtomicU64 = AtomicU64::new(0);
 
+/// Set when the library is too large for the in-memory catalog's budget. The
+/// FTS5 tables stay authoritative and `ensure` returns `None`, so a huge
+/// library trades fuzzy matching for a bounded resident set instead of
+/// growing without limit. Re-evaluated on every rebuild (a wipe or a smaller
+/// library lifts it).
+static OVER_BUDGET: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Default catalog budget (MiB). The estimate below is ~0.4 KiB per song, so
+/// 64 MiB keeps roughly 170k ASCII-heavy tracks fuzzy-matchable;
+/// `MUSIKA_SEARCH_INDEX_BUDGET_MIB=0` disables the cap for very large
+/// libraries that prefer the catalog.
+const DEFAULT_BUDGET_MIB: usize = 64;
+
+/// Fixed per-song cost of the catalog: `ArcInner<SongHit>` (192 B), the
+/// boxcar entry holding the `Arc` plus its `Utf32String` column (~32 B) and
+/// the two secondary index slots (~16 B), with a little slack. Calibrated
+/// against `bench_100k_songs` (256 + 3×text lands within ~10% of the
+/// measured retained bytes).
+const SONG_FIXED_COST: usize = 256;
+/// Text factor: every byte is stored once in the `SongHit` `String` and once
+/// more in Nucleo's haystack — 1 byte/char for ASCII, up to 4 bytes for
+/// non-ASCII (UTF-32). Three is the conservative middle, so a non-Latin
+/// library does not silently overshoot the budget by much.
+const HAYSTACK_FACTOR: usize = 3;
+
 /// The in-memory catalog is built for the hybrid and Nucleo engines;
 /// `MUSIKA_SEARCH_ENGINE=fts` skips it. `search_json` falls back to FTS
 /// whenever the in-memory build or query fails.
@@ -324,9 +359,50 @@ pub fn enabled() -> bool {
     )
 }
 
+/// Whether the last build declined the catalog for its memory budget. The
+/// search path skips the attempt entirely while this holds; the next
+/// [`rebuild`]/[`clear`] re-evaluates.
+pub fn over_budget() -> bool {
+    OVER_BUDGET.load(Ordering::Relaxed)
+}
+
+/// The catalog budget in bytes (`None` = unlimited).
+fn budget_bytes() -> Option<usize> {
+    let mib = std::env::var("MUSIKA_SEARCH_INDEX_BUDGET_MIB")
+        .ok()
+        .and_then(|value| value.trim().parse::<usize>().ok())
+        .unwrap_or(DEFAULT_BUDGET_MIB);
+    (mib > 0).then_some(mib.saturating_mul(1024 * 1024))
+}
+
+/// Estimates the catalog's resident cost from `library.db` without loading
+/// any row into Rust: one aggregate scan, then the fixed and text terms.
+async fn catalog_cost(pool: &SqlitePool) -> Result<usize> {
+    let (songs, text_bytes): (i64, i64) = sqlx::query_as(
+        "SELECT COUNT(*),
+                COALESCE(SUM(
+                    length(CAST(s.id AS BLOB))
+                    + length(CAST(s.title AS BLOB))
+                    + COALESCE(length(CAST(s.artist AS BLOB)), 0)
+                    + COALESCE(length(CAST(s.album AS BLOB)), 0)
+                    + COALESCE(length(CAST(s.album_id AS BLOB)), 0)
+                    + COALESCE(length(CAST(COALESCE(al.cover_art, s.cover_art) AS BLOB)), 0)
+                ), 0)
+         FROM songs s LEFT JOIN albums al ON al.id = s.album_id",
+    )
+    .fetch_one(pool)
+    .await?;
+    let songs = usize::try_from(songs).unwrap_or(usize::MAX);
+    let text = usize::try_from(text_bytes).unwrap_or(usize::MAX);
+    Ok(songs
+        .saturating_mul(SONG_FIXED_COST)
+        .saturating_add(text.saturating_mul(HAYSTACK_FACTOR)))
+}
+
 /// Drops the in-memory catalog (wipe/logout). The next search rebuilds it.
 pub fn clear() {
     EPOCH.fetch_add(1, Ordering::Relaxed);
+    OVER_BUDGET.store(false, Ordering::Relaxed);
     *slot().write().unwrap_or_else(|error| error.into_inner()) = None;
 }
 
@@ -335,16 +411,20 @@ pub fn clear() {
 /// instead of reading the library and building a second catalog in parallel.
 static BUILD: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
-/// The current index, built lazily from `library.db` on first use. FIX-6:
-/// concurrent builds wait for the in-flight one (the epoch guard already
-/// handles wipe races).
-pub async fn ensure(pool: &SqlitePool) -> Result<Arc<SearchIndex>> {
+/// The current index, built lazily from `library.db` on first use. `None`
+/// means the library exceeded the catalog budget: the caller must use FTS.
+/// FIX-6: concurrent builds wait for the in-flight one (the epoch guard
+/// already handles wipe races).
+pub async fn ensure(pool: &SqlitePool) -> Result<Option<Arc<SearchIndex>>> {
+    if OVER_BUDGET.load(Ordering::Relaxed) {
+        return Ok(None);
+    }
     if let Some(index) = slot()
         .read()
         .unwrap_or_else(|error| error.into_inner())
         .clone()
     {
-        return Ok(index);
+        return Ok(Some(index));
     }
     let build = BUILD.lock().await;
     // Double-check: the wait may already have paid for the build.
@@ -353,15 +433,17 @@ pub async fn ensure(pool: &SqlitePool) -> Result<Arc<SearchIndex>> {
         .unwrap_or_else(|error| error.into_inner())
         .clone()
     {
-        return Ok(index);
+        return Ok(Some(index));
+    }
+    if OVER_BUDGET.load(Ordering::Relaxed) {
+        return Ok(None);
     }
     rebuild_locked(pool).await?;
     drop(build);
-    slot()
+    Ok(slot()
         .read()
         .unwrap_or_else(|error| error.into_inner())
-        .clone()
-        .context("search index was not built")
+        .clone())
 }
 
 /// Rebuilds the whole catalog from `library.db` (after a sync or on first
@@ -376,16 +458,44 @@ pub async fn rebuild(pool: &SqlitePool) -> Result<()> {
 
 async fn rebuild_locked(pool: &SqlitePool) -> Result<()> {
     let epoch = EPOCH.load(Ordering::Relaxed);
-    let songs: Vec<SongHit> = sqlx::query_as(
-        "SELECT s.id, s.title, s.artist, s.album, s.duration,
-                COALESCE(s.play_count, 0) AS play_count,
-                s.album_id,
-                COALESCE(al.cover_art, s.cover_art) AS cover_art,
-                s.track, s.disc_number
-         FROM songs s LEFT JOIN albums al ON al.id = s.album_id",
-    )
-    .fetch_all(pool)
-    .await?;
+    // A previous over-budget verdict must not stick forever: every rebuild
+    // re-measures (the library may have shrunk, or the budget changed).
+    OVER_BUDGET.store(false, Ordering::Relaxed);
+    if let Some(budget) = budget_bytes() {
+        let estimate = catalog_cost(pool).await?;
+        if estimate > budget {
+            OVER_BUDGET.store(true, Ordering::Relaxed);
+            // Drop any older catalog: the point of the budget is a smaller
+            // resident set, not keeping the previous generation alive.
+            *slot().write().unwrap_or_else(|error| error.into_inner()) = None;
+            eprintln!(
+                "search: catalog estimate {} MiB exceeds the {} MiB budget; \
+                 FTS answers instead (MUSIKA_SEARCH_INDEX_BUDGET_MIB=0 disables the cap)",
+                estimate / (1024 * 1024),
+                budget / (1024 * 1024),
+            );
+            return Ok(());
+        }
+    }
+
+    // MEMORY: wrap each row in its `Arc` as it arrives instead of collecting
+    // into a `Vec<SongHit>` and converting afterwards; `from_shared` then
+    // injects the same Arcs, so the build never holds both forms.
+    let mut songs: Vec<Arc<SongHit>> = Vec::new();
+    {
+        let mut rows = sqlx::query_as::<_, SongHit>(
+            "SELECT s.id, s.title, s.artist, s.album, s.duration,
+                    COALESCE(s.play_count, 0) AS play_count,
+                    s.album_id,
+                    COALESCE(al.cover_art, s.cover_art) AS cover_art,
+                    s.track, s.disc_number
+             FROM songs s LEFT JOIN albums al ON al.id = s.album_id",
+        )
+        .fetch(pool);
+        while let Some(song) = rows.try_next().await? {
+            songs.push(Arc::new(song));
+        }
+    }
     let artists: Vec<ArtistRow> =
         sqlx::query_as(
             "SELECT id, name, album_count, cover_art, starred FROM artists
@@ -401,7 +511,8 @@ async fn rebuild_locked(pool: &SqlitePool) -> Result<()> {
     .await?;
 
     let index =
-        tokio::task::spawn_blocking(move || SearchIndex::new(songs, artists, albums)).await?;
+        tokio::task::spawn_blocking(move || SearchIndex::from_shared(songs, artists, albums))
+            .await?;
     if EPOCH.load(Ordering::Relaxed) != epoch {
         // A wipe landed while this build was running; drop the stale catalog.
         return Ok(());
@@ -549,32 +660,130 @@ mod tests {
         assert_eq!(results.albums[0].id, "al1");
     }
 
+    /// The budget estimate is one aggregate scan: empty is free, and each row
+    /// pays the fixed catalog cost plus five bytes per text byte (String +
+    /// the UTF-32 haystack).
+    #[tokio::test]
+    async fn catalog_cost_charges_fixed_and_text_terms() {
+        let pool = crate::sqlite::memory_pool(sqlx::migrate!("./migrations_library")).await;
+        assert_eq!(catalog_cost(&pool).await.unwrap(), 0);
+
+        sqlx::raw_sql(
+            "INSERT INTO songs (id, title, artist, album, album_id, cover_art)
+             VALUES ('s1', 'Title', 'Artist', 'Album', 'al1', 'cov')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let text =
+            "s1".len() + "Title".len() + "Artist".len() + "Album".len() + "al1".len() + "cov".len();
+        assert_eq!(
+            catalog_cost(&pool).await.unwrap(),
+            SONG_FIXED_COST + text * HAYSTACK_FACTOR
+        );
+        assert!(catalog_cost(&pool).await.unwrap() > 0);
+    }
+
     /// M0 baseline: `cargo test --release search::index::tests::bench -- --ignored --nocapture`.
     #[test]
     #[ignore = "benchmark, run explicitly"]
     fn bench_100k_songs() {
         use std::time::Instant;
 
-        let songs: Vec<SongHit> = (0..100_000)
-            .map(|i| {
-                song(
-                    &format!("s{i}"),
-                    &format!("Track {i}"),
-                    "Radiohead",
-                    "Kid A",
-                    i % 100,
-                )
-            })
-            .collect();
-
-        let start = Instant::now();
-        let index = SearchIndex::new(songs, Vec::new(), Vec::new());
-        eprintln!("index build (100k): {:?}", start.elapsed());
+        // The fixture is built inside the tracked closure, so the input Vec's
+        // buffer (consumed into `Arc<SongHit>`s) cancels out and the retained
+        // count is the catalog itself.
+        let ((index, elapsed, estimate), retained) = crate::test_alloc::live(|| {
+            let songs: Vec<SongHit> = (0..100_000)
+                .map(|i| {
+                    song(
+                        &format!("s{i}"),
+                        &format!("Track {i}"),
+                        "Radiohead",
+                        "Kid A",
+                        i % 100,
+                    )
+                })
+                .collect();
+            let songs_len = songs.len();
+            let estimate = songs_len * SONG_FIXED_COST
+                + songs
+                    .iter()
+                    .map(|hit| {
+                        hit.id.len()
+                            + hit.title.len()
+                            + hit.artist.as_deref().map_or(0, str::len)
+                            + hit.album.as_deref().map_or(0, str::len)
+                            + hit.album_id.as_deref().map_or(0, str::len)
+                            + hit.cover_art.as_deref().map_or(0, str::len)
+                    })
+                    .sum::<usize>()
+                    * HAYSTACK_FACTOR;
+            let start = Instant::now();
+            let index = SearchIndex::new(songs, Vec::new(), Vec::new());
+            (index, start.elapsed(), estimate)
+        });
+        eprintln!(
+            "index build (100k): {elapsed:?}, retained {:.1} MiB ({:.0} B/song), \
+             budget estimate {:.1} MiB ({:.0} B/song)",
+            retained as f64 / (1024.0 * 1024.0),
+            retained as f64 / 100_000.0,
+            estimate as f64 / (1024.0 * 1024.0),
+            estimate as f64 / 100_000.0,
+        );
 
         for query in ["rdo", "track", "radio", "zzz"] {
             let start = Instant::now();
             let hits = index.search(query, 20);
             eprintln!("{query}: {:?} ({} hits)", start.elapsed(), hits.songs.len());
         }
+    }
+
+    /// Build peak: the old `Vec<SongHit>` → `Arc` conversion vs the sync's
+    /// streamed `Arc<SongHit>` path.
+    ///
+    /// `cargo test search::index::tests::bench_index_build_peak -- --ignored --nocapture`
+    #[test]
+    #[ignore = "memory probe, run explicitly"]
+    fn bench_index_build_peak() {
+        let (_, vec_peak) = crate::test_alloc::measure(|| {
+            let songs: Vec<SongHit> = (0..100_000)
+                .map(|i| {
+                    song(
+                        &format!("s{i}"),
+                        &format!("Track {i}"),
+                        "Radiohead",
+                        "Kid A",
+                        i % 100,
+                    )
+                })
+                .collect();
+            SearchIndex::new(songs, Vec::new(), Vec::new())
+        });
+        let (_, shared_peak) = crate::test_alloc::measure(|| {
+            let songs: Vec<Arc<SongHit>> = (0..100_000)
+                .map(|i| {
+                    Arc::new(song(
+                        &format!("s{i}"),
+                        &format!("Track {i}"),
+                        "Radiohead",
+                        "Kid A",
+                        i % 100,
+                    ))
+                })
+                .collect();
+            SearchIndex::from_shared(songs, Vec::new(), Vec::new())
+        });
+
+        eprintln!(
+            "index build peak (100k): streamed Arcs {:.1} MiB | Vec<SongHit> {:.1} MiB",
+            shared_peak as f64 / (1024.0 * 1024.0),
+            vec_peak as f64 / (1024.0 * 1024.0),
+        );
+        assert!(
+            shared_peak < vec_peak,
+            "the streamed build must not hold both row forms"
+        );
     }
 }

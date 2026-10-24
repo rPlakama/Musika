@@ -21,6 +21,8 @@
 
 use std::collections::{HashMap, HashSet};
 
+use serde::ser::{Serialize, SerializeSeq, SerializeStruct, Serializer};
+
 /// CACHE-9: the offline catalog. Only songs whose download finished are
 /// listable (and therefore playable) while the server is unreachable; albums
 /// and artists survive only through their downloaded songs.
@@ -93,19 +95,14 @@ pub async fn load_albums_json(
         .filter_map(|album| album.cover_art.clone())
         .collect();
     let covers = crate::covers::url_map_of(dbs, &cover_ids).await?;
-    let rows: Vec<serde_json::Value> = albums
-        .iter()
-        .map(|album| {
-            album_json(
-                album,
-                &covers,
-                offline
-                    .as_ref()
-                    .and_then(|filter| filter.albums.get(&album.id).copied()),
-            )
-        })
-        .collect();
-    Ok(serde_json::to_string(&rows)?)
+    // Stream the sequence straight into the payload string: the old
+    // `Vec<Value>` built one object/map per row (with its own key and value
+    // allocations) before serializing it a second time.
+    Ok(serde_json::to_string(&AlbumSeq {
+        albums: &albums,
+        covers: &covers,
+        offline: offline.as_deref(),
+    })?)
 }
 
 pub async fn load_songs_page_json(
@@ -127,15 +124,13 @@ pub async fn load_songs_page_json(
         .filter_map(|song| song.cover_art.clone())
         .collect();
     let covers = crate::covers::url_map_of(dbs, &cover_ids).await?;
-    let rows: serde_json::Value = serde_json::from_str(&song_rows_json(&songs, &covers)?)
-        .unwrap_or_else(|_| serde_json::Value::Array(Vec::new()));
-    Ok(serde_json::json!({
-        "offset": offset,
-        "next": offset + returned,
-        "has_more": has_more,
-        "rows": rows,
-    })
-    .to_string())
+    Ok(serde_json::to_string(&SongsPage {
+        offset,
+        next: offset + returned,
+        has_more,
+        songs: &songs,
+        covers: &covers,
+    })?)
 }
 
 pub async fn load_album_songs_json(
@@ -178,21 +173,13 @@ pub async fn load_artists_json(
             .into_iter()
             .collect();
     let user_ratings = crate::artist_user::ratings(&dbs.artist_user).await?;
-    let rows: Vec<serde_json::Value> = artists
-        .iter()
-        .map(|artist| {
-            artist_json(
-                artist,
-                &covers,
-                filter
-                    .as_ref()
-                    .and_then(|filter| filter.artists.get(&artist.id).copied()),
-                artist.starred.is_some() || user_starred.contains(&artist.id),
-                user_ratings.get(&artist.id).copied().unwrap_or(0),
-            )
-        })
-        .collect();
-    Ok(serde_json::to_string(&rows)?)
+    Ok(serde_json::to_string(&ArtistSeq {
+        artists: &artists,
+        covers: &covers,
+        offline: filter.as_deref(),
+        user_starred: &user_starred,
+        user_ratings: &user_ratings,
+    })?)
 }
 
 /// One artist (library.db) with cover URL and its albums, for ArtistEntry.
@@ -221,30 +208,23 @@ pub async fn load_artist_json(
             .into_iter()
             .collect();
     let user_ratings = crate::artist_user::ratings(&dbs.artist_user).await?;
-    let mut value = artist_json(
-        &artist,
-        &covers,
-        filter
-            .as_ref()
-            .and_then(|filter| filter.artists.get(&artist.id).copied()),
-        artist.starred.is_some() || user_starred.contains(&artist.id),
-        user_ratings.get(&artist.id).copied().unwrap_or(0),
-    );
-    value["albums"] = serde_json::Value::Array(
-        albums
-            .iter()
-            .map(|album| {
-                album_json(
-                    album,
-                    &covers,
-                    filter
-                        .as_ref()
-                        .and_then(|filter| filter.albums.get(&album.id).copied()),
-                )
-            })
-            .collect(),
-    );
-    Ok(Some(value.to_string()))
+    let album_count = filter
+        .as_ref()
+        .and_then(|filter| filter.artists.get(&artist.id).copied())
+        .unwrap_or(artist.album_count);
+    let page = ArtistPage {
+        artist: &artist,
+        cover: cover_url_ref(artist.cover_art.as_deref(), &covers),
+        album_count,
+        starred: artist.starred.is_some() || user_starred.contains(&artist.id),
+        rating: user_ratings.get(&artist.id).copied().unwrap_or(0),
+        albums: AlbumSeq {
+            albums: &albums,
+            covers: &covers,
+            offline: filter.as_deref(),
+        },
+    };
+    Ok(Some(serde_json::to_string(&page)?))
 }
 
 pub(crate) fn artist_json(
@@ -312,27 +292,214 @@ fn song_json(
     })
 }
 
+// ---------------------------------------------------------------------------
+// Streaming list serializers
+// ---------------------------------------------------------------------------
+//
+// The album/artist/song list loaders used to build a `Vec<serde_json::Value>`
+// and serialize it afterwards. Every row then existed as a tree of maps,
+// boxed keys and cloned strings before the final string was written. These
+// borrow-based `Serialize` views emit the same JSON straight into the output
+// buffer, so a list page costs the row vector + the final string.
+
+/// Borrowed cover URL for a row: the map's value or the empty string.
+pub(crate) fn cover_url_ref<'a>(id: Option<&str>, covers: &'a HashMap<String, String>) -> &'a str {
+    id.and_then(|id| covers.get(id))
+        .map(String::as_str)
+        .unwrap_or_default()
+}
+
+struct AlbumElement<'a> {
+    album: &'a crate::library::AlbumRow,
+    cover: &'a str,
+    song_count: i64,
+}
+
+impl Serialize for AlbumElement<'_> {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        let mut state = serializer.serialize_struct("album", 9)?;
+        state.serialize_field("id", &self.album.id)?;
+        state.serialize_field("title", &self.album.title)?;
+        state.serialize_field("artist", &self.album.artist)?;
+        state.serialize_field("year", &self.album.year)?;
+        state.serialize_field("song_count", &self.song_count)?;
+        state.serialize_field("tracks", &self.song_count)?;
+        state.serialize_field("cover", self.cover)?;
+        state.serialize_field("starred", &self.album.starred.is_some())?;
+        state.serialize_field("rating", &self.album.rating)?;
+        state.end()
+    }
+}
+
+/// An album list (or an artist page's `albums` array) streamed row by row.
+struct AlbumSeq<'a> {
+    albums: &'a [crate::library::AlbumRow],
+    covers: &'a HashMap<String, String>,
+    /// Offline track counts by album id, when the offline filter applies.
+    offline: Option<&'a OfflineFilter>,
+}
+
+impl Serialize for AlbumSeq<'_> {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        let mut seq = serializer.serialize_seq(Some(self.albums.len()))?;
+        for album in self.albums {
+            let song_count = self
+                .offline
+                .and_then(|filter| filter.albums.get(&album.id).copied())
+                .unwrap_or(album.song_count);
+            seq.serialize_element(&AlbumElement {
+                album,
+                cover: cover_url_ref(album.cover_art.as_deref(), self.covers),
+                song_count,
+            })?;
+        }
+        seq.end()
+    }
+}
+
+struct ArtistElement<'a> {
+    artist: &'a crate::library::ArtistRow,
+    cover: &'a str,
+    album_count: i64,
+    starred: bool,
+    rating: i64,
+}
+
+impl Serialize for ArtistElement<'_> {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        let mut state = serializer.serialize_struct("artist", 6)?;
+        state.serialize_field("id", &self.artist.id)?;
+        state.serialize_field("name", &self.artist.name)?;
+        state.serialize_field("album_count", &self.album_count)?;
+        state.serialize_field("cover", self.cover)?;
+        state.serialize_field("starred", &self.starred)?;
+        state.serialize_field("rating", &self.rating)?;
+        state.end()
+    }
+}
+
+struct ArtistSeq<'a> {
+    artists: &'a [crate::library::ArtistRow],
+    covers: &'a HashMap<String, String>,
+    offline: Option<&'a OfflineFilter>,
+    user_starred: &'a HashSet<String>,
+    user_ratings: &'a HashMap<String, i64>,
+}
+
+impl Serialize for ArtistSeq<'_> {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        let mut seq = serializer.serialize_seq(Some(self.artists.len()))?;
+        for artist in self.artists {
+            let album_count = self
+                .offline
+                .and_then(|filter| filter.artists.get(&artist.id).copied())
+                .unwrap_or(artist.album_count);
+            seq.serialize_element(&ArtistElement {
+                artist,
+                cover: cover_url_ref(artist.cover_art.as_deref(), self.covers),
+                album_count,
+                starred: artist.starred.is_some() || self.user_starred.contains(&artist.id),
+                rating: self.user_ratings.get(&artist.id).copied().unwrap_or(0),
+            })?;
+        }
+        seq.end()
+    }
+}
+
+/// One artist page: the artist fields plus its `albums` array.
+struct ArtistPage<'a> {
+    artist: &'a crate::library::ArtistRow,
+    cover: &'a str,
+    album_count: i64,
+    starred: bool,
+    rating: i64,
+    albums: AlbumSeq<'a>,
+}
+
+impl Serialize for ArtistPage<'_> {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        let mut state = serializer.serialize_struct("artist_page", 7)?;
+        state.serialize_field("id", &self.artist.id)?;
+        state.serialize_field("name", &self.artist.name)?;
+        state.serialize_field("album_count", &self.album_count)?;
+        state.serialize_field("cover", self.cover)?;
+        state.serialize_field("starred", &self.starred)?;
+        state.serialize_field("rating", &self.rating)?;
+        state.serialize_field("albums", &self.albums)?;
+        state.end()
+    }
+}
+
+struct SongElement<'a> {
+    song: &'a crate::library::SongRow,
+    cover: &'a str,
+}
+
+impl Serialize for SongElement<'_> {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        let mut state = serializer.serialize_struct("song", 9)?;
+        state.serialize_field("id", &self.song.id)?;
+        state.serialize_field("title", &self.song.title)?;
+        state.serialize_field("artist", &self.song.artist)?;
+        state.serialize_field("album", &self.song.album)?;
+        state.serialize_field("album_id", &self.song.album_id)?;
+        state.serialize_field("track", &self.song.track)?;
+        state.serialize_field("duration", &self.song.duration)?;
+        state.serialize_field("cover", self.cover)?;
+        state.serialize_field("starred", &self.song.starred.is_some())?;
+        state.end()
+    }
+}
+
+struct SongSeq<'a> {
+    songs: &'a [crate::library::SongRow],
+    covers: &'a HashMap<String, String>,
+}
+
+impl Serialize for SongSeq<'_> {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        let mut seq = serializer.serialize_seq(Some(self.songs.len()))?;
+        for song in self.songs {
+            seq.serialize_element(&SongElement {
+                song,
+                cover: cover_url_ref(song.cover_art.as_deref(), self.covers),
+            })?;
+        }
+        seq.end()
+    }
+}
+
+/// The paged Songs payload (`rows` is the streamed SongSeq).
+struct SongsPage<'a> {
+    offset: i64,
+    next: i64,
+    has_more: bool,
+    songs: &'a [crate::library::SongRow],
+    covers: &'a HashMap<String, String>,
+}
+
+impl Serialize for SongsPage<'_> {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        let mut state = serializer.serialize_struct("songs_page", 4)?;
+        state.serialize_field("offset", &self.offset)?;
+        state.serialize_field("next", &self.next)?;
+        state.serialize_field("has_more", &self.has_more)?;
+        state.serialize_field(
+            "rows",
+            &SongSeq {
+                songs: self.songs,
+                covers: self.covers,
+            },
+        )?;
+        state.end()
+    }
+}
+
 fn song_rows_json(
     songs: &[crate::library::SongRow],
     covers: &HashMap<String, String>,
 ) -> anyhow::Result<String> {
-    let rows: Vec<serde_json::Value> = songs
-        .iter()
-        .map(|song| {
-            song_json(
-                &song.id,
-                &song.title,
-                song.artist.as_deref(),
-                song.album.as_deref(),
-                song.album_id.as_deref(),
-                song.track,
-                song.duration,
-                cover_url(song.cover_art.as_deref(), covers),
-                song.starred.is_some(),
-            )
-        })
-        .collect();
-    Ok(serde_json::to_string(&rows)?)
+    Ok(serde_json::to_string(&SongSeq { songs, covers })?)
 }
 
 /// Fetches an album's description text from the server (`getAlbumInfo2`).
@@ -350,9 +517,7 @@ pub async fn album_notes(dbs: &crate::db::Dbs, album_id: &str) -> String {
 }
 
 pub(crate) fn cover_url(id: Option<&str>, covers: &HashMap<String, String>) -> String {
-    id.and_then(|id| covers.get(id))
-        .cloned()
-        .unwrap_or_default()
+    cover_url_ref(id, covers).to_string()
 }
 
 /// One song row in the search payload, independent of the engine that found
@@ -392,46 +557,68 @@ pub async fn search_json(
     offline: bool,
     limit: usize,
 ) -> anyhow::Result<String> {
-    match crate::search::engine() {
-        crate::search::Engine::Hybrid => search_json_hybrid(dbs, query, offline, limit).await,
+    Ok(search_value(dbs, query, offline, limit).await?.to_string())
+}
+
+/// One payload, built as a [`serde_json::Value`] until the bridge boundary.
+/// The hybrid merge composes two engines' results, so serializing each one
+/// first and parsing it back only to merge would copy the whole payload
+/// several times per keystroke.
+async fn search_value(
+    dbs: &crate::db::Dbs,
+    query: &str,
+    offline: bool,
+    limit: usize,
+) -> anyhow::Result<serde_json::Value> {
+    let engine = crate::search::engine();
+    // A library past the catalog budget already knows FTS is the answer; do
+    // not rebuild/serialize a Nucleo payload only to discard it.
+    if engine != crate::search::Engine::Fts && crate::search::index::over_budget() {
+        return search_value_fts(dbs, query, offline, limit).await;
+    }
+    match engine {
+        crate::search::Engine::Hybrid => search_value_hybrid(dbs, query, offline, limit).await,
         crate::search::Engine::Nucleo => {
-            match search_json_index(dbs, query, offline, limit).await {
-                Ok(json) => Ok(json),
+            match search_value_index(dbs, query, offline, limit).await {
+                Ok(value) => Ok(value),
                 Err(err) => {
                     // The in-memory catalog is a cache: a build failure must
                     // not take the palette down while FTS is still available.
                     eprintln!("search: nucleo engine failed, using FTS: {err:#}");
-                    search_json_fts(dbs, query, offline, limit).await
+                    search_value_fts(dbs, query, offline, limit).await
                 }
             }
         }
-        crate::search::Engine::Fts => search_json_fts(dbs, query, offline, limit).await,
+        crate::search::Engine::Fts => search_value_fts(dbs, query, offline, limit).await,
     }
 }
 
 /// Nucleo answers first; FTS fills any column that came back short (or steps
 /// in wholesale when the in-memory catalog fails). The merge is only paid for
 /// sparse queries — a broad hit set never touches SQLite.
-async fn search_json_hybrid(
+async fn search_value_hybrid(
     dbs: &crate::db::Dbs,
     query: &str,
     offline: bool,
     limit: usize,
-) -> anyhow::Result<String> {
-    let nucleo_json = match search_json_index(dbs, query, offline, limit).await {
-        Ok(json) => json,
+) -> anyhow::Result<serde_json::Value> {
+    let mut nucleo = match search_value_index(dbs, query, offline, limit).await {
+        Ok(value) => value,
         Err(err) => {
             eprintln!("search: nucleo engine failed, using FTS: {err:#}");
-            return search_json_fts(dbs, query, offline, limit).await;
+            return search_value_fts(dbs, query, offline, limit).await;
         }
     };
-    let Ok(nucleo) = serde_json::from_str::<serde_json::Value>(&nucleo_json) else {
-        return Ok(nucleo_json);
-    };
+    // The first search may have discovered the over-budget verdict while this
+    // request was in flight; `search_value_index` already returned the FTS
+    // payload then, so do not merge FTS with itself.
+    if crate::search::index::over_budget() {
+        return Ok(nucleo);
+    }
     // The empty-query surface and S-8's single-album tracklist already own
     // their result set; do not let FTS mix another album in.
     if nucleo["most_played"].as_bool() == Some(true) || nucleo["album_context"].is_string() {
-        return Ok(nucleo_json);
+        return Ok(nucleo);
     }
     // The FTS fill is for sparse song sets (a rare/typo query, or an offline
     // catalog); a broad hit set already fills the Songs column, and the
@@ -441,47 +628,49 @@ async fn search_json_hybrid(
         .and_then(serde_json::Value::as_array)
         .is_none_or(|rows| rows.len() < limit);
     if !sparse_songs {
-        return Ok(nucleo_json);
+        return Ok(nucleo);
     }
 
-    let fts_json = match search_json_fts(dbs, query, offline, limit).await {
-        Ok(json) => json,
+    let mut fts = match search_value_fts(dbs, query, offline, limit).await {
+        Ok(value) => value,
         Err(err) => {
             eprintln!("search: FTS fill failed: {err:#}");
-            return Ok(nucleo_json);
+            return Ok(nucleo);
         }
     };
-    let Ok(fts) = serde_json::from_str::<serde_json::Value>(&fts_json) else {
-        return Ok(nucleo_json);
-    };
-    let mut merged = nucleo;
     for key in ["songs", "artists", "albums"] {
-        if let (Some(primary), Some(secondary)) = (merged.get_mut(key), fts.get(key)) {
+        if let (Some(primary), Some(secondary)) = (nucleo.get_mut(key), fts.get_mut(key)) {
             merge_json_rows(primary, secondary, limit);
         }
     }
-    Ok(merged.to_string())
+    Ok(nucleo)
 }
 
 /// Append the FTS-only rows to the Nucleo array, keeping the Nucleo order and
-/// the visible cap. Rows are identified by their `id`.
-fn merge_json_rows(primary: &mut serde_json::Value, secondary: &serde_json::Value, limit: usize) {
+/// the visible cap. Rows are identified by their `id`. The secondary rows are
+/// moved, not cloned: the FTS payload is discarded after the merge.
+fn merge_json_rows(
+    primary: &mut serde_json::Value,
+    secondary: &mut serde_json::Value,
+    limit: usize,
+) {
     let Some(primary_rows) = primary.as_array_mut() else {
         return;
     };
     let mut seen: HashSet<String> = primary_rows.iter().filter_map(json_row_id).collect();
-    if let Some(secondary_rows) = secondary.as_array() {
-        for row in secondary_rows {
-            if primary_rows.len() >= limit {
-                break;
-            }
-            if let Some(id) = json_row_id(row)
-                && !seen.insert(id)
-            {
-                continue;
-            }
-            primary_rows.push(row.clone());
+    let Some(secondary_rows) = secondary.as_array_mut() else {
+        return;
+    };
+    for row in std::mem::take(secondary_rows) {
+        if primary_rows.len() >= limit {
+            break;
         }
+        if let Some(id) = json_row_id(&row)
+            && !seen.insert(id)
+        {
+            continue;
+        }
+        primary_rows.push(row);
     }
     primary_rows.truncate(limit);
 }
@@ -492,12 +681,12 @@ fn json_row_id(row: &serde_json::Value) -> Option<String> {
         .map(str::to_string)
 }
 
-async fn search_json_fts(
+async fn search_value_fts(
     dbs: &crate::db::Dbs,
     query: &str,
     offline: bool,
     limit: usize,
-) -> anyhow::Result<String> {
+) -> anyhow::Result<serde_json::Value> {
     let filter = offline_filter(dbs, offline).await?;
     let limit = limit.max(1);
     // Offline hits are filtered down to the downloaded catalog, so over-fetch
@@ -567,7 +756,7 @@ async fn search_json_fts(
         })
         .collect();
 
-    search_payload(
+    search_payload_value(
         dbs,
         query,
         most_played,
@@ -579,18 +768,21 @@ async fn search_json_fts(
     .await
 }
 
-async fn search_json_index(
+async fn search_value_index(
     dbs: &crate::db::Dbs,
     query: &str,
     offline: bool,
     limit: usize,
-) -> anyhow::Result<String> {
+) -> anyhow::Result<serde_json::Value> {
     let filter = offline_filter(dbs, offline).await?;
     let limit = limit.max(1);
     let fetch = if filter.is_some() { limit * 3 } else { limit };
     let cleaned = crate::search::clean_query(query);
     let most_played = cleaned.is_empty();
-    let index = crate::search::index::ensure(&dbs.library).await?;
+    let Some(index) = crate::search::index::ensure(&dbs.library).await? else {
+        // Over budget: the catalog declined to build, FTS owns the query.
+        return search_value_fts(dbs, query, offline, limit).await;
+    };
     let (mut artists, mut albums, mut songs) = if most_played {
         // The unified search's empty-query surface browses every scope:
         // artists and albums are full name-ordered lists, songs stay Most
@@ -651,7 +843,7 @@ async fn search_json_index(
     }
     songs.truncate(limit);
 
-    search_payload(
+    search_payload_value(
         dbs,
         query,
         most_played,
@@ -663,7 +855,7 @@ async fn search_json_index(
     .await
 }
 
-async fn search_payload(
+async fn search_payload_value(
     dbs: &crate::db::Dbs,
     query: &str,
     most_played: bool,
@@ -671,7 +863,7 @@ async fn search_payload(
     albums: Vec<std::sync::Arc<crate::library::AlbumRow>>,
     songs: Vec<SearchSong>,
     album_context: Option<String>,
-) -> anyhow::Result<String> {
+) -> anyhow::Result<serde_json::Value> {
     let mut cover_ids: Vec<String> = albums
         .iter()
         .filter_map(|album| album.cover_art.clone())
@@ -741,8 +933,7 @@ async fn search_payload(
         "artists": artist_rows,
         "albums": album_rows,
         "songs": song_rows,
-    })
-    .to_string())
+    }))
 }
 
 #[cfg(test)]
@@ -786,6 +977,169 @@ mod tests {
         assert_eq!(parsed[1]["starred"], false);
     }
 
+    /// The streaming serializers must emit exactly the object the old
+    /// `Value` builders produce: the Qt side parses this shape, so a field
+    /// rename or a null/absent drift would silently blank a list.
+    #[test]
+    fn streaming_list_rows_match_the_value_payload_shape() {
+        let covers = HashMap::new();
+
+        let album = crate::library::AlbumRow {
+            id: "al1".to_string(),
+            title: "Kid A".to_string(),
+            artist: Some("Radiohead".to_string()),
+            year: Some(2000),
+            song_count: 2,
+            cover_art: None,
+            starred: None,
+            rating: 3,
+        };
+        let albums = vec![album];
+        let streamed = serde_json::to_string(&AlbumSeq {
+            albums: &albums,
+            covers: &covers,
+            offline: None,
+        })
+        .unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&streamed).unwrap();
+        assert_eq!(
+            parsed,
+            serde_json::json!([album_json(&albums[0], &covers, None)])
+        );
+
+        let artist = crate::library::ArtistRow {
+            id: "ar1".to_string(),
+            name: "Radiohead".to_string(),
+            album_count: 1,
+            cover_art: None,
+            starred: Some("2026-10-14T00:00:00Z".to_string()),
+        };
+        let artists = vec![artist];
+        let user_starred = HashSet::new();
+        let user_ratings = HashMap::new();
+        let streamed = serde_json::to_string(&ArtistSeq {
+            artists: &artists,
+            covers: &covers,
+            offline: None,
+            user_starred: &user_starred,
+            user_ratings: &user_ratings,
+        })
+        .unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&streamed).unwrap();
+        assert_eq!(
+            parsed,
+            serde_json::json!([artist_json(&artists[0], &covers, None, true, 0)])
+        );
+
+        let songs = vec![song_row("s1", Some("al1"))];
+        let streamed = song_rows_json(&songs, &covers).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&streamed).unwrap();
+        let expected = song_json(
+            &songs[0].id,
+            &songs[0].title,
+            songs[0].artist.as_deref(),
+            songs[0].album.as_deref(),
+            songs[0].album_id.as_deref(),
+            songs[0].track,
+            songs[0].duration,
+            cover_url(songs[0].cover_art.as_deref(), &covers),
+            false,
+        );
+        assert_eq!(parsed, serde_json::json!([expected]));
+
+        // The artist page nests the album sequence under `albums`.
+        let page = ArtistPage {
+            artist: &artists[0],
+            cover: "",
+            album_count: 1,
+            starred: true,
+            rating: 0,
+            albums: AlbumSeq {
+                albums: &albums,
+                covers: &covers,
+                offline: None,
+            },
+        };
+        let parsed = serde_json::to_value(&page).unwrap();
+        assert_eq!(parsed["id"], "ar1");
+        assert_eq!(parsed["albums"][0]["id"], "al1");
+
+        // The songs page keeps its paging envelope around the streamed rows.
+        let page = SongsPage {
+            offset: 10,
+            next: 12,
+            has_more: true,
+            songs: &songs,
+            covers: &covers,
+        };
+        let parsed = serde_json::to_value(&page).unwrap();
+        assert_eq!(parsed["offset"], 10);
+        assert_eq!(parsed["next"], 12);
+        assert_eq!(parsed["has_more"], true);
+        assert_eq!(parsed["rows"][0]["id"], "s1");
+    }
+
+    /// Memory probe for the streaming serializers: the same 5k-row album list
+    /// through the old `Vec<Value>` path and the borrowed `AlbumSeq`.
+    ///
+    /// `cargo test browse::tests::bench_streamed_list_vs_value_tree -- --ignored --nocapture`
+    #[test]
+    #[ignore = "memory probe, run explicitly"]
+    fn bench_streamed_list_vs_value_tree() {
+        let albums: Vec<crate::library::AlbumRow> = (0..5_000)
+            .map(|index| crate::library::AlbumRow {
+                id: format!("al{index}"),
+                title: format!("Album number {index}"),
+                artist: Some("Radiohead".to_string()),
+                year: Some(2000),
+                song_count: 12,
+                cover_art: Some(format!("cov{index}")),
+                starred: None,
+                rating: 3,
+            })
+            .collect();
+        let covers: HashMap<String, String> = (0..5_000)
+            .map(|index| {
+                (
+                    format!("cov{index}"),
+                    format!("file:///covers/cov{index}.jpg"),
+                )
+            })
+            .collect();
+
+        let (streamed, streamed_peak) = crate::test_alloc::measure(|| {
+            serde_json::to_string(&AlbumSeq {
+                albums: &albums,
+                covers: &covers,
+                offline: None,
+            })
+            .expect("streamed list")
+        });
+        let (treed, tree_peak) = crate::test_alloc::measure(|| {
+            let rows: Vec<serde_json::Value> = albums
+                .iter()
+                .map(|album| album_json(album, &covers, None))
+                .collect();
+            serde_json::to_string(&rows).expect("value list")
+        });
+
+        eprintln!(
+            "album list JSON (5k rows): streamed peak {} KiB | Value-tree peak {} KiB",
+            streamed_peak / 1024,
+            tree_peak / 1024,
+        );
+        let streamed: serde_json::Value = serde_json::from_str(&streamed).unwrap();
+        let treed: serde_json::Value = serde_json::from_str(&treed).unwrap();
+        assert_eq!(
+            streamed, treed,
+            "the streamed shape must parse to the same JSON value"
+        );
+        assert!(
+            streamed_peak < tree_peak,
+            "streaming must not cost more than the intermediate Value tree"
+        );
+    }
+
     /// ARC-SEARCH: the Nucleo engine answers from the in-memory catalog and
     /// keeps S-8 (one album match = track order) and S-9 (Most played).
     #[tokio::test]
@@ -819,8 +1173,7 @@ mod tests {
         .await
         .unwrap();
 
-        let json = search_json_index(&dbs, "rdo", false, 20).await.unwrap();
-        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+        let parsed = search_value_index(&dbs, "rdo", false, 20).await.unwrap();
         assert_eq!(parsed["most_played"], false);
         assert_eq!(parsed["album_context"], "al1");
         let ids: Vec<&str> = parsed["songs"]
@@ -831,8 +1184,7 @@ mod tests {
             .collect();
         assert_eq!(ids, ["s1", "s2"], "one album match reads in track order");
 
-        let json = search_json_index(&dbs, "", false, 20).await.unwrap();
-        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+        let parsed = search_value_index(&dbs, "", false, 20).await.unwrap();
         assert_eq!(parsed["most_played"], true);
         assert!(parsed["album_context"].is_null());
         assert_eq!(parsed["songs"][0]["id"], "s2");
@@ -846,8 +1198,8 @@ mod tests {
     #[test]
     fn hybrid_merge_keeps_primary_order_and_dedupes() {
         let mut primary = serde_json::json!([{"id": "a"}, {"id": "b"}]);
-        let secondary = serde_json::json!([{"id": "b"}, {"id": "c"}, {"id": "d"}]);
-        merge_json_rows(&mut primary, &secondary, 3);
+        let mut secondary = serde_json::json!([{"id": "b"}, {"id": "c"}, {"id": "d"}]);
+        merge_json_rows(&mut primary, &mut secondary, 3);
         let ids: Vec<&str> = primary
             .as_array()
             .unwrap()
@@ -855,5 +1207,126 @@ mod tests {
             .map(|row| row["id"].as_str().unwrap())
             .collect();
         assert_eq!(ids, ["a", "b", "c"]);
+    }
+
+    /// Session-shaped probe: the real list/search loaders against a 20k-song
+    /// catalog (2k albums, 200 artists), reporting each payload's peak heap
+    /// and size. This is the Rust half of the "live profile" without Qt.
+    ///
+    /// `cargo test browse::tests::bench_session_loaders -- --ignored --nocapture`
+    #[test]
+    #[ignore = "memory probe, run explicitly"]
+    fn bench_session_loaders() {
+        use std::time::Instant;
+
+        fn measured(
+            rt: &tokio::runtime::Runtime,
+            future: impl std::future::Future<Output = anyhow::Result<String>>,
+        ) -> (usize, usize, std::time::Duration) {
+            let start = Instant::now();
+            let (json, peak) = crate::test_alloc::measure(|| rt.block_on(future).expect("loader"));
+            (json.len(), peak.max(0) as usize, start.elapsed())
+        }
+
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("probe runtime");
+        let library = rt.block_on(crate::sqlite::memory_pool(sqlx::migrate!(
+            "./migrations_library"
+        )));
+        let covers = rt.block_on(crate::sqlite::memory_pool(sqlx::migrate!(
+            "./migrations_media"
+        )));
+        let dbs = crate::db::Dbs {
+            credentials: library.clone(),
+            library: library.clone(),
+            search: library.clone(),
+            covers,
+            media: library.clone(),
+            lyrics: library.clone(),
+            colors: library.clone(),
+            status: library.clone(),
+            artist_user: library.clone(),
+            download: library.clone(),
+            playlist: library.clone(),
+        };
+        rt.block_on(async {
+            sqlx::raw_sql(
+                "WITH RECURSIVE c(x) AS (VALUES(1) UNION ALL SELECT x+1 FROM c WHERE x<200)
+                 INSERT INTO artists (id, name, album_count, cover_art)
+                 SELECT 'ar'||x, 'Artist '||x, 10, 'acov'||x FROM c;
+                 WITH RECURSIVE c(x) AS (VALUES(1) UNION ALL SELECT x+1 FROM c WHERE x<2000)
+                 INSERT INTO albums
+                     (id, artist_id, name, artist, year, song_count, duration, cover_art)
+                 SELECT 'al'||x, 'ar'||(((x-1)/10)+1), 'Album '||x,
+                        'Artist '||(((x-1)/10)+1), 2000+(x%20), 10, 3600, 'cov'||x
+                 FROM c;
+                 WITH RECURSIVE c(x) AS (VALUES(1) UNION ALL SELECT x+1 FROM c WHERE x<20000)
+                 INSERT INTO songs
+                     (id, album_id, artist_id, title, artist, album, track, disc_number,
+                      duration, cover_art, play_count)
+                 SELECT 's'||x, 'al'||((x-1)/10+1), 'ar'||(((x-1)/100)+1),
+                        'Track '||x, 'Artist '||(((x-1)/100)+1),
+                        'Album '||((x-1)/10+1), (x%10)+1, 1, 180+(x%120),
+                        'cov'||((x-1)/10+1), x%7
+                 FROM c;",
+            )
+            .execute(&library)
+            .await
+            .expect("seed session");
+        });
+
+        let (albums_len, albums_peak, albums_time) =
+            measured(&rt, load_albums_json(&dbs, "", "Artist", false));
+        eprintln!(
+            "session albums (2k): {} KiB payload, {} KiB peak, {:?}",
+            albums_len / 1024,
+            albums_peak / 1024,
+            albums_time
+        );
+
+        let (artists_len, artists_peak, artists_time) =
+            measured(&rt, load_artists_json(&dbs, "Name", false));
+        eprintln!(
+            "session artists (200): {} KiB payload, {} KiB peak, {:?}",
+            artists_len / 1024,
+            artists_peak / 1024,
+            artists_time
+        );
+
+        let (songs_len, songs_peak, songs_time) =
+            measured(&rt, load_songs_page_json(&dbs, 0, 200, "Title", false));
+        eprintln!(
+            "session songs page (200): {} KiB payload, {} KiB peak, {:?}",
+            songs_len / 1024,
+            songs_peak / 1024,
+            songs_time
+        );
+
+        let artist_page = load_artist_json(&dbs, "ar5", "Artist", false);
+        let (page_len, page_peak, page_time) = measured(&rt, async {
+            artist_page.await.map(|page| page.unwrap_or_default())
+        });
+        eprintln!(
+            "session artist page (10 albums): {} KiB payload, {} KiB peak, {:?}",
+            page_len / 1024,
+            page_peak / 1024,
+            page_time
+        );
+
+        // Warm the catalog once, then measure the typed search payload.
+        rt.block_on(search_json(&dbs, "artist", false, 30))
+            .expect("warm search");
+        let (search_len, search_peak, search_time) =
+            measured(&rt, search_json(&dbs, "artist", false, 30));
+        eprintln!(
+            "session search (30 rows/column): {} KiB payload, {} KiB peak, {:?}",
+            search_len / 1024,
+            search_peak / 1024,
+            search_time
+        );
+
+        crate::search::index::clear();
     }
 }

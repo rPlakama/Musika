@@ -168,7 +168,11 @@ enum Ready {
 
 /// Playback queue plus the running `mpv` process and its IPC connection.
 pub struct Player {
-    queue: Vec<Track>,
+    /// Copy-on-write: readers (`emit_queue`, session snapshots) clone an
+    /// `Arc`, and only a real row mutation pays for the deep copy. The queue
+    /// can hold the whole library, so a full clone just to serialize one
+    /// payload was the expensive part.
+    queue: Arc<Vec<Track>>,
     index: usize,
     state: State,
     child: Option<Child>,
@@ -208,7 +212,7 @@ impl Default for Player {
 impl Player {
     pub fn new() -> Self {
         Self {
-            queue: Vec::new(),
+            queue: Arc::new(Vec::new()),
             index: 0,
             state: State::Stopped,
             child: None,
@@ -254,7 +258,7 @@ impl Player {
         album_covers: &std::collections::HashMap<String, String>,
         covers: &std::collections::HashMap<String, String>,
     ) {
-        for track in &mut self.queue {
+        for track in Arc::make_mut(&mut self.queue).iter_mut() {
             if let Some(cover) = album_covers
                 .get(&track.album_id)
                 .filter(|cover| !cover.is_empty())
@@ -273,7 +277,7 @@ impl Player {
     pub fn refresh_track_metadata(&mut self, songs: &[crate::library::SongRow]) {
         let by_id: std::collections::HashMap<&str, &crate::library::SongRow> =
             songs.iter().map(|song| (song.id.as_str(), song)).collect();
-        for track in &mut self.queue {
+        for track in Arc::make_mut(&mut self.queue).iter_mut() {
             let Some(song) = by_id.get(track.id.as_str()) else {
                 continue;
             };
@@ -332,7 +336,7 @@ impl Player {
 
     /// Replaces the queue and starts at `start`.
     pub fn load(&mut self, tracks: Vec<Track>, start: usize) {
-        self.queue = tracks;
+        self.queue = Arc::new(tracks);
         self.index = start.min(self.queue.len().saturating_sub(1));
         self.revision += 1;
         self.play_current();
@@ -351,7 +355,7 @@ impl Player {
         if tracks.is_empty() {
             return;
         }
-        self.queue.extend(tracks);
+        self.queue_mut().extend(tracks);
         self.revision += 1;
     }
 
@@ -519,7 +523,19 @@ impl Player {
 
     /// The current queue, in order.
     pub fn queue(&self) -> &[Track] {
-        &self.queue
+        self.queue.as_slice()
+    }
+
+    /// A cheap snapshot for a background payload: cloning the `Arc` avoids a
+    /// deep copy of every row. The next row mutation pays the copy (COW).
+    pub fn queue_snapshot(&self) -> Arc<Vec<Track>> {
+        Arc::clone(&self.queue)
+    }
+
+    /// Mutable access for a row change; clones the rows only if a snapshot is
+    /// still alive.
+    fn queue_mut(&mut self) -> &mut Vec<Track> {
+        Arc::make_mut(&mut self.queue)
     }
 
     /// Jumps to and plays the track at `index`.
@@ -537,7 +553,7 @@ impl Player {
             return;
         }
         let was_current = index == self.index;
-        self.queue.remove(index);
+        self.queue_mut().remove(index);
         self.revision += 1;
         if self.queue.is_empty() {
             self.stop();
@@ -601,7 +617,7 @@ impl Player {
         let position = self.position();
         let paused = self.state == State::Paused;
 
-        self.queue.splice(at..at, tracks);
+        self.queue_mut().splice(at..at, tracks);
         if at <= self.index {
             self.index += count;
         }
@@ -624,8 +640,9 @@ impl Player {
         if from >= self.queue.len() || to >= self.queue.len() || from == to {
             return;
         }
-        let track = self.queue.remove(from);
-        self.queue.insert(to, track);
+        let queue = self.queue_mut();
+        let track = queue.remove(from);
+        queue.insert(to, track);
         self.revision += 1;
         // Track the current index across the reorder.
         if self.index == from {
@@ -1205,13 +1222,39 @@ mod tests {
         assert_eq!(player.request_id, 2);
     }
 
+    /// The publisher takes an `Arc` snapshot, so an emit no longer deep-copies
+    /// the whole queue. A row mutation while the snapshot is alive must leave
+    /// the published rows untouched; afterwards the buffer is unique again and
+    /// the next mutation edits it in place.
+    #[test]
+    fn a_queue_snapshot_is_copy_on_write() {
+        let mut player = Player::new();
+        player.append(vec![track("s0"), track("s1"), track("s2")]);
+        let snapshot = player.queue_snapshot();
+        assert!(Arc::ptr_eq(&snapshot, &player.queue));
+
+        player.insert_many(0, vec![track("x")]);
+        assert_eq!(snapshot.len(), 3, "the snapshot keeps its own row set");
+        assert_eq!(player.len(), 4);
+        assert!(!Arc::ptr_eq(&snapshot, &player.queue), "mutation copied");
+
+        drop(snapshot);
+        let buffer = Arc::as_ptr(&player.queue);
+        player.append(vec![track("z")]);
+        assert_eq!(
+            Arc::as_ptr(&player.queue),
+            buffer,
+            "with no reader left, a mutation reuses the buffer"
+        );
+    }
+
     /// FIX-11 regression: `load_paused` pauses while the socket is still
     /// connecting (the command is dropped). Resolving the deferred start
     /// must not autoplay the restored queue.
     #[test]
     fn a_deferred_paused_start_stays_paused() {
         let mut player = Player::new();
-        player.queue = vec![track("s1")];
+        player.queue = Arc::new(vec![track("s1")]);
         player.deferred_start = true;
         player.state = State::Paused;
         player.finish_deferred_start();
@@ -1224,7 +1267,7 @@ mod tests {
     #[test]
     fn a_deferred_start_keeps_the_pending_playhead() {
         let mut player = Player::new();
-        player.queue = vec![track("s1")];
+        player.queue = Arc::new(vec![track("s1")]);
         player.deferred_start = true;
         player.state = State::Playing;
         player.shared().position = 42.0;
@@ -1236,7 +1279,7 @@ mod tests {
     #[test]
     fn remove_many_drops_the_selection_and_keeps_the_current_track() {
         let mut player = Player::new();
-        player.queue = (0..=5).map(|i| track(&format!("s{i}"))).collect();
+        player.queue = Arc::new((0..=5).map(|i| track(&format!("s{i}"))).collect());
         player.index = 0;
         // Unsorted, with a duplicate and an out-of-range index: four rows
         // actually leave the queue.
@@ -1261,7 +1304,7 @@ mod tests {
     #[test]
     fn paste_above_the_current_track_keeps_it_current() {
         let mut player = Player::new();
-        player.queue = vec![track("s0"), track("s1"), track("s2")];
+        player.queue = Arc::new(vec![track("s0"), track("s1"), track("s2")]);
         player.index = 1;
         player.insert_many(0, vec![track("x"), track("y")]);
         assert_eq!(player.index(), 3);

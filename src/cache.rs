@@ -66,6 +66,17 @@ pub fn push_in_list(builder: &mut sqlx::QueryBuilder<sqlx::Sqlite>, ids: &[Strin
     separated.push_unseparated(")");
 }
 
+/// Borrowed twin of [`push_in_list`] for callers whose ids already exist as
+/// `&str` (a scanned page) and would otherwise allocate one `String` per id
+/// just to bind it.
+pub fn push_in_list_refs(builder: &mut sqlx::QueryBuilder<sqlx::Sqlite>, ids: &[&str]) {
+    let mut separated = builder.separated(", ");
+    for id in ids {
+        separated.push_bind(*id);
+    }
+    separated.push_unseparated(")");
+}
+
 /// Deletes rows matched by an `... IN (` prefix and the bound ids.
 pub async fn delete_in<'e, E>(executor: E, sql: &'static str, ids: &[String]) -> Result<()>
 where
@@ -113,10 +124,54 @@ pub async fn purge_missing(
     let ids: Vec<String> = sqlx::query_scalar::<_, String>(AssertSqlSafe(select))
         .fetch_all(derived)
         .await?;
+    delete_missing(derived, table, key_col, &ids, owner_ids).await
+}
+
+/// Twin of [`purge_missing`] that queries the owner table for **only the
+/// derived ids** instead of materializing every owner.
+///
+/// The `songs` table can be far larger than the lyric/download/media cache, so
+/// loading all song ids just to answer "does this cached id still exist?" was
+/// the bigger allocation. Here the derived ids are collected (needed anyway),
+/// then the owner pool is asked about them in 500-row chunks.
+///
+/// The table/column names are compile-time constants supplied by the caller;
+/// ids are always bound.
+pub async fn purge_missing_against(
+    derived: &SqlitePool,
+    table: &'static str,
+    key_col: &'static str,
+    owners: &SqlitePool,
+    owner_table: &'static str,
+    owner_col: &'static str,
+) -> Result<usize> {
+    let select = format!("SELECT {key_col} FROM {table}");
+    let ids: Vec<String> = sqlx::query_scalar::<_, String>(AssertSqlSafe(select))
+        .fetch_all(derived)
+        .await?;
     if ids.is_empty() {
         return Ok(0);
     }
 
+    let mut owner_ids: HashSet<String> = HashSet::with_capacity(ids.len());
+    for chunk in ids.chunks(500) {
+        let mut builder = sqlx::QueryBuilder::<sqlx::Sqlite>::new(format!(
+            "SELECT {owner_col} FROM {owner_table} WHERE {owner_col} IN ("
+        ));
+        push_in_list(&mut builder, chunk);
+        let found: Vec<String> = builder.build_query_scalar().fetch_all(owners).await?;
+        owner_ids.extend(found);
+    }
+    delete_missing(derived, table, key_col, &ids, &owner_ids).await
+}
+
+async fn delete_missing(
+    derived: &SqlitePool,
+    table: &'static str,
+    key_col: &'static str,
+    ids: &[String],
+    owner_ids: &HashSet<String>,
+) -> Result<usize> {
     let stale: Vec<&String> = ids.iter().filter(|id| !owner_ids.contains(*id)).collect();
     if stale.is_empty() {
         return Ok(0);
@@ -167,6 +222,53 @@ mod tests {
         );
         assert_eq!(
             purge_missing(&derived, "cache", "id", &owners)
+                .await
+                .unwrap(),
+            0
+        );
+    }
+
+    /// The owner-pool variant asks only about the derived ids; an empty cache
+    /// must not query the owner table at all (it can be absent).
+    #[tokio::test]
+    async fn purge_missing_against_checks_only_the_derived_ids() {
+        let derived = pool().await;
+        sqlx::query("CREATE TABLE cache (id TEXT PRIMARY KEY)")
+            .execute(&derived)
+            .await
+            .unwrap();
+        for id in ["keep", "gone", "also-gone"] {
+            sqlx::query("INSERT INTO cache (id) VALUES (?1)")
+                .bind(id)
+                .execute(&derived)
+                .await
+                .unwrap();
+        }
+        let owners = pool().await;
+        sqlx::query("CREATE TABLE owners (id TEXT PRIMARY KEY)")
+            .execute(&owners)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO owners (id) VALUES ('keep')")
+            .execute(&owners)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            purge_missing_against(&derived, "cache", "id", &owners, "owners", "id")
+                .await
+                .unwrap(),
+            2
+        );
+
+        let empty = pool().await;
+        sqlx::query("CREATE TABLE cache (id TEXT PRIMARY KEY)")
+            .execute(&empty)
+            .await
+            .unwrap();
+        let no_owner_table = pool().await;
+        assert_eq!(
+            purge_missing_against(&empty, "cache", "id", &no_owner_table, "owners", "id")
                 .await
                 .unwrap(),
             0

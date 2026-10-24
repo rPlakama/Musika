@@ -30,7 +30,6 @@ use std::path::Path;
 
 use crate::consts::now_secs;
 use anyhow::{Context, Result};
-use image::imageops::FilterType;
 use material_colors::color::Rgb;
 use material_colors::dislike::fix_if_disliked;
 use material_colors::hct::Hct;
@@ -41,6 +40,10 @@ use sqlx::sqlite::SqlitePool;
 
 /// Thumbnail side fed to the quantizer (matugen uses 112).
 const THUMBNAIL: u32 = 112;
+/// Refuse pathological art before decoding it: the palette reads 112 px, so an
+/// oversized upload must not become a multi-hundred-megabyte allocation on a
+/// blocking worker (the caller keeps the static palette instead).
+const MAX_SOURCE_EDGE: u32 = 8192;
 /// Maximum quantizer clusters (matugen uses 128).
 const MAX_COLORS: usize = 128;
 /// How many seeds the DB6 cache keeps before evicting the least recently used.
@@ -77,12 +80,33 @@ pub struct Seed {
 }
 
 /// Decodes `path`, downscales to a 112² thumbnail and keeps opaque pixels.
+///
+/// The caller normally hands us the cover cache's 320 px thumbnail (see
+/// [`crate::covers::palette_path`]). When it has to fall back to the original,
+/// the dimension probe still rejects absurd uploads before the decoder
+/// allocates their pixels, and [`image::DynamicImage::thumbnail`] samples the
+/// small output instead of running a full-kernel resize over the source.
 fn sample(path: &Path) -> Result<Vec<Rgb>> {
-    let image =
-        image::open(path).with_context(|| format!("failed to decode cover {}", path.display()))?;
-    let thumbnail = image
-        .resize_exact(THUMBNAIL, THUMBNAIL, FilterType::Triangle)
-        .to_rgba8();
+    let context = || format!("failed to decode cover {}", path.display());
+    let (width, height) = image::ImageReader::open(path)
+        .with_context(context)?
+        .with_guessed_format()
+        .with_context(context)?
+        .into_dimensions()
+        .with_context(context)?;
+    anyhow::ensure!(
+        width <= MAX_SOURCE_EDGE && height <= MAX_SOURCE_EDGE,
+        "cover {} is {width}x{height}, over the {MAX_SOURCE_EDGE} px palette limit",
+        path.display()
+    );
+
+    let image = image::ImageReader::open(path)
+        .with_context(context)?
+        .with_guessed_format()
+        .with_context(context)?
+        .decode()
+        .with_context(context)?;
+    let thumbnail = image.thumbnail(THUMBNAIL, THUMBNAIL).to_rgba8();
 
     Ok(thumbnail
         .pixels()

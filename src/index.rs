@@ -167,6 +167,15 @@ where
     album_ids.sort();
     album_ids.dedup();
 
+    // MEMORY: take the artist rows now, before fetching albums. The artist
+    // entries carry their album metadata; keeping that Vec alive alongside the
+    // album entries (which repeat it) and the flattened `albums` copy held the
+    // same rows in memory up to three times during a sync.
+    let artists: Vec<ArtistID3> = fetched_artists
+        .into_iter()
+        .map(|entry| entry.artist)
+        .collect();
+
     report(
         &mut progress,
         format!("Fetching {} albums…", album_ids.len()),
@@ -174,15 +183,13 @@ where
     );
     let fetched_albums = fetch_albums(&client, &album_ids).await?;
 
-    let artists: Vec<ArtistID3> = fetched_artists
-        .into_iter()
-        .map(|entry| entry.artist)
-        .collect();
+    // MEMORY: consume the album entries instead of cloning their album and
+    // song vectors into a second full copy of the catalog.
     let mut albums: Vec<AlbumID3> = Vec::with_capacity(fetched_albums.len());
     let mut songs: Vec<Child> = Vec::new();
-    for entry in &fetched_albums {
-        albums.push(entry.album.clone());
-        songs.extend(entry.song.iter().cloned());
+    for entry in fetched_albums {
+        albums.push(entry.album);
+        songs.extend(entry.song);
     }
 
     // 1. library metadata
@@ -309,9 +316,15 @@ where
 
     // 5d. download ledger: drop rows for songs that left the library
     best_effort("download ledger purge failed", async {
-        let ids = crate::library::song_ids(&dbs.library).await?;
-        let owners: std::collections::HashSet<String> = ids.into_iter().collect();
-        crate::cache::purge_missing(&dbs.download, "download", "song_id", &owners).await?;
+        crate::cache::purge_missing_against(
+            &dbs.download,
+            "download",
+            "song_id",
+            &dbs.library,
+            "songs",
+            "id",
+        )
+        .await?;
         Ok(())
     })
     .await;
@@ -349,8 +362,9 @@ where
 /// FTS5 mirror (kept as the fallback engine) and, when ARC-SEARCH is opted
 /// in, the in-memory Nucleo catalog.
 async fn rebuild_search(dbs: &Dbs) -> Result<()> {
-    let rows = crate::library::song_search_rows(&dbs.library).await?;
-    crate::search::rebuild(&dbs.search, &rows).await?;
+    // Paged rebuild: the old path collected every search row into a Vec
+    // before writing the FTS table (FIX-26).
+    crate::search::rebuild_from_library(&dbs.search).await?;
     if crate::search::index::enabled()
         && let Err(err) = crate::search::index::rebuild(&dbs.library).await
     {

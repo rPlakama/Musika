@@ -274,9 +274,16 @@ pub async fn scan(dbs: &Dbs) -> Result<String> {
 /// [`scan`] against an explicit folder (the test seam).
 pub async fn scan_dir(dbs: &Dbs, dir: &Path) -> Result<String> {
     std::fs::create_dir_all(dir).ok();
-    let songs = load_songs(&dbs.library).await?;
-    let matcher = Matcher::new(&songs);
 
+    struct ScannedM3u {
+        id: String,
+        name: String,
+        path: PathBuf,
+        mtime: i64,
+        entries: Vec<M3uEntry>,
+    }
+
+    let mut files: Vec<ScannedM3u> = Vec::new();
     let mut seen: Vec<String> = Vec::new();
     if let Ok(entries) = std::fs::read_dir(dir) {
         for entry in entries.flatten() {
@@ -291,6 +298,8 @@ pub async fn scan_dir(dbs: &Dbs, dir: &Path) -> Result<String> {
             }
             let name = entry.file_name().to_string_lossy().to_string();
             let id = format!("m3u:{name}");
+            // Marked seen before the read: an unreadable file keeps its
+            // previous rows instead of being purged as vanished.
             seen.push(id.clone());
             let Ok(text) = std::fs::read_to_string(&path) else {
                 continue;
@@ -302,9 +311,38 @@ pub async fn scan_dir(dbs: &Dbs, dir: &Path) -> Result<String> {
                 .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
                 .map(|d| d.as_secs() as i64)
                 .unwrap_or(0);
-            let parsed = parse_m3u(&text);
-            store_file(dbs, &id, &name, &path, mtime, &parsed, &songs, &matcher).await?;
+            files.push(ScannedM3u {
+                id,
+                name,
+                path,
+                mtime,
+                entries: parse_m3u(&text),
+            });
         }
+    }
+
+    // MEMORY: only read the library when a playlist actually has entries to
+    // resolve. Opening the Playlists segment used to load every song and
+    // build three normalized maps even with an empty m3u folder (FIX-28).
+    let needs_library = files.iter().any(|file| !file.entries.is_empty());
+    let songs = if needs_library {
+        load_songs(&dbs.library).await?
+    } else {
+        Vec::new()
+    };
+    let matcher = Matcher::new(&songs);
+    for file in &files {
+        store_file(
+            dbs,
+            &file.id,
+            &file.name,
+            &file.path,
+            file.mtime,
+            &file.entries,
+            &songs,
+            &matcher,
+        )
+        .await?;
     }
 
     // Purge m3u playlists whose file vanished.
@@ -418,10 +456,22 @@ async fn store_file(
     Ok(())
 }
 
+/// One segment row. Serializes straight from the query instead of building a
+/// `Value` map per playlist.
+#[derive(Debug, sqlx::FromRow, serde::Serialize)]
+struct PlaylistListRow {
+    id: String,
+    source: String,
+    name: String,
+    song_count: i64,
+    duration: i64,
+    owner: Option<String>,
+}
+
 /// The segment payload: every playlist, m3u and (later) Subsonic, as the
 /// list rows the QML maps.
 pub async fn list_json(dbs: &Dbs) -> Result<String> {
-    let rows = sqlx::query_as::<_, (String, String, String, i64, i64, Option<String>)>(
+    let rows: Vec<PlaylistListRow> = sqlx::query_as(
         "SELECT id, source, name, song_count, duration, owner
          FROM playlist
          WHERE song_count > 0
@@ -429,20 +479,7 @@ pub async fn list_json(dbs: &Dbs) -> Result<String> {
     )
     .fetch_all(&dbs.playlist)
     .await?;
-    let payload: Vec<serde_json::Value> = rows
-        .into_iter()
-        .map(|(id, source, name, song_count, duration, owner)| {
-            serde_json::json!({
-                "id": id,
-                "source": source,
-                "name": name,
-                "song_count": song_count,
-                "duration": duration,
-                "owner": owner,
-            })
-        })
-        .collect();
-    Ok(serde_json::Value::Array(payload).to_string())
+    Ok(serde_json::to_string(&rows)?)
 }
 
 #[cfg(test)]
@@ -542,6 +579,30 @@ mod tests {
         assert_eq!(rows[0].1.as_deref(), Some("s1"));
         assert_eq!(rows[1].1.as_deref(), Some("s2"));
         assert_eq!(rows[2].1, None);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// An empty m3u folder must not read `library.db` at all: the segment is
+    /// often opened on a machine with no local playlists, and the old scan
+    /// loaded every song and built three normalized lookup maps first. The
+    /// library pool here has no schema, so a read would fail the scan.
+    #[tokio::test]
+    async fn an_empty_m3u_folder_does_not_read_the_library() {
+        let library = memory_pool().await;
+        let playlist = memory_pool().await;
+        sqlx::migrate!("./migrations_playlist")
+            .run(&playlist)
+            .await
+            .unwrap();
+        let dbs = test_dbs(&library, &playlist);
+
+        let dir = std::env::temp_dir().join(format!("musika-pl-empty-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let json = scan_dir(&dbs, &dir).await.expect("empty scan");
+        assert_eq!(json, "[]");
 
         let _ = std::fs::remove_dir_all(&dir);
     }

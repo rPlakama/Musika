@@ -464,7 +464,6 @@ pub(super) async fn download_one(
 
     let fetched = async {
         let client = client(dbs).await?;
-        let bytes = client.download_media(song_id).await?;
         let (size, suffix, bit_rate) = crate::library::song_file_info(&dbs.library, song_id)
             .await?
             .unwrap_or((None, None, None));
@@ -482,10 +481,21 @@ pub(super) async fn download_one(
             Some(rule) => (crate::media::KIND_RULE, Some(rule)),
             None => (crate::media::KIND_PERMANENT, None),
         };
-        crate::media::store(
+        // Stream the body into the tier's `.part` file: a fetched song is
+        // never held whole in memory, and the adoption is one atomic rename.
+        let temp = crate::media::temp_path(kind)?;
+        let written = match client.download_media_to(song_id, &temp).await {
+            Ok(written) => written,
+            Err(err) => {
+                let _ = std::fs::remove_file(&temp);
+                return Err(err);
+            }
+        };
+        crate::media::store_streamed(
             &dbs.media,
             song_id,
-            &bytes,
+            &temp,
+            i64::try_from(written).unwrap_or(i64::MAX),
             kind,
             quality,
             &fingerprint,

@@ -3,6 +3,58 @@
 All notable changes to Musika, newest first. `TASKLISTMAJOR.md` tracks the
 open work; this file is the release history.
 
+## Unreleased — _Leaner backend_
+
+Rust memory pass (see `RUSTAUDIT.md` for the per-module ledger):
+
+- Stream song downloads into a `.part` file instead of buffering each body
+  twice; adopt with one atomic rename (FIX-14).
+- Sample palettes from the 320 px cover thumbnail: 1.8 MiB peak instead of
+  17.1 MiB for a 2400 px cover; bounded source dimensions (FIX-15).
+- Cap SQLite's per-connection page cache at 8 MiB (ten connections), and read
+  cover-art bodies in one pass (FIX-13/FIX-18).
+- Sync without triple-copying the catalog: consume the fetched rows and stream
+  old songs into `id -> hash` (FIX-16).
+- Build search payloads as `Value` and serialize once at the bridge; reuse the
+  queue rows string for its dedupe hash (FIX-17).
+- Budget the in-memory search catalog (64 MiB by default,
+  `MUSIKA_SEARCH_INDEX_BUDGET_MIB` to tune): a larger library falls back to FTS
+  instead of growing the resident set (FIX-19).
+- Stream the cover refresh: at most `FETCH_CONCURRENCY` art bodies are resident
+  while syncing instead of every referenced cover at once (FIX-21).
+- Thumbnail generation keeps four workers for small art and decodes blobs over
+  2 MiB one at a time, bounding the cover pass's decode spike (FIX-20).
+- Stream list and queue rows with borrowing serializers instead of building a
+  `Value` tree per row (5k album rows: 1.0 MiB peak vs 4.7 MiB); a superseded
+  queue publish now skips the serialization entirely (FIX-22).
+- Diff the sync catalog with `id -> hash` for albums and artists too, keeping
+  only the album cover id needed to decide a refetch (FIX-23).
+- Publish the queue from a copy-on-write snapshot: a row change no longer
+  deep-copies every track just to serialize the rows, and the post-sync queue
+  refresh binds ids by reference (FIX-24).
+- Serialize the session's queue ids from the same snapshot in the debounced
+  worker, so the 10-second position save stops cloning every id (FIX-25).
+- Rebuild the FTS table in 500-row keyset pages and stream the `index.txt`
+  mirror in 64 KiB chunks instead of holding the catalog twice; 20k songs:
+  3.6 MiB peak vs 8.1 MiB (FIX-26/27).
+- Skip the whole-library read and matcher build when the m3u folder is empty,
+  so opening Playlists no longer scans every song for nothing (FIX-28).
+- Stream the search catalog build straight into `Arc<SongHit>`s: 100k songs
+  peak at 33.4 MiB instead of 49.4 MiB (FIX-29).
+- Resolve the sync diff before the destructive insert and drop the old hashes
+  first, so the insert phase does not carry the previous catalog (FIX-30).
+- Purge the lyric/download/media caches by asking `songs` about only the cached
+  ids, not by materializing the whole catalog; 100k songs/5k cache: 406 KiB vs
+  3045 KiB (FIX-31).
+- Stream queue payloads from `SongRow`s instead of building a `Vec<Track>`
+  first; 50k tracks: 16.4 MiB vs 36.1 MiB peak (FIX-32).
+- Deserialize the queue-covers and download-window payloads directly into
+  their final collections instead of building a `Value` and cloning its
+  subtrees; 20k-song queue: 7.1 MiB vs 32.0 MiB peak (FIX-33).
+- Stream the queue-covers envelope from its maps/song slice (20k songs:
+  4.0 MiB vs 18.9 MiB) and serialize the playlist segment rows directly
+  (FIX-34/35).
+
 ## 0.4.0 — _Now its quite charming, how cute_
 
 All commits since `v0.3.16`:

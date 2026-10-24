@@ -25,38 +25,82 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 
+use serde::ser::{Error as _, Serialize, SerializeSeq, SerializeStruct, Serializer};
+
 use crate::http_client::SubsonicClient;
 
-/// Builds a playable [`crate::player::Track`] from an indexed song.
-///
 /// CACHE-1 local-first: a cached blob is handed to mpv as a `file://` URL,
 /// otherwise the stream URL is used. The network is still only touched by
 /// mpv; "prefer server online" is CACHE-6.
-fn build_track(
+fn track_url(
     client: &SubsonicClient,
-    song: crate::library::SongRow,
-    covers: &HashMap<String, String>,
+    song: &crate::library::SongRow,
     media: &HashMap<String, PathBuf>,
-) -> anyhow::Result<crate::player::Track> {
+) -> anyhow::Result<String> {
     let url = match media.get(&song.id) {
         Some(path) => reqwest::Url::from_file_path(path)
             .map_err(|_| anyhow::anyhow!("cached media path is not a valid file URL"))?,
         None => client.stream_url(&song.id)?,
     };
-    let cover_art = song.cover_art.unwrap_or_default();
-    let cover_url = crate::browse::cover_url(Some(&cover_art), covers);
-    Ok(crate::player::Track {
-        id: song.id,
-        title: song.title,
-        artist: song.artist.unwrap_or_default(),
-        album: song.album.unwrap_or_default(),
-        album_id: song.album_id.unwrap_or_default(),
-        favorite: song.starred.is_some(),
-        duration: song.duration.unwrap_or(0) as f64,
-        url: url.to_string(),
-        cover_art,
-        cover_url,
-    })
+    Ok(url.to_string())
+}
+
+/// One `player::Track` row, streamed straight from its `SongRow`.
+///
+/// The old path built a full `Vec<Track>` (moving every string) and then
+/// serialized it, so a library-wide queue held both the row vector and the
+/// JSON string. Borrowing the row and only owning the computed stream URL
+/// removes that intermediate vector.
+struct TrackElement<'a> {
+    song: &'a crate::library::SongRow,
+    url: &'a str,
+    cover_url: &'a str,
+}
+
+impl Serialize for TrackElement<'_> {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        let mut state = serializer.serialize_struct("track", 10)?;
+        state.serialize_field("id", &self.song.id)?;
+        state.serialize_field("title", &self.song.title)?;
+        state.serialize_field("artist", self.song.artist.as_deref().unwrap_or_default())?;
+        state.serialize_field("album", self.song.album.as_deref().unwrap_or_default())?;
+        state.serialize_field(
+            "album_id",
+            self.song.album_id.as_deref().unwrap_or_default(),
+        )?;
+        state.serialize_field("favorite", &self.song.starred.is_some())?;
+        state.serialize_field("duration", &(self.song.duration.unwrap_or(0) as f64))?;
+        state.serialize_field("url", self.url)?;
+        state.serialize_field(
+            "cover_art",
+            self.song.cover_art.as_deref().unwrap_or_default(),
+        )?;
+        state.serialize_field("cover_url", self.cover_url)?;
+        state.end()
+    }
+}
+
+struct TrackRows<'a> {
+    songs: &'a [crate::library::SongRow],
+    client: &'a SubsonicClient,
+    covers: &'a HashMap<String, String>,
+    media: &'a HashMap<String, PathBuf>,
+}
+
+impl Serialize for TrackRows<'_> {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        let mut seq = serializer.serialize_seq(Some(self.songs.len()))?;
+        for song in self.songs {
+            let url = track_url(self.client, song, self.media).map_err(S::Error::custom)?;
+            let cover_url = crate::browse::cover_url_ref(song.cover_art.as_deref(), self.covers);
+            seq.serialize_element(&TrackElement {
+                song,
+                url: &url,
+                cover_url,
+            })?;
+        }
+        seq.end()
+    }
 }
 
 /// CACHE-9: while offline, only downloaded songs are playable — drop the
@@ -472,11 +516,12 @@ async fn tracks_json(
         .await
         .unwrap_or_default();
 
-    let mut tracks = Vec::with_capacity(songs.len());
-    for song in songs {
-        tracks.push(build_track(&client, song, &covers, &media)?);
-    }
-    Ok(serde_json::to_string(&tracks)?)
+    Ok(serde_json::to_string(&TrackRows {
+        songs: &songs,
+        client: &client,
+        covers: &covers,
+        media: &media,
+    })?)
 }
 
 #[cfg(test)]
@@ -495,6 +540,122 @@ mod tests {
             cover_art: None,
             starred: None,
         }
+    }
+
+    #[test]
+    fn track_rows_stream_the_player_track_shape() {
+        let client =
+            crate::http_client::SubsonicClient::new("https://music.example", "alice", "secret");
+        let mut song = song_row("s1");
+        song.cover_art = Some("cov1".to_string());
+        song.starred = Some("2026-10-14T00:00:00Z".to_string());
+        let covers = HashMap::from([("cov1".to_string(), "file:///covers/cov1.jpg".to_string())]);
+        let media = HashMap::from([("s1".to_string(), PathBuf::from("/media/s1.flac"))]);
+
+        let json = serde_json::to_string(&TrackRows {
+            songs: std::slice::from_ref(&song),
+            client: &client,
+            covers: &covers,
+            media: &media,
+        })
+        .unwrap();
+        let tracks: Vec<crate::player::Track> = serde_json::from_str(&json).unwrap();
+        assert_eq!(tracks.len(), 1);
+        let track = &tracks[0];
+        assert_eq!(track.id, "s1");
+        assert_eq!(track.artist, "Radiohead");
+        assert_eq!(track.album, "Kid A");
+        assert_eq!(track.album_id, "al1");
+        assert!(track.favorite);
+        assert_eq!(track.duration, 200.0);
+        assert_eq!(track.cover_art, "cov1");
+        assert_eq!(track.cover_url, "file:///covers/cov1.jpg");
+        assert_eq!(
+            track.url,
+            reqwest::Url::from_file_path("/media/s1.flac")
+                .unwrap()
+                .to_string()
+        );
+
+        // No cached blob and no art: the stream URL is used and the
+        // cover fields are empty, matching the old `build_track` defaults.
+        let plain = song_row("s2");
+        let json = serde_json::to_string(&TrackRows {
+            songs: std::slice::from_ref(&plain),
+            client: &client,
+            covers: &HashMap::new(),
+            media: &HashMap::new(),
+        })
+        .unwrap();
+        let tracks: Vec<crate::player::Track> = serde_json::from_str(&json).unwrap();
+        assert!(tracks[0].url.contains("stream"));
+        assert_eq!(tracks[0].cover_art, "");
+        assert_eq!(tracks[0].cover_url, "");
+        assert!(!tracks[0].favorite);
+    }
+
+    /// Memory probe: a 50k-track queue payload through the old
+    /// `Vec<Track>` + serialize path vs the borrowing `TrackRows`.
+    ///
+    /// `cargo test queue::tests::bench_track_rows_streaming -- --ignored --nocapture`
+    #[test]
+    #[ignore = "memory probe, run explicitly"]
+    fn bench_track_rows_streaming() {
+        let client =
+            crate::http_client::SubsonicClient::new("https://music.example", "alice", "secret");
+        let songs: Vec<crate::library::SongRow> = (0..50_000)
+            .map(|i| {
+                let mut song = song_row(&format!("s{i}"));
+                song.cover_art = Some(format!("cov{}", i % 2000));
+                song.starred = (i % 5 == 0).then(|| "2026-10-14T00:00:00Z".to_string());
+                song
+            })
+            .collect();
+        let covers: HashMap<String, String> = (0..2000)
+            .map(|i| (format!("cov{i}"), format!("file:///covers/cov{i}.jpg")))
+            .collect();
+        let media = HashMap::new();
+
+        let (_, vec_peak) = crate::test_alloc::measure(|| {
+            let tracks: Vec<crate::player::Track> = songs
+                .iter()
+                .map(|song| {
+                    let url = track_url(&client, song, &media).expect("url");
+                    crate::player::Track {
+                        id: song.id.clone(),
+                        title: song.title.clone(),
+                        artist: song.artist.clone().unwrap_or_default(),
+                        album: song.album.clone().unwrap_or_default(),
+                        album_id: song.album_id.clone().unwrap_or_default(),
+                        favorite: song.starred.is_some(),
+                        duration: song.duration.unwrap_or(0) as f64,
+                        url,
+                        cover_art: song.cover_art.clone().unwrap_or_default(),
+                        cover_url: crate::browse::cover_url(song.cover_art.as_deref(), &covers),
+                    }
+                })
+                .collect();
+            serde_json::to_string(&tracks).expect("queue json")
+        });
+        let (_, stream_peak) = crate::test_alloc::measure(|| {
+            serde_json::to_string(&TrackRows {
+                songs: &songs,
+                client: &client,
+                covers: &covers,
+                media: &media,
+            })
+            .expect("streamed queue json")
+        });
+
+        eprintln!(
+            "queue JSON (50k tracks): streamed {} KiB | Vec<Track> {} KiB",
+            stream_peak / 1024,
+            vec_peak / 1024,
+        );
+        assert!(
+            stream_peak < vec_peak,
+            "the streamed queue must not build a Track vector first"
+        );
     }
 
     #[test]

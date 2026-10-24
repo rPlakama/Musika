@@ -98,6 +98,11 @@ const THUMB_EDGE: u32 = 320;
 const THUMB_QUALITY: u8 = 82;
 /// Bounded worker count for lazy thumbnail generation.
 const THUMB_CONCURRENCY: usize = 4;
+/// Blobs above this are thumbnailed one at a time. A compressed cover can
+/// decode to an order of magnitude more RGBA than its file size, so four
+/// large originals in parallel (a 6000 px cover is ~144 MB each) would spike
+/// the sync's cover pass; small art keeps the parallel path.
+const THUMB_LARGE_BYTES: u64 = 2 * 1024 * 1024;
 
 /// ARC-39: remote SVG art is rasterized at ingest; the longest edge of the
 /// stored PNG never exceeds this (the palette and every surface are raster).
@@ -181,125 +186,54 @@ async fn refresh_inner(
     let mut report = CoverReport::default();
     let mut thumb_jobs: Vec<(String, PathBuf)> = Vec::new();
 
+    // MEMORY: process each completed fetch before starting the next one. The
+    // old `fanout::map_bounded` collected every `CoverArt` (body bytes
+    // included) first and only then stored them, so a first sync held every
+    // downloaded cover in RAM at once — hundreds of MB on a big library. A
+    // chunked `JoinSet` keeps at most `FETCH_CONCURRENCY` bodies alive.
     let client = Arc::clone(client);
-    let known_for_fetch = Arc::clone(&known);
-    let results = crate::fanout::map_bounded(ids, move |id| {
-        let client = Arc::clone(&client);
-        let known = Arc::clone(&known_for_fetch);
-        let forced = Arc::clone(&forced);
-        async move {
-            let cached = known.get(&id);
-            let needs_raw = cached.is_some_and(|row| !is_raw_file(&row.file));
-            let (etag, last_modified) = if forced.contains(&id) || needs_raw {
-                (None, None)
-            } else {
-                cached
-                    .map(|row| (row.etag.clone(), row.last_modified.clone()))
-                    .unwrap_or((None, None))
-            };
-            // No `size`: keep the provider's original art for the large
-            // surfaces (fullscreen, album page); small ones use the thumbnail.
-            client
-                .get_cover_art(&id, None, etag.as_deref(), last_modified.as_deref())
-                .await
-        }
-    })
-    .await;
-
-    for (id, result) in results {
-        match result {
-            Ok(art) if art.not_modified => {
-                touch(pool, &id).await?;
-                report.unchanged += 1;
-            }
-            Ok(art) => {
-                let Some((bytes, extension, content_type)) =
-                    store_art(art.bytes, art.content_type.as_deref())
-                else {
-                    // Malformed/oversize SVG: never store an undecodable
-                    // blob, the placeholder path owns it (ARC-39).
-                    eprintln!("covers: rejected undecodable SVG cover {id}");
-                    continue;
+    for chunk in ids.chunks(crate::consts::FETCH_CONCURRENCY) {
+        let mut set = tokio::task::JoinSet::new();
+        for id in chunk {
+            let id = id.clone();
+            let client = Arc::clone(&client);
+            let known = Arc::clone(&known);
+            let forced = Arc::clone(&forced);
+            set.spawn(async move {
+                let cached = known.get(&id);
+                let needs_raw = cached.is_some_and(|row| !is_raw_file(&row.file));
+                let (etag, last_modified) = if forced.contains(&id) || needs_raw {
+                    (None, None)
+                } else {
+                    cached
+                        .map(|row| (row.etag.clone(), row.last_modified.clone()))
+                        .unwrap_or((None, None))
                 };
-
-                let hash = md5_hex(&bytes);
-                // Content-suffixed: changed art gets a new file/URL, so the
-                // UI can never keep painting the previous image at the old
-                // path (the cover id is not guaranteed to change with it).
-                // The raw prefix also marks the source resolution.
-                let file = cover_file_name(&id, &hash, extension);
-
-                if let Some(old) = known.get(&id)
-                    && old.hash.as_deref() == Some(hash.as_str())
-                {
-                    if old.file == file {
-                        // The provider revalidated the art and reported the
-                        // same bytes: keep the file, but store the date it now
-                        // carries so the next conditional request compares
-                        // against it.
-                        upsert(
-                            pool,
-                            &id,
-                            &old.file,
-                            &hash,
-                            content_type.as_deref(),
-                            bytes.len() as i64,
-                            art.etag.as_deref(),
-                            art.last_modified.as_deref(),
-                        )
-                        .await?;
-                        report.unchanged += 1;
-                    } else {
-                        // Same bytes, legacy filename: move the entry to the
-                        // canonical raw name now, or the raw upgrade would
-                        // force a full download on every pass forever.
-                        crate::cache::write_atomic(&dir, &file, &bytes)?;
-                        thumb_jobs.push((thumb_name(&file), dir.join(&file)));
-                        upsert(
-                            pool,
-                            &id,
-                            &file,
-                            &hash,
-                            content_type.as_deref(),
-                            bytes.len() as i64,
-                            art.etag.as_deref(),
-                            art.last_modified.as_deref(),
-                        )
-                        .await?;
-                        let _ = std::fs::remove_file(dir.join(&old.file));
-                        let _ = std::fs::remove_file(dir.join(thumb_name(&old.file)));
-                        report.upgraded += 1;
-                    }
-                    continue;
+                // No `size`: keep the provider's original art for the large
+                // surfaces (fullscreen, album page); small ones use the
+                // thumbnail.
+                let result = client
+                    .get_cover_art(&id, None, etag.as_deref(), last_modified.as_deref())
+                    .await;
+                (id, result)
+            });
+        }
+        while let Some(joined) = set.join_next().await {
+            match joined {
+                Ok((id, result)) => {
+                    apply_fetched(
+                        pool,
+                        &dir,
+                        known.as_ref(),
+                        &id,
+                        result,
+                        &mut report,
+                        &mut thumb_jobs,
+                    )
+                    .await?;
                 }
-
-                crate::cache::write_atomic(&dir, &file, &bytes)?;
-
-                upsert(
-                    pool,
-                    &id,
-                    &file,
-                    &hash,
-                    content_type.as_deref(),
-                    bytes.len() as i64,
-                    art.etag.as_deref(),
-                    art.last_modified.as_deref(),
-                )
-                .await?;
-
-                // Generate here, off the UI path, so pages find the thumbnail
-                // ready when they first resolve the cover URL.
-                thumb_jobs.push((thumb_name(&file), dir.join(&file)));
-
-                if let Some(old) = known.get(&id)
-                    && old.file != file
-                {
-                    let _ = std::fs::remove_file(dir.join(&old.file));
-                    let _ = std::fs::remove_file(dir.join(thumb_name(&old.file)));
-                }
-                report.downloaded += 1;
+                Err(err) => eprintln!("covers: fetch task failed: {err}"),
             }
-            Err(err) => eprintln!("covers: failed to fetch {id}: {err:#}"),
         }
     }
 
@@ -322,6 +256,115 @@ async fn refresh_inner(
     Ok(report)
 }
 
+/// Stores one completed fetch: revalidation touch, content-addressed write,
+/// URI-field upsert and thumbnail job. Split out of [`refresh_inner`] so the
+/// network chunk and the disk/database step stay one short result apart.
+#[allow(clippy::too_many_arguments)]
+async fn apply_fetched(
+    pool: &SqlitePool,
+    dir: &Path,
+    known: &HashMap<String, CoverRow>,
+    id: &str,
+    result: Result<crate::http_client::CoverArt>,
+    report: &mut CoverReport,
+    thumb_jobs: &mut Vec<(String, PathBuf)>,
+) -> Result<()> {
+    match result {
+        Ok(art) if art.not_modified => {
+            touch(pool, id).await?;
+            report.unchanged += 1;
+        }
+        Ok(art) => {
+            let Some((bytes, extension, content_type)) =
+                store_art(art.bytes, art.content_type.as_deref())
+            else {
+                // Malformed/oversize SVG: never store an undecodable blob,
+                // the placeholder path owns it (ARC-39).
+                eprintln!("covers: rejected undecodable SVG cover {id}");
+                return Ok(());
+            };
+
+            let hash = md5_hex(&bytes);
+            // Content-suffixed: changed art gets a new file/URL, so the UI
+            // can never keep painting the previous image at the old path
+            // (the cover id is not guaranteed to change with it). The raw
+            // prefix also marks the source resolution.
+            let file = cover_file_name(id, &hash, extension);
+
+            if let Some(old) = known.get(id)
+                && old.hash.as_deref() == Some(hash.as_str())
+            {
+                if old.file == file {
+                    // The provider revalidated the art and reported the same
+                    // bytes: keep the file, but store the date it now carries
+                    // so the next conditional request compares against it.
+                    upsert(
+                        pool,
+                        id,
+                        &old.file,
+                        &hash,
+                        content_type.as_deref(),
+                        bytes.len() as i64,
+                        art.etag.as_deref(),
+                        art.last_modified.as_deref(),
+                    )
+                    .await?;
+                    report.unchanged += 1;
+                } else {
+                    // Same bytes, legacy filename: move the entry to the
+                    // canonical raw name now, or the raw upgrade would force a
+                    // full download on every pass forever.
+                    crate::cache::write_atomic(dir, &file, &bytes)?;
+                    thumb_jobs.push((thumb_name(&file), dir.join(&file)));
+                    upsert(
+                        pool,
+                        id,
+                        &file,
+                        &hash,
+                        content_type.as_deref(),
+                        bytes.len() as i64,
+                        art.etag.as_deref(),
+                        art.last_modified.as_deref(),
+                    )
+                    .await?;
+                    let _ = std::fs::remove_file(dir.join(&old.file));
+                    let _ = std::fs::remove_file(dir.join(thumb_name(&old.file)));
+                    report.upgraded += 1;
+                }
+                return Ok(());
+            }
+
+            crate::cache::write_atomic(dir, &file, &bytes)?;
+
+            upsert(
+                pool,
+                id,
+                &file,
+                &hash,
+                content_type.as_deref(),
+                bytes.len() as i64,
+                art.etag.as_deref(),
+                art.last_modified.as_deref(),
+            )
+            .await?;
+
+            // Generate here, off the UI path, so pages find the thumbnail
+            // ready when they first resolve the cover URL.
+            thumb_jobs.push((thumb_name(&file), dir.join(&file)));
+
+            if let Some(old) = known.get(id)
+                && old.file != file
+            {
+                let _ = std::fs::remove_file(dir.join(&old.file));
+                let _ = std::fs::remove_file(dir.join(thumb_name(&old.file)));
+            }
+            report.downloaded += 1;
+        }
+        Err(err) => eprintln!("covers: failed to fetch {id}: {err:#}"),
+    }
+    Ok(())
+}
+
 /// Absolute path to a cached cover, if present.
 pub async fn cached_path(pool: &SqlitePool, id: &str) -> Result<Option<std::path::PathBuf>> {
     let file: Option<String> = sqlx::query_scalar("SELECT file FROM covers WHERE id = ?1")
@@ -333,6 +376,36 @@ pub async fn cached_path(pool: &SqlitePool, id: &str) -> Result<Option<std::path
     };
     let path = crate::db::covers_dir()?.join(file);
     Ok(path.is_file().then_some(path))
+}
+
+/// Path to the art the palette sampler should decode: the small thumbnail
+/// when the cache has one, the original otherwise.
+///
+/// The sampler downscales to 112 px either way, so decoding the provider's
+/// full-resolution art is pure peak cost: a 3000 px JPEG decodes to ~36 MB of
+/// RGBA against ~0.4 MB for the 320 px thumbnail, on every track change. The
+/// thumbnail is written by the sync and the on-demand path; a cover whose
+/// thumbnail has not landed yet still gets a palette from the original.
+pub async fn palette_path(pool: &SqlitePool, id: &str) -> Result<Option<std::path::PathBuf>> {
+    let file: Option<String> = sqlx::query_scalar("SELECT file FROM covers WHERE id = ?1")
+        .bind(id)
+        .fetch_optional(pool)
+        .await?;
+    let Some(file) = file else {
+        return Ok(None);
+    };
+    Ok(preferred_art(&crate::db::covers_dir()?, &file))
+}
+
+/// Thumbnail-first resolution shared by [`palette_path`] (kept pure so the
+/// preference is testable without a database or the config directory).
+fn preferred_art(dir: &Path, file: &str) -> Option<PathBuf> {
+    let thumb = dir.join(thumb_name(file));
+    if thumb.is_file() {
+        return Some(thumb);
+    }
+    let raw = dir.join(file);
+    raw.is_file().then_some(raw)
 }
 
 /// The content hash stored for a cached cover (used to revalidate colors).
@@ -567,23 +640,47 @@ fn write_thumb(source: &Path, dir: &Path, name: &str) -> Result<()> {
 /// Generates missing thumbnails on a bounded blocking pool: decoding is CPU
 /// work, and the Qt image reader only decodes one file at a time. Returns
 /// the thumb names it processed so the caller can release its claims.
+///
+/// Large blobs are decoded one at a time ([`THUMB_LARGE_BYTES`]); small blobs
+/// keep [`THUMB_CONCURRENCY`] workers. The blob size is a cheap stand-in for
+/// decoded dimensions and avoids probing every file twice.
 async fn ensure_thumbs(dir: &Path, jobs: Vec<(String, PathBuf)>) -> Vec<String> {
     let processed: Vec<String> = jobs.iter().map(|(name, _)| name.clone()).collect();
-    for chunk in jobs.chunks(THUMB_CONCURRENCY) {
-        let mut set = tokio::task::JoinSet::new();
-        for (name, source) in chunk {
-            let dir = dir.to_path_buf();
-            let name = name.clone();
-            let source = source.clone();
-            set.spawn_blocking(move || {
-                if let Err(err) = write_thumb(&source, &dir, &name) {
-                    eprintln!("covers: failed to thumbnail {}: {err:#}", source.display());
-                }
-            });
+    let mut large: Vec<(String, PathBuf)> = Vec::new();
+    let mut small: Vec<(String, PathBuf)> = Vec::new();
+    for job in jobs {
+        let is_large = tokio::fs::metadata(&job.1)
+            .await
+            .map(|meta| meta.len() > THUMB_LARGE_BYTES)
+            .unwrap_or(false);
+        if is_large {
+            large.push(job);
+        } else {
+            small.push(job);
         }
-        while set.join_next().await.is_some() {}
+    }
+
+    for job in large {
+        run_thumb_batch(dir, vec![job]).await;
+    }
+    for chunk in small.chunks(THUMB_CONCURRENCY) {
+        run_thumb_batch(dir, chunk.to_vec()).await;
     }
     processed
+}
+
+/// Decodes and writes one batch of thumbnails concurrently.
+async fn run_thumb_batch(dir: &Path, jobs: Vec<(String, PathBuf)>) {
+    let mut set = tokio::task::JoinSet::new();
+    for (name, source) in jobs {
+        let dir = dir.to_path_buf();
+        set.spawn_blocking(move || {
+            if let Err(err) = write_thumb(&source, &dir, &name) {
+                eprintln!("covers: failed to thumbnail {}: {err:#}", source.display());
+            }
+        });
+    }
+    while set.join_next().await.is_some() {}
 }
 
 /// Maps only the requested cover ids to `file://` URLs, in bounded batches.
@@ -661,10 +758,7 @@ async fn cached_urls(
     let mut thumb_jobs: Vec<(String, PathBuf)> = Vec::new();
     for chunk in unique.chunks(500) {
         let mut builder = sqlx::QueryBuilder::new("SELECT id, file FROM covers WHERE id IN (");
-        crate::cache::push_in_list(
-            &mut builder,
-            &chunk.iter().map(|id| id.to_string()).collect::<Vec<_>>(),
-        );
+        crate::cache::push_in_list_refs(&mut builder, chunk);
         let rows: Vec<(String, String)> = builder.build_query_as().fetch_all(pool).await?;
         for (id, file) in rows {
             let path = dir.join(&file);
@@ -816,6 +910,99 @@ mod tests {
         assert_eq!(thumb_name("a.b.webp"), "a.b.thumb.jpg");
     }
 
+    /// The single-result storage step (the chunked fetch's landing pad): a
+    /// new blob is written content-addressed, recorded and queued for its
+    /// thumbnail; a `304` only touches the row.
+    #[tokio::test]
+    async fn apply_fetched_stores_new_art_and_handles_revalidation() {
+        use crate::http_client::CoverArt;
+
+        let pool = crate::sqlite::memory_pool(sqlx::migrate!("./migrations_media")).await;
+        let dir = temp_thumb_dir();
+        let known = HashMap::new();
+        let mut report = CoverReport::default();
+        let mut jobs = Vec::new();
+
+        let art = CoverArt {
+            not_modified: false,
+            etag: Some("\"v1\"".to_string()),
+            last_modified: None,
+            content_type: Some("image/png".to_string()),
+            bytes: b"\x89PNG\r\n\x1a\nfake".to_vec(),
+        };
+        apply_fetched(&pool, &dir, &known, "cov1", Ok(art), &mut report, &mut jobs)
+            .await
+            .expect("store cover");
+
+        assert_eq!(report.downloaded, 1);
+        assert_eq!(jobs.len(), 1);
+        let (file, hash, size): (String, String, i64) =
+            sqlx::query_as("SELECT file, hash, size FROM covers WHERE id = 'cov1'")
+                .fetch_one(&pool)
+                .await
+                .expect("cover row");
+        assert!(file.ends_with(".png"), "content type picks the extension");
+        assert_eq!(hash.len(), 32);
+        assert_eq!(size, 12);
+        assert!(dir.join(&file).is_file());
+        assert_eq!(jobs[0].1, dir.join(&file));
+
+        let revalidated = CoverArt {
+            not_modified: true,
+            etag: None,
+            last_modified: None,
+            content_type: None,
+            bytes: Vec::new(),
+        };
+        apply_fetched(
+            &pool,
+            &dir,
+            &known,
+            "cov1",
+            Ok(revalidated),
+            &mut report,
+            &mut jobs,
+        )
+        .await
+        .expect("touch cover");
+        assert_eq!(report.unchanged, 1);
+        assert_eq!(jobs.len(), 1, "a 304 never queues a thumbnail");
+
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// The palette decodes the 320 px thumbnail when it exists (the whole
+    /// point of the thumbnail) and falls back to the original while it does
+    /// not (a just-fetched cover, offline).
+    #[test]
+    fn palette_art_prefers_the_thumbnail_then_the_original() {
+        let dir = temp_thumb_dir();
+        let raw = dir.join("raw-abc.jpg");
+        std::fs::write(&raw, b"raw").expect("write raw");
+        assert_eq!(
+            preferred_art(&dir, "raw-abc.jpg").as_deref(),
+            Some(raw.as_path()),
+            "no thumbnail yet: the full cover is the only decodable art"
+        );
+
+        let thumb = dir.join("raw-abc.thumb.jpg");
+        std::fs::write(&thumb, b"thumb").expect("write thumb");
+        assert_eq!(
+            preferred_art(&dir, "raw-abc.jpg").as_deref(),
+            Some(thumb.as_path()),
+            "a present thumbnail must win"
+        );
+
+        std::fs::remove_file(&raw).expect("remove raw");
+        assert_eq!(
+            preferred_art(&dir, "raw-abc.jpg").as_deref(),
+            Some(thumb.as_path()),
+            "a missing original must not hide an existing thumbnail"
+        );
+
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
     #[test]
     fn thumb_is_bounded_and_written() {
         let dir = temp_thumb_dir();
@@ -846,6 +1033,43 @@ mod tests {
         assert_eq!(
             std::fs::read(dir.join(&name)).expect("read thumb"),
             b"not an image"
+        );
+
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// The size split still processes every job: small art decodes in the
+    /// parallel path and an oversized blob goes through the single slot
+    /// (falling back to a copy when it is not decodable).
+    #[tokio::test]
+    async fn ensure_thumbs_covers_both_size_buckets() {
+        use image::{Rgba, RgbaImage};
+
+        let dir = temp_thumb_dir();
+        let small = dir.join("small.png");
+        RgbaImage::from_pixel(64, 64, Rgba([10, 20, 30, 255]))
+            .save(&small)
+            .expect("small cover");
+        let large = dir.join("large.img");
+        std::fs::write(&large, vec![0u8; THUMB_LARGE_BYTES as usize + 1]).expect("large blob");
+
+        let processed = ensure_thumbs(
+            &dir,
+            vec![
+                (thumb_name("small.png"), small),
+                (thumb_name("large.img"), large),
+            ],
+        )
+        .await;
+
+        assert_eq!(processed.len(), 2);
+        assert!(dir.join("small.thumb.jpg").is_file());
+        assert!(dir.join("large.thumb.jpg").is_file());
+        assert_eq!(
+            std::fs::read(dir.join("large.thumb.jpg"))
+                .expect("fallback thumb")
+                .len(),
+            THUMB_LARGE_BYTES as usize + 1
         );
 
         let _ = std::fs::remove_dir_all(dir);

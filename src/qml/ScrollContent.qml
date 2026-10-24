@@ -88,6 +88,12 @@ Item {
     /// Kept for host compatibility; the extent is Qt's own now.
     property real contentHeightHint: 0
     property bool recenterOnWidth: root.layout === "grid"
+    /// Bottom-align a short uniform list instead of leaving its rows at
+    /// the top of an otherwise empty viewport (album pages).
+    property bool bottomAlignShort: false
+    /// Optional content rendered in the list header, just above the first
+    /// row (a section title, for example).
+    property Component headerContent: null
 
     /// Follow duration (ms); 0 snaps. `reduceMotion` also snaps.
     property int followMs: Theme.motion.scroll
@@ -124,6 +130,25 @@ Item {
         root.rowRefHeight > 0 ? root.rowRefHeight : root.height)
     readonly property real rowStride:
         root.adaptiveRows ? root.adaptiveRowHeight + root.rowSpacing : 0
+
+    /// Native ListView header that fills the shortfall when a uniform list
+    /// does not fill the viewport, pushing its rows to the bottom. The gap
+    /// must come from row math (not contentHeight), or the header would feed
+    /// its own height back into the calculation.
+    readonly property real _shortContentGap: {
+        var v = root.view;
+        if (!root.bottomAlignShort || !v || v.count === 0 || v.height <= 0)
+            return 0;
+        if (root.layout === "grid") {
+            var cell = root.cellHeight > 0 ? root.cellHeight : root.cellWidth;
+            var rows = Math.ceil(v.count / Math.max(1, root.columns));
+            return Math.max(0, v.height - rows * cell);
+        }
+        if (root.rowStride <= 0)
+            return 0;
+        var rowsHeight = v.count * root.rowStride - root.rowSpacing;
+        return Math.max(0, v.height - rowsHeight);
+    }
 
     // ── Cursor ───────────────────────────────────────────────────────────
 
@@ -703,6 +728,19 @@ Item {
             model: root.layout === "grid" ? null : root.model
             delegate: root.rowDelegate
             spacing: root.rowSpacing
+            header: Column {
+                width: list.width
+                Item {
+                    width: parent.width
+                    height: Math.max(0,
+                        root._shortContentGap - headerLoader.height)
+                }
+                Loader {
+                    id: headerLoader
+                    width: parent.width
+                    sourceComponent: root.headerContent
+                }
+            }
             boundsBehavior: Flickable.StopAtBounds
             highlightFollowsCurrentItem: false
             reuseItems: false
@@ -719,6 +757,19 @@ Item {
             model: root.layout === "grid" ? root.model : null
             delegate: root.cellDelegate
             cellWidth: root.cellWidth
+            header: Column {
+                width: grid.width
+                Item {
+                    width: parent.width
+                    height: Math.max(0,
+                        root._shortContentGap - headerLoaderGrid.height)
+                }
+                Loader {
+                    id: headerLoaderGrid
+                    width: parent.width
+                    sourceComponent: root.headerContent
+                }
+            }
             cellHeight: root.cellHeight > 0 ? root.cellHeight : root.cellWidth
             boundsBehavior: Flickable.StopAtBounds
             highlightFollowsCurrentItem: false

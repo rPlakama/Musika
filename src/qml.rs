@@ -705,6 +705,15 @@ impl Backend {
                     .await
                     {
                         Ok(info) => {
+                            // Auto-login has no login form to set these: record the
+                            // account before the sync so the header greets the user
+                            // and the account-scoped status can restore.
+                            qtbridge::invoke_method!(
+                                invoker,
+                                "rememberAccount",
+                                credentials.server_url.clone(),
+                                credentials.username.clone()
+                            );
                             online_authenticated(
                                 &invoker,
                                 sync_finish,

@@ -659,35 +659,45 @@ Rectangle {
             }
         }
 
-        Rectangle {
-            radius: Theme.radius
-            Layout.fillWidth: true
-            Layout.preferredHeight: Math.max(1, root.height * Theme.hairlineRatio)
-            color: Palette.outlineVariant
-        }
+        // Tracks and its divider ride the list header as one block, so the
+        // whole section title follows the first row (and bottom-aligns with
+        // a short album).
+        Component {
+            id: tracksHeader
+            Column {
+                width: parent ? parent.width : 0
+                spacing: root.height * 0.008
 
-        // Tracks.
-        RowLayout {
-            Layout.fillWidth: true
-            spacing: root.height * 0.012
+                Rectangle {
+                    width: parent.width
+                    height: Math.max(1, root.height * Theme.hairlineRatio)
+                    radius: Theme.radius
+                    color: Palette.outlineVariant
+                }
 
-            FadeText {
-                text: "Tracks"
-                color: Palette.primary
-                font.pixelSize: root.height * 0.024
-                font.bold: true
-                font.letterSpacing: root.height * 0.004
-            }
+                RowLayout {
+                    width: parent.width
+                    spacing: root.height * 0.012
 
-            Item {
-                Layout.fillWidth: true
-            }
+                    FadeText {
+                        text: "Tracks"
+                        color: Palette.primary
+                        font.pixelSize: root.height * 0.024
+                        font.bold: true
+                        font.letterSpacing: root.height * 0.004
+                    }
 
-            // VI-4: the selection count pill.
-            SelectionBadge {
-                Layout.alignment: Qt.AlignVCenter
-                count: root.selectionCount
-                pixelSize: root.height * 0.02
+                    Item {
+                        Layout.fillWidth: true
+                    }
+
+                    // VI-4: the selection count pill.
+                    SelectionBadge {
+                        Layout.alignment: Qt.AlignVCenter
+                        count: root.selectionCount
+                        pixelSize: root.height * 0.02
+                    }
+                }
             }
         }
 
@@ -707,6 +717,8 @@ Rectangle {
             // estimate.
             context: "album"
             rowRefHeight: root.height
+            bottomAlignShort: true
+            headerContent: tracksHeader
 
             rowDelegate: Component {
                 Rectangle {

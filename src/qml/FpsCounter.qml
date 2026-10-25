@@ -84,7 +84,8 @@ Item {
     FrameAnimation {
         running: root.visible
         onTriggered: {
-            var elapsed = frameTime;
+            // FrameAnimation.frameTime is seconds, not milliseconds.
+            var elapsed = frameTime * 1000;
             if (!(elapsed > 0) || elapsed > 1000)
                 return;
             root.delayMs = elapsed;

@@ -71,6 +71,32 @@ pub struct Track {
     pub cover_url: String,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Repeat {
+    #[default]
+    Off,
+    One,
+    All,
+}
+
+impl Repeat {
+    pub fn code(self) -> i64 {
+        match self {
+            Self::Off => 0,
+            Self::One => 1,
+            Self::All => 2,
+        }
+    }
+
+    fn cycle(self) -> Self {
+        match self {
+            Self::Off => Self::One,
+            Self::One => Self::All,
+            Self::All => Self::Off,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum State {
     Stopped,
@@ -157,6 +183,7 @@ pub struct Player {
     pub(crate) queue: Arc<Vec<Track>>,
     pub(crate) index: usize,
     pub(crate) state: State,
+    pub(crate) repeat: Repeat,
     pub(crate) child: Option<Child>,
     pub(crate) ipc: Option<UnixStream>,
     pub(crate) socket: Option<PathBuf>,
@@ -197,6 +224,7 @@ impl Player {
             queue: Arc::new(Vec::new()),
             index: 0,
             state: State::Stopped,
+            repeat: Repeat::Off,
             child: None,
             ipc: None,
             socket: None,
@@ -397,6 +425,7 @@ impl Player {
             json!("replace"),
         ]);
         self.push_metadata(&track);
+        self.apply_repeat();
         self.set_property("pause", json!(false));
         self.state = State::Playing;
     }
@@ -412,6 +441,17 @@ impl Player {
             "mpris:artUrl": track.cover_url,
         });
         self.set_property("metadata", metadata);
+    }
+
+    pub fn cycle_repeat(&mut self) -> Repeat {
+        self.repeat = self.repeat.cycle();
+        self.apply_repeat();
+        self.repeat
+    }
+
+    fn apply_repeat(&mut self) {
+        let mode = if self.repeat == Repeat::One { "inf" } else { "no" };
+        self.set_property("loop-file", json!(mode));
     }
 
     pub fn toggle(&mut self) {
@@ -475,6 +515,9 @@ impl Player {
             self.push_metadata(&track);
         } else if self.index + 1 < self.queue.len() {
             self.index += 1;
+            self.play_current();
+        } else if self.repeat == Repeat::All {
+            self.index = 0;
             self.play_current();
         } else {
             self.stop();

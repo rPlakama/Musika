@@ -293,6 +293,8 @@ pub struct Backend {
     /// Pending mark ids waiting on the debounced reader (PATH-5).
     mark_pending: std::sync::Arc<std::sync::Mutex<MarkPending>>,
     playback_state: String,
+    /// 0 = off, 1 = repeat one, 2 = repeat queue.
+    repeat_mode: i64,
     position: f64,
     duration: f64,
     volume: f64,
@@ -465,6 +467,11 @@ impl Backend {
         "playbackState",
         Member = playback_state,
         Notify = playback_state_changed
+    );
+    qproperty!(
+        "repeatMode",
+        Member = repeat_mode,
+        Notify = repeat_mode_changed
     );
     qproperty!("position", Member = position, Notify = position_changed);
     qproperty!("duration", Member = duration, Notify = duration_changed);
@@ -659,6 +666,8 @@ impl Backend {
     fn login_required(&mut self);
     #[qsignal]
     fn playback_state_changed(&mut self);
+    #[qsignal]
+    fn repeat_mode_changed(&mut self);
     /// The playhead jumped (a seek, not playback progression): the lyrics
     /// follower drops its manual-scroll hold and re-centres at once (LYR-8).
     #[qsignal]
@@ -1950,6 +1959,15 @@ impl Backend {
         self.player.toggle();
         self.play_toggled();
         self.sync_player();
+    }
+
+    #[qslot(qml_name = "cycleRepeat")]
+    fn cycle_repeat(&mut self) {
+        let mode = self.player.cycle_repeat().code();
+        if self.repeat_mode != mode {
+            self.repeat_mode = mode;
+            self.repeat_mode_changed();
+        }
     }
 
     #[qslot(qml_name = "debugBuild")]

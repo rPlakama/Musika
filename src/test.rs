@@ -1842,6 +1842,7 @@ mod keybind {
     fn single_token_binding() {
         let mut keymap = Keymap::new();
         assert_eq!(keymap.feed("ctrl-n"), Outcome::Action(Action::NextTrack));
+        assert_eq!(keymap.feed("ctrl-r"), Outcome::Action(Action::RepeatCycle));
         assert_eq!(keymap.feed("j"), Outcome::Action(Action::MoveDown));
     }
 
@@ -3685,6 +3686,14 @@ mod player {
         player.append(vec![track("s3")]);
         assert_eq!(player.len(), 3);
         assert_eq!(player.index(), 0);
+    }
+
+    #[test]
+    fn repeat_cycles_off_one_all() {
+        let mut player = Player::new();
+        assert_eq!(player.cycle_repeat(), Repeat::One);
+        assert_eq!(player.cycle_repeat(), Repeat::All);
+        assert_eq!(player.cycle_repeat(), Repeat::Off);
     }
 
     #[test]

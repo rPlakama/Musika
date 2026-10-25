@@ -25,7 +25,7 @@ use std::time::{Duration, Instant};
 
 use serde_json::{Value, json};
 
-use super::{ErrorInfo, Player, Ready, Shared, State};
+use super::{ErrorInfo, Player, Ready, Repeat, Shared, State};
 
 mod sys {
     use std::ffi::c_int;
@@ -149,8 +149,17 @@ impl Player {
         }
         if idle && !advanced && !retried && self.retry_at.is_none() {
             // The window drained without an error: short track that outran
-            // its lookahead, or the queue ended. Advance or stop.
-            if self.index + 1 < self.queue.len() {
+            // its lookahead, or the queue ended. Repeat modes own the edge.
+            if self.repeat == Repeat::One {
+                self.play_current();
+            } else if self.repeat == Repeat::All && !self.queue.is_empty() {
+                self.index = if self.index + 1 < self.queue.len() {
+                    self.index + 1
+                } else {
+                    0
+                };
+                self.play_current();
+            } else if self.index + 1 < self.queue.len() {
                 self.index += 1;
                 self.play_current();
             } else {

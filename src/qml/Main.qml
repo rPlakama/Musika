@@ -137,6 +137,10 @@ ApplicationWindow {
                 Backend.playerAdjustVolume(-5 * Math.max(1, Backend.keyCount));
                 return;
             }
+            if (action === "repeat_cycle") {
+                Backend.cycleRepeat();
+                return;
+            }
 
             // Clipboard verbs (VI-21): `y` yanks the playing track to the
             // system clipboard. VI-8a: any focused row surface (or the queue

@@ -602,8 +602,11 @@ The product is incomplete without these.
   - **Why:** the shuffle button exists but is inert; repeat-one/all is expected.
   - **Details:** wire the shuffle icon + repeat mode, show the active state via
     a state layer (stop is already wired; see UI-17).
-  - **Now:** the transport uses `random-svgrepo-com.svg` with no `onClicked`;
-    `player.rs` has no shuffle/repeat state.
+  - **Now:** repeat landed — `repeat-rounded` sits left of previous (alpha 0
+    when off), Ctrl-R / click cycles off → one (`1` badge) → all → off;
+    `Player::cycle_repeat` maps one to mpv `loop-file=inf`, all wraps the
+    Rust queue at the end. Shuffle remains inert: the transport still shows
+    `random-svgrepo-com.svg` with no `onClicked`.
 
 - [ ] **Q-6 · A-B repeat, playback rate, crossfade** — P3 · (M9)
 

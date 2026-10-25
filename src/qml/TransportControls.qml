@@ -19,8 +19,9 @@ import QtQuick.Layouts
 import musika
 import "Theme.js" as Theme
 
-// UI-59: the one transport cluster — previous / play-pause / next on a single
-// horizontal line, identical in the player bar and the fullscreen transport.
+// UI-59: the one transport cluster — repeat / previous / play-pause / next on a
+// single horizontal line, identical in the player bar and the fullscreen
+// transport.
 // The buttons are unsqueezable (`Layout.minimum*` == preferred) and share a
 // common centre line, so a tight layout clips the surrounding zones first
 // instead of deforming the cluster; the play button is proportionally larger
@@ -36,6 +37,33 @@ RowLayout {
     readonly property real playRatio: 1.22
 
     spacing: root.unit * 0.11
+
+    IconButton {
+        id: repeatButton
+        Layout.preferredWidth: root.unit
+        Layout.preferredHeight: root.unit
+        Layout.minimumWidth: root.unit
+        Layout.minimumHeight: root.unit
+        Layout.alignment: Qt.AlignVCenter
+        iconSource: "qrc:/app/icons/repeat-rounded.svg"
+        symbolRatio: 0.9
+        // Off keeps the slot but is visually absent; the click and Ctrl-R
+        // still cycle it.
+        opacity: Backend.repeatMode === 0 ? 0.0 : 1.0
+        onClicked: Backend.cycleRepeat()
+
+        Icon {
+            anchors.right: parent.right
+            anchors.bottom: parent.bottom
+            width: parent.width * 0.38
+            height: width
+            source: "qrc:/app/icons/number-1.svg"
+            symbolColor: Theme.iconStrong
+            iconRatio: 0.78
+            visible: Backend.repeatMode === 1
+            z: 2
+        }
+    }
 
     IconButton {
         id: previousButton

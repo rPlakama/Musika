@@ -73,6 +73,7 @@ pub enum Action {
     QueueUp,
     QueueDown,
     QueueRemove,
+    RepeatCycle,
     PrevPlace,
     NextPlace,
 }
@@ -125,6 +126,7 @@ impl Action {
             Self::QueueUp => "queue_up",
             Self::QueueDown => "queue_down",
             Self::QueueRemove => "queue_remove",
+            Self::RepeatCycle => "repeat_cycle",
             Self::PrevPlace => "prev_place",
             Self::NextPlace => "next_place",
         }
@@ -215,6 +217,7 @@ fn defaults() -> Vec<(&'static str, Action)> {
         ("ctrl-[", Action::Back),
         ("q", Action::Back),
         ("ctrl-q", Action::QueueToggle),
+        ("ctrl-r", Action::RepeatCycle),
         ("shift-k", Action::ScopePrev),
         ("shift-j", Action::ScopeNext),
         ("ctrl-shift-k", Action::QueueUp),

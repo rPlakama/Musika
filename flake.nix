@@ -177,6 +177,7 @@
           libglvnd
           openssl
           sqlx-cli
+          vulkan-tools # vulkaninfo for test::benchmark::vulkan_probe
           qt
         ];
 

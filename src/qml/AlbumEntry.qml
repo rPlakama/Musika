@@ -590,6 +590,9 @@ Rectangle {
     ColumnLayout {
         anchors.fill: parent
         anchors.margins: root.width * 0.02
+        // The track scroller owns the page bottom edge; the side and top
+        // gutters stay inset.
+        anchors.bottomMargin: 0
         spacing: root.height * 0.02
 
         // Header: the album art is only the page ambience now; the identity

@@ -64,7 +64,7 @@ Item {
     Rectangle {
         anchors.fill: parent
         color: "black"
-        opacity: 0.60
+        opacity: 0.95
     }
 
     // The artwork itself: top-centre, aspect-fit in the largest page square.

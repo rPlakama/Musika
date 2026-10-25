@@ -394,11 +394,24 @@ Rectangle {
     }
 
     function handleAction(action) {
-        // UI-60/UI-14: Tab cycles rows -> cover -> artist -> notes -> Back chip
-        // -> rows (Shift+Tab reverses). Empty artist/notes stops are skipped;
-        // selecting the notes expands the reader.
+        // UI-60/UI-14: Tab walks the rows (one track at a time), then cover ->
+        // artist -> notes -> Back chip -> rows (Shift+Tab reverses). Empty
+        // artist/notes stops are skipped; selecting the notes expands the
+        // reader.
         if (action === "pane_cycle" || action === "pane_cycle_back") {
             var state = root.onCover ? 1 : (root.onArtist ? 2 : (root.onNotes ? 3 : (root.onToolbar ? 4 : 0)));
+            // The rows stop is walkable: Tab/Shift+Tab move the song cursor
+            // until the list edge, then continue into the header.
+            if (state === 0 && songs.count > 0) {
+                if (action === "pane_cycle" && content.currentIndex < songs.count - 1) {
+                    content.currentIndex += 1;
+                    return;
+                }
+                if (action === "pane_cycle_back" && content.currentIndex > 0) {
+                    content.currentIndex -= 1;
+                    return;
+                }
+            }
             do {
                 state = (state + (action === "pane_cycle" ? 1 : 4)) % 5;
             } while ((state === 2 && root.albumArtist.length === 0)

@@ -3,6 +3,18 @@
 All notable changes to Musika, newest first. `TASKLISTMAJOR.md` tracks the
 open work; this file is the release history.
 
+## 0.4.4 — _I am really starting to like it now, good work Deepseek-chan_
+
+All commits since `v0.4.3`:
+
+- `5ad92b6` Keep rows and grid cells above their minimum size
+- `abfd375` Use gradient vignette instead of canvas
+- `ba23c5f` Replace the blurred surround with a vignette
+- `ed9cd9e` Scale the cover to the rows band
+- `7e599bf` Cap the album cover push at three quarters
+- `336ece1` Push the album rows below the displayed cover
+- `559b59c` Contain the page covers and blur their surround
+
 ## 0.4.3 — _Somewhere with defined style_
 
 All commits since `v0.4.2`:

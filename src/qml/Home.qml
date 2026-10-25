@@ -1102,7 +1102,16 @@ Item {
         backdrop: (root.nowPlayingExpanded && nowPlaying) ? nowPlaying : shell
     }
 
-    // VI-7: the count register's chip — the number being typed (`3` before
+    ActionBadge {
+        id: actionBadge
+        anchors.right: parent.right
+        anchors.rightMargin: root.width * 0.02
+        anchors.bottom: parent.bottom
+        anchors.bottomMargin: root.playH + root.height * 0.02
+        z: Theme.zToast + 1
+    }
+
+    // VI-7: the count register.s chip — the number being typed (`3` before
     // `j`). Fades in over `micro`; the clear is instant (the visibility
     // drops with the register, no fade-out).
     Rectangle {
@@ -1115,8 +1124,8 @@ Item {
         height: root.height * 0.045
         radius: Theme.radius
         color: Palette.surfaceContainerHigh
-        visible: Backend.keyCount > 0
-        opacity: Backend.keyCount > 0 ? 1 : 0
+        visible: Backend.keyPending && Backend.keyCount > 0 && !actionBadge.active
+        opacity: visible ? 1 : 0
         z: Theme.zToast
 
         Behavior on opacity {
@@ -1322,6 +1331,10 @@ Item {
         running: true
         repeat: false
         onTriggered: Backend.refreshLibraryStatus()
+    }
+
+    function showAction(action, count) {
+        actionBadge.showAction(action, count);
     }
 
     // ARC-45: the travel log starts on the first place.

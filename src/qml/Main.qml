@@ -160,7 +160,10 @@ ApplicationWindow {
         focus: true
         property bool qqArmed: false
 
-        function dispatch(action) {
+        function dispatch(action, count) {
+            var screen = stack.currentItem;
+            if (screen && screen.showAction)
+                screen.showAction(action, count === undefined ? 1 : count);
             // Mute and volume steps are global like Space (media-key style).
             if (action === "mute") {
                 Backend.playerToggleMute();
@@ -330,7 +333,7 @@ ApplicationWindow {
             keyTimer.stop();
             if (action.length > 0) {
                 event.accepted = true;
-                dispatch(action);
+                dispatch(action, Math.max(1, Backend.keyCount));
             }
         }
 

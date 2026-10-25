@@ -5354,4 +5354,100 @@ mod benchmark {
             payload.len()
         );
     }
+
+    fn summary_field<'a>(summary: &'a str, key: &str) -> Option<&'a str> {
+        summary.lines().find_map(|line| {
+            let line = line.trim();
+            let value = line.strip_prefix(key)?.trim_start();
+            let value = value.strip_prefix('=')?.trim();
+            Some(value)
+        })
+    }
+
+    fn vulkan_device_kind(kind: &str) -> &'static str {
+        match kind {
+            "PHYSICAL_DEVICE_TYPE_CPU" => "software/CPU",
+            "PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU" => "integrated GPU",
+            "PHYSICAL_DEVICE_TYPE_DISCRETE_GPU" => "discrete GPU",
+            "PHYSICAL_DEVICE_TYPE_VIRTUAL_GPU" => "virtual GPU",
+            _ => "unknown GPU type",
+        }
+    }
+
+    /// Reports whether the Vulkan loader sees a device and which one, plus the
+    /// DRM render-node permissions. Run with:
+    ///
+    /// `cargo test test::benchmark::vulkan_probe -- --nocapture`
+    #[test]
+    fn vulkan_probe() {
+        for entry in std::fs::read_dir("/sys/class/drm")
+            .into_iter()
+            .flatten()
+            .flatten()
+        {
+            let name = entry.file_name();
+            let name = name.to_string_lossy();
+            if !name.starts_with("card") || name.contains('-') {
+                continue;
+            }
+            let path = entry.path().join("device/uevent");
+            if let Ok(text) = std::fs::read_to_string(path) {
+                let driver = text
+                    .lines()
+                    .find_map(|line| line.strip_prefix("DRIVER="))
+                    .unwrap_or("unknown");
+                let pci = text
+                    .lines()
+                    .find_map(|line| line.strip_prefix("PCI_ID="))
+                    .unwrap_or("unknown");
+                println!("[bench] DRM {name}: {driver} ({pci})");
+            }
+        }
+
+        for entry in std::fs::read_dir("/dev/dri")
+            .into_iter()
+            .flatten()
+            .flatten()
+        {
+            let path = entry.path();
+            let name = path.file_name().unwrap_or_default().to_string_lossy();
+            if !name.starts_with("renderD") {
+                continue;
+            }
+            let result = std::fs::OpenOptions::new()
+                .read(true)
+                .write(true)
+                .open(&path);
+            match result {
+                Ok(_) => println!("[bench] {path:?}: read-write access ok"),
+                Err(err) => println!("[bench] {path:?}: read-write access failed: {err}"),
+            }
+        }
+
+        let output = match Command::new("vulkaninfo").arg("--summary").output() {
+            Ok(output) => output,
+            Err(err) => {
+                println!(
+                    "[bench] Vulkan: unknown (vulkaninfo not found: {err}; install vulkan-tools)"
+                );
+                return;
+            }
+        };
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let name = summary_field(&stdout, "deviceName");
+        let kind = summary_field(&stdout, "deviceType");
+        let driver = summary_field(&stdout, "driverName");
+        if name.is_some() {
+            let name = name.unwrap_or("unknown device");
+            let kind = kind.map(vulkan_device_kind).unwrap_or("unknown GPU type");
+            println!(
+                "[bench] Vulkan: Available, using {name} ({kind}; driver {})",
+                driver.unwrap_or("unknown")
+            );
+        } else {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            let reason = stderr.lines().next_back().unwrap_or("no diagnostics");
+            println!("[bench] Vulkan: unavailable ({reason})");
+        }
+    }
 }

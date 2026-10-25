@@ -27,13 +27,14 @@ use crate::browse::{
     album_notes, load_album_songs_json, load_albums_json, load_artist_json, load_artists_json,
     load_songs_page_json, search_json,
 };
-use crate::http_client::SubsonicClient;
 use crate::keybind::{Keymap, Outcome};
 use crate::player::{Player, State};
 use crate::queue::{album_tracks_json, library_queue_payload, song_album_payload};
 
 #[path = "qml_backend/artist.rs"]
 mod artist;
+#[path = "qml_backend/auth.rs"]
+mod auth;
 #[path = "qml_backend/download.rs"]
 pub(crate) mod download;
 #[path = "qml_backend/marks.rs"]
@@ -47,12 +48,9 @@ mod sync;
 
 use crate::session::client;
 use artist::{ArtistUserAction, apply_artist_user};
-use download::{
-    album_container_off, album_container_on, artist_covers_album, completed_album, download_one,
-    downloaded_music_available, fetch_marked, rule_off, selection_toggle,
-};
+use download::{artist_covers_album, selection_toggle};
 use support::{album_cache_payload, album_state_payload, artist_cache_payload, emit, raise};
-use sync::{index_value, online_authenticated, spawn_sync};
+use sync::{index_value, spawn_sync};
 
 /// Bumped by every status change; the debounced writer only persists when its
 /// captured generation is still the latest (P-6 / roadmap "Session status").
@@ -719,190 +717,12 @@ impl Backend {
 
     #[qslot]
     fn login(&mut self) {
-        let server_url = self.server_url.trim().to_string();
-        let username = self.username.trim().to_string();
-        let password = self.password.clone();
-
-        if server_url.is_empty() || username.is_empty() || password.is_empty() {
-            self.status_message = "Server, username and password are all required.".to_string();
-            self.status_message_changed();
-            return;
-        }
-
-        self.busy = true;
-        self.busy_changed();
-        self.status_message = format!("Connecting to {server_url}…");
-        self.status_message_changed();
-
-        let invoker = self.get_qml_method_invoker();
-        let sync_finish = self.get_qml_method_invoker();
-        let sync_progress = self.get_qml_method_invoker();
-        let pool = crate::app::pool();
-
-        crate::app::runtime().spawn(async move {
-            match crate::http_client::authenticate(&server_url, &username, &password).await {
-                Ok(info) => {
-                    if let Some(pool) = pool.as_ref() {
-                        if let Err(err) = crate::sqlite::save_credentials(
-                            pool,
-                            &username,
-                            &password,
-                            &server_url,
-                            &info.kind,
-                        )
-                        .await
-                        {
-                            eprintln!("Failed to persist credentials: {err:#}");
-                        }
-                    }
-                    online_authenticated(
-                        &invoker,
-                        sync_finish,
-                        sync_progress,
-                        SubsonicClient::new(&server_url, &username, &password),
-                        info.kind,
-                        true,
-                    );
-                }
-                Err(err) => {
-                    // CACHE-9: with downloaded music, a dead server enters
-                    // offline mode instead of bouncing back to the Login.
-                    if downloaded_music_available().await {
-                        qtbridge::invoke_method!(
-                            invoker,
-                            "offlineLogin",
-                            server_url.clone(),
-                            username.clone()
-                        );
-                    } else {
-                        qtbridge::invoke_method!(invoker, "login_failed", format!("{err:#}"));
-                    }
-                }
-            }
-        });
+        self.login_impl();
     }
-
     #[qslot]
     fn startup(&mut self) {
-        let album_order =
-            crate::library::effective_order(&crate::library::ORDERS, &self.album_order, 0)
-                .to_string();
-        if self.album_order != album_order {
-            self.album_order = album_order;
-            self.album_order_changed();
-        }
-        let song_order =
-            crate::library::effective_order(&crate::library::ORDERS, &self.song_order, 0)
-                .to_string();
-        if self.song_order != song_order {
-            self.song_order = song_order;
-            self.song_order_changed();
-        }
-        let artist_order =
-            crate::library::effective_order(&crate::library::ARTIST_ORDERS, &self.artist_order, 0)
-                .to_string();
-        if self.artist_order != artist_order {
-            self.artist_order = artist_order;
-            self.artist_order_changed();
-        }
-        let invoker = self.get_qml_method_invoker();
-        let sync_finish = self.get_qml_method_invoker();
-        let sync_progress = self.get_qml_method_invoker();
-        let Some(pool) = crate::app::pool() else {
-            return;
-        };
-
-        // Auto-login with the ping: the stored account always tries to
-        // complete the login on its own. With downloaded music the app opens
-        // right away as `offline` (filtered to the downloaded catalog) while
-        // the auth finishes in the background — on success the flag clears
-        // and the full streaming library loads. Without downloads it waits
-        // for the same ping and only returns to the Login form, prefilled,
-        // when the server is unreachable.
-        crate::app::runtime().spawn(async move {
-            match crate::sqlite::load_credentials(&pool).await {
-                Ok(Some(credentials)) => {
-                    // The stored discriminator keeps "Last Sync: …, <server>"
-                    // populated before the first fresh ping (offline too).
-                    qtbridge::invoke_method!(
-                        invoker,
-                        "noteServerType",
-                        credentials.server_type.clone()
-                    );
-
-                    let has_downloads = downloaded_music_available().await;
-                    if has_downloads {
-                        qtbridge::invoke_method!(
-                            invoker,
-                            "offlineLogin",
-                            credentials.server_url.clone(),
-                            credentials.username.clone()
-                        );
-                    }
-
-                    // Finish the login inside the app (the ping). A failure
-                    // with a cached catalog just stays offline; without one it
-                    // falls back to the Login form with the account prefilled.
-                    match crate::http_client::authenticate(
-                        &credentials.server_url,
-                        &credentials.username,
-                        &credentials.password,
-                    )
-                    .await
-                    {
-                        Ok(info) => {
-                            // Auto-login has no login form to set these: record the
-                            // account before the sync so the header greets the user
-                            // and the account-scoped status can restore.
-                            qtbridge::invoke_method!(
-                                invoker,
-                                "rememberAccount",
-                                credentials.server_url.clone(),
-                                credentials.username.clone()
-                            );
-                            online_authenticated(
-                                &invoker,
-                                sync_finish,
-                                sync_progress,
-                                SubsonicClient::new(
-                                    &credentials.server_url,
-                                    &credentials.username,
-                                    &credentials.password,
-                                ),
-                                info.kind,
-                                !has_downloads,
-                            );
-                        }
-                        Err(err) if has_downloads => {
-                            // Stay offline; the auth is retried on the next
-                            // sync/login.
-                            eprintln!("login: background auth failed, staying offline: {err:#}");
-                        }
-                        Err(err) => {
-                            eprintln!("login: startup auth failed: {err:#}");
-                            qtbridge::invoke_method!(
-                                invoker,
-                                "prefillCredentials",
-                                credentials.server_url,
-                                credentials.username,
-                                credentials.password
-                            );
-                            invoker.invoke_method("login_required");
-                        }
-                    }
-                }
-                Ok(None) => {
-                    invoker.invoke_method("login_required");
-                }
-                Err(err) => {
-                    eprintln!("Failed to load saved credentials: {err:#}");
-                    invoker.invoke_method("login_required");
-                }
-            }
-        });
+        self.startup_impl();
     }
-
-    /// Login-only fallback: fills the form from the stored account.
     #[qslot(qml_name = "prefillCredentials")]
     fn prefill_credentials(&mut self, server_url: String, username: String, password: String) {
         self.remember_account(server_url, username);
@@ -1815,37 +1635,7 @@ impl Backend {
     /// with the reason). Emits the `download` state and an error toast.
     #[qslot(qml_name = "downloadSong")]
     fn download_song(&mut self, song_id: String) {
-        // Optimistic and targeted: the row's loading glyph spins from the
-        // first frame, the completion flips that row (and its album's) only.
-        self.note_download_state(song_id.clone(), crate::download::ACTIVE.to_string());
-        let invoker = self.get_qml_method_invoker();
-        let error_invoker = self.get_qml_method_invoker();
-        self.spawn_task(move |dbs| async move {
-            match download_one(&dbs, &song_id).await {
-                Ok(state) => {
-                    qtbridge::invoke_method!(
-                        invoker,
-                        "noteDownloadState",
-                        song_id.clone(),
-                        state.to_string()
-                    );
-                    if state == crate::download::DONE {
-                        if let Some(album) = completed_album(&dbs, &song_id).await {
-                            qtbridge::invoke_method!(invoker, "markAlbumCached", album);
-                        }
-                    }
-                }
-                Err(err) => {
-                    qtbridge::invoke_method!(
-                        invoker,
-                        "noteDownloadState",
-                        song_id.clone(),
-                        crate::download::ERROR.to_string()
-                    );
-                    raise(&error_invoker, "error", format!("Download failed: {err:#}"));
-                }
-            }
-        });
+        self.download_song_impl(song_id);
     }
 
     /// The stored artist-container selection (`artist_cache` channel).
@@ -1882,82 +1672,7 @@ impl Backend {
     /// `artist_cache` for the ArtistEntry toggle.
     #[qslot(qml_name = "downloadArtist")]
     fn download_artist(&mut self, artist_id: String, on: bool) {
-        // The request is initiated now: the row's loading glyph lights the
-        // same frame (the pass' batch and completions follow per id).
-        if on {
-            self.note_download_states(serde_json::json!([artist_id]).to_string());
-        }
-        let invoker = self.get_qml_method_invoker();
-        let fetch_invoker = self.get_qml_method_invoker();
-        let error_invoker = self.get_qml_method_invoker();
-        self.spawn_task(move |dbs| async move {
-            let albums = match crate::library::artist_album_ids(&dbs.library, &artist_id).await {
-                Ok(albums) => albums,
-                Err(err) => {
-                    eprintln!("media: could not list the artist's albums: {err:#}");
-                    return;
-                }
-            };
-            if on {
-                let mut songs: Vec<String> = Vec::new();
-                let mut queued_albums: Vec<String> = Vec::new();
-                for album in &albums {
-                    match album_container_on(&dbs, album).await {
-                        Ok(album_songs) => {
-                            eprintln!(
-                                "download: artist {artist_id} album {album} queued ({} songs)",
-                                album_songs.len()
-                            );
-                            songs.extend(album_songs);
-                            queued_albums.push(album.clone());
-                        }
-                        Err(err) => {
-                            raise(
-                                &error_invoker,
-                                "error",
-                                format!("Could not select the album for download: {err:#}"),
-                            );
-                        }
-                    }
-                }
-                // No bulk in-flight batch: the fetch pass lights each chunk
-                // (three songs) and their albums as it reaches them — a
-                // row's loading glyph means its track is fetching *now*.
-                eprintln!(
-                    "download: artist {artist_id} pass started ({} albums, {} songs)",
-                    queued_albums.len(),
-                    songs.len()
-                );
-                // The pass is now in flight: the chip shows its loading loop.
-                let json = artist_cache_payload(&artist_id, true, true);
-                emit(&invoker, "artist_cache", json);
-                fetch_marked(&dbs, &songs, &artist_id, false, fetch_invoker).await;
-                // The albums that had nothing to fetch never emitted a
-                // completion: settle their rows here.
-                for album in &queued_albums {
-                    qtbridge::invoke_method!(invoker, "settleDownloadRequest", album.clone());
-                }
-                eprintln!("download: artist {artist_id} pass finished");
-                let json = artist_cache_payload(&artist_id, true, false);
-                emit(&invoker, "artist_cache", json);
-            } else {
-                for album in &albums {
-                    album_container_off(&dbs, album).await;
-                }
-                // Legacy cleanup: the pre-album design kept an artist-kind
-                // rule; it has no role anymore.
-                if let Ok(Some(rule)) =
-                    crate::media::rule_for(&dbs.media, "artist", &artist_id).await
-                {
-                    rule_off(&dbs, &rule.id).await;
-                }
-                eprintln!("download: artist {artist_id} removed from the cache");
-                let json = artist_cache_payload(&artist_id, false, false);
-                emit(&invoker, "artist_cache", json);
-                // The marks lose the artist's songs: hard reset + re-read.
-                qtbridge::invoke_method!(fetch_invoker, "ResetRowMarks");
-            }
-        });
+        self.download_artist_impl(artist_id, on);
     }
 
     /// The album container state for the fullscreen keybar's Download button
@@ -2081,59 +1796,7 @@ impl Backend {
     /// rule-owned blobs. Emits `album_cache` throughout.
     #[qslot(qml_name = "downloadAlbum")]
     fn download_album(&mut self, album_id: String, on: bool) {
-        // The request is initiated now: the row's loading glyph lights the
-        // same frame (the pass' batch and completions follow per id).
-        if on {
-            self.note_download_states(serde_json::json!([album_id]).to_string());
-        }
-        let invoker = self.get_qml_method_invoker();
-        let fetch_invoker = self.get_qml_method_invoker();
-        let error_invoker = self.get_qml_method_invoker();
-        self.spawn_task(move |dbs| async move {
-            if on {
-                let artist_covered =
-                    match crate::library::album_artist_id(&dbs.library, &album_id).await {
-                        Ok(Some(artist_id)) => {
-                            artist_covers_album(&dbs, &artist_id, &album_id).await
-                        }
-                        _ => false,
-                    };
-                if artist_covered {
-                    // Redundant: the artist container already owns these songs.
-                    eprintln!(
-                        "download: album {album_id} already covered by the artist container; skipping"
-                    );
-                    let json = album_cache_payload(&album_id, true, false, true);
-                    emit(&invoker, "album_cache", json);
-                    return;
-                }
-                let songs = match album_container_on(&dbs, &album_id).await {
-                    Ok(songs) => songs,
-                    Err(err) => {
-                        raise(&error_invoker, "error", format!("Could not select the album for download: {err:#}"));
-                        return;
-                    }
-                };
-                eprintln!(
-                    "download: album {album_id} pass started ({} songs)",
-                    songs.len()
-                );
-                // The pass is now in flight: the chip shows its loading loop.
-                let json = album_cache_payload(&album_id, true, true, false);
-                emit(&invoker, "album_cache", json);
-                fetch_marked(&dbs, &songs, &album_id, true, fetch_invoker).await;
-                eprintln!("download: album {album_id} pass finished");
-                let json = album_cache_payload(&album_id, true, false, false);
-                emit(&invoker, "album_cache", json);
-            } else {
-                album_container_off(&dbs, &album_id).await;
-                eprintln!("download: album {album_id} removed from the cache");
-                let json = album_cache_payload(&album_id, false, false, false);
-                emit(&invoker, "album_cache", json);
-                // The marks lose the album's songs: hard reset + re-read.
-                qtbridge::invoke_method!(fetch_invoker, "ResetRowMarks");
-            }
-        });
+        self.download_album_impl(album_id, on);
     }
 
     #[qslot(qml_name = "requestAlbumSongs")]

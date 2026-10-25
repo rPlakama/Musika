@@ -540,3 +540,177 @@ pub(super) async fn downloaded_music_available() -> bool {
         None => false,
     }
 }
+
+use qtbridge::QmlObject;
+
+use super::Backend;
+use super::support::{album_cache_payload, artist_cache_payload, emit};
+
+impl Backend {
+    pub(super) fn download_song_impl(&mut self, song_id: String) {
+        // Optimistic and targeted: the row's loading glyph spins from the
+        // first frame, the completion flips that row (and its album's) only.
+        self.note_download_state(song_id.clone(), crate::download::ACTIVE.to_string());
+        let invoker = self.get_qml_method_invoker();
+        let error_invoker = self.get_qml_method_invoker();
+        self.spawn_task(move |dbs| async move {
+            match download_one(&dbs, &song_id).await {
+                Ok(state) => {
+                    qtbridge::invoke_method!(
+                        invoker,
+                        "noteDownloadState",
+                        song_id.clone(),
+                        state.to_string()
+                    );
+                    if state == crate::download::DONE {
+                        if let Some(album) = completed_album(&dbs, &song_id).await {
+                            qtbridge::invoke_method!(invoker, "markAlbumCached", album);
+                        }
+                    }
+                }
+                Err(err) => {
+                    qtbridge::invoke_method!(
+                        invoker,
+                        "noteDownloadState",
+                        song_id.clone(),
+                        crate::download::ERROR.to_string()
+                    );
+                    raise(&error_invoker, "error", format!("Download failed: {err:#}"));
+                }
+            }
+        });
+    }
+    pub(super) fn download_artist_impl(&mut self, artist_id: String, on: bool) {
+        // The request is initiated now: the row's loading glyph lights the
+        // same frame (the pass' batch and completions follow per id).
+        if on {
+            self.note_download_states(serde_json::json!([artist_id]).to_string());
+        }
+        let invoker = self.get_qml_method_invoker();
+        let fetch_invoker = self.get_qml_method_invoker();
+        let error_invoker = self.get_qml_method_invoker();
+        self.spawn_task(move |dbs| async move {
+            let albums = match crate::library::artist_album_ids(&dbs.library, &artist_id).await {
+                Ok(albums) => albums,
+                Err(err) => {
+                    eprintln!("media: could not list the artist's albums: {err:#}");
+                    return;
+                }
+            };
+            if on {
+                let mut songs: Vec<String> = Vec::new();
+                let mut queued_albums: Vec<String> = Vec::new();
+                for album in &albums {
+                    match album_container_on(&dbs, album).await {
+                        Ok(album_songs) => {
+                            eprintln!(
+                                "download: artist {artist_id} album {album} queued ({} songs)",
+                                album_songs.len()
+                            );
+                            songs.extend(album_songs);
+                            queued_albums.push(album.clone());
+                        }
+                        Err(err) => {
+                            raise(
+                                &error_invoker,
+                                "error",
+                                format!("Could not select the album for download: {err:#}"),
+                            );
+                        }
+                    }
+                }
+                // No bulk in-flight batch: the fetch pass lights each chunk
+                // (three songs) and their albums as it reaches them — a
+                // row's loading glyph means its track is fetching *now*.
+                eprintln!(
+                    "download: artist {artist_id} pass started ({} albums, {} songs)",
+                    queued_albums.len(),
+                    songs.len()
+                );
+                // The pass is now in flight: the chip shows its loading loop.
+                let json = artist_cache_payload(&artist_id, true, true);
+                emit(&invoker, "artist_cache", json);
+                fetch_marked(&dbs, &songs, &artist_id, false, fetch_invoker).await;
+                // The albums that had nothing to fetch never emitted a
+                // completion: settle their rows here.
+                for album in &queued_albums {
+                    qtbridge::invoke_method!(invoker, "settleDownloadRequest", album.clone());
+                }
+                eprintln!("download: artist {artist_id} pass finished");
+                let json = artist_cache_payload(&artist_id, true, false);
+                emit(&invoker, "artist_cache", json);
+            } else {
+                for album in &albums {
+                    album_container_off(&dbs, album).await;
+                }
+                // Legacy cleanup: the pre-album design kept an artist-kind
+                // rule; it has no role anymore.
+                if let Ok(Some(rule)) =
+                    crate::media::rule_for(&dbs.media, "artist", &artist_id).await
+                {
+                    rule_off(&dbs, &rule.id).await;
+                }
+                eprintln!("download: artist {artist_id} removed from the cache");
+                let json = artist_cache_payload(&artist_id, false, false);
+                emit(&invoker, "artist_cache", json);
+                // The marks lose the artist's songs: hard reset + re-read.
+                qtbridge::invoke_method!(fetch_invoker, "ResetRowMarks");
+            }
+        });
+    }
+    pub(super) fn download_album_impl(&mut self, album_id: String, on: bool) {
+        // The request is initiated now: the row's loading glyph lights the
+        // same frame (the pass' batch and completions follow per id).
+        if on {
+            self.note_download_states(serde_json::json!([album_id]).to_string());
+        }
+        let invoker = self.get_qml_method_invoker();
+        let fetch_invoker = self.get_qml_method_invoker();
+        let error_invoker = self.get_qml_method_invoker();
+        self.spawn_task(move |dbs| async move {
+            if on {
+                let artist_covered =
+                    match crate::library::album_artist_id(&dbs.library, &album_id).await {
+                        Ok(Some(artist_id)) => {
+                            artist_covers_album(&dbs, &artist_id, &album_id).await
+                        }
+                        _ => false,
+                    };
+                if artist_covered {
+                    // Redundant: the artist container already owns these songs.
+                    eprintln!(
+                        "download: album {album_id} already covered by the artist container; skipping"
+                    );
+                    let json = album_cache_payload(&album_id, true, false, true);
+                    emit(&invoker, "album_cache", json);
+                    return;
+                }
+                let songs = match album_container_on(&dbs, &album_id).await {
+                    Ok(songs) => songs,
+                    Err(err) => {
+                        raise(&error_invoker, "error", format!("Could not select the album for download: {err:#}"));
+                        return;
+                    }
+                };
+                eprintln!(
+                    "download: album {album_id} pass started ({} songs)",
+                    songs.len()
+                );
+                // The pass is now in flight: the chip shows its loading loop.
+                let json = album_cache_payload(&album_id, true, true, false);
+                emit(&invoker, "album_cache", json);
+                fetch_marked(&dbs, &songs, &album_id, true, fetch_invoker).await;
+                eprintln!("download: album {album_id} pass finished");
+                let json = album_cache_payload(&album_id, true, false, false);
+                emit(&invoker, "album_cache", json);
+            } else {
+                album_container_off(&dbs, &album_id).await;
+                eprintln!("download: album {album_id} removed from the cache");
+                let json = album_cache_payload(&album_id, false, false, false);
+                emit(&invoker, "album_cache", json);
+                // The marks lose the album's songs: hard reset + re-read.
+                qtbridge::invoke_method!(fetch_invoker, "ResetRowMarks");
+            }
+        });
+    }
+}

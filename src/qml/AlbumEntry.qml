@@ -614,6 +614,9 @@ Rectangle {
         ColumnLayout {
             id: header
             Layout.fillWidth: true
+            // The rows start below the displayed square art, not on top of it.
+            Layout.bottomMargin: Math.max(0, coverBackdrop.coverSide - root.width * 0.02
+                - header.implicitHeight - (headerGap.visible ? root.height * 0.22 : 0))
             spacing: root.height * 0.008
 
             // Description.
@@ -734,7 +737,9 @@ Rectangle {
         Item {
             id: headerGap
             Layout.fillWidth: true
-            Layout.fillHeight: true
+            Layout.fillHeight: false
+            Layout.preferredHeight: notesBox.visible ? root.height * 0.22 : 0
+            visible: notesBox.visible
             clip: true
 
             // UI-14: the description fills the top of the gap. Text wraps
@@ -800,8 +805,7 @@ Rectangle {
         ColumnLayout {
             id: tracksSection
             Layout.fillWidth: true
-            Layout.fillHeight: false
-            Layout.preferredHeight: (parent.height - parent.spacing * 2) * 0.5
+            Layout.fillHeight: true
             spacing: root.height * 0.008
 
             ScrollContent {

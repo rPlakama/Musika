@@ -52,6 +52,10 @@ Item {
     readonly property int decodeHeight: Math.min(root.maxDecodeEdge, Math.max(32,
         Math.ceil(height * root.decodeFactor / 32) * 32))
 
+    // The thumb path is one pre-scaled file per cover: decode it once at its
+    // native edge so every row using the same cover hits the same cached
+    // pixmap instead of a different per-row sourceSize.
+    readonly property bool usingThumb: root.imageSource.toString().indexOf(".thumb.jpg") >= 0
     readonly property bool ready: image.status === Image.Ready
     opacity: root.ready ? 1 : 0
     visible: root.ready
@@ -86,8 +90,8 @@ Item {
         id: image
         anchors.fill: parent
         source: root.imageSource
-        sourceSize.width: root.decodeWidth
-        sourceSize.height: root.decodeHeight
+        sourceSize.width: root.usingThumb ? root.thumbEdge : root.decodeWidth
+        sourceSize.height: root.usingThumb ? root.thumbEdge : root.decodeHeight
         asynchronous: true
         cache: true
         fillMode: root.fillMode

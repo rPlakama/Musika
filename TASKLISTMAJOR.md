@@ -1443,24 +1443,30 @@ The product is incomplete without these.
       generate the Theme.js colour copies; shape/motion/type stay there);
     - library projections: shared `const` column fragments or one builder per
       entity (ARC-11).
-  - **Now (partial):** `consts::now_secs()` replaces the four local `now()`
-    helpers (covers binds `.to_string()` at its two write sites); new
-    `cache::purge_missing` collapses the lyric and color purge seams (covers
-    keeps its own loop because it also removes files), with a unit test.
-    Open: the qml.rs `emit_async!` scaffold + shared client constructor,
-    `log_error!` routing (ARC-5), palette/Theme role single source, and the
-    library projection fragments.
-  - **Verify:** audit counts drop (`now` 4→1, `spawn` 17→~4, `eprintln` 44→~5,
-    `SubsonicClient::new` 7→2), `cargo test` stays green, no visual diff.
+  - **Now (post-0.4.2 modularization pass):** `consts::now_secs()` replaced the
+    four local `now()` helpers; `cache::purge_missing` collapsed the lyric and
+    color purge seams. The pass also added `scripts/modularity.sh`, the
+    session/digest/offline primitives, `app` process state (root `dbs`/
+    `runtime`/`pool` references 60→0), the library split (`library.rs` 1330→
+    912 lines; `library/sync.rs` 293, `library/info.rs` 179), the browse split
+    (`browse.rs` 941→176; `browse/rows.rs` 292, `browse/search.rs` 435), and
+    the player split (`player.rs` 1099→676; `player/mpv.rs` 451). Duplicate
+    `md5_hex` 2→1, lower-layer `crate::qml::{online,client}` 4→0, and
+    `chunks(500)` 11→0 (one `cache::IN_BATCH`).
+    Open: `qml.rs` logic extraction (3,760 lines, 109 qslots), the remaining
+    library query/state split, the optional covers split, and ARC-5.
+  - **Verify:** `sh scripts/modularity.sh`, `cargo test` (192), `cargo fmt
+    --check`, `nix build .#musika`; no visual diff.
 
 - [ ] **ARC-17 · Slim the `Backend` god-object** — P2 · (O17)
   - **Why:** huge slot surface; `playback_state` is a `String`, should be enum.
-  - **Now (partial):** the Qt bridge's data layer left `qml.rs` — `browse.rs`
-    (list/search JSON loaders + cover-URL resolution) and `queue.rs` (Track
-    queue builders); `qml.rs` 1957 → 1793 lines, keeping the QObject,
-    tick/sync glue and invoker-driven orchestration. Open: `playback_state`
-    String → enum, slot-surface reduction. Next module candidate: `api.rs`
-    (1894 lines: protocol types + client methods).
+  - **Now (post-0.4.2):** `qml.rs` is 3,760 lines with 109 qslots; the data
+    layer (browse/queue) and the process state (`app`) no longer live here, but
+    the bridge still owns auth, status, downloads, marks and transport bodies.
+    Open: extract those bodies into `qml_backend/{auth,browse,player,marks}.rs`
+    while keeping the qslots in the annotated impl (qtbridge requires one
+    impl/mod for them); then reduce the slot surface and make
+    `playback_state` an enum.
 
 - [ ] **ARC-24 · Shared sync epoch across the five DBs** — P1 · (DB analysis)
   - **Why:** only library.db knows when it last synced; search/covers/lyrics

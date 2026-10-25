@@ -1842,8 +1842,7 @@ mod keybind {
     fn single_token_binding() {
         let mut keymap = Keymap::new();
         assert_eq!(keymap.feed("ctrl-n"), Outcome::Action(Action::NextTrack));
-        assert_eq!(keymap.feed("q"), Outcome::Pending);
-        assert_eq!(keymap.feed("q"), Outcome::Action(Action::Quit));
+        assert_eq!(keymap.feed("q"), Outcome::Action(Action::Back));
         assert_eq!(keymap.feed("ctrl-r"), Outcome::Action(Action::RepeatCycle));
         assert_eq!(keymap.feed("j"), Outcome::Action(Action::MoveDown));
     }

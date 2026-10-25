@@ -34,6 +34,7 @@ Item {
         visible = true;
         opacity = 0;
         fadeIn.restart();
+        quitTimer.restart();
         for (var i = 0; i < lettersRepeater.count; ++i) {
             var letter = lettersRepeater.itemAt(i);
             if (letter)
@@ -44,6 +45,12 @@ Item {
     Rectangle {
         anchors.fill: parent
         color: Qt.rgba(0, 0, 0, 0.62)
+    }
+
+    Timer {
+        id: quitTimer
+        interval: 200
+        onTriggered: Qt.quit() // onClosing flushes the session
     }
 
     Row {
@@ -107,9 +114,5 @@ Item {
         duration: 200
         easing.type: Easing.Bezier
         easing.bezierCurve: Theme.ease.standard
-        onFinished: {
-            Backend.flushStatus();
-            Qt.quit();
-        }
     }
 }

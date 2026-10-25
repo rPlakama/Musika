@@ -158,6 +158,7 @@ ApplicationWindow {
         id: keyHandler
         anchors.fill: parent
         focus: true
+        property bool qqArmed: false
 
         function dispatch(action) {
             // Mute and volume steps are global like Space (media-key style).
@@ -175,14 +176,6 @@ ApplicationWindow {
             }
             if (action === "repeat_cycle") {
                 Backend.cycleRepeat();
-                return;
-            }
-            if (action === "quit") {
-                var page = stack.currentItem;
-                if (page && page.atHome === true)
-                    exitOverlay.play();
-                else if (page && page.handleAction)
-                    page.handleAction("back");
                 return;
             }
 
@@ -310,6 +303,25 @@ ApplicationWindow {
                 if (event.key === Qt.Key_Escape)
                     return;
             }
+            // At Home, q waits briefly for a second q; elsewhere q stays the
+            // immediate Back key. This keeps single-q navigation responsive.
+            if (event.key === Qt.Key_Q && event.modifiers === Qt.NoModifier
+                && !event.isAutoRepeat
+                && stack.currentItem && stack.currentItem.atHome === true) {
+                event.accepted = true;
+                if (qqArmed) {
+                    qqArmed = false;
+                    qqTimer.stop();
+                    exitOverlay.play();
+                } else {
+                    qqArmed = true;
+                    qqTimer.restart();
+                }
+                return;
+            }
+            qqArmed = false;
+            qqTimer.stop();
+
             var action = Backend.keyEvent(event.key, event.modifiers);
             if (action === "PENDING") {
                 keyTimer.restart();
@@ -360,6 +372,12 @@ ApplicationWindow {
 
         // Resolves deferred sequences once the inter-key timeout elapses
         // (e.g. `g g`, `shift-space f`); bare Space fires immediately.
+        Timer {
+            id: qqTimer
+            interval: 250
+            onTriggered: keyHandler.qqArmed = false
+        }
+
         Timer {
             id: keyTimer
             interval: 800

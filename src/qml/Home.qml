@@ -36,6 +36,9 @@ Item {
     property int activeRegion: 1
     property bool nowPlayingExpanded: false
     property int currentSegment: 0
+    // True only at the root: no page, drawer or fullscreen player above it.
+    readonly property bool atHome: contentStack.depth === 1
+        && !nowPlayingExpanded && !queueDrawer.open
     // A scope switch starts the target segment at row 0 instead of
     // restoring/settling toward its previous cursor.
     property bool _resetSegmentOnShow: false

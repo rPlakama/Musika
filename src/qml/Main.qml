@@ -28,7 +28,7 @@ ApplicationWindow {
     minimumWidth: 0
     minimumHeight: Screen.height * 0.4
     color: Palette.background
-    title: qsTr("Musika")
+    title: exitOverlay.running ? "Bye!" : qsTr("Musika")
 
     // Debug only: report the first paint, then stay quiet.
     property bool frontendReadySent: false
@@ -78,6 +78,12 @@ ApplicationWindow {
         active: Backend.debugBuild()
         source: "FpsCounter.qml"
         onLoaded: item.idle = Qt.binding(function () { return root.idleBehavior; })
+    }
+
+    ExitOverlay {
+        id: exitOverlay
+        anchors.fill: parent
+        z: 5000
     }
 
     onClosing: Backend.flushStatus()
@@ -169,6 +175,14 @@ ApplicationWindow {
             }
             if (action === "repeat_cycle") {
                 Backend.cycleRepeat();
+                return;
+            }
+            if (action === "quit") {
+                var page = stack.currentItem;
+                if (page && page.atHome === true)
+                    exitOverlay.play();
+                else if (page && page.handleAction)
+                    page.handleAction("back");
                 return;
             }
 

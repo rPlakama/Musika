@@ -1453,14 +1453,16 @@ The product is incomplete without these.
     the player split (`player.rs` 1099→676; `player/mpv.rs` 451). Duplicate
     `md5_hex` 2→1, lower-layer `crate::qml::{online,client}` 4→0, and
     `chunks(500)` 11→0 (one `cache::IN_BATCH`).
-    Open: `qml.rs` logic extraction (3,760 lines, 109 qslots), the remaining
+    Open: `qml.rs` logic extraction (3,534 lines, 109 qslots; the mark window
+    moved to `qml_backend/marks.rs`, 258 lines), the remaining
     library query/state split, the optional covers split, and ARC-5.
   - **Verify:** `sh scripts/modularity.sh`, `cargo test` (192), `cargo fmt
     --check`, `nix build .#musika`; no visual diff.
 
 - [ ] **ARC-17 · Slim the `Backend` god-object** — P2 · (O17)
   - **Why:** huge slot surface; `playback_state` is a `String`, should be enum.
-  - **Now (post-0.4.2):** `qml.rs` is 3,760 lines with 109 qslots; the data
+  - **Now (post-0.4.2):** `qml.rs` is 3,534 lines with 109 qslots (the mark window moved to
+    `qml_backend/marks.rs`); the data
     layer (browse/queue) and the process state (`app`) no longer live here, but
     the bridge still owns auth, status, downloads, marks and transport bodies.
     Open: extract those bodies into `qml_backend/{auth,browse,player,marks}.rs`

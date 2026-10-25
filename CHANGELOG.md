@@ -3,6 +3,25 @@
 All notable changes to Musika, newest first. `TASKLISTMAJOR.md` tracks the
 open work; this file is the release history.
 
+## 0.4.3 — _Somewhere with defined style_
+
+All commits since `v0.4.2`:
+
+- `7b768a3` Make the artist title and biography Tab stops
+- `0caa6eb` Restyle the artist header after the album header
+- `1a6395e` Finish paged lists before jumping to the true end
+- `82b572a` Teleport numeric scrolls above fifteen rows
+- `721043c` Record the bridge helper extraction
+- `5e4e5b8` Extract queue publishing and player sync from the bridge
+- `3332cd3` Record the mark-window extraction
+- `463b674` Extract the mark window from the QML bridge
+- `1551451` Record the modularization pass in the task list
+- `155152e` Split the mpv process out of the player queue
+- `93064dc` Split browse rows and search payloads
+- `97339a7` Split library sync and info caches out of the query module
+- `aa20d7b` Move process state out of main into app
+- `59f7370` Extract session, digest, offline and cache primitives
+
 ## 0.4.2 — _Wouldn't that be strange to have so much information?_
 
 All commits since `v0.4.1`:

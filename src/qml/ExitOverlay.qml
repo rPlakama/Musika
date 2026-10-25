@@ -37,9 +37,8 @@ Item {
         for (var i = 0; i < lettersRepeater.count; ++i) {
             var letter = lettersRepeater.itemAt(i);
             if (letter)
-                letter.restart(i * 45);
+                letter.restart();
         }
-        shutdown.restart();
     }
 
     Rectangle {
@@ -61,7 +60,6 @@ Item {
                 required property string modelData
                 required property int index
 
-                property int delay: 0
                 text: modelData
                 color: "white"
                 font.family: Theme.fonts.wordmark
@@ -70,34 +68,30 @@ Item {
                 opacity: 0
                 scale: 0.6
 
-                function restart(wait) {
-                    delay = wait;
+                function restart() {
                     opacity = 0;
                     scale = 0.6;
                     spawn.restart();
                 }
 
-                SequentialAnimation {
+                ParallelAnimation {
                     id: spawn
-                    PauseAnimation { duration: letter.delay }
-                    ParallelAnimation {
-                        NumberAnimation {
-                            target: letter
-                            property: "opacity"
-                            from: 0
-                            to: 1
-                            duration: 200
-                            easing.type: Easing.Bezier
-                            easing.bezierCurve: Theme.ease.standard
-                        }
-                        NumberAnimation {
-                            target: letter
-                            property: "scale"
-                            from: 0.6
-                            to: 1
-                            duration: 200
-                            easing.type: Easing.OutBack
-                        }
+                    NumberAnimation {
+                        target: letter
+                        property: "opacity"
+                        from: 0
+                        to: 1
+                        duration: 200
+                        easing.type: Easing.Bezier
+                        easing.bezierCurve: Theme.ease.standard
+                    }
+                    NumberAnimation {
+                        target: letter
+                        property: "scale"
+                        from: 0.6
+                        to: 1
+                        duration: 200
+                        easing.type: Easing.OutBack
                     }
                 }
             }
@@ -113,11 +107,9 @@ Item {
         duration: 200
         easing.type: Easing.Bezier
         easing.bezierCurve: Theme.ease.standard
-    }
-
-    Timer {
-        id: shutdown
-        interval: 800
-        onTriggered: Qt.quit()
+        onFinished: {
+            Backend.flushStatus();
+            Qt.quit();
+        }
     }
 }

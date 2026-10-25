@@ -66,7 +66,7 @@ pub struct Snapshot {
 
 impl Snapshot {
     /// Key for change detection: everything signalled except `Position`.
-    fn signal_key(&self) -> String {
+    pub(crate) fn signal_key(&self) -> String {
         format!(
             "{}|{}|{}|{}|{}|{}|{}|{}|{}|{}",
             self.playback_status,
@@ -120,7 +120,7 @@ fn submit(command: String) {
 }
 
 /// The non-blocking send policy, split out so the bound is testable.
-fn queue_command(tx: &mpsc::Sender<String>, command: String) {
+pub(crate) fn queue_command(tx: &mpsc::Sender<String>, command: String) {
     let _ = tx.try_send(command);
 }
 
@@ -254,7 +254,7 @@ async fn emit_changes(connection: &Connection, notify: &Notify) {
     }
 }
 
-fn owned(value: Value<'_>) -> OwnedValue {
+pub(crate) fn owned(value: Value<'_>) -> OwnedValue {
     value
         .try_into()
         .unwrap_or_else(|_| Value::from(0u8).try_into().expect("u8 is representable"))
@@ -262,7 +262,7 @@ fn owned(value: Value<'_>) -> OwnedValue {
 
 /// MPRIS object path for a song id (segments allow `[A-Za-z0-9_]` only).
 /// The empty id maps to the spec's "no track" placeholder.
-fn track_path(song_id: &str) -> String {
+pub(crate) fn track_path(song_id: &str) -> String {
     if song_id.is_empty() {
         return "/org/mpris/MediaPlayer2/TrackList/NoTrack".to_string();
     }
@@ -279,7 +279,7 @@ fn track_path(song_id: &str) -> String {
     format!("/org/musika/track/{safe}")
 }
 
-fn metadata(state: &Snapshot) -> HashMap<String, OwnedValue> {
+pub(crate) fn metadata(state: &Snapshot) -> HashMap<String, OwnedValue> {
     let mut map = HashMap::new();
     if let Ok(path) = ObjectPath::try_from(track_path(&state.track_id)) {
         map.insert("mpris:trackid".to_string(), owned(Value::from(path)));
@@ -491,81 +491,4 @@ impl MprisPlayer {
 
     #[zbus(signal)]
     async fn seeked(signal_emitter: &SignalEmitter<'_>, position: i64) -> zbus::Result<()>;
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn track_paths_are_valid_object_paths() {
-        assert_eq!(
-            track_path("3PlpTsrmYRDfmuo3fe3PEJ"),
-            "/org/musika/track/3PlpTsrmYRDfmuo3fe3PEJ"
-        );
-        assert_eq!(track_path("a-b.c"), "/org/musika/track/a_b_c");
-        assert_eq!(track_path(""), "/org/mpris/MediaPlayer2/TrackList/NoTrack");
-        assert!(ObjectPath::try_from(track_path("a-b.c")).is_ok());
-    }
-
-    #[test]
-    fn metadata_carries_the_expected_roles() {
-        let state = Snapshot {
-            title: "Idioteque".to_string(),
-            artist: "Radiohead".to_string(),
-            album: "Kid A".to_string(),
-            track_id: "abc123".to_string(),
-            duration_us: 297_000_000,
-            art_url: "file:///tmp/a.jpg".to_string(),
-            ..Snapshot::default()
-        };
-        let map = metadata(&state);
-        assert!(map.contains_key("mpris:trackid"));
-        assert_eq!(map["mpris:length"], owned(Value::from(297_000_000i64)));
-        assert_eq!(map["xesam:title"], owned(Value::from("Idioteque")));
-        assert_eq!(
-            map["xesam:artist"],
-            owned(Value::from(vec!["Radiohead".to_string()]))
-        );
-        assert!(map.contains_key("mpris:artUrl"));
-    }
-
-    #[test]
-    fn idle_state_exposes_the_no_track_placeholder() {
-        let map = metadata(&Snapshot::default());
-        assert_eq!(
-            map["mpris:trackid"],
-            owned(Value::from(
-                ObjectPath::try_from("/org/mpris/MediaPlayer2/TrackList/NoTrack").unwrap()
-            ))
-        );
-        assert!(!map.contains_key("mpris:length"));
-    }
-
-    #[test]
-    fn signal_key_ignores_position_only_updates() {
-        let mut state = Snapshot {
-            title: "Idioteque".to_string(),
-            ..Snapshot::default()
-        };
-        let before = state.signal_key();
-        state.position_us = 42_000_000;
-        assert_eq!(before, state.signal_key());
-
-        state.volume = 0.5;
-        assert_ne!(before, state.signal_key());
-    }
-
-    /// FIX-8: a flood beyond the capacity drops commands instead of growing
-    /// the queue or blocking the bus thread.
-    #[test]
-    fn a_full_command_queue_drops_instead_of_blocking() {
-        let (tx, mut rx) = mpsc::channel(2);
-        queue_command(&tx, "mpris_play".to_string());
-        queue_command(&tx, "mpris_next".to_string());
-        queue_command(&tx, "mpris_previous".to_string());
-        assert_eq!(rx.try_recv().as_deref(), Ok("mpris_play"));
-        assert_eq!(rx.try_recv().as_deref(), Ok("mpris_next"));
-        assert!(rx.try_recv().is_err(), "the excess command was dropped");
-    }
 }

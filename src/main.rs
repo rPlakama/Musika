@@ -49,7 +49,10 @@ mod search;
 mod sqlite;
 mod status;
 
-/// Test-only heap probe (see `colors::tests::bench_palette_decode_peak`).
+#[cfg(test)]
+mod test;
+
+/// Test-only heap probe (see `test::colors::bench_palette_decode_peak`).
 ///
 /// The memory work needs numbers, not guesses: `/proc/self/status` only
 /// exposes a monotonic high-water mark, so a per-thread allocator counter

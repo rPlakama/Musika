@@ -264,8 +264,6 @@ Item {
         var meta = [];
         if (year.length > 0)
             meta.push(year);
-        if (tracks.length > 0)
-            meta.push(tracks + " tracks");
         contentStack.push(albumEntryComponent, {
             albumId: albumId,
             albumTitle: title,
@@ -968,6 +966,15 @@ Item {
                         id: albumEntryComponent
                         AlbumEntry {
                             onBack: contentStack.pop()
+                            // The header artist name is a Tab stop; it opens
+                            // the album's owning artist page.
+                            onArtistActivated: (artistId, artistName, artistCover) => {
+                                contentStack.push(artistEntryComponent, {
+                                    artistId: artistId,
+                                    artistName: artistName,
+                                    artistCover: artistCover
+                                });
+                            }
                             // ARC-I-2: the page arms the shared Alt overlay on
                             // its song rows.
                             onQuickAction: (target, actions) =>
@@ -1226,8 +1233,6 @@ Item {
                     var meta = [];
                     if (album.year)
                         meta.push(String(album.year));
-                    if (album.tracks)
-                        meta.push(album.tracks + " tracks");
                     contentStack.push(albumEntryComponent, {
                         albumId: album.id,
                         albumTitle: album.title,

@@ -34,12 +34,17 @@ Rectangle {
     /// ARC-I-2: Alt-hold quick actions on the song row under the cursor;
     /// Home routes it to the shared overlay.
     signal quickAction(var target, var actions)
+    /// Opens the album's owning artist page from the header name.
+    signal artistActivated(string artistId, string artistName, string artistCover)
 
     property string albumId: ""
     property bool onToolbar: false
     /// UI-60: the big cover is a selectable album surface (Enter/click arms
     /// its favourite + count + download verbs).
     property bool onCover: false
+    /// The header's artist name is its own Tab stop; Enter/click opens the
+    /// owning artist's page.
+    property bool onArtist: false
     /// UI-14: the description is its own Tab stop; selecting it expands the
     /// one-line notes into the scrollable reader.
     property bool onNotes: false
@@ -69,8 +74,34 @@ Rectangle {
     readonly property string memoryKey: "album:" + root.albumId
     property bool _restored: false
 
-    /// Star hitbox side in the header (five slots total).
-    readonly property real starUnit: Math.max(14, Math.min(28, root.height * 0.025))
+    /// Metadata stats merged after the album date:
+    /// `<N> Tracks · <m:ss> · <AUDIO TAG>`.
+    property int tracksDuration: 0
+    property string tracksFormat: ""
+    readonly property string tracksSummary: {
+        var parts = [];
+        var count = songs.count;
+        if (count > 0)
+            parts.push(count + (count === 1 ? " Track" : " Tracks"));
+        if (root.tracksDuration > 0)
+            parts.push(Theme.formatTime(root.tracksDuration));
+        if (root.tracksFormat.length > 0)
+            parts.push(root.tracksFormat);
+        return parts.join(" · ");
+    }
+    /// The header metadata line: date first, then the track stats.
+    readonly property string albumMetaLine: {
+        var parts = [];
+        if (root.albumMeta.length > 0)
+            parts.push(root.albumMeta);
+        if (root.tracksSummary.length > 0)
+            parts.push(root.tracksSummary);
+        return parts.join(" · ");
+    }
+
+    /// Star hitbox side in the header (five slots total). 60% larger than
+    /// the old strip, matching the album-title scale.
+    readonly property real starUnit: Math.max(22, Math.min(45, root.height * 0.04))
 
     color: Palette.surface
 
@@ -211,6 +242,13 @@ Rectangle {
         }
     }
 
+    /// Resolve the album's owning artist and let Home push its page.
+    function activateArtist() {
+        if (root.albumArtist.length === 0)
+            return;
+        Backend.requestAlbumArtist(root.albumId);
+    }
+
     /// UI-14: expand/collapse the notes reader. The expanded block is a
     /// Flickable capped to the header's share of the pane; short notes show
     /// whole, long ones scroll without eliding.
@@ -232,8 +270,17 @@ Rectangle {
         content.clearSelection();
         songs.clear();
         var list = JSON.parse(payload);
+        // Tracks-header stats: total runtime + the most common file suffix.
+        var total = 0;
+        var formats = {};
         for (var i = 0; i < list.length; i++) {
             var song = list[i];
+            total += Number(song.duration) || 0;
+            var suffix = song.suffix ? String(song.suffix).toLowerCase() : "";
+            if (suffix.charAt(0) === ".")
+                suffix = suffix.substring(1);
+            if (suffix.length > 0)
+                formats[suffix] = (formats[suffix] || 0) + 1;
             songs.append({
                 track: song.track ? String(song.track) : String(i + 1),
                 title: song.title,
@@ -243,6 +290,16 @@ Rectangle {
                 albumId: song.album_id ? song.album_id : ""
             });
         }
+        root.tracksDuration = total;
+        var format = "";
+        var formatCount = 0;
+        for (var key in formats) {
+            if (formats[key] > formatCount) {
+                format = key;
+                formatCount = formats[key];
+            }
+        }
+        root.tracksFormat = format.toUpperCase();
         root.loading = false;
         // UI-54: reopening the page restores the cursor + offset; later
         // reloads (library change, resync) keep the live state.
@@ -336,18 +393,20 @@ Rectangle {
     }
 
     function handleAction(action) {
-        // UI-60/UI-14: Tab cycles rows -> cover -> notes -> (dropped)Back chip -> rows
-        // (Shift+Tab reverses). Selecting the notes expands the reader; the
-        // empty-notes albums skip that stop.
+        // UI-60/UI-14: Tab cycles rows -> cover -> artist -> notes -> Back chip
+        // -> rows (Shift+Tab reverses). Empty artist/notes stops are skipped;
+        // selecting the notes expands the reader.
         if (action === "pane_cycle" || action === "pane_cycle_back") {
-            var state = root.onCover ? 1 : (root.onNotes ? 2 : (root.onToolbar ? 3 : 0));
+            var state = root.onCover ? 1 : (root.onArtist ? 2 : (root.onNotes ? 3 : (root.onToolbar ? 4 : 0)));
             do {
-                state = (state + (action === "pane_cycle" ? 1 : 3)) % 4;
-            } while (state === 2 && root.albumNotes.length === 0)
+                state = (state + (action === "pane_cycle" ? 1 : 4)) % 5;
+            } while ((state === 2 && root.albumArtist.length === 0)
+                || (state === 3 && root.albumNotes.length === 0))
             root.onCover = state === 1;
-            root.onNotes = state === 2;
-            root.onToolbar = state === 3;
-            root.setNotesExpanded(state === 2);
+            root.onArtist = state === 2;
+            root.onNotes = state === 3;
+            root.onToolbar = state === 4;
+            root.setNotesExpanded(state === 3);
             if (state !== 0)
                 content.clearSelection();
             else if (songs.count > 0 && content.currentIndex < 0)
@@ -360,6 +419,7 @@ Rectangle {
             if (songs.count === 0)
                 return;
             root.onCover = false;
+            root.onArtist = false;
             root.onNotes = false;
             root.onToolbar = false;
             root.setNotesExpanded(false);
@@ -374,6 +434,7 @@ Rectangle {
             if (songs.count === 0)
                 return;
             root.onCover = false;
+            root.onArtist = false;
             root.onNotes = false;
             root.onToolbar = false;
             root.setNotesExpanded(false);
@@ -384,10 +445,26 @@ Rectangle {
             if (songs.count === 0)
                 return;
             root.onCover = false;
+            root.onArtist = false;
             root.onNotes = false;
             root.onToolbar = false;
             root.setNotesExpanded(false);
             content.extendSelection("move_" + action.substring(7));
+            return;
+        }
+
+        if (root.onArtist) {
+            // The header's artist name: Enter opens the owning artist page.
+            if (action === "enter") {
+                root.activateArtist();
+            } else if (action === "move_up") {
+                root.onArtist = false;
+                root.onCover = true;
+            } else if (action === "move_down") {
+                root.onArtist = false;
+                if (songs.count > 0)
+                    content.currentIndex = 0;
+            }
             return;
         }
 
@@ -400,7 +477,10 @@ Rectangle {
                     root.scrollNotes(action === "move_up" ? -line : line);
                 } else if (action === "move_up") {
                     root.onNotes = false;
-                    root.onCover = true;
+                    if (root.albumArtist.length > 0)
+                        root.onArtist = true;
+                    else
+                        root.onCover = true;
                 } else {
                     root.onNotes = false;
                     root.onToolbar = true;
@@ -412,13 +492,16 @@ Rectangle {
         }
 
         if (root.onCover) {
-            // UI-60: the cover sits between the Back chip and the first row.
+            // UI-60: the cover sits between the Back chip and the artist link.
             if (action === "move_up") {
                 root.onCover = false;
                 root.onToolbar = true;
-            } else if (action === "move_down" && songs.count > 0) {
+            } else if (action === "move_down") {
                 root.onCover = false;
-                content.currentIndex = 0;
+                if (root.albumArtist.length > 0)
+                    root.onArtist = true;
+                else if (songs.count > 0)
+                    content.currentIndex = 0;
             } else if (action === "enter") {
                 root.armCoverActions(true);
             }
@@ -466,7 +549,11 @@ Rectangle {
                 root.apply(payload);
             else if (channel === "album_info")
                 root.applyInfo(payload);
-            else if (channel === "album_state") {
+            else if (channel === "album_artist") {
+                var link = JSON.parse(payload);
+                if (link.album_id === root.albumId && link.artist_id)
+                    root.artistActivated(link.artist_id, root.albumArtist, root.albumCover);
+            } else if (channel === "album_state") {
                 var state = JSON.parse(payload);
                 if (state.id === root.albumId) {
                     root.albumStarred = state.starred === true;
@@ -522,14 +609,11 @@ Rectangle {
         anchors.margins: root.width * 0.02
         spacing: root.height * 0.02
 
-        // Toolbar: back.
         // Header: the album art is only the page ambience now; the identity
-        // gets the full width.
+        // gets the full width and stays anchored at the top of the page.
         ColumnLayout {
             id: header
             Layout.fillWidth: true
-            // The notes reader owns the band that used to be blank margin.
-            Layout.bottomMargin: 0
             spacing: root.height * 0.008
 
             // Description.
@@ -560,6 +644,7 @@ Rectangle {
                     TapHandler {
                         onTapped: {
                             root.onToolbar = false;
+                            root.onArtist = false;
                             root.onNotes = false;
                             root.onCover = true;
                             root.setNotesExpanded(false);
@@ -579,11 +664,31 @@ Rectangle {
                 }
 
                 FadeText {
+                    id: artistLink
                     Layout.fillWidth: true
                     text: root.albumArtist
                     color: Palette.primary
                     font.pixelSize: root.height * 0.024
                     elide: Text.ElideRight
+
+                    ScopeRing {
+                        anchors.fill: parent
+                        shown: root.onArtist
+                    }
+
+                    HoverHandler {
+                        cursorShape: Qt.PointingHandCursor
+                    }
+
+                    TapHandler {
+                        onTapped: {
+                            root.onCover = false;
+                            root.onNotes = false;
+                            root.onToolbar = false;
+                            root.onArtist = true;
+                            root.activateArtist();
+                        }
+                    }
                 }
                 RowLayout {
                     Layout.fillWidth: true
@@ -606,100 +711,13 @@ Rectangle {
 
                     FadeText {
                         Layout.fillWidth: true
-                        text: root.albumMeta
+                        text: root.albumMetaLine
                         color: Palette.onSurfaceVariant
                         font.pixelSize: root.height * 0.02
                         elide: Text.ElideRight
                     }
-                }
-                // UI-14: the notes fill the band that used to be blank header
-                // margin. Text wraps inside it; long notes scroll (wheel/trackpad
-                // or j/k while the notes stop is selected) instead of eliding.
-                Item {
-                    id: notesBox
-                    Layout.fillWidth: true
-                    Layout.topMargin: root.height * 0.008
-                    Layout.preferredHeight: root.height * 0.325
-                    visible: root.albumNotes.length > 0
-                    clip: true
 
-                    Flickable {
-                        id: notesView
-                        anchors.fill: parent
-                        contentWidth: width
-                        contentHeight: notesText.implicitHeight
-                        boundsBehavior: Flickable.StopAtBounds
-                        interactive: contentHeight > height
-                        clip: true
-
-                        FadeText {
-                            id: notesText
-                            width: notesView.width
-                            text: root.albumNotes
-                            color: Palette.onSurfaceVariant
-                            font.pixelSize: root.height * 0.02
-                            lineHeight: 1.25
-                            wrapMode: Text.WordWrap
-                            maximumLineCount: 0
-                            elide: Text.ElideNone
-                        }
-                    }
-
-                    ScopeRing {
-                        shown: root.onNotes
-                        anchors.fill: parent
-                    }
-
-                    HoverHandler {
-                        enabled: root.albumNotes.length > 0
-                        cursorShape: Qt.PointingHandCursor
-                    }
-                    TapHandler {
-                        enabled: root.albumNotes.length > 0
-                        onTapped: {
-                            root.onCover = false;
-                            root.onToolbar = false;
-                            root.onNotes = true;
-                            root.setNotesExpanded(!root.notesExpanded);
-                        }
-                    }
-                }
-            }
-        }
-
-        // Tracks and its divider ride the list header as one block, so the
-        // whole section title follows the first row (and bottom-aligns with
-        // a short album).
-        Component {
-            id: tracksHeader
-            Column {
-                width: parent ? parent.width : 0
-                spacing: root.height * 0.008
-
-                Rectangle {
-                    width: parent.width
-                    height: Math.max(1, root.height * Theme.hairlineRatio)
-                    radius: Theme.radius
-                    color: Palette.outlineVariant
-                }
-
-                RowLayout {
-                    width: parent.width
-                    spacing: root.height * 0.012
-
-                    FadeText {
-                        text: "Tracks"
-                        color: Palette.primary
-                        font.pixelSize: root.height * 0.024
-                        font.bold: true
-                        font.letterSpacing: root.height * 0.004
-                    }
-
-                    Item {
-                        Layout.fillWidth: true
-                    }
-
-                    // VI-4: the selection count pill.
+                    // VI-4: the selection count pill follows the metadata.
                     SelectionBadge {
                         Layout.alignment: Qt.AlignVCenter
                         count: root.selectionCount
@@ -709,26 +727,101 @@ Rectangle {
             }
         }
 
-        ScrollContent {
-            id: content
+        // The header's bottom gap: an empty band (or the description when
+        // there is one) between the identity at the top and the Tracks list
+        // at the bottom. The gap only grows downward — the header itself
+        // never stretches.
+        Item {
+            id: headerGap
             Layout.fillWidth: true
             Layout.fillHeight: true
-            model: songs
-            selectable: true
-            memoryKey: root.memoryKey
-            visible: !(root.loading && songs.count === 0)
-            // ARC-UI-2 M1: the rows paint track, title and duration.
-            searchFields: ["track", "title", "duration"]
-            // UI-58: rows scale from the page height, not the song viewport
-            // (the header/notes reflow must not rescale every row). The
-            // precomputed extent keeps the shared glide off Qt's lazy
-            // estimate.
-            context: "album"
-            rowRefHeight: root.height
-            bottomAlignShort: true
-            headerContent: tracksHeader
+            clip: true
 
-            rowDelegate: Component {
+            // UI-14: the description fills the top of the gap. Text wraps
+            // inside it; long notes scroll (wheel/trackpad or j/k while the
+            // notes stop is selected) instead of eliding.
+            Item {
+                id: notesBox
+                anchors.top: parent.top
+                anchors.left: parent.left
+                anchors.right: parent.right
+                height: root.albumNotes.length > 0
+                    ? Math.min(parent.height, root.height * 0.325)
+                    : 0
+                visible: root.albumNotes.length > 0
+                clip: true
+
+                Flickable {
+                    id: notesView
+                    anchors.fill: parent
+                    contentWidth: width
+                    contentHeight: notesText.implicitHeight
+                    boundsBehavior: Flickable.StopAtBounds
+                    interactive: contentHeight > height
+                    clip: true
+
+                    FadeText {
+                        id: notesText
+                        width: notesView.width
+                        text: root.albumNotes
+                        color: Palette.onSurfaceVariant
+                        font.pixelSize: root.height * 0.02
+                        lineHeight: 1.25
+                        wrapMode: Text.WordWrap
+                        maximumLineCount: 0
+                        elide: Text.ElideNone
+                    }
+                }
+
+                ScopeRing {
+                    shown: root.onNotes
+                    anchors.fill: parent
+                }
+
+                HoverHandler {
+                    enabled: root.albumNotes.length > 0
+                    cursorShape: Qt.PointingHandCursor
+                }
+                TapHandler {
+                    enabled: root.albumNotes.length > 0
+                    onTapped: {
+                        root.onCover = false;
+                        root.onArtist = false;
+                        root.onToolbar = false;
+                        root.onNotes = true;
+                        root.setNotesExpanded(!root.notesExpanded);
+                    }
+                }
+            }
+        }
+
+        // The bottom section is the scroll view alone: the track count,
+        // runtime and format now live as fineprint under the album title.
+        ColumnLayout {
+            id: tracksSection
+            Layout.fillWidth: true
+            Layout.fillHeight: false
+            Layout.preferredHeight: (parent.height - parent.spacing * 2) * 0.5
+            spacing: root.height * 0.008
+
+            ScrollContent {
+                id: content
+                Layout.fillWidth: true
+                Layout.fillHeight: true
+                model: songs
+                selectable: true
+                memoryKey: root.memoryKey
+                visible: !(root.loading && songs.count === 0)
+                // ARC-UI-2 M1: the rows paint track, title and duration.
+                searchFields: ["track", "title", "duration"]
+                // UI-58: rows scale from the page height, not the song viewport
+                // (the header/notes reflow must not rescale every row). The
+                // precomputed extent keeps the shared glide off Qt's lazy
+                // estimate.
+                context: "album"
+                rowRefHeight: root.height
+
+                rowDelegate: Component {
                 Rectangle {
                     id: songRow
                     radius: Theme.radius
@@ -836,6 +929,7 @@ Rectangle {
             font.pixelSize: Theme.fontSize("body", root.height)
             horizontalAlignment: Text.AlignHCenter
             verticalAlignment: Text.AlignVCenter
+        }
         }
     }
 }

@@ -256,7 +256,7 @@ pub async fn invalidate_with(pool: &SqlitePool, cover_art: &str) -> Result<()> {
 }
 
 #[derive(Debug, FromRow)]
-pub(super) struct CachedRow {
+pub(crate) struct CachedRow {
     cover_hash: String,
     scheme: String,
     seed: i64,
@@ -266,7 +266,7 @@ pub(super) struct CachedRow {
     role_hash: String,
 }
 
-pub(super) async fn load(pool: &SqlitePool, cover_art: &str) -> Result<Option<CachedRow>> {
+pub(crate) async fn load(pool: &SqlitePool, cover_art: &str) -> Result<Option<CachedRow>> {
     let row = sqlx::query_as::<_, CachedRow>(
         "SELECT cover_hash, scheme, seed, colorfulness, dark, generator, role_hash
          FROM cover_color WHERE cover_art = ?1",

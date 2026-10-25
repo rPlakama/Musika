@@ -54,7 +54,7 @@ where
 }
 
 /// Builds the query-pairs slice, skipping absent (`None`) options.
-fn query(pairs: &[(&'static str, Option<String>)]) -> Vec<(&'static str, String)> {
+pub(crate) fn query(pairs: &[(&'static str, Option<String>)]) -> Vec<(&'static str, String)> {
     pairs
         .iter()
         .filter_map(|(key, value)| value.as_ref().map(|value| (*key, value.clone())))
@@ -74,7 +74,7 @@ fn push_all(
 
 /// Pulls `key` out of a response body and deserializes it, defaulting to an
 /// empty model when the element is absent.
-fn extract<T: DeserializeOwned + Default>(body: Value, key: &str) -> Result<T> {
+pub(crate) fn extract<T: DeserializeOwned + Default>(body: Value, key: &str) -> Result<T> {
     Ok(extract_opt(body, key)?.unwrap_or_default())
 }
 
@@ -534,91 +534,4 @@ fn star_params<'a>(
     push_all(&mut params, "albumId", album_ids);
     push_all(&mut params, "artistId", artist_ids);
     params
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn parses_single_object_into_list() {
-        let body: Value = serde_json::from_str(
-            r#"{"indexes":{"ignoredArticles":"The","lastModified":1,"index":{"name":"A","artist":{"id":"1","name":"AC/DC"}}}}"#,
-        )
-        .unwrap();
-
-        let indexes: Indexes = extract(body, "indexes").unwrap();
-        assert_eq!(indexes.index.len(), 1);
-        assert_eq!(indexes.index[0].artist.len(), 1);
-        assert_eq!(indexes.index[0].artist[0].name, "AC/DC");
-    }
-
-    #[test]
-    fn parses_song_type_field_and_missing_fields() {
-        let body: Value = serde_json::from_str(
-            r#"{"song":{"id":"42","isDir":false,"title":"Hello","artist":"Adele","type":"music"}}"#,
-        )
-        .unwrap();
-
-        let song: Child = extract(body, "song").unwrap();
-        assert_eq!(song.id, "42");
-        assert_eq!(song.title, "Hello");
-        assert_eq!(song.media_type.as_deref(), Some("music"));
-        assert_eq!(song.duration, None);
-    }
-
-    #[test]
-    fn absent_element_yields_default() {
-        let body: Value = serde_json::from_str(r#"{"version":"1.16.1"}"#).unwrap();
-        let lyrics: Lyrics = extract(body, "lyrics").unwrap();
-        assert!(lyrics.value.is_empty());
-    }
-
-    #[test]
-    fn album_with_songs_flattens_album_fields() {
-        let body: Value = serde_json::from_str(
-            r#"{"album":{"id":"a1","name":"Album","songCount":1,"duration":30,"created":"2020-01-01T00:00:00Z","song":[{"id":"s1","isDir":false,"title":"Track"}]}}"#,
-        )
-        .unwrap();
-
-        let album: AlbumWithSongsID3 = extract(body, "album").unwrap();
-        assert_eq!(album.album.name, "Album");
-        assert_eq!(album.song.len(), 1);
-        assert_eq!(album.song[0].title, "Track");
-    }
-
-    #[test]
-    fn parses_playlists_and_entries() {
-        // A single playlist object becomes a one-element list; fields map.
-        let body: Value = serde_json::from_str(
-            r#"{"playlists":{"playlist":{"id":"p1","name":"Mix","songCount":2,"duration":90,"owner":"me","public":true,"changed":"2026-01-01T00:00:00Z"}}}"#,
-        )
-        .unwrap();
-        let lists: Playlists = extract(body, "playlists").unwrap();
-        assert_eq!(lists.playlist.len(), 1);
-        assert_eq!(lists.playlist[0].name, "Mix");
-        assert_eq!(lists.playlist[0].song_count, Some(2));
-        assert_eq!(lists.playlist[0].public, Some(true));
-
-        // The entries flatten into the playlist and keep their order.
-        let body: Value = serde_json::from_str(
-            r#"{"playlist":{"id":"p1","name":"Mix","songCount":2,"duration":90,"entry":[{"id":"s1","isDir":false,"title":"A"},{"id":"s2","isDir":false,"title":"B"}]}}"#,
-        )
-        .unwrap();
-        let page: PlaylistWithSongs = extract(body, "playlist").unwrap();
-        assert_eq!(page.playlist.name, "Mix");
-        assert_eq!(page.entry.len(), 2);
-        assert_eq!(page.entry[0].title, "A");
-
-        // An absent element defaults to empty, never errors.
-        let body: Value = serde_json::from_str(r#"{"version":"1.16.1"}"#).unwrap();
-        let lists: Playlists = extract(body, "playlists").unwrap();
-        assert!(lists.playlist.is_empty());
-    }
-
-    #[test]
-    fn query_skips_none() {
-        let params = query(&[("a", Some("1".to_string())), ("b", None)]);
-        assert_eq!(params, vec![("a", "1".to_string())]);
-    }
 }

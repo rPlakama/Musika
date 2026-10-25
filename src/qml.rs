@@ -35,7 +35,7 @@ use crate::queue::{album_tracks_json, library_queue_payload, song_album_payload}
 #[path = "qml_backend/artist.rs"]
 mod artist;
 #[path = "qml_backend/download.rs"]
-mod download;
+pub(crate) mod download;
 #[path = "qml_backend/support.rs"]
 mod support;
 #[path = "qml_backend/sync.rs"]
@@ -172,9 +172,9 @@ impl Serialize for QueueRow<'_> {
     }
 }
 
-struct QueueRows<'a> {
-    queue: &'a [crate::player::Track],
-    starred: &'a std::collections::HashSet<String>,
+pub(crate) struct QueueRows<'a> {
+    pub(crate) queue: &'a [crate::player::Track],
+    pub(crate) starred: &'a std::collections::HashSet<String>,
 }
 
 impl Serialize for QueueRows<'_> {
@@ -197,23 +197,23 @@ impl Serialize for QueueRows<'_> {
 /// `songs` subtrees before deserializing them; for a library-wide queue that
 /// meant three extra copies of the whole payload on the UI thread.
 #[derive(Default, serde::Deserialize)]
-struct QueueCoversPayload {
+pub(crate) struct QueueCoversPayload {
     #[serde(default)]
-    covers: HashMap<String, String>,
+    pub(crate) covers: HashMap<String, String>,
     #[serde(default)]
-    albums: HashMap<String, String>,
+    pub(crate) albums: HashMap<String, String>,
     #[serde(default)]
-    songs: Vec<crate::library::SongRow>,
+    pub(crate) songs: Vec<crate::library::SongRow>,
 }
 
 /// Producer twin of [`QueueCoversPayload`]: writes the three collections
 /// straight into the payload string instead of building a `Value` tree of the
 /// whole queue first.
 #[derive(serde::Serialize)]
-struct QueueCoversEnvelope<'a> {
-    covers: &'a HashMap<String, String>,
-    albums: &'a HashMap<String, String>,
-    songs: &'a [crate::library::SongRow],
+pub(crate) struct QueueCoversEnvelope<'a> {
+    pub(crate) covers: &'a HashMap<String, String>,
+    pub(crate) albums: &'a HashMap<String, String>,
+    pub(crate) songs: &'a [crate::library::SongRow],
 }
 
 /// The download-window payload (`applyDownloadedIds`), same rationale.
@@ -2208,6 +2208,19 @@ impl Backend {
         });
     }
 
+    /// Resolves the album's owning artist id for the header's artist link.
+    #[qslot(qml_name = "requestAlbumArtist")]
+    fn request_album_artist(&mut self, album_id: String) {
+        self.spawn_data("album_artist", move |dbs| async move {
+            let artist_id = crate::library::album_artist_id(&dbs.library, &album_id).await?;
+            Ok(serde_json::json!({
+                "album_id": album_id,
+                "artist_id": artist_id,
+            })
+            .to_string())
+        });
+    }
+
     /// Fetches an album's description ("notes") from the server.
     #[qslot(qml_name = "requestAlbumInfo")]
     fn request_album_info(&mut self, album_id: String) {
@@ -2667,7 +2680,7 @@ impl Backend {
             }
             // Stream the row set once: the queue can hold the entire library,
             // and this string doubles as the dedupe hash input.
-            let row_count = queue.len();
+            let _row_count = queue.len();
             let rows = QueueRows {
                 queue: queue.as_slice(),
                 starred: &starred,
@@ -2686,7 +2699,7 @@ impl Backend {
             if !force && previous == rows_hash {
                 return;
             }
-            crate::debug_log!("queue: published {row_count} rows");
+            crate::debug_log!("queue: published {_row_count} rows");
             // The rows were just serialized for the hash; splice that string
             // into the envelope instead of serializing the whole row set a
             // second time (the queue can hold the entire library).
@@ -3162,13 +3175,7 @@ impl Backend {
         crate::runtime().spawn(async move {
             match crate::queue::quick_tracks_json_many(&dbs, &kind, &ids, offline).await {
                 Ok(json) => {
-                    qtbridge::invoke_method!(
-                        invoker,
-                        "pasteQueueTracks",
-                        cursor,
-                        above,
-                        json
-                    );
+                    qtbridge::invoke_method!(invoker, "pasteQueueTracks", cursor, above, json);
                 }
                 Err(err) => raise(
                     &error_invoker,
@@ -3756,162 +3763,5 @@ impl Backend {
             can_prev: self.queue_index > 0,
             art_url: self.current_cover_url.clone(),
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// The queue-covers payload goes straight into its final collections:
-    /// all three subtrees, and missing keys default to empty.
-    #[test]
-    fn queue_covers_payload_deserializes_directly() {
-        let song = crate::library::SongRow {
-            id: "s1".to_string(),
-            title: "Everything In Its Right Place".to_string(),
-            artist: Some("Radiohead".to_string()),
-            album: Some("Kid A".to_string()),
-            album_id: Some("al1".to_string()),
-            track: Some(1),
-            duration: Some(240),
-            cover_art: Some("c1".to_string()),
-            starred: None,
-        };
-        let json = serde_json::json!({
-            "covers": {"c1": "file:///c1.jpg"},
-            "albums": {"al1": "c1"},
-            "songs": [song],
-        })
-        .to_string();
-
-        let payload: QueueCoversPayload = serde_json::from_str(&json).unwrap();
-        assert_eq!(
-            payload.covers.get("c1").map(String::as_str),
-            Some("file:///c1.jpg")
-        );
-        assert_eq!(payload.albums.get("al1").map(String::as_str), Some("c1"));
-        assert_eq!(payload.songs.len(), 1);
-        assert_eq!(payload.songs[0].id, "s1");
-
-        let empty: QueueCoversPayload = serde_json::from_str("{}").unwrap();
-        assert!(empty.covers.is_empty() && empty.albums.is_empty() && empty.songs.is_empty());
-    }
-
-    /// Memory probe: the old `Value` + three subtree clones vs the typed
-    /// `QueueCoversPayload` for a 20k-row queue payload.
-    ///
-    /// `cargo test qml::tests::bench_queue_covers_payload -- --ignored --nocapture`
-    #[test]
-    #[ignore = "memory probe, run explicitly"]
-    fn bench_queue_covers_payload() {
-        let songs: Vec<crate::library::SongRow> = (0..20_000)
-            .map(|i| crate::library::SongRow {
-                id: format!("s{i}"),
-                title: format!("Track {i}"),
-                artist: Some("Radiohead".to_string()),
-                album: Some("Kid A".to_string()),
-                album_id: Some(format!("al{}", i % 2000)),
-                track: Some((i % 10) as i32 + 1),
-                duration: Some(180 + i % 120),
-                cover_art: Some(format!("c{}", i % 2000)),
-                starred: None,
-            })
-            .collect();
-        let covers: HashMap<String, String> = (0..2000)
-            .map(|i| (format!("c{i}"), format!("file:///covers/c{i}.jpg")))
-            .collect();
-        let albums: HashMap<String, String> = (0..2000)
-            .map(|i| (format!("al{i}"), format!("c{i}")))
-            .collect();
-        let json = serde_json::json!({
-            "covers": &covers,
-            "albums": &albums,
-            "songs": &songs,
-        })
-        .to_string();
-
-        let envelope = QueueCoversEnvelope {
-            covers: &covers,
-            albums: &albums,
-            songs: &songs,
-        };
-        let (_, value_tree_peak) = crate::test_alloc::measure(|| {
-            serde_json::to_value(&envelope)
-                .expect("envelope value")
-                .to_string()
-        });
-        let (_, direct_peak) =
-            crate::test_alloc::measure(|| serde_json::to_string(&envelope).expect("envelope json"));
-        eprintln!(
-            "queue covers envelope (20k songs): direct {} KiB | Value tree {} KiB",
-            direct_peak / 1024,
-            value_tree_peak / 1024,
-        );
-        assert!(
-            direct_peak < value_tree_peak,
-            "the typed envelope must not build a Value tree first"
-        );
-
-        let (_, clone_peak) = crate::test_alloc::measure(|| {
-            let value: serde_json::Value = serde_json::from_str(&json).unwrap();
-            let covers: HashMap<String, String> =
-                serde_json::from_value(value["covers"].clone()).unwrap_or_default();
-            let albums: HashMap<String, String> =
-                serde_json::from_value(value["albums"].clone()).unwrap_or_default();
-            let songs: Vec<crate::library::SongRow> =
-                serde_json::from_value(value["songs"].clone()).unwrap_or_default();
-            covers.len() + albums.len() + songs.len()
-        });
-        let (_, typed_peak) = crate::test_alloc::measure(|| {
-            let payload: QueueCoversPayload = serde_json::from_str(&json).unwrap();
-            payload.covers.len() + payload.albums.len() + payload.songs.len()
-        });
-
-        eprintln!(
-            "queue covers payload (20k songs): typed {} KiB | Value + clones {} KiB",
-            typed_peak / 1024,
-            clone_peak / 1024,
-        );
-        assert!(
-            typed_peak < clone_peak,
-            "direct deserialization must beat the Value tree plus subtree clones"
-        );
-    }
-
-    /// The queue stream must publish exactly the roles the drawer paints
-    /// (QR-4) and the live favourite flag, without the old `Value` tree.
-    #[test]
-    fn queue_rows_stream_the_published_shape() {
-        let track = crate::player::Track {
-            id: "s1".to_string(),
-            title: "Everything In Its Right Place".to_string(),
-            artist: "Radiohead".to_string(),
-            album: "Kid A".to_string(),
-            album_id: "al1".to_string(),
-            favorite: true,
-            duration: 240.0,
-            url: "https://server/stream?id=s1".to_string(),
-            cover_art: "cov1".to_string(),
-            cover_url: "file:///c.jpg".to_string(),
-        };
-        let starred: std::collections::HashSet<String> = ["s1".to_string()].into_iter().collect();
-        let rows = QueueRows {
-            queue: std::slice::from_ref(&track),
-            starred: &starred,
-        };
-
-        let parsed: serde_json::Value =
-            serde_json::from_str(&serde_json::to_string(&rows).unwrap()).unwrap();
-        assert_eq!(parsed[0]["id"], "s1");
-        assert_eq!(parsed[0]["title"], "Everything In Its Right Place");
-        assert_eq!(parsed[0]["album_id"], "al1");
-        assert_eq!(parsed[0]["starred"], true);
-        assert_eq!(parsed[0]["duration"], 240.0);
-        assert_eq!(parsed[0]["cover"], "file:///c.jpg");
-        assert!(
-            parsed[0].get("artist").is_none() && parsed[0].get("album").is_none(),
-            "QR-4: the drawer never painted subtitle roles"
-        );
     }
 }

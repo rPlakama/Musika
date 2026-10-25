@@ -398,7 +398,7 @@ pub(super) async fn selection_toggle(
 }
 
 /// True when every track of `album_id` is finished in the ledger.
-pub(super) async fn album_complete(dbs: &crate::db::Dbs, album_id: &str) -> bool {
+pub(crate) async fn album_complete(dbs: &crate::db::Dbs, album_id: &str) -> bool {
     let tracklist = crate::library::album_song_ids(&dbs.library, album_id)
         .await
         .unwrap_or_default();
@@ -537,61 +537,5 @@ pub(super) async fn downloaded_music_available() -> bool {
             .map(|counts| counts.done > 0)
             .unwrap_or(false),
         None => false,
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    async fn dbs() -> crate::db::Dbs {
-        let pool = crate::sqlite::memory_pool(None).await;
-        sqlx::raw_sql(
-            "CREATE TABLE songs (id TEXT PRIMARY KEY, album_id TEXT);
-             CREATE TABLE download (
-                 song_id TEXT PRIMARY KEY,
-                 state TEXT NOT NULL,
-                 error TEXT,
-                 rule_id TEXT,
-                 requested_at INTEGER NOT NULL DEFAULT 0,
-                 updated_at INTEGER NOT NULL DEFAULT 0
-             );",
-        )
-        .execute(&pool)
-        .await
-        .unwrap();
-        crate::db::Dbs {
-            credentials: pool.clone(),
-            library: pool.clone(),
-            search: pool.clone(),
-            covers: pool.clone(),
-            media: pool.clone(),
-            lyrics: pool.clone(),
-            colors: pool.clone(),
-            status: pool.clone(),
-            artist_user: pool.clone(),
-            download: pool.clone(),
-            playlist: pool,
-        }
-    }
-
-    #[tokio::test]
-    async fn album_completion_requires_every_track() {
-        let dbs = dbs().await;
-        sqlx::raw_sql("INSERT INTO songs (id, album_id) VALUES ('s1', 'a1'), ('s2', 'a1')")
-            .execute(&dbs.library)
-            .await
-            .unwrap();
-
-        crate::download::set_state(&dbs.download, "s1", crate::download::DONE, None)
-            .await
-            .unwrap();
-        assert!(!album_complete(&dbs, "a1").await);
-
-        crate::download::set_state(&dbs.download, "s2", crate::download::DONE, None)
-            .await
-            .unwrap();
-        assert!(album_complete(&dbs, "a1").await);
-        assert!(!album_complete(&dbs, "missing").await);
     }
 }

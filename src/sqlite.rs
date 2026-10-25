@@ -59,24 +59,6 @@ pub async fn save_credentials(
     Ok(())
 }
 
-#[cfg(test)]
-pub(crate) async fn memory_pool(
-    migrations: impl Into<Option<sqlx::migrate::Migrator>>,
-) -> SqlitePool {
-    use std::str::FromStr;
-
-    let options = sqlx::sqlite::SqliteConnectOptions::from_str("sqlite::memory:").unwrap();
-    let pool = sqlx::sqlite::SqlitePoolOptions::new()
-        .max_connections(1)
-        .connect_with(options)
-        .await
-        .unwrap();
-    if let Some(migrations) = migrations.into() {
-        migrations.run(&pool).await.unwrap();
-    }
-    pool
-}
-
 pub async fn load_credentials(pool: &SqlitePool) -> Result<Option<Credentials>> {
     let row: Option<(String, String, String, String)> = sqlx::query_as(
         "SELECT username, password, serverURL, server_type

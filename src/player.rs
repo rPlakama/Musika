@@ -109,32 +109,32 @@ impl State {
 
 /// A failed `end-file` for the UI thread to act on (Q-5).
 #[derive(Debug, Clone)]
-struct ErrorInfo {
+pub(crate) struct ErrorInfo {
     /// mpv's `file_error` string ("loading failed", …).
-    message: String,
+    pub(crate) message: String,
     /// `true` when the file had already produced media (`position > 0`):
     /// mid-track failures advance, load failures retry.
-    played: bool,
+    pub(crate) played: bool,
 }
 
 /// Snapshot of mpv state, written by the reader thread and read by the UI.
 #[derive(Debug, Default)]
-struct Shared {
-    position: f64,
-    duration: f64,
-    paused: bool,
+pub(crate) struct Shared {
+    pub(crate) position: f64,
+    pub(crate) duration: f64,
+    pub(crate) paused: bool,
     /// The current entry's file loaded successfully (`file-loaded`).
-    loaded: bool,
+    pub(crate) loaded: bool,
     /// mpv playlist index of the playing entry (`-1`/`None` when idle).
-    playlist_pos: Option<i64>,
+    pub(crate) playlist_pos: Option<i64>,
     /// mpv entered idle mode (end of the window).
-    idle: bool,
+    pub(crate) idle: bool,
     /// Set once per failed `end-file`, consumed by [`Player::pump`].
-    error: Option<ErrorInfo>,
+    pub(crate) error: Option<ErrorInfo>,
     /// `true` between issuing a load and mpv reporting `start-file`.
     /// While set, `end-file` events belong to the file we deliberately
     /// replaced and must not advance the queue (fast skip/previous races).
-    pending_load: bool,
+    pub(crate) pending_load: bool,
 }
 
 impl Shared {
@@ -155,7 +155,7 @@ const RETRY_BACKOFF: Duration = Duration::from_secs(1);
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(3);
 
 /// FIX-1/FIX-11: outcome of [`Player::ensure_ready`].
-enum Ready {
+pub(crate) enum Ready {
     /// The IPC socket is connected; commands can flow.
     Connected,
     /// mpv is spawned (or resurrected from the previous attempt); its socket
@@ -172,35 +172,35 @@ pub struct Player {
     /// `Arc`, and only a real row mutation pays for the deep copy. The queue
     /// can hold the whole library, so a full clone just to serialize one
     /// payload was the expensive part.
-    queue: Arc<Vec<Track>>,
-    index: usize,
-    state: State,
-    child: Option<Child>,
-    ipc: Option<UnixStream>,
-    socket: Option<PathBuf>,
-    shared: Arc<Mutex<Shared>>,
-    request_id: i64,
-    fallback_duration: f64,
-    volume: f64,
-    muted: bool,
+    pub(crate) queue: Arc<Vec<Track>>,
+    pub(crate) index: usize,
+    pub(crate) state: State,
+    pub(crate) child: Option<Child>,
+    pub(crate) ipc: Option<UnixStream>,
+    pub(crate) socket: Option<PathBuf>,
+    pub(crate) shared: Arc<Mutex<Shared>>,
+    pub(crate) request_id: i64,
+    pub(crate) fallback_duration: f64,
+    pub(crate) volume: f64,
+    pub(crate) muted: bool,
     /// Queue index of mpv playlist entry 0; `index - window_base` is the
     /// current entry's playlist position. Fixed between rebuilds.
-    window_base: usize,
+    pub(crate) window_base: usize,
     /// Entries currently in the mpv playlist.
-    window_len: usize,
+    pub(crate) window_len: usize,
     /// Retries already spent on the current load (Q-5).
-    retries: u32,
+    pub(crate) retries: u32,
     /// When the next retry is due (backoff between attempts).
-    retry_at: Option<Instant>,
+    pub(crate) retry_at: Option<Instant>,
     /// FIX-11: when the current deferred connect attempt times out; `None`
     /// once connected or reaped.
-    connect_deadline: Option<Instant>,
+    pub(crate) connect_deadline: Option<Instant>,
     /// FIX-11: `play_current` is waiting for the socket; rebuild on the pump.
-    deferred_start: bool,
+    pub(crate) deferred_start: bool,
     /// Row revision (QUEUEROWSTUDY QR-1): bumped by every mutation of the
     /// queue's rows, so `emit_queue` can skip its O(N) clone/read/serialize
     /// when only the index moved (a skip or an advance).
-    revision: u64,
+    pub(crate) revision: u64,
 }
 
 impl Default for Player {
@@ -309,7 +309,7 @@ impl Player {
         self.muted
     }
 
-    fn shared(&self) -> std::sync::MutexGuard<'_, Shared> {
+    pub(crate) fn shared(&self) -> std::sync::MutexGuard<'_, Shared> {
         self.shared.lock().unwrap()
     }
 
@@ -385,7 +385,7 @@ impl Player {
     /// connect was pending, `pause`/`seek` commands were dropped with no
     /// socket — replay that intent after the rebuild, so a restored session
     /// still comes up paused at its saved playhead instead of autoplaying.
-    fn finish_deferred_start(&mut self) {
+    pub(crate) fn finish_deferred_start(&mut self) {
         let paused = self.state == State::Paused;
         let position = self.shared().position;
         self.deferred_start = false;
@@ -415,7 +415,11 @@ impl Player {
         self.retries = 0;
         self.retry_at = None;
 
-        self.command(vec![json!("loadfile"), json!(track.url.clone()), json!("replace")]);
+        self.command(vec![
+            json!("loadfile"),
+            json!(track.url.clone()),
+            json!("replace"),
+        ]);
         self.push_metadata(&track);
         self.set_property("pause", json!(false));
         self.state = State::Playing;
@@ -661,10 +665,7 @@ impl Player {
         }
         let end = self.window_base + self.window_len;
         let crosses = (from < self.window_base) != (to < self.window_base);
-        let touched = crosses
-            || [from, to]
-                .iter()
-                .any(|&i| i >= self.window_base && i < end);
+        let touched = crosses || [from, to].iter().any(|&i| i >= self.window_base && i < end);
         if touched {
             let position = self.position();
             let paused = self.state == State::Paused;
@@ -861,7 +862,7 @@ impl Player {
     /// FIX-1: reaps a spawned mpv whose IPC socket never came up (or was
     /// replaced by a later attempt), so a retried start cannot orphan the
     /// process and its reader thread.
-    fn reap_child(&mut self) {
+    pub(crate) fn reap_child(&mut self) {
         if let Some(mut child) = self.child.take() {
             // mpv shuts down cleanly on TERM; `child.kill()` would SIGKILL it.
             signal(child.id(), sys::SIGTERM);
@@ -882,7 +883,7 @@ impl Player {
     /// SIGKILL, where Drop never runs): PR_SET_PDEATHSIG in `pre_exec`, no
     /// supervisor shell. PDEATHSIG follows the spawning thread, and
     /// `ensure_ready` runs on the Qt thread, which lives for the process.
-    fn ensure_ready(&mut self) -> Ready {
+    pub(crate) fn ensure_ready(&mut self) -> Ready {
         if self.ipc.is_some() {
             return Ready::Connected;
         }
@@ -1001,7 +1002,7 @@ impl Player {
         self.set_muted(self.muted);
     }
 
-    fn command(&mut self, args: Vec<Value>) -> bool {
+    pub(crate) fn command(&mut self, args: Vec<Value>) -> bool {
         self.request_id += 1;
         let message = json!({ "command": args, "request_id": self.request_id });
         let mut line = message.to_string();
@@ -1037,7 +1038,7 @@ fn signal(pid: u32, signal: std::ffi::c_int) {
 /// from bouncing back into a track the user already moved away from. A
 /// `file_error` is kept for [`Player::pump`] instead of acted on here;
 /// `stop` (our own skip) is ignored, mpv's playlist moves on by itself.
-fn apply_event(shared: &mut Shared, value: &Value) {
+pub(crate) fn apply_event(shared: &mut Shared, value: &Value) {
     match value.get("event").and_then(Value::as_str) {
         Some("property-change") => {
             let data = value.get("data");
@@ -1094,260 +1095,5 @@ fn apply_event(shared: &mut Shared, value: &Value) {
             shared.idle = true;
         }
         _ => {}
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn stale_end_file_does_not_record_an_error_while_a_load_is_pending() {
-        let mut shared = Shared {
-            pending_load: true,
-            ..Shared::default()
-        };
-        apply_event(
-            &mut shared,
-            &serde_json::json!({ "event": "end-file", "reason": "stop" }),
-        );
-        apply_event(
-            &mut shared,
-            &serde_json::json!({ "event": "end-file", "reason": "error", "file_error": "loading failed" }),
-        );
-        assert!(shared.error.is_none());
-    }
-
-    #[test]
-    fn start_file_clears_pending_and_the_stale_position() {
-        let mut shared = Shared {
-            position: 42.0,
-            duration: 200.0,
-            paused: true,
-            loaded: true,
-            idle: true,
-            pending_load: true,
-            ..Shared::default()
-        };
-        apply_event(&mut shared, &serde_json::json!({ "event": "start-file" }));
-        assert_eq!(shared.position, 0.0);
-        assert_eq!(shared.duration, 0.0);
-        assert!(!shared.loaded);
-        assert!(!shared.idle);
-        assert!(!shared.pending_load);
-    }
-
-    #[test]
-    fn stop_never_records_an_error_but_a_failure_does() {
-        let mut shared = Shared::default();
-        apply_event(&mut shared, &serde_json::json!({ "event": "start-file" }));
-        apply_event(
-            &mut shared,
-            &serde_json::json!({ "event": "end-file", "reason": "stop" }),
-        );
-        assert!(shared.error.is_none());
-
-        apply_event(&mut shared, &serde_json::json!({ "event": "start-file" }));
-        apply_event(
-            &mut shared,
-            &serde_json::json!({ "event": "end-file", "reason": "error", "file_error": "loading failed" }),
-        );
-        let error = shared.error.take().expect("error recorded");
-        assert_eq!(error.message, "loading failed");
-        assert!(!error.played, "a failed load never produced media");
-    }
-
-    #[test]
-    fn an_error_after_playback_is_marked_as_played() {
-        let mut shared = Shared::default();
-        apply_event(&mut shared, &serde_json::json!({ "event": "start-file" }));
-        apply_event(
-            &mut shared,
-            &serde_json::json!({ "event": "property-change", "name": "time-pos", "data": 7.5 }),
-        );
-        apply_event(
-            &mut shared,
-            &serde_json::json!({ "event": "end-file", "reason": "error", "file_error": "I/O error" }),
-        );
-        let error = shared.error.take().expect("error recorded");
-        assert!(error.played);
-    }
-
-    #[test]
-    fn playlist_pos_and_idle_are_mirrored() {
-        let mut shared = Shared::default();
-        apply_event(
-            &mut shared,
-            &serde_json::json!({ "event": "property-change", "name": "playlist-pos", "data": 1 }),
-        );
-        assert_eq!(shared.playlist_pos, Some(1));
-        apply_event(&mut shared, &serde_json::json!({ "event": "file-loaded" }));
-        assert!(shared.loaded);
-        apply_event(&mut shared, &serde_json::json!({ "event": "idle" }));
-        assert!(shared.idle);
-    }
-
-    fn track(id: &str) -> Track {
-        Track {
-            id: id.to_string(),
-            title: id.to_string(),
-            artist: String::new(),
-            album: String::new(),
-            album_id: String::new(),
-            favorite: false,
-            duration: 1.0,
-            url: String::new(),
-            cover_art: String::new(),
-            cover_url: String::new(),
-        }
-    }
-
-    #[test]
-    fn append_extends_the_queue_without_moving_the_cursor() {
-        let mut player = Player::new();
-        player.append(vec![track("s1"), track("s2")]);
-        assert_eq!(player.len(), 2);
-        assert_eq!(player.index(), 0);
-        assert_eq!(player.current().map(|t| t.id.as_str()), Some("s1"));
-        player.append(vec![track("s3")]);
-        assert_eq!(player.len(), 3);
-        assert_eq!(player.index(), 0);
-    }
-
-    #[test]
-    fn request_ids_increase_by_one_per_command() {
-        let mut player = Player::new();
-        player.command(vec![json!("stop")]);
-        player.command(vec![json!("stop")]);
-        assert_eq!(player.request_id, 2);
-    }
-
-    /// The publisher takes an `Arc` snapshot, so an emit no longer deep-copies
-    /// the whole queue. A row mutation while the snapshot is alive must leave
-    /// the published rows untouched; afterwards the buffer is unique again and
-    /// the next mutation edits it in place.
-    #[test]
-    fn a_queue_snapshot_is_copy_on_write() {
-        let mut player = Player::new();
-        player.append(vec![track("s0"), track("s1"), track("s2")]);
-        let snapshot = player.queue_snapshot();
-        assert!(Arc::ptr_eq(&snapshot, &player.queue));
-
-        player.insert_many(0, vec![track("x")]);
-        assert_eq!(snapshot.len(), 3, "the snapshot keeps its own row set");
-        assert_eq!(player.len(), 4);
-        assert!(!Arc::ptr_eq(&snapshot, &player.queue), "mutation copied");
-
-        drop(snapshot);
-        let buffer = Arc::as_ptr(&player.queue);
-        player.append(vec![track("z")]);
-        assert_eq!(
-            Arc::as_ptr(&player.queue),
-            buffer,
-            "with no reader left, a mutation reuses the buffer"
-        );
-    }
-
-    /// FIX-11 regression: `load_paused` pauses while the socket is still
-    /// connecting (the command is dropped). Resolving the deferred start
-    /// must not autoplay the restored queue.
-    #[test]
-    fn a_deferred_paused_start_stays_paused() {
-        let mut player = Player::new();
-        player.queue = Arc::new(vec![track("s1")]);
-        player.deferred_start = true;
-        player.state = State::Paused;
-        player.finish_deferred_start();
-        assert_eq!(player.state(), State::Paused);
-        assert!(!player.deferred_start);
-    }
-
-    /// FIX-11 regression: a seek issued while connecting (restored playhead)
-    /// survives the deferred rebuild.
-    #[test]
-    fn a_deferred_start_keeps_the_pending_playhead() {
-        let mut player = Player::new();
-        player.queue = Arc::new(vec![track("s1")]);
-        player.deferred_start = true;
-        player.state = State::Playing;
-        player.shared().position = 42.0;
-        player.finish_deferred_start();
-        assert_eq!(player.state(), State::Playing);
-        assert_eq!(player.position(), 42.0);
-    }
-
-    #[test]
-    fn remove_many_drops_the_selection_and_keeps_the_current_track() {
-        let mut player = Player::new();
-        player.queue = Arc::new((0..=5).map(|i| track(&format!("s{i}"))).collect());
-        player.index = 0;
-        // Unsorted, with a duplicate and an out-of-range index: four rows
-        // actually leave the queue.
-        assert_eq!(player.remove_many(&[5, 2, 1, 4, 1, 9]), 4);
-        assert_eq!(player.len(), 2);
-        assert_eq!(player.current().map(|t| t.id.as_str()), Some("s0"));
-        assert_eq!(player.index(), 0);
-        assert_eq!(player.remove_many(&[1]), 1);
-        assert_eq!(player.len(), 1);
-        assert_eq!(player.remove_many(&[1, 9]), 0, "nothing valid to remove");
-        assert_eq!(player.remove_many(&[0]), 1);
-        assert!(player.queue.is_empty());
-        assert_eq!(player.state(), State::Stopped);
-    }
-
-    fn ids(player: &Player) -> Vec<&str> {
-        player.queue().iter().map(|track| track.id.as_str()).collect()
-    }
-
-    /// VI-8a: inserting above the current track shifts its index with it;
-    /// the insert point clamps to the queue length.
-    #[test]
-    fn paste_above_the_current_track_keeps_it_current() {
-        let mut player = Player::new();
-        player.queue = Arc::new(vec![track("s0"), track("s1"), track("s2")]);
-        player.index = 1;
-        player.insert_many(0, vec![track("x"), track("y")]);
-        assert_eq!(player.index(), 3);
-        assert_eq!(player.current().map(|t| t.id.as_str()), Some("s1"));
-        player.insert_many(99, vec![track("z")]);
-        assert_eq!(ids(&player), ["x", "y", "s0", "s1", "s2", "z"]);
-        assert_eq!(player.index(), 3);
-        player.insert_many(0, Vec::new());
-        assert_eq!(player.len(), 6, "an empty clipboard is a no-op");
-    }
-
-    /// FIX-1: reaping takes ownership of the spawned child (TERM + wait)
-    /// and clears the recorded socket, so a retried start cannot orphan
-    /// the process.
-    #[test]
-    fn reap_child_takes_the_child_and_the_down() {
-        let mut player = Player::new();
-        player.child = Some(Command::new("sleep").arg("1").spawn().unwrap());
-        player.socket = Some(PathBuf::from("/tmp/nonexistent-musika.sock"));
-        player.connect_deadline = Some(Instant::now() + Duration::from_secs(1));
-        player.reap_child();
-        assert!(player.child.is_none());
-        assert!(player.socket.is_none());
-        assert!(player.connect_deadline.is_none());
-    }
-
-    /// FIX-11: while the socket is coming up the start defers instead of
-    /// sleeping on the caller; the same calendar retry never re-spawns,
-    /// and `stop` during the deferral aborts the start.
-    #[test]
-    fn stop_during_a_deferred_start_aborts_it() {
-        let mut player = Player::new();
-        // Spawn mpv (connect pending) without connecting.
-        if !matches!(player.ensure_ready(), Ready::Connecting) {
-            return; // mpv not testable here; the live verify covers it.
-        }
-        player.state = State::Playing;
-        player.deferred_start = true;
-        player.stop();
-        assert!(player.child.is_some(), "stop reuses the spawned child");
-        assert!(!player.deferred_start);
-        assert_eq!(player.state(), State::Stopped);
-        player.pump();
-        assert_eq!(player.state(), State::Stopped);
     }
 }

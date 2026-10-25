@@ -59,7 +59,13 @@ pub async fn init() -> Result<Dbs> {
         false,
     )
     .await?;
-    let media = open_migrated(media_path()?, 3, sqlx::migrate!("./migrations_media"), false).await?;
+    let media = open_migrated(
+        media_path()?,
+        3,
+        sqlx::migrate!("./migrations_media"),
+        false,
+    )
+    .await?;
     absorb_legacy(&library, &media).await?;
     // Search gets its own connections over the same library file: a slow or
     // cancelled query can never occupy the writer's pool (the search box
@@ -129,10 +135,7 @@ async fn absorb_legacy(library: &SqlitePool, media: &SqlitePool) -> Result<()> {
     let mut conn = media.acquire().await?;
     let media_legacy = [
         (covers_path()?, &["covers"][..]),
-        (
-            lyrics_path()?,
-            &["lyrics", "lyric_line", "lyrics_meta"][..],
-        ),
+        (lyrics_path()?, &["lyrics", "lyric_line", "lyrics_meta"][..]),
         (download_path()?, &["download"][..]),
     ];
     for (path, tables) in &media_legacy {
@@ -297,8 +300,8 @@ pub async fn wipe_files(dbs: &Dbs) -> Result<()> {
     }
     let dir = config_dir()?;
     let socket = crate::ipc::socket_path();
-    let entries = std::fs::read_dir(&dir)
-        .with_context(|| format!("failed to list {}", dir.display()))?;
+    let entries =
+        std::fs::read_dir(&dir).with_context(|| format!("failed to list {}", dir.display()))?;
     for entry in entries.flatten() {
         let path = entry.path();
         if path == socket {
@@ -347,7 +350,7 @@ pub async fn wipe(dbs: &Dbs) -> Result<()> {
 /// Drops every user table in one database (virtual/FTS tables first, so their
 /// shadow tables fall with them; FK checks are off while DROP implicitly
 /// deletes rows).
-async fn wipe_pool(pool: &SqlitePool) -> Result<()> {
+pub(crate) async fn wipe_pool(pool: &SqlitePool) -> Result<()> {
     let mut conn = pool.acquire().await?;
     sqlx::query("PRAGMA foreign_keys = OFF")
         .execute(&mut *conn)
@@ -512,49 +515,4 @@ pub fn config_dir() -> Result<PathBuf> {
 
 fn non_empty_env(key: &str) -> Option<String> {
     std::env::var(key).ok().filter(|value| !value.is_empty())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn library_migrations_include_the_combined_schema() {
-        let migrations = sqlx::migrate!("./migrations_library");
-        assert!(
-            migrations
-                .iter()
-                .any(|migration| migration.version == 20261017000001)
-        );
-    }
-
-    #[tokio::test]
-    async fn wipe_pool_drops_every_table_and_migrations_rebuild_them() {
-        let pool = crate::sqlite::memory_pool(sqlx::migrate!("./migrations_library")).await;
-        sqlx::query("INSERT INTO artists (id, name) VALUES ('a', 'A')")
-            .execute(&pool)
-            .await
-            .unwrap();
-
-        wipe_pool(&pool).await.unwrap();
-        let tables: i64 = sqlx::query_scalar(
-            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'",
-        )
-        .fetch_one(&pool)
-        .await
-        .unwrap();
-        assert_eq!(tables, 0);
-
-        // Re-migrating yields the empty schema again (the wipe path's second
-        // half): tables exist, rows are gone.
-        sqlx::migrate!("./migrations_library")
-            .run(&pool)
-            .await
-            .unwrap();
-        let artists: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM artists")
-            .fetch_one(&pool)
-            .await
-            .unwrap();
-        assert_eq!(artists, 0);
-    }
 }

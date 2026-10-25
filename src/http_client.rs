@@ -21,8 +21,8 @@ use serde::Deserialize;
 use serde::de::DeserializeOwned;
 use std::sync::OnceLock;
 
-const API_VERSION: &str = "1.16.1";
-const CLIENT_NAME: &str = "musika";
+pub(crate) const API_VERSION: &str = "1.16.1";
+pub(crate) const CLIENT_NAME: &str = "musika";
 
 /// One process-wide reqwest client: every `SubsonicClient` shares its
 /// connection pool and TLS session cache. Cloning a reqwest client is a
@@ -276,13 +276,13 @@ pub(crate) fn server_info(body: &serde_json::Value) -> ServerInfo {
 }
 
 #[derive(Debug, Deserialize)]
-struct Envelope<T> {
+pub(crate) struct Envelope<T> {
     #[serde(rename = "subsonic-response")]
-    response: SubsonicResponse<T>,
+    pub(crate) response: SubsonicResponse<T>,
 }
 
 #[derive(Debug, Deserialize)]
-struct SubsonicResponse<T> {
+pub(crate) struct SubsonicResponse<T> {
     status: String,
     #[serde(default)]
     error: Option<SubsonicError>,
@@ -291,7 +291,7 @@ struct SubsonicResponse<T> {
 }
 
 impl<T> SubsonicResponse<T> {
-    fn into_result(self) -> Result<T> {
+    pub(crate) fn into_result(self) -> Result<T> {
         if self.status.eq_ignore_ascii_case("ok") {
             return Ok(self.body);
         }
@@ -338,122 +338,9 @@ fn generate_salt() -> String {
     format!("{:x}", crate::consts::now_nanos())
 }
 
-fn md5_token(password: &str, salt: &str) -> String {
+pub(crate) fn md5_token(password: &str, salt: &str) -> String {
     let mut hasher = Hasher::new(MessageDigest::md5()).expect("openssl md5");
     hasher.update(password.as_bytes()).expect("openssl md5");
     hasher.update(salt.as_bytes()).expect("openssl md5");
     crate::hex::encode(hasher.finish().expect("openssl md5"))
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn endpoint_url_has_auth_and_extra_params() {
-        let client = SubsonicClient::new("navidrome.example.com/", "alice", "secret");
-        let url = client
-            .endpoint_url("getArtists", &[("musicFolderId", "1".to_string())])
-            .unwrap();
-
-        assert_eq!(url.scheme(), "https");
-        assert_eq!(url.path(), "/rest/getArtists.view");
-
-        let query: std::collections::HashMap<_, _> = url.query_pairs().into_owned().collect();
-        assert_eq!(query.get("u").unwrap(), "alice");
-        assert_eq!(query.get("v").unwrap(), API_VERSION);
-        assert_eq!(query.get("c").unwrap(), CLIENT_NAME);
-        assert_eq!(query.get("f").unwrap(), "json");
-        assert_eq!(query.get("musicFolderId").unwrap(), "1");
-        assert!(query.contains_key("t") && query.contains_key("s"));
-    }
-
-    #[test]
-    fn token_is_md5_of_password_plus_salt() {
-        let expected = openssl::hash::hash(MessageDigest::md5(), b"secretabc").unwrap();
-        assert_eq!(md5_token("secret", "abc"), crate::hex::encode(expected));
-    }
-
-    #[test]
-    fn ok_envelope_yields_body() {
-        let envelope: Envelope<serde_json::Value> =
-            serde_json::from_str(r#"{"subsonic-response":{"status":"ok","version":"1.16.1"}}"#)
-                .unwrap();
-        assert!(envelope.response.into_result().is_ok());
-    }
-
-    #[test]
-    fn failed_envelope_surfaces_server_message() {
-        let envelope: Envelope<serde_json::Value> = serde_json::from_str(
-            r#"{"subsonic-response":{"status":"failed","error":{"code":40,"message":"Wrong username or password"}}}"#,
-        )
-        .unwrap();
-
-        let err = envelope.response.into_result().unwrap_err();
-        assert!(err.to_string().contains("Wrong username or password"));
-    }
-
-    #[test]
-    fn auth_code_without_message_still_maps_to_credentials_error() {
-        let envelope: Envelope<serde_json::Value> = serde_json::from_str(
-            r#"{"subsonic-response":{"status":"failed","error":{"code":40}}}"#,
-        )
-        .unwrap();
-
-        let err = envelope.response.into_result().unwrap_err();
-        assert!(err.to_string().contains("Wrong username or password"));
-    }
-
-    #[test]
-    fn other_errors_are_not_masked_as_auth_failures() {
-        let envelope: Envelope<serde_json::Value> = serde_json::from_str(
-            r#"{"subsonic-response":{"status":"failed","error":{"code":70}}}"#,
-        )
-        .unwrap();
-
-        let err = envelope.response.into_result().unwrap_err();
-        assert!(err.to_string().contains("code 70"));
-        assert!(!err.to_string().contains("username"));
-    }
-
-    /// The download path streams the body to a file instead of collecting it:
-    /// a multi-chunk body must arrive intact and the byte count must match.
-    #[tokio::test]
-    async fn media_download_streams_chunks_to_the_target_file() {
-        use std::io::{Read, Write};
-
-        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind loopback");
-        let addr = listener.local_addr().expect("local addr");
-        let body: Vec<u8> = (0..200_000).map(|index| (index % 251) as u8).collect();
-        let served = body.clone();
-        let server = std::thread::spawn(move || {
-            let (mut socket, _) = listener.accept().expect("accept");
-            let mut request = [0u8; 4096];
-            let _ = socket.read(&mut request);
-            let head = format!(
-                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nContent-Type: application/octet-stream\r\nConnection: close\r\n\r\n",
-                served.len()
-            );
-            socket.write_all(head.as_bytes()).expect("head");
-            for chunk in served.chunks(16 * 1024) {
-                socket.write_all(chunk).expect("chunk");
-            }
-            socket.flush().expect("flush");
-        });
-
-        let dir = std::env::temp_dir().join(format!("musika-download-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).expect("temp dir");
-        let dest = dir.join("song.part");
-
-        let client = SubsonicClient::new(&format!("http://{addr}"), "alice", "secret");
-        let written = client
-            .download_media_to("song-1", &dest)
-            .await
-            .expect("stream the body");
-        server.join().expect("server thread");
-
-        assert_eq!(written as usize, body.len());
-        assert_eq!(std::fs::read(&dest).expect("read back"), body);
-        let _ = std::fs::remove_dir_all(dir);
-    }
 }

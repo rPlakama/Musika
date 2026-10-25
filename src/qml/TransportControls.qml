@@ -50,6 +50,13 @@ RowLayout {
         // Off keeps the slot but is visually absent; the click and Ctrl-R
         // still cycle it.
         opacity: Backend.repeatMode === 0 ? 0.0 : 1.0
+        Behavior on opacity {
+            NumberAnimation {
+                duration: Theme.motion.quick
+                easing.type: Easing.Bezier
+                easing.bezierCurve: Theme.ease.standard
+            }
+        }
         onClicked: Backend.cycleRepeat()
 
         Icon {
@@ -107,6 +114,9 @@ RowLayout {
     // Press feedback: fires for keyboard, mouse and IPC alike.
     Connections {
         target: Backend
+        function onRepeatModeChanged() {
+            repeatButton.press();
+        }
         function onTrackSkipped(forward) {
             if (forward)
                 nextButton.press();

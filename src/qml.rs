@@ -666,7 +666,7 @@ impl Backend {
     fn login_required(&mut self);
     #[qsignal]
     fn playback_state_changed(&mut self);
-    #[qsignal]
+    #[qsignal(qml_name = "repeatModeChanged")]
     fn repeat_mode_changed(&mut self);
     /// The playhead jumped (a seek, not playback progression): the lyrics
     /// follower drops its manual-scroll hold and re-centres at once (LYR-8).

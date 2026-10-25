@@ -90,6 +90,8 @@ impl Backend {
     }
 
     pub(super) fn startup_impl(&mut self) {
+        #[cfg(debug_assertions)]
+        crate::debug_info::since_start("qml.completed");
         let album_order =
             crate::library::effective_order(&crate::library::ORDERS, &self.album_order, 0)
                 .to_string();

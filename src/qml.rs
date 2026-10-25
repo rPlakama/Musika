@@ -724,6 +724,14 @@ impl Backend {
     fn startup(&mut self) {
         self.startup_impl();
     }
+
+    /// Debug only: the first rendered frame (no-op in release).
+    #[qslot(qml_name = "frontendReady")]
+    fn frontend_ready(&mut self) {
+        #[cfg(debug_assertions)]
+        crate::debug_info::since_start("frontend.ready");
+    }
+
     #[qslot(qml_name = "prefillCredentials")]
     fn prefill_credentials(&mut self, server_url: String, username: String, password: String) {
         self.remember_account(server_url, username);
@@ -1358,8 +1366,19 @@ impl Backend {
         let order = crate::library::effective_order(&crate::library::ORDERS, &self.album_order, 0)
             .to_string();
         let offline = self.offline;
+        #[cfg(debug_assertions)]
+        let started = std::time::Instant::now();
         self.spawn_data("albums", move |dbs| async move {
-            load_albums_json(&dbs, &artist, &order, offline).await
+            let payload = load_albums_json(&dbs, &artist, &order, offline).await?;
+            #[cfg(debug_assertions)]
+            {
+                let rows = serde_json::from_str::<serde_json::Value>(&payload)
+                    .ok()
+                    .and_then(|value| value.as_array().map(Vec::len))
+                    .unwrap_or(0);
+                crate::debug_info::albums_loaded(started, rows, payload.len());
+            }
+            Ok(payload)
         });
     }
 

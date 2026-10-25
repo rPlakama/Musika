@@ -27,6 +27,9 @@ mod covers;
 mod crypto;
 mod db;
 mod debug;
+#[cfg(debug_assertions)]
+#[path = "test/debug.rs"]
+mod debug_info;
 mod digest;
 mod download;
 mod fanout;
@@ -186,6 +189,9 @@ fn main() {
         return;
     }
 
+    #[cfg(debug_assertions)]
+    crate::debug_info::start();
+
     load_dotenv();
 
     if std::env::var("QSG_RHI_BACKEND").is_err() {
@@ -194,6 +200,8 @@ fn main() {
         }
     }
 
+    #[cfg(debug_assertions)]
+    let db_started = std::time::Instant::now();
     let dbs = match crate::app::runtime().block_on(db::init()) {
         Ok(dbs) => dbs,
         Err(err) => {
@@ -201,6 +209,8 @@ fn main() {
             std::process::exit(1);
         }
     };
+    #[cfg(debug_assertions)]
+    crate::debug_info::report("db.init", db_started);
     crate::app::set_dbs(dbs);
 
     let mut app = QApp::new();
@@ -211,6 +221,11 @@ fn main() {
     app.application_name("musika")
         .register::<qml::Backend>()
         .register::<palette::Palette>()
-        .load_qml_from_file("qrc:/app/qml/Main.qml")
-        .run();
+        .load_qml_from_file("qrc:/app/qml/Main.qml");
+    #[cfg(debug_assertions)]
+    {
+        crate::debug_info::since_start("qml.loaded");
+        crate::debug_info::print_diagnostics();
+    }
+    app.run();
 }

@@ -30,6 +30,15 @@ ApplicationWindow {
     color: Palette.background
     title: qsTr("Musika")
 
+    // Debug only: report the first paint, then stay quiet.
+    property bool frontendReadySent: false
+    onAfterRendering: {
+        if (!frontendReadySent) {
+            frontendReadySent = true;
+            Backend.frontendReady();
+        }
+    }
+
     // P-6: the session debounce cannot be awaited during teardown, so the
     // backend does one synchronous last-chance write (own DB, single row).
     onClosing: Backend.flushStatus()

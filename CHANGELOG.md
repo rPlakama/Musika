@@ -7,6 +7,10 @@ open work; this file is the release history.
 
 All commits since `v0.4.4`:
 
+- `9b84550` Show transient action badges in the lower-right corner
+- `ac54f0a` Keep q immediate and quit after the bye animation
+- `4db7c34` Shut down as soon as the bye animation ends
+- `42fa90e` Add an elegant qq shutdown
 - `07501e2` Scale search rows to their available height
 - `092f7ee` Log idle transitions in debug builds
 - `504e32c` Pace idle frames while the window is unfocused

@@ -17,19 +17,21 @@
 //! Shared content digests: one MD5 implementation for cache names and the
 //! Subsonic token.
 
+use anyhow::Result;
 use openssl::hash::{Hasher, MessageDigest};
 
 /// Lowercase hex MD5 of one byte slice.
-pub(crate) fn md5_hex(bytes: impl AsRef<[u8]>) -> String {
-    crate::hex::encode(
-        openssl::hash::hash(MessageDigest::md5(), bytes.as_ref()).expect("openssl md5"),
-    )
+pub(crate) fn md5_hex(bytes: impl AsRef<[u8]>) -> Result<String> {
+    Ok(crate::hex::encode(openssl::hash::hash(
+        MessageDigest::md5(),
+        bytes.as_ref(),
+    )?))
 }
 
 /// The Subsonic authentication token: hex MD5 of `password + salt`.
-pub(crate) fn md5_token(password: &str, salt: &str) -> String {
-    let mut hasher = Hasher::new(MessageDigest::md5()).expect("openssl md5");
-    hasher.update(password.as_bytes()).expect("openssl md5");
-    hasher.update(salt.as_bytes()).expect("openssl md5");
-    crate::hex::encode(hasher.finish().expect("openssl md5"))
+pub(crate) fn md5_token(password: &str, salt: &str) -> Result<String> {
+    let mut hasher = Hasher::new(MessageDigest::md5())?;
+    hasher.update(password.as_bytes())?;
+    hasher.update(salt.as_bytes())?;
+    Ok(crate::hex::encode(hasher.finish()?))
 }

@@ -242,7 +242,7 @@ pub(crate) async fn store_in_dir(
 ) -> Result<PathBuf> {
     let file = format!(
         "{}.{}",
-        crate::digest::md5_hex(song_id.as_bytes()),
+        crate::digest::md5_hex(song_id.as_bytes())?,
         extension
     );
     let final_path = dir.join(&file);
@@ -342,7 +342,7 @@ pub async fn set_rule(pool: &SqlitePool, kind: &str, ref_id: &str) -> Result<Str
     if let Some(rule) = rule_for(pool, kind, ref_id).await? {
         return Ok(rule.id);
     }
-    let id = format!("{kind}-{}", crate::digest::md5_hex(ref_id.as_bytes()));
+    let id = format!("{kind}-{}", crate::digest::md5_hex(ref_id.as_bytes())?);
     sqlx::query(
         "INSERT INTO media_rule (id, kind, ref_id, created_at)
          VALUES (?1, ?2, ?3, ?4)

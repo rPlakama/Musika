@@ -903,8 +903,8 @@ mod colors {
     #[test]
     fn seed_schemes_are_deterministic_and_serializable() {
         let seed = Rgb::new(58, 95, 205);
-        let first = from_seed(seed);
-        let second = from_seed(seed);
+        let first = from_seed(seed).unwrap();
+        let second = from_seed(seed).unwrap();
         assert_eq!(first, second);
 
         let payload = first.to_json();
@@ -1148,18 +1148,18 @@ mod covers {
 
     #[test]
     fn md5_is_stable_and_distinct() {
-        assert_eq!(md5_hex(b"same"), md5_hex(b"same"));
-        assert_ne!(md5_hex(b"a"), md5_hex(b"b"));
+        assert_eq!(md5_hex(b"same").unwrap(), md5_hex(b"same").unwrap());
+        assert_ne!(md5_hex(b"a").unwrap(), md5_hex(b"b").unwrap());
     }
 
     #[test]
     fn raw_file_name_ends_the_upgrade_task() {
-        let file = cover_file_name("cov", "hash", "jpg");
+        let file = cover_file_name("cov", "hash", "jpg").unwrap();
         assert!(is_raw_file(&file));
         assert!(file.ends_with(".jpg"));
         // A second pass resolves the same canonical name, so the legacy
         // upgrade no longer forces an unconditional fetch.
-        assert_eq!(file, cover_file_name("cov", "hash", "jpg"));
+        assert_eq!(file, cover_file_name("cov", "hash", "jpg").unwrap());
         assert!(!is_raw_file("legacy-cover.jpg"));
     }
 
@@ -1667,7 +1667,10 @@ mod http_client {
     #[test]
     fn token_is_md5_of_password_plus_salt() {
         let expected = openssl::hash::hash(MessageDigest::md5(), b"secretabc").unwrap();
-        assert_eq!(md5_token("secret", "abc"), crate::hex::encode(expected));
+        assert_eq!(
+            md5_token("secret", "abc").unwrap(),
+            crate::hex::encode(expected)
+        );
     }
 
     #[test]
@@ -3146,7 +3149,7 @@ mod media {
         .await
         .expect("adopt");
 
-        let file = format!("{}.flac", md5_hex(b"s1"));
+        let file = format!("{}.flac", md5_hex(b"s1").unwrap());
         assert_eq!(path, dir.join(&file));
         assert!(!temp.exists(), "the .part is consumed by the rename");
         assert_eq!(std::fs::read(&path).expect("blob"), b"audio bytes");

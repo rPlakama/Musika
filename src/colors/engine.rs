@@ -25,7 +25,6 @@ use std::path::Path;
 
 use anyhow::{Context, Result};
 use material_colors::color::Rgb;
-use openssl::hash::MessageDigest;
 use sqlx::FromRow;
 use sqlx::sqlite::SqlitePool;
 
@@ -196,7 +195,7 @@ pub async fn fetch_into(
     let scheme =
         tokio::task::spawn_blocking(move || build_scheme(resolved.color, colorfulness, &knobs))
             .await
-            .context("palette task panicked")?;
+            .context("palette task panicked")??;
 
     store(pool, cover_art, cover_hash, &generator, &scheme).await?;
     Ok(scheme)
@@ -208,12 +207,12 @@ pub fn generate_from_path(path: &Path, options: &Options) -> Result<CoverScheme>
         Some(argb) => (super::rgb::from_argb(argb), 0.0),
         None => seed::extract(path, options.source)?,
     };
-    Ok(build_scheme(color, colorfulness, options))
+    Ok(build_scheme(color, colorfulness, options)?)
 }
 
 /// Convenience wrapper: Tonal Spot at standard contrast under the default
 /// spec (used by tests and any caller that wants a plain scheme).
-pub fn from_seed(seed: Rgb) -> CoverScheme {
+pub fn from_seed(seed: Rgb) -> Result<CoverScheme> {
     build_scheme(
         seed,
         0.0,
@@ -224,7 +223,7 @@ pub fn from_seed(seed: Rgb) -> CoverScheme {
     )
 }
 
-fn build_scheme(seed: Rgb, colorfulness: f64, options: &Options) -> CoverScheme {
+fn build_scheme(seed: Rgb, colorfulness: f64, options: &Options) -> Result<CoverScheme> {
     let (name, roles) = scheme::build(
         seed,
         options.variant,
@@ -232,13 +231,13 @@ fn build_scheme(seed: Rgb, colorfulness: f64, options: &Options) -> CoverScheme 
         options.contrast,
         options.spec,
     );
-    CoverScheme {
+    Ok(CoverScheme {
         scheme: name,
         seed: super::rgb::argb(seed),
         colorfulness,
-        role_hash: hash_roles(&roles),
+        role_hash: hash_roles(&roles)?,
         roles,
-    }
+    })
 }
 
 /// Drops the cached scheme for one cover, forcing the next request to
@@ -329,9 +328,7 @@ pub async fn purge_with(colors: &SqlitePool, covers: &SqlitePool) -> Result<usiz
 
 /// Canonical hash of a role map (BTreeMap → stable JSON → md5). The UI treats
 /// an unchanged hash as "no work".
-pub fn hash_roles(roles: &BTreeMap<String, String>) -> String {
-    let canonical = serde_json::to_string(roles).unwrap_or_default();
-    crate::hex::encode(
-        openssl::hash::hash(MessageDigest::md5(), canonical.as_bytes()).expect("openssl md5"),
-    )
+pub fn hash_roles(roles: &BTreeMap<String, String>) -> Result<String> {
+    let canonical = serde_json::to_string(roles)?;
+    crate::digest::md5_hex(canonical.as_bytes())
 }

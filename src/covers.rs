@@ -283,12 +283,12 @@ pub(crate) async fn apply_fetched(
                 return Ok(());
             };
 
-            let hash = crate::digest::md5_hex(&bytes);
+            let hash = crate::digest::md5_hex(&bytes)?;
             // Content-suffixed: changed art gets a new file/URL, so the UI
             // can never keep painting the previous image at the old path
             // (the cover id is not guaranteed to change with it). The raw
             // prefix also marks the source resolution.
-            let file = cover_file_name(id, &hash, extension);
+            let file = cover_file_name(id, &hash, extension)?;
 
             if let Some(old) = known.get(id)
                 && old.hash.as_deref() == Some(hash.as_str())
@@ -570,12 +570,12 @@ pub(crate) fn store_art(
 
 /// Canonical content-suffixed cover filename. The raw prefix is what makes the
 /// one-shot legacy upgrade terminate: once written, the next pass sees it.
-pub(crate) fn cover_file_name(id: &str, hash: &str, extension: &str) -> String {
-    format!(
+pub(crate) fn cover_file_name(id: &str, hash: &str, extension: &str) -> Result<String> {
+    Ok(format!(
         "{RAW_PREFIX}{}.{}",
-        crate::digest::md5_hex(format!("{id}\0{hash}").as_bytes()),
+        crate::digest::md5_hex(format!("{id}\0{hash}").as_bytes())?,
         extension
-    )
+    ))
 }
 
 pub(crate) fn is_raw_file(name: &str) -> bool {

@@ -75,7 +75,7 @@ impl SubsonicClient {
     /// `<method>.view` (for example `hls.m3u8`).
     pub fn resource_url(&self, resource: &str, params: &[(&str, String)]) -> Result<Url> {
         let salt = generate_salt();
-        let token = md5_token(&self.password, &salt);
+        let token = md5_token(&self.password, &salt)?;
 
         let mut url = Url::parse(&format!("{}/rest/{resource}", self.base))
             .with_context(|| format!("Invalid server URL: {}", self.base))?;
@@ -337,6 +337,6 @@ fn generate_salt() -> String {
     format!("{:x}", crate::consts::now_nanos())
 }
 
-pub(crate) fn md5_token(password: &str, salt: &str) -> String {
+pub(crate) fn md5_token(password: &str, salt: &str) -> anyhow::Result<String> {
     crate::digest::md5_token(password, salt)
 }

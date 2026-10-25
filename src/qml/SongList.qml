@@ -30,6 +30,11 @@ MediaList {
     property int _nextOffset: 0
     property bool _allLoaded: false
     property bool _loadingPage: false
+    property bool _edgeTargetBottom: false
+
+    // `G` on the paged Songs list finishes the tail, then lands on the true
+    // last row instead of the last loaded one.
+    edgeJumpOverride: function(last, count) { root.jumpToEdge(last, count); }
 
     title: "Songs"
     orderText: Backend.songOrder
@@ -39,6 +44,7 @@ MediaList {
         root.loading = true;
         root._allLoaded = false;
         root._loadingPage = true;
+        root._edgeTargetBottom = false;
         root._nextOffset = 0;
         // UI-54: preload through the remembered cursor so `restore()` lands on
         // the same row; beyond that, pages stream in on demand.
@@ -91,16 +97,45 @@ MediaList {
             root.loadMore();
         else if (!root._allLoaded && root.count > 0 && root.currentIndex >= root.count - 20)
             root.loadMore();
+        if (root._edgeTargetBottom) {
+            if (root._allLoaded) {
+                root._edgeTargetBottom = false;
+                root.land(root.count - 1);
+            } else {
+                root.loadMore(root.pageSize * 4);
+            }
+        }
     }
 
-    function loadMore() {
+    function loadMore(limit) {
         if (root._allLoaded || root._loadingPage)
             return;
         root._loadingPage = true;
-        Backend.requestSongsPage(root._nextOffset, root.pageSize);
+        var size = limit === undefined ? root.pageSize : Math.max(root.pageSize, limit);
+        Backend.requestSongsPage(root._nextOffset, size);
+    }
+
+    /// `G` on a paged list: finish the tail, then land on the real last row.
+    function jumpToEdge(last, count) {
+        if (count !== undefined && count > 1) {
+            root.land(Math.min(count, root.count) - 1);
+            return;
+        }
+        if (!last) {
+            root.land(0);
+            return;
+        }
+        if (root._allLoaded) {
+            root.land(root.count - 1);
+            return;
+        }
+        root._edgeTargetBottom = true;
+        root.loadMore(root.pageSize * 4);
     }
 
     onCursorMoved: (index) => {
+        if (root._edgeTargetBottom && index < root.count - 1)
+            root._edgeTargetBottom = false;
         if (index >= root.count - 20)
             root.loadMore();
     }

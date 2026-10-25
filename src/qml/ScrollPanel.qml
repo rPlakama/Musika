@@ -98,6 +98,9 @@ Rectangle {
     readonly property alias firstVisibleIndex: content.firstVisibleIndex
     readonly property alias lastVisibleIndex: content.lastVisibleIndex
     readonly property alias visibleRowCount: content.visibleRowCount
+    /// `G` on a paged list can finish the tail before landing on the true
+    /// last row; null keeps the shared instant edge jump.
+    property var edgeJumpOverride: null
     /// Escape hatch for surfaces that need the view itself (lyrics follow).
     /// ARC-UI-3: the body can swap list ⇄ grid, so the alias is read-only.
     readonly property alias view: content.view
@@ -257,6 +260,11 @@ Rectangle {
         return content.moveStep(action);
     }
 
+    /// Instant landing used by paged hosts that finish loading an edge first.
+    function land(index) {
+        content.land(index);
+    }
+
     // Shared cursor grammar: j/k, gg/G, Enter; unknown actions go to
     // `actionHandler` (search columns, queue reorder, …). Cursor moves are
     // followed by the view itself (ScrollContent highlight machinery); gg/G
@@ -299,8 +307,13 @@ Rectangle {
         else if (action === "move_up" || action === "move_down"
                 || action === "move_left" || action === "move_right")
             content.moveStep(action, steps);
-        else if (action === "top" || action === "bottom")
+        else if (action === "top" || action === "bottom") {
+            if (root.edgeJumpOverride) {
+                root.edgeJumpOverride(action === "bottom", steps);
+                return;
+            }
             content.edgeJump(action === "bottom", steps);
+        }
         else if (action === "enter")
             root.activate();
         else if (root.actionHandler)

@@ -308,10 +308,13 @@ Rectangle {
             root.albumActivated(album.albumId, album.title, album.artist, album.year, album.tracks, album.cover, album.starred === true);
     }
 
-    /// Tab scope over the header chips (same ring as the status bar): 0
-    /// download, 1 shuffle, 2 favorite. -1 returns Enter to the album grid;
-    /// any grid move drops the ring back there.
+    /// Header Tab stops: title, biography, then the chips (0 download,
+    /// 1 shuffle, 2 favorite). -1 returns Enter to the album grid; any
+    /// grid move drops the ring back there.
     property int chipScope: -1
+    /// Tab stops above the chips: the artist title and the biography.
+    property bool onTitle: false
+    property bool onDescription: false
 
     function toggleCache() {
         root.artistCacheOn = !root.artistCacheOn;
@@ -334,6 +337,24 @@ Rectangle {
             root.toggleFavorite();
     }
 
+    /// Tab order: title -> biography -> download -> shuffle -> favourite.
+    function cycleHeader(step) {
+        var i = root.onTitle ? 0 : (root.onDescription ? 1 : (root.chipScope >= 0 ? root.chipScope + 2 : -1));
+        if (i < 0)
+            i = 0;
+        i = (i + step + 5) % 5;
+        root.onTitle = i === 0;
+        root.onDescription = i === 1;
+        root.chipScope = i >= 2 ? i - 2 : -1;
+    }
+
+    function scrollDescription(delta) {
+        if (!descriptionView)
+            return;
+        var max = Math.max(0, descriptionView.contentHeight - descriptionView.height);
+        descriptionView.contentY = Math.max(0, Math.min(max, descriptionView.contentY + delta));
+    }
+
     /// The shuffle chip: a time-seeded album rotation of this artist,
     /// queued and played from its head (the backend's seeded walk).
     function shuffle() {
@@ -350,7 +371,9 @@ Rectangle {
     function moveWithinGrid(action) {
         if (!wall.moveWithinGrid(action))
             return false;
-        // Moving the wall ends the header chip scope (Enter opens albums).
+        // Moving the wall ends every header stop (Enter opens albums).
+        root.onTitle = false;
+        root.onDescription = false;
         root.chipScope = -1;
         return true;
     }
@@ -361,11 +384,28 @@ Rectangle {
     // where it was opened from).
     function handleAction(action) {
         if (action === "pane_cycle" || action === "pane_cycle_back") {
-            // Tab cycles the header chips (Download → Shuffle → Favorite);
-            // Shift+Tab walks the same circle backwards.
-            var step = action === "pane_cycle" ? 1 : 2;
-            root.chipScope = (root.chipScope + step) % 3;
+            root.cycleHeader(action === "pane_cycle" ? 1 : 4);
             return;
+        }
+        if (root.onDescription) {
+            if (action === "move_up" || action === "move_down") {
+                var line = Math.max(12, descriptionText.font.pixelSize * descriptionText.lineHeight);
+                root.scrollDescription(action === "move_up" ? -line : line);
+                return;
+            }
+            if (action === "page_up" || action === "page_down") {
+                root.scrollDescription(action === "page_up"
+                    ? -descriptionView.height * 0.9 : descriptionView.height * 0.9);
+                return;
+            }
+            if (action === "enter")
+                return;
+            root.onDescription = false;
+        }
+        if (root.onTitle) {
+            if (action === "enter")
+                return;
+            root.onTitle = false;
         }
         if (action === "enter" && root.chipScope >= 0) {
             root.activateChip();
@@ -451,22 +491,6 @@ Rectangle {
         anchors.margins: root.width * 0.02
         spacing: root.height * 0.02
 
-        // Toolbar: back.
-        RowLayout {
-            Layout.fillWidth: true
-            spacing: root.width * 0.02
-
-            ExitChip {
-                host: root
-                label: "ESC/Q"
-                onClicked: root.back()
-            }
-
-            Item {
-                Layout.fillWidth: true
-            }
-        }
-
         // Header, AlbumEntry style: the artist art is the page ambience and
         // the identity gets the full width, anchored at the top.
         ColumnLayout {
@@ -479,12 +503,18 @@ Rectangle {
                 spacing: root.height * 0.006
 
                 FadeText {
+                    id: artistTitle
                     Layout.fillWidth: true
                     text: root.artistName
                     color: Palette.onSurface
                     font.pixelSize: root.height * 0.04
                     font.bold: true
                     elide: Text.ElideRight
+
+                    ScopeRing {
+                        anchors.fill: parent
+                        shown: root.onTitle
+                    }
                 }
 
                 StarRating {
@@ -576,6 +606,7 @@ Rectangle {
                             unit: parent.height * 0.42
                             starred: root.artistStarred
                             rating: root.artistRating
+                            showCount: false
                         }
 
                         ScopeRing {
@@ -584,17 +615,57 @@ Rectangle {
                     }
                 }
 
-                // The biography is the header's fineprint band; long copy
-                // elides instead of squeezing the wall below.
-                FadeText {
+                // The biography is Tab-selectable and scrolls in place; the wall
+                // below keeps its space even for a long text.
+                Item {
+                    id: descriptionBox
                     Layout.fillWidth: true
-                    text: root.descriptionText
-                    color: Palette.onSurfaceVariant
-                    font.pixelSize: root.height * 0.02
-                    lineHeight: 1.25
-                    wrapMode: Text.WordWrap
-                    maximumLineCount: 4
-                    elide: Text.ElideRight
+                    Layout.preferredHeight: root.height * 0.22
+                    clip: true
+
+                    Flickable {
+                        id: descriptionView
+                        anchors.fill: parent
+                        contentWidth: width
+                        contentHeight: descriptionText.implicitHeight
+                        boundsBehavior: Flickable.StopAtBounds
+                        interactive: contentHeight > height
+                        clip: true
+
+                        FadeText {
+                            id: descriptionText
+                            width: descriptionView.width
+                            text: root.descriptionText
+                            color: Palette.onSurfaceVariant
+                            font.pixelSize: root.height * 0.02
+                            lineHeight: 1.25
+                            wrapMode: Text.WordWrap
+                            maximumLineCount: 0
+                            elide: Text.ElideNone
+                        }
+                    }
+
+                    ScopeRing {
+                        anchors.fill: parent
+                        shown: root.onDescription
+                    }
+
+                    HoverHandler {
+                        cursorShape: Qt.PointingHandCursor
+                    }
+                    TapHandler {
+                        onTapped: {
+                            root.onTitle = false;
+                            root.chipScope = -1;
+                            root.onDescription = true;
+                        }
+                    }
+                    WheelHandler {
+                        onWheel: (wheel) => {
+                            root.scrollDescription(-wheel.angleDelta.y);
+                            wheel.accepted = true;
+                        }
+                    }
                 }
             }
         }

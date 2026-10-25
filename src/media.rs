@@ -30,7 +30,6 @@ use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
-use openssl::hash::MessageDigest;
 use sqlx::sqlite::SqlitePool;
 
 /// Playback-tier blob: fetched around the current queue, purgeable.
@@ -241,7 +240,11 @@ pub(crate) async fn store_in_dir(
     extension: &str,
     rule_id: Option<&str>,
 ) -> Result<PathBuf> {
-    let file = format!("{}.{}", md5_hex(song_id.as_bytes()), extension);
+    let file = format!(
+        "{}.{}",
+        crate::digest::md5_hex(song_id.as_bytes()),
+        extension
+    );
     let final_path = dir.join(&file);
     let previous = get(pool, song_id).await?;
 
@@ -339,7 +342,7 @@ pub async fn set_rule(pool: &SqlitePool, kind: &str, ref_id: &str) -> Result<Str
     if let Some(rule) = rule_for(pool, kind, ref_id).await? {
         return Ok(rule.id);
     }
-    let id = format!("{kind}-{}", md5_hex(ref_id.as_bytes()));
+    let id = format!("{kind}-{}", crate::digest::md5_hex(ref_id.as_bytes()));
     sqlx::query(
         "INSERT INTO media_rule (id, kind, ref_id, created_at)
          VALUES (?1, ?2, ?3, ?4)
@@ -574,10 +577,6 @@ fn remove_temp_files(dir: &std::path::Path) {
     }
 }
 
-pub(crate) fn md5_hex(bytes: &[u8]) -> String {
-    crate::hex::encode(openssl::hash::hash(MessageDigest::md5(), bytes).expect("openssl md5"))
-}
-
 /// The cached paths for only `ids`, in bounded batches: a play action never
 /// walks the whole media cache.
 pub async fn path_map_of(pool: &SqlitePool, ids: &[String]) -> Result<HashMap<String, PathBuf>> {
@@ -592,7 +591,7 @@ pub async fn path_map_of(pool: &SqlitePool, ids: &[String]) -> Result<HashMap<St
         return Ok(HashMap::new());
     }
     let mut map = HashMap::with_capacity(unique.len());
-    for chunk in unique.chunks(500) {
+    for chunk in unique.chunks(crate::cache::IN_BATCH) {
         let mut builder =
             sqlx::QueryBuilder::new("SELECT song_id, kind, file FROM media WHERE song_id IN (");
         crate::cache::push_in_list_refs(&mut builder, chunk);

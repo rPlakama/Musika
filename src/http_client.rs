@@ -15,7 +15,6 @@
 // along with this program; if not, see <https://www.gnu.org/licenses/>.
 
 use anyhow::{Context, Result, bail};
-use openssl::hash::{Hasher, MessageDigest};
 use reqwest::Url;
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
@@ -339,8 +338,5 @@ fn generate_salt() -> String {
 }
 
 pub(crate) fn md5_token(password: &str, salt: &str) -> String {
-    let mut hasher = Hasher::new(MessageDigest::md5()).expect("openssl md5");
-    hasher.update(password.as_bytes()).expect("openssl md5");
-    hasher.update(salt.as_bytes()).expect("openssl md5");
-    crate::hex::encode(hasher.finish().expect("openssl md5"))
+    crate::digest::md5_token(password, salt)
 }

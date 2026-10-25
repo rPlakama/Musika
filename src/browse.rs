@@ -23,61 +23,6 @@ use std::collections::{HashMap, HashSet};
 
 use serde::ser::{Serialize, SerializeSeq, SerializeStruct, Serializer};
 
-/// CACHE-9: the offline catalog. Only songs whose download finished are
-/// listable (and therefore playable) while the server is unreachable; albums
-/// and artists survive only through their downloaded songs.
-pub(crate) struct OfflineFilter {
-    songs: HashSet<String>,
-    albums: HashMap<String, i64>,
-    artists: HashMap<String, i64>,
-}
-
-/// PATH-12: the offline catalog is the same for every payload between
-/// ledger changes; a short TTL coalesces paging/search bursts, and download
-/// settles clear it eagerly.
-static OFFLINE_FILTER: std::sync::OnceLock<
-    std::sync::Mutex<Option<(std::time::Instant, std::sync::Arc<OfflineFilter>)>>,
-> = std::sync::OnceLock::new();
-const OFFLINE_FILTER_TTL: std::time::Duration = std::time::Duration::from_secs(2);
-
-pub(crate) fn clear_offline_filter() {
-    if let Some(cache) = OFFLINE_FILTER.get() {
-        *cache.lock().unwrap_or_else(|error| error.into_inner()) = None;
-    }
-}
-
-/// `None` while online; the downloaded set while offline.
-async fn offline_filter(
-    dbs: &crate::db::Dbs,
-    offline: bool,
-) -> anyhow::Result<Option<std::sync::Arc<OfflineFilter>>> {
-    if !offline {
-        return Ok(None);
-    }
-    let cache = OFFLINE_FILTER.get_or_init(|| std::sync::Mutex::new(None));
-    {
-        let guard = cache.lock().unwrap_or_else(|error| error.into_inner());
-        if let Some((at, filter)) = guard.as_ref()
-            && at.elapsed() < OFFLINE_FILTER_TTL
-        {
-            return Ok(Some(std::sync::Arc::clone(filter)));
-        }
-    }
-    let Some(songs) = crate::download::offline_song_ids(dbs, offline).await? else {
-        return Ok(None);
-    };
-    let ids: Vec<String> = songs.iter().cloned().collect();
-    let (albums, artists) = crate::library::downloaded_owners(&dbs.library, &ids).await?;
-    let filter = std::sync::Arc::new(OfflineFilter {
-        songs,
-        albums,
-        artists,
-    });
-    *cache.lock().unwrap_or_else(|error| error.into_inner()) =
-        Some((std::time::Instant::now(), std::sync::Arc::clone(&filter)));
-    Ok(Some(filter))
-}
-
 pub async fn load_albums_json(
     dbs: &crate::db::Dbs,
     artist: &str,
@@ -86,15 +31,12 @@ pub async fn load_albums_json(
 ) -> anyhow::Result<String> {
     let filter = (!artist.is_empty()).then_some(artist);
     let mut albums = crate::library::albums(&dbs.library, filter, order).await?;
-    let offline = offline_filter(dbs, offline).await?;
+    let offline = crate::offline::load(dbs, offline).await?;
     if let Some(offline) = &offline {
-        albums.retain(|album| offline.albums.contains_key(&album.id));
+        albums.retain(|album| offline.contains_album(&album.id));
     }
-    let cover_ids: Vec<String> = albums
-        .iter()
-        .filter_map(|album| album.cover_art.clone())
-        .collect();
-    let covers = crate::covers::url_map_of(dbs, &cover_ids).await?;
+    let covers =
+        crate::covers::url_map_for(dbs, albums.iter().map(|album| &album.cover_art)).await?;
     // Stream the sequence straight into the payload string: the old
     // `Vec<Value>` built one object/map per row (with its own key and value
     // allocations) before serializing it a second time.
@@ -116,14 +58,10 @@ pub async fn load_songs_page_json(
     let has_more = songs.len() as i64 > limit;
     songs.truncate(limit.max(0) as usize);
     let returned = songs.len() as i64;
-    if let Some(filter) = offline_filter(dbs, offline).await? {
-        songs.retain(|song| filter.songs.contains(&song.id));
+    if let Some(filter) = crate::offline::load(dbs, offline).await? {
+        songs.retain(|song| filter.contains_song(&song.id));
     }
-    let cover_ids: Vec<String> = songs
-        .iter()
-        .filter_map(|song| song.cover_art.clone())
-        .collect();
-    let covers = crate::covers::url_map_of(dbs, &cover_ids).await?;
+    let covers = crate::covers::url_map_for(dbs, songs.iter().map(|song| &song.cover_art)).await?;
     Ok(serde_json::to_string(&SongsPage {
         offset,
         next: offset + returned,
@@ -139,14 +77,10 @@ pub async fn load_album_songs_json(
     offline: bool,
 ) -> anyhow::Result<String> {
     let mut songs = crate::library::album_songs(&dbs.library, album_id).await?;
-    if let Some(filter) = offline_filter(dbs, offline).await? {
-        songs.retain(|song| filter.songs.contains(&song.id));
+    if let Some(filter) = crate::offline::load(dbs, offline).await? {
+        songs.retain(|song| filter.contains_song(&song.id));
     }
-    let cover_ids: Vec<String> = songs
-        .iter()
-        .filter_map(|song| song.cover_art.clone())
-        .collect();
-    let covers = crate::covers::url_map_of(dbs, &cover_ids).await?;
+    let covers = crate::covers::url_map_for(dbs, songs.iter().map(|song| &song.cover_art)).await?;
     song_rows_json(&songs, &covers)
 }
 
@@ -156,15 +90,12 @@ pub async fn load_artists_json(
     offline: bool,
 ) -> anyhow::Result<String> {
     let mut artists = crate::library::artists(&dbs.library, order).await?;
-    let filter = offline_filter(dbs, offline).await?;
+    let filter = crate::offline::load(dbs, offline).await?;
     if let Some(filter) = &filter {
-        artists.retain(|artist| filter.artists.contains_key(&artist.id));
+        artists.retain(|artist| filter.contains_artist(&artist.id));
     }
-    let cover_ids: Vec<String> = artists
-        .iter()
-        .filter_map(|artist| artist.cover_art.clone())
-        .collect();
-    let covers = crate::covers::url_map_of(dbs, &cover_ids).await?;
+    let covers =
+        crate::covers::url_map_for(dbs, artists.iter().map(|artist| &artist.cover_art)).await?;
     // UI-56: the artist favourite is the server flag ORed with the local
     // `artist_user` overlay (ARC-42), so both surfaces agree.
     let user_starred: std::collections::HashSet<String> =
@@ -193,15 +124,15 @@ pub async fn load_artist_json(
         return Ok(None);
     };
     let mut albums = crate::library::artist_albums(&dbs.library, id, order).await?;
-    let filter = offline_filter(dbs, offline).await?;
+    let filter = crate::offline::load(dbs, offline).await?;
     if let Some(filter) = &filter {
-        albums.retain(|album| filter.albums.contains_key(&album.id));
+        albums.retain(|album| filter.contains_album(&album.id));
     }
-    let cover_ids: Vec<String> = std::iter::once(artist.cover_art.clone())
-        .chain(albums.iter().map(|album| album.cover_art.clone()))
-        .flatten()
-        .collect();
-    let covers = crate::covers::url_map_of(dbs, &cover_ids).await?;
+    let covers = crate::covers::url_map_for(
+        dbs,
+        std::iter::once(&artist.cover_art).chain(albums.iter().map(|album| &album.cover_art)),
+    )
+    .await?;
     let user_starred: std::collections::HashSet<String> =
         crate::artist_user::starred_ids(&dbs.artist_user)
             .await?
@@ -210,11 +141,11 @@ pub async fn load_artist_json(
     let user_ratings = crate::artist_user::ratings(&dbs.artist_user).await?;
     let album_count = filter
         .as_ref()
-        .and_then(|filter| filter.artists.get(&artist.id).copied())
+        .and_then(|filter| filter.artist_count(&artist.id))
         .unwrap_or(artist.album_count);
     let page = ArtistPage {
         artist: &artist,
-        cover: cover_url_ref(artist.cover_art.as_deref(), &covers),
+        cover: crate::covers::url_for_ref(artist.cover_art.as_deref(), &covers),
         album_count,
         starred: artist.starred.is_some() || user_starred.contains(&artist.id),
         rating: user_ratings.get(&artist.id).copied().unwrap_or(0),
@@ -234,7 +165,7 @@ pub(crate) fn artist_json(
     starred: bool,
     rating: i64,
 ) -> serde_json::Value {
-    let cover = cover_url(artist.cover_art.as_deref(), covers);
+    let cover = crate::covers::url_for(artist.cover_art.as_deref(), covers);
     serde_json::json!({
         "id": artist.id,
         "name": artist.name,
@@ -252,7 +183,7 @@ pub(crate) fn album_json(
     covers: &HashMap<String, String>,
     song_count: Option<i64>,
 ) -> serde_json::Value {
-    let cover = cover_url(album.cover_art.as_deref(), covers);
+    let cover = crate::covers::url_for(album.cover_art.as_deref(), covers);
     let count = song_count.unwrap_or(album.song_count);
     serde_json::json!({
         "id": album.id,
@@ -304,13 +235,6 @@ pub(crate) fn song_json(
 // borrow-based `Serialize` views emit the same JSON straight into the output
 // buffer, so a list page costs the row vector + the final string.
 
-/// Borrowed cover URL for a row: the map's value or the empty string.
-pub(crate) fn cover_url_ref<'a>(id: Option<&str>, covers: &'a HashMap<String, String>) -> &'a str {
-    id.and_then(|id| covers.get(id))
-        .map(String::as_str)
-        .unwrap_or_default()
-}
-
 struct AlbumElement<'a> {
     album: &'a crate::library::AlbumRow,
     cover: &'a str,
@@ -338,7 +262,7 @@ pub(crate) struct AlbumSeq<'a> {
     pub(crate) albums: &'a [crate::library::AlbumRow],
     pub(crate) covers: &'a HashMap<String, String>,
     /// Offline track counts by album id, when the offline filter applies.
-    pub(crate) offline: Option<&'a OfflineFilter>,
+    pub(crate) offline: Option<&'a crate::offline::Filter>,
 }
 
 impl Serialize for AlbumSeq<'_> {
@@ -347,11 +271,11 @@ impl Serialize for AlbumSeq<'_> {
         for album in self.albums {
             let song_count = self
                 .offline
-                .and_then(|filter| filter.albums.get(&album.id).copied())
+                .and_then(|filter| filter.album_count(&album.id))
                 .unwrap_or(album.song_count);
             seq.serialize_element(&AlbumElement {
                 album,
-                cover: cover_url_ref(album.cover_art.as_deref(), self.covers),
+                cover: crate::covers::url_for_ref(album.cover_art.as_deref(), self.covers),
                 song_count,
             })?;
         }
@@ -383,7 +307,7 @@ impl Serialize for ArtistElement<'_> {
 pub(crate) struct ArtistSeq<'a> {
     pub(crate) artists: &'a [crate::library::ArtistRow],
     pub(crate) covers: &'a HashMap<String, String>,
-    pub(crate) offline: Option<&'a OfflineFilter>,
+    pub(crate) offline: Option<&'a crate::offline::Filter>,
     pub(crate) user_starred: &'a HashSet<String>,
     pub(crate) user_ratings: &'a HashMap<String, i64>,
 }
@@ -394,11 +318,11 @@ impl Serialize for ArtistSeq<'_> {
         for artist in self.artists {
             let album_count = self
                 .offline
-                .and_then(|filter| filter.artists.get(&artist.id).copied())
+                .and_then(|filter| filter.artist_count(&artist.id))
                 .unwrap_or(artist.album_count);
             seq.serialize_element(&ArtistElement {
                 artist,
-                cover: cover_url_ref(artist.cover_art.as_deref(), self.covers),
+                cover: crate::covers::url_for_ref(artist.cover_art.as_deref(), self.covers),
                 album_count,
                 starred: artist.starred.is_some() || self.user_starred.contains(&artist.id),
                 rating: self.user_ratings.get(&artist.id).copied().unwrap_or(0),
@@ -465,7 +389,7 @@ impl Serialize for SongSeq<'_> {
         for song in self.songs {
             seq.serialize_element(&SongElement {
                 song,
-                cover: cover_url_ref(song.cover_art.as_deref(), self.covers),
+                cover: crate::covers::url_for_ref(song.cover_art.as_deref(), self.covers),
             })?;
         }
         seq.end()
@@ -507,7 +431,7 @@ pub(crate) fn song_rows_json(
 
 /// Fetches an album's description text from the server (`getAlbumInfo2`).
 pub async fn album_notes(dbs: &crate::db::Dbs, album_id: &str) -> String {
-    let Ok(client) = crate::qml::client(dbs).await else {
+    let Ok(client) = crate::session::client(dbs).await else {
         return String::new();
     };
     match client.get_album_info2(album_id).await {
@@ -517,10 +441,6 @@ pub async fn album_notes(dbs: &crate::db::Dbs, album_id: &str) -> String {
             String::new()
         }
     }
-}
-
-pub(crate) fn cover_url(id: Option<&str>, covers: &HashMap<String, String>) -> String {
-    cover_url_ref(id, covers).to_string()
 }
 
 /// One song row in the search payload, independent of the engine that found
@@ -690,7 +610,7 @@ async fn search_value_fts(
     offline: bool,
     limit: usize,
 ) -> anyhow::Result<serde_json::Value> {
-    let filter = offline_filter(dbs, offline).await?;
+    let filter = crate::offline::load(dbs, offline).await?;
     let limit = limit.max(1);
     // Offline hits are filtered down to the downloaded catalog, so over-fetch
     // before truncating back to the rendered rows.
@@ -721,11 +641,11 @@ async fn search_value_fts(
         Some(filter) => (
             artists
                 .into_iter()
-                .filter(|artist| filter.artists.contains_key(&artist.id))
+                .filter(|artist| filter.contains_artist(&artist.id))
                 .collect(),
             albums
                 .into_iter()
-                .filter(|album| filter.albums.contains_key(&album.id))
+                .filter(|album| filter.contains_album(&album.id))
                 .collect(),
         ),
         None => (artists, albums),
@@ -733,7 +653,7 @@ async fn search_value_fts(
     artists.truncate(limit);
     albums.truncate(limit);
     if let Some(filter) = &filter {
-        songs.retain(|song| filter.songs.contains(&song.song_id));
+        songs.retain(|song| filter.contains_song(&song.song_id));
     }
     songs.truncate(limit);
 
@@ -777,7 +697,7 @@ pub(crate) async fn search_value_index(
     offline: bool,
     limit: usize,
 ) -> anyhow::Result<serde_json::Value> {
-    let filter = offline_filter(dbs, offline).await?;
+    let filter = crate::offline::load(dbs, offline).await?;
     let limit = limit.max(1);
     let fetch = if filter.is_some() { limit * 3 } else { limit };
     let cleaned = crate::search::clean_query(query);
@@ -825,9 +745,9 @@ pub(crate) async fn search_value_index(
         )
     };
     if let Some(filter) = &filter {
-        artists.retain(|artist| filter.artists.contains_key(&artist.id));
-        albums.retain(|album| filter.albums.contains_key(&album.id));
-        songs.retain(|song| filter.songs.contains(&song.id));
+        artists.retain(|artist| filter.contains_artist(&artist.id));
+        albums.retain(|album| filter.contains_album(&album.id));
+        songs.retain(|song| filter.contains_song(&song.id));
     }
     artists.truncate(limit);
     albums.truncate(limit);
@@ -841,7 +761,7 @@ pub(crate) async fn search_value_index(
             .map(|song| SearchSong::from_index(song))
             .collect();
         if let Some(filter) = &filter {
-            songs.retain(|song| filter.songs.contains(&song.id));
+            songs.retain(|song| filter.contains_song(&song.id));
         }
     }
     songs.truncate(limit);
@@ -922,7 +842,7 @@ async fn search_payload_value(
                 song.track,
                 song.duration,
                 None,
-                cover_url(song.cover_art.as_deref(), &covers),
+                crate::covers::url_for(song.cover_art.as_deref(), &covers),
                 song_starred.contains(&song.id),
             );
             value["play_count"] = serde_json::json!(song.play_count);

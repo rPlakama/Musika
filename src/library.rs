@@ -395,7 +395,7 @@ pub async fn album_states(
         return Ok(HashMap::new());
     }
     let mut states = HashMap::with_capacity(ids.len());
-    for chunk in ids.chunks(500) {
+    for chunk in ids.chunks(crate::cache::IN_BATCH) {
         let mut builder = sqlx::QueryBuilder::new(
             "SELECT id, CASE WHEN starred IS NOT NULL THEN 1 ELSE 0 END AS starred, rating
              FROM albums WHERE id IN (",
@@ -449,7 +449,7 @@ pub async fn album_covers_refs(
         return Ok(std::collections::HashMap::new());
     }
     let mut covers = std::collections::HashMap::new();
-    for chunk in album_ids.chunks(500) {
+    for chunk in album_ids.chunks(crate::cache::IN_BATCH) {
         let mut builder = sqlx::QueryBuilder::new(
             "SELECT id, cover_art FROM albums WHERE cover_art IS NOT NULL AND id IN (",
         );
@@ -471,7 +471,7 @@ pub async fn album_song_ids_of(
     }
     let mut grouped: std::collections::HashMap<String, Vec<String>> =
         std::collections::HashMap::new();
-    for chunk in album_ids.chunks(500) {
+    for chunk in album_ids.chunks(crate::cache::IN_BATCH) {
         let mut builder =
             sqlx::QueryBuilder::new("SELECT album_id, id FROM songs WHERE album_id IN (");
         crate::cache::push_in_list(&mut builder, chunk);
@@ -547,7 +547,7 @@ pub async fn existing_song_ids(
     ids: &[&str],
 ) -> Result<std::collections::HashSet<String>> {
     let mut existing = std::collections::HashSet::with_capacity(ids.len());
-    for chunk in ids.chunks(500) {
+    for chunk in ids.chunks(crate::cache::IN_BATCH) {
         let mut builder =
             sqlx::QueryBuilder::<sqlx::Sqlite>::new("SELECT id FROM songs WHERE id IN (");
         crate::cache::push_in_list_refs(&mut builder, chunk);
@@ -580,7 +580,7 @@ pub async fn downloaded_owners(
     let mut album_counts: HashMap<String, i64> = HashMap::new();
     let mut artist_albums: HashMap<String, HashSet<String>> = HashMap::new();
 
-    for chunk in song_ids.chunks(500) {
+    for chunk in song_ids.chunks(crate::cache::IN_BATCH) {
         let mut query =
             QueryBuilder::new("SELECT album_id, artist_id, COUNT(*) FROM songs WHERE id IN (");
         crate::cache::push_in_list(&mut query, chunk);

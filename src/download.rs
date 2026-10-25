@@ -144,7 +144,7 @@ pub async fn offline_song_ids(
 /// query; an empty window costs nothing.
 pub async fn done_ids_of(pool: &SqlitePool, ids: &[String]) -> Result<Vec<String>> {
     let mut out = Vec::new();
-    for chunk in ids.chunks(500) {
+    for chunk in ids.chunks(crate::cache::IN_BATCH) {
         let mut builder = sqlx::QueryBuilder::new(
             "SELECT song_id FROM download WHERE state = 'done' AND song_id IN (",
         );
@@ -162,7 +162,7 @@ pub async fn done_ids_of(pool: &SqlitePool, ids: &[String]) -> Result<Vec<String
 /// the loading glyph for these while the fetch runs.
 pub async fn pending_ids_of(pool: &SqlitePool, ids: &[String]) -> Result<Vec<String>> {
     let mut out = Vec::new();
-    for chunk in ids.chunks(500) {
+    for chunk in ids.chunks(crate::cache::IN_BATCH) {
         let mut builder = sqlx::QueryBuilder::new(
             "SELECT song_id FROM download WHERE state IN ('queued', 'active') AND song_id IN (",
         );

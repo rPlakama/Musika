@@ -26,6 +26,7 @@ mod common {
     pub use crate::api::{AlbumID3, ArtistID3, Child, LyricsList};
     pub use crate::consts::now_secs;
     pub use crate::db::Dbs;
+    pub(crate) use crate::digest::md5_hex;
     pub use crate::library::{AlbumRow, ArtistRow, SongSearchRow};
     pub use material_colors::color::Rgb;
     pub use material_colors::dynamic_color::{DynamicScheme, Platform, SpecVersion, Variant};
@@ -343,7 +344,7 @@ mod browse {
             songs[0].track,
             songs[0].duration,
             songs[0].suffix.as_deref(),
-            cover_url(songs[0].cover_art.as_deref(), &covers),
+            crate::covers::url_for(songs[0].cover_art.as_deref(), &covers),
             false,
         );
         assert_eq!(parsed, serde_json::json!([expected]));
@@ -4353,7 +4354,7 @@ mod queue {
                         duration: song.duration.unwrap_or(0) as f64,
                         url,
                         cover_art: song.cover_art.clone().unwrap_or_default(),
-                        cover_url: crate::browse::cover_url(song.cover_art.as_deref(), &covers),
+                        cover_url: crate::covers::url_for(song.cover_art.as_deref(), &covers),
                     }
                 })
                 .collect();
@@ -4441,13 +4442,17 @@ mod queue {
             .unwrap();
 
         let mut songs = vec![song_row("s1"), song_row("s2"), song_row("s3")];
-        filter_offline(&dbs, true, &mut songs).await.unwrap();
+        crate::offline::retain_songs(&dbs, true, &mut songs)
+            .await
+            .unwrap();
         assert_eq!(songs.len(), 1);
         assert_eq!(songs[0].id, "s1");
 
         // Online keeps everything.
         let mut songs = vec![song_row("s1"), song_row("s2")];
-        filter_offline(&dbs, false, &mut songs).await.unwrap();
+        crate::offline::retain_songs(&dbs, false, &mut songs)
+            .await
+            .unwrap();
         assert_eq!(songs.len(), 2);
     }
 

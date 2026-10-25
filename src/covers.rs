@@ -35,7 +35,6 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, LazyLock, Mutex, MutexGuard, PoisonError};
 
 use anyhow::{Context, Result};
-use openssl::hash::MessageDigest;
 use sqlx::FromRow;
 use sqlx::sqlite::SqlitePool;
 
@@ -284,7 +283,7 @@ pub(crate) async fn apply_fetched(
                 return Ok(());
             };
 
-            let hash = md5_hex(&bytes);
+            let hash = crate::digest::md5_hex(&bytes);
             // Content-suffixed: changed art gets a new file/URL, so the UI
             // can never keep painting the previous image at the old path
             // (the cover id is not guaranteed to change with it). The raw
@@ -569,16 +568,12 @@ pub(crate) fn store_art(
     Some((png, "png", Some("image/png".to_string())))
 }
 
-pub(crate) fn md5_hex(bytes: &[u8]) -> String {
-    crate::hex::encode(openssl::hash::hash(MessageDigest::md5(), bytes).expect("openssl md5"))
-}
-
 /// Canonical content-suffixed cover filename. The raw prefix is what makes the
 /// one-shot legacy upgrade terminate: once written, the next pass sees it.
 pub(crate) fn cover_file_name(id: &str, hash: &str, extension: &str) -> String {
     format!(
         "{RAW_PREFIX}{}.{}",
-        md5_hex(format!("{id}\0{hash}").as_bytes()),
+        crate::digest::md5_hex(format!("{id}\0{hash}").as_bytes()),
         extension
     )
 }
@@ -683,6 +678,31 @@ async fn run_thumb_batch(dir: &Path, jobs: Vec<(String, PathBuf)>) {
     while set.join_next().await.is_some() {}
 }
 
+/// The `file://` URL for one cover id, borrowed from the map.
+pub(crate) fn url_for_ref<'a>(id: Option<&str>, covers: &'a HashMap<String, String>) -> &'a str {
+    id.and_then(|id| covers.get(id))
+        .map(String::as_str)
+        .unwrap_or_default()
+}
+
+/// Owned twin of [`url_for_ref`] for payload builders.
+pub(crate) fn url_for(id: Option<&str>, covers: &HashMap<String, String>) -> String {
+    url_for_ref(id, covers).to_string()
+}
+
+/// Resolves a batch of optional cover ids without the caller re-collecting
+/// them: the one place list loaders and queue builders turn rows into URLs.
+pub(crate) async fn url_map_for<'a, I>(
+    dbs: &crate::db::Dbs,
+    ids: I,
+) -> Result<HashMap<String, String>>
+where
+    I: IntoIterator<Item = &'a Option<String>>,
+{
+    let ids: Vec<String> = ids.into_iter().flatten().cloned().collect();
+    url_map_of(dbs, &ids).await
+}
+
 /// Maps only the requested cover ids to `file://` URLs, in bounded batches.
 /// Payload loaders use this so a page's cost follows
 /// the page, never the whole cover cache.
@@ -697,11 +717,11 @@ pub async fn url_map_of(dbs: &crate::db::Dbs, ids: &[String]) -> Result<HashMap<
         .filter(|id| !map.contains_key(*id))
         .map(str::to_string)
         .collect();
-    if missing.is_empty() || !crate::qml::online() {
+    if missing.is_empty() || !crate::session::online() {
         return Ok(map);
     }
 
-    let Ok(client) = crate::qml::client(dbs).await else {
+    let Ok(client) = crate::session::client(dbs).await else {
         return Ok(map);
     };
     for id in &missing {
@@ -750,7 +770,7 @@ async fn cached_urls(pool: &SqlitePool, ids: &[String]) -> Result<HashMap<String
     let dir = crate::db::covers_dir()?;
     let mut map = HashMap::with_capacity(unique.len());
     let mut thumb_jobs: Vec<(String, PathBuf)> = Vec::new();
-    for chunk in unique.chunks(500) {
+    for chunk in unique.chunks(crate::cache::IN_BATCH) {
         let mut builder = sqlx::QueryBuilder::new("SELECT id, file FROM covers WHERE id IN (");
         crate::cache::push_in_list_refs(&mut builder, chunk);
         let rows: Vec<(String, String)> = builder.build_query_as().fetch_all(pool).await?;

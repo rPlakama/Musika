@@ -92,7 +92,7 @@ impl Serialize for TrackRows<'_> {
         let mut seq = serializer.serialize_seq(Some(self.songs.len()))?;
         for song in self.songs {
             let url = track_url(self.client, song, self.media).map_err(S::Error::custom)?;
-            let cover_url = crate::browse::cover_url_ref(song.cover_art.as_deref(), self.covers);
+            let cover_url = crate::covers::url_for_ref(song.cover_art.as_deref(), self.covers);
             seq.serialize_element(&TrackElement {
                 song,
                 url: &url,
@@ -105,24 +105,13 @@ impl Serialize for TrackRows<'_> {
 
 /// CACHE-9: while offline, only downloaded songs are playable — drop the
 /// rest from a queue that is about to be built.
-pub(crate) async fn filter_offline(
-    dbs: &crate::db::Dbs,
-    offline: bool,
-    songs: &mut Vec<crate::library::SongRow>,
-) -> anyhow::Result<()> {
-    if let Some(done) = crate::download::offline_song_ids(dbs, offline).await? {
-        songs.retain(|song| done.contains(&song.id));
-    }
-    Ok(())
-}
-
 pub async fn album_tracks_json(
     dbs: &crate::db::Dbs,
     album_id: &str,
     offline: bool,
 ) -> anyhow::Result<String> {
     let mut songs = crate::library::album_songs(&dbs.library, album_id).await?;
-    filter_offline(dbs, offline, &mut songs).await?;
+    crate::offline::retain_songs(dbs, offline, &mut songs).await?;
     tracks_json(dbs, songs).await
 }
 
@@ -145,7 +134,7 @@ pub async fn artist_shuffle_json(
     for album in &albums {
         songs.extend(crate::library::album_songs(&dbs.library, album).await?);
     }
-    filter_offline(dbs, offline, &mut songs).await?;
+    crate::offline::retain_songs(dbs, offline, &mut songs).await?;
     tracks_json(dbs, songs).await
 }
 
@@ -202,7 +191,7 @@ pub async fn shuffle_queue_json(
         // input order), never a query per unit.
         crate::library::songs_by_ids(&dbs.library, units).await?
     };
-    filter_offline(dbs, offline, &mut songs).await?;
+    crate::offline::retain_songs(dbs, offline, &mut songs).await?;
     tracks_json(dbs, songs).await
 }
 
@@ -229,7 +218,7 @@ pub async fn library_queue_payload(
     offline: bool,
 ) -> anyhow::Result<(String, usize)> {
     let mut songs = crate::library::all_songs(&dbs.library, order).await?;
-    filter_offline(dbs, offline, &mut songs).await?;
+    crate::offline::retain_songs(dbs, offline, &mut songs).await?;
     let start = library_start(&songs, song_id)?;
     Ok((tracks_json(dbs, songs).await?, start))
 }
@@ -274,7 +263,7 @@ pub async fn song_album_payload(
     };
     let Some(album_id) = song.album_id.as_deref().filter(|id| !id.is_empty()) else {
         let mut songs = vec![song];
-        filter_offline(dbs, offline, &mut songs).await?;
+        crate::offline::retain_songs(dbs, offline, &mut songs).await?;
         if songs.is_empty() {
             return Err(anyhow::anyhow!("song is not downloaded"));
         }
@@ -288,7 +277,7 @@ pub async fn song_album_payload(
     };
 
     let mut songs = crate::library::album_songs(&dbs.library, album_id).await?;
-    filter_offline(dbs, offline, &mut songs).await?;
+    crate::offline::retain_songs(dbs, offline, &mut songs).await?;
     let start = queue_start(&songs, &song.id);
     let queue = tracks_json(dbs, songs).await?;
 
@@ -335,7 +324,7 @@ pub async fn quick_tracks_json(
     offline: bool,
 ) -> anyhow::Result<String> {
     let mut songs = quick_songs(dbs, kind, id).await?;
-    filter_offline(dbs, offline, &mut songs).await?;
+    crate::offline::retain_songs(dbs, offline, &mut songs).await?;
     tracks_json(dbs, songs).await
 }
 
@@ -361,7 +350,7 @@ pub async fn quick_tracks_json_many(
     offline: bool,
 ) -> anyhow::Result<String> {
     let mut songs = quick_songs_many(dbs, kind, ids).await?;
-    filter_offline(dbs, offline, &mut songs).await?;
+    crate::offline::retain_songs(dbs, offline, &mut songs).await?;
     tracks_json(dbs, songs).await
 }
 
@@ -397,7 +386,7 @@ pub async fn album_artist_page_json(
         .ok_or_else(|| anyhow::anyhow!("artist not found in index"))?;
     let cover_ids: Vec<String> = artist.cover_art.clone().into_iter().collect();
     let covers = crate::covers::url_map_of(dbs, &cover_ids).await?;
-    let cover = crate::browse::cover_url(artist.cover_art.as_deref(), &covers);
+    let cover = crate::covers::url_for(artist.cover_art.as_deref(), &covers);
     Ok(serde_json::json!({
         "id": artist.id,
         "name": artist.name,
@@ -458,7 +447,7 @@ pub async fn resume_payload(
     let snapshot: Vec<String> = serde_json::from_str(&status.queue).unwrap_or_default();
     if !snapshot.is_empty() {
         let mut songs = crate::library::songs_by_ids(&dbs.library, &snapshot).await?;
-        filter_offline(dbs, offline, &mut songs).await?;
+        crate::offline::retain_songs(dbs, offline, &mut songs).await?;
         if !songs.is_empty() {
             let index = snapshot_start(&snapshot, &songs, status.queue_index);
             // No credentials yet (or a stream URL failure) degrades to just
@@ -481,7 +470,7 @@ pub async fn resume_payload(
                 Some(album_id) => crate::library::album_songs(&dbs.library, album_id).await?,
                 None => vec![song],
             };
-            filter_offline(dbs, offline, &mut songs).await?;
+            crate::offline::retain_songs(dbs, offline, &mut songs).await?;
             let index = queue_start(&songs, &song_id);
             match tracks_json(dbs, songs).await {
                 Ok(json) => {
@@ -508,12 +497,8 @@ async fn tracks_json(
     dbs: &crate::db::Dbs,
     songs: Vec<crate::library::SongRow>,
 ) -> anyhow::Result<String> {
-    let client = crate::qml::client(dbs).await?;
-    let cover_ids: Vec<String> = songs
-        .iter()
-        .filter_map(|song| song.cover_art.clone())
-        .collect();
-    let covers = crate::covers::url_map_of(dbs, &cover_ids).await?;
+    let client = crate::session::client(dbs).await?;
+    let covers = crate::covers::url_map_for(dbs, songs.iter().map(|song| &song.cover_art)).await?;
     let song_ids: Vec<String> = songs.iter().map(|song| song.id.clone()).collect();
     let media = crate::media::path_map_of(&dbs.media, &song_ids)
         .await

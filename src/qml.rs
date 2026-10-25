@@ -18,7 +18,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::LazyLock;
 use std::sync::Mutex;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use qtbridge::{QmlObject, qobject};
 use serde::ser::{Serialize, SerializeSeq, SerializeStruct, Serializer};
@@ -41,22 +41,14 @@ mod support;
 #[path = "qml_backend/sync.rs"]
 mod sync;
 
+use crate::session::client;
 use artist::{ArtistUserAction, apply_artist_user};
 use download::{
     album_container_off, album_container_on, apply_window, artist_covers_album, completed_album,
     download_one, downloaded_music_available, fetch_marked, rule_off, selection_toggle,
 };
-pub(crate) use support::client;
 use support::{album_cache_payload, album_state_payload, artist_cache_payload, emit, raise};
 use sync::{index_value, online_authenticated, spawn_sync};
-
-/// Whether the server is reachable for on-demand work outside the sync (cover
-/// misses): offline logins and the pre-login state keep it false.
-static ONLINE: AtomicBool = AtomicBool::new(false);
-
-pub(crate) fn online() -> bool {
-    ONLINE.load(Ordering::Relaxed)
-}
 
 /// Bumped by every status change; the debounced writer only persists when its
 /// captured generation is still the latest (P-6 / roadmap "Session status").
@@ -935,7 +927,7 @@ impl Backend {
     #[qslot(qml_name = "offlineLogin")]
     fn offline_login(&mut self, server_url: String, username: String) {
         self.remember_account(server_url, username);
-        ONLINE.store(false, Ordering::Relaxed);
+        crate::session::set_online(false);
         self.offline = true;
         self.offline_changed();
         crate::debug_log!("login: offline mode — showing downloaded music only");
@@ -949,7 +941,7 @@ impl Backend {
     /// refreshes it right after.
     #[qslot(qml_name = "noteOnline")]
     fn note_online(&mut self) {
-        ONLINE.store(true, Ordering::Relaxed);
+        crate::session::set_online(true);
         if self.offline {
             self.offline = false;
             self.offline_changed();
@@ -1504,11 +1496,11 @@ impl Backend {
     #[qslot(qml_name = "wipeFinished")]
     fn wipe_finished(&mut self, scope: String) {
         if scope == "all" {
-            crate::runtime().spawn(async { support::invalidate_client().await });
+            crate::runtime().spawn(async { crate::session::invalidate().await });
             self.player.stop();
             self.sync_player();
             self.reset_colors();
-            ONLINE.store(false, Ordering::Relaxed);
+            crate::session::set_online(false);
             self.offline = false;
             self.offline_changed();
             self.logged_in = false;
@@ -1541,7 +1533,7 @@ impl Backend {
     fn apply_queue_covers(&mut self, covers_json: String) {
         // One deserialization into the final maps/rows: no intermediate
         // `Value`, no subtree clones (FIX-33).
-        let payload: QueueCoversPayload = serde_json::from_str(&covers_json).unwrap_or_default();
+        let payload: QueueCoversPayload = crate::cache::parse_or_default(&covers_json);
         self.player.refresh_track_metadata(&payload.songs);
         self.player
             .refresh_cover_arts(&payload.albums, &payload.covers);
@@ -2717,8 +2709,8 @@ impl Backend {
     /// whenever the rendered-row window changes, never for the whole library.
     #[qslot(qml_name = "requestDownloads")]
     fn request_downloads(&mut self, songs: String, albums: String) {
-        let songs: Vec<String> = serde_json::from_str(&songs).unwrap_or_default();
-        let albums: Vec<String> = serde_json::from_str(&albums).unwrap_or_default();
+        let songs: Vec<String> = crate::cache::parse_or_default(&songs);
+        let albums: Vec<String> = crate::cache::parse_or_default(&albums);
         // Every surface asks on entry, on cursor moves and on rebuilds; the
         // window is the dedupe key — an unchanged window costs nothing.
         if songs == self.download_window_songs && albums == self.download_window_albums {
@@ -2732,8 +2724,8 @@ impl Backend {
     /// the dedupe must not swallow the update.
     #[qslot(qml_name = "refreshDownloads")]
     fn refresh_downloads(&mut self, songs: String, albums: String) {
-        let songs: Vec<String> = serde_json::from_str(&songs).unwrap_or_default();
-        let albums: Vec<String> = serde_json::from_str(&albums).unwrap_or_default();
+        let songs: Vec<String> = crate::cache::parse_or_default(&songs);
+        let albums: Vec<String> = crate::cache::parse_or_default(&albums);
         self.store_and_refresh(songs, albums);
     }
 
@@ -2769,7 +2761,7 @@ impl Backend {
     fn apply_downloaded_ids(&mut self, ids_json: String) {
         // One typed deserialization: a window can be a page of ids, and this
         // runs per reload — no `Value` tree and no per-array clone (FIX-33).
-        let payload: DownloadedIdsPayload = serde_json::from_str(&ids_json).unwrap_or_default();
+        let payload: DownloadedIdsPayload = crate::cache::parse_or_default(&ids_json);
         let songs: std::collections::HashSet<String> = payload.songs.into_iter().collect();
         let downloading: std::collections::HashSet<String> =
             payload.downloading.into_iter().collect();
@@ -2927,7 +2919,7 @@ impl Backend {
     /// spins its loading glyph; per-song completions follow.
     #[qslot(qml_name = "noteDownloadStates")]
     fn note_download_states(&mut self, ids_json: String) {
-        let ids: Vec<String> = serde_json::from_str(&ids_json).unwrap_or_default();
+        let ids: Vec<String> = crate::cache::parse_or_default(&ids_json);
         if ids.is_empty() {
             return;
         }
@@ -2976,7 +2968,7 @@ impl Backend {
     }
 
     fn apply_download_settle(&mut self, song_id: String) {
-        crate::browse::clear_offline_filter();
+        crate::offline::clear_cache();
         let touched = self
             .mark_states
             .get(&song_id)
@@ -3008,7 +3000,7 @@ impl Backend {
     /// favourites do not come through here anymore.
     #[qslot(qml_name = "TriggerRowReload")]
     fn trigger_row_reload(&mut self) {
-        crate::browse::clear_offline_filter();
+        crate::offline::clear_cache();
         self.refresh_download_window();
         // Row content changed outside the player (syncs, wipe reloads,
         // download settles): the revision gate must not swallow this

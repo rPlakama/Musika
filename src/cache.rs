@@ -28,6 +28,12 @@ use anyhow::{Context, Result};
 use sqlx::AssertSqlSafe;
 use sqlx::sqlite::SqlitePool;
 
+/// Rows per `IN (...)` chunk for cross-database and by-id reads.
+pub const IN_BATCH: usize = 500;
+
+/// Rows per `INSERT` batch in [`insert_many`].
+pub const INSERT_BATCH: usize = 32;
+
 /// Makes concurrent writers of the same target use distinct temp files.
 static TMP_GEN: AtomicU64 = AtomicU64::new(0);
 
@@ -46,6 +52,14 @@ pub fn write_atomic(dir: &Path, file: &str, bytes: &[u8]) -> Result<PathBuf> {
         return Err(err).with_context(|| format!("failed to replace {}", final_path.display()));
     }
     Ok(final_path)
+}
+
+/// Decodes a QML payload, falling back to the type default and a debug log.
+pub(crate) fn parse_or_default<T: serde::de::DeserializeOwned + Default>(text: &str) -> T {
+    serde_json::from_str(text).unwrap_or_else(|err| {
+        crate::debug_log!("payload: could not decode: {err}");
+        T::default()
+    })
 }
 
 /// Deletes rows matched by one static `DELETE` statement and one bound key.
@@ -101,7 +115,7 @@ pub async fn insert_many<T, F>(
 where
     F: FnMut(sqlx::query_builder::Separated<'_, sqlx::Sqlite, &'static str>, &T),
 {
-    for chunk in rows.chunks(32) {
+    for chunk in rows.chunks(INSERT_BATCH) {
         let mut query = sqlx::QueryBuilder::<sqlx::Sqlite>::new(sql);
         query.push_values(chunk, &mut push_tuple);
         query.build().execute(&mut **tx).await?;
@@ -154,7 +168,7 @@ pub async fn purge_missing_against(
     }
 
     let mut owner_ids: HashSet<String> = HashSet::with_capacity(ids.len());
-    for chunk in ids.chunks(500) {
+    for chunk in ids.chunks(IN_BATCH) {
         let mut builder = sqlx::QueryBuilder::<sqlx::Sqlite>::new(format!(
             "SELECT {owner_col} FROM {owner_table} WHERE {owner_col} IN ("
         ));

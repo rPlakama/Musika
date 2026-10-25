@@ -116,7 +116,7 @@ pub async fn import_ratings(pool: &SqlitePool, ratings: &[(String, i64)]) -> Res
     }
     let now = crate::consts::now_secs().to_string();
     let mut tx = pool.begin().await?;
-    for chunk in valid.chunks(500) {
+    for chunk in valid.chunks(crate::cache::IN_BATCH) {
         let mut query = sqlx::QueryBuilder::new(
             "INSERT INTO artist_user (artist_id, starred, rating, updated_at) ",
         );

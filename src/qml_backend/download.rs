@@ -14,7 +14,8 @@
 // You should have received a copy of the GNU General Public License
 // along with this program; if not, see <https://www.gnu.org/licenses/>.
 
-use super::support::{client, raise};
+use super::support::raise;
+use crate::session::client;
 
 /// Reads the download ledger for the requested window and applies the
 /// finished subset to the backend's `downloadedIds` property plus the albums

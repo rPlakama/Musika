@@ -68,12 +68,12 @@ pub(super) fn spawn_sync(
     client: SubsonicClient,
     emit_started: bool,
 ) {
-    let Some(dbs) = crate::dbs() else {
+    let Some(dbs) = crate::app::dbs() else {
         eprintln!("index: databases are not initialised");
         return;
     };
 
-    crate::runtime().spawn(async move {
+    crate::app::runtime().spawn(async move {
         if emit_started {
             qtbridge::invoke_method!(progress_invoker, "librarySyncStarted");
         }
@@ -116,7 +116,7 @@ pub(super) fn spawn_sync(
                 if report.covers_due {
                     let cover_dbs = dbs.clone();
                     let forced = report.forced_covers.clone();
-                    crate::runtime().spawn(async move {
+                    crate::app::runtime().spawn(async move {
                         let result =
                             crate::index::cache_covers(&cover_dbs, &cover_client, &forced).await;
                         crate::debug_log!(

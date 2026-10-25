@@ -532,7 +532,7 @@ pub(super) async fn download_one(
 /// CACHE-9: does the download ledger hold at least one finished song? Only
 /// then can the app enter offline mode instead of failing the login.
 pub(super) async fn downloaded_music_available() -> bool {
-    match crate::dbs() {
+    match crate::app::dbs() {
         Some(dbs) => crate::download::counts(&dbs.download)
             .await
             .map(|counts| counts.done > 0)

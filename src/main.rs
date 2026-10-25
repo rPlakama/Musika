@@ -15,11 +15,9 @@
 // along with this program; if not, see <https://www.gnu.org/licenses/>.
 
 use qtbridge::QApp;
-use sqlx::SqlitePool;
-use std::sync::{Arc, OnceLock, PoisonError, RwLock};
-use tokio::runtime::Runtime;
 
 mod api;
+mod app;
 mod artist_user;
 mod browse;
 mod cache;
@@ -154,60 +152,6 @@ pub(crate) mod test_alloc {
 #[global_allocator]
 static TEST_ALLOCATOR: test_alloc::TrackingAllocator = test_alloc::TrackingAllocator;
 
-static DBS: OnceLock<RwLock<Arc<db::Dbs>>> = OnceLock::new();
-
-/// The five databases opened at start-up. FIX-3: an owned handle over a
-/// swappable slot — repeated wipes no longer leak a leaked database set per
-/// pass; the old set is dropped and its pools closed.
-pub fn dbs() -> Option<Arc<db::Dbs>> {
-    let slot = DBS.get()?;
-    let guard = slot.read().unwrap_or_else(PoisonError::into_inner);
-    Some(Arc::clone(&guard))
-}
-
-/// Swaps in a freshly initialised set (the full wipe deletes the files and
-/// re-inits). The previous set's pools — including the separate `search`
-/// pool `wipe_files` never closed — are closed on the runtime afterwards, so
-/// repeated wipes do not accumulate stale connections over unlinked files.
-pub fn set_dbs(dbs: db::Dbs) {
-    // ARC-SEARCH: the in-memory catalog belongs to the database it was built
-    // from; a fresh set starts cold and rebuilds on first search/sync.
-    search::index::clear();
-    let dbs = Arc::new(dbs);
-    match DBS.get() {
-        Some(slot) => {
-            let mut guard = slot.write().unwrap_or_else(PoisonError::into_inner);
-            let old = std::mem::replace(&mut *guard, Arc::clone(&dbs));
-            drop(guard);
-            drop_dbs(old);
-        }
-        None => {
-            let _ = DBS.set(RwLock::new(dbs));
-        }
-    }
-}
-
-/// Closes the distinct pools of an old database set off the Qt/DB threads.
-/// `library`/`credentials` share one pool, so do `media`/`covers`/…; only
-/// `search` is separate (FIX-3).
-fn drop_dbs(old: Arc<db::Dbs>) {
-    runtime().spawn(async move {
-        for pool in [&old.library, &old.search, &old.media] {
-            pool.clone().close().await;
-        }
-    });
-}
-
-/// Convenience accessor for the credentials database.
-pub fn pool() -> Option<SqlitePool> {
-    dbs().map(|dbs| dbs.credentials.clone())
-}
-
-pub fn runtime() -> &'static Runtime {
-    static RT: OnceLock<Runtime> = OnceLock::new();
-    RT.get_or_init(|| Runtime::new().unwrap())
-}
-
 fn load_dotenv() {
     let Ok(text) = std::fs::read_to_string(".env") else {
         return;
@@ -250,10 +194,10 @@ fn main() {
         }
     }
 
-    let dbs = runtime()
+    let dbs = crate::app::runtime()
         .block_on(db::init())
         .expect("failed to initialise the databases");
-    set_dbs(dbs);
+    crate::app::set_dbs(dbs);
 
     let mut app = QApp::new();
     qtbridge::include_bytes_qml!("qml", "app");

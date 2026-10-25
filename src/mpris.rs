@@ -162,7 +162,7 @@ pub fn init() {
     let _ = COMMAND_RX.set(Mutex::new(rx));
     let _ = SNAPSHOT.set(Mutex::new(Snapshot::default()));
     let _ = NOTIFY.set(Notify::new());
-    crate::runtime().spawn(serve());
+    crate::app::runtime().spawn(serve());
 }
 
 async fn serve() {

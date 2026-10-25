@@ -739,7 +739,7 @@ pub async fn url_map_of(dbs: &crate::db::Dbs, ids: &[String]) -> Result<HashMap<
     }
     let pooled = dbs.covers.clone();
     let client = Arc::new(client);
-    crate::runtime().spawn(async move {
+    crate::app::runtime().spawn(async move {
         let result = fetch_ids(&pooled, &client, &missing).await;
         for id in &missing {
             release_fetch(id.clone());
@@ -797,7 +797,7 @@ async fn cached_urls(pool: &SqlitePool, ids: &[String]) -> Result<HashMap<String
         .collect();
     if !thumb_jobs.is_empty() {
         let dir = dir.clone();
-        crate::runtime().spawn(async move {
+        crate::app::runtime().spawn(async move {
             ensure_thumbs(&dir, thumb_jobs)
                 .await
                 .into_iter()

@@ -531,10 +531,10 @@ impl Backend {
         F: FnOnce(Arc<crate::db::Dbs>) -> Fut + Send + 'static,
         Fut: std::future::Future<Output = ()> + Send + 'static,
     {
-        let Some(dbs) = crate::dbs() else {
+        let Some(dbs) = crate::app::dbs() else {
             return;
         };
-        crate::runtime().spawn(task(dbs));
+        crate::app::runtime().spawn(task(dbs));
     }
 
     fn spawn_data<F, Fut>(&self, channel: &'static str, load: F)
@@ -543,14 +543,14 @@ impl Backend {
         Fut: std::future::Future<Output = anyhow::Result<String>> + Send,
     {
         let invoker = self.get_qml_method_invoker();
-        let Some(dbs) = crate::dbs() else {
+        let Some(dbs) = crate::app::dbs() else {
             return;
         };
         // FIX-4: one generation per channel, bumped by every request — a
         // newer order/filter/page owns the channel, so a load still running
         // under an older generation never emits (SEARCH_GEN pattern).
         let generation = bump_data_gen(channel);
-        crate::runtime().spawn(async move {
+        crate::app::runtime().spawn(async move {
             if data_gen(channel) != generation {
                 return;
             }
@@ -733,9 +733,9 @@ impl Backend {
         let invoker = self.get_qml_method_invoker();
         let sync_finish = self.get_qml_method_invoker();
         let sync_progress = self.get_qml_method_invoker();
-        let pool = crate::pool();
+        let pool = crate::app::pool();
 
-        crate::runtime().spawn(async move {
+        crate::app::runtime().spawn(async move {
             match crate::http_client::authenticate(&server_url, &username, &password).await {
                 Ok(info) => {
                     if let Some(pool) = pool.as_ref() {
@@ -804,7 +804,7 @@ impl Backend {
         let invoker = self.get_qml_method_invoker();
         let sync_finish = self.get_qml_method_invoker();
         let sync_progress = self.get_qml_method_invoker();
-        let Some(pool) = crate::pool() else {
+        let Some(pool) = crate::app::pool() else {
             return;
         };
 
@@ -815,7 +815,7 @@ impl Backend {
         // and the full streaming library loads. Without downloads it waits
         // for the same ping and only returns to the Login form, prefilled,
         // when the server is unreachable.
-        crate::runtime().spawn(async move {
+        crate::app::runtime().spawn(async move {
             match crate::sqlite::load_credentials(&pool).await {
                 Ok(Some(credentials)) => {
                     // The stored discriminator keeps "Last Sync: …, <server>"
@@ -963,14 +963,14 @@ impl Backend {
     /// S1 restore: volume/mute only. Album/queue navigation and the paused
     /// queue are S2; transient UI is never restored.
     fn restore_status(&mut self) {
-        let Some(dbs) = crate::dbs() else {
+        let Some(dbs) = crate::app::dbs() else {
             return;
         };
         let server_url = self.server_url.trim().to_string();
         let username = self.username.trim().to_string();
         let offline = self.offline;
         let invoker = self.get_qml_method_invoker();
-        crate::runtime().spawn(async move {
+        crate::app::runtime().spawn(async move {
             match crate::status::load(&dbs.status).await {
                 Ok(Some(status))
                     if status.server_url == server_url && status.username == username =>
@@ -1054,7 +1054,7 @@ impl Backend {
             return;
         }
         let generation = STATUS_WRITE_GEN.fetch_add(1, Ordering::Relaxed) + 1;
-        let Some(dbs) = crate::dbs() else {
+        let Some(dbs) = crate::app::dbs() else {
             return;
         };
         // PATH-7: take a COW snapshot here and serialize it in the worker
@@ -1062,7 +1062,7 @@ impl Backend {
         // `String` clone per queued id on every status write (FIX-25).
         let queue = self.player.queue_snapshot();
         let status = self.session_status(String::new());
-        crate::runtime().spawn(async move {
+        crate::app::runtime().spawn(async move {
             tokio::time::sleep(std::time::Duration::from_millis(500)).await;
             if STATUS_WRITE_GEN.load(Ordering::Relaxed) != generation {
                 return;
@@ -1095,13 +1095,14 @@ impl Backend {
         if !self.logged_in || self.server_url.trim().is_empty() || self.username.trim().is_empty() {
             return;
         }
-        let Some(dbs) = crate::dbs() else {
+        let Some(dbs) = crate::app::dbs() else {
             return;
         };
         // Cancel a pending debounce so it cannot race (or overwrite) this.
         STATUS_WRITE_GEN.fetch_add(1, Ordering::Relaxed);
         let status = self.session_status(self.queue_ids_json());
-        if let Err(err) = crate::runtime().block_on(crate::status::save(&dbs.status, &status)) {
+        if let Err(err) = crate::app::runtime().block_on(crate::status::save(&dbs.status, &status))
+        {
             eprintln!("status: could not flush the session: {err:#}");
         }
     }
@@ -1330,7 +1331,7 @@ impl Backend {
         self.library_sync_started();
         let finish_invoker = self.get_qml_method_invoker();
         let progress_invoker = self.get_qml_method_invoker();
-        let Some(dbs) = crate::dbs() else {
+        let Some(dbs) = crate::app::dbs() else {
             qtbridge::invoke_method!(
                 finish_invoker,
                 "librarySyncFinished",
@@ -1339,7 +1340,7 @@ impl Backend {
             return;
         };
 
-        crate::runtime().spawn(async move {
+        crate::app::runtime().spawn(async move {
             let client = match client(&dbs).await {
                 Ok(client) => client,
                 Err(err) => {
@@ -1397,10 +1398,10 @@ impl Backend {
         // COW snapshot: the task borrows the rows instead of cloning three
         // strings per queued track on the Qt thread.
         let queue = self.player.queue_snapshot();
-        let Some(dbs) = crate::dbs() else {
+        let Some(dbs) = crate::app::dbs() else {
             return;
         };
-        crate::runtime().spawn(async move {
+        crate::app::runtime().spawn(async move {
             let album_ids: Vec<&str> = queue
                 .iter()
                 .map(|track| track.album_id.as_str())
@@ -1446,13 +1447,13 @@ impl Backend {
     fn wipe_databases(&mut self, scope: String) {
         let invoker = self.get_qml_method_invoker();
         let error_invoker = self.get_qml_method_invoker();
-        let Some(dbs) = crate::dbs() else {
+        let Some(dbs) = crate::app::dbs() else {
             return;
         };
         self.library_sync_started();
         self.sync_message = format!("Wiping {scope}…");
         self.sync_message_changed();
-        crate::runtime().spawn(async move {
+        crate::app::runtime().spawn(async move {
             let result = match scope.as_str() {
                 "library" => crate::db::wipe_library(&dbs).await,
                 "indexes" => crate::db::wipe_indexes(&dbs).await,
@@ -1465,7 +1466,7 @@ impl Backend {
                     match crate::db::wipe_files(&dbs).await {
                         Ok(()) => match crate::db::init().await {
                             Ok(fresh) => {
-                                crate::set_dbs(fresh);
+                                crate::app::set_dbs(fresh);
                                 Ok(())
                             }
                             Err(err) => Err(err),
@@ -1496,7 +1497,7 @@ impl Backend {
     #[qslot(qml_name = "wipeFinished")]
     fn wipe_finished(&mut self, scope: String) {
         if scope == "all" {
-            crate::runtime().spawn(async { crate::session::invalidate().await });
+            crate::app::runtime().spawn(async { crate::session::invalidate().await });
             self.player.stop();
             self.sync_player();
             self.reset_colors();
@@ -2272,7 +2273,7 @@ impl Backend {
             return;
         };
         let generation = SCROLL_WRITE_GEN.fetch_add(1, Ordering::Relaxed) + 1;
-        crate::runtime().spawn(async move {
+        crate::app::runtime().spawn(async move {
             let _ = tokio::task::spawn_blocking(move || {
                 if SCROLL_WRITE_GEN.load(Ordering::Relaxed) != generation {
                     return;
@@ -2295,10 +2296,10 @@ impl Backend {
         let limit = limit.clamp(1, 100) as usize;
         let generation = SEARCH_GEN.fetch_add(1, Ordering::Relaxed) + 1;
         let invoker = self.get_qml_method_invoker();
-        let Some(dbs) = crate::dbs() else {
+        let Some(dbs) = crate::app::dbs() else {
             return;
         };
-        crate::runtime().spawn(async move {
+        crate::app::runtime().spawn(async move {
             // A newer keystroke owns the box: never start (or emit) a read
             // the user already superseded. The search pool is separate from
             // the library writer, so this task can never pin the sync.
@@ -2333,11 +2334,11 @@ impl Backend {
     #[qslot(qml_name = "playAlbum")]
     fn play_album(&mut self, album_id: String, start: i64) {
         let invoker = self.get_qml_method_invoker();
-        let Some(dbs) = crate::dbs() else {
+        let Some(dbs) = crate::app::dbs() else {
             return;
         };
         let offline = self.offline;
-        crate::runtime().spawn(async move {
+        crate::app::runtime().spawn(async move {
             match album_tracks_json(&dbs, &album_id, offline).await {
                 Ok(json) => {
                     qtbridge::invoke_method!(invoker, "playerLoad", json, start);
@@ -2368,7 +2369,7 @@ impl Backend {
         }
         eprintln!("shuffle: {kind}");
         let invoker = self.get_qml_method_invoker();
-        let Some(dbs) = crate::dbs() else {
+        let Some(dbs) = crate::app::dbs() else {
             return;
         };
         let offline = self.offline;
@@ -2382,7 +2383,7 @@ impl Backend {
         // Optimistic: the chip lights on the press, the state lands with
         // the whole queue or clears on failure.
         self.set_shuffling(true, kind.clone());
-        crate::runtime().spawn(async move {
+        crate::app::runtime().spawn(async move {
             let units = if kind == "albums" {
                 crate::library::albums(&dbs.library, None, &order)
                     .await
@@ -2465,11 +2466,11 @@ impl Backend {
     #[qslot(qml_name = "shuffleArtist")]
     fn shuffle_artist(&mut self, artist_id: String) {
         let invoker = self.get_qml_method_invoker();
-        let Some(dbs) = crate::dbs() else {
+        let Some(dbs) = crate::app::dbs() else {
             return;
         };
         let offline = self.offline;
-        crate::runtime().spawn(async move {
+        crate::app::runtime().spawn(async move {
             match crate::queue::artist_shuffle_json(&dbs, &artist_id, offline).await {
                 Ok(json) => {
                     qtbridge::invoke_method!(invoker, "playerLoad", json, 0_i64);
@@ -2486,13 +2487,13 @@ impl Backend {
     #[qslot(qml_name = "playSong")]
     fn play_song(&mut self, song_id: String) {
         let invoker = self.get_qml_method_invoker();
-        let Some(dbs) = crate::dbs() else {
+        let Some(dbs) = crate::app::dbs() else {
             return;
         };
         let order = crate::library::effective_order(&crate::library::ORDERS, &self.song_order, 0)
             .to_string();
         let offline = self.offline;
-        crate::runtime().spawn(async move {
+        crate::app::runtime().spawn(async move {
             match library_queue_payload(&dbs, &song_id, &order, offline).await {
                 Ok((json, start)) => {
                     qtbridge::invoke_method!(invoker, "playerLoadLibrary", json, start as i64);
@@ -2515,11 +2516,11 @@ impl Backend {
     #[qslot(qml_name = "playSongInAlbum")]
     fn play_song_in_album(&mut self, song_id: String) {
         let invoker = self.get_qml_method_invoker();
-        let Some(dbs) = crate::dbs() else {
+        let Some(dbs) = crate::app::dbs() else {
             return;
         };
         let offline = self.offline;
-        crate::runtime().spawn(async move {
+        crate::app::runtime().spawn(async move {
             match song_album_payload(&dbs, &song_id, offline).await {
                 Ok(payload) => {
                     emit(&invoker, "song_album", payload);
@@ -2647,7 +2648,7 @@ impl Backend {
             return;
         }
         let invoker = self.get_qml_method_invoker();
-        let Some(dbs) = crate::dbs() else {
+        let Some(dbs) = crate::app::dbs() else {
             return;
         };
         // Record the revision only once the emit is actually going out: a
@@ -2657,7 +2658,7 @@ impl Backend {
         let queue = self.player.queue_snapshot();
         let index = self.player.index();
         let generation = QUEUE_EMIT_GEN.fetch_add(1, Ordering::Relaxed) + 1;
-        crate::runtime().spawn(async move {
+        crate::app::runtime().spawn(async move {
             let starred: std::collections::HashSet<String> =
                 crate::library::starred_song_ids(&dbs.library)
                     .await
@@ -2955,7 +2956,7 @@ impl Backend {
             return;
         }
         let invoker = self.get_qml_method_invoker();
-        crate::runtime().spawn(async move {
+        crate::app::runtime().spawn(async move {
             tokio::time::sleep(delay).await;
             qtbridge::invoke_method!(invoker, "settleDownloadRequest", song_id);
         });
@@ -3052,12 +3053,12 @@ impl Backend {
             )
         };
         let invoker = self.get_qml_method_invoker();
-        let Some(dbs) = crate::dbs() else {
+        let Some(dbs) = crate::app::dbs() else {
             return;
         };
         let pending = std::sync::Arc::clone(&self.mark_pending);
         let generation = MARK_WINDOW_GEN.fetch_add(1, Ordering::Relaxed) + 1;
-        crate::runtime().spawn(async move {
+        crate::app::runtime().spawn(async move {
             tokio::time::sleep(std::time::Duration::from_millis(60)).await;
             if MARK_WINDOW_GEN.load(Ordering::Relaxed) != generation {
                 return;
@@ -3161,10 +3162,10 @@ impl Backend {
         let offline = self.offline;
         let invoker = self.get_qml_method_invoker();
         let error_invoker = self.get_qml_method_invoker();
-        let Some(dbs) = crate::dbs() else {
+        let Some(dbs) = crate::app::dbs() else {
             return;
         };
-        crate::runtime().spawn(async move {
+        crate::app::runtime().spawn(async move {
             match crate::queue::quick_tracks_json_many(&dbs, &kind, &ids, offline).await {
                 Ok(json) => {
                     qtbridge::invoke_method!(invoker, "pasteQueueTracks", cursor, above, json);
@@ -3232,11 +3233,11 @@ impl Backend {
     fn alt_add_to_queue(&mut self, kind: String, id: String) {
         let invoker = self.get_qml_method_invoker();
         let error_invoker = self.get_qml_method_invoker();
-        let Some(dbs) = crate::dbs() else {
+        let Some(dbs) = crate::app::dbs() else {
             return;
         };
         let offline = self.offline;
-        crate::runtime().spawn(async move {
+        crate::app::runtime().spawn(async move {
             match crate::queue::quick_tracks_json(&dbs, &kind, &id, offline).await {
                 Ok(json) => {
                     qtbridge::invoke_method!(invoker, "playerAppend", json);
@@ -3270,11 +3271,11 @@ impl Backend {
         };
         let invoker = self.get_qml_method_invoker();
         let error_invoker = self.get_qml_method_invoker();
-        let Some(dbs) = crate::dbs() else {
+        let Some(dbs) = crate::app::dbs() else {
             return;
         };
         let offline = self.offline;
-        crate::runtime().spawn(async move {
+        crate::app::runtime().spawn(async move {
             match crate::queue::quick_tracks_json_many(&dbs, &kind, &ids, offline).await {
                 Ok(json) => {
                     qtbridge::invoke_method!(invoker, "playerAppend", json);
@@ -3468,7 +3469,7 @@ impl Backend {
     #[qslot(qml_name = "requestLyrics")]
     fn request_lyrics(&mut self) {
         let invoker = self.get_qml_method_invoker();
-        let Some(dbs) = crate::dbs() else {
+        let Some(dbs) = crate::app::dbs() else {
             return;
         };
         let Some(song_id) = self.player.current().map(|track| track.id.clone()) else {
@@ -3484,7 +3485,7 @@ impl Backend {
         // LYR-5: warm the cache for the next few queue tracks, bounded.
         let upcoming = self.player.upcoming(3);
 
-        crate::runtime().spawn(async move {
+        crate::app::runtime().spawn(async move {
             let client = match client(&dbs).await {
                 Ok(client) => Some(client),
                 Err(err) => {
@@ -3516,7 +3517,7 @@ impl Backend {
     #[qslot(qml_name = "refreshLyrics")]
     fn refresh_lyrics(&mut self) {
         let invoker = self.get_qml_method_invoker();
-        let Some(dbs) = crate::dbs() else {
+        let Some(dbs) = crate::app::dbs() else {
             return;
         };
         let Some(song_id) = self.player.current().map(|track| track.id.clone()) else {
@@ -3526,7 +3527,7 @@ impl Backend {
         // marker of the first fetch does not suppress it.
         self.lyrics_in_flight = None;
 
-        crate::runtime().spawn(async move {
+        crate::app::runtime().spawn(async move {
             if let Err(err) = crate::lyrics::invalidate(&dbs.lyrics, &song_id).await {
                 eprintln!("lyrics: could not invalidate {song_id}: {err:#}");
             }
@@ -3542,7 +3543,7 @@ impl Backend {
     #[qslot(qml_name = "requestColors")]
     fn request_colors(&mut self) {
         let invoker = self.get_qml_method_invoker();
-        let Some(dbs) = crate::dbs() else {
+        let Some(dbs) = crate::app::dbs() else {
             return;
         };
         let cover = self.current_cover_art.clone();
@@ -3554,7 +3555,7 @@ impl Backend {
         }
         self.colors_in_flight = Some(cover.clone());
 
-        crate::runtime().spawn(async move {
+        crate::app::runtime().spawn(async move {
             let cover_hash = crate::covers::hash(&dbs.covers, &cover)
                 .await
                 .ok()
@@ -3623,7 +3624,7 @@ impl Backend {
     #[qslot(qml_name = "refreshColors")]
     fn refresh_colors(&mut self) {
         let invoker = self.get_qml_method_invoker();
-        let Some(dbs) = crate::dbs() else {
+        let Some(dbs) = crate::app::dbs() else {
             return;
         };
         let cover = self.current_cover_art.clone();
@@ -3632,7 +3633,7 @@ impl Backend {
         }
         self.colors_in_flight = None;
 
-        crate::runtime().spawn(async move {
+        crate::app::runtime().spawn(async move {
             if let Err(err) = crate::colors::invalidate(&dbs, &cover).await {
                 eprintln!("colors: could not invalidate {cover}: {err:#}");
             }

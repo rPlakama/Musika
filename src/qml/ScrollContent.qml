@@ -759,7 +759,7 @@ Item {
             }
             boundsBehavior: Flickable.StopAtBounds
             highlightFollowsCurrentItem: false
-            reuseItems: false
+            reuseItems: true
             cacheBuffer: root.renderOverscan
         }
 
@@ -789,7 +789,7 @@ Item {
             cellHeight: root.cellHeight > 0 ? root.cellHeight : root.cellWidth
             boundsBehavior: Flickable.StopAtBounds
             highlightFollowsCurrentItem: false
-            reuseItems: false
+            reuseItems: true
             cacheBuffer: root.renderOverscan
         }
     }

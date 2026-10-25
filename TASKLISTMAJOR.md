@@ -1284,8 +1284,9 @@ The product is incomplete without these.
     `reduceMotion`) and is wired into the search columns and both queues;
     payload swaps crossfade, reorders stay live. Open: the distance-aware
     `clamp(px / 2.5, 80, 240)` helper for MediaList/AlbumEntry/ArtistList,
-    `DragOverBounds`, `reuseItems`/`cacheBuffer`, and the lyrics
-    `SmoothedAnimation` follower.
+    `DragOverBounds`, and the lyrics `SmoothedAnimation` follower.
+    `reuseItems` is now enabled on both list/grid views (the delegates are
+    property-driven); `cacheBuffer` was already the render overscan.
   - **Verify:** frame graph (`QSG_RENDER_TIMING=1`) smooth for 1-row, 5-row
     and 20-row moves; wheel mid-follow doesn't stutter; long titles don't
     clip while expanding; `reduceMotion` flat.
@@ -1362,6 +1363,38 @@ The product is incomplete without these.
     its niri-like shell/fullscreen blur with the overlay acrylic. Open: the
     `SuperiorBar`/`InferiorBar` in-app panels and the desktop
     contrast/fallback pass.
+
+- [ ] **UI-63 · Vulkan/RHI budget pass (notes)** — P2 · (GPU review)
+  - **Why:** the RHI path is already Vulkan, but pipeline creation, MSAA and
+    full-surface blur can still hitch the first interaction or waste GPU on
+    static overlays. Capture a profile before changing anything; the frame
+    graph is the only way to know whether lists, blur or overdraw dominate.
+  - **Notes (operator-provided, not implemented):**
+    - **Persistent pipeline cache:** `QQuickGraphicsConfiguration::
+      setPipelineCacheSaveFile(<CacheLocation>/pipeline_cache.bin)` on the
+      window/engine, so cold start does not re-JIT every effect pipeline.
+    - **MSAA:** choose it explicitly (`QQuickWindow::setSampling` or the RHI
+      equivalent); prefer no full-scene MSAA and per-shape antialiasing for
+      rounded rects/text.
+    - **MultiEffect/blur:** keep `blurMax` as low as acceptable,
+      `autoPaddingEnabled: false` when no padding is needed, crop the
+      `ShaderEffectSource`/`sourceRect` to the covered region, and use
+      `live: false` + manual invalidation for static overlays instead of
+      re-blurring every frame.
+    - **Custom native work:** if particles/visualizers outgrow QML items,
+      consider a `QSGRenderNode` with native `VkCommandBuffer` draws rather
+      than N small `Rectangle`/`Image` nodes; use
+      `QNativeInterface::QSGVulkanTexture::fromNative` when art comes from a
+      non-Qt decoder, instead of a `QImage` CPU round-trip.
+    - **Shader warm-up:** pre-render a 1×1 offscreen frame per effect variant
+      before showing the window; keep `.qsb` permutations minimal.
+    - **Profiling:** `QSG_RHI_PROFILE=1`, `QSG_RHI_SHADER_DEBUG=1`,
+      `QSG_RENDERER_DEBUG=render`, and `QT_VK_DEBUG_LAYER=1` for validation.
+    - **Cover uploads:** check whether album art needs RGBA8; opaque formats
+      avoid blend state and batch better.
+  - **Status:** notes only. Start with a profile of `NowPlaying`, the blurred
+    overlays and grid scrolling; do not add a native render node without a
+    measured bottleneck.
 
 - [ ] **THM-6 · Rewrite the color engine on DMS's pipeline** — P2 · (MATUGENSTUDY.md; roadmap T5+)
   - **Why:** DMS cleanly separates seed extraction, palette specs, caching,

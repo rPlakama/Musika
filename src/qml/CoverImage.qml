@@ -91,6 +91,9 @@ Item {
         asynchronous: true
         cache: true
         fillMode: root.fillMode
+        // The decode already targets the painted size; no extra GPU filtering.
+        smooth: false
+        mipmap: false
         visible: root.ready
         onStatusChanged: {
             if (status === Image.Error && !root.thumbFailed

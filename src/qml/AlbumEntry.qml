@@ -578,7 +578,7 @@ Rectangle {
 
     // Ambience (D-5): the album art itself, painted sharp, then washed into the
     // theme surface by the gradient below.
-    CoverImage {
+    CoverBackdrop {
         id: coverBackdrop
         anchors.fill: parent
         source: root.albumCover

@@ -411,7 +411,7 @@ Rectangle {
         id: ambience
         anchors.fill: parent
 
-        CoverImage {
+        CoverBackdrop {
             id: coverBackdrop
             anchors.fill: parent
             source: Backend.currentCoverUrl

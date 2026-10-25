@@ -38,6 +38,11 @@ Item {
     /// Decode headroom over the painted size (1.0 = exactly the painted size).
     property real sizeFactor: 1.0
 
+    /// How the decoded pixels fill this item. The default keeps the historic
+    /// cover-thumbnail crop; backdrops ask for `PreserveAspectFit` so the
+    /// album square is never cut.
+    property int fillMode: Image.PreserveAspectCrop
+
     // The cache keeps the provider's original art, so large surfaces can
     // decode at their painted size. Cap pathological uploads to a sane edge.
     readonly property int maxDecodeEdge: 4096
@@ -85,7 +90,7 @@ Item {
         sourceSize.height: root.decodeHeight
         asynchronous: true
         cache: true
-        fillMode: Image.PreserveAspectCrop
+        fillMode: root.fillMode
         visible: root.ready
         onStatusChanged: {
             if (status === Image.Error && !root.thumbFailed

@@ -460,7 +460,7 @@ Rectangle {
 
     // Ambience (D-5): same rule as AlbumEntry/NowPlaying — the artist art
     // painted sharp and washed into the surface by the gradient.
-    CoverImage {
+    CoverBackdrop {
         id: coverBackdrop
         anchors.fill: parent
         source: root.artistCover

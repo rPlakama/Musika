@@ -12,22 +12,18 @@
 // GNU General Public License for more details.
 //
 // You should have received a copy of the GNU General Public License
-// along with this program.  If not, see <https://www.gnu.org/licenses/>.
+// along with this program; if not, see <https://www.gnu.org/licenses/>.
 
 import QtQuick
 import QtQuick.Layouts
 import musika
 import "Theme.js" as Theme
 
-// UI-59: the one transport cluster — repeat / previous / play-pause / next on a
-// single horizontal line, identical in the player bar and the fullscreen
-// transport.
-// The buttons are unsqueezable (`Layout.minimum*` == preferred) and share a
-// common centre line, so a tight layout clips the surrounding zones first
-// instead of deforming the cluster; the play button is proportionally larger
-// and sits at the row's centre. The skip/play press feedback lives here, so
-// hosts never duplicate it (CRITIQUEQML QA-5).
-RowLayout {
+// UI-59: the shared transport cluster. The previous / play-pause / next group
+// is the only thing that contributes to this item's implicit size, so hosts
+// keep that group centred. Repeat is an accessory drawn in the left gutter;
+// toggling it never changes the transport's centre.
+Item {
     id: root
 
     /// The reference size: skips are drawn at `unit` square, the play button
@@ -35,16 +31,65 @@ RowLayout {
     property real unit: 24
     /// Play-to-skip size ratio.
     readonly property real playRatio: 1.22
+    property real spacing: root.unit * 0.11
 
-    spacing: root.unit * 0.11
+    implicitWidth: core.implicitWidth
+    implicitHeight: core.implicitHeight
+    clip: false
 
+    // The centring authority: previous / play / next only.
+    RowLayout {
+        id: core
+        anchors.centerIn: parent
+        spacing: root.spacing
+
+        IconButton {
+            id: previousButton
+            Layout.preferredWidth: root.unit
+            Layout.preferredHeight: root.unit
+            Layout.minimumWidth: root.unit
+            Layout.minimumHeight: root.unit
+            Layout.alignment: Qt.AlignVCenter
+            iconSource: "qrc:/app/icons/skip-previous-solid-svgrepo-com.svg"
+            symbolRatio: 0.9
+            onClicked: Backend.playerPrevious()
+        }
+
+        IconButton {
+            id: playButton
+            Layout.preferredWidth: root.unit * root.playRatio
+            Layout.preferredHeight: root.unit * root.playRatio
+            Layout.minimumWidth: root.unit * root.playRatio
+            Layout.minimumHeight: root.unit * root.playRatio
+            Layout.alignment: Qt.AlignVCenter
+            symbolRatio: 0.6
+            iconSource: Backend.playbackState === "playing"
+                ? "qrc:/app/icons/pause-svgrepo-com.svg"
+                : "qrc:/app/icons/play-1001-svgrepo-com.svg"
+            symbolColor: Theme.iconStrong
+            onClicked: Backend.playerToggle()
+        }
+
+        IconButton {
+            id: nextButton
+            Layout.preferredWidth: root.unit
+            Layout.preferredHeight: root.unit
+            Layout.minimumWidth: root.unit
+            Layout.minimumHeight: root.unit
+            Layout.alignment: Qt.AlignVCenter
+            iconSource: "qrc:/app/icons/skip-next-circle-solid-svgrepo-com.svg"
+            symbolRatio: 0.9
+            onClicked: Backend.playerNext()
+        }
+    }
+
+    // Accessory: sits in the left gutter, outside the centred core.
     IconButton {
         id: repeatButton
-        Layout.preferredWidth: root.unit
-        Layout.preferredHeight: root.unit
-        Layout.minimumWidth: root.unit
-        Layout.minimumHeight: root.unit
-        Layout.alignment: Qt.AlignVCenter
+        anchors.verticalCenter: core.verticalCenter
+        x: -width - root.spacing
+        width: root.unit
+        height: root.unit
         iconSource: "qrc:/app/icons/repeat-rounded.svg"
         symbolRatio: 0.9
         // Off keeps the slot but is visually absent; the click and Ctrl-R
@@ -70,45 +115,6 @@ RowLayout {
             visible: Backend.repeatMode === 1
             z: 2
         }
-    }
-
-    IconButton {
-        id: previousButton
-        Layout.preferredWidth: root.unit
-        Layout.preferredHeight: root.unit
-        Layout.minimumWidth: root.unit
-        Layout.minimumHeight: root.unit
-        Layout.alignment: Qt.AlignVCenter
-        iconSource: "qrc:/app/icons/skip-previous-solid-svgrepo-com.svg"
-        symbolRatio: 0.9
-        onClicked: Backend.playerPrevious()
-    }
-
-    IconButton {
-        id: playButton
-        Layout.preferredWidth: root.unit * root.playRatio
-        Layout.preferredHeight: root.unit * root.playRatio
-        Layout.minimumWidth: root.unit * root.playRatio
-        Layout.minimumHeight: root.unit * root.playRatio
-        Layout.alignment: Qt.AlignVCenter
-        symbolRatio: 0.6
-        iconSource: Backend.playbackState === "playing"
-            ? "qrc:/app/icons/pause-svgrepo-com.svg"
-            : "qrc:/app/icons/play-1001-svgrepo-com.svg"
-        symbolColor: Theme.iconStrong
-        onClicked: Backend.playerToggle()
-    }
-
-    IconButton {
-        id: nextButton
-        Layout.preferredWidth: root.unit
-        Layout.preferredHeight: root.unit
-        Layout.minimumWidth: root.unit
-        Layout.minimumHeight: root.unit
-        Layout.alignment: Qt.AlignVCenter
-        iconSource: "qrc:/app/icons/skip-next-circle-solid-svgrepo-com.svg"
-        symbolRatio: 0.9
-        onClicked: Backend.playerNext()
     }
 
     // Press feedback: fires for keyboard, mouse and IPC alike.

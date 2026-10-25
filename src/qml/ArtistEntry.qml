@@ -164,9 +164,6 @@ Rectangle {
     // back to the Artists segment or a search result.
     readonly property bool exitsToMain: true
 
-    // ARC-UI-3: the wall geometry comes from the shared scroll profile.
-    readonly property real avatarSide: Math.max(96, Math.min(height * 0.22, 256))
-
     // Study §2 "name+server tag": host only, never the full URL.
     readonly property string serverTag: {
         var url = Backend.serverURL;
@@ -470,160 +467,71 @@ Rectangle {
             }
         }
 
-        // UI-53 header standard: one major rectangle holds three transparent
-        // containers — left identity (30% width: round avatar + name + album
-        // count) and a right stack (the remaining width) split 70% height for
-        // the biography over 30% for the action row. Fixed anchors, so a long
-        // biography can never squeeze the identity or grow the header.
-        Rectangle {
-            radius: Theme.radius
+        // Header, AlbumEntry style: the artist art is the page ambience and
+        // the identity gets the full width, anchored at the top.
+        ColumnLayout {
             id: header
             Layout.fillWidth: true
-            Layout.preferredHeight: root.avatarSide
-            color: "transparent"
+            spacing: root.height * 0.008
 
-            Rectangle {
-                radius: Theme.radius
-                id: identityBox
-                anchors.left: parent.left
-                anchors.top: parent.top
-                anchors.bottom: parent.bottom
-                width: parent.width * 0.3
-                color: "transparent"
-
-                // The only circle in the product is the artist avatar (R3).
-                RowLayout {
-                    anchors.fill: parent
-                    spacing: root.width * 0.015
-
-                    Rectangle {
-                        readonly property real side: Math.min(root.avatarSide,
-                            identityBox.width * 0.5)
-
-                        Layout.preferredWidth: side
-                        Layout.preferredHeight: side
-                        Layout.alignment: Qt.AlignVCenter
-                        radius: width * 0.5
-                        color: Palette.primaryContainer
-                        clip: true
-
-                        CoverImage {
-                            anchors.fill: parent
-                            source: root.artistCover
-                        }
-                    }
-
-                    ColumnLayout {
-                        Layout.fillWidth: true
-                        Layout.alignment: Qt.AlignVCenter
-                        spacing: root.height * 0.006
-
-                        FadeText {
-                            Layout.fillWidth: true
-                            text: root.artistName
-                            color: Palette.onSurface
-                            font.pixelSize: root.height * 0.036
-                            font.bold: true
-                            elide: Text.ElideRight
-                        }
-                        FadeText {
-                            Layout.fillWidth: true
-                            text: root.artistMeta + (root.serverTag.length > 0 ? "   ·   " + root.serverTag : "")
-                            color: Palette.onSurfaceVariant
-                            font.pixelSize: root.height * 0.02
-                            elide: Text.ElideRight
-                        }
-                    }
-                }
-            }
-
-            Rectangle {
-                radius: Theme.radius
-                id: descriptionBox
-                anchors.left: identityBox.right
-                anchors.right: parent.right
-                anchors.top: parent.top
-                height: parent.height * 0.7
-                color: "transparent"
-                visible: !Theme.isNarrow(root.width)
-
-                // 15 px metrics: the capacity reference for the size ramp.
-                FontMetrics {
-                    id: bioMetrics
-                    font.family: Theme.fonts.body
-                    font.pixelSize: 15
-                }
+            ColumnLayout {
+                Layout.fillWidth: true
+                spacing: root.height * 0.006
 
                 FadeText {
-                    id: descriptionLabel
-                    anchors.fill: parent
-                    anchors.leftMargin: root.width * 0.015
-
-                    // UI-52/UI-53: font size ramps 15..17 by how much of this
-                    // rectangle the text fills — `capacity` is how many
-                    // characters fit at the 15 px floor (font metrics × the
-                    // lines that fit at that floor); a short biography grows
-                    // toward 17, one that exactly fills the box sits at 15,
-                    // overflow stays 15 and elides.
-                    readonly property int lines: Math.max(1,
-                        Math.floor(height / (15 * 1.3)))
-                    readonly property real charsPerLine: Math.max(1,
-                        Math.floor(width / bioMetrics.averageCharacterWidth))
-                    readonly property real capacity: charsPerLine * lines
-
-                    text: root.descriptionText
-                    color: Palette.onSurfaceVariant
-                    font.pixelSize: Theme.clamp(
-                        15 + (1 - text.length / capacity) * 2, 15, 17)
-                    wrapMode: Text.WordWrap
-                    maximumLineCount: lines
+                    Layout.fillWidth: true
+                    text: root.artistName
+                    color: Palette.onSurface
+                    font.pixelSize: root.height * 0.04
+                    font.bold: true
                     elide: Text.ElideRight
                 }
-            }
 
-            Rectangle {
-                radius: Theme.radius
-                id: actionsBox
-                anchors.left: identityBox.right
-                anchors.right: parent.right
-                anchors.top: descriptionBox.bottom
-                anchors.bottom: parent.bottom
-                color: "transparent"
-                visible: !Theme.isNarrow(root.width)
-
-                // UI-60: the five-star array leads the strip (hover preview,
-                // click sets/clears); the favourite chip keeps the count
-                // badge on the right.
-                Row {
-                    anchors.left: parent.left
-                    anchors.leftMargin: root.width * 0.015
-                    anchors.verticalCenter: parent.verticalCenter
-
-                    StarRating {
-                        anchors.verticalCenter: parent.verticalCenter
-                        unit: root.height * 0.05
-                        rating: root.artistRating
-                        onPicked: (level) => {
-                            root.artistRating = level;
-                            Backend.rateArtist(root.artistId, level);
-                        }
+                StarRating {
+                    Layout.alignment: Qt.AlignLeft
+                    unit: Math.max(22, Math.min(45, root.height * 0.04))
+                    rating: root.artistRating
+                    onPicked: level => {
+                        root.artistRating = level;
+                        Backend.rateArtist(root.artistId, level);
                     }
                 }
 
+                RowLayout {
+                    Layout.fillWidth: true
+                    spacing: root.height * 0.008
+
+                    // ARC-I-2/UI-60: the favourite leads the fineprint line.
+                    Item {
+                        visible: root.artistStarred
+                        Layout.alignment: Qt.AlignVCenter
+                        Layout.preferredWidth: root.height * 0.016
+                        Layout.preferredHeight: width
+
+                        Icon {
+                            anchors.fill: parent
+                            name: "baseline-favorite"
+                            symbolColor: Theme.iconStrong
+                        }
+                    }
+
+                    FadeText {
+                        Layout.fillWidth: true
+                        text: root.artistMeta + (root.serverTag.length > 0 ? "   ·   " + root.serverTag : "")
+                        color: Palette.onSurfaceVariant
+                        font.pixelSize: root.height * 0.02
+                        elide: Text.ElideRight
+                    }
+                }
+
+                // UI-60: the artist actions keep their Tab ring, now under the
+                // identity instead of inside the old 30/70 header box.
                 Row {
-                    anchors.right: parent.right
-                    anchors.rightMargin: root.width * 0.015
-                    anchors.verticalCenter: parent.verticalCenter
+                    Layout.alignment: Qt.AlignLeft
                     spacing: root.height * 0.010
 
                     ActionChip {
                         unit: root.height * 0.06
-                        // CACHE-5/8: artist container download toggle. ON
-                        // marks and fetches every song of the artist, OFF
-                        // drops the rule, its marks and its rule-owned blobs;
-                        // the `artist_cache` payload reconciles (including
-                        // `active`). The visual is the shared
-                        // ARC-UI-6 DownloadButton. Counts label is CACHE-7.
                         icon: ""
                         onClicked: {
                             root.chipScope = 0;
@@ -662,9 +570,6 @@ Rectangle {
                             root.toggleFavorite();
                         }
 
-                        // UI-60: the shared favourite button carries the
-                        // artist's state + count (the Alt overlay's rating
-                        // step reconciles through `ratingChanged`).
                         FavoriteButton {
                             anchors.fill: parent
                             variant: "chip"
@@ -678,16 +583,21 @@ Rectangle {
                         }
                     }
                 }
+
+                // The biography is the header's fineprint band; long copy
+                // elides instead of squeezing the wall below.
+                FadeText {
+                    Layout.fillWidth: true
+                    text: root.descriptionText
+                    color: Palette.onSurfaceVariant
+                    font.pixelSize: root.height * 0.02
+                    lineHeight: 1.25
+                    wrapMode: Text.WordWrap
+                    maximumLineCount: 4
+                    elide: Text.ElideRight
+                }
             }
         }
-
-        Rectangle {
-            radius: Theme.radius
-            Layout.fillWidth: true
-            Layout.preferredHeight: Math.max(1, root.height * Theme.hairlineRatio)
-            color: Palette.outlineVariant
-        }
-
         // Albums: the shared panel (ARC-UI-3, SCROLLGRIDSTUDY.md) — the same
         // `ScrollPanel` the Main list segments use, in grid mode: four covers
         // per row with the title and year/count underneath, gg/G, the `/`

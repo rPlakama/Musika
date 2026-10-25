@@ -3,6 +3,12 @@
 All notable changes to Musika, newest first. `TASKLISTMAJOR.md` tracks the
 open work; this file is the release history.
 
+## 0.4.2 — _Wouldn't that be strange to have so much information?_
+
+All commits since `v0.4.1`:
+
+- `00f5e73` Polish the album page and consolidate tests into test.rs
+
 ## 0.4.1 — _Leaner enough to grab by the hips_
 
 All commits since `v0.4.0`:

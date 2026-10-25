@@ -1960,6 +1960,28 @@ impl Backend {
         self.track_skipped(true);
     }
 
+    #[qslot(qml_name = "playerNextBy")]
+    fn player_next_by(&mut self, count: i64) {
+        let steps = (count.max(1) as usize).min(self.player.queue().len().max(1));
+        for _ in 0..steps {
+            self.player.next();
+        }
+        self.sync_player();
+        self.emit_queue(false);
+        self.track_skipped(true);
+    }
+
+    #[qslot(qml_name = "playerPreviousBy")]
+    fn player_previous_by(&mut self, count: i64) {
+        let steps = (count.max(1) as usize).min(self.player.queue().len().max(1));
+        for _ in 0..steps {
+            self.player.previous();
+        }
+        self.sync_player();
+        self.emit_queue(false);
+        self.track_skipped(false);
+    }
+
     #[qslot(qml_name = "playerPrevious")]
     fn player_previous(&mut self) {
         self.player.previous();

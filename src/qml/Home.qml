@@ -617,11 +617,11 @@ Item {
         // Ctrl-N/Ctrl-P (and n/p) skip tracks and ,/. seek ±5 s wherever a
         // list owns focus. The player bar is decoration and owns no keys.
         if (action === "next_track") {
-            Backend.playerNext();
+            Backend.playerNextBy(Math.max(1, Backend.keyCount));
             return;
         }
         if (action === "prev_track") {
-            Backend.playerPrevious();
+            Backend.playerPreviousBy(Math.max(1, Backend.keyCount));
             return;
         }
         if (action === "seek_back") {

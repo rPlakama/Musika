@@ -285,11 +285,11 @@ Rectangle {
     // Fullscreen keys, scoped to the focused surface. Esc/back stays with Home.
     function handleAction(action) {
         if (action === "next_track") {
-            Backend.playerNext();
+            Backend.playerNextBy(Math.max(1, Backend.keyCount));
             return;
         }
         if (action === "prev_track") {
-            Backend.playerPrevious();
+            Backend.playerPreviousBy(Math.max(1, Backend.keyCount));
             return;
         }
 

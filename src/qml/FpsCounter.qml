@@ -32,6 +32,9 @@ Item {
     property real averageMs: 0
     property real delayMs: 0
     property int framesSinceUpdate: 0
+    // When true, the debug overlay stops driving frames so the idle pacer
+    // can settle the window at ~30 Hz.
+    property bool idle: false
 
     width: 190
     height: column.implicitHeight + 12
@@ -82,7 +85,7 @@ Item {
     }
 
     FrameAnimation {
-        running: root.visible
+        running: root.visible && !root.idle
         onTriggered: {
             // FrameAnimation.frameTime is seconds, not milliseconds.
             var elapsed = frameTime * 1000;

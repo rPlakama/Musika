@@ -41,13 +41,42 @@ ApplicationWindow {
 
     // P-6: the session debounce cannot be awaited during teardown, so the
     // backend does one synchronous last-chance write (own DB, single row).
+    // Idle frame pacing: Qt Quick has no per-window FPS property, so while
+    // the window is unfocused (and the fullscreen player is not up) this
+    // pacer is the only thing asking for a repaint. It ticks at ~30 Hz;
+    // active windows and NowPlaying ride the normal vsync rate.
+    readonly property bool nowPlayingVisible: {
+        var page = stack.currentItem;
+        return page !== null && page.nowPlayingExpanded === true;
+    }
+    readonly property bool idleBehavior: !root.active && !root.nowPlayingVisible
+    property int idleTick: 0
+
+    Timer {
+        interval: 33
+        repeat: true
+        running: root.idleBehavior
+        onTriggered: root.idleTick++
+    }
+
+    // A one-pixel pulse gives the idle timer something to repaint.
+    Rectangle {
+        x: -2
+        y: -2
+        width: 1
+        height: 1
+        color: root.idleTick % 2 === 0 ? "#000000" : "#010101"
+    }
+
     Loader {
+        id: fpsLoader
         anchors.top: parent.top
         anchors.left: parent.left
         anchors.margins: 8
         z: 1000
         active: Backend.debugBuild()
         source: "FpsCounter.qml"
+        onLoaded: item.idle = Qt.binding(function () { return root.idleBehavior; })
     }
 
     onClosing: Backend.flushStatus()

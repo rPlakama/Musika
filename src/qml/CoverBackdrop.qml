@@ -15,20 +15,18 @@
 // along with this program; if not, see <https://www.gnu.org/licenses/>.
 
 import QtQuick
-import QtQuick.Effects
 import musika
-import "Theme.js" as Theme
 
 // Album/artist ambience for the rectangular pages. The sharp square is
 // contained at the upper centre (never cropped or stretched); the rest of the
-// page is the same cover cropped edge-to-edge, blurred into its main colours.
+// page is a vignette centred on that square instead of a blurred copy.
 Item {
     id: root
 
     property url source
 
-    /// True once the covering image is decoded; hosts use this for their wash.
-    readonly property bool ready: fill.ready
+    /// True once the artwork is decoded; hosts use this for their wash.
+    readonly property bool ready: cover.ready
 
     /// Optional ceiling for hosts that reserve a rows band below the art.
     property real maxSide: Number.POSITIVE_INFINITY
@@ -39,35 +37,46 @@ Item {
     visible: root.ready
     clip: true
 
-    // Opaque base: blur edges and transparent padding blend into the surface.
     Rectangle {
         anchors.fill: parent
         color: Palette.surfaceContainerLowest
     }
 
-    // Edge-to-edge bleed: cropped (the crop is hidden by the blur) and
-    // desaturated only by the theme's acrylic recipe.
-    CoverImage {
-        id: fill
+    // Radial vignette around the square: transparent at the artwork, darker
+    // toward the page edges. Painted once per size, not per frame.
+    Canvas {
+        id: vignette
         anchors.fill: parent
-        source: root.source
-        // Half-res decode: the blur hides the difference and the page does not
-        // pay for a second full-resolution image.
-        sizeFactor: 0.5
-        fillMode: Image.PreserveAspectCrop
-        opacity: Theme.acrylic.enabled ? 1 : 0
-        layer.enabled: fill.ready && Theme.acrylic.enabled
-        layer.effect: MultiEffect {
-            blurEnabled: true
-            blur: Theme.acrylic.blur
-            blurMax: Theme.acrylic.blurMax
-            saturation: 1.0
-            autoPaddingEnabled: false
+
+        onPaint: {
+            if (root.width <= 0 || root.height <= 0)
+                return;
+            var ctx = getContext("2d");
+            ctx.clearRect(0, 0, root.width, root.height);
+            var cx = root.width * 0.5;
+            var cy = root.coverSide * 0.5;
+            var inner = Math.max(1, root.coverSide * 0.32);
+            var outer = Math.max(root.width, root.height) * 0.78;
+            var gradient = ctx.createRadialGradient(cx, cy, inner, cx, cy, outer);
+            gradient.addColorStop(0.0, "rgba(0,0,0,0)");
+            gradient.addColorStop(0.55, "rgba(0,0,0,0.16)");
+            gradient.addColorStop(1.0, "rgba(0,0,0,0.62)");
+            ctx.fillStyle = gradient;
+            ctx.fillRect(0, 0, root.width, root.height);
         }
+
+        onWidthChanged: requestPaint()
+        onHeightChanged: requestPaint()
+    }
+
+    Connections {
+        target: root
+        function onCoverSideChanged() { vignette.requestPaint(); }
     }
 
     // The artwork itself: top-centre, aspect-fit in the largest page square.
     CoverImage {
+        id: cover
         anchors.top: parent.top
         anchors.horizontalCenter: parent.horizontalCenter
         width: root.coverSide

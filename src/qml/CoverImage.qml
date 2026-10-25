@@ -91,9 +91,10 @@ Item {
         asynchronous: true
         cache: true
         fillMode: root.fillMode
-        // The decode already targets the painted size; no extra GPU filtering.
-        smooth: false
-        mipmap: false
+        // Cover art is scaled in the page headers and rows: keep bilinear
+        // filtering and mipmaps enabled for a clean downscale.
+        smooth: true
+        mipmap: true
         visible: root.ready
         onStatusChanged: {
             if (status === Image.Error && !root.thumbFailed

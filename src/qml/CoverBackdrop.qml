@@ -18,8 +18,8 @@ import QtQuick
 import musika
 
 // Album/artist ambience for the rectangular pages. The sharp square is
-// contained at the upper centre (never cropped or stretched); the rest of the
-// page is a vignette centred on that square instead of a blurred copy.
+// contained at the upper centre (never cropped or stretched) on the plain
+// surface; there is deliberately no blurred or vignetted surround.
 Item {
     id: root
 
@@ -40,29 +40,6 @@ Item {
     Rectangle {
         anchors.fill: parent
         color: Palette.surfaceContainerLowest
-    }
-
-    // Cross vignette: two transparent-to-dark gradients, centred on the
-    // artwork. Their overlap darkens the corners without an extra image pass.
-    Rectangle {
-        anchors.fill: parent
-        gradient: Gradient {
-            GradientStop { position: 0.0; color: Qt.rgba(0, 0, 0, 0.34) }
-            GradientStop { position: 0.34; color: "transparent" }
-            GradientStop { position: 0.66; color: "transparent" }
-            GradientStop { position: 1.0; color: Qt.rgba(0, 0, 0, 0.46) }
-        }
-    }
-
-    Rectangle {
-        anchors.fill: parent
-        gradient: Gradient {
-            orientation: Gradient.Horizontal
-            GradientStop { position: 0.0; color: Qt.rgba(0, 0, 0, 0.28) }
-            GradientStop { position: 0.30; color: "transparent" }
-            GradientStop { position: 0.70; color: "transparent" }
-            GradientStop { position: 1.0; color: Qt.rgba(0, 0, 0, 0.28) }
-        }
     }
 
     // The artwork itself: top-centre, aspect-fit in the largest page square.

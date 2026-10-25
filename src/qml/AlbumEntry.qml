@@ -103,6 +103,12 @@ Rectangle {
     /// the old strip, matching the album-title scale.
     readonly property real starUnit: Math.max(22, Math.min(45, root.height * 0.04))
 
+    /// The header gap follows the cover but never eats more than 75% of
+    /// the usable page height; wide pages keep room for the rows.
+    readonly property real headerCoverBottom: Math.min(
+        coverBackdrop.coverSide - root.width * 0.02,
+        (root.height - root.width * 0.04) * 0.75)
+
     color: Palette.surface
 
     // A color with a replaced alpha, for the ambience gradient stops.
@@ -615,8 +621,8 @@ Rectangle {
             id: header
             Layout.fillWidth: true
             // The rows start below the displayed square art, not on top of it.
-            Layout.bottomMargin: Math.max(0, coverBackdrop.coverSide - root.width * 0.02
-                - header.implicitHeight - (headerGap.visible ? root.height * 0.22 : 0))
+            Layout.bottomMargin: Math.max(0, root.headerCoverBottom - header.implicitHeight
+                - (headerGap.visible ? root.height * 0.22 : 0))
             spacing: root.height * 0.008
 
             // Description.

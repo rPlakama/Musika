@@ -304,6 +304,8 @@ Item {
     }
 
     function _cursorMoved() {
+        var teleport = root._teleportMove;
+        root._teleportMove = false;
         if (root._landing)
             return;
         root._manualScroll = false;
@@ -324,7 +326,7 @@ Item {
         }
         if (v.currentIndex !== index)
             v.currentIndex = index;
-        root._follow(v, index, false);
+        root._follow(v, index, teleport);
     }
 
     /// Instant landing (semantic jumps: gg/G, search, restores, reset).
@@ -475,6 +477,8 @@ Item {
         }
         if (target === root.currentIndex)
             return false;
+        // VI-7: a big count is a teleport, not a long scroll animation.
+        root._teleportMove = n > root.teleportThreshold;
         root.currentIndex = target;
         return true;
     }
@@ -554,6 +558,11 @@ Item {
 
     property bool _manualScroll: false
     property bool _landing: false
+    /// A numeric move above `teleportThreshold` lands natively instead of
+    /// gliding through every intermediate row.
+    property bool _teleportMove: false
+    /// The row count above which a numeric move teleports (`15` = 16+).
+    property int teleportThreshold: 15
     property bool _resizeScheduled: false
 
     /// One deferred pass per resize batch, off the compositor event.

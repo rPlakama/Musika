@@ -30,8 +30,11 @@ Item {
     /// True once the covering image is decoded; hosts use this for their wash.
     readonly property bool ready: fill.ready
 
+    /// Optional ceiling for hosts that reserve a rows band below the art.
+    property real maxSide: Number.POSITIVE_INFINITY
+
     /// The largest square that fits the page; the cover grows/shrinks with it.
-    readonly property real coverSide: Math.min(width, height)
+    readonly property real coverSide: Math.min(width, height, maxSide)
 
     visible: root.ready
     clip: true

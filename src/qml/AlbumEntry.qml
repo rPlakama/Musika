@@ -588,6 +588,9 @@ Rectangle {
         id: coverBackdrop
         anchors.fill: parent
         source: root.albumCover
+        // Leave the bottom quarter for the rows; the square never grows
+        // behind them.
+        maxSide: (root.height - root.width * 0.04) * 0.75
     }
 
     Rectangle {

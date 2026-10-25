@@ -339,7 +339,9 @@ impl Player {
                 let Ok(value) = serde_json::from_str::<Value>(&line) else {
                     return;
                 };
-                let mut shared = shared.lock().unwrap();
+                let mut shared = shared
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
                 apply_event(&mut shared, &value);
             });
         }

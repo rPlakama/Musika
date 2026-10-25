@@ -131,7 +131,9 @@ fn secret_key() -> Result<&'static SecretKey> {
     }
     let key = SecretKey::load()?;
     let _ = SECRET_KEY.set(key);
-    Ok(SECRET_KEY.get().expect("secret key just initialised"))
+    SECRET_KEY
+        .get()
+        .ok_or_else(|| anyhow::anyhow!("secret key not initialised"))
 }
 
 pub fn encrypt_password(password: &str) -> Result<String> {

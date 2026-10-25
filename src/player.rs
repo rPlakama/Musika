@@ -292,7 +292,9 @@ impl Player {
     }
 
     pub(crate) fn shared(&self) -> std::sync::MutexGuard<'_, Shared> {
-        self.shared.lock().unwrap()
+        self.shared
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
     pub fn duration(&self) -> f64 {

@@ -70,5 +70,11 @@ pub fn pool() -> Option<SqlitePool> {
 
 pub fn runtime() -> &'static Runtime {
     static RT: OnceLock<Runtime> = OnceLock::new();
-    RT.get_or_init(|| Runtime::new().unwrap())
+    RT.get_or_init(|| match Runtime::new() {
+        Ok(runtime) => runtime,
+        Err(err) => {
+            eprintln!("runtime: could not start Tokio: {err}");
+            std::process::exit(1);
+        }
+    })
 }

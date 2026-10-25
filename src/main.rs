@@ -194,9 +194,13 @@ fn main() {
         }
     }
 
-    let dbs = crate::app::runtime()
-        .block_on(db::init())
-        .expect("failed to initialise the databases");
+    let dbs = match crate::app::runtime().block_on(db::init()) {
+        Ok(dbs) => dbs,
+        Err(err) => {
+            eprintln!("database: failed to initialise: {err:#}");
+            std::process::exit(1);
+        }
+    };
     crate::app::set_dbs(dbs);
 
     let mut app = QApp::new();

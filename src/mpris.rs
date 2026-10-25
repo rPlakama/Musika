@@ -255,9 +255,7 @@ async fn emit_changes(connection: &Connection, notify: &Notify) {
 }
 
 pub(crate) fn owned(value: Value<'_>) -> OwnedValue {
-    value
-        .try_into()
-        .unwrap_or_else(|_| Value::from(0u8).try_into().expect("u8 is representable"))
+    value.try_into().unwrap_or_else(|_| OwnedValue::from(0u8))
 }
 
 /// MPRIS object path for a song id (segments allow `[A-Za-z0-9_]` only).

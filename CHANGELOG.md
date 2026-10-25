@@ -3,6 +3,19 @@
 All notable changes to Musika, newest first. `TASKLISTMAJOR.md` tracks the
 open work; this file is the release history.
 
+## 0.4.6 — _Small fixes, small ribcages, small hips, aren't all they easy to grab?_
+
+All commits since `v0.4.5`:
+
+- `d238008` Share one thumbnail decode per cover
+- `d3f4b46` Keep the transport core centered around repeat
+- `a1677fe` Make album tracks Tab-selectable and deepen the cover shadow
+- `a69630d` Anchor the album track scroller to the bottom
+- `9c7bff5` Restore a blurred, shadowed cover backdrop
+- `becc25f` Restore smooth cover filtering
+- `26ef704` Stop washing the page covers
+- `b713298` Remove the cover vignette
+
 ## 0.4.5 — _Under the flesh, under the clothes..._
 
 All commits since `v0.4.4`:

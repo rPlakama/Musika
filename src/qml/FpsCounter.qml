@@ -52,31 +52,31 @@ Item {
         spacing: 1
 
         Text {
-            text: "Current: " + root.currentFps.toFixed(1) + " FPS"
+            text: "Current: " + format(root.currentFps, 1) + " FPS"
             color: "white"; font.pixelSize: 11; font.family: "monospace"
         }
         Text {
-            text: "Top: " + root.topFps.toFixed(1) + " FPS"
+            text: "Top: " + format(root.topFps, 1) + " FPS"
             color: "white"; font.pixelSize: 11; font.family: "monospace"
         }
         Text {
-            text: "Min: " + root.minFps.toFixed(1) + " FPS"
+            text: "Min: " + format(root.minFps, 1) + " FPS"
             color: "white"; font.pixelSize: 11; font.family: "monospace"
         }
         Text {
-            text: "Low 1%: " + root.lowOnePercentFps.toFixed(1) + " FPS"
+            text: "Low 1%: " + format(root.lowOnePercentFps, 1) + " FPS"
             color: "white"; font.pixelSize: 11; font.family: "monospace"
         }
         Text {
-            text: "Average: " + root.averageFps.toFixed(1) + " FPS"
+            text: "Average: " + format(root.averageFps, 1) + " FPS"
             color: "white"; font.pixelSize: 11; font.family: "monospace"
         }
         Text {
-            text: "AverageMS: " + root.averageMs.toFixed(2) + " ms"
+            text: "AverageMS: " + format(root.averageMs, 2) + " ms"
             color: "white"; font.pixelSize: 11; font.family: "monospace"
         }
         Text {
-            text: "Delay: " + root.delayMs.toFixed(2) + " ms"
+            text: "Delay: " + format(root.delayMs, 2) + " ms"
             color: "white"; font.pixelSize: 11; font.family: "monospace"
         }
     }
@@ -98,6 +98,13 @@ Item {
                 root.updateStats();
             }
         }
+    }
+
+    // Trim trailing zeros: 60.0 FPS -> 60 FPS, 16.70 ms -> 16.7 ms.
+    function format(value, digits) {
+        return Number(value).toFixed(digits)
+            .replace(/\.0+$/, "")
+            .replace(/(\.\d*?)0+$/, "$1");
     }
 
     function updateStats() {

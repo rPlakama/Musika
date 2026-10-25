@@ -51,6 +51,19 @@ pub(crate) fn since_start(label: &str) {
     report(label, started);
 }
 
+pub(crate) fn idle_event(entered: bool) -> &'static str {
+    if entered { "enter" } else { "leave" }
+}
+
+pub(crate) fn idle(entered: bool) {
+    let started = *PROCESS_START.get_or_init(Instant::now);
+    println!(
+        "[musika/debug] idle.{} at {:.2} ms",
+        idle_event(entered),
+        ms(started)
+    );
+}
+
 pub(crate) fn albums_loaded(started: Instant, rows: usize, bytes: usize) {
     report_with(
         "albums.load",

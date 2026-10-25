@@ -50,6 +50,7 @@ ApplicationWindow {
         return page !== null && page.nowPlayingExpanded === true;
     }
     readonly property bool idleBehavior: !root.active && !root.nowPlayingVisible
+    onIdleBehaviorChanged: Backend.noteIdle(idleBehavior)
     property int idleTick: 0
 
     Timer {

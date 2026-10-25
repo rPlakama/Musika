@@ -5371,6 +5371,12 @@ mod benchmark {
     ///
     /// `cargo test test::benchmark::vulkan_probe -- --nocapture`
     #[test]
+    fn idle_log_labels_are_stable() {
+        assert_eq!(super::debug_info::idle_event(true), "enter");
+        assert_eq!(super::debug_info::idle_event(false), "leave");
+    }
+
+    #[test]
     fn vulkan_probe() {
         for line in super::debug_info::diagnostics() {
             println!("[bench] {line}");

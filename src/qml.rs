@@ -1970,6 +1970,12 @@ impl Backend {
         }
     }
 
+    #[qslot(qml_name = "noteIdle")]
+    fn note_idle(&mut self, idle: bool) {
+        #[cfg(debug_assertions)]
+        crate::debug_info::idle(idle);
+    }
+
     #[qslot(qml_name = "debugBuild")]
     fn debug_build(&self) -> bool {
         cfg!(debug_assertions)

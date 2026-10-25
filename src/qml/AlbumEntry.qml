@@ -111,11 +111,6 @@ Rectangle {
 
     color: Palette.surface
 
-    // A color with a replaced alpha, for the ambience gradient stops.
-    function withAlpha(color, alpha) {
-        return Qt.rgba(color.r, color.g, color.b, alpha);
-    }
-
     ListModel {
         id: songs
     }
@@ -582,8 +577,7 @@ Rectangle {
         }
     }
 
-    // Ambience (D-5): the album art itself, painted sharp, then washed into the
-    // theme surface by the gradient below.
+    // Ambience (D-5): the album art itself, painted sharp with no wash
     CoverBackdrop {
         id: coverBackdrop
         anchors.fill: parent
@@ -591,26 +585,6 @@ Rectangle {
         // Leave the bottom quarter for the rows; the square never grows
         // behind them.
         maxSide: (root.height - root.width * 0.04) * 0.75
-    }
-
-    Rectangle {
-        radius: Theme.radius
-        anchors.fill: parent
-        visible: coverBackdrop.visible
-        gradient: Gradient {
-            GradientStop {
-                position: 0.0
-                color: root.withAlpha(Palette.surface, 0.82)
-            }
-            GradientStop {
-                position: 0.38
-                color: root.withAlpha(Palette.surface, 0.30)
-            }
-            GradientStop {
-                position: 1.0
-                color: root.withAlpha(Palette.surface, 1.0)
-            }
-        }
     }
 
     ColumnLayout {

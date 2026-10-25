@@ -5264,3 +5264,94 @@ mod status {
         assert_eq!(loaded.updated_at, 200);
     }
 }
+
+mod benchmark {
+    use super::common::*;
+    use super::memory_pool;
+    use crate::browse::load_albums_json;
+
+    fn dbs(library: &SqlitePool, media: &SqlitePool) -> Dbs {
+        Dbs {
+            credentials: library.clone(),
+            library: library.clone(),
+            search: library.clone(),
+            covers: media.clone(),
+            media: media.clone(),
+            lyrics: media.clone(),
+            colors: library.clone(),
+            status: library.clone(),
+            artist_user: library.clone(),
+            download: media.clone(),
+            playlist: library.clone(),
+        }
+    }
+
+    /// Database open + embedded migrations, against SQLite in memory.
+    ///
+    /// `cargo test test::benchmark::bench_database_open -- --ignored --nocapture`
+    #[ignore = "benchmark, run explicitly"]
+    #[tokio::test]
+    async fn bench_database_open() {
+        let started = Instant::now();
+        let library = memory_pool(sqlx::migrate!("./migrations_library")).await;
+        let media = memory_pool(sqlx::migrate!("./migrations_media")).await;
+        let search = memory_pool(sqlx::migrate!("./migrations_library")).await;
+        println!(
+            "[bench] database.open (memory + migrations): {:.2} ms",
+            started.elapsed().as_secs_f64() * 1000.0
+        );
+        drop((library, media, search));
+    }
+
+    struct AlbumSeed {
+        id: String,
+        name: String,
+    }
+
+    /// Album list read -> cover map -> JSON payload, on a seeded library.
+    ///
+    /// `cargo test test::benchmark::bench_albums_load -- --ignored --nocapture`
+    #[ignore = "benchmark, run explicitly"]
+    #[tokio::test]
+    async fn bench_albums_load() {
+        const ALBUMS: usize = 3_000;
+
+        let library = memory_pool(sqlx::migrate!("./migrations_library")).await;
+        let media = memory_pool(sqlx::migrate!("./migrations_media")).await;
+        let rows: Vec<AlbumSeed> = (0..ALBUMS)
+            .map(|i| AlbumSeed {
+                id: format!("al{i}"),
+                name: format!("Album {i:05}"),
+            })
+            .collect();
+        let mut tx = library.begin().await.unwrap();
+        crate::cache::insert_many(
+            &mut tx,
+            "INSERT INTO albums (id, artist_id, name, artist, year, song_count, duration, cover_art) ",
+            &rows,
+            |mut query, row| {
+                query
+                    .push_bind(&row.id)
+                    .push_bind("ar1")
+                    .push_bind(&row.name)
+                    .push_bind("Bench Artist")
+                    .push_bind(2026_i64)
+                    .push_bind(10_i64)
+                    .push_bind(2_400_i64)
+                    .push_bind("");
+            },
+        )
+        .await
+        .unwrap();
+        tx.commit().await.unwrap();
+
+        let dbs = dbs(&library, &media);
+        let started = Instant::now();
+        let payload = load_albums_json(&dbs, "", "Artist", false).await.unwrap();
+        println!(
+            "[bench] albums.load ({ALBUMS} rows): {:.2} ms ({} bytes)",
+            started.elapsed().as_secs_f64() * 1000.0,
+            payload.len()
+        );
+    }
+}

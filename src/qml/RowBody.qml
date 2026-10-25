@@ -19,9 +19,10 @@ import musika
 import "Theme.js" as Theme
 
 // ARC-IDK: one row body shared by library lists and the fullscreen queue.
-// Covers, text, meta and the shared RowMarks keep their own update seams
-// (cover source, title/subtitle text, meta text, mark ids), so a per-row
-// change never has to recall the surrounding list.
+// The row is one horizontal strip: cover, metadata, a squeezeable gap, the
+// symbol block and the additional info. Metadata is the only flexible text
+// segment and wraps when the gap runs out; the symbols always keep their
+// rectangle and the additional info keeps its reserved width.
 Item {
     id: root
 
@@ -69,62 +70,37 @@ Item {
     property string searchQuery: ""
     property bool searchCurrent: false
 
+    /// The desired breathing room between metadata and symbols. It is spent
+    /// first; only when it reaches zero does the metadata segment start
+    /// wrapping.
+    readonly property real desiredGap: root.viewWidth * 0.03
+    readonly property real metaReserve: root.showMeta
+        ? metaBox.width + root.rightMargin : 0
+    readonly property real marksReserve: root.showMarks && marks.width > 0
+        ? marks.width + (root.showMeta ? root.marksMargin : root.rightMargin) : 0
+    readonly property real metadataLeft: root.showCover
+        ? cover.width + root.textGap : root.leftMargin
+    readonly property real metadataAvailable: Math.max(1,
+        root.viewWidth - root.metadataLeft - root.metaReserve - root.marksReserve)
+    readonly property real metadataMin: Math.max(1, root.viewWidth * 0.18)
+    readonly property real gapWidth: Math.max(0,
+        Math.min(root.desiredGap, root.metadataAvailable - root.metadataMin))
+
     Item {
-        width: root.width
-        height: root.height
+        anchors.fill: parent
 
-            Rectangle {
-                id: cover
-        visible: root.showCover
-        anchors.left: parent.left
-        anchors.verticalCenter: parent.verticalCenter
-        anchors.leftMargin: root.leftMargin
-        width: root.rowHeight * 0.78
-        height: root.rowHeight * 0.78
-        radius: root.roundedArt ? width * 0.5 : Theme.radius
-        color: Palette.surfaceContainerHigh
-        clip: true
-        scale: root.emphasized && !Theme.reduceMotion ? Theme.selectionEmphasis : 1.0
-
-        Behavior on scale {
-            NumberAnimation {
-                duration: Theme.motion.quick
-                easing.type: Easing.Bezier
-                easing.bezierCurve: Theme.ease.standard
-            }
-        }
-
-        CoverImage {
-            anchors.fill: parent
-            source: root.cover
-            sizeFactor: 1.25
-        }
-    }
-
-    Column {
-        id: textColumn
-        anchors.verticalCenter: parent.verticalCenter
-        anchors.left: root.showCover ? cover.right : parent.left
-        anchors.leftMargin: root.showCover ? root.textGap : root.leftMargin
-        anchors.right: root.showMeta ? metaBox.left : parent.right
-        anchors.rightMargin: root.showMeta ? root.textGap : root.marksMargin
-        spacing: root.rowHeight * 0.05
-
-        SearchText {
-            id: titleText
-            width: parent.width
-            text: root.title
-            color: root.titleColor
-            font.pixelSize: root.titlePixelSize
-            font.bold: root.current
-            elide: Text.ElideRight
-            animated: false
-            query: root.searchQuery
-            currentMatch: root.searchCurrent
-            transformOrigin: Item.Left
-            scale: root.emphasized && !Theme.reduceMotion
-                ? Theme.fitScale(titleText.width, titleText.paintedWidth, Theme.selectionEmphasis)
-                : 1.0
+        Rectangle {
+            id: cover
+            visible: root.showCover
+            anchors.left: parent.left
+            anchors.verticalCenter: parent.verticalCenter
+            anchors.leftMargin: root.leftMargin
+            width: root.rowHeight * 0.78
+            height: root.rowHeight * 0.78
+            radius: root.roundedArt ? width * 0.5 : Theme.radius
+            color: Palette.surfaceContainerHigh
+            clip: true
+            scale: root.emphasized && !Theme.reduceMotion ? Theme.selectionEmphasis : 1.0
 
             Behavior on scale {
                 NumberAnimation {
@@ -133,67 +109,134 @@ Item {
                     easing.bezierCurve: Theme.ease.standard
                 }
             }
+
+            CoverImage {
+                anchors.fill: parent
+                source: root.cover
+                sizeFactor: 1.25
+            }
         }
 
-        SearchText {
-            visible: root.showSubtitle
-            width: parent.width
-            text: root.subtitle
-            color: root.subtitleColor
-            font.pixelSize: root.subtitlePixelSize
-            elide: Text.ElideRight
-            animated: false
-            query: root.searchQuery
-            currentMatch: root.searchCurrent
+        // Metadata segment: the only elastic piece.
+        Rectangle {
+            id: metainfoBox
+            color: "transparent"
+            clip: true
+            anchors.verticalCenter: parent.verticalCenter
+            anchors.left: root.showCover ? cover.right : parent.left
+            anchors.leftMargin: root.showCover ? root.textGap : root.leftMargin
+            anchors.right: gap.left
+            height: Math.min(root.rowHeight, metainfoColumn.implicitHeight)
+
+            Column {
+                id: metainfoColumn
+                width: parent.width
+                anchors.verticalCenter: parent.verticalCenter
+                spacing: root.rowHeight * 0.05
+
+                SearchText {
+                    id: titleText
+                    width: parent.width
+                    text: root.title
+                    color: root.titleColor
+                    font.pixelSize: root.titlePixelSize
+                    font.bold: root.current
+                    wrapMode: Text.WordWrap
+                    maximumLineCount: 2
+                    elide: Text.ElideRight
+                    animated: false
+                    query: root.searchQuery
+                    currentMatch: root.searchCurrent
+                    transformOrigin: Item.Left
+                    scale: root.emphasized && !Theme.reduceMotion
+                        ? Theme.fitScale(titleText.width, titleText.paintedWidth, Theme.selectionEmphasis)
+                        : 1.0
+
+                    Behavior on scale {
+                        NumberAnimation {
+                            duration: Theme.motion.quick
+                            easing.type: Easing.Bezier
+                            easing.bezierCurve: Theme.ease.standard
+                        }
+                    }
+                }
+
+                SearchText {
+                    visible: root.showSubtitle
+                    width: parent.width
+                    text: root.subtitle
+                    color: root.subtitleColor
+                    font.pixelSize: root.subtitlePixelSize
+                    wrapMode: Text.WordWrap
+                    maximumLineCount: 2
+                    elide: Text.ElideRight
+                    animated: false
+                    query: root.searchQuery
+                    currentMatch: root.searchCurrent
+                }
+            }
         }
-    }
 
-    Rectangle {
-        id: metaBox
-        visible: root.showMeta
-        anchors.verticalCenter: parent.verticalCenter
-        anchors.right: parent.right
-        anchors.rightMargin: root.rightMargin
-        width: root.reserveMeta
-            ? metaMetrics.advanceWidth("00:00:00")
-            : metaLabel.implicitWidth
-        height: metaLabel.implicitHeight
-        color: "transparent"
-
-        FontMetrics {
-            id: metaMetrics
-            font.family: Theme.fonts.body
-            font.pixelSize: metaLabel.font.pixelSize
+        // Squeezeable gap: its width goes to zero before the metadata wraps.
+        Rectangle {
+            id: gap
+            color: "transparent"
+            anchors.verticalCenter: parent.verticalCenter
+            anchors.right: root.showMarks && marks.width > 0
+                ? marks.left : (root.showMeta ? metaBox.left : parent.right)
+            width: root.gapWidth
+            height: 1
         }
 
-        SearchText {
-            id: metaLabel
-            anchors.fill: parent
-            text: root.meta
-            color: root.metaColor
-            font.pixelSize: root.metaPixelSize
-            horizontalAlignment: root.metaAlignRight ? Text.AlignRight : Text.AlignLeft
-            animated: false
-            query: root.searchQuery
-            currentMatch: root.searchCurrent
+        // Symbols segment: its own rectangle, always kept before meta.
+        RowMarks {
+            id: marks
+            visible: root.showMarks
+            anchors.verticalCenter: parent.verticalCenter
+            anchors.right: root.showMeta ? metaBox.left : parent.right
+            anchors.rightMargin: root.showMeta ? root.marksMargin : root.rightMargin
+            cursor: root.markCursor
+            firstVisible: root.visibleStart
+            lastVisible: root.visibleEnd
+            index: root.markIndex
+            songId: root.markSongId
+            albumId: root.markAlbumId
+            starred: root.markStarred
+            rating: root.markRating
+            showRating: root.markRatingVisible
+            base: metaLabel.font.pixelSize * 0.8
         }
-    }
 
-    RowMarks {
-        visible: root.showMarks
-        anchors.verticalCenter: parent.verticalCenter
-        anchors.right: root.showMeta ? metaBox.left : parent.right
-        anchors.rightMargin: root.showMeta ? root.marksMargin : root.rightMargin
-        cursor: root.markCursor
-        firstVisible: root.visibleStart
-        lastVisible: root.visibleEnd
-        index: root.markIndex
-        songId: root.markSongId
-        albumId: root.markAlbumId
-        starred: root.markStarred
-        rating: root.markRating
-        showRating: root.markRatingVisible
-        base: metaLabel.font.pixelSize * 0.8
+        // Additional info segment: its own reserved rectangle.
+        Rectangle {
+            id: metaBox
+            visible: root.showMeta
+            anchors.verticalCenter: parent.verticalCenter
+            anchors.right: parent.right
+            anchors.rightMargin: root.rightMargin
+            width: root.reserveMeta
+                ? metaMetrics.advanceWidth("00:00:00")
+                : metaLabel.implicitWidth
+            height: metaLabel.implicitHeight
+            color: "transparent"
+
+            FontMetrics {
+                id: metaMetrics
+                font.family: Theme.fonts.body
+                font.pixelSize: metaLabel.font.pixelSize
+            }
+
+            SearchText {
+                id: metaLabel
+                anchors.fill: parent
+                text: root.meta
+                color: root.metaColor
+                font.pixelSize: root.metaPixelSize
+                horizontalAlignment: root.metaAlignRight ? Text.AlignRight : Text.AlignLeft
+                animated: false
+                query: root.searchQuery
+                currentMatch: root.searchCurrent
+            }
         }
     }
 }

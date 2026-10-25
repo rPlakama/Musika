@@ -24,7 +24,7 @@ use qtbridge::{QmlObject, qobject};
 use serde::ser::{Serialize, SerializeSeq, SerializeStruct, Serializer};
 
 use crate::browse::{
-    album_notes, load_album_songs_json, load_albums_json, load_artist_json, load_artists_json,
+    load_album_songs_json, load_albums_json, load_artist_json, load_artists_json,
     load_songs_page_json, search_json,
 };
 use crate::keybind::{Keymap, Outcome};
@@ -37,6 +37,8 @@ mod artist;
 mod auth;
 #[path = "qml_backend/download.rs"]
 pub(crate) mod download;
+#[path = "qml_backend/library.rs"]
+mod library;
 #[path = "qml_backend/marks.rs"]
 mod marks;
 #[path = "qml_backend/player.rs"]
@@ -47,9 +49,8 @@ mod support;
 mod sync;
 
 use crate::session::client;
-use artist::{ArtistUserAction, apply_artist_user};
-use download::{artist_covers_album, selection_toggle};
-use support::{album_cache_payload, album_state_payload, artist_cache_payload, emit, raise};
+use download::selection_toggle;
+use support::{album_state_payload, emit, raise};
 use sync::{index_value, spawn_sync};
 
 /// Bumped by every status change; the debounced writer only persists when its
@@ -1492,20 +1493,7 @@ impl Backend {
     /// error toast.
     #[qslot(qml_name = "starArtist")]
     fn star_artist(&mut self, artist_id: String, on: bool) {
-        let invoker = self.get_qml_method_invoker();
-        let error_invoker = self.get_qml_method_invoker();
-        self.spawn_task(move |dbs| async move {
-            let result = apply_artist_user(&dbs, &artist_id, ArtistUserAction::Star(on)).await;
-            let json = crate::artist_user::payload(&dbs.artist_user, &artist_id).await;
-            emit(&invoker, "artist_user", json);
-            if let Err(err) = result {
-                raise(
-                    &error_invoker,
-                    "error",
-                    format!("Could not toggle favourite: {err:#}"),
-                );
-            }
-        });
+        self.star_artist_impl(artist_id, on);
     }
 
     /// Sets the artist rating (0..=5) on the server, then indexes it locally
@@ -1513,42 +1501,7 @@ impl Backend {
     /// error toast.
     #[qslot(qml_name = "rateArtist")]
     fn rate_artist(&mut self, artist_id: String, rating: i32) {
-        let rating = match u8::try_from(rating) {
-            Ok(rating) if rating <= 5 => rating,
-            _ => {
-                eprintln!("artist: rating {rating} is outside the 0..=5 domain");
-                return;
-            }
-        };
-        let invoker = self.get_qml_method_invoker();
-        let error_invoker = self.get_qml_method_invoker();
-        self.spawn_task(move |dbs| async move {
-            let result = apply_artist_user(&dbs, &artist_id, ArtistUserAction::Rate(rating)).await;
-            let json = crate::artist_user::payload(&dbs.artist_user, &artist_id).await;
-            emit(&invoker, "artist_user", json);
-            // UI-60: patch the artist rows in place (list/search), also on
-            // failure — the stored value reverts the optimistic badge.
-            let stored = crate::artist_user::get(&dbs.artist_user, &artist_id)
-                .await
-                .ok()
-                .flatten()
-                .map(|row| row.rating)
-                .unwrap_or(0);
-            qtbridge::invoke_method!(
-                invoker,
-                "ratingChanged",
-                "artist".to_string(),
-                artist_id.clone(),
-                stored
-            );
-            if let Err(err) = result {
-                raise(
-                    &error_invoker,
-                    "error",
-                    format!("Could not rate artist: {err:#}"),
-                );
-            }
-        });
+        self.rate_artist_impl(artist_id, rating);
     }
 
     /// Fetches the artist biography (`getArtistInfo2` → `getArtistInfo`
@@ -1556,78 +1509,7 @@ impl Backend {
     /// `artist_info`; offline serves the cached row.
     #[qslot(qml_name = "requestArtistInfo")]
     fn request_artist_info(&mut self, artist_id: String) {
-        let invoker = self.get_qml_method_invoker();
-        self.spawn_task(move |dbs| async move {
-            let cached = crate::library::artist_info(&dbs.library, &artist_id)
-                .await
-                .ok()
-                .flatten();
-            if let Some(row) = &cached {
-                emit(
-                    &invoker,
-                    "artist_info",
-                    serde_json::json!({
-                        "id": artist_id,
-                        "biography": row.biography,
-                        "url": row.url,
-                    })
-                    .to_string(),
-                );
-                if let Ok(fetched_at) = row.fetched_at.parse::<i64>()
-                    && crate::consts::now_secs() - fetched_at < crate::consts::INFO_TTL_SECS
-                {
-                    return;
-                }
-            }
-            let fetched = async {
-                let client = client(&dbs).await?;
-                let (biography, url) =
-                    match client.get_artist_info2(&artist_id, Some(10), None).await {
-                        Ok(info) => (info.info.biography, info.info.last_fm_url),
-                        Err(err) => {
-                            eprintln!("artist: getArtistInfo2 failed for {artist_id}: {err:#}");
-                            let info = client.get_artist_info(&artist_id, Some(10), None).await?;
-                            (info.info.biography, info.info.last_fm_url)
-                        }
-                    };
-                let biography = biography.unwrap_or_default();
-                let url = url.unwrap_or_default();
-                crate::library::upsert_artist_info(&dbs.library, &artist_id, &biography, &url)
-                    .await?;
-                Ok::<_, anyhow::Error>((biography, url))
-            }
-            .await;
-
-            match fetched {
-                Ok((biography, url)) => {
-                    emit(
-                        &invoker,
-                        "artist_info",
-                        serde_json::json!({
-                            "id": artist_id,
-                            "biography": biography,
-                            "url": url,
-                        })
-                        .to_string(),
-                    );
-                }
-                Err(err) => {
-                    eprintln!("artist: info fetch failed for {artist_id}: {err:#}");
-                    if cached.is_none() {
-                        emit(
-                            &invoker,
-                            "artist_info",
-                            serde_json::json!({
-                                "id": artist_id,
-                                "biography": "",
-                                "url": "",
-                            })
-                            .to_string(),
-                        );
-                    }
-                }
-            }
-        });
+        self.request_artist_info_impl(artist_id);
     }
     /// CACHE-1/8: an explicit user download. Idempotent — a cached blob or an
     /// in-flight fetch short-circuits; otherwise marks the ledger, fetches the
@@ -1641,26 +1523,7 @@ impl Backend {
     /// The stored artist-container selection (`artist_cache` channel).
     #[qslot(qml_name = "requestArtistCache")]
     fn request_artist_cache(&mut self, artist_id: String) {
-        let invoker = self.get_qml_method_invoker();
-        self.spawn_task(move |dbs| async move {
-            // The artist is "on" when every album of it holds an album rule
-            // (the batch is per album now; a legacy artist rule has no role).
-            let albums = crate::library::artist_album_ids(&dbs.library, &artist_id)
-                .await
-                .unwrap_or_default();
-            let mut on = !albums.is_empty();
-            for album in &albums {
-                if !matches!(
-                    crate::media::rule_for(&dbs.media, "album", album).await,
-                    Ok(Some(_))
-                ) {
-                    on = false;
-                    break;
-                }
-            }
-            let json = artist_cache_payload(&artist_id, on, false);
-            emit(&invoker, "artist_cache", json);
-        });
+        self.request_artist_cache_impl(artist_id);
     }
 
     /// The artist batch, reusable-style: it lists the artist's albums (the
@@ -1679,60 +1542,13 @@ impl Backend {
     /// (`album_cache`): an album rule, or an artist rule covering the album.
     #[qslot(qml_name = "requestAlbumCache")]
     fn request_album_cache(&mut self, album_id: String) {
-        self.spawn_data("album_cache", move |dbs| async move {
-            let album_rule = matches!(
-                crate::media::rule_for(&dbs.media, "album", &album_id).await,
-                Ok(Some(_))
-            );
-            let artist_covered =
-                match crate::library::album_artist_id(&dbs.library, &album_id).await {
-                    Ok(Some(artist_id)) => artist_covers_album(&dbs, &artist_id, &album_id).await,
-                    _ => false,
-                };
-            Ok(album_cache_payload(
-                &album_id,
-                album_rule || artist_covered,
-                false,
-                artist_covered,
-            ))
-        });
+        self.request_album_cache_impl(album_id);
     }
 
     /// The album favourite flag for the fullscreen keybar's heart.
     #[qslot(qml_name = "requestAlbumState")]
     fn request_album_state(&mut self, album_id: String) {
-        self.spawn_data("album_state", move |dbs| async move {
-            let starred = crate::library::album_starred(&dbs.library, &album_id)
-                .await
-                .unwrap_or(false);
-            let rating = crate::library::album_rating(&dbs.library, &album_id)
-                .await
-                .unwrap_or(0);
-            // Re-resolve the header cover here too: a sync can replace the
-            // art (or a wipe can drop it) while the page stays open.
-            let cover_ids: Vec<String> = crate::library::album(&dbs.library, &album_id)
-                .await
-                .ok()
-                .flatten()
-                .and_then(|album| album.cover_art)
-                .into_iter()
-                .collect();
-            let covers = crate::covers::url_map_of(&dbs, &cover_ids)
-                .await
-                .unwrap_or_default();
-            let cover = cover_ids
-                .first()
-                .and_then(|id| covers.get(id))
-                .cloned()
-                .unwrap_or_default();
-            Ok(serde_json::json!({
-                "id": album_id,
-                "starred": starred,
-                "rating": rating,
-                "cover": cover,
-            })
-            .to_string())
-        });
+        self.request_album_state_impl(album_id);
     }
 
     /// UI-60: sets an album's 0..=5 user rating on the server, then indexes
@@ -1742,51 +1558,7 @@ impl Backend {
     /// failure, with the stored value).
     #[qslot(qml_name = "rateAlbum")]
     fn rate_album(&mut self, album_id: String, rating: i32) {
-        let rating = match u8::try_from(rating) {
-            Ok(rating) if rating <= 5 => rating,
-            _ => {
-                eprintln!("album: rating {rating} is outside the 0..=5 domain");
-                return;
-            }
-        };
-        let error_invoker = self.get_qml_method_invoker();
-        let state_invoker = self.get_qml_method_invoker();
-        self.spawn_task(move |dbs| async move {
-            let result = async {
-                let client = client(&dbs).await?;
-                client.set_rating(&album_id, rating).await?;
-                crate::library::set_album_rating(&dbs.library, &album_id, rating).await
-            }
-            .await;
-            // Re-read the stored row: on failure this reverts the optimistic
-            // badge to the last accepted value.
-            let stored = crate::library::album_rating(&dbs.library, &album_id)
-                .await
-                .unwrap_or(0);
-            let starred = crate::library::album_starred(&dbs.library, &album_id)
-                .await
-                .unwrap_or(false);
-            qtbridge::invoke_method!(
-                state_invoker,
-                "ratingChanged",
-                "album".to_string(),
-                album_id.clone(),
-                stored
-            );
-            emit(
-                &state_invoker,
-                "album_state",
-                album_state_payload(&album_id, starred, stored),
-            );
-            if let Err(err) = result {
-                eprintln!("album: could not rate {album_id}: {err:#}");
-                raise(
-                    &error_invoker,
-                    "error",
-                    format!("Could not rate album: {err:#}"),
-                );
-            }
-        });
+        self.rate_album_impl(album_id, rating);
     }
 
     /// The album twin of [`downloadArtist`] — the keybar's Download button:
@@ -1823,44 +1595,7 @@ impl Backend {
     /// Fetches an album's description ("notes") from the server.
     #[qslot(qml_name = "requestAlbumInfo")]
     fn request_album_info(&mut self, album_id: String) {
-        let invoker = self.get_qml_method_invoker();
-        self.spawn_task(move |dbs| async move {
-            let cached = crate::library::album_info(&dbs.library, &album_id)
-                .await
-                .ok()
-                .flatten();
-            if let Some((notes, fetched_at)) = &cached {
-                emit(
-                    &invoker,
-                    "album_info",
-                    serde_json::json!({ "notes": notes }).to_string(),
-                );
-                if crate::consts::now_secs() - fetched_at < crate::consts::INFO_TTL_SECS {
-                    return;
-                }
-            }
-            let fresh = album_notes(&dbs, &album_id).await;
-            if fresh.is_empty() {
-                if cached.is_none() {
-                    emit(
-                        &invoker,
-                        "album_info",
-                        serde_json::json!({ "notes": "" }).to_string(),
-                    );
-                }
-                return;
-            }
-            if let Err(err) =
-                crate::library::upsert_album_info(&dbs.library, &album_id, &fresh).await
-            {
-                eprintln!("album: could not cache notes for {album_id}: {err:#}");
-            }
-            emit(
-                &invoker,
-                "album_info",
-                serde_json::json!({ "notes": fresh }).to_string(),
-            );
-        });
+        self.request_album_info_impl(album_id);
     }
 
     /// ARC-UI-7.5: the persisted scroll store (empty on first launch).

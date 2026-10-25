@@ -42,36 +42,27 @@ Item {
         color: Palette.surfaceContainerLowest
     }
 
-    // Radial vignette around the square: transparent at the artwork, darker
-    // toward the page edges. Painted once per size, not per frame.
-    Canvas {
-        id: vignette
+    // Cross vignette: two transparent-to-dark gradients, centred on the
+    // artwork. Their overlap darkens the corners without an extra image pass.
+    Rectangle {
         anchors.fill: parent
-
-        onPaint: {
-            if (root.width <= 0 || root.height <= 0)
-                return;
-            var ctx = getContext("2d");
-            ctx.clearRect(0, 0, root.width, root.height);
-            var cx = root.width * 0.5;
-            var cy = root.coverSide * 0.5;
-            var inner = Math.max(1, root.coverSide * 0.32);
-            var outer = Math.max(root.width, root.height) * 0.78;
-            var gradient = ctx.createRadialGradient(cx, cy, inner, cx, cy, outer);
-            gradient.addColorStop(0.0, "rgba(0,0,0,0)");
-            gradient.addColorStop(0.55, "rgba(0,0,0,0.16)");
-            gradient.addColorStop(1.0, "rgba(0,0,0,0.62)");
-            ctx.fillStyle = gradient;
-            ctx.fillRect(0, 0, root.width, root.height);
+        gradient: Gradient {
+            GradientStop { position: 0.0; color: Qt.rgba(0, 0, 0, 0.34) }
+            GradientStop { position: 0.34; color: "transparent" }
+            GradientStop { position: 0.66; color: "transparent" }
+            GradientStop { position: 1.0; color: Qt.rgba(0, 0, 0, 0.46) }
         }
-
-        onWidthChanged: requestPaint()
-        onHeightChanged: requestPaint()
     }
 
-    Connections {
-        target: root
-        function onCoverSideChanged() { vignette.requestPaint(); }
+    Rectangle {
+        anchors.fill: parent
+        gradient: Gradient {
+            orientation: Gradient.Horizontal
+            GradientStop { position: 0.0; color: Qt.rgba(0, 0, 0, 0.28) }
+            GradientStop { position: 0.30; color: "transparent" }
+            GradientStop { position: 0.70; color: "transparent" }
+            GradientStop { position: 1.0; color: Qt.rgba(0, 0, 0, 0.28) }
+        }
     }
 
     // The artwork itself: top-centre, aspect-fit in the largest page square.

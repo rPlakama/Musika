@@ -3,6 +3,29 @@
 All notable changes to Musika, newest first. `TASKLISTMAJOR.md` tracks the
 open work; this file is the release history.
 
+## 0.4.5 — _Under the flesh, under the clothes..._
+
+All commits since `v0.4.4`:
+
+- `07501e2` Scale search rows to their available height
+- `092f7ee` Log idle transitions in debug builds
+- `504e32c` Pace idle frames while the window is unfocused
+- `f7662c4` Bounce and fade the repeat control
+- `aed6c1a` Add repeat modes and a transport control
+- `e5f8f1b` Trim FPS overlay precision
+- `1962abf` Add a debug FPS overlay
+- `ffa4874` Apply numeric counts to track skipping
+- `1eb1f15` Add a debug startup report under the test module
+- `534d7fb` Add vulkan-tools to the development shell
+- `9f7b995` Add a Vulkan and GPU probe to the test module
+- `c40ffb0` Add database and album benchmarks to the test module
+- `663b262` Reuse list delegates and skip cover smoothing
+- `82d3df8` Extract library state and info slots from the bridge
+- `a96c551` Extract auth and download slot bodies from the bridge
+- `d1d8341` Propagate digest failures instead of panicking
+- `6626ce1` Replace production unwraps with handled failures
+- `24acf53` Give each row segment its own box
+
 ## 0.4.4 — _I am really starting to like it now, good work Deepseek-chan_
 
 All commits since `v0.4.3`:

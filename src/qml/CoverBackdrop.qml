@@ -15,11 +15,12 @@
 // along with this program; if not, see <https://www.gnu.org/licenses/>.
 
 import QtQuick
+import QtQuick.Effects
 import musika
 
-// Album/artist ambience for the rectangular pages. The sharp square is
-// contained at the upper centre (never cropped or stretched) on the plain
-// surface; there is deliberately no blurred or vignetted surround.
+// Album/artist ambience for the rectangular pages. A blurred, darkened copy
+// of the artwork fills the surface; the sharp square stays contained at the
+// upper centre (never cropped or stretched).
 Item {
     id: root
 
@@ -40,6 +41,30 @@ Item {
     Rectangle {
         anchors.fill: parent
         color: Palette.surfaceContainerLowest
+    }
+
+    // Blurred cover fill, then a 60% black shadow, then the sharp artwork.
+    CoverImage {
+        id: fill
+        anchors.fill: parent
+        source: root.source
+        sizeFactor: 0.5
+        fillMode: Image.PreserveAspectCrop
+        opacity: fill.ready ? 1 : 0
+        layer.enabled: fill.ready
+        layer.effect: MultiEffect {
+            blurEnabled: true
+            blur: 0.8
+            blurMax: 48
+            saturation: 1.0
+            autoPaddingEnabled: false
+        }
+    }
+
+    Rectangle {
+        anchors.fill: parent
+        color: "black"
+        opacity: 0.60
     }
 
     // The artwork itself: top-centre, aspect-fit in the largest page square.

@@ -64,7 +64,7 @@ Item {
         ? root.cellWidth * root.profile.cellAspect
           + root.height * (root.profile.cellExtra || 0)
         : 0
-    readonly property real cellWidth: Math.max(1, root.width / Math.max(1, root.columns))
+    readonly property real cellWidth: Math.max(1, root.width / Math.max(1, root.effectiveColumns))
 
     /// Row sizing: nominal fraction of the reference height (0 = delegates
     /// own their heights, e.g. lyrics).
@@ -84,7 +84,13 @@ Item {
         var stride = root._stride(root.view);
         return stride > 0 ? stride * root.renderOverscanRows : 0;
     }
-    property real minRowHeight: 18
+    // Keep rows tall enough for the row text even in a short pane.
+    property real minRowHeight: 36
+    // A grid cell never gets narrower than this; the wall drops columns
+    // instead of shrinking every card into unreadable thumbnails.
+    property real minCellWidth: 132
+    readonly property int effectiveColumns: Math.max(1, Math.min(root.columns,
+        Math.floor(root.width / Math.max(1, root.minCellWidth))))
     /// Kept for host compatibility; the extent is Qt's own now.
     property real contentHeightHint: 0
     property bool recenterOnWidth: root.layout === "grid"
@@ -141,7 +147,7 @@ Item {
             return 0;
         if (root.layout === "grid") {
             var cell = root.cellHeight > 0 ? root.cellHeight : root.cellWidth;
-            var rows = Math.ceil(v.count / Math.max(1, root.columns));
+            var rows = Math.ceil(v.count / Math.max(1, root.effectiveColumns));
             return Math.max(0, v.height - rows * cell);
         }
         if (root.rowStride <= 0)
@@ -203,11 +209,11 @@ Item {
         if (root.layout === "grid") {
             var cell = root.cellHeight > 0 ? root.cellHeight : root.cellWidth;
             var stride = Math.max(1, cell);
-            var rows = Math.ceil(v.count / Math.max(1, root.columns));
+            var rows = Math.ceil(v.count / Math.max(1, root.effectiveColumns));
             var firstRow = Math.max(0, Math.floor(v.contentY / stride) - overscan);
             var lastRow = Math.min(rows - 1,
                 Math.ceil((v.contentY + v.height) / stride) - 1 + overscan);
-            var cols = Math.max(1, root.columns);
+            var cols = Math.max(1, root.effectiveColumns);
             return {
                 first: Math.min(v.count - 1, firstRow * cols),
                 last: Math.min(v.count - 1, (lastRow + 1) * cols - 1)
@@ -445,7 +451,7 @@ Item {
         if (root.count === 0)
             return false;
         var n = count === undefined ? 1 : Math.max(1, count);
-        var cols = root.layout === "grid" ? Math.max(1, root.columns) : 1;
+        var cols = root.layout === "grid" ? Math.max(1, root.effectiveColumns) : 1;
         var column = root.currentIndex % cols;
         var target = root.currentIndex;
         if (action === "move_left") {

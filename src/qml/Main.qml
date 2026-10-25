@@ -41,6 +41,15 @@ ApplicationWindow {
 
     // P-6: the session debounce cannot be awaited during teardown, so the
     // backend does one synchronous last-chance write (own DB, single row).
+    Loader {
+        anchors.top: parent.top
+        anchors.left: parent.left
+        anchors.margins: 8
+        z: 1000
+        active: Backend.debugBuild()
+        source: "FpsCounter.qml"
+    }
+
     onClosing: Backend.flushStatus()
 
     // ARC-43: a focus loss can swallow the Alt release; never leave the

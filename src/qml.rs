@@ -1952,6 +1952,11 @@ impl Backend {
         self.sync_player();
     }
 
+    #[qslot(qml_name = "debugBuild")]
+    fn debug_build(&self) -> bool {
+        cfg!(debug_assertions)
+    }
+
     #[qslot(qml_name = "playerNext")]
     fn player_next(&mut self) {
         self.player.next();

@@ -2,8 +2,8 @@
 
 Master task list merging `CRITIQUE.md`, `TASKS.md`, `MICRODESIGNS.md`,
 `roadmap.md`, `materialyou3idea.md` and `RECYCLECRITIQUE.md` (REC batch),
-re-audited against the current working tree (commit `434896e`, clean) and
-organised by delivery bucket.
+re-audited against the current working tree (0.4.7, commit `528a329`, clean)
+and organised by delivery bucket.
 
 Legend: `[x]` solved · `[ ]` open. Priorities: **P0** correctness/robustness ·
 **P1** vi fidelity · **P2** player/UX features · **P3** nice-to-have.
@@ -11,6 +11,32 @@ Each task keeps its area id (`VI`, `Q`, `P`, `LYR`, `S`, `UI`, `THM`, `ARC`,
 `ARC-UI`, `CACHE`, `AUTH`, `DOC`, `REC`), its **Why** and **Details**; solved
 and partial tasks add **Now** with the current evidence. Solved entries live in
 the reference section at the bottom.
+
+### Recent landed (0.4.4–0.4.7, 2026-10-26)
+
+Kept here so the open sections below do not claim work that already landed:
+
+- **0.4.4** — contained page covers, vignette/blur experiments, album rows
+  tied to the displayed cover, and 36 px/132 px row/cell floors.
+- **0.4.5** — zero production unwraps/expects/panics (`6626ce1`,
+  `d1d8341`), qml bridge extraction (`a96c551`, `82d3df8`, `24acf53`; now
+  2,815 lines), test-module benchmarks/Vulkan probe (`c40ffb0`, `9f7b995`),
+  debug startup/FPS/idle logs (`1eb1f15`, `1962abf`, `092f7ee`), numeric
+  Ctrl-N/P skips (`ffa4874`), repeat modes (`aed6c1a`, `f7662c4`), action
+  badges (`9b84550`), and the `qq` Bye overlay (`42fa90e`, `4db7c34`,
+  `ac54f0a`).
+- **0.4.6** — cover vignette/wash removal, blurred cover + shadow backdrop,
+  restored smooth cover filtering, album tracks Tab-selectable, scroller
+  bottom anchoring, transport core centred around the repeat accessory
+  (`d3f4b46`), and shared thumbnail decode sizes (`b713298`–`d238008`).
+- **0.4.7** — row text fit/wrap and vertical centering, selected rows above
+  neighbours, short album lists bottom-aligned, and lyrics CurveRendering at
+  device-pixel layer resolution (`06cef85`–`37294d3`).
+
+Still open from this batch: **Q-3** shuffle half, **ARC-17/ARC-36** remaining
+bridge/status extraction, **UI-63** Vulkan/RHI profile pass, a shared GPU
+cover-texture cache beyond the decoded-pixmap sharing in `d238008`, and the
+clippy deny gate listed under ARC-34.
 
 ### Buckets
 
@@ -353,8 +379,11 @@ The app is unsafe or misleading without these.
   - **Now:** toast channel exists for sync/playback; many call sites still log.
   - **Impl** Use notifications In-app (Top-right-corner) for logs and other information;
 
-- [ ] **ARC-12 · Poison-safe player lock** — P1 · (O10)
+- [x] **ARC-12 · Poison-safe player lock** — P1 · (O10)
   - **Why:** `lock().unwrap()` on the reader thread can panic the UI tick.
+  - **Now:** closed by ARC-34 — `Player::shared()` and the mpv reader recover
+    poisoned guards with `PoisonError::into_inner`; a reader panic cannot
+    abort the UI tick.
 
 - [x] **ARC-25 · Refuse destructive replace/purge on partial fetches** — P1 · (DB analysis)
   - **Why:** a failed artist/album fetch is logged and skipped, then
@@ -370,7 +399,7 @@ The app is unsafe or misleading without these.
     *complete* index when the last scan is newer than `ifModifiedSince`,
     otherwise an empty index — no partial replace hazard on the target server.
 
-- [ ] **ARC-34 · `.unwrap()` audit — 8 production sites; recover or surface, never abort** — P1 · (ARC-12, ARC-5)
+- [x] **ARC-34 · `.unwrap()` audit — 8 production sites; recover or surface, never abort** — P1 · (ARC-12, ARC-5)
   - **Why:** a poisoned player `Mutex` or a failed runtime/DB init panics the
     whole app; production unwraps hide failure context instead of collecting
     it. The 82 test unwraps are fixtures and should stay.
@@ -400,6 +429,13 @@ The app is unsafe or misleading without these.
       unwraps are deliberate.
     - policy: tests keep their unwraps; prefer `expect("<what>")` when a
       failure message would save debugging time.
+  - **Now:** landed in `6626ce1` + `d1d8341` — zero production `.unwrap()`,
+    `.expect()` or `panic!` sites. Player/mpv guards recover with
+    `PoisonError::into_inner`, runtime and DB init print and exit(1), crypto
+    returns an error instead of an `expect`, MPRIS uses an infallible
+    `OwnedValue` fallback, and MD5/cover/color hashes return `Result` and
+    propagate. Tests keep their fixtures. The clippy deny gate remains a
+    nice-to-have, not implemented.
 
 ## Should have
 
@@ -602,9 +638,10 @@ The product is incomplete without these.
   - **Why:** the shuffle button exists but is inert; repeat-one/all is expected.
   - **Details:** wire the shuffle icon + repeat mode, show the active state via
     a state layer (stop is already wired; see UI-17).
-  - **Now:** repeat landed — `repeat-rounded` sits left of previous (alpha 0
-    when off), Ctrl-R / click cycles off → one (`1` badge) → all → off;
-    `Player::cycle_repeat` maps one to mpv `loop-file=inf`, all wraps the
+  - **Now:** repeat landed (`aed6c1a`, `f7662c4`, `d3f4b46`) — `repeat-rounded`
+    is an accessory in the left gutter of the centred previous/play/next core
+    (alpha 0 when off), Ctrl-R / click cycles off → one (`1` badge) → all →
+    off; `Player::cycle_repeat` maps one to mpv `loop-file=inf`, all wraps the
     Rust queue at the end. Shuffle remains inert: the transport still shows
     `random-svgrepo-com.svg` with no `onClicked`.
 
@@ -1489,23 +1526,24 @@ The product is incomplete without these.
     the player split (`player.rs` 1099→676; `player/mpv.rs` 451). Duplicate
     `md5_hex` 2→1, lower-layer `crate::qml::{online,client}` 4→0, and
     `chunks(500)` 11→0 (one `cache::IN_BATCH`).
-    Open: `qml.rs` logic extraction (3,347 lines, 109 qslots; the mark window
-    moved to `qml_backend/marks.rs`, 258 lines, and queue publishing/player
-    sync to `qml_backend/player.rs`, 216 lines), the remaining
-    library query/state split, the optional covers split, and ARC-5.
-  - **Verify:** `sh scripts/modularity.sh`, `cargo test` (192), `cargo fmt
+    Open: `qml.rs` logic extraction (2,815 lines, 115 qslots; the mark window
+    is in `qml_backend/marks.rs` 257, queue publishing/player sync in
+    `qml_backend/player.rs` 213, auth/startup in `qml_backend/auth.rs` 211,
+    library state/info in `qml_backend/library.rs` 323, and download slots in
+    `qml_backend/download.rs` 716), the remaining library query/state split,
+    the optional covers split, and ARC-5.
+  - **Verify:** `sh scripts/modularity.sh`, `cargo test` (195), `cargo fmt
     --check`, `nix build .#musika`; no visual diff.
 
 - [ ] **ARC-17 · Slim the `Backend` god-object** — P2 · (O17)
   - **Why:** huge slot surface; `playback_state` is a `String`, should be enum.
-  - **Now (post-0.4.2):** `qml.rs` is 3,347 lines with 109 qslots (the mark window moved to
-    `qml_backend/marks.rs` and queue publishing to `qml_backend/player.rs`); the data
-    layer (browse/queue) and the process state (`app`) no longer live here, but
-    the bridge still owns auth, status, downloads, marks and transport bodies.
-    Open: extract those bodies into `qml_backend/{auth,browse,player,marks}.rs`
-    while keeping the qslots in the annotated impl (qtbridge requires one
-    impl/mod for them); then reduce the slot surface and make
-    `playback_state` an enum.
+  - **Now (post-0.4.7):** `qml.rs` is 2,815 lines with 115 qslots. The mark
+    window (`marks.rs`), queue publishing/player sync (`player.rs`),
+    auth/startup (`auth.rs`), library state/info (`library.rs`) and download
+    bodies (`download.rs`) are out; the data layer (`browse`/`queue`) and
+    process state (`app`) never lived here. Open: finish the status/search/
+    transport wrappers, reduce the slot surface, and make `playback_state`
+    an enum.
 
 - [ ] **ARC-24 · Shared sync epoch across the five DBs** — P1 · (DB analysis)
   - **Why:** only library.db knows when it last synced; search/covers/lyrics
@@ -3022,6 +3060,16 @@ action. Ordered by expected ROI; each item is independently shippable.
     `pending_ids_of` and `album_song_ids_of` now chunk their `IN` lists at
     500 ids.
 
+- [ ] **PATH-14 · Shared GPU cover texture cache** — P3 · (cover review)
+  - **Why:** `d238008` makes every thumbnail decode at its native 320 px edge,
+    so the decoded pixmap is shared per cover, but each visible `CoverImage`
+    still creates its own GPU texture node.
+  - **Details:** a native texture provider / `QSGTexture` pool keyed by cover
+    file, or a shared provider image with per-row texture coordinates; do not
+    re-upload the same 320 px bitmap for every repeated album cover.
+  - **Verify:** same cover in grid + search + queue uploads once; visual
+    output unchanged; release build.
+
 ## Quick wins
 
 > **All quick wins are done** (2026-10-13): UI-2, UI-4, UI-6, UI-7, UI-10,
@@ -3091,13 +3139,14 @@ Small, bounded, high-value changes.
   - **Verify:** squeeze both bars down through `compact` → `narrow` — the
     three stay on one line with steady relative sizes and the pause centred;
     no overlap with the time/volume clusters at any width.
-  - **Now:** landed (`9841d14`) — `TransportControls.qml` is the one
-    previous/play/next row: common centre line, play at 1.22× the skips and
-    the row centre, minimum == preferred so a tight bar clips around the
+  - **Now:** landed (`9841d14`, `d3f4b46`) — `TransportControls.qml` is the
+    one previous/play/next core: common centre line, play at 1.22× the skips
+    and the core centre, minimum == preferred so a tight bar clips around the
     cluster; the skip/play press feedback moved inside so both hosts dropped
-    their copies. The player bar and the fullscreen transport instantiate it
-    (unit 0.46× / 0.05× bar height). Open: the manual squeeze pass compact →
-    narrow.
+    their copies. The repeat control is an accessory in the left gutter and
+    never changes the core's implicit width, so play stays centred. The
+    player bar and the fullscreen transport instantiate it (unit 0.46× /
+    0.05× bar height). Open: the manual squeeze pass compact → narrow.
 
 - [x] **UI-60 · Merging Favorite System** — P2 · (reported)
   - **Why:** favourite and rating are two grammars for one piece of user
@@ -3330,8 +3379,10 @@ Small, bounded, high-value changes.
     single-shot `lyricResume` timer re-centres the active phrase after the
     idle window — `Theme.lyricsResume` 5 s while the lyrics pane is focused,
     `Theme.lyricsResumeUnfocused` 2 s otherwise, re-armed when pane focus
-    moves and dropped on track change. Open: edge fades (dropped after the
-    first review pass) and a desktop pass for the timer feel.
+    moves and dropped on track change. Crispness pass (`37294d3`): lyric
+    lines use `Text.CurveRendering` and the masked stage layer is sized in
+    device pixels. Open: edge fades (dropped after the first review pass) and
+    a desktop pass for the timer feel.
 
 - [x] **S-9 · Empty-query search surface + usage boost** — P2 · (roadmap mixed design, "Empty state" + "Selection, scope and ordering")
   - **Why:** an empty query leaves three empty columns; Noctalia leads with

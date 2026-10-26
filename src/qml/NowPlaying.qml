@@ -194,11 +194,6 @@ Rectangle {
         lyricsView.currentIndex = root.activeLyric;
     }
 
-    // A color with a replaced alpha, for the ambience gradient stops.
-    function withAlpha(color, alpha) {
-        return Qt.rgba(color.r, color.g, color.b, alpha);
-    }
-
     function applyLyrics(payload) {
         var data = JSON.parse(payload);
         if (data.song_id !== Backend.currentSongId)
@@ -402,11 +397,9 @@ Rectangle {
         id: lyricModel
     }
 
-    // D-5 ambience: the playing cover painted sharp and washed into the theme
-    // background by the gradient below, so the lyrics float on their own
-    // colours. Hidden without art; the surfaces stay opaque.
-    // UI-55: one item for cover + wash, so the panes' acrylic samples exactly
-    // what is painted behind them.
+    // D-5 ambience: the playing cover painted sharp over the shared blurred,
+    // darkened backdrop. Hidden without art; the surfaces stay opaque.
+    // UI-55: the panes sample exactly what is painted behind them.
     Item {
         id: ambience
         anchors.fill: parent
@@ -415,26 +408,6 @@ Rectangle {
             id: coverBackdrop
             anchors.fill: parent
             source: Backend.currentCoverUrl
-        }
-
-        Rectangle {
-            radius: Theme.radius
-            anchors.fill: parent
-            visible: coverBackdrop.visible
-            gradient: Gradient {
-                GradientStop {
-                    position: 0.0
-                    color: root.withAlpha(Palette.background, 0.84)
-                }
-                GradientStop {
-                    position: 0.38
-                    color: root.withAlpha(Palette.background, 0.38)
-                }
-                GradientStop {
-                    position: 1.0
-                    color: root.withAlpha(Palette.background, 0.96)
-                }
-            }
         }
     }
 

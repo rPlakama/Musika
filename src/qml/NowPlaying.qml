@@ -725,6 +725,12 @@ Rectangle {
                         color: "transparent"
                         clip: true
                         layer.enabled: true
+                        // The mask needs an offscreen layer; keep that texture in
+                        // device pixels so HiDPI lyrics are not rasterized at
+                        // logical resolution.
+                        layer.textureSize: Qt.size(
+                            Math.max(1, Math.ceil(width * Screen.devicePixelRatio)),
+                            Math.max(1, Math.ceil(height * Screen.devicePixelRatio)))
                         layer.effect: MultiEffect {
                             maskEnabled: true
                             maskSource: lyricsMaskTexture
@@ -819,6 +825,9 @@ Rectangle {
                                     color: lyricLine.active ? Palette.onSurface : Palette.onSurfaceVariant
                                     font.family: Theme.fonts.lyrics
                                     font.pixelSize: root.lyricSize
+                                    // Curve rasterization stays crisp through the
+                                    // active-line scale (DMS offers the same mode).
+                                    renderType: Text.CurveRendering
                                     wrapMode: Text.WordWrap
                                     animated: false
                                     transformOrigin: Item.Center

@@ -40,10 +40,11 @@ Item {
 
     Rectangle {
         anchors.fill: parent
-        color: Palette.surfaceContainerLowest
+        color: Palette.surfaceContainerLow
     }
 
-    // Blurred cover fill, then a 60% black shadow, then the sharp artwork.
+    // Blurred cover fill, colourised with the second-darkest generated
+    // surface tone, then the sharp artwork.
     CoverImage {
         id: fill
         anchors.fill: parent
@@ -57,14 +58,10 @@ Item {
             blur: 0.8
             blurMax: 48
             saturation: 1.0
+            colorizationColor: Palette.surfaceContainerLow
+            colorization: 0.75
             autoPaddingEnabled: false
         }
-    }
-
-    Rectangle {
-        anchors.fill: parent
-        color: "black"
-        opacity: 0.95
     }
 
     // The artwork itself: top-centre, aspect-fit in the largest page square.

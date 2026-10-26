@@ -822,6 +822,9 @@ Rectangle {
                 // precomputed extent keeps the shared glide off Qt's lazy
                 // estimate.
                 context: "album"
+                // Short albums sit against the page bottom instead of floating at
+                // the top of the scroller.
+                bottomAlignShort: true
                 rowRefHeight: root.height
 
                 rowDelegate: Component {

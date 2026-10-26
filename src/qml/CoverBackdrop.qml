@@ -51,7 +51,7 @@ Item {
         source: root.source
         sizeFactor: 0.5
         fillMode: Image.PreserveAspectCrop
-        opacity: fill.ready ? 1 : 0
+        opacity: fill.ready ? 0.90 : 0
         layer.enabled: fill.ready
         layer.effect: MultiEffect {
             blurEnabled: true
@@ -59,7 +59,7 @@ Item {
             blurMax: 48
             saturation: 1.0
             colorizationColor: Palette.surfaceContainerLow
-            colorization: 0.75
+            colorization: 0.35
             autoPaddingEnabled: false
         }
     }

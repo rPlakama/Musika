@@ -126,7 +126,7 @@ Item {
             anchors.left: root.showCover ? cover.right : parent.left
             anchors.leftMargin: root.showCover ? root.textGap : root.leftMargin
             anchors.right: gap.left
-            height: Math.min(root.rowHeight, metainfoColumn.implicitHeight)
+            height: root.rowHeight
 
             Column {
                 id: metainfoColumn
@@ -137,11 +137,14 @@ Item {
                 SearchText {
                     id: titleText
                     width: parent.width
+                    height: root.showSubtitle ? root.rowHeight * 0.55 : root.rowHeight
                     text: root.title
                     color: root.titleColor
                     font.pixelSize: root.titlePixelSize
                     font.bold: root.current
-                    wrapMode: Text.WordWrap
+                    fontSizeMode: Text.Fit
+                    minimumPixelSize: 7
+                    wrapMode: Text.WrapAnywhere
                     maximumLineCount: 2
                     elide: Text.ElideRight
                     animated: false
@@ -164,10 +167,13 @@ Item {
                 SearchText {
                     visible: root.showSubtitle
                     width: parent.width
+                    height: root.showSubtitle ? root.rowHeight * 0.36 : 0
                     text: root.subtitle
                     color: root.subtitleColor
                     font.pixelSize: root.subtitlePixelSize
-                    wrapMode: Text.WordWrap
+                    fontSizeMode: Text.Fit
+                    minimumPixelSize: 7
+                    wrapMode: Text.WrapAnywhere
                     maximumLineCount: 2
                     elide: Text.ElideRight
                     animated: false

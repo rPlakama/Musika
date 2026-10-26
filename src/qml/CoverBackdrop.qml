@@ -40,28 +40,31 @@ Item {
 
     Rectangle {
         anchors.fill: parent
-        color: Palette.surfaceContainerLow
+        color: Palette.surface
     }
 
-    // Blurred cover fill, colourised with the second-darkest generated
-    // surface tone, then the sharp artwork.
+    // Instanced copy of the cover: blurred, then darkened by an 80% shadow.
     CoverImage {
         id: fill
         anchors.fill: parent
         source: root.source
         sizeFactor: 0.5
         fillMode: Image.PreserveAspectCrop
-        opacity: fill.ready ? 0.90 : 0
+        opacity: fill.ready ? 1 : 0
         layer.enabled: fill.ready
         layer.effect: MultiEffect {
             blurEnabled: true
             blur: 0.8
             blurMax: 48
             saturation: 1.0
-            colorizationColor: Palette.surfaceContainerLow
-            colorization: 0.35
             autoPaddingEnabled: false
         }
+    }
+
+    Rectangle {
+        anchors.fill: parent
+        color: "black"
+        opacity: 0.80
     }
 
     // The artwork itself: top-centre, aspect-fit in the largest page square.

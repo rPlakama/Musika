@@ -142,6 +142,7 @@ Item {
                     color: root.titleColor
                     font.pixelSize: root.titlePixelSize
                     font.bold: root.current
+                    verticalAlignment: Text.AlignVCenter
                     fontSizeMode: Text.Fit
                     minimumPixelSize: 7
                     wrapMode: Text.WrapAnywhere
@@ -171,6 +172,7 @@ Item {
                     text: root.subtitle
                     color: root.subtitleColor
                     font.pixelSize: root.subtitlePixelSize
+                    verticalAlignment: Text.AlignVCenter
                     fontSizeMode: Text.Fit
                     minimumPixelSize: 7
                     wrapMode: Text.WrapAnywhere

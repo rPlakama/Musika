@@ -3,6 +3,20 @@
 All notable changes to Musika, newest first. `TASKLISTMAJOR.md` tracks the
 open work; this file is the release history.
 
+## 0.4.7 — _Well, UI still needs loads of work;_
+
+All commits since `v0.4.6`:
+
+- `37294d3` Render lyrics with curve rasterization at device resolution
+- `cae968c` Bottom-align short album track lists
+- `a7d396a` Center row titles in their row
+- `716a197` Fit and wrap row titles inside their row
+- `21b532f` Paint selected rows above their neighbours
+- `e4bb449` Use a blurred cover copy with an 80% shadow
+- `fbed9ed` Let the blurred cover read through the tone
+- `1f67ada` Tone the blurred backdrop with the second-darkest surface
+- `06cef85` Stop washing the NowPlaying cover
+
 ## 0.4.6 — _Small fixes, small ribcages, small hips, aren't all they easy to grab?_
 
 All commits since `v0.4.5`:

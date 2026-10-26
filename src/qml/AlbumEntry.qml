@@ -841,6 +841,7 @@ Rectangle {
                     readonly property bool emphasized: ListView.isCurrentItem || rowHover.hovered
 
                     width: ListView.view ? ListView.view.width : 0
+                    z: emphasized ? 1 : 0
                     // UI-58: the model's page-relative adaptive row.
                     height: content.adaptiveRowHeight
                     color: ((ListView.isCurrentItem && !root.onToolbar) || songRow.selectedRow) ? Palette.secondaryContainer : (rowHover.hovered ? Palette.surfaceContainerHigh : (index % 2 === 0 ? Palette.surface : Palette.surfaceContainerLowest))

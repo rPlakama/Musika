@@ -361,6 +361,9 @@ ScrollPanel {
             readonly property bool selectedRow: root.isSelected(index)
 
             width: viewWidth
+            // Selection scale paints above the neighbouring rows instead of
+            // letting the row above clip it.
+            z: row.emphasized ? 1 : 0
             // UI-58: adaptive — stops at the 18% floor instead of stepping.
             height: root.adaptiveRowHeight > 0
                 ? root.adaptiveRowHeight

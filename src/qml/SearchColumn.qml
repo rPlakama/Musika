@@ -432,6 +432,7 @@ Item {
 
                         width: ListView.view.width
                         height: content.adaptiveRowHeight
+                        z: row.emphasized ? 1 : 0
                         // The row is a layout container only (UI-48): the block
                         // highlight lives in its own layer below, so it can
                         // overflow the row without touching the content geometry.

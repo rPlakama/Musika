@@ -521,6 +521,7 @@ Item {
                             readonly property bool emphasized: index === root.queueCursor || rowHover.hovered
 
                             width: ListView.view.width
+                            z: emphasized ? 1 : 0
                             // UI-58: adaptive — stops shrinking at the 18%
                             // floor, never jumps a row.
                             height: queueContent.adaptiveRowHeight

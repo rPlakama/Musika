@@ -85,10 +85,10 @@ Item {
         return stride > 0 ? stride * root.renderOverscanRows : 0;
     }
     // Keep rows tall enough for the row text even in a short pane.
-    property real minRowHeight: 36
+    property real minRowHeight: 50
     // A grid cell never gets narrower than this; the wall drops columns
     // instead of shrinking every card into unreadable thumbnails.
-    property real minCellWidth: 132
+    property real minCellWidth: 185
     readonly property int effectiveColumns: Math.max(1, Math.min(root.columns,
         Math.floor(root.width / Math.max(1, root.minCellWidth))))
     /// Kept for host compatibility; the extent is Qt's own now.

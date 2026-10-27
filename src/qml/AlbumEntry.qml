@@ -285,6 +285,7 @@ Rectangle {
             songs.append({
                 track: song.track ? String(song.track) : String(i + 1),
                 title: song.title,
+                subtitle: song.artist ? String(song.artist) : "",
                 duration: Theme.formatTime(song.duration),
                 starred: song.starred === true,
                 songId: song.id,
@@ -816,7 +817,7 @@ Rectangle {
                 memoryKey: root.memoryKey
                 visible: !(root.loading && songs.count === 0)
                 // ARC-UI-2 M1: the rows paint track, title and duration.
-                searchFields: ["track", "title", "duration"]
+                searchFields: ["track", "title", "subtitle", "duration"]
                 // UI-58: rows scale from the page height, not the song viewport
                 // (the header/notes reflow must not rescale every row). The
                 // precomputed extent keeps the shared glide off Qt's lazy
@@ -834,6 +835,7 @@ Rectangle {
                     required property int index
                     required property string track
                     required property string title
+                    required property string subtitle
                     required property string duration
                     required property string songId
                     required property string albumId
@@ -865,8 +867,9 @@ Rectangle {
                         emphasized: songRow.emphasized
                         current: ListView.isCurrentItem && !root.onToolbar
                         showCover: false
-                        showSubtitle: false
+                        showSubtitle: songRow.subtitle.length > 0
                         title: songRow.track.length > 0 ? songRow.track + ". " + songRow.title : songRow.title
+                        subtitle: songRow.subtitle
                         meta: songRow.duration
                         titlePixelSize: songRow.height * 0.34
                         metaPixelSize: songRow.height * 0.30

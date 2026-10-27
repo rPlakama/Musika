@@ -1,2 +1,0 @@
-module Musika.Row
-singleton RowLoader 1.0 RowLoader.qml

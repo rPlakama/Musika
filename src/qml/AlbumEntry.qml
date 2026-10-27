@@ -18,7 +18,6 @@ import QtQuick
 import QtQuick.Layouts
 import QtQuick.Effects
 import musika
-import "row"
 import "Theme.js" as Theme
 
 // Album entry: the album art is the page ambience, with the identity and
@@ -267,19 +266,42 @@ Rectangle {
         notesView.contentY = Math.max(0, Math.min(max, notesView.contentY + delta));
     }
 
-    property int _rowRequest: 0
-
     function apply(payload) {
         // VI-4: a reload invalidates the selected range.
         content.clearSelection();
         songs.clear();
-        root.loading = true;
-        root._rowRequest = RowLoader.load("album-tracks", payload);
-    }
-
-    function _finishTracks(meta) {
-        root.tracksDuration = meta.total;
-        root.tracksFormat = meta.format;
+        var list = JSON.parse(payload);
+        // Tracks-header stats: total runtime + the most common file suffix.
+        var total = 0;
+        var formats = {};
+        for (var i = 0; i < list.length; i++) {
+            var song = list[i];
+            total += Number(song.duration) || 0;
+            var suffix = song.suffix ? String(song.suffix).toLowerCase() : "";
+            if (suffix.charAt(0) === ".")
+                suffix = suffix.substring(1);
+            if (suffix.length > 0)
+                formats[suffix] = (formats[suffix] || 0) + 1;
+            songs.append({
+                track: song.track ? String(song.track) : String(i + 1),
+                title: song.title,
+                subtitle: song.artist ? String(song.artist) : "",
+                duration: Theme.formatTime(song.duration),
+                starred: song.starred === true,
+                songId: song.id,
+                albumId: song.album_id ? song.album_id : ""
+            });
+        }
+        root.tracksDuration = total;
+        var format = "";
+        var formatCount = 0;
+        for (var key in formats) {
+            if (formats[key] > formatCount) {
+                format = key;
+                formatCount = formats[key];
+            }
+        }
+        root.tracksFormat = format.toUpperCase();
         root.loading = false;
         // UI-54: reopening the page restores the cursor + offset; later
         // reloads (library change, resync) keep the live state.
@@ -294,25 +316,6 @@ Rectangle {
                 content.land(0);
         }
         root.requestMarkWindow();
-    }
-
-    Connections {
-        target: RowLoader
-        function onBatch(requestId, kind, rows, done, meta) {
-            if (requestId !== root._rowRequest)
-                return;
-            for (var i = 0; i < rows.length; i++)
-                songs.append(rows[i]);
-            root.requestMarkWindow();
-            if (done)
-                root._finishTracks(meta);
-        }
-        function onFailed(requestId, kind, message) {
-            if (requestId === root._rowRequest) {
-                root.loading = false;
-                console.warn("album track load failed: " + message);
-            }
-        }
     }
 
     /// Place the cursor on the playing track when this page's album is the

@@ -16,6 +16,7 @@
 
 import QtQuick
 import QtQuick.Controls
+import musika
 import "Theme.js" as Theme
 
 // Native Slider with Musika's flat rail: the whole control is the hit area,

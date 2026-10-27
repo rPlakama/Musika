@@ -16,7 +16,6 @@
 
 import QtQuick
 import musika
-import "row"
 import "Theme.js" as Theme
 import "ScrollMemory.js" as Memory
 
@@ -32,11 +31,6 @@ MediaList {
     property bool _allLoaded: false
     property bool _loadingPage: false
     property bool _edgeTargetBottom: false
-    property int _pageRequest: 0
-    property bool _pageStarted: false
-    property bool _pageStale: false
-    property int _pageOffset: 0
-    property int _pageRows: 0
 
     // `G` on the paged Songs list finishes the tail, then lands on the true
     // last row instead of the last loaded one.
@@ -62,24 +56,46 @@ MediaList {
         Backend.requestSongsPage(0, limit);
     }
 
-    function applyPage(payload) {
-        root._pageStarted = false;
-        root._pageStale = false;
-        root._pageRows = 0;
-        root._pageRequest = RowLoader.load("songs-page", payload);
+    function mapRow(song) {
+        var artist = song.artist ? song.artist : "";
+        var album = song.album ? song.album : "";
+        return {
+            title: song.title,
+            subtitle: artist + (album.length > 0 ? " · " + album : ""),
+            meta: Theme.formatTime(song.duration),
+            cover: song.cover ? song.cover : "",
+            songId: song.id,
+            albumId: song.album_id ? song.album_id : "",
+            starred: song.starred === true,
+            rating: 0
+        };
     }
 
-    function _finishPage(meta) {
-        root._nextOffset = meta.next;
-        root._allLoaded = meta.has_more !== true;
+    function applyPage(payload) {
+        var data = JSON.parse(payload);
+        // A page from before a reload/order swap must not append to the new
+        // model (only the first page may restart the list).
+        if (data.offset !== 0 && data.offset !== root._nextOffset)
+            return;
+        var rows = [];
+        for (var i = 0; i < data.rows.length; i++)
+            rows.push(root.mapRow(data.rows[i]));
+        if (data.offset === 0) {
+            // MediaList owns the loading state while it fills the model in
+            // batches.
+            root.setRows(rows);
+        } else {
+            root.appendRows(rows);
+            root.loading = false;
+        }
+        root._nextOffset = data.next;
+        root._allLoaded = data.has_more !== true;
         root._loadingPage = false;
-        root.loading = false;
         if (root.count > 0 && root.currentIndex < 0)
             root.currentIndex = 0;
-        if (root._pageRows === 0 && meta.has_more === true)
+        if (rows.length === 0 && data.has_more === true)
             root.loadMore();
-        else if (!root._allLoaded && root.count > 0
-                && root.currentIndex >= root.count - 20)
+        else if (!root._allLoaded && root.count > 0 && root.currentIndex >= root.count - 20)
             root.loadMore();
         if (root._edgeTargetBottom) {
             if (root._allLoaded) {
@@ -87,40 +103,6 @@ MediaList {
                 root.land(root.count - 1);
             } else {
                 root.loadMore(root.pageSize * 4);
-            }
-        }
-    }
-
-    Connections {
-        target: RowLoader
-        function onBatch(requestId, kind, rows, done, meta) {
-            if (requestId !== root._pageRequest)
-                return;
-            var first = !root._pageStarted;
-            if (first) {
-                root._pageStarted = true;
-                root._pageOffset = meta.offset;
-                if (meta.offset !== 0 && meta.offset !== root._nextOffset) {
-                    root._pageStale = true;
-                    root._loadingPage = false;
-                    return;
-                }
-            }
-            if (root._pageStale)
-                return;
-            root._pageRows += rows.length;
-            if (root._pageOffset === 0 && first)
-                root.setRows(rows);
-            else
-                root.appendRows(rows);
-            if (done)
-                root._finishPage(meta);
-        }
-        function onFailed(requestId, kind, message) {
-            if (requestId === root._pageRequest) {
-                root._loadingPage = false;
-                root.loading = false;
-                console.warn("songs page load failed: " + message);
             }
         }
     }

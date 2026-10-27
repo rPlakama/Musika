@@ -15,6 +15,7 @@
 // along with this program; if not, see <https://www.gnu.org/licenses/>.
 
 import QtQuick
+import QtQuick.Effects
 import QtQuick.Layouts
 import musika
 import "ScrollMemory.js" as Memory
@@ -678,6 +679,18 @@ Rectangle {
                         radius: Theme.radius
                         color: "transparent"
                         clip: true
+                        layer.enabled: true
+                        layer.textureSize: Qt.size(
+                            Math.max(1, Math.ceil(width * Screen.devicePixelRatio)),
+                            Math.max(1, Math.ceil(height * Screen.devicePixelRatio)))
+                        layer.effect: MultiEffect {
+                            maskEnabled: true
+                            maskSource: lyricsMaskTexture
+                            maskThresholdMin: 0.0
+                            maskThresholdMax: 1.0
+                            maskSpreadAtMin: 0.0
+                            maskSpreadAtMax: 0.0
+                        }
 
                         ScrollContent {
                             id: lyricsView
@@ -795,30 +808,24 @@ Rectangle {
                                 }
                             }
                         }
-                        Rectangle {
-                            anchors.top: parent.top
-                            anchors.left: parent.left
-                            anchors.right: parent.right
-                            height: parent.height * 0.16
-                            z: 2
-                            visible: root.lyricsAvailable
-                            gradient: Gradient {
-                                GradientStop { position: 0.0; color: Palette.background }
-                                GradientStop { position: 1.0; color: "transparent" }
-                            }
-                        }
+                    }
 
-                        Rectangle {
-                            anchors.bottom: parent.bottom
-                            anchors.left: parent.left
-                            anchors.right: parent.right
-                            height: parent.height * 0.16
-                            z: 2
-                            visible: root.lyricsAvailable
-                            gradient: Gradient {
-                                GradientStop { position: 0.0; color: "transparent" }
-                                GradientStop { position: 1.0; color: Palette.background }
-                            }
+                    ShaderEffectSource {
+                        id: lyricsMaskTexture
+                        sourceItem: lyricsMask
+                        hideSource: true
+                        live: true
+                    }
+
+                    Rectangle {
+                        id: lyricsMask
+                        anchors.fill: parent
+                        readonly property real fade: 0.25
+                        gradient: Gradient {
+                            GradientStop { position: 0.0; color: "transparent" }
+                            GradientStop { position: lyricsMask.fade; color: "white" }
+                            GradientStop { position: 1.0 - lyricsMask.fade; color: "white" }
+                            GradientStop { position: 1.0; color: "transparent" }
                         }
                     }
                      }

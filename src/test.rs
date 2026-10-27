@@ -1342,14 +1342,6 @@ mod covers {
         write_thumb(&source, &dir, &name).expect("write thumbnail");
         assert!(dir.join(&name).is_file());
 
-        let blur_name = blur_name("cover.png");
-        assert!(dir.join(&blur_name).is_file());
-        let blur = image::load_from_memory(
-            &std::fs::read(dir.join(&blur_name)).expect("read blur"),
-        )
-        .expect("blur decodes");
-        assert!(blur.width() <= BLUR_EDGE && blur.height() <= BLUR_EDGE);
-
         let _ = std::fs::remove_dir_all(dir);
     }
 

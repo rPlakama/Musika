@@ -2,7 +2,7 @@
 
 Master task list merging `CRITIQUE.md`, `TASKS.md`, `MICRODESIGNS.md`,
 `roadmap.md`, `materialyou3idea.md` and `RECYCLECRITIQUE.md` (REC batch),
-re-audited against the current working tree (0.4.7, commit `528a329`, clean)
+re-audited against the current working tree (0.4.8, clean)
 and organised by delivery bucket.
 
 Legend: `[x]` solved · `[ ]` open. Priorities: **P0** correctness/robustness ·
@@ -12,7 +12,7 @@ Each task keeps its area id (`VI`, `Q`, `P`, `LYR`, `S`, `UI`, `THM`, `ARC`,
 and partial tasks add **Now** with the current evidence. Solved entries live in
 the reference section at the bottom.
 
-### Recent landed (0.4.4–0.4.7, 2026-10-26)
+### Recent landed (0.4.4–0.4.8, 2026-10-27)
 
 Kept here so the open sections below do not claim work that already landed:
 
@@ -32,6 +32,11 @@ Kept here so the open sections below do not claim work that already landed:
 - **0.4.7** — row text fit/wrap and vertical centering, selected rows above
   neighbours, short album lists bottom-aligned, and lyrics CurveRendering at
   device-pixel layer resolution (`06cef85`–`37294d3`).
+- **0.4.8** — native QML audit (Qt Layouts, AppText, native Slider and
+  AbstractButton), lighter text/row/backdrop/lyrics rendering, the Rust
+  row writers in album tracks and the queue, and the quarter-core
+  background work cap
+  (`754d806`–`d6f8963`).
 
 Still open from this batch: **Q-3** shuffle half, **ARC-17/ARC-36** remaining
 bridge/status extraction, **UI-63** Vulkan/RHI profile pass, a shared GPU
@@ -1448,23 +1453,21 @@ The product is incomplete without these.
     `AbstractButton` with the same Musika skin.
   - **Performance pass (native/frugal):** `AppText` defaults to
     `Text.NativeRendering` and opts into `QtRendering` only for transformed
-    text (lyrics); `CoverBackdrop` uses the Rust 96 px blur cache and no
-    full-page MultiEffect; `AcrylicPanel` skips the hidden blur pass when its
+    text (lyrics); `CoverBackdrop` blurs a quarter-resolution texture
+    and does not run a full-page MultiEffect; `AcrylicPanel` skips the hidden blur pass when its
     tint is opaque; the lyric stage has native gradient edge fades instead of
     an offscreen mask layer; `ScrollContent` uses realised-delegate targets
     plus native `indexAt`/`displayMargin`, and only probes Qt for
     unrealised/far targets.
-  - **Row worker:** the shared `RowLoader` singleton (in `src/qml/row/`)
-    parses and maps payloads on one `WorkerScript` off the GUI thread in
-    128-row batches for albums, artists, playlists, song pages, album tracks
-    and the queue. QML delegate creation stays on the GUI thread (Qt
-    requirement); `ListView`/`GridView` reuse, margins and stable row buckets
-    keep that cost down. `SearchOverlay` still maps its three result columns
-    inline.
+  - **Row loading:** the QML `WorkerScript` pipeline was removed. Qt 6.11's
+    WorkerScript creates a `QtObject` with no public `QJSEngine`, which emits
+    `QObject::connect(QJSEngine, QtObject): invalid nullptr parameter` on the
+    worker thread. Rows map back on the GUI for now; moving the shaping to
+    Rust is the next performance step, not a release blocker.
   - **Concurrency cap:** `app::worker_limit()` is
     `max(1, available_cores / 4)`; the Tokio runtime uses it for worker
-    threads and thumbnail batches use it for their chunk size. The row loader
-    is one shared worker, so no surface can spawn its own pool.
+    threads and thumbnail batches use it for their chunk size. The removed row
+    worker no longer contributes a thread.
   - **Audit (native already):** `ScrollContent` is native `ListView`/
     `GridView` + `ScrollMemory`; rows use `HoverHandler`/`TapHandler`/
     `DragHandler`; `RatingBurst` is native `ParticleSystem`; badges, icons

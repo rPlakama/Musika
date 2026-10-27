@@ -16,7 +16,6 @@
 
 import QtQuick
 import musika
-import "row"
 import "Theme.js" as Theme
 
 // Full-width library list shared by the Albums, Songs and Artists segments:
@@ -222,48 +221,6 @@ ScrollPanel {
         repeat: false
         onTriggered: root._appendFill(root._fillRows, root._fillStart,
             root._fillGeneration)
-    }
-
-    // Async row load: parse/map in RowWorker, append 128-row batches here.
-    property int _rowRequest: 0
-
-    function loadRows(kind, payload) {
-        root.clearSelection();
-        mediaRows.clear();
-        root.loading = true;
-        root._rowRequest = RowLoader.load(kind, payload);
-    }
-
-    function onRowsDone(meta) {
-    }
-
-    function onRowsFailed(message) {
-        root.loading = false;
-        console.warn("row load failed: " + message);
-    }
-
-    Connections {
-        target: RowLoader
-        function onBatch(requestId, kind, rows, done, meta) {
-            if (requestId !== root._rowRequest)
-                return;
-            root.appendRows(rows);
-            if (!done)
-                return;
-            root.loading = false;
-            if (root.resetPending) {
-                root.resetPending = false;
-                root.resetViewNow();
-            } else if (!root.restore() && root.count > 0
-                    && (root.currentIndex < 0 || root.currentIndex >= root.count)) {
-                root.currentIndex = 0;
-            }
-            root.onRowsDone(meta);
-        }
-        function onFailed(requestId, kind, message) {
-            if (requestId === root._rowRequest)
-                root.onRowsFailed(message);
-        }
     }
 
     function setRows(rows) {

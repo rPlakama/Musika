@@ -3,6 +3,25 @@
 All notable changes to Musika, newest first. `TASKLISTMAJOR.md` tracks the
 open work; this file is the release history.
 
+## 0.4.8 — _Native QML controls, lighter rendering, quarter-core background cap_
+
+Notable changes since `v0.4.7`:
+
+- Restore the lyric edge fade so the stage no longer paints opaque gradient bands over the text
+- Fix the cover backdrop loader by using the low-resolution GPU blur instead of missing `.blur.jpg` files
+- Remove the QML WorkerScript row pipeline (Qt 6.11 null QJSEngine warning)
+- `b638cdc` Cap background work at a quarter of the cores
+- `c9bcdfb` Trim QML rendering and row layout work
+- `d766d8a` Show writers in queue rows too
+- `716ef82` Show track writers under album track titles
+- `0da5f50` Base the icon button on native AbstractButton
+- `447156b` Replace the last mouse areas with native scrub sliders
+- `ad7d8c4` Start the native QML audit
+- `0552c70` Raise the row and cell size clamps by forty percent
+- `36138b9` Clamp row text scaling at a readable minimum
+- `f38e3ac` Lay out scroll panel segments with Qt Layouts
+- `754d806` Route all app text through one smooth AppText
+
 ## 0.4.7 — _Well, UI still needs loads of work;_
 
 All commits since `v0.4.6`:

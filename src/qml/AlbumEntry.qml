@@ -274,8 +274,7 @@ Rectangle {
         content.clearSelection();
         songs.clear();
         root.loading = true;
-        root._rowRequest++;
-        RowLoader.load("album-tracks", payload);
+        root._rowRequest = RowLoader.load("album-tracks", payload);
     }
 
     function _finishTracks(meta) {

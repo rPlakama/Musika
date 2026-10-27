@@ -63,11 +63,10 @@ MediaList {
     }
 
     function applyPage(payload) {
-        root._pageRequest++;
         root._pageStarted = false;
         root._pageStale = false;
         root._pageRows = 0;
-        RowLoader.load("songs-page", payload);
+        root._pageRequest = RowLoader.load("songs-page", payload);
     }
 
     function _finishPage(meta) {

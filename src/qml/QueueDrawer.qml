@@ -228,9 +228,8 @@ Item {
     property int _queueRowsChanged: -1
 
     function applyQueue(payload) {
-        root._queueRequest++;
         root._queueRowsChanged = -1;
-        RowLoader.load("queue", payload);
+        root._queueRequest = RowLoader.load("queue", payload);
     }
 
     function _finishQueue(meta) {

@@ -231,8 +231,7 @@ ScrollPanel {
         root.clearSelection();
         mediaRows.clear();
         root.loading = true;
-        root._rowRequest++;
-        RowLoader.load(kind, payload);
+        root._rowRequest = RowLoader.load(kind, payload);
     }
 
     function onRowsDone(meta) {

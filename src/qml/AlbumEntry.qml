@@ -18,6 +18,7 @@ import QtQuick
 import QtQuick.Layouts
 import QtQuick.Effects
 import musika
+import "row"
 import "Theme.js" as Theme
 
 // Album entry: the album art is the page ambience, with the identity and
@@ -29,10 +30,6 @@ import "Theme.js" as Theme
 Rectangle {
     id: root
     radius: Theme.radius
-
-    RowLoader {
-        id: rowLoader
-    }
 
     signal back
     /// ARC-I-2: Alt-hold quick actions on the song row under the cursor;
@@ -278,7 +275,7 @@ Rectangle {
         songs.clear();
         root.loading = true;
         root._rowRequest++;
-        rowLoader.load("album-tracks", payload);
+        RowLoader.load("album-tracks", payload);
     }
 
     function _finishTracks(meta) {
@@ -301,7 +298,7 @@ Rectangle {
     }
 
     Connections {
-        target: rowLoader
+        target: RowLoader
         function onBatch(requestId, kind, rows, done, meta) {
             if (requestId !== root._rowRequest)
                 return;

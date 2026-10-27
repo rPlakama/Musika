@@ -16,6 +16,7 @@
 
 import QtQuick
 import musika
+import "row"
 import "Theme.js" as Theme
 
 // Full-width library list shared by the Albums, Songs and Artists segments:
@@ -231,7 +232,7 @@ ScrollPanel {
         mediaRows.clear();
         root.loading = true;
         root._rowRequest++;
-        rowLoader.load(kind, payload);
+        RowLoader.load(kind, payload);
     }
 
     function onRowsDone(meta) {
@@ -242,12 +243,8 @@ ScrollPanel {
         console.warn("row load failed: " + message);
     }
 
-    RowLoader {
-        id: rowLoader
-    }
-
     Connections {
-        target: rowLoader
+        target: RowLoader
         function onBatch(requestId, kind, rows, done, meta) {
             if (requestId !== root._rowRequest)
                 return;

@@ -6,6 +6,8 @@
 // the Free Software Foundation; either version 2 of the License, or
 // (at your option) any later version.
 
+pragma Singleton
+
 import QtQuick
 
 // Row payload worker: JSON parsing and field mapping happen off the GUI

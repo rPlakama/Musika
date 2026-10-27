@@ -68,9 +68,24 @@ pub fn pool() -> Option<SqlitePool> {
     dbs().map(|dbs| dbs.credentials.clone())
 }
 
+/// The shared ceiling for background work: one quarter of the available CPU
+/// cores, never zero. Used by the Tokio runtime and the thumbnail blocking
+/// batches so a many-core desktop does not turn a sync or a page fill into a
+/// CPU stampede.
+pub(crate) fn worker_limit() -> usize {
+    let cores = std::thread::available_parallelism()
+        .map(|count| count.get())
+        .unwrap_or(4);
+    (cores / 4).max(1)
+}
+
 pub fn runtime() -> &'static Runtime {
     static RT: OnceLock<Runtime> = OnceLock::new();
-    RT.get_or_init(|| match Runtime::new() {
+    RT.get_or_init(|| match tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(worker_limit())
+        .enable_all()
+        .build()
+    {
         Ok(runtime) => runtime,
         Err(err) => {
             eprintln!("runtime: could not start Tokio: {err}");

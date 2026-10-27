@@ -16,6 +16,7 @@
 
 import QtQuick
 import musika
+import "row"
 import "Theme.js" as Theme
 import "ScrollMemory.js" as Memory
 
@@ -36,10 +37,6 @@ MediaList {
     property bool _pageStale: false
     property int _pageOffset: 0
     property int _pageRows: 0
-
-    RowLoader {
-        id: pageLoader
-    }
 
     // `G` on the paged Songs list finishes the tail, then lands on the true
     // last row instead of the last loaded one.
@@ -70,7 +67,7 @@ MediaList {
         root._pageStarted = false;
         root._pageStale = false;
         root._pageRows = 0;
-        pageLoader.load("songs-page", payload);
+        RowLoader.load("songs-page", payload);
     }
 
     function _finishPage(meta) {
@@ -96,7 +93,7 @@ MediaList {
     }
 
     Connections {
-        target: pageLoader
+        target: RowLoader
         function onBatch(requestId, kind, rows, done, meta) {
             if (requestId !== root._pageRequest)
                 return;

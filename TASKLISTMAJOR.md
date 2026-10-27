@@ -1454,12 +1454,17 @@ The product is incomplete without these.
     an offscreen mask layer; `ScrollContent` uses realised-delegate targets
     plus native `indexAt`/`displayMargin`, and only probes Qt for
     unrealised/far targets.
-  - **Row worker:** `RowLoader`/`RowWorker.js` parse and map payloads off the
-    GUI thread in 128-row batches for albums, artists, playlists, song pages,
-    album tracks and the queue. QML delegate creation stays on the GUI thread
-    (Qt requirement); `ListView`/`GridView` reuse, margins and stable row
-    buckets keep that cost down. `SearchOverlay` still maps its three result
-    columns inline.
+  - **Row worker:** the shared `RowLoader` singleton (in `src/qml/row/`)
+    parses and maps payloads on one `WorkerScript` off the GUI thread in
+    128-row batches for albums, artists, playlists, song pages, album tracks
+    and the queue. QML delegate creation stays on the GUI thread (Qt
+    requirement); `ListView`/`GridView` reuse, margins and stable row buckets
+    keep that cost down. `SearchOverlay` still maps its three result columns
+    inline.
+  - **Concurrency cap:** `app::worker_limit()` is
+    `max(1, available_cores / 4)`; the Tokio runtime uses it for worker
+    threads and thumbnail batches use it for their chunk size. The row loader
+    is one shared worker, so no surface can spawn its own pool.
   - **Audit (native already):** `ScrollContent` is native `ListView`/
     `GridView` + `ScrollMemory`; rows use `HoverHandler`/`TapHandler`/
     `DragHandler`; `RatingBurst` is native `ParticleSystem`; badges, icons

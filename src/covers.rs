@@ -98,8 +98,6 @@ pub(crate) const THUMB_EDGE: u32 = 320;
 pub(crate) const BLUR_EDGE: u32 = 96;
 /// JPEG quality for thumbnails; invisible at the painted row sizes.
 const THUMB_QUALITY: u8 = 82;
-/// Bounded worker count for lazy thumbnail generation.
-const THUMB_CONCURRENCY: usize = 4;
 /// Blobs above this are thumbnailed one at a time. A compressed cover can
 /// decode to an order of magnitude more RGBA than its file size, so four
 /// large originals in parallel (a 6000 px cover is ~144 MB each) would spike
@@ -682,7 +680,7 @@ pub(crate) fn write_thumb(source: &Path, dir: &Path, name: &str) -> Result<()> {
 /// the thumb names it processed so the caller can release its claims.
 ///
 /// Large blobs are decoded one at a time ([`THUMB_LARGE_BYTES`]); small blobs
-/// keep [`THUMB_CONCURRENCY`] workers. The blob size is a cheap stand-in for
+/// keep a quarter-core worker batch. The blob size is a cheap stand-in for
 /// decoded dimensions and avoids probing every file twice.
 pub(crate) async fn ensure_thumbs(dir: &Path, jobs: Vec<(String, PathBuf)>) -> Vec<String> {
     let processed: Vec<String> = jobs.iter().map(|(name, _)| name.clone()).collect();
@@ -703,7 +701,8 @@ pub(crate) async fn ensure_thumbs(dir: &Path, jobs: Vec<(String, PathBuf)>) -> V
     for job in large {
         run_thumb_batch(dir, vec![job]).await;
     }
-    for chunk in small.chunks(THUMB_CONCURRENCY) {
+    let concurrency = crate::app::worker_limit();
+    for chunk in small.chunks(concurrency) {
         run_thumb_batch(dir, chunk.to_vec()).await;
     }
     processed
@@ -823,7 +822,10 @@ async fn cached_urls(pool: &SqlitePool, ids: &[String]) -> Result<HashMap<String
             let path = dir.join(&file);
             if path.is_file() {
                 let name = thumb_name(&file);
-                if !dir.join(&name).is_file() || !dir.join(blur_name(&file)).is_file() {
+                // Do not regenerate old thumbnails just to backfill blur files:
+                // that turns the first start after an upgrade into a full cover
+                // pass. New or refreshed art gets its blur with the thumbnail.
+                if !dir.join(&name).is_file() {
                     thumb_jobs.push((name, path.clone()));
                 }
                 if let Ok(url) = reqwest::Url::from_file_path(&path) {

@@ -17,6 +17,7 @@
 import QtQuick
 import QtQuick.Layouts
 import musika
+import "row"
 import "ScrollMemory.js" as Memory
 import "Theme.js" as Theme
 
@@ -229,7 +230,7 @@ Item {
     function applyQueue(payload) {
         root._queueRequest++;
         root._queueRowsChanged = -1;
-        rowLoader.load("queue", payload);
+        RowLoader.load("queue", payload);
     }
 
     function _finishQueue(meta) {
@@ -261,7 +262,7 @@ Item {
     }
 
     Connections {
-        target: rowLoader
+        target: RowLoader
         function onBatch(requestId, kind, rows, done, meta) {
             if (requestId !== root._queueRequest)
                 return;
@@ -426,10 +427,6 @@ Item {
 
     AcrylicPanel {
         id: queueDrawer
-
-    RowLoader {
-        id: rowLoader
-    }
         anchors.top: parent.top
         anchors.bottom: parent.bottom
         width: root.width * 0.36

@@ -17,7 +17,6 @@
 import QtQuick
 import QtQuick.Layouts
 import musika
-import "ScrollMemory.js" as Memory
 import "Theme.js" as Theme
 
 // Standalone play-queue drawer (Ctrl-Q), hosted by Home so it can slide over
@@ -237,7 +236,7 @@ Item {
             // ARC-memory: a different row set is a new queue — drop the old
             // queue's remembered scroll/prefetch target before it can be
             // restored.
-            Memory.clearScroll("fullscreen");
+            Backend.scrollClear("fullscreen");
             root._recallQueue = false;
             // UI-41: payload swaps fade in quickly; a reorder keeps the list live.
             if (!root._reordering)
@@ -247,10 +246,10 @@ Item {
                 var track = data.items[i];
                 queueItems.append({
                     title: track.title,
-                    subtitle: track.artist ? track.artist : "",
-                    duration: Theme.formatTime(track.duration),
-                    songId: track.id,
-                    albumId: track.album_id ? track.album_id : "",
+                    subtitle: track.subtitle ? track.subtitle : "",
+                    duration: track.meta,
+                    songId: track.songId,
+                    albumId: track.albumId ? track.albumId : "",
                     starred: track.starred === true
                 });
             }

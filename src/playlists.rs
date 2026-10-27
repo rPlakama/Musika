@@ -490,5 +490,42 @@ pub async fn list_json(dbs: &Dbs) -> Result<String> {
     )
     .fetch_all(&dbs.playlist)
     .await?;
+    let rows: Vec<serde_json::Value> = rows
+        .into_iter()
+        .map(|row| {
+            let id = row.id;
+            let name = row.name;
+            let owner = row.owner;
+            let origin = if row.source == "m3u" {
+                "M3U".to_string()
+            } else if let Some(owner) = owner.as_ref().filter(|owner| !owner.is_empty()) {
+                owner.clone()
+            } else {
+                "Playlist".to_string()
+            };
+            serde_json::json!({
+                "id": id.clone(),
+                "source": row.source,
+                "name": name.clone(),
+                "song_count": row.song_count,
+                "duration": row.duration,
+                "owner": owner,
+                "title": name,
+                "subtitle": format!("{origin} · {} song{}", row.song_count,
+                    if row.song_count == 1 { "" } else { "s" }),
+                "meta": if row.duration > 0 {
+                    crate::browse::rows::format_duration(Some(row.duration as i32))
+                } else {
+                    String::new()
+                },
+                "playlistId": id,
+                "songId": "",
+                "albumId": "",
+                "cover": "",
+                "starred": false,
+                "rating": 0,
+            })
+        })
+        .collect();
     Ok(serde_json::to_string(&rows)?)
 }

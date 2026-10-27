@@ -1459,11 +1459,16 @@ The product is incomplete without these.
     an offscreen mask layer; `ScrollContent` uses realised-delegate targets
     plus native `indexAt`/`displayMargin`, and only probes Qt for
     unrealised/far targets.
-  - **Row loading:** the QML `WorkerScript` pipeline was removed. Qt 6.11's
-    WorkerScript creates a `QtObject` with no public `QJSEngine`, which emits
-    `QObject::connect(QJSEngine, QtObject): invalid nullptr parameter` on the
-    worker thread. Rows map back on the GUI for now; moving the shaping to
-    Rust is the next performance step, not a release blocker.
+  - **Row loading:** the QML `WorkerScript` pipeline was removed (Qt 6.11
+    emits `QObject::connect(QJSEngine, QtObject): invalid nullptr parameter`
+    for every worker). Rust now shapes album, artist, song, album-track,
+    playlist and queue rows; QML only parses and appends them. `SearchOverlay`
+    still maps its three result columns inline.
+  - **JS logic:** `ScrollMemory.js` moved to `src/scroll_memory.rs` (TTL,
+    cap, startup-zero policy, hydration and serialization in Rust);
+    `RowSync.js` was unused and is gone. Remaining `Theme.js`,
+    `ScrollProfiles.js` and `SearchMatch.js` are binding-time visual/text
+    helpers; moving them behind the bridge would be slower.
   - **Concurrency cap:** `app::worker_limit()` is
     `max(1, available_cores / 4)`; the Tokio runtime uses it for worker
     threads and thumbnail batches use it for their chunk size. The removed row

@@ -286,10 +286,10 @@ Rectangle {
                 track: song.track ? String(song.track) : String(i + 1),
                 title: song.title,
                 subtitle: song.artist ? String(song.artist) : "",
-                duration: Theme.formatTime(song.duration),
+                duration: song.meta,
                 starred: song.starred === true,
                 songId: song.id,
-                albumId: song.album_id ? song.album_id : ""
+                albumId: song.albumId ? song.albumId : ""
             });
         }
         root.tracksDuration = total;

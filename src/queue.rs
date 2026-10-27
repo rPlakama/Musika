@@ -59,7 +59,7 @@ struct TrackElement<'a> {
 
 impl Serialize for TrackElement<'_> {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        let mut state = serializer.serialize_struct("track", 10)?;
+        let mut state = serializer.serialize_struct("track", 15)?;
         state.serialize_field("id", &self.song.id)?;
         state.serialize_field("title", &self.song.title)?;
         state.serialize_field("artist", self.song.artist.as_deref().unwrap_or_default())?;
@@ -76,6 +76,11 @@ impl Serialize for TrackElement<'_> {
             self.song.cover_art.as_deref().unwrap_or_default(),
         )?;
         state.serialize_field("cover_url", self.cover_url)?;
+        state.serialize_field("subtitle", self.song.artist.as_deref().unwrap_or_default())?;
+        state.serialize_field("meta", &crate::browse::rows::format_duration(self.song.duration))?;
+        state.serialize_field("songId", &self.song.id)?;
+        state.serialize_field("albumId", self.song.album_id.as_deref().unwrap_or_default())?;
+        state.serialize_field("starred", &self.song.starred.is_some())?;
         state.end()
     }
 }

@@ -1626,7 +1626,49 @@ impl Backend {
         self.request_album_info_impl(album_id);
     }
 
-    /// ARC-UI-7.5: the persisted scroll store (empty on first launch).
+    /// ARC-UI-7.5: hydrate the Rust-owned scroll store once.
+    #[qslot(qml_name = "scrollHydrate")]
+    fn scroll_hydrate(&mut self) {
+        crate::scroll_memory::hydrate();
+    }
+
+    #[qslot(qml_name = "scrollRemember")]
+    fn scroll_remember(&mut self, key: String, index: i64, y: f64, scope: i64, layout: String) {
+        crate::scroll_memory::remember(&key, index, y, scope, &layout);
+    }
+
+    #[qslot(qml_name = "scrollRememberLayout")]
+    fn scroll_remember_layout(&mut self, key: String, layout: String) {
+        crate::scroll_memory::remember_layout(&key, &layout);
+    }
+
+    #[qslot(qml_name = "scrollEntry")]
+    fn scroll_entry(&self, key: String) -> String {
+        crate::scroll_memory::entry_json(&key)
+    }
+
+    #[qslot(qml_name = "scrollSavedIndex")]
+    fn scroll_saved_index(&self, key: String) -> i64 {
+        crate::scroll_memory::saved_index(&key)
+    }
+
+    #[qslot(qml_name = "scrollSavedLayout")]
+    fn scroll_saved_layout(&self, key: String) -> String {
+        crate::scroll_memory::saved_layout(&key)
+    }
+
+    #[qslot(qml_name = "scrollClear")]
+    fn scroll_clear(&mut self, key: String) {
+        crate::scroll_memory::clear(&key);
+    }
+
+    #[qslot(qml_name = "scrollFlush")]
+    fn scroll_flush(&mut self) {
+        let payload = crate::scroll_memory::serialize();
+        self.write_scroll_memory(payload);
+    }
+
+    /// ARC-UI-7.5: the persisted scroll store (compatibility read).
     #[qslot(qml_name = "scrollMemory")]
     fn scroll_memory(&self) -> String {
         let Ok(path) = crate::db::scroll_path() else {
@@ -1638,6 +1680,10 @@ impl Backend {
     /// ARC-UI-7.5: atomic write of the scroll store from the QML debounce.
     #[qslot(qml_name = "saveScrollMemory")]
     fn save_scroll_memory(&mut self, payload: String) {
+        self.write_scroll_memory(payload);
+    }
+
+    fn write_scroll_memory(&self, payload: String) {
         let Ok(path) = crate::db::scroll_path() else {
             return;
         };

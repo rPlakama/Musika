@@ -18,7 +18,6 @@ import QtQuick
 import QtQuick.Effects
 import QtQuick.Layouts
 import musika
-import "ScrollMemory.js" as Memory
 import "Theme.js" as Theme
 
 // Fullscreen player ("mainscreen"):
@@ -324,7 +323,9 @@ Rectangle {
         if (visible) {
             // UI-54: re-entering restores the last fullscreen scope (pane).
             // Only lyrics/album are panes — the queue is Home's drawer.
-            var saved = Memory.loadScroll("fullscreen");
+            Backend.scrollHydrate();
+            var raw = Backend.scrollEntry("fullscreen");
+            var saved = raw ? JSON.parse(raw) : null;
             pane = saved && (saved.scope === 1 || saved.scope === 3) ? saved.scope : 1;
             // Lyrics stay alive while the player is closed: fetch only when
             // the track changed behind the curtain, otherwise the lines stay

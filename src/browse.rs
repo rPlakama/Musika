@@ -19,7 +19,7 @@
 //!
 //! Split out of `qml.rs` (ARC-17); playback queues live in [`crate::queue`].
 
-mod rows;
+pub(crate) mod rows;
 mod search;
 
 pub(crate) use rows::*;

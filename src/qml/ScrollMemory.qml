@@ -16,7 +16,6 @@
 
 import QtQuick
 import musika
-import "ScrollMemory.js" as Memory
 
 // UI-54: the shared scroll-memory seam — `remember` stores the cursor +
 // offset (and the focused scope, where one exists) and `recall` restores
@@ -27,11 +26,8 @@ import "ScrollMemory.js" as Memory
 // persists cursor + offset (UI-54), so there is no `contentY` animation
 // here to fight teleports or user input.
 //
-// ARC-UI-7.5: the JS dict is the hot store; the QtCore.Settings copy makes
-// the entry pages, queue and fullscreen panes survive a restart. The main
-// Albums/Songs/Artists/Playlists segments always reopen on row 0 (their
-// in-session memory still works); writes are coalesced (500 ms) and the
-// store prunes old surfaces on load/save.
+// ARC-UI-7.5: the store, TTL/cap policy and persisted JSON live in Rust.
+// Writes are coalesced here (500 ms) and flushed through `Backend.scrollFlush`.
 QtObject {
     id: root
 
@@ -42,27 +38,21 @@ QtObject {
         onTriggered: root.flush()
     }
 
-    Component.onCompleted: {
-        root._ensureHydrated();
-        Backend.saveScrollMemory("{\"probe\":1}");
-    }
+    Component.onCompleted: root._ensureHydrated()
     Component.onDestruction: root.flush()
 
     function _ensureHydrated() {
         if (root._hydrated)
             return;
         root._hydrated = true;
-        var raw = Backend.scrollMemory();
-        if (raw)
-            Memory.hydrate(raw);
+        Backend.scrollHydrate();
     }
 
-    /// Writes the hot store to the backend's config file (called by the
-    /// debounce and on teardown).
+    /// Writes the Rust store to the backend's config file.
     function flush() {
         if (!root._hydrated)
             return;
-        Backend.saveScrollMemory(Memory.serialize());
+        Backend.scrollFlush();
     }
 
     function _persist() {
@@ -81,7 +71,9 @@ QtObject {
         // A cursor of -1 is "no memory" (restore treats it that way), so a
         // teardown transient never erases a real saved position.
         if (key && view && i >= 0) {
-            Memory.saveScroll(key, i, view.contentY, scope, layout);
+            Backend.scrollRemember(key, i, view.contentY,
+                scope === undefined ? -1 : scope,
+                layout === undefined ? "" : layout);
             root._persist();
         }
     }
@@ -89,22 +81,20 @@ QtObject {
     /// ARC-UI-3: the remembered layout under `key` ("" when none was saved).
     function savedLayout(key) {
         root._ensureHydrated();
-        var saved = Memory.loadScroll(key);
-        return saved && saved.layout !== undefined ? saved.layout : "";
+        return Backend.scrollSavedLayout(key);
     }
 
     /// The remembered cursor index under `key` (-1 when none was saved).
     function savedIndex(key) {
         root._ensureHydrated();
-        var saved = Memory.loadScroll(key);
-        return saved && saved.index !== undefined ? saved.index : -1;
+        return Backend.scrollSavedIndex(key);
     }
 
-    /// ARC-UI-3: persist only the active layout (see `Memory.saveLayout`).
+    /// ARC-UI-3: persist only the active layout.
     function rememberLayout(key, layout) {
         root._ensureHydrated();
         if (key) {
-            Memory.saveLayout(key, layout);
+            Backend.scrollRememberLayout(key, layout);
             root._persist();
         }
     }
@@ -115,7 +105,8 @@ QtObject {
     /// view is empty (ARC-UI-7.5's richer recall).
     function recall(key, view) {
         root._ensureHydrated();
-        var saved = Memory.loadScroll(key);
+        var raw = Backend.scrollEntry(key);
+        var saved = raw ? JSON.parse(raw) : null;
         if (!saved || !view || view.count === 0)
             return { ok: false, index: -1, y: 0 };
         view.currentIndex = Math.max(0, Math.min(view.count - 1, saved.index));

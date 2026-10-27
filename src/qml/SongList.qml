@@ -17,7 +17,6 @@
 import QtQuick
 import musika
 import "Theme.js" as Theme
-import "ScrollMemory.js" as Memory
 
 // Songs segment: the indexed songs, loaded in pages (PATH-3). The first page
 // loads up to the remembered cursor (one page of headroom) so the scroll
@@ -48,27 +47,13 @@ MediaList {
         root._nextOffset = 0;
         // UI-54: preload through the remembered cursor so `restore()` lands on
         // the same row; beyond that, pages stream in on demand.
-        var saved = Memory.loadScroll(root.memoryKey);
+        Backend.scrollHydrate();
+        var saved = Backend.scrollSavedIndex(root.memoryKey);
         var at = root.currentIndex >= 0
             ? root.currentIndex
-            : (saved && saved.index >= 0 ? saved.index : 0);
+            : (saved >= 0 ? saved : 0);
         var limit = Math.max(root.pageSize, at + root.pageSize);
         Backend.requestSongsPage(0, limit);
-    }
-
-    function mapRow(song) {
-        var artist = song.artist ? song.artist : "";
-        var album = song.album ? song.album : "";
-        return {
-            title: song.title,
-            subtitle: artist + (album.length > 0 ? " · " + album : ""),
-            meta: Theme.formatTime(song.duration),
-            cover: song.cover ? song.cover : "",
-            songId: song.id,
-            albumId: song.album_id ? song.album_id : "",
-            starred: song.starred === true,
-            rating: 0
-        };
     }
 
     function applyPage(payload) {
@@ -77,9 +62,7 @@ MediaList {
         // model (only the first page may restart the list).
         if (data.offset !== 0 && data.offset !== root._nextOffset)
             return;
-        var rows = [];
-        for (var i = 0; i < data.rows.length; i++)
-            rows.push(root.mapRow(data.rows[i]));
+        var rows = data.rows;
         if (data.offset === 0) {
             // MediaList owns the loading state while it fills the model in
             // batches.

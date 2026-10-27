@@ -48,6 +48,7 @@ mod player;
 mod playlists;
 mod qml;
 mod queue;
+mod scroll_memory;
 mod search;
 mod session;
 mod sqlite;

@@ -20,6 +20,39 @@ use std::collections::{HashMap, HashSet};
 
 use serde::ser::{Serialize, SerializeSeq, SerializeStruct, Serializer};
 
+/// The one row-duration format: m:ss, or h:mm:ss past the hour.
+pub(crate) fn format_duration(seconds: Option<i32>) -> String {
+    let total = seconds.unwrap_or(0).max(0) as u64;
+    let h = total / 3600;
+    let m = (total % 3600) / 60;
+    let s = total % 60;
+    if h > 0 {
+        format!("{h}:{m:02}:{s:02}")
+    } else {
+        format!("{m}:{s:02}")
+    }
+}
+
+fn album_subtitle(album: &crate::library::AlbumRow) -> String {
+    let artist = album.artist.as_deref().unwrap_or("");
+    match album.year {
+        Some(year) => format!("{artist} · {year}"),
+        None => artist.to_string(),
+    }
+}
+
+fn song_subtitle_from_parts(artist: Option<&str>, album: Option<&str>) -> String {
+    let artist = artist.unwrap_or("");
+    match album {
+        Some(album) if !album.is_empty() => format!("{artist} · {album}"),
+        _ => artist.to_string(),
+    }
+}
+
+fn song_subtitle(song: &crate::library::SongRow) -> String {
+    song_subtitle_from_parts(song.artist.as_deref(), song.album.as_deref())
+}
+
 pub(crate) fn artist_json(
     artist: &crate::library::ArtistRow,
     covers: &HashMap<String, String>,
@@ -37,6 +70,15 @@ pub(crate) fn artist_json(
         "starred": starred,
         // UI-60: the local `artist_user` rating (0 = unrated).
         "rating": rating,
+        "title": artist.name,
+        "subtitle": "",
+        "meta": format!("{} album{}", album_count.unwrap_or(artist.album_count),
+            if album_count.unwrap_or(artist.album_count) == 1 { "" } else { "s" }),
+        "artistId": artist.id,
+        "artistName": artist.name,
+        "artistCover": cover,
+        "songId": "",
+        "albumId": "",
     })
 }
 
@@ -58,6 +100,10 @@ pub(crate) fn album_json(
         "starred": album.starred.is_some(),
         // UI-60: user rating 0..=5 (0 = unrated).
         "rating": album.rating,
+        "subtitle": album_subtitle(album),
+        "meta": format!("{count} tracks"),
+        "albumId": album.id,
+        "songId": "",
     })
 }
 
@@ -84,6 +130,11 @@ pub(crate) fn song_json(
         "suffix": suffix,
         "cover": cover,
         "starred": starred,
+        "subtitle": song_subtitle_from_parts(artist, album),
+        "meta": format_duration(duration),
+        "songId": id,
+        "albumId": album_id.unwrap_or(""),
+        "rating": 0,
     })
 }
 
@@ -105,7 +156,7 @@ struct AlbumElement<'a> {
 
 impl Serialize for AlbumElement<'_> {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        let mut state = serializer.serialize_struct("album", 9)?;
+        let mut state = serializer.serialize_struct("album", 13)?;
         state.serialize_field("id", &self.album.id)?;
         state.serialize_field("title", &self.album.title)?;
         state.serialize_field("artist", &self.album.artist)?;
@@ -115,6 +166,10 @@ impl Serialize for AlbumElement<'_> {
         state.serialize_field("cover", self.cover)?;
         state.serialize_field("starred", &self.album.starred.is_some())?;
         state.serialize_field("rating", &self.album.rating)?;
+        state.serialize_field("subtitle", &album_subtitle(self.album))?;
+        state.serialize_field("meta", &format!("{} tracks", self.song_count))?;
+        state.serialize_field("albumId", &self.album.id)?;
+        state.serialize_field("songId", "")?;
         state.end()
     }
 }
@@ -155,13 +210,22 @@ struct ArtistElement<'a> {
 
 impl Serialize for ArtistElement<'_> {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        let mut state = serializer.serialize_struct("artist", 6)?;
+        let mut state = serializer.serialize_struct("artist", 14)?;
         state.serialize_field("id", &self.artist.id)?;
         state.serialize_field("name", &self.artist.name)?;
         state.serialize_field("album_count", &self.album_count)?;
         state.serialize_field("cover", self.cover)?;
         state.serialize_field("starred", &self.starred)?;
         state.serialize_field("rating", &self.rating)?;
+        state.serialize_field("title", &self.artist.name)?;
+        state.serialize_field("subtitle", "")?;
+        state.serialize_field("meta", &format!("{} album{}", self.album_count,
+            if self.album_count == 1 { "" } else { "s" }))?;
+        state.serialize_field("artistId", &self.artist.id)?;
+        state.serialize_field("artistName", &self.artist.name)?;
+        state.serialize_field("artistCover", self.cover)?;
+        state.serialize_field("songId", "")?;
+        state.serialize_field("albumId", "")?;
         state.end()
     }
 }
@@ -225,7 +289,7 @@ struct SongElement<'a> {
 
 impl Serialize for SongElement<'_> {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        let mut state = serializer.serialize_struct("song", 10)?;
+        let mut state = serializer.serialize_struct("song", 15)?;
         state.serialize_field("id", &self.song.id)?;
         state.serialize_field("title", &self.song.title)?;
         state.serialize_field("artist", &self.song.artist)?;
@@ -236,6 +300,11 @@ impl Serialize for SongElement<'_> {
         state.serialize_field("suffix", &self.song.suffix)?;
         state.serialize_field("cover", self.cover)?;
         state.serialize_field("starred", &self.song.starred.is_some())?;
+        state.serialize_field("subtitle", &song_subtitle(self.song))?;
+        state.serialize_field("meta", &format_duration(self.song.duration))?;
+        state.serialize_field("songId", &self.song.id)?;
+        state.serialize_field("albumId", self.song.album_id.as_deref().unwrap_or(""))?;
+        state.serialize_field("rating", &0)?;
         state.end()
     }
 }

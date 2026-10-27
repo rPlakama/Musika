@@ -56,50 +56,17 @@ Rectangle {
         onTriggered: Backend.tick()
     }
 
-    // Seek line across the top edge.
-    Rectangle {
-        radius: Theme.radius
-        anchors.top: parent.top
-        anchors.left: parent.left
-        anchors.right: parent.right
-        height: Math.max(1, root.height * 0.03)
-        color: Palette.outlineVariant
-
-        Rectangle {
-            radius: Theme.radius
-            width: parent.width * (Backend.duration > 0
-                ? Math.min(1, Backend.position / Backend.duration)
-                : 0)
-            height: parent.height
-            color: Palette.primary
-
-            Behavior on width {
-                NumberAnimation { duration: Theme.motion.quick; easing.type: Easing.Linear }
-            }
-        }
-    }
-
-    // Click/drag anywhere on the top strip to seek.
-    MouseArea {
+    // Native seek rail across the top edge (click and drag).
+    ScrubBar {
         anchors.top: parent.top
         anchors.left: parent.left
         anchors.right: parent.right
         height: Math.max(root.height * 0.14, 8)
         enabled: Backend.duration > 0
-        cursorShape: Qt.PointingHandCursor
-
-        function seekTo(x) {
-            if (Backend.duration <= 0)
-                return;
-            var fraction = Math.max(0, Math.min(1, x / width));
-            Backend.playerSeek(fraction * Backend.duration);
-        }
-
-        onPressed: (mouse) => seekTo(mouse.x)
-        onPositionChanged: (mouse) => {
-            if (pressed)
-                seekTo(mouse.x);
-        }
+        trackHeight: Math.max(1, root.height * 0.03)
+        value: Backend.duration > 0
+            ? Math.min(1, Backend.position / Backend.duration) : 0
+        onMoved: Backend.playerSeek(value * Backend.duration)
     }
 
     Item {
@@ -219,33 +186,14 @@ Rectangle {
                     onClicked: Backend.playerToggleMute()
                 }
 
-                Rectangle {
-                    id: volumeTrack
+                ScrubBar {
                     Layout.preferredWidth: root.width * 0.07
-                    Layout.preferredHeight: Math.max(2, root.height * 0.05)
-                    color: Palette.outlineVariant
-                    radius: Theme.radius
-
-                    Rectangle {
-                        width: parent.width * Math.max(0, Math.min(1, Backend.volume / 100))
-                        height: parent.height
-                        radius: Theme.radius
-                        color: Backend.muted ? Palette.outline : Palette.primary
-
-                        Behavior on width {
-                            NumberAnimation { duration: Theme.motion.quick; easing.type: Easing.Linear }
-                        }
-                    }
-
-                    MouseArea {
-                        anchors.fill: parent
-                        cursorShape: Qt.PointingHandCursor
-                        onPressed: (mouse) => Backend.playerSetVolume(Math.max(0, Math.min(1, mouse.x / width)) * 100)
-                        onPositionChanged: (mouse) => {
-                            if (pressed)
-                                Backend.playerSetVolume(Math.max(0, Math.min(1, mouse.x / width)) * 100);
-                        }
-                    }
+                    Layout.preferredHeight: Math.max(8, root.height * 0.12)
+                    Layout.alignment: Qt.AlignVCenter
+                    trackHeight: Math.max(2, root.height * 0.05)
+                    dimmed: Backend.muted
+                    value: Math.max(0, Math.min(1, Backend.volume / 100))
+                    onMoved: Backend.playerSetVolume(value * 100)
                 }
             }
         }

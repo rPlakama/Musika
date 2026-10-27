@@ -1444,15 +1444,15 @@ The product is incomplete without these.
     (`f38e3ac`); all app text goes through `AppText` (`Text.CurveRendering`,
     `754d806`); `RowBody` uses `Text.Fit` + wrap (`716a197`, `36138b9`);
     `AltActionsOverlay`'s dismiss scrim uses `TapHandler` instead of
-    `MouseArea`.
+    `MouseArea`; seek/volume are the native `ScrubBar` (Slider) in both the
+    player bar and NowPlaying.
   - **Audit (native already):** `ScrollContent` is native `ListView`/
     `GridView` + `ScrollMemory`; rows use `HoverHandler`/`TapHandler`/
     `DragHandler`; `RatingBurst` is native `ParticleSystem`; badges, icons
     and covers use `Image`/`VectorImage`; animations are Qt
-    `NumberAnimation`/`Behavior`/`ParticleSystem`.
+    `NumberAnimation`/`Behavior`/`ParticleSystem`; there are no remaining
+    `MouseArea`s in `src/qml`.
   - **Open candidates:**
-    - `InferiorBar.qml` + `NowPlaying.qml` seek/volume `MouseArea`s → native
-      `Slider` (or `TapHandler` + `DragHandler` if the custom rail stays);
     - `Toast`/`ToastModal`, `QueueDrawer`, `SearchOverlay` → native
       `Popup`/`Drawer` where the custom acrylic backdrop and keyboard model
       allow;

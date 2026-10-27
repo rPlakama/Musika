@@ -529,35 +529,13 @@ Rectangle {
                         }
                     }
 
-                    Rectangle {
-                        id: seekTrack
+                    ScrubBar {
                         Layout.fillWidth: true
-                        Layout.preferredHeight: Math.max(2, root.height * 0.006)
-                        color: Palette.outlineVariant
-                        radius: Theme.radius
-
-                        Rectangle {
-                            width: seekTrack.width * (Backend.duration > 0 ? Math.min(1, Backend.position / Backend.duration) : 0)
-                            height: parent.height
-                            color: Palette.primary
-                            radius: Theme.radius
-
-                            Behavior on width {
-                                NumberAnimation {
-                                    duration: Theme.motion.quick
-                                    easing.type: Easing.Linear
-                                }
-                            }
-                        }
-
-                        MouseArea {
-                            anchors.fill: parent
-                            cursorShape: Qt.PointingHandCursor
-                            onPressed: mouse => {
-                                if (Backend.duration > 0)
-                                    Backend.playerSeek(Math.max(0, Math.min(1, mouse.x / width)) * Backend.duration);
-                            }
-                        }
+                        Layout.preferredHeight: Math.max(8, root.height * 0.02)
+                        trackHeight: Math.max(2, root.height * 0.006)
+                        value: Backend.duration > 0
+                            ? Math.min(1, Backend.position / Backend.duration) : 0
+                        onMoved: Backend.playerSeek(value * Backend.duration)
                     }
 
                     Rectangle {
@@ -620,40 +598,17 @@ Rectangle {
                                 onClicked: Backend.playerToggleMute()
                             }
 
-                            Rectangle {
-                                id: volumeTrack
+                            ScrubBar {
                                 visible: root.width >= Theme.breakpoints.narrow
                                 Layout.fillWidth: true
                                 Layout.minimumWidth: root.height * 0.02
                                 Layout.maximumWidth: root.width * 0.06
                                 Layout.preferredWidth: root.width * 0.06
-                                Layout.preferredHeight: Math.max(2, root.height * 0.006)
-                                color: Palette.outlineVariant
-                                radius: Theme.radius
-
-                                Rectangle {
-                                    width: parent.width * Math.max(0, Math.min(1, Backend.volume / 100))
-                                    height: parent.height
-                                    radius: Theme.radius
-                                    color: Backend.muted ? Palette.outline : Palette.primary
-
-                                    Behavior on width {
-                                        NumberAnimation {
-                                            duration: Theme.motion.quick
-                                            easing.type: Easing.Linear
-                                        }
-                                    }
-                                }
-
-                                MouseArea {
-                                    anchors.fill: parent
-                                    cursorShape: Qt.PointingHandCursor
-                                    onPressed: mouse => Backend.playerSetVolume(Math.max(0, Math.min(1, mouse.x / width)) * 100)
-                                    onPositionChanged: mouse => {
-                                        if (pressed)
-                                            Backend.playerSetVolume(Math.max(0, Math.min(1, mouse.x / width)) * 100);
-                                    }
-                                }
+                                Layout.preferredHeight: Math.max(8, root.height * 0.02)
+                                trackHeight: Math.max(2, root.height * 0.006)
+                                dimmed: Backend.muted
+                                value: Math.max(0, Math.min(1, Backend.volume / 100))
+                                onMoved: Backend.playerSetVolume(value * 100)
                             }
                         }
                     }

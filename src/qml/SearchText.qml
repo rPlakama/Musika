@@ -27,7 +27,7 @@ import "SearchMatch.js" as Match
 // the matched substrings painted over them in the highlight foreground, the
 // actual `Search`/`CurSearch` contrast pair. The children die at the cell
 // edge (`clip`), so a match under the ellipsis cannot leak.
-Text {
+AppText {
     id: root
 
     /// The live `/` query ("" = no session, no blocks) and whether this row
@@ -37,7 +37,6 @@ Text {
     /// FadeText's contract: fade in on creation (off for recycled delegates).
     property bool animated: true
 
-    font.family: Theme.fonts.body
 
     NumberAnimation on opacity {
         running: root.animated && !Theme.reduceMotion
@@ -86,7 +85,7 @@ Text {
     Repeater {
         model: root.spans
 
-        delegate: Text {
+        delegate: AppText {
             required property var modelData
 
             x: root._originX + fm.advanceWidth(root.text.substring(0, modelData.start))

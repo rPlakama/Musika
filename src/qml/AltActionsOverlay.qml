@@ -393,7 +393,7 @@ Item {
                     : (box.isAimed ? Palette.onPrimaryContainer : Palette.onSurfaceVariant)
             }
 
-            Text {
+            AppText {
                 id: boxLabel
                 anchors.centerIn: parent
                 visible: box.iconSource.length === 0

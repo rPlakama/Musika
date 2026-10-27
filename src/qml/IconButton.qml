@@ -149,7 +149,7 @@ Rectangle {
         property url iconGlyph: ""
         opacity: 1
 
-        Text {
+        AppText {
             anchors.centerIn: parent
             visible: glyphA.iconGlyph.toString().length === 0 && glyphA.textGlyph.length > 0
             text: glyphA.textGlyph
@@ -183,7 +183,7 @@ Rectangle {
         property url iconGlyph: ""
         opacity: 0
 
-        Text {
+        AppText {
             anchors.centerIn: parent
             visible: glyphB.iconGlyph.toString().length === 0 && glyphB.textGlyph.length > 0
             text: glyphB.textGlyph

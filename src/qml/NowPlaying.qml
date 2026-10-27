@@ -825,9 +825,6 @@ Rectangle {
                                     color: lyricLine.active ? Palette.onSurface : Palette.onSurfaceVariant
                                     font.family: Theme.fonts.lyrics
                                     font.pixelSize: root.lyricSize
-                                    // Curve rasterization stays crisp through the
-                                    // active-line scale (DMS offers the same mode).
-                                    renderType: Text.CurveRendering
                                     wrapMode: Text.WordWrap
                                     animated: false
                                     transformOrigin: Item.Center

@@ -249,7 +249,7 @@ Item {
             spacing: root.height * 0.012
 
             // The Neovim command-line prefix.
-            Text {
+            AppText {
                 text: "/"
                 color: Palette.primary
                 font.family: Theme.fonts.body
@@ -299,7 +299,7 @@ Item {
             }
 
             // Neovim's `[i/N]` — matching rows, current / total.
-            Text {
+            AppText {
                 text: root.counterText
                 color: Palette.onSurfaceVariant
                 font.family: Theme.fonts.body

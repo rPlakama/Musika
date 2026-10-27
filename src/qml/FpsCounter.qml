@@ -15,6 +15,7 @@
 // along with this program; if not, see <https://www.gnu.org/licenses/>.
 
 import QtQuick
+import musika
 
 // Debug-only frame-time overlay. `FrameAnimation` gives the interval between
 // rendered frames; keep the last ~10 s and show the instantaneous, top,
@@ -54,31 +55,31 @@ Item {
         anchors.margins: 6
         spacing: 1
 
-        Text {
+        AppText {
             text: "Current: " + format(root.currentFps, 1) + " FPS"
             color: "white"; font.pixelSize: 11; font.family: "monospace"
         }
-        Text {
+        AppText {
             text: "Top: " + format(root.topFps, 1) + " FPS"
             color: "white"; font.pixelSize: 11; font.family: "monospace"
         }
-        Text {
+        AppText {
             text: "Min: " + format(root.minFps, 1) + " FPS"
             color: "white"; font.pixelSize: 11; font.family: "monospace"
         }
-        Text {
+        AppText {
             text: "Low 1%: " + format(root.lowOnePercentFps, 1) + " FPS"
             color: "white"; font.pixelSize: 11; font.family: "monospace"
         }
-        Text {
+        AppText {
             text: "Average: " + format(root.averageFps, 1) + " FPS"
             color: "white"; font.pixelSize: 11; font.family: "monospace"
         }
-        Text {
+        AppText {
             text: "AverageMS: " + format(root.averageMs, 2) + " ms"
             color: "white"; font.pixelSize: 11; font.family: "monospace"
         }
-        Text {
+        AppText {
             text: "Delay: " + format(root.delayMs, 2) + " ms"
             color: "white"; font.pixelSize: 11; font.family: "monospace"
         }

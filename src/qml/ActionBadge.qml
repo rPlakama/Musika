@@ -15,6 +15,7 @@
 // along with this program; if not, see <https://www.gnu.org/licenses/>.
 
 import QtQuick
+import musika
 import "Theme.js" as Theme
 
 // Transient action feedback in the lower-right corner. The first action shows
@@ -105,14 +106,14 @@ Item {
             anchors.centerIn: parent
             spacing: height * 0.12
 
-            Text {
+            AppText {
                 text: root.label
                 color: "white"
                 font.family: Theme.fonts.body
                 font.pixelSize: badge.height * 0.42
             }
 
-            Text {
+            AppText {
                 visible: root.count > 1
                 text: root.count > 1 ? "×" + root.count : ""
                 color: "white"

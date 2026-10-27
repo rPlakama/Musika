@@ -15,6 +15,7 @@
 // along with this program; if not, see <https://www.gnu.org/licenses/>.
 
 import QtQuick
+import musika
 import "Theme.js" as Theme
 
 // Elegant shutdown: fade the scrim in, spawn the white "Bye!" letters with a
@@ -62,7 +63,7 @@ Item {
             id: lettersRepeater
             model: ["B", "y", "e", "!"]
 
-            delegate: Text {
+            delegate: AppText {
                 id: letter
                 required property string modelData
                 required property int index

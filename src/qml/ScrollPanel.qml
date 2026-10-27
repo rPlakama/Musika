@@ -15,6 +15,7 @@
 // along with this program; if not, see <https://www.gnu.org/licenses/>.
 
 import QtQuick
+import QtQuick.Layouts
 import musika
 import "ScrollProfiles.js" as ScrollProfiles
 import "Theme.js" as Theme
@@ -22,10 +23,10 @@ import "Theme.js" as Theme
 // Shared scroll panel — the standard shape of every scrollable segment:
 //
 //   Main   — the surface itself (callers size it; `background` is the fill).
-//   A 20%  — the title band, anchored top, horizontal centre: `title` plus any
+//   A 20%  — the title band, laid out by Qt Layouts: `title` plus any
 //            writings declared as children (order cues, counts, chips).
-//   B rest — the scroll body, anchored bottom, horizontal centre: the ListView
-//            with the eased follow (UI-41), scroll memory (UI-54),
+//   B rest — the scroll body, laid out by the same native stack: the
+//            ListView with the eased follow (UI-41), scroll memory (UI-54),
 //            loading/empty states and the keyboard cursor.
 //
 // Callers keep their model, row delegate and payload mapping; the panel owns
@@ -326,7 +327,7 @@ Rectangle {
         anchors.top: parent.top
         anchors.left: parent.left
         anchors.right: parent.right
-        anchors.bottom: body.bottom
+        anchors.bottom: parent.bottom
         topLeftRadius: Theme.radius
         topRightRadius: Theme.radius
         bottomLeftRadius: 0
@@ -334,83 +335,86 @@ Rectangle {
         color: Palette.surface
     }
 
-    // A: title band (20% of the panel by default; less while compressed,
-    // UI-57).
-    Rectangle {
-        radius: Theme.radius
-        id: header
-        anchors.top: parent.top
-        anchors.horizontalCenter: parent.horizontalCenter
-        width: parent.width
-        height: root.height * root.effectiveHeaderRatio
-        color: "transparent"
+    // A/B are laid out by Qt Layouts; the custom anchor split is gone.
+    ColumnLayout {
+        anchors.fill: parent
+        spacing: 0
 
-        FadeText {
-            id: titleLabel
-            visible: root.title.length > 0
-            anchors.verticalCenter: parent.verticalCenter
-            anchors.left: parent.left
-            anchors.leftMargin: root.width * 0.02
-            text: root.title
-            color: Palette.onSurface
-            font.pixelSize: root.titlePixelSize
-            font.bold: true
-            animated: false
+        // A: title band (20% of the panel by default; less while compressed,
+        // UI-57).
+        Rectangle {
+            radius: Theme.radius
+            id: header
+            Layout.fillWidth: true
+            Layout.preferredHeight: root.height * root.effectiveHeaderRatio
+            color: "transparent"
+    
+            FadeText {
+                id: titleLabel
+                visible: root.title.length > 0
+                anchors.verticalCenter: parent.verticalCenter
+                anchors.left: parent.left
+                anchors.leftMargin: root.width * 0.02
+                text: root.title
+                color: Palette.onSurface
+                font.pixelSize: root.titlePixelSize
+                font.bold: true
+                animated: false
+            }
+    
+            FadeText {
+                visible: root.titleHint.length > 0 && titleLabel.visible
+                anchors.left: titleLabel.right
+                anchors.leftMargin: root.width * 0.012
+                anchors.verticalCenter: parent.verticalCenter
+                width: Math.max(0, parent.width * 0.36)
+                text: root.titleHint
+                color: Palette.onSurfaceVariant
+                font.pixelSize: Theme.fontSize("label", root.height)
+                elide: Text.ElideRight
+                animated: false
+            }
         }
-
-        FadeText {
-            visible: root.titleHint.length > 0 && titleLabel.visible
-            anchors.left: titleLabel.right
-            anchors.leftMargin: root.width * 0.012
-            anchors.verticalCenter: parent.verticalCenter
-            width: Math.max(0, parent.width * 0.36)
-            text: root.titleHint
-            color: Palette.onSurfaceVariant
-            font.pixelSize: Theme.fontSize("label", root.height)
-            elide: Text.ElideRight
-            animated: false
-        }
-    }
-
-    // B: the scroll body, filling the room under the header.
-    Rectangle {
-        radius: Theme.radius
-        id: body
-        anchors.top: header.bottom
-        anchors.horizontalCenter: parent.horizontalCenter
-        width: parent.width
-        height: root.bodyHeight
-        color: "transparent"
-        clip: true
-
-        // The shared scroll body (UI-48 stage, cursor, eased follow, memory).
-        ScrollContent {
-            id: content
-            anchors.fill: parent
-            context: root.context
-            bleed: root.bleed
-            model: root.model
-            rowDelegate: root.rowDelegate
-            selectable: root.selectable
-            memoryKey: root.memoryKey
-            memoryScope: root.memoryScope
-            onItemActivated: (index) => root.itemActivated(index)
-            onSelectionChanged: root.selectionChanged()
-        }
-
-        FadeText {
-            anchors.centerIn: parent
-            visible: !root.loading && count === 0 && root.emptyText.length > 0
-            text: root.emptyText
-            color: Palette.onSurfaceVariant
-            font.pixelSize: Theme.fontSize("body", root.height)
-            animated: false
-        }
-
-        // UI-22/UI-38: the shared wait state while the first payload lands.
-        SkeletonList {
-            anchors.fill: parent
-            visible: root.loading && count === 0
+    
+        // B: the scroll body, filling the room under the header.
+        Rectangle {
+            radius: Theme.radius
+            id: body
+            Layout.fillWidth: true
+            Layout.fillHeight: true
+            Layout.minimumHeight: 0
+            color: "transparent"
+            clip: true
+    
+            // The shared scroll body (UI-48 stage, cursor, eased follow, memory).
+            ScrollContent {
+                id: content
+                anchors.fill: parent
+                context: root.context
+                bleed: root.bleed
+                model: root.model
+                rowDelegate: root.rowDelegate
+                selectable: root.selectable
+                memoryKey: root.memoryKey
+                memoryScope: root.memoryScope
+                onItemActivated: (index) => root.itemActivated(index)
+                onSelectionChanged: root.selectionChanged()
+            }
+    
+            FadeText {
+                anchors.centerIn: parent
+                visible: !root.loading && count === 0 && root.emptyText.length > 0
+                text: root.emptyText
+                color: Palette.onSurfaceVariant
+                font.pixelSize: Theme.fontSize("body", root.height)
+                animated: false
+            }
+    
+            // UI-22/UI-38: the shared wait state while the first payload lands.
+            SkeletonList {
+                anchors.fill: parent
+                visible: root.loading && count === 0
+            }
         }
     }
 }

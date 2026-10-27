@@ -44,6 +44,10 @@ Item {
 
     property real titlePixelSize: rowHeight * 0.26
     property real subtitlePixelSize: rowHeight * 0.19
+    // Text.Fit may shrink a long row title; stop before it becomes
+    // unreadable in a short or narrow row.
+    property real minTitlePixelSize: 9
+    property real minSubtitlePixelSize: 8
     property real metaPixelSize: rowHeight * 0.19
     property color titleColor: Palette.onSurface
     property color subtitleColor: Palette.onSurfaceVariant
@@ -144,7 +148,7 @@ Item {
                     font.bold: root.current
                     verticalAlignment: Text.AlignVCenter
                     fontSizeMode: Text.Fit
-                    minimumPixelSize: 7
+                    minimumPixelSize: Math.min(root.titlePixelSize, root.minTitlePixelSize)
                     wrapMode: Text.WrapAnywhere
                     maximumLineCount: 2
                     elide: Text.ElideRight
@@ -174,7 +178,7 @@ Item {
                     font.pixelSize: root.subtitlePixelSize
                     verticalAlignment: Text.AlignVCenter
                     fontSizeMode: Text.Fit
-                    minimumPixelSize: 7
+                    minimumPixelSize: Math.min(root.subtitlePixelSize, root.minSubtitlePixelSize)
                     wrapMode: Text.WrapAnywhere
                     maximumLineCount: 2
                     elide: Text.ElideRight

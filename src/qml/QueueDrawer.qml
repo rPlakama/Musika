@@ -222,45 +222,20 @@ Item {
         queueCursor = queueContent.currentIndex;
     }
 
+    property int _queueRequest: 0
+    // -1 = no batch yet, 0 = same rows, 1 = rebuilt
+    property int _queueRowsChanged: -1
+
     function applyQueue(payload) {
-        var data = JSON.parse(payload);
-        var rowsChanged = data.hash !== root._queueHash;
+        root._queueRequest++;
+        root._queueRowsChanged = -1;
+        rowLoader.load("queue", payload);
+    }
 
-        // A skip or an auto-advance re-delivers the exact same rows with a
-        // new playing index. Rebuilding the model for that flicked the pane
-        // (clear + fade) and, when the follow raced the refill, corrupted
-        // the view's layout (realised rows stopped at the old window and
-        // later jumps inflated the item offsets — SC-5). So: rebuild only
-        // when the rows really changed; a pure move just follows the index.
-        if (rowsChanged) {
-            root._queueHash = data.hash;
-            // ARC-memory: a different row set is a new queue — drop the old
-            // queue's remembered scroll/prefetch target before it can be
-            // restored.
-            Memory.clearScroll("fullscreen");
-            root._recallQueue = false;
-            // UI-41: payload swaps fade in quickly; a reorder keeps the list live.
-            if (!root._reordering)
-                queueContent.opacity = 0;
-            queueItems.clear();
-            for (var i = 0; i < data.items.length; i++) {
-                var track = data.items[i];
-                queueItems.append({
-                    title: track.title,
-                    subtitle: track.artist ? track.artist : "",
-                    duration: Theme.formatTime(track.duration),
-                    songId: track.id,
-                    albumId: track.album_id ? track.album_id : "",
-                    starred: track.starred === true
-                });
-            }
-            Qt.callLater(function () {
-                queueContent.opacity = 1;
-            });
-        }
-
-        queueIndex = data.index;
-        if (root._pendingQueueCursor >= 0 && rowsChanged) {
+    function _finishQueue(meta) {
+        queueIndex = meta.index;
+        var changed = root._queueRowsChanged === 1;
+        if (root._pendingQueueCursor >= 0 && changed) {
             root._recallQueue = false;
             queueCursor = Math.max(0, Math.min(queueItems.count - 1, root._pendingQueueCursor));
             root._pendingQueueCursor = -1;
@@ -275,9 +250,40 @@ Item {
         } else {
             // A pure index move is a skip/advance: glide to the new playing
             // row instead of snapping. A rebuilt payload lands instantly.
-            root.recallQueueCursor(!rowsChanged);
+            root.recallQueueCursor(!changed);
+        }
+        if (changed) {
+            Qt.callLater(function () {
+                queueContent.opacity = 1;
+            });
         }
         root.requestMarkWindow();
+    }
+
+    Connections {
+        target: rowLoader
+        function onBatch(requestId, kind, rows, done, meta) {
+            if (requestId !== root._queueRequest)
+                return;
+            if (root._queueRowsChanged < 0) {
+                root._queueRowsChanged = meta.hash !== root._queueHash ? 1 : 0;
+                if (root._queueRowsChanged === 1) {
+                root._queueHash = meta.hash;
+                Memory.clearScroll("fullscreen");
+                root._recallQueue = false;
+                if (!root._reordering)
+                    queueContent.opacity = 0;
+                queueItems.clear();
+                }
+            }
+            if (root._queueRowsChanged === 1) {
+                for (var i = 0; i < rows.length; i++)
+                    queueItems.append(rows[i]);
+                root.requestMarkWindow();
+            }
+            if (done)
+                root._finishQueue(meta);
+        }
     }
 
     /// The queue cursor for a fresh payload (UI-54 re-entry remembers; a
@@ -420,6 +426,10 @@ Item {
 
     AcrylicPanel {
         id: queueDrawer
+
+    RowLoader {
+        id: rowLoader
+    }
         anchors.top: parent.top
         anchors.bottom: parent.bottom
         width: root.width * 0.36

@@ -40,26 +40,7 @@ MediaList {
     }
 
     function apply(payload) {
-        var parsed = JSON.parse(payload);
-        var rows = [];
-        for (var i = 0; i < parsed.length; i++) {
-            var artist = parsed[i];
-            var count = artist.album_count;
-            rows.push({
-                title: artist.name,
-                subtitle: "",
-                meta: count + (count === 1 ? " album" : " albums"),
-                cover: artist.cover ? artist.cover : "",
-                artistId: artist.id,
-                artistName: artist.name,
-                artistCover: artist.cover ? artist.cover : "",
-                songId: "",
-                albumId: "",
-                starred: artist.starred === true,
-                rating: Number(artist.rating) || 0
-            });
-        }
-        root.setRows(rows);
+        root.loadRows("artists", payload);
     }
 
     onActivated: (item) => root.artistActivated(item.artistId, item.artistName, item.artistCover)

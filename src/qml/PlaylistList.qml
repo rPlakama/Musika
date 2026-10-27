@@ -37,27 +37,7 @@ MediaList {
     }
 
     function apply(payload) {
-        var parsed = JSON.parse(payload);
-        var rows = [];
-        for (var i = 0; i < parsed.length; i++) {
-            var list = parsed[i];
-            var origin = list.source === "m3u"
-                ? "M3U"
-                : (list.owner && list.owner.length > 0 ? list.owner : "Playlist");
-            rows.push({
-                title: list.name,
-                subtitle: origin + " · " + list.song_count
-                    + (list.song_count === 1 ? " song" : " songs"),
-                meta: list.duration > 0 ? Theme.formatTime(list.duration) : "",
-                cover: "",
-                playlistId: list.id,
-                songId: "",
-                albumId: "",
-                starred: false,
-                rating: 0
-            });
-        }
-        root.setRows(rows);
+        root.loadRows("playlists", payload);
     }
 
     onActivated: (item) => root.playlistActivated(item.playlistId)

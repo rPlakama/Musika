@@ -1454,6 +1454,12 @@ The product is incomplete without these.
     an offscreen mask layer; `ScrollContent` uses realised-delegate targets
     plus native `indexAt`/`displayMargin`, and only probes Qt for
     unrealised/far targets.
+  - **Row worker:** `RowLoader`/`RowWorker.js` parse and map payloads off the
+    GUI thread in 128-row batches for albums, artists, playlists, song pages,
+    album tracks and the queue. QML delegate creation stays on the GUI thread
+    (Qt requirement); `ListView`/`GridView` reuse, margins and stable row
+    buckets keep that cost down. `SearchOverlay` still maps its three result
+    columns inline.
   - **Audit (native already):** `ScrollContent` is native `ListView`/
     `GridView` + `ScrollMemory`; rows use `HoverHandler`/`TapHandler`/
     `DragHandler`; `RatingBurst` is native `ParticleSystem`; badges, icons
@@ -1463,6 +1469,8 @@ The product is incomplete without these.
   - **Further candidates:** `SymbolIcon` still pays a per-icon MultiEffect
     colorization pass; measure and cache tinted icons only if it remains hot.
   - **Open candidates:**
+    - `SearchOverlay` → `RowWorker` for its three result columns (the last
+      GUI-side payload mapping);
     - `Toast`/`ToastModal`, `QueueDrawer`, `SearchOverlay` → native
       `Popup`/`Drawer` where the custom acrylic backdrop and keyboard model
       allow;

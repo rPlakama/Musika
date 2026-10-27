@@ -15,7 +15,6 @@
 // along with this program; if not, see <https://www.gnu.org/licenses/>.
 
 import QtQuick
-import QtQuick.Effects
 import musika
 
 // Album/artist ambience for the rectangular pages. A blurred, darkened copy
@@ -48,17 +47,10 @@ Item {
         id: fill
         anchors.fill: parent
         source: root.source
-        sizeFactor: 0.5
+        sizeFactor: 1
+        blurred: true
         fillMode: Image.PreserveAspectCrop
         opacity: fill.ready ? 1 : 0
-        layer.enabled: fill.ready
-        layer.effect: MultiEffect {
-            blurEnabled: true
-            blur: 0.8
-            blurMax: 48
-            saturation: 1.0
-            autoPaddingEnabled: false
-        }
     }
 
     Rectangle {

@@ -200,25 +200,13 @@ Item {
     readonly property int visibleRowCount: root.visibleRows()
 
     /// First and last *item* indices in the rendered band (viewport plus
-    /// overscan), used for marks and mark requests.
+    /// overscan), used for marks and mark requests. Both native view types
+    /// answer `indexAt`; no manual grid row arithmetic.
     readonly property var _visibleBounds: {
         var v = root.view;
         if (!v || v.count === 0 || v.height <= 0)
             return { first: -1, last: -1 };
         var overscan = root.renderOverscanRows;
-        if (root.layout === "grid") {
-            var cell = root.cellHeight > 0 ? root.cellHeight : root.cellWidth;
-            var stride = Math.max(1, cell);
-            var rows = Math.ceil(v.count / Math.max(1, root.effectiveColumns));
-            var firstRow = Math.max(0, Math.floor(v.contentY / stride) - overscan);
-            var lastRow = Math.min(rows - 1,
-                Math.ceil((v.contentY + v.height) / stride) - 1 + overscan);
-            var cols = Math.max(1, root.effectiveColumns);
-            return {
-                first: Math.min(v.count - 1, firstRow * cols),
-                last: Math.min(v.count - 1, (lastRow + 1) * cols - 1)
-            };
-        }
         var first = v.indexAt(v.width * 0.5, v.contentY);
         var last = v.indexAt(v.width * 0.5, v.contentY + v.height - 1);
         if (first < 0)
@@ -233,11 +221,17 @@ Item {
     readonly property int firstVisibleIndex: root._visibleBounds.first
     readonly property int lastVisibleIndex: root._visibleBounds.last
 
-    /// Let Qt compute the centred (and edge-clamped) target, then restore the
-    /// live viewport so the glide can animate from where it actually is.
+    /// The centred target. Realised delegates give it directly (no layout
+    /// probe); only far/unrealised targets fall back to Qt's positioning.
     function _target(v, index) {
         if (!v || index < 0 || index >= v.count)
             return null;
+        var item = v.itemAtIndex(index);
+        if (item && item.height > 0) {
+            var max = Math.max(0, v.contentHeight - v.height);
+            return Math.max(0, Math.min(max,
+                item.y - (v.height - item.height) / 2));
+        }
         var old = v.contentY;
         v.positionViewAtIndex(index, ListView.Center);
         var target = v.contentY;
@@ -761,6 +755,8 @@ Item {
             highlightFollowsCurrentItem: false
             reuseItems: true
             cacheBuffer: root.renderOverscan
+            displayMarginBeginning: root.renderOverscan
+            displayMarginEnd: root.renderOverscan
         }
 
         GridView {
@@ -791,6 +787,8 @@ Item {
             highlightFollowsCurrentItem: false
             reuseItems: true
             cacheBuffer: root.renderOverscan
+            displayMarginBeginning: root.renderOverscan
+            displayMarginEnd: root.renderOverscan
         }
     }
 

@@ -1441,18 +1441,27 @@ The product is incomplete without these.
     already provides; the audit finds the cases where a native type keeps the
     contract with less custom state.
   - **Done this pass:** `ScrollPanel`'s A/B segments use `ColumnLayout`
-    (`f38e3ac`); all app text goes through `AppText` (`Text.CurveRendering`,
-    `754d806`); `RowBody` uses `Text.Fit` + wrap (`716a197`, `36138b9`);
-    `AltActionsOverlay`'s dismiss scrim uses `TapHandler` instead of
-    `MouseArea`; seek/volume are the native `ScrubBar` (Slider) in both the
-    player bar and NowPlaying; `IconButton` is a native `AbstractButton`
-    with the same Musika skin.
+    (`f38e3ac`); all app text goes through `AppText`; `RowBody` uses stable
+    font buckets with wrap/elide; `AltActionsOverlay`'s dismiss scrim uses
+    `TapHandler` instead of `MouseArea`; seek/volume are the native `ScrubBar`
+    (Slider) in both the player bar and NowPlaying; `IconButton` is a native
+    `AbstractButton` with the same Musika skin.
+  - **Performance pass (native/frugal):** `AppText` defaults to
+    `Text.NativeRendering` and opts into `QtRendering` only for transformed
+    text (lyrics); `CoverBackdrop` uses the Rust 96 px blur cache and no
+    full-page MultiEffect; `AcrylicPanel` skips the hidden blur pass when its
+    tint is opaque; the lyric stage has native gradient edge fades instead of
+    an offscreen mask layer; `ScrollContent` uses realised-delegate targets
+    plus native `indexAt`/`displayMargin`, and only probes Qt for
+    unrealised/far targets.
   - **Audit (native already):** `ScrollContent` is native `ListView`/
     `GridView` + `ScrollMemory`; rows use `HoverHandler`/`TapHandler`/
     `DragHandler`; `RatingBurst` is native `ParticleSystem`; badges, icons
     and covers use `Image`/`VectorImage`; animations are Qt
     `NumberAnimation`/`Behavior`/`ParticleSystem`; there are no remaining
     `MouseArea`s in `src/qml`.
+  - **Further candidates:** `SymbolIcon` still pays a per-icon MultiEffect
+    colorization pass; measure and cache tinted icons only if it remains hot.
   - **Open candidates:**
     - `Toast`/`ToastModal`, `QueueDrawer`, `SearchOverlay` → native
       `Popup`/`Drawer` where the custom acrylic backdrop and keyboard model

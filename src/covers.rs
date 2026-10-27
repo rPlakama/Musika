@@ -93,6 +93,9 @@ impl LockUnguarded for Mutex<HashSet<String>> {
 /// Longest edge of the thumbnail kept beside each cover; small surfaces load
 /// this instead of the full art (keep in sync with `CoverImage.thumbEdge`).
 pub(crate) const THUMB_EDGE: u32 = 320;
+/// Blurred backdrop edge; generated with the thumbnail so pages never run a
+/// full-page GPU blur.
+pub(crate) const BLUR_EDGE: u32 = 96;
 /// JPEG quality for thumbnails; invisible at the painted row sizes.
 const THUMB_QUALITY: u8 = 82;
 /// Bounded worker count for lazy thumbnail generation.
@@ -243,6 +246,7 @@ async fn refresh_inner(
             if !referenced.contains(id) {
                 let _ = std::fs::remove_file(dir.join(&row.file));
                 let _ = std::fs::remove_file(dir.join(thumb_name(&row.file)));
+                let _ = std::fs::remove_file(dir.join(blur_name(&row.file)));
                 crate::cache::delete_by(pool, "DELETE FROM covers WHERE id = ?1", id).await?;
                 report.removed += 1;
             }
@@ -328,6 +332,7 @@ pub(crate) async fn apply_fetched(
                     .await?;
                     let _ = std::fs::remove_file(dir.join(&old.file));
                     let _ = std::fs::remove_file(dir.join(thumb_name(&old.file)));
+                    let _ = std::fs::remove_file(dir.join(blur_name(&old.file)));
                     report.upgraded += 1;
                 }
                 return Ok(());
@@ -356,6 +361,7 @@ pub(crate) async fn apply_fetched(
             {
                 let _ = std::fs::remove_file(dir.join(&old.file));
                 let _ = std::fs::remove_file(dir.join(thumb_name(&old.file)));
+                let _ = std::fs::remove_file(dir.join(blur_name(&old.file)));
             }
             report.downloaded += 1;
         }
@@ -468,13 +474,16 @@ async fn remove_orphans(pool: &SqlitePool, dir: &std::path::Path) -> Result<()> 
         .await?;
     let kept: HashSet<String> = kept.into_iter().collect();
     let kept_thumbs: HashSet<String> = kept.iter().map(|file| thumb_name(file)).collect();
+    let kept_blurs: HashSet<String> = kept.iter().map(|file| blur_name(file)).collect();
 
     let Ok(entries) = std::fs::read_dir(dir) else {
         return Ok(());
     };
     for entry in entries.flatten() {
         let name = entry.file_name().to_string_lossy().to_string();
-        if name.ends_with(".tmp") || (!kept.contains(&name) && !kept_thumbs.contains(&name)) {
+        if name.ends_with(".tmp")
+            || (!kept.contains(&name) && !kept_thumbs.contains(&name) && !kept_blurs.contains(&name))
+        {
             let _ = std::fs::remove_file(entry.path());
         }
     }
@@ -592,7 +601,19 @@ pub(crate) fn thumb_name(file: &str) -> String {
     format!("{stem}.thumb.jpg")
 }
 
+pub(crate) fn blur_name(file: &str) -> String {
+    let stem = Path::new(file)
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .unwrap_or(file);
+    format!("{stem}.blur.jpg")
+}
+
 pub(crate) fn build_thumb(source: &Path) -> Result<Vec<u8>> {
+    Ok(build_thumb_and_blur(source)?.0)
+}
+
+fn build_thumb_and_blur(source: &Path) -> Result<(Vec<u8>, Option<Vec<u8>>)> {
     let image = image::ImageReader::open(source)
         .with_context(|| format!("failed to open cover {}", source.display()))?
         .with_guessed_format()
@@ -600,35 +621,59 @@ pub(crate) fn build_thumb(source: &Path) -> Result<Vec<u8>> {
         .decode()
         .with_context(|| format!("failed to decode cover {}", source.display()))?;
 
-    // Small art is already cheap to decode; copy it rather than re-encode.
-    if image.width() <= THUMB_EDGE && image.height() <= THUMB_EDGE {
-        return std::fs::read(source)
-            .with_context(|| format!("failed to read cover {}", source.display()));
-    }
+    let thumb = if image.width() <= THUMB_EDGE && image.height() <= THUMB_EDGE {
+        std::fs::read(source)
+            .with_context(|| format!("failed to read cover {}", source.display()))?
+    } else {
+        let resized = image.resize(
+            THUMB_EDGE,
+            THUMB_EDGE,
+            image::imageops::FilterType::Lanczos3,
+        );
+        let mut bytes = Vec::new();
+        image::codecs::jpeg::JpegEncoder::new_with_quality(&mut bytes, THUMB_QUALITY)
+            .encode_image(&resized.to_rgb8())
+            .with_context(|| format!("failed to encode thumbnail for {}", source.display()))?;
+        bytes
+    };
 
-    let thumb = image.resize(
-        THUMB_EDGE,
-        THUMB_EDGE,
-        image::imageops::FilterType::Lanczos3,
-    );
-    let mut bytes = Vec::new();
-    image::codecs::jpeg::JpegEncoder::new_with_quality(&mut bytes, THUMB_QUALITY)
-        .encode_image(&thumb.to_rgb8())
-        .with_context(|| format!("failed to encode thumbnail for {}", source.display()))?;
-    Ok(bytes)
+    let blurred = image
+        .resize(
+            BLUR_EDGE,
+            BLUR_EDGE,
+            image::imageops::FilterType::Triangle,
+        )
+        .blur(6.0);
+    let mut blur_bytes = Vec::new();
+    let blur = if image::codecs::jpeg::JpegEncoder::new_with_quality(&mut blur_bytes, 72)
+        .encode_image(&blurred.to_rgb8())
+        .is_ok()
+    {
+        Some(blur_bytes)
+    } else {
+        None
+    };
+
+    Ok((thumb, blur))
 }
 
 pub(crate) fn write_thumb(source: &Path, dir: &Path, name: &str) -> Result<()> {
-    let bytes = build_thumb(source).or_else(|err| {
+    let (thumb, blur) = build_thumb_and_blur(source).or_else(|err| {
         // A blob the decoder rejects still needs a file QML can request; the
         // copy surfaces the same failure as the full-size path.
         eprintln!(
             "covers: thumbnail fallback for {}: {err:#}",
             source.display()
         );
-        std::fs::read(source).context("failed to read cover for thumbnail fallback")
+        std::fs::read(source)
+            .map(|bytes| (bytes, None))
+            .context("failed to read cover for thumbnail fallback")
     })?;
-    crate::cache::write_atomic(dir, name, &bytes)?;
+    crate::cache::write_atomic(dir, name, &thumb)?;
+    if let Some(blur) = blur {
+        let raw = name.strip_suffix(".thumb.jpg").unwrap_or(name);
+        crate::cache::write_atomic(dir, &format!("{raw}.blur.jpg"), &blur)?;
+    }
     Ok(())
 }
 
@@ -778,7 +823,7 @@ async fn cached_urls(pool: &SqlitePool, ids: &[String]) -> Result<HashMap<String
             let path = dir.join(&file);
             if path.is_file() {
                 let name = thumb_name(&file);
-                if !dir.join(&name).is_file() {
+                if !dir.join(&name).is_file() || !dir.join(blur_name(&file)).is_file() {
                     thumb_jobs.push((name, path.clone()));
                 }
                 if let Ok(url) = reqwest::Url::from_file_path(&path) {

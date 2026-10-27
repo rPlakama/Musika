@@ -16,7 +16,6 @@
 
 import QtQuick
 import QtQuick.Layouts
-import QtQuick.Effects
 import musika
 import "ScrollMemory.js" as Memory
 import "Theme.js" as Theme
@@ -679,21 +678,6 @@ Rectangle {
                         radius: Theme.radius
                         color: "transparent"
                         clip: true
-                        layer.enabled: true
-                        // The mask needs an offscreen layer; keep that texture in
-                        // device pixels so HiDPI lyrics are not rasterized at
-                        // logical resolution.
-                        layer.textureSize: Qt.size(
-                            Math.max(1, Math.ceil(width * Screen.devicePixelRatio)),
-                            Math.max(1, Math.ceil(height * Screen.devicePixelRatio)))
-                        layer.effect: MultiEffect {
-                            maskEnabled: true
-                            maskSource: lyricsMaskTexture
-                            maskThresholdMin: 0.0
-                            maskThresholdMax: 1.0
-                            maskSpreadAtMin: 0.0
-                            maskSpreadAtMax: 0.0
-                        }
 
                         ScrollContent {
                             id: lyricsView
@@ -780,6 +764,7 @@ Rectangle {
                                     color: lyricLine.active ? Palette.onSurface : Palette.onSurfaceVariant
                                     font.family: Theme.fonts.lyrics
                                     font.pixelSize: root.lyricSize
+                                    scalable: true
                                     wrapMode: Text.WordWrap
                                     animated: false
                                     transformOrigin: Item.Center
@@ -810,30 +795,33 @@ Rectangle {
                                 }
                             }
                         }
-                    }
+                        Rectangle {
+                            anchors.top: parent.top
+                            anchors.left: parent.left
+                            anchors.right: parent.right
+                            height: parent.height * 0.16
+                            z: 2
+                            visible: root.lyricsAvailable
+                            gradient: Gradient {
+                                GradientStop { position: 0.0; color: Palette.background }
+                                GradientStop { position: 1.0; color: "transparent" }
+                            }
+                        }
 
-                    // Mask sources live outside the masked stage: MultiEffect
-                    // only sees a valid texture when the source is not itself
-                    // part of the layer being rendered.
-                    ShaderEffectSource {
-                        id: lyricsMaskTexture
-                        sourceItem: lyricsMask
-                        hideSource: true
-                        live: true
-                    }
-
-                    Rectangle {
-                        id: lyricsMask
-                        anchors.fill: parent
-                        readonly property real fade: 0.25
-                        gradient: Gradient {
-                            GradientStop { position: 0.0; color: "transparent" }
-                            GradientStop { position: lyricsMask.fade; color: "white" }
-                            GradientStop { position: 1.0 - lyricsMask.fade; color: "white" }
-                            GradientStop { position: 1.0; color: "transparent" }
+                        Rectangle {
+                            anchors.bottom: parent.bottom
+                            anchors.left: parent.left
+                            anchors.right: parent.right
+                            height: parent.height * 0.16
+                            z: 2
+                            visible: root.lyricsAvailable
+                            gradient: Gradient {
+                                GradientStop { position: 0.0; color: "transparent" }
+                                GradientStop { position: 1.0; color: Palette.background }
+                            }
                         }
                     }
-                    }
+                     }
 
                     FadeText {
                         Layout.fillWidth: true

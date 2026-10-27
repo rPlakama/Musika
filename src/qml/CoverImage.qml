@@ -38,6 +38,9 @@ Item {
     /// Decode headroom over the painted size (1.0 = exactly the painted size).
     property real sizeFactor: 1.0
 
+    /// Use the pre-blurred 96 px cache file instead of a painted-size cover.
+    property bool blurred: false
+
     /// How the decoded pixels fill this item. The default keeps the historic
     /// cover-thumbnail crop; backdrops ask for `PreserveAspectFit` so the
     /// album square is never cut.
@@ -62,10 +65,16 @@ Item {
 
     // A thumbnail the cache has not written yet falls back to the full cover.
     property bool thumbFailed: false
-    onSourceChanged: root.thumbFailed = false
+    property bool blurFailed: false
+    onSourceChanged: {
+        root.thumbFailed = false;
+        root.blurFailed = false;
+    }
 
     // Keep in sync with `THUMB_EDGE` in src/covers.rs.
     readonly property int thumbEdge: 320
+    // Keep in sync with BLUR_EDGE in src/covers.rs.
+    readonly property int blurEdge: 96
 
     function thumbUrl(u) {
         var text = u.toString()
@@ -74,12 +83,21 @@ Item {
         return (dot <= slash ? text : text.substring(0, dot)) + ".thumb.jpg"
     }
 
+    function blurUrl(u) {
+        var text = u.toString()
+        var slash = text.lastIndexOf("/")
+        var dot = text.lastIndexOf(".")
+        return (dot <= slash ? text : text.substring(0, dot)) + ".blur.jpg"
+    }
+
     readonly property url imageSource: {
         var text = root.source.toString()
         if (text.length === 0)
             return ""
         if (text.indexOf("file:") !== 0)
             return root.source
+        if (root.blurred)
+            return root.blurFailed ? root.source : root.blurUrl(text)
         if (root.thumbFailed)
             return root.source
         var deviceEdge = Math.max(root.decodeWidth, root.decodeHeight) * Screen.devicePixelRatio
@@ -90,8 +108,10 @@ Item {
         id: image
         anchors.fill: parent
         source: root.imageSource
-        sourceSize.width: root.usingThumb ? root.thumbEdge : root.decodeWidth
-        sourceSize.height: root.usingThumb ? root.thumbEdge : root.decodeHeight
+        sourceSize.width: root.blurred ? root.blurEdge
+            : (root.usingThumb ? root.thumbEdge : root.decodeWidth)
+        sourceSize.height: root.blurred ? root.blurEdge
+            : (root.usingThumb ? root.thumbEdge : root.decodeHeight)
         asynchronous: true
         cache: true
         fillMode: root.fillMode
@@ -104,6 +124,18 @@ Item {
             if (status === Image.Error && !root.thumbFailed
                     && root.imageSource.toString() !== root.source.toString())
                 root.thumbFailed = true
+        }
+    }
+
+    // A blur file is generated lazily with the thumbnail; retry once it may
+    // have landed instead of keeping the raw fallback for the session.
+    Timer {
+        interval: 1500
+        running: root.blurred && root.blurFailed
+        onTriggered: {
+            root.blurFailed = false;
+            image.source = "";
+            image.source = Qt.binding(function () { return root.imageSource; });
         }
     }
 

@@ -48,6 +48,11 @@ Item {
     // unreadable in a short or narrow row.
     property real minTitlePixelSize: 9
     property real minSubtitlePixelSize: 8
+    // Stable per-row buckets: no per-delegate Text.Fit measurement.
+    readonly property real rowTitleSize: Math.max(root.minTitlePixelSize,
+        Math.min(root.titlePixelSize, root.rowHeight * 0.22))
+    readonly property real rowSubtitleSize: Math.max(root.minSubtitlePixelSize,
+        Math.min(root.subtitlePixelSize, root.rowHeight * 0.16))
     property real metaPixelSize: rowHeight * 0.19
     property color titleColor: Palette.onSurface
     property color subtitleColor: Palette.onSurfaceVariant
@@ -144,41 +149,25 @@ Item {
                     height: root.showSubtitle ? root.rowHeight * 0.55 : root.rowHeight
                     text: root.title
                     color: root.titleColor
-                    font.pixelSize: root.titlePixelSize
+                    font.pixelSize: root.rowTitleSize
                     font.bold: root.current
                     verticalAlignment: Text.AlignVCenter
-                    fontSizeMode: Text.Fit
-                    minimumPixelSize: Math.min(root.titlePixelSize, root.minTitlePixelSize)
                     wrapMode: Text.WrapAnywhere
                     maximumLineCount: 2
                     elide: Text.ElideRight
                     animated: false
                     query: root.searchQuery
                     currentMatch: root.searchCurrent
-                    transformOrigin: Item.Left
-                    scale: root.emphasized && !Theme.reduceMotion
-                        ? Theme.fitScale(titleText.width, titleText.paintedWidth, Theme.selectionEmphasis)
-                        : 1.0
-
-                    Behavior on scale {
-                        NumberAnimation {
-                            duration: Theme.motion.quick
-                            easing.type: Easing.Bezier
-                            easing.bezierCurve: Theme.ease.standard
-                        }
-                    }
                 }
 
                 SearchText {
                     visible: root.showSubtitle
                     width: parent.width
-                    height: root.showSubtitle ? root.rowHeight * 0.36 : 0
+                    height: root.showSubtitle ? root.rowHeight * 0.39 : 0
                     text: root.subtitle
                     color: root.subtitleColor
-                    font.pixelSize: root.subtitlePixelSize
+                    font.pixelSize: root.rowSubtitleSize
                     verticalAlignment: Text.AlignVCenter
-                    fontSizeMode: Text.Fit
-                    minimumPixelSize: Math.min(root.subtitlePixelSize, root.minSubtitlePixelSize)
                     wrapMode: Text.WrapAnywhere
                     maximumLineCount: 2
                     elide: Text.ElideRight

@@ -37,6 +37,7 @@ Rectangle {
     property real tintAlpha: Theme.acrylic.tintAlpha
 
     readonly property bool acrylic: Theme.acrylic.enabled && root.backdrop !== null
+        && root.tintAlpha < 0.99
 
     color: root.acrylic ? "transparent" : root.tint
 

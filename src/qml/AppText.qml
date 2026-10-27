@@ -17,13 +17,15 @@
 import QtQuick
 import "Theme.js" as Theme
 
-// One reusable text primitive for the whole app: the body family plus the
-// smooth curve rasterizer (the same mode the lyrics use). Anything that needs
-// a different face or renderer can still override `font` / `renderType` on
-// the instance.
+// One reusable text primitive for the whole app. Static text uses the native
+// font rasterizer (cheapest, crisp at the painted size); opt into the
+// distance-field renderer with `scalable` when the text is transformed or
+// animated (lyrics scale). Anything can still override `font` / `renderType`.
 Text {
     id: root
 
+    property bool scalable: false
+
     font.family: Theme.fonts.body
-    renderType: Text.CurveRendering
+    renderType: root.scalable ? Text.QtRendering : Text.NativeRendering
 }

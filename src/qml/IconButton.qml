@@ -15,6 +15,7 @@
 // along with this program; if not, see <https://www.gnu.org/licenses/>.
 
 import QtQuick
+import QtQuick.Controls
 import musika
 import "Theme.js" as Theme
 
@@ -31,8 +32,9 @@ import "Theme.js" as Theme
 //     sets share a baseline, so swapping icons never moves anything.
 //
 // State layers (R6): hover 8%, focus 10% primary + hairline, press 10%,
-// disabled 12%/38%. Never colour alone.
-Rectangle {
+// disabled 12%/38%. Native AbstractButton supplies the click/hover/press
+// state; the skin stays Musika's.
+AbstractButton {
     id: root
 
     property string symbol: "▶"
@@ -42,9 +44,10 @@ Rectangle {
     // Text-glyph colour; play/pause overrides it with the fixed
     // `Theme.iconStrong` (white, UI-31). SVG icons carry their own fill.
     property color symbolColor: Palette.onSurface
-    property alias hovered: hover.hovered
-
-    signal clicked()
+    property real radius: Theme.radius
+    hoverEnabled: true
+    focusPolicy: Qt.NoFocus
+    padding: 0
 
     /// Fires the "press" feel through the shared `PressBounce` animation: a
     /// quick scale-down, then back with an overshooting bezier. Transport
@@ -59,28 +62,24 @@ Rectangle {
         target: root
     }
 
-    radius: Theme.radius
-    color: "transparent"
-    border.width: activeFocus ? Math.max(1, width * Theme.hairlineRatio) : 0
-    border.color: Palette.primary
-
     // Press state is animation-driven only; the scale transform lives in
     // `PressBounce` so every button shares one implementation.
 
-    Rectangle {
-        anchors.fill: parent
+    background: Rectangle {
         radius: root.radius
         color: {
             if (!root.enabled)
                 return Theme.stateDisabledContainer;
-            if (tap.pressed)
+            if (root.down)
                 return Theme.statePress;
             if (root.activeFocus)
                 return Theme.stateFocus;
-            if (hover.hovered)
+            if (root.hovered)
                 return Theme.stateHover;
             return "transparent";
         }
+        border.width: root.activeFocus ? Math.max(1, root.width * Theme.hairlineRatio) : 0
+        border.color: Palette.primary
 
         Behavior on color {
             ColorAnimation { duration: Theme.motion.micro; easing.type: Easing.Bezier; easing.bezierCurve: Theme.ease.standard }
@@ -206,16 +205,7 @@ Rectangle {
         }
     }
 
-    // Clickable affordance (reuse for every clickable): the hover handler
-    // carries the pointing-hand cursor, the tap handler the action. Pair them
-    // like this wherever something is clickable.
     HoverHandler {
-        id: hover
         cursorShape: Qt.PointingHandCursor
-    }
-
-    TapHandler {
-        id: tap
-        onTapped: root.clicked()
     }
 }

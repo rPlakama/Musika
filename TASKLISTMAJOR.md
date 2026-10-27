@@ -1445,7 +1445,8 @@ The product is incomplete without these.
     `754d806`); `RowBody` uses `Text.Fit` + wrap (`716a197`, `36138b9`);
     `AltActionsOverlay`'s dismiss scrim uses `TapHandler` instead of
     `MouseArea`; seek/volume are the native `ScrubBar` (Slider) in both the
-    player bar and NowPlaying.
+    player bar and NowPlaying; `IconButton` is a native `AbstractButton`
+    with the same Musika skin.
   - **Audit (native already):** `ScrollContent` is native `ListView`/
     `GridView` + `ScrollMemory`; rows use `HoverHandler`/`TapHandler`/
     `DragHandler`; `RatingBurst` is native `ParticleSystem`; badges, icons
@@ -1456,8 +1457,8 @@ The product is incomplete without these.
     - `Toast`/`ToastModal`, `QueueDrawer`, `SearchOverlay` → native
       `Popup`/`Drawer` where the custom acrylic backdrop and keyboard model
       allow;
-    - `IconButton`, `ActionChip`, `ShuffleChip` → `Button`/`ToolButton`
-      styling instead of custom click state;
+    - `ActionChip`, `ShuffleChip` → `Button`/`ToolButton` styling instead of
+      custom click state (IconButton is done);
     - `Home`'s `EnterView`/`ExitView` + travel log vs Qt `State`/
       `Transition`;
     - `ScrollContent`'s custom `contentY` glide stays because Qt has no

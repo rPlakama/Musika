@@ -245,11 +245,10 @@ Item {
     // underneath mid-gesture; a click that no tile claims cancels the menu
     // (the mouse equivalent of releasing over neutral). Hover passes through
     // (no hoverEnabled).
-    MouseArea {
-        anchors.fill: parent
-        acceptedButtons: Qt.LeftButton
+    TapHandler {
         enabled: root.armed
-        onClicked: root.cancel()
+        acceptedButtons: Qt.LeftButton
+        onTapped: root.cancel()
     }
 
     // ARC-UI-1: one parent rectangle owns the cluster — the margin between the

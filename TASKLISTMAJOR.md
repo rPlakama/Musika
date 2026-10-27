@@ -1436,6 +1436,35 @@ The product is incomplete without these.
     overlays and grid scrolling; do not add a native render node without a
     measured bottleneck.
 
+- [ ] **UI-64 · Nativemaxxing audit — 59 QML modules** — P2 · (native Qt review)
+  - **Why:** hand-rolled items and event plumbing duplicate what Qt Quick
+    already provides; the audit finds the cases where a native type keeps the
+    contract with less custom state.
+  - **Done this pass:** `ScrollPanel`'s A/B segments use `ColumnLayout`
+    (`f38e3ac`); all app text goes through `AppText` (`Text.CurveRendering`,
+    `754d806`); `RowBody` uses `Text.Fit` + wrap (`716a197`, `36138b9`);
+    `AltActionsOverlay`'s dismiss scrim uses `TapHandler` instead of
+    `MouseArea`.
+  - **Audit (native already):** `ScrollContent` is native `ListView`/
+    `GridView` + `ScrollMemory`; rows use `HoverHandler`/`TapHandler`/
+    `DragHandler`; `RatingBurst` is native `ParticleSystem`; badges, icons
+    and covers use `Image`/`VectorImage`; animations are Qt
+    `NumberAnimation`/`Behavior`/`ParticleSystem`.
+  - **Open candidates:**
+    - `InferiorBar.qml` + `NowPlaying.qml` seek/volume `MouseArea`s → native
+      `Slider` (or `TapHandler` + `DragHandler` if the custom rail stays);
+    - `Toast`/`ToastModal`, `QueueDrawer`, `SearchOverlay` → native
+      `Popup`/`Drawer` where the custom acrylic backdrop and keyboard model
+      allow;
+    - `IconButton`, `ActionChip`, `ShuffleChip` → `Button`/`ToolButton`
+      styling instead of custom click state;
+    - `Home`'s `EnterView`/`ExitView` + travel log vs Qt `State`/
+      `Transition`;
+    - `ScrollContent`'s custom `contentY` glide stays because Qt has no
+      animated `positionViewAtIndex`.
+  - **Verify:** `scripts/check-qml.sh`, `cargo test` (195), `nix build`;
+    no visual/behaviour diff per refactor.
+
 - [ ] **THM-6 · Rewrite the color engine on DMS's pipeline** — P2 · (MATUGENSTUDY.md; roadmap T5+)
   - **Why:** DMS cleanly separates seed extraction, palette specs, caching,
     change detection and coalescing; Musika's single-shot engine re-quantizes

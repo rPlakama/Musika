@@ -247,6 +247,7 @@ Item {
                 var track = data.items[i];
                 queueItems.append({
                     title: track.title,
+                    subtitle: track.artist ? track.artist : "",
                     duration: Theme.formatTime(track.duration),
                     songId: track.id,
                     albumId: track.album_id ? track.album_id : "",
@@ -497,7 +498,7 @@ Item {
                     selectable: true
                     memoryKey: "queue"
                     // ARC-UI-2 M1: the queue rows paint title and duration.
-                    searchFields: ["title", "duration"]
+                    searchFields: ["title", "subtitle", "duration"]
                     visible: queueItems.count > 0
 
                     Behavior on opacity {
@@ -514,6 +515,7 @@ Item {
                             radius: Theme.radius
                             required property int index
                             required property string title
+                            required property string subtitle
                             required property string duration
                             required property string songId
                             required property bool starred
@@ -565,11 +567,13 @@ Item {
                                 emphasized: row.emphasized
                                 current: index === root.queueCursor
                                 showCover: false
-                                showSubtitle: false
+                                showSubtitle: row.subtitle.length > 0
                                 title: row.title
+                                subtitle: row.subtitle
                                 meta: row.duration
                                 titlePixelSize: Theme.fontSize("body", root.height)
                                 titleColor: index === root.queueCursor ? Palette.onSecondaryContainer : Palette.onSurface
+                                subtitlePixelSize: Theme.fontSize("label", root.height)
                                 metaPixelSize: Theme.fontSize("mono", root.height)
                                 reserveMeta: true
                                 metaAlignRight: true

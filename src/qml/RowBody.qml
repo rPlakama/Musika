@@ -46,8 +46,8 @@ Item {
     property real subtitlePixelSize: rowHeight * 0.19
     // Text.Fit may shrink a long row title; stop before it becomes
     // unreadable in a short or narrow row.
-    property real minTitlePixelSize: 9
-    property real minSubtitlePixelSize: 8
+    property real minTitlePixelSize: 11
+    property real minSubtitlePixelSize: 10
     // Stable per-row buckets: no per-delegate Text.Fit measurement.
     readonly property real rowTitleSize: Math.max(root.minTitlePixelSize,
         Math.min(root.titlePixelSize, root.rowHeight * 0.30))

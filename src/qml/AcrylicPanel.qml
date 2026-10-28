@@ -39,7 +39,9 @@ Rectangle {
     readonly property bool acrylic: Theme.acrylic.enabled && root.backdrop !== null
         && root.tintAlpha < 0.99
 
-    color: root.acrylic ? "transparent" : root.tint
+    color: root.acrylic
+        ? "transparent"
+        : Qt.rgba(root.tint.r, root.tint.g, root.tint.b, root.tintAlpha)
 
     // Backdrop pass: the panel rect mapped into the backdrop, rendered at a
     // fraction of the panel size (the blur hides the downscale) and run

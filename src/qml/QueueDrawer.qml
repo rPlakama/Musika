@@ -430,7 +430,8 @@ Item {
         anchors.top: parent.top
         anchors.bottom: parent.bottom
         width: root.width * 0.36
-        tint: Palette.surfaceContainerHigh
+        tint: "#000000"
+        tintAlpha: 0.80
         backdrop: root.backdrop
         border.color: Palette.primary
         border.width: Math.max(1, root.width * Theme.hairlineRatio)

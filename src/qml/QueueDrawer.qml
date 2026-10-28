@@ -323,8 +323,16 @@ Item {
     // The open drawer owns its navigation keys; the caller routes here while
     // `open` is set (Home keeps transport and the modals outside).
     function handleAction(action) {
+        // `q` and Ctrl-Q close the drawer; Esc is a vi key here (below).
         if (action === "back" || action === "queue_toggle") {
             root.closeQueue();
+            return;
+        }
+        if (action === "cancel") {
+            // Esc is a vi key inside the drawer: it ends the visual selection
+            // instead of closing (q / Ctrl-Q close the drawer).
+            if (root.hasSelection)
+                queueContent.clearSelection();
             return;
         }
         // VI-8a row clipboard (only reachable while the drawer is open).

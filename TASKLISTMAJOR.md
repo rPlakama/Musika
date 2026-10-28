@@ -1047,6 +1047,35 @@ The product is incomplete without these.
     pass; `scripts/check-qml.sh` clean. Open: the manual X11/Wayland mouse
     pass (compositor button mapping).
 
+- [ ] **ARC-46 · Preload the scope heads at startup (150 rows each)** — P2 · (scope switch latency)
+  - **Why:** a scope switch is a foreground action, but the first visit to
+    Songs/Artists still pays a cold query + row shaping + `JSON.parse`
+    before the first row appears. Keeping a small head of each library scope
+    in RAM at application load makes the switch land on real rows instantly;
+    the full (uncapped, parallel) load then replaces the head in place.
+  - **Details:**
+    - after the library is ready (`login_succeeded` / `library_changed`),
+      request the first 150 rows of Albums, Songs and Artists (and Playlists
+      when cheap) through the same scope channels, on the uncapped scope
+      path; issue them concurrently, not as a serial warm-up.
+    - the head is a warm start, not a second model: when the segment is
+      shown it seeds the list (cursor/scroll memory still restore), and the
+      full load for that segment is issued once and replaces the seeded rows
+      without a skeleton beat or a visible jump.
+    - coalesce with the real scope load: a head request must not bump the
+      channel generation out from under an in-flight full load (and vice
+      versa); one request per channel, newest wins.
+    - invalidate on library sync, order/filter change, wipe, logout and
+      account switch; heads are keyed per account (server/username) if they
+      outlive `Home`, and the cache is bounded to the row head (never the
+      full payload).
+    - memory budget: 150 rows × 3–4 scopes is small; no full-list retention
+      beyond what the visible model already holds.
+  - **Verify:** cold start → switch Songs/Artists/Albums: the head renders
+    without a skeleton; the 150 rows match the full payload's order. A
+    library sync/order change/wipe drops or refreshes the heads. Memory probe
+    stays flat; `cargo test` and `scripts/check-qml.sh` clean.
+
 - [ ] **P-5 · Radio** — P2 · (M6, roadmap)
   - **Why:** sidebar segment is a placeholder; Subsonic radio endpoints exist.
 
@@ -1463,8 +1492,12 @@ The product is incomplete without these.
     emits `QObject::connect(QJSEngine, QtObject): invalid nullptr parameter`
     for every worker). Rust now shapes album, artist, song, album-track,
     playlist and queue rows; QML only parses and appends them. `SearchOverlay`
-    still maps its three result columns inline. mpv publishes an RMS/peak
-    envelope via `astats` metadata for the player transport.
+    still maps its three result columns inline. Scope switches are bulk reads:
+    the whole target segment loads (Songs no longer stops at the 300-row page)
+    and the row chunks are shaped in parallel on rayon's full-core pool
+    (`browse::rows::parallel_seq_json`), with the order preserved. mpv
+    publishes an RMS/peak envelope via `astats` metadata for the player
+    transport.
   - **Playback scene:** fullscreen is a 50/50 cover/lyrics body. Inline lyrics
     retract below a ~300 px lyric column and the cover expands into the free
     width; `?` (`Shift+/`) opens the shared lyrics host over a 35% scrim, and
@@ -1494,7 +1527,10 @@ The product is incomplete without these.
   - **Concurrency cap:** `app::worker_limit()` is
     `max(1, available_cores / 4)`; the Tokio runtime uses it for worker
     threads and thumbnail batches use it for their chunk size. The removed row
-    worker no longer contributes a thread.
+    worker no longer contributes a thread. Scope switches are exempt: they
+    shape rows on rayon's full-core pool (`app::all_cores()`) because a
+    foreground segment change is a user-initiated bulk read, not background
+    work.
   - **Audit (native already):** `ScrollContent` is native `ListView`/
     `GridView` + `ScrollMemory`; rows use `HoverHandler`/`TapHandler`/
     `DragHandler`; `RatingBurst` is native `ParticleSystem`; badges, icons
@@ -3820,8 +3856,8 @@ Small, bounded, high-value changes.
     sequence/count.
   - **Details:** add `ctrl-[` token; feed Esc through `Keymap.reset()`.
   - **Now:** `token_from_qt` maps `[` (`0x5B`) so `Ctrl-[` becomes `ctrl-[`;
-    bound to `Action::Back` next to `escape`, and a pending `g` is cleared when
-    escape/`ctrl-[` arrives (unit-tested).
+    bound to `Action::Cancel` next to `escape` (the vi cancel key), and a
+    pending `g` is cleared when escape/`ctrl-[` arrives (unit-tested).
 
 - [x] **VI-10 · Repurpose `Ctrl-N`/`Ctrl-P` as track skips** — P1 · (N7, Q-9)
   - **Why:** `Ctrl-N`/`Ctrl-P` only duplicated `j/k` scrolling; the better use
@@ -3841,8 +3877,10 @@ Small, bounded, high-value changes.
     both Back; document or split.
   - **Now:** documented in `keybind.rs` above `defaults()`: Enter is
     context-confirm (row open/play, queue jump, album back, status sync,
-    visual commit); `Esc`/`q`/`Ctrl-[` are the same Back, Esc stepping out of
-    typing/insert first; `Space` play/pause and `Shift-Enter` fullscreen.
+    visual commit); `q` is Back, while `Esc`/`Ctrl-[` are Cancel (Back
+    everywhere except the queue drawer, where they end the visual selection
+    and only `q`/`Ctrl-Q` close); Esc steps out of typing/insert first;
+    `Space` play/pause and `Shift-Enter` fullscreen.
 
 - [x] **VI-17 · Status bar focus behaviour** — P2 · (CRITIQUE ghost focus)
   - **Why:** focusing a non-interactive pane used to make keys inert.
@@ -4492,8 +4530,9 @@ Kept for rationale; the tree already carries these.
 - [x] **VI-5 · Single `Esc` dismisses overlays** — P1 · (N3, CRITIQUE Ph1.3)
   - **Why:** Esc is the invariant cancel key; unbound Esc feels broken.
   - **Details:** close fullscreen → pop album page → close search, in order.
-  - **Now:** `escape` maps to `Action::Back` (keybind.rs); Home closes fullscreen
-    first (Home.qml); search overlay Esc steps typing → normal → close.
+  - **Now:** `escape` maps to `Action::Cancel` (keybind.rs), treated as Back
+    everywhere except the queue drawer (vi selection cancel); Home closes
+    fullscreen first (Home.qml); search overlay Esc steps typing → normal → close.
 
 - [x] **VI-21 · Global yank/paste (`y`/`P`) to the system clipboard** — P1 · **high priority** · (CRITIQUE Ph2 operators)
   - **Why:** copying a track out of the app and pasting a track reference back

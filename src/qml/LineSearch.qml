@@ -167,7 +167,7 @@ Item {
     function handleAction(action) {
         if (action === "enter")
             commit();
-        else if (action === "back")
+        else if (action === "back" || action === "cancel")
             abandon();
     }
 

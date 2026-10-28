@@ -643,10 +643,15 @@ Item {
             return;
         }
 
-        if (action === "back") {
-            // The queue drawer is the topmost context: Esc closes it first.
+        // Esc/Ctrl-[ (cancel) and q (back) share the hierarchical Back chain,
+        // except inside the queue drawer: there Esc is a vi key (it ends the
+        // visual selection), and only q / Ctrl-Q close the drawer.
+        if (action === "back" || action === "cancel") {
             if (queueDrawer.open) {
-                queueDrawer.closeQueue();
+                if (action === "cancel")
+                    queueDrawer.handleAction(action);
+                else
+                    queueDrawer.closeQueue();
                 return;
             }
             // Fullscreen is the next context down; an open lyrics overlay

@@ -364,7 +364,7 @@ Rectangle {
             return;
         }
         if (root.lyricsOverlayOpen) {
-            if (action === "back" || action === "escape")
+            if (action === "back" || action === "cancel")
                 root.closeLyricsOverlay();
             else if (action === "move_up")
                 scrollLyrics(-lyricsView.height * 0.3 * Math.max(1, Backend.keyCount));

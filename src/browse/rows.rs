@@ -18,7 +18,76 @@
 
 use std::collections::{HashMap, HashSet};
 
+use rayon::prelude::*;
 use serde::ser::{Serialize, SerializeSeq, SerializeStruct, Serializer};
+
+/// A payload below this row count is cheaper to shape on the calling worker
+/// than to split and join; above it the scope-switch path fans out.
+const PARALLEL_ROWS_MIN: usize = 128;
+
+/// Serializes a row sequence as one JSON array across the full-core rayon
+/// pool. This is the scope-switch path: it deliberately ignores
+/// [`crate::app::worker_limit`]'s quarter-core budget, because a foreground
+/// scope change is a bulk read that should use the whole machine.
+fn parallel_seq_json<T, F>(rows: &[T], serialize: F) -> anyhow::Result<String>
+where
+    T: Sync,
+    F: Fn(&[T]) -> Result<String, serde_json::Error> + Send + Sync,
+{
+    Ok(join_json_arrays(parallel_chunks_json(rows, serialize)?))
+}
+
+/// Shapes the chunks in parallel, one per core (bounded by the row count and
+/// the fan-out floor). The chunks are returned in row order: `par_chunks` is
+/// indexed and `collect` preserves it.
+fn parallel_chunks_json<T, F>(rows: &[T], serialize: F) -> anyhow::Result<Vec<String>>
+where
+    T: Sync,
+    F: Fn(&[T]) -> Result<String, serde_json::Error> + Send + Sync,
+{
+    let workers = crate::app::all_cores()
+        .min(rows.len().div_ceil(PARALLEL_ROWS_MIN))
+        .max(1);
+    if workers < 2 {
+        return Ok(vec![serialize(rows)?]);
+    }
+    let chunk = rows.len().div_ceil(workers);
+    Ok(rows
+        .par_chunks(chunk)
+        .map(serialize)
+        .collect::<Result<_, _>>()?)
+}
+
+/// Concatenates per-chunk JSON arrays into one array, preserving chunk order
+/// (`par_chunks` is indexed, so row order survives the fan-out).
+pub(crate) fn join_json_arrays(chunks: Vec<String>) -> String {
+    let mut out = String::with_capacity(chunks.iter().map(String::len).sum::<usize>() + 2);
+    write_json_array(&mut out, chunks);
+    out
+}
+
+/// Appends the chunk bodies to `out` as one JSON array. Used directly by the
+/// Songs envelope so the row payload is copied once, not into an array string
+/// and then again into the envelope.
+fn write_json_array(out: &mut String, chunks: Vec<String>) {
+    out.push('[');
+    let mut first = true;
+    for chunk in chunks {
+        let body = chunk
+            .strip_prefix('[')
+            .and_then(|body| body.strip_suffix(']'))
+            .unwrap_or(&chunk);
+        if body.is_empty() {
+            continue;
+        }
+        if !first {
+            out.push(',');
+        }
+        out.push_str(body);
+        first = false;
+    }
+    out.push(']');
+}
 
 /// The one row-duration format: m:ss, or h:mm:ss past the hour.
 pub(crate) fn format_duration(seconds: Option<i32>) -> String {
@@ -200,6 +269,22 @@ impl Serialize for AlbumSeq<'_> {
     }
 }
 
+/// Shapes an album list on the full-core scope path (see
+/// [`parallel_seq_json`]).
+pub(crate) fn album_seq_json(
+    albums: &[crate::library::AlbumRow],
+    covers: &HashMap<String, String>,
+    offline: Option<&crate::offline::Filter>,
+) -> anyhow::Result<String> {
+    parallel_seq_json(albums, |chunk| {
+        serde_json::to_string(&AlbumSeq {
+            albums: chunk,
+            covers,
+            offline,
+        })
+    })
+}
+
 struct ArtistElement<'a> {
     artist: &'a crate::library::ArtistRow,
     cover: &'a str,
@@ -256,6 +341,26 @@ impl Serialize for ArtistSeq<'_> {
         }
         seq.end()
     }
+}
+
+/// Shapes an artist list on the full-core scope path (see
+/// [`parallel_seq_json`]).
+pub(crate) fn artist_seq_json(
+    artists: &[crate::library::ArtistRow],
+    covers: &HashMap<String, String>,
+    offline: Option<&crate::offline::Filter>,
+    user_starred: &HashSet<String>,
+    user_ratings: &HashMap<String, i64>,
+) -> anyhow::Result<String> {
+    parallel_seq_json(artists, |chunk| {
+        serde_json::to_string(&ArtistSeq {
+            artists: chunk,
+            covers,
+            offline,
+            user_starred,
+            user_ratings,
+        })
+    })
 }
 
 /// One artist page: the artist fields plus its `albums` array.
@@ -325,6 +430,31 @@ impl Serialize for SongSeq<'_> {
         }
         seq.end()
     }
+}
+
+/// The Songs payload built from the parallel row sequence. A scope switch
+/// loads the whole segment, so the envelope reports `has_more = false`.
+pub(crate) fn songs_page_json(
+    offset: i64,
+    next: i64,
+    has_more: bool,
+    songs: &[crate::library::SongRow],
+    covers: &HashMap<String, String>,
+) -> anyhow::Result<String> {
+    let chunks = parallel_chunks_json(songs, |chunk| {
+        serde_json::to_string(&SongSeq {
+            songs: chunk,
+            covers,
+        })
+    })?;
+    let rows = chunks.iter().map(String::len).sum::<usize>();
+    let mut out = String::with_capacity(rows + 64);
+    out.push_str(&format!(
+        "{{\"offset\":{offset},\"next\":{next},\"has_more\":{has_more},\"rows\":"
+    ));
+    write_json_array(&mut out, chunks);
+    out.push('}');
+    Ok(out)
 }
 
 /// The paged Songs payload (`rows` is the streamed SongSeq).

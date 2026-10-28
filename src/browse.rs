@@ -43,12 +43,9 @@ pub async fn load_albums_json(
         crate::covers::url_map_for(dbs, albums.iter().map(|album| &album.cover_art)).await?;
     // Stream the sequence straight into the payload string: the old
     // `Vec<Value>` built one object/map per row (with its own key and value
-    // allocations) before serializing it a second time.
-    Ok(serde_json::to_string(&AlbumSeq {
-        albums: &albums,
-        covers: &covers,
-        offline: offline.as_deref(),
-    })?)
+    // allocations) before serializing it a second time. The scope path
+    // shapes the chunks on every core.
+    album_seq_json(&albums, &covers, offline.as_deref())
 }
 
 pub async fn load_songs_page_json(
@@ -66,6 +63,8 @@ pub async fn load_songs_page_json(
         songs.retain(|song| filter.contains_song(&song.id));
     }
     let covers = crate::covers::url_map_for(dbs, songs.iter().map(|song| &song.cover_art)).await?;
+    // The paged reader stays on the caller's (capped) worker; only the
+    // scope-switch bulk load fans out across the full-core pool.
     Ok(serde_json::to_string(&SongsPage {
         offset,
         next: offset + returned,
@@ -73,6 +72,21 @@ pub async fn load_songs_page_json(
         songs: &songs,
         covers: &covers,
     })?)
+}
+
+/// Every song in the index, for a scope switch: the Songs segment loads the
+/// whole list instead of a page, shaped across all cores.
+pub async fn load_all_songs_json(
+    dbs: &crate::db::Dbs,
+    order: &str,
+    offline: bool,
+) -> anyhow::Result<String> {
+    let mut songs = crate::library::all_songs(&dbs.library, order).await?;
+    if let Some(filter) = crate::offline::load(dbs, offline).await? {
+        songs.retain(|song| filter.contains_song(&song.id));
+    }
+    let covers = crate::covers::url_map_for(dbs, songs.iter().map(|song| &song.cover_art)).await?;
+    songs_page_json(0, songs.len() as i64, false, &songs, &covers)
 }
 
 pub async fn load_album_songs_json(
@@ -108,13 +122,13 @@ pub async fn load_artists_json(
             .into_iter()
             .collect();
     let user_ratings = crate::artist_user::ratings(&dbs.artist_user).await?;
-    Ok(serde_json::to_string(&ArtistSeq {
-        artists: &artists,
-        covers: &covers,
-        offline: filter.as_deref(),
-        user_starred: &user_starred,
-        user_ratings: &user_ratings,
-    })?)
+    artist_seq_json(
+        &artists,
+        &covers,
+        filter.as_deref(),
+        &user_starred,
+        &user_ratings,
+    )
 }
 
 /// One artist (library.db) with cover URL and its albums, for ArtistEntry.

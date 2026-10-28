@@ -12,6 +12,7 @@ material-colors = { version = "0.5", features = ["quantize"] }
 nucleo = "0.5.0"
 openssl = "0.10.81"
 qtbridge = "0.3.0"
+rayon = "1.12"
 reqwest = { version = "0.13.5", features = [ "json" ] }
 resvg = { version = "0.48.1", default-features = false, features = ["raster-images"] }
 serde = { version = "1.0", features = [ "derive" ] }

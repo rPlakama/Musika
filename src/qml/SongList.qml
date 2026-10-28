@@ -31,8 +31,8 @@ MediaList {
     property bool _loadingPage: false
     property bool _edgeTargetBottom: false
 
-    // `G` on the paged Songs list finishes the tail, then lands on the true
-    // last row instead of the last loaded one.
+    // `G` on the Songs list lands on the true last row. The tail-page path
+    // remains for any paged payload; a scope load arrives complete.
     edgeJumpOverride: function(last, count) { root.jumpToEdge(last, count); }
 
     title: "Songs"
@@ -40,20 +40,17 @@ MediaList {
     memoryKey: "songs"
 
     function reload() {
+        // A scope switch loads the whole Songs segment on the uncapped row
+        // path: the list is complete before the cursor can reach its end, so
+        // no page cap applies while switching between scopes. Library and
+        // order reloads ride the same full read.
         root.loading = true;
         root._allLoaded = false;
         root._loadingPage = true;
         root._edgeTargetBottom = false;
         root._nextOffset = 0;
-        // UI-54: preload through the remembered cursor so `restore()` lands on
-        // the same row; beyond that, pages stream in on demand.
         Backend.scrollHydrate();
-        var saved = Backend.scrollSavedIndex(root.memoryKey);
-        var at = root.currentIndex >= 0
-            ? root.currentIndex
-            : (saved >= 0 ? saved : 0);
-        var limit = Math.max(root.pageSize, at + root.pageSize);
-        Backend.requestSongsPage(0, limit);
+        Backend.requestAllSongs();
     }
 
     function applyPage(payload) {

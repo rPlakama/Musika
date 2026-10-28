@@ -180,7 +180,7 @@ Item {
 
     // Search normal mode: hjkl navigates, Enter opens/plays, i types again.
     function handleAction(action) {
-        if (action === "back") {
+        if (action === "back" || action === "cancel") {
             // VI-4: the first Esc ends the active visual selection.
             if (resultsColumn.hasSelection)
                 resultsColumn.clearSelection();

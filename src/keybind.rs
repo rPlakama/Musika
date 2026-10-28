@@ -46,6 +46,7 @@ pub enum Action {
     VisualAll,
     Enter,
     Back,
+    Cancel,
     ToggleFullscreen,
     PlayPause,
     Mute,
@@ -100,6 +101,7 @@ impl Action {
             Self::VisualAll => "visual_all",
             Self::Enter => "enter",
             Self::Back => "back",
+            Self::Cancel => "cancel",
             Self::ToggleFullscreen => "toggle_fullscreen",
             Self::PlayPause => "play_pause",
             Self::Mute => "mute",
@@ -161,8 +163,10 @@ pub enum Outcome {
 /// - `i` starts typing: it opens the floating search in INSERT mode.
 /// - `Enter` is context-confirm: open/play a row, jump in the queue, go back
 ///   on the album toolbar, sync in the status bar, commit in visual mode.
-/// - `Esc`, `q` and `Ctrl-[` are the same Back action; Esc additionally steps
-///   out of typing/insert before leaving (the invariant cancel key).
+/// - `Esc`/`Ctrl-[` are the Cancel key: the same hierarchical Back everywhere
+///   except the queue drawer, where they are vi keys (end the visual
+///   selection) and only `q`/`Ctrl-Q` close it. Esc additionally steps out of
+///   typing/insert before leaving (the invariant cancel key); `q` is Back.
 /// - `[b`/`]b` walk the session's previous/next place travel log (ARC-45).
 /// - `Space` is play/pause globally; `Shift-Enter` toggles fullscreen.
 /// - `,`/`.` seek back/forward 5 s globally (the transport is decoration:
@@ -215,8 +219,8 @@ fn defaults() -> Vec<(&'static str, Action)> {
         ("p", Action::PasteBelow),
         ("shift-p", Action::PasteAbove),
         ("ctrl-v", Action::Paste),
-        ("escape", Action::Back),
-        ("ctrl-[", Action::Back),
+        ("escape", Action::Cancel),
+        ("ctrl-[", Action::Cancel),
         ("q", Action::Back),
         ("ctrl-q", Action::QueueToggle),
         ("?", Action::LyricsOverlay),

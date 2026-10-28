@@ -51,6 +51,7 @@ Item {
         case "search_action": return "Search";
         case "enter": return "Open";
         case "back": return "Back";
+        case "cancel": return "Cancel";
         case "toggle_fullscreen": return "Fullscreen";
         case "move_up": return "Up";
         case "move_down": return "Down";

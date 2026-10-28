@@ -68,15 +68,21 @@ pub fn pool() -> Option<SqlitePool> {
     dbs().map(|dbs| dbs.credentials.clone())
 }
 
+/// Every core the machine has. Scope switches are user-initiated bulk reads,
+/// so their row shaping runs on the full-core rayon pool; the quarter-core
+/// [`worker_limit`] budget is for background work, not a foreground switch.
+pub(crate) fn all_cores() -> usize {
+    std::thread::available_parallelism()
+        .map(|count| count.get())
+        .unwrap_or(4)
+}
+
 /// The shared ceiling for background work: one quarter of the available CPU
 /// cores, never zero. Used by the Tokio runtime and the thumbnail blocking
 /// batches so a many-core desktop does not turn a sync or a page fill into a
 /// CPU stampede.
 pub(crate) fn worker_limit() -> usize {
-    let cores = std::thread::available_parallelism()
-        .map(|count| count.get())
-        .unwrap_or(4);
-    (cores / 4).max(1)
+    (all_cores() / 4).max(1)
 }
 
 pub fn runtime() -> &'static Runtime {

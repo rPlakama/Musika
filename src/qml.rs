@@ -24,8 +24,8 @@ use qtbridge::{QmlObject, qobject};
 use serde::ser::{Serialize, SerializeSeq, SerializeStruct, Serializer};
 
 use crate::browse::{
-    load_album_songs_json, load_albums_json, load_artist_json, load_artists_json,
-    load_songs_page_json, search_json,
+    load_album_songs_json, load_albums_json, load_all_songs_json, load_artist_json,
+    load_artists_json, load_songs_page_json, search_json,
 };
 use crate::keybind::{Keymap, Outcome};
 use crate::player::{Player, State};
@@ -1502,6 +1502,19 @@ impl Backend {
         let offline = self.offline;
         self.spawn_data("songs_page", move |dbs| async move {
             load_songs_page_json(&dbs, offset, limit, &order, offline).await
+        });
+    }
+
+    /// The scope-switch Songs load: the whole segment, not a page. The rows
+    /// are shaped on the full-core pool, unlike the capped background page
+    /// reader (`requestSongsPage`).
+    #[qslot(qml_name = "requestAllSongs")]
+    fn request_all_songs(&mut self) {
+        let order = crate::library::effective_order(&crate::library::ORDERS, &self.song_order, 0)
+            .to_string();
+        let offline = self.offline;
+        self.spawn_data("songs_page", move |dbs| async move {
+            load_all_songs_json(&dbs, &order, offline).await
         });
     }
 

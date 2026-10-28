@@ -385,6 +385,60 @@ mod browse {
         assert_eq!(parsed["rows"][0]["id"], "s1");
     }
 
+    /// The scope path fans a large list across the rayon pool; the joined
+    /// chunks must equal the sequential payload exactly (same row order, no
+    /// stray commas), and the join must survive empty chunks.
+    #[test]
+    fn parallel_scope_rows_match_the_sequential_payload() {
+        assert_eq!(
+            join_json_arrays(vec![
+                "[{\"id\":1},{\"id\":2}]".to_string(),
+                "[{\"id\":3}]".to_string(),
+            ]),
+            "[{\"id\":1},{\"id\":2},{\"id\":3}]"
+        );
+        assert_eq!(
+            join_json_arrays(vec!["[]".to_string(), "[]".to_string()]),
+            "[]"
+        );
+
+        let covers = HashMap::new();
+        let songs: Vec<_> = (0..1_000)
+            .map(|index| song_row(&format!("s{index}"), Some("al1")))
+            .collect();
+        let parallel = songs_page_json(0, songs.len() as i64, false, &songs, &covers).unwrap();
+        let sequential = serde_json::to_string(&SongsPage {
+            offset: 0,
+            next: songs.len() as i64,
+            has_more: false,
+            songs: &songs,
+            covers: &covers,
+        })
+        .unwrap();
+        assert_eq!(parallel, sequential);
+
+        let albums: Vec<_> = (0..1_000)
+            .map(|index| crate::library::AlbumRow {
+                id: format!("al{index}"),
+                title: format!("Album {index}"),
+                artist: Some("Radiohead".to_string()),
+                year: Some(2000),
+                song_count: 12,
+                cover_art: None,
+                starred: None,
+                rating: 0,
+            })
+            .collect();
+        let parallel = album_seq_json(&albums, &covers, None).unwrap();
+        let sequential = serde_json::to_string(&AlbumSeq {
+            albums: &albums,
+            covers: &covers,
+            offline: None,
+        })
+        .unwrap();
+        assert_eq!(parallel, sequential);
+    }
+
     /// Memory probe for the streaming serializers: the same 5k-row album list
     /// through the old `Vec<Value>` path and the borrowed `AlbumSeq`.
     ///
@@ -1908,11 +1962,11 @@ mod keybind {
         assert_eq!(keymap.feed("]"), Outcome::Pending);
         assert_eq!(keymap.feed("b"), Outcome::Action(Action::NextPlace));
 
-        // A lone prefix times out silently; Ctrl-[ keeps hierarchical Back.
+        // A lone prefix times out silently; Ctrl-[ is the Escape alias.
         let mut keymap = Keymap::new();
         assert_eq!(keymap.feed("["), Outcome::Pending);
         assert_eq!(keymap.feed_timeout(), Outcome::None);
-        assert_eq!(keymap.feed("ctrl-["), Outcome::Action(Action::Back));
+        assert_eq!(keymap.feed("ctrl-["), Outcome::Action(Action::Cancel));
     }
 
     #[test]
@@ -1948,21 +2002,21 @@ mod keybind {
     #[test]
     fn escape_and_insert_mode() {
         let mut keymap = Keymap::new();
-        assert_eq!(keymap.feed("escape"), Outcome::Action(Action::Back));
+        assert_eq!(keymap.feed("escape"), Outcome::Action(Action::Cancel));
         assert_eq!(keymap.feed("i"), Outcome::Action(Action::InsertMode));
     }
 
     #[test]
-    fn ctrl_bracket_is_back_and_cancels_pending() {
+    fn ctrl_bracket_is_cancel_and_clears_pending() {
         assert_eq!(token_from_qt(0x5B, QT_CTRL).as_deref(), Some("ctrl-["));
 
         let mut keymap = Keymap::new();
-        assert_eq!(keymap.feed("ctrl-["), Outcome::Action(Action::Back));
+        assert_eq!(keymap.feed("ctrl-["), Outcome::Action(Action::Cancel));
 
         // A half-typed sequence is cleared by the escape alias.
         let mut keymap = Keymap::new();
         assert_eq!(keymap.feed("g"), Outcome::Pending);
-        assert_eq!(keymap.feed("escape"), Outcome::Action(Action::Back));
+        assert_eq!(keymap.feed("escape"), Outcome::Action(Action::Cancel));
         assert!(!keymap.is_pending());
     }
 
@@ -1993,6 +2047,17 @@ mod keybind {
         let mut keymap = Keymap::new();
         assert_eq!(keymap.feed("d"), Outcome::Pending);
         assert_eq!(keymap.feed("d"), Outcome::Action(Action::QueueRemove));
+    }
+
+    #[test]
+    fn queue_closes_on_q_but_escape_is_cancel() {
+        // The drawer's close keys are `q` (Back) and Ctrl-Q (QueueToggle);
+        // Esc/Ctrl-[ are vi keys there, so they resolve to Cancel.
+        let mut keymap = Keymap::new();
+        assert_eq!(keymap.feed("q"), Outcome::Action(Action::Back));
+        assert_eq!(keymap.feed("escape"), Outcome::Action(Action::Cancel));
+        assert_eq!(keymap.feed("ctrl-["), Outcome::Action(Action::Cancel));
+        assert_eq!(keymap.feed("ctrl-q"), Outcome::Action(Action::QueueToggle));
     }
 
     #[test]
@@ -2155,7 +2220,7 @@ mod keybind {
         // Esc: the count dies with the sequence it was waiting on.
         let mut keymap = Keymap::new();
         assert_eq!(keymap.feed("3"), Outcome::Pending);
-        assert_eq!(keymap.feed("escape"), Outcome::Action(Action::Back));
+        assert_eq!(keymap.feed("escape"), Outcome::Action(Action::Cancel));
         assert_eq!(keymap.take_count(), 3, "the count rides the fired action");
         assert_eq!(keymap.count(), 0);
 

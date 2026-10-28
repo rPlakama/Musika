@@ -615,24 +615,41 @@ pub fn effective_order(orders: &[&'static str], current: &str, delta: i64) -> &'
 /// by one of [`ORDERS`]. Kept as static SQL (no interpolation) so the
 /// allowlist is enforced at the type level.
 pub async fn albums(pool: &SqlitePool, artist: Option<&str>, order: &str) -> Result<Vec<AlbumRow>> {
+    albums_limited(pool, artist, order, 0).await
+}
+
+/// The first `limit` albums of [`albums`]; `limit <= 0` means all.
+pub async fn albums_limited(
+    pool: &SqlitePool,
+    artist: Option<&str>,
+    order: &str,
+    limit: i64,
+) -> Result<Vec<AlbumRow>> {
     let filter = if artist.is_some() {
         " WHERE artist = ?1"
     } else {
         ""
     };
-    let sql = format!("{ALBUM_SELECT}{filter}{}", album_order(order, true));
+    let limit_sql = if limit > 0 { " LIMIT ?" } else { "" };
+    let sql = format!(
+        "{ALBUM_SELECT}{filter}{}{limit_sql}",
+        album_order(order, true)
+    );
 
     let rows = match artist {
         Some(artist) => {
-            sqlx::query_as::<_, AlbumRow>(sqlx::AssertSqlSafe(sql))
-                .bind(artist)
-                .fetch_all(pool)
-                .await?
+            let mut query = sqlx::query_as::<_, AlbumRow>(sqlx::AssertSqlSafe(sql)).bind(artist);
+            if limit > 0 {
+                query = query.bind(limit);
+            }
+            query.fetch_all(pool).await?
         }
         None => {
-            sqlx::query_as::<_, AlbumRow>(sqlx::AssertSqlSafe(sql))
-                .fetch_all(pool)
-                .await?
+            let mut query = sqlx::query_as::<_, AlbumRow>(sqlx::AssertSqlSafe(sql));
+            if limit > 0 {
+                query = query.bind(limit);
+            }
+            query.fetch_all(pool).await?
         }
     };
     Ok(rows)
@@ -658,17 +675,29 @@ pub async fn artist_albums(
 
 /// All artists, ordered by one of [`ARTIST_ORDERS`].
 pub async fn artists(pool: &SqlitePool, order: &str) -> Result<Vec<ArtistRow>> {
+    artists_limited(pool, order, 0).await
+}
+
+/// The first `limit` artists of [`artists`]; `limit <= 0` means all.
+pub async fn artists_limited(
+    pool: &SqlitePool,
+    order: &str,
+    limit: i64,
+) -> Result<Vec<ArtistRow>> {
     let order = match order {
         "Albums" => " ORDER BY album_count DESC, name",
         _ => " ORDER BY name",
     };
+    let limit_sql = if limit > 0 { " LIMIT ?" } else { "" };
     let sql = format!(
         "{ARTIST_SELECT} WHERE EXISTS (
-             SELECT 1 FROM albums WHERE albums.artist_id = artists.id){order}"
+             SELECT 1 FROM albums WHERE albums.artist_id = artists.id){order}{limit_sql}"
     );
-    let rows = sqlx::query_as::<_, ArtistRow>(sqlx::AssertSqlSafe(sql))
-        .fetch_all(pool)
-        .await?;
+    let mut query = sqlx::query_as::<_, ArtistRow>(sqlx::AssertSqlSafe(sql));
+    if limit > 0 {
+        query = query.bind(limit);
+    }
+    let rows = query.fetch_all(pool).await?;
     Ok(rows)
 }
 

@@ -1480,6 +1480,11 @@ The product is incomplete without these.
     `TapHandler` instead of `MouseArea`; seek/volume are the native `ScrubBar`
     (Slider) in both the player bar and NowPlaying; `IconButton` is a native
     `AbstractButton` with the same Musika skin.
+  - **Startup preload:** Albums, Songs and Artists are instantiated at app load;
+    the active scope keeps its normal full load, while hidden tabs wait 350 ms
+    and then fetch their first 50 rows concurrently (limited SQL for albums/
+    artists, a capped songs page). Activating a preloaded tab requests the full
+    list without turning its loading state back on.
   - **Performance pass (native/frugal):** `AppText` defaults to
     `Text.NativeRendering` and opts into `QtRendering` only for transformed
     text (lyrics); `CoverBackdrop` paints a plain black stage for playback and

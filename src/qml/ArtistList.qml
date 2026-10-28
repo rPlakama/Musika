@@ -34,9 +34,52 @@ MediaList {
     // overlay (the rating rides the south slot).
     quickActionKind: "artist"
 
-    function reload() {
+    property bool _preloaded: false
+    property bool _fullLoaded: false
+    property bool _preloadOnly: false
+
+    function start() {
+        if (root._preloadOnly)
+            root.preload();
+        else
+            root.activate();
+    }
+
+    function activate() {
+        preloadTimer.stop();
+        if (root._fullLoaded)
+            return;
+        root.requestFull(root.count === 0);
+    }
+
+    function preload() {
+        if (root._preloaded)
+            return;
+        root._preloaded = true;
+        preloadTimer.restart();
+    }
+
+    function requestPreload() {
         root.loading = true;
+        Backend.preloadArtists();
+    }
+
+    function reload() {
+        root.requestFull(true);
+    }
+
+    function requestFull(showLoading) {
+        preloadTimer.stop();
+        root._fullLoaded = true;
+        root.loading = showLoading;
         Backend.requestArtists();
+    }
+
+    Timer {
+        id: preloadTimer
+        interval: 350
+        repeat: false
+        onTriggered: root.requestPreload()
     }
 
     function apply(payload) {
@@ -45,7 +88,7 @@ MediaList {
 
     onActivated: (item) => root.artistActivated(item.artistId, item.artistName, item.artistCover)
 
-    Component.onCompleted: reload()
+    Component.onCompleted: Qt.callLater(root.start)
 
     Connections {
         target: Backend

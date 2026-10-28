@@ -33,8 +33,20 @@ pub async fn load_albums_json(
     order: &str,
     offline: bool,
 ) -> anyhow::Result<String> {
+    load_albums_json_limited(dbs, artist, order, offline, 0).await
+}
+
+/// The first `limit` albums, for the startup tab preload; `limit <= 0`
+/// means the whole list.
+pub async fn load_albums_json_limited(
+    dbs: &crate::db::Dbs,
+    artist: &str,
+    order: &str,
+    offline: bool,
+    limit: i64,
+) -> anyhow::Result<String> {
     let filter = (!artist.is_empty()).then_some(artist);
-    let mut albums = crate::library::albums(&dbs.library, filter, order).await?;
+    let mut albums = crate::library::albums_limited(&dbs.library, filter, order, limit).await?;
     let offline = crate::offline::load(dbs, offline).await?;
     if let Some(offline) = &offline {
         albums.retain(|album| offline.contains_album(&album.id));
@@ -107,7 +119,18 @@ pub async fn load_artists_json(
     order: &str,
     offline: bool,
 ) -> anyhow::Result<String> {
-    let mut artists = crate::library::artists(&dbs.library, order).await?;
+    load_artists_json_limited(dbs, order, offline, 0).await
+}
+
+/// The first `limit` artists, for the startup tab preload; `limit <= 0`
+/// means the whole list.
+pub async fn load_artists_json_limited(
+    dbs: &crate::db::Dbs,
+    order: &str,
+    offline: bool,
+    limit: i64,
+) -> anyhow::Result<String> {
+    let mut artists = crate::library::artists_limited(&dbs.library, order, limit).await?;
     let filter = crate::offline::load(dbs, offline).await?;
     if let Some(filter) = &filter {
         artists.retain(|artist| filter.contains_artist(&artist.id));

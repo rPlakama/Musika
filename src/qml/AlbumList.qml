@@ -40,10 +40,10 @@ MediaList {
         if (root._preloadOnly)
             root.preload();
         else
-            root.activate();
+            root.activateTab();
     }
 
-    function activate() {
+    function activateTab() {
         preloadTimer.stop();
         if (root._fullLoaded)
             return;

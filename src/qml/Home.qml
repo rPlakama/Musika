@@ -897,8 +897,8 @@ Item {
                                         // The current entry is never a preload target,
                                         // even if its visible flag has not settled yet.
                                         item._preloadOnly = index !== root.currentSegment;
-                                        if (index === root.currentSegment && item.activate)
-                                            item.activate();
+                                        if (index === root.currentSegment && item.activateTab)
+                                            item.activateTab();
                                     }
                                     if (visible)
                                         root._landOrResetSegment(item);
@@ -908,8 +908,8 @@ Item {
                                 onVisibleChanged: {
                                     if (visible && item) {
                                         item._preloadOnly = false;
-                                        if (item.activate)
-                                            item.activate();
+                                        if (item.activateTab)
+                                            item.activateTab();
                                     }
                                     if (visible)
                                         root._landOrResetSegment(item);

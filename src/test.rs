@@ -1890,7 +1890,14 @@ mod keybind {
         assert_eq!(token_from_qt(0x2F, 0).as_deref(), Some("/")); // Key_Slash
         assert_eq!(token_from_qt(0x5B, 0).as_deref(), Some("[")); // Key_BracketLeft
         assert_eq!(token_from_qt(0x5D, 0).as_deref(), Some("]")); // Key_BracketRight
-        assert_eq!(token_from_qt(0x3F, 0), None); // `?` stays unbound until M4
+        assert_eq!(token_from_qt(0x3F, 0).as_deref(), Some("?")); // Key_Question
+    }
+
+    #[test]
+    fn lyrics_overlay_binding() {
+        let mut keymap = Keymap::new();
+        assert_eq!(keymap.feed("?"), Outcome::Action(Action::LyricsOverlay));
+        assert_eq!(keymap.feed("shift-/"), Outcome::Action(Action::LyricsOverlay));
     }
 
     #[test]
@@ -3575,6 +3582,24 @@ mod mpris {
 mod player {
     use super::common::*;
     use crate::player::*;
+
+    #[test]
+    fn astats_metadata_publishes_the_envelope() {
+        let mut shared = Shared::default();
+        apply_event(
+            &mut shared,
+            &serde_json::json!({
+                "event": "property-change",
+                "name": "af-metadata/astats",
+                "data": {
+                    "lavfi.astats.Overall.RMS_level": "-18.0",
+                    "lavfi.astats.Overall.Peak_level": "-6.0"
+                }
+            }),
+        );
+        assert!((shared.audio_level - 0.7).abs() < 0.001);
+        assert!((shared.audio_peak - 0.9).abs() < 0.001);
+    }
 
     #[test]
     fn stale_end_file_does_not_record_an_error_while_a_load_is_pending() {

@@ -5,28 +5,18 @@
 // it under the terms of the GNU General Public License as published by
 // the Free Software Foundation; either version 2 of the License, or
 // (at your option) any later version.
-//
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU General Public License for more details.
-//
-// You should have received a copy of the GNU General Public License
-// along with this program; if not, see <https://www.gnu.org/licenses/>.
 
 import QtQuick
-import QtQuick.Effects
 import musika
 
-// Album/artist ambience for the rectangular pages. A blurred, darkened copy
-// of the artwork fills the surface; the sharp square stays contained at the
-// upper centre (never cropped or stretched).
+// Album/artist/fullscreen ambience: soft radial pools behind the sharp
+// artwork. `showCover` lets the fullscreen split own its own cover pane.
 Item {
     id: root
 
     property url source
-
-    /// True once the artwork is decoded; hosts use this for their wash.
+    property bool showCover: true
+    /// True once the sharp artwork is decoded.
     readonly property bool ready: cover.ready
 
     /// Optional ceiling for hosts that reserve a rows band below the art.
@@ -35,39 +25,11 @@ Item {
     /// The largest square that fits the page; the cover grows/shrinks with it.
     readonly property real coverSide: Math.min(width, height, maxSide)
 
-    visible: root.ready
     clip: true
 
     Rectangle {
         anchors.fill: parent
-        color: Palette.surface
-    }
-
-    // Instanced copy of the cover: blurred, then darkened by an 80% shadow.
-    CoverImage {
-        id: fill
-        anchors.fill: parent
-        source: root.source
-        sizeFactor: 0.5
-        fillMode: Image.PreserveAspectCrop
-        opacity: fill.ready ? 1 : 0
-        layer.enabled: fill.ready
-        layer.textureSize: Qt.size(
-            Math.max(1, Math.ceil(width * 0.25)),
-            Math.max(1, Math.ceil(height * 0.25)))
-        layer.effect: MultiEffect {
-            blurEnabled: true
-            blur: 0.8
-            blurMax: 32
-            saturation: 1.0
-            autoPaddingEnabled: false
-        }
-    }
-
-    Rectangle {
-        anchors.fill: parent
-        color: "black"
-        opacity: 0.80
+        color: "#000000"
     }
 
     // The artwork itself: top-centre, aspect-fit in the largest page square.
@@ -77,7 +39,9 @@ Item {
         anchors.horizontalCenter: parent.horizontalCenter
         width: root.coverSide
         height: root.coverSide
-        source: root.source
+        source: root.showCover ? root.source : ""
         fillMode: Image.PreserveAspectFit
+        visible: root.showCover
+        opacity: visible && ready ? 1 : 0
     }
 }

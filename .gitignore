@@ -16,3 +16,5 @@ DankMaterialShell/
 *.db-wal
 *.sqlite
 *.sqlite3
+
+build/

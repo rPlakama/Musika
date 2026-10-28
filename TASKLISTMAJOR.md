@@ -1453,17 +1453,24 @@ The product is incomplete without these.
     `AbstractButton` with the same Musika skin.
   - **Performance pass (native/frugal):** `AppText` defaults to
     `Text.NativeRendering` and opts into `QtRendering` only for transformed
-    text (lyrics); `CoverBackdrop` blurs a quarter-resolution texture
-    and does not run a full-page MultiEffect; `AcrylicPanel` skips the hidden blur pass when its
-    tint is opaque; the lyric stage has native gradient edge fades instead of
-    an offscreen mask layer; `ScrollContent` uses realised-delegate targets
+    text (lyrics); `CoverBackdrop` now composes `FluidBackdrop` from the extracted Palette
+    roles (quarter-resolution blur, no cover blur); `AcrylicPanel` skips the
+    hidden blur pass when its tint is opaque; the lyric stage uses a masked
+    edge fade (the gradient-band shortcut read as a vignette over the text); `ScrollContent` uses realised-delegate targets
     plus native `indexAt`/`displayMargin`, and only probes Qt for
     unrealised/far targets.
   - **Row loading:** the QML `WorkerScript` pipeline was removed (Qt 6.11
     emits `QObject::connect(QJSEngine, QtObject): invalid nullptr parameter`
     for every worker). Rust now shapes album, artist, song, album-track,
     playlist and queue rows; QML only parses and appends them. `SearchOverlay`
-    still maps its three result columns inline.
+    still maps its three result columns inline. mpv publishes an RMS/peak
+    envelope via `astats` metadata; `FluidBackdrop` uses it for the fullscreen
+    wave motion; album/artist pages run the same fields at a slower idle
+    cadence.
+  - **Playback scene:** fullscreen is a 50/50 cover/lyrics body. Inline lyrics
+    retract below a ~300 px lyric column; `?` (`Shift+/`) opens the shared
+    lyrics host over a 35% scrim, and `?`/Esc/scrim close it. The backdrop is
+    the Palette-driven `FluidBackdrop`; the sharp cover is a separate pane.
   - **JS logic:** `ScrollMemory.js` moved to `src/scroll_memory.rs` (TTL,
     cap, startup-zero policy, hydration and serialization in Rust);
     `RowSync.js` was unused and is gone. Remaining `Theme.js`,

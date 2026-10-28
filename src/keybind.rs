@@ -70,6 +70,7 @@ pub enum Action {
     PasteBelow,
     PasteAbove,
     QueueToggle,
+    LyricsOverlay,
     QueueUp,
     QueueDown,
     QueueRemove,
@@ -123,6 +124,7 @@ impl Action {
             Self::PasteBelow => "paste_below",
             Self::PasteAbove => "paste_above",
             Self::QueueToggle => "queue_toggle",
+            Self::LyricsOverlay => "lyrics_overlay",
             Self::QueueUp => "queue_up",
             Self::QueueDown => "queue_down",
             Self::QueueRemove => "queue_remove",
@@ -217,6 +219,8 @@ fn defaults() -> Vec<(&'static str, Action)> {
         ("ctrl-[", Action::Back),
         ("q", Action::Back),
         ("ctrl-q", Action::QueueToggle),
+        ("?", Action::LyricsOverlay),
+        ("shift-/", Action::LyricsOverlay),
         ("ctrl-r", Action::RepeatCycle),
         ("shift-k", Action::ScopePrev),
         ("shift-j", Action::ScopeNext),
@@ -389,6 +393,7 @@ const QT_KEY_RIGHT: i32 = 0x0100_0014;
 pub(crate) const QT_KEY_DOWN: i32 = 0x0100_0015;
 const QT_KEY_PAGEUP: i32 = 0x0100_0016;
 const QT_KEY_PAGEDOWN: i32 = 0x0100_0017;
+const QT_KEY_QUESTION: i32 = 0x3F;
 
 pub(crate) const QT_SHIFT: i32 = 0x0200_0000;
 pub(crate) const QT_CTRL: i32 = 0x0400_0000;
@@ -400,6 +405,9 @@ pub fn token_from_qt(key: i32, modifiers: i32) -> Option<String> {
     // Qt hands Shift+Tab as Backtab (0x01000002), not Tab+shiftmodifier.
     // Remember it so both shapes canonicalise to "shift-tab".
     let mut backtab = false;
+    if key == QT_KEY_QUESTION {
+        return Some("?".to_string());
+    }
     let base = match key {
         QT_KEY_SPACE => "space".to_string(),
         QT_KEY_ESCAPE => "escape".to_string(),

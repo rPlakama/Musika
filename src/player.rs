@@ -150,6 +150,10 @@ pub(crate) struct Shared {
     /// While set, `end-file` events belong to the file we deliberately
     /// replaced and must not advance the queue (fast skip/previous races).
     pub(crate) pending_load: bool,
+    /// Playback envelope from mpv astats metadata (0..1).
+    pub(crate) audio_level: f64,
+    pub(crate) audio_peak: f64,
+    pub(crate) audio_at: Option<std::time::Instant>,
 }
 
 impl Shared {
@@ -157,6 +161,9 @@ impl Shared {
         self.position = 0.0;
         self.duration = 0.0;
         self.error = None;
+        self.audio_level = 0.0;
+        self.audio_peak = 0.0;
+        self.audio_at = None;
     }
 }
 
@@ -336,6 +343,14 @@ impl Player {
 
     pub fn position(&self) -> f64 {
         self.shared().position
+    }
+
+    pub(crate) fn audio_level(&self) -> f64 {
+        self.shared().audio_level
+    }
+
+    pub(crate) fn audio_peak(&self) -> f64 {
+        self.shared().audio_peak
     }
 
     /// Replaces the queue and starts at `start`.

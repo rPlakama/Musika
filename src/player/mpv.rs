@@ -277,6 +277,7 @@ impl Player {
                 .arg("--demuxer-max-bytes=32MiB")
                 .arg("--demuxer-max-back-bytes=8MiB")
                 .arg("--stream-lavf-o=reconnect=1,reconnect_streamed=1,reconnect_delay_max=5")
+                .arg("--af=:astats=metadata=1:reset=1")
                 .arg(&socket_arg);
             if let Some(script) = crate::mpris::mpris_script() {
                 command.arg(format!("--script={script}"));
@@ -361,6 +362,7 @@ impl Player {
         self.observe(2, "duration");
         self.observe(3, "pause");
         self.observe(4, "playlist-pos");
+        self.observe(5, "af-metadata/astats");
         self.set_volume(self.volume);
         self.set_muted(self.muted);
     }
@@ -401,6 +403,30 @@ fn signal(pid: u32, signal: std::ffi::c_int) {
 /// from bouncing back into a track the user already moved away from. A
 /// `file_error` is kept for [`Player::pump`] instead of acted on here;
 /// `stop` (our own skip) is ignored, mpv's playlist moves on by itself.
+/// Converts one astats metadata map into the 0..1 playback envelope.
+fn update_audio(shared: &mut Shared, data: &Value) {
+    use std::time::{Duration, Instant};
+    if shared
+        .audio_at
+        .is_some_and(|at| at.elapsed() < Duration::from_millis(33))
+    {
+        return;
+    }
+    let value = |key: &str| -> Option<f64> {
+        data.get(key).and_then(|value| {
+            value
+                .as_f64()
+                .or_else(|| value.as_str().and_then(|text| text.parse::<f64>().ok()))
+        })
+    };
+    let level = |db: f64| ((db + 60.0) / 60.0).clamp(0.0, 1.0);
+    let rms = value("lavfi.astats.Overall.RMS_level").unwrap_or(-60.0);
+    let peak = value("lavfi.astats.Overall.Peak_level").unwrap_or(-60.0);
+    shared.audio_level = level(rms);
+    shared.audio_peak = level(peak);
+    shared.audio_at = Some(Instant::now());
+}
+
 pub(crate) fn apply_event(shared: &mut Shared, value: &Value) {
     match value.get("event").and_then(Value::as_str) {
         Some("property-change") => {
@@ -426,10 +452,18 @@ pub(crate) fn apply_event(shared: &mut Shared, value: &Value) {
                 Some("playlist-pos") => {
                     shared.playlist_pos = data.and_then(Value::as_i64);
                 }
+                Some("af-metadata/astats") => {
+                    if let Some(data) = data {
+                        update_audio(shared, data);
+                    }
+                }
                 _ => {}
             }
         }
         Some("start-file") => {
+            shared.audio_level = 0.0;
+            shared.audio_peak = 0.0;
+            shared.audio_at = None;
             shared.pending_load = false;
             shared.loaded = false;
             shared.idle = false;

@@ -91,6 +91,14 @@ Rectangle {
     // Keep the 50/50 body while the fetch is in flight; collapse only once
     // the track is known to have no lyrics.
     readonly property bool lyricsVisible: root.lyricsAvailable || root.lyricsLoading
+    // Inline lyrics need a readable column; below that the split collapses.
+    readonly property real inlinePaneWidth:
+        (root.width * 0.95 - root.width * 0.012) / 2
+    readonly property bool lyricsInline:
+        root.lyricsVisible && root.inlinePaneWidth >= 300
+    property bool lyricsOverlayOpen: false
+    readonly property bool lyricsOverlayAvailable:
+        root.lyricsVisible && !root.lyricsInline
     property string lyricsSource: ""
     property string lyricsLang: ""
     property int lyricsOffset: 0
@@ -105,8 +113,8 @@ Rectangle {
     // window, so lines can't outgrow the pane's walls; the stage caps the
     // active emphasis to the padded room, so the grown line never reaches the
     // margin (see the delegate's `emphasis`).
-    readonly property real lyricSize: Theme.clamp(lyricsPane.height * 0.055, 13, 22)
-    readonly property real lyricPad: Math.max(6, lyricsPane.height * 0.04)
+    readonly property real lyricSize: Theme.clamp(lyricsHost.height * 0.055, 13, 22)
+    readonly property real lyricPad: Math.max(6, lyricsHost.height * 0.04)
 
     // Active synced line, matched against the offset-corrected position.
     // Zero-allocation: reads timestamps from flat JS array instead of querying
@@ -137,11 +145,31 @@ Rectangle {
     }
 
     function keyHints() {
+        if (root.lyricsOverlayOpen)
+            return "? close   ·   j/k scroll   ·   Esc/Q exit";
         if (pane === 1)
             return "j/k scroll   ·   ,/. seek   ·   Ctrl-N/P track   ·   Tab album   ·   Esc/Q exit";
+        var extra = root.lyricsInline ? "   ·   Tab lyrics"
+            : (root.lyricsVisible ? "   ·   ? lyrics" : "");
         if (pane === 3)
-            return "Enter album actions" + (lyricsVisible ? "   ·   Tab lyrics" : "") + "   ·   Esc exit";
-        return "j/k scroll   ·   ,/. seek   ·   Ctrl-N/P track   ·   Tab album   ·   Esc/Q exit";
+            return "Enter album actions" + extra + "   ·   Esc exit";
+        return "j/k scroll   ·   ,/. seek   ·   Ctrl-N/P track   ·   Tab album   ·   Esc exit";
+    }
+
+    function toggleLyricsOverlay() {
+        if (!root.lyricsOverlayAvailable) {
+            if (root.lyricsOverlayOpen)
+                root.closeLyricsOverlay();
+            return;
+        }
+        root.lyricsOverlayOpen = true;
+        root.pane = 1;
+    }
+
+    function closeLyricsOverlay() {
+        root.lyricsOverlayOpen = false;
+        if (!root.lyricsInline && root.pane === 1)
+            root.pane = 3;
     }
 
     /// The keybar's album-scope state (favourite + container download) for
@@ -248,7 +276,17 @@ Rectangle {
 
     // When a fetch settles with no lyrics, pane 1 no longer exists.
     onLyricsVisibleChanged: {
-        if (!root.lyricsVisible && root.pane === 1)
+        if (!root.lyricsVisible) {
+            root.closeLyricsOverlay();
+            if (root.pane === 1)
+                root.pane = 3;
+        }
+    }
+
+    onLyricsInlineChanged: {
+        if (root.lyricsInline)
+            root.closeLyricsOverlay();
+        else if (!root.lyricsOverlayOpen && root.pane === 1)
             root.pane = 3;
     }
 
@@ -267,7 +305,7 @@ Rectangle {
 
     /// Tab walks the surfaces that exist: lyrics is skipped while hidden.
     function cyclePane(forward) {
-        var order = root.lyricsVisible ? [1, 3] : [3];
+        var order = root.lyricsInline ? [1, 3] : [3];
         var i = order.indexOf(root.pane);
         if (i < 0)
             i = 0;
@@ -278,6 +316,23 @@ Rectangle {
 
     // Fullscreen keys, scoped to the focused surface. Esc/back stays with Home.
     function handleAction(action) {
+        if (action === "lyrics_overlay") {
+            root.toggleLyricsOverlay();
+            return;
+        }
+        if (root.lyricsOverlayOpen) {
+            if (action === "back" || action === "escape")
+                root.closeLyricsOverlay();
+            else if (action === "move_up")
+                scrollLyrics(-lyricsView.height * 0.3 * Math.max(1, Backend.keyCount));
+            else if (action === "move_down")
+                scrollLyrics(lyricsView.height * 0.3 * Math.max(1, Backend.keyCount));
+            else if (action === "page_up")
+                scrollLyrics(-lyricsView.height * 0.5);
+            else if (action === "page_down")
+                scrollLyrics(lyricsView.height * 0.5);
+            return;
+        }
         if (action === "next_track") {
             Backend.playerNextBy(Math.max(1, Backend.keyCount));
             return;
@@ -299,7 +354,7 @@ Rectangle {
                 var coverMenu = root.coverActions();
                 coverMenu.sticky = true;
                 root.quickAction(albumTitleBox, coverMenu);
-            } else if ((action === "move_left" || action === "move_right") && root.lyricsVisible) {
+            } else if ((action === "move_left" || action === "move_right") && root.lyricsInline) {
                 root.pane = 1;
             }
             return;
@@ -334,10 +389,12 @@ Rectangle {
                 lyricsLoading = true;
                 Backend.requestLyrics();
             }
-            if (root.pane === 1 && !root.lyricsVisible)
+            if (root.pane === 1 && !root.lyricsInline && !root.lyricsOverlayOpen)
                 root.pane = 3;
             // The keybar's album actions reconcile on entry too.
             root.requestAlbumActions();
+        } else {
+            root.closeLyricsOverlay();
         }
     }
 
@@ -409,6 +466,7 @@ Rectangle {
             id: coverBackdrop
             anchors.fill: parent
             source: Backend.currentCoverUrl
+            showCover: false
         }
     }
 
@@ -651,18 +709,54 @@ Rectangle {
             spacing: root.width * 0.012
 
             Item {
+                id: coverPane
+                Layout.fillWidth: true
+                Layout.fillHeight: true
+                Layout.preferredWidth: 0
+                clip: true
+
+                Rectangle {
+                    anchors.fill: parent
+                    radius: Theme.radius
+                    color: Palette.surfaceContainerLow
+                }
+
+                CoverImage {
+                    anchors.fill: parent
+                    source: Backend.currentCoverUrl
+                    fillMode: Image.PreserveAspectFit
+                }
+            }
+
+            Item {
                 id: lyricsPane
                 Layout.fillWidth: true
                 Layout.fillHeight: true
-                visible: root.lyricsVisible
+                Layout.preferredWidth: 0
+                visible: true
+                enabled: root.lyricsInline
+                opacity: root.lyricsInline ? 1 : 0
+
+                Behavior on opacity {
+                    NumberAnimation {
+                        duration: Theme.motion.quick
+                        easing.type: Easing.Bezier
+                        easing.bezierCurve: Theme.ease.standard
+                    }
+                }
 
                 TapHandler {
                     onTapped: root.pane = 1
                 }
 
-                ColumnLayout {
+                Item {
+                    id: lyricsHost
+                    parent: root.lyricsOverlayOpen ? lyricsOverlayPanel : lyricsPane
                     anchors.fill: parent
-                    spacing: root.height * 0.006
+
+                    ColumnLayout {
+                        anchors.fill: parent
+                        spacing: root.height * 0.006
 
                     // The stage: an inner rectangle inside the pane that
                     // contains every lyric line, the scaled active one
@@ -855,6 +949,7 @@ Rectangle {
                         verticalAlignment: Text.AlignVCenter
                     }
                 }
+                }
             }
         }
 
@@ -884,5 +979,37 @@ Rectangle {
                 }
             }
         }
+    }
+
+    Rectangle {
+        id: lyricsScrim
+        anchors.fill: parent
+        color: "#000000"
+        opacity: root.lyricsOverlayOpen ? 0.35 : 0
+        visible: opacity > 0
+        z: Theme.zOverlay
+
+        Behavior on opacity {
+            NumberAnimation {
+                duration: Theme.motion.quick
+                easing.type: Easing.Bezier
+                easing.bezierCurve: Theme.ease.standard
+            }
+        }
+
+        TapHandler {
+            enabled: root.lyricsOverlayOpen
+            onTapped: root.closeLyricsOverlay()
+        }
+    }
+
+    Item {
+        id: lyricsOverlayPanel
+        anchors.top: parent.top
+        anchors.bottom: parent.bottom
+        anchors.right: parent.right
+        width: Math.min(root.width * 0.72, 720)
+        visible: root.lyricsOverlayOpen
+        z: Theme.zOverlay + 1
     }
 }

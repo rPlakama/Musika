@@ -298,6 +298,9 @@ pub struct Backend {
     position: f64,
     duration: f64,
     volume: f64,
+    /// Playback envelope published for the fluid backdrop (0..1).
+    audio_level: f64,
+    audio_peak: f64,
     muted: bool,
     queue_index: i64,
     /// The queue rows' player revision at the last publish (QUEUEROWSTUDY
@@ -476,6 +479,8 @@ impl Backend {
     qproperty!("position", Member = position, Notify = position_changed);
     qproperty!("duration", Member = duration, Notify = duration_changed);
     qproperty!("volume", Member = volume, Notify = volume_changed);
+    qproperty!("audioLevel", Member = audio_level, Notify = audio_level_changed);
+    qproperty!("audioPeak", Member = audio_peak, Notify = audio_peak_changed);
     qproperty!("muted", Member = muted, Notify = muted_changed);
     qproperty!(
         "queueIndex",
@@ -678,6 +683,10 @@ impl Backend {
     fn duration_changed(&mut self);
     #[qsignal]
     fn volume_changed(&mut self);
+    #[qsignal]
+    fn audio_level_changed(&mut self);
+    #[qsignal]
+    fn audio_peak_changed(&mut self);
     #[qsignal]
     fn muted_changed(&mut self);
     #[qsignal]
@@ -2839,6 +2848,26 @@ impl Backend {
     }
 
     /// Publishes the player state to the QML properties.
+    /// UI-facing audio envelope pump: the fullscreen backdrop polls this at
+    /// ~25 Hz while it is visible.
+    #[qslot(qml_name = "audioTick")]
+    fn audio_tick(&mut self) {
+        let mut level = self.player.audio_level();
+        let mut peak = self.player.audio_peak();
+        if self.player.state() != State::Playing {
+            level *= 0.82;
+            peak *= 0.82;
+        }
+        if (self.audio_level - level).abs() > 0.002 {
+            self.audio_level = level;
+            self.audio_level_changed();
+        }
+        if (self.audio_peak - peak).abs() > 0.002 {
+            self.audio_peak = peak;
+            self.audio_peak_changed();
+        }
+    }
+
     fn mpris_snapshot(&self) -> crate::mpris::Snapshot {
         crate::mpris::Snapshot {
             playback_status: self.player.state().mpris_status().to_string(),

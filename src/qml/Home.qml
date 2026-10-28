@@ -648,7 +648,12 @@ Item {
                 queueDrawer.closeQueue();
                 return;
             }
-            // Fullscreen is the next context down: Esc leaves the player.
+            // Fullscreen is the next context down; an open lyrics overlay
+            // takes the first Back.
+            if (nowPlayingExpanded && nowPlaying && nowPlaying.lyricsOverlayOpen) {
+                nowPlaying.closeLyricsOverlay();
+                return;
+            }
             if (nowPlayingExpanded) {
                 nowPlayingExpanded = false;
                 return;

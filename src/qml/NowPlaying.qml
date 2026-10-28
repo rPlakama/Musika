@@ -1069,10 +1069,9 @@ Rectangle {
 
     Item {
         id: lyricsOverlayPanel
-        anchors.top: parent.top
-        anchors.bottom: parent.bottom
-        anchors.right: parent.right
+        anchors.centerIn: parent
         width: Math.min(root.width * 0.72, 720)
+        height: parent.height
         visible: root.lyricsOverlayOpen
         z: Theme.zOverlay + 1
     }

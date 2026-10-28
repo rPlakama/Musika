@@ -252,10 +252,11 @@ Item {
             view.clearSelection();
     }
 
-    // P-8: returning from an artist entry always lands on Main — the plain
-    // album list, unfiltered and out of any other segment or search.
+    // Returning from an artist entry lands on Home in the same scope it was
+    // entered from (Albums, Songs or Artists), with that scope's cursor and
+    // scroll state intact.
     function leaveArtistEntry() {
-        showSegment(0);
+        showSegment(root.currentSegment);
     }
 
     // Single album-page push used by the album list, the artist entry and the

@@ -50,9 +50,9 @@ Item {
     property real minSubtitlePixelSize: 8
     // Stable per-row buckets: no per-delegate Text.Fit measurement.
     readonly property real rowTitleSize: Math.max(root.minTitlePixelSize,
-        Math.min(root.titlePixelSize, root.rowHeight * 0.22))
+        Math.min(root.titlePixelSize, root.rowHeight * 0.30))
     readonly property real rowSubtitleSize: Math.max(root.minSubtitlePixelSize,
-        Math.min(root.subtitlePixelSize, root.rowHeight * 0.16))
+        Math.min(root.subtitlePixelSize, root.rowHeight * 0.25))
     property real metaPixelSize: rowHeight * 0.19
     property color titleColor: Palette.onSurface
     property color subtitleColor: Palette.onSurfaceVariant

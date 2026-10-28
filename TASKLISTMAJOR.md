@@ -1453,8 +1453,8 @@ The product is incomplete without these.
     `AbstractButton` with the same Musika skin.
   - **Performance pass (native/frugal):** `AppText` defaults to
     `Text.NativeRendering` and opts into `QtRendering` only for transformed
-    text (lyrics); `CoverBackdrop` now composes `FluidBackdrop` from the extracted Palette
-    roles (quarter-resolution blur, no cover blur); `AcrylicPanel` skips the
+    text (lyrics); `CoverBackdrop` paints a plain black stage for playback and
+    album/artist pages; `AcrylicPanel` skips the
     hidden blur pass when its tint is opaque; the lyric stage uses a masked
     edge fade (the gradient-band shortcut read as a vignette over the text); `ScrollContent` uses realised-delegate targets
     plus native `indexAt`/`displayMargin`, and only probes Qt for
@@ -1464,19 +1464,23 @@ The product is incomplete without these.
     for every worker). Rust now shapes album, artist, song, album-track,
     playlist and queue rows; QML only parses and appends them. `SearchOverlay`
     still maps its three result columns inline. mpv publishes an RMS/peak
-    envelope via `astats` metadata; `FluidBackdrop` uses it for the fullscreen
-    wave motion; album/artist pages run the same fields at a slower idle
-    cadence.
+    envelope via `astats` metadata for the player transport.
   - **Playback scene:** fullscreen is a 50/50 cover/lyrics body. Inline lyrics
     retract below a ~300 px lyric column and the cover expands into the free
     width; `?` (`Shift+/`) opens the shared lyrics host over a 35% scrim, and
-    `?`/Esc/scrim close it. The backdrop is the Palette-driven
-    `FluidBackdrop`; the sharp cover is a separate pane.
+    `?`/Esc/scrim close it. The playback backdrop is plain black; the sharp
+    cover is a separate pane.
+  - **Backdrop:** plain black behind the artwork. The shader and gradient
+    experiments were removed.
   - **Queue:** queue rows are shaped in Rust (`songId`, `duration`, `subtitle`,
     `albumId`) before they reach the drawer, so delegates no longer lose
     required fields.
-  - **Playback follow/actions:** lyrics update the cursor without forcing a
-    recenter per line; they glide only after the active row leaves a 22–78%
+  - **Audio envelope:** mpv AF is `@astats:astats=metadata=1:reset=10:measure_perchannel=none`;
+    Rust publishes `audioLevel`/`audioPeak` and the backdrop smooths them with a
+    fast attack/lazy release.
+  - **Playback follow/actions:** lyrics reset to the top on every new-track
+    init (before the payload arrives), update the cursor without forcing a
+    recenter per line, and glide only after the active row leaves a 22–78%
     band. Pane 4 is the playing track title: click/Enter/Alt opens
     `QuickActions.song`, with `currentSongStarred` mirrored from the player.
   - **Alt + Search:** Alt retracts typing to Search normal mode, arms the

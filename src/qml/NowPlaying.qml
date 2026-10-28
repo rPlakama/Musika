@@ -251,6 +251,14 @@ Rectangle {
         lyricsView.followIndex(root.activeLyric);
     }
 
+    /// A new track starts at the top, even before its payload arrives.
+    function resetLyricsScroll() {
+        lyricResume.stop();
+        root._lyricsHeld = false;
+        if (lyricsView)
+            lyricsView.resetView();
+    }
+
     function applyLyrics(payload) {
         var data = JSON.parse(payload);
         if (data.song_id !== Backend.currentSongId)
@@ -264,6 +272,7 @@ Rectangle {
         lyricsLoading = false;
 
         // Quick fade so a track change does not snap the lines (LYR-9).
+        root.resetLyricsScroll();
         lyricsView.opacity = 0;
         lyricModel.clear();
         var times = [];
@@ -432,6 +441,7 @@ Rectangle {
             // the track changed behind the curtain, otherwise the lines stay
             // exactly where they were (no reload, no flick).
             if (root._lyricsSongId !== Backend.currentSongId) {
+                root.resetLyricsScroll();
                 lyricsLoading = true;
                 Backend.requestLyrics();
             }
@@ -478,6 +488,7 @@ Rectangle {
         }
         function onCurrent_song_id_changed() {
             if (root.visible) {
+                root.resetLyricsScroll();
                 root.lyricsLoading = true;
                 Backend.requestLyrics();
             }

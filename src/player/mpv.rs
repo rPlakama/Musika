@@ -277,7 +277,7 @@ impl Player {
                 .arg("--demuxer-max-bytes=32MiB")
                 .arg("--demuxer-max-back-bytes=8MiB")
                 .arg("--stream-lavf-o=reconnect=1,reconnect_streamed=1,reconnect_delay_max=5")
-                .arg("--af=:astats=metadata=1:reset=10:measure_perchannel=none")
+                .arg("--af=@astats:astats=metadata=1:reset=10:measure_perchannel=none")
                 .arg(&socket_arg);
             if let Some(script) = crate::mpris::mpris_script() {
                 command.arg(format!("--script={script}"));

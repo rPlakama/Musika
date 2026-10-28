@@ -784,12 +784,6 @@ Rectangle {
                 Layout.preferredWidth: 0
                 clip: true
 
-                Rectangle {
-                    anchors.fill: parent
-                    radius: Theme.radius
-                    color: Palette.surfaceContainerLow
-                }
-
                 CoverImage {
                     anchors.fill: parent
                     source: Backend.currentCoverUrl

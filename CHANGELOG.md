@@ -3,6 +3,18 @@
 All notable changes to Musika, newest first. `TASKLISTMAJOR.md` tracks the
 open work; this file is the release history.
 
+## 0.4.9 — _Rust scroll memory, fullscreen playback, queue/MPV fixes_
+
+Notable changes since `v0.4.8`:
+
+- `5e124b9` Move scroll memory and row shaping into Rust
+- `c30c933` Add the fullscreen playback scene with a black stage
+- `b511ef5` Fix lyric band follow, track-title actions, and the Alt/Search handoff
+- `11e0734` Shape queue rows, throttle astats metadata, and let the cover take the freed lyric width
+- `9d73979` Fix the astats filter label and drop the cover underlay
+- `5726a2c` Center the lyrics overlay
+- `e2e48c1` Reset lyrics scroll on new-track init
+
 ## 0.4.8 — _Native QML controls, lighter rendering, quarter-core background cap_
 
 Notable changes since `v0.4.7`:

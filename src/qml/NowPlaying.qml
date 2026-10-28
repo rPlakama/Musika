@@ -799,7 +799,7 @@ Rectangle {
 
             Item {
                 id: lyricsPane
-                Layout.fillWidth: true
+                Layout.fillWidth: root.lyricsInline
                 Layout.fillHeight: true
                 Layout.preferredWidth: 0
                 visible: true

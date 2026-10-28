@@ -1468,9 +1468,13 @@ The product is incomplete without these.
     wave motion; album/artist pages run the same fields at a slower idle
     cadence.
   - **Playback scene:** fullscreen is a 50/50 cover/lyrics body. Inline lyrics
-    retract below a ~300 px lyric column; `?` (`Shift+/`) opens the shared
-    lyrics host over a 35% scrim, and `?`/Esc/scrim close it. The backdrop is
-    the Palette-driven `FluidBackdrop`; the sharp cover is a separate pane.
+    retract below a ~300 px lyric column and the cover expands into the free
+    width; `?` (`Shift+/`) opens the shared lyrics host over a 35% scrim, and
+    `?`/Esc/scrim close it. The backdrop is the Palette-driven
+    `FluidBackdrop`; the sharp cover is a separate pane.
+  - **Queue:** queue rows are shaped in Rust (`songId`, `duration`, `subtitle`,
+    `albumId`) before they reach the drawer, so delegates no longer lose
+    required fields.
   - **Playback follow/actions:** lyrics update the cursor without forcing a
     recenter per line; they glide only after the active row leaves a 22–78%
     band. Pane 4 is the playing track title: click/Enter/Alt opens

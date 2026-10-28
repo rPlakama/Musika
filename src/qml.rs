@@ -156,13 +156,20 @@ struct QueueRow<'a> {
 
 impl Serialize for QueueRow<'_> {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        let mut state = serializer.serialize_struct("queue_row", 6)?;
+        let mut state = serializer.serialize_struct("queue_row", 10)?;
         state.serialize_field("id", &self.track.id)?;
         state.serialize_field("title", &self.track.title)?;
         state.serialize_field("album_id", &self.track.album_id)?;
         state.serialize_field("starred", &self.starred)?;
         state.serialize_field("duration", &self.track.duration)?;
         state.serialize_field("cover", &self.track.cover_url)?;
+        state.serialize_field("subtitle", &self.track.artist)?;
+        state.serialize_field(
+            "meta",
+            &crate::browse::rows::format_duration(Some(self.track.duration as i32)),
+        )?;
+        state.serialize_field("songId", &self.track.id)?;
+        state.serialize_field("albumId", &self.track.album_id)?;
         state.end()
     }
 }

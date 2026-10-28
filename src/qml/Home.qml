@@ -299,6 +299,7 @@ Item {
         if (lineSearch.opened)
             return;
         if (searchOverlay.opened) {
+            searchOverlay.retractForQuickActions();
             searchOverlay.armQuickActions();
             return;
         }
@@ -1202,6 +1203,8 @@ Item {
         function onAlt_held_changed() {
             if (Backend.altHeld)
                 root.beginQuickActions();
+            else
+                searchOverlay.restoreAfterQuickActions();
         }
         // Q-10 (roadmap D-4): activating a song opens Fullscreen Playback.
         // Album/artist activation keeps its navigation; the album-page IPC

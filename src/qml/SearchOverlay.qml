@@ -32,6 +32,8 @@ Item {
     property bool opened: false
     property bool loading: false
     property bool typing: true // false = search "normal mode" (hjkl navigates)
+    // ARC-43: Alt is a temporary retraction of typing; release restores it.
+    property bool _altWasTyping: false
     // Unified result scope: 0 songs, 1 albums, 2 artists. Songs lead by
     // default; a scope with no hits falls through to the next one.
     property int scope: 0
@@ -127,6 +129,7 @@ Item {
     function close() {
         opened = false;
         typing = false;
+        _altWasTyping = false;
         // VI-4: leaving the overlay clears the list's visual selection.
         resultsColumn.clearSelection();
         Backend.setSearchOpen(false);
@@ -142,6 +145,27 @@ Item {
         } else {
             close();
         }
+    }
+
+    /// Alt armed: leave typing for normal-mode navigation without closing
+    /// or clearing the query.
+    function retractForQuickActions() {
+        if (!opened)
+            return;
+        _altWasTyping = typing;
+        if (typing) {
+            typing = false;
+            field.focus = false;
+            Backend.releaseFocus();
+        }
+    }
+
+    /// Alt released: return to typing only when that is where we started.
+    function restoreAfterQuickActions() {
+        if (!opened || !_altWasTyping)
+            return;
+        _altWasTyping = false;
+        enterTyping();
     }
 
     function enterTyping() {

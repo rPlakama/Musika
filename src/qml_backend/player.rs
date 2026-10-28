@@ -206,6 +206,11 @@ impl Backend {
         sync_field!(muted, muted_changed, self.player.muted());
         sync_field!(queue_index, queue_index_changed, self.player.index() as i64);
         sync_field!(queue_length, queue_length_changed, self.player.len() as i64);
+        sync_field!(
+            current_song_starred,
+            current_song_starred_changed,
+            self.player.current().map(|track| track.favorite).unwrap_or(false)
+        );
 
         // Q-8: mirror the player into the native MPRIS service.
         crate::mpris::publish(self.mpris_snapshot());

@@ -1471,6 +1471,13 @@ The product is incomplete without these.
     retract below a ~300 px lyric column; `?` (`Shift+/`) opens the shared
     lyrics host over a 35% scrim, and `?`/Esc/scrim close it. The backdrop is
     the Palette-driven `FluidBackdrop`; the sharp cover is a separate pane.
+  - **Playback follow/actions:** lyrics update the cursor without forcing a
+    recenter per line; they glide only after the active row leaves a 22–78%
+    band. Pane 4 is the playing track title: click/Enter/Alt opens
+    `QuickActions.song`, with `currentSongStarred` mirrored from the player.
+  - **Alt + Search:** Alt retracts typing to Search normal mode, arms the
+    active row, and release restores typing only when the hold started in
+    typing mode.
   - **JS logic:** `ScrollMemory.js` moved to `src/scroll_memory.rs` (TTL,
     cap, startup-zero policy, hydration and serialization in Rust);
     `RowSync.js` was unused and is gone. Remaining `Theme.js`,

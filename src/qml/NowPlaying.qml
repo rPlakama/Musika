@@ -151,6 +151,8 @@ Rectangle {
             return "j/k scroll   ·   ,/. seek   ·   Ctrl-N/P track   ·   Tab album   ·   Esc/Q exit";
         var extra = root.lyricsInline ? "   ·   Tab lyrics"
             : (root.lyricsVisible ? "   ·   ? lyrics" : "");
+        if (pane === 4)
+            return "Enter track actions   ·   Tab album   ·   Esc exit";
         if (pane === 3)
             return "Enter album actions" + extra + "   ·   Esc exit";
         return "j/k scroll   ·   ,/. seek   ·   Ctrl-N/P track   ·   Tab album   ·   Esc exit";
@@ -179,6 +181,18 @@ Rectangle {
             return;
         Backend.requestAlbumCache(Backend.currentAlbumId);
         Backend.requestAlbumState(Backend.currentAlbumId);
+    }
+
+    function trackItem() {
+        return {
+            songId: Backend.currentSongId,
+            albumId: Backend.currentAlbumId,
+            starred: Backend.currentSongStarred === true
+        };
+    }
+
+    function trackActions() {
+        return verbs.song(trackItem());
     }
 
     function albumItem() {
@@ -219,6 +233,22 @@ Rectangle {
         if (root._lyricsHeld || !lyricsSynced || activeLyric < 0 || lyricModel.count === 0)
             return;
         lyricsView.currentIndex = root.activeLyric;
+        var view = lyricsView.view;
+        if (!view || view.height <= 0)
+            return;
+        var item = view.itemAtIndex(root.activeLyric);
+        if (!item) {
+            lyricsView.followIndex(root.activeLyric);
+            return;
+        }
+        // Keep the stage still while the active phrase sits inside the band;
+        // only glide once it would cross the safe edge. This removes the
+        // per-line recenter push at phrase boundaries.
+        var top = item.y - view.contentY;
+        var pad = Math.max(1, view.height * 0.22);
+        if (top >= pad && top + item.height <= view.height - pad)
+            return;
+        lyricsView.followIndex(root.activeLyric);
     }
 
     function applyLyrics(payload) {
@@ -297,6 +327,10 @@ Rectangle {
     /// ARC-UI-1: Alt armed the gesture — with the album pane focused, the
     /// album name owns the album verbs.
     function armQuickActions() {
+        if (root.pane === 4 && Backend.currentSongId.length > 0) {
+            root.quickAction(titleBox, root.trackActions());
+            return;
+        }
         // UI-60: with the album pane focused, Alt anchors on the album name;
         // its verbs carry the favourite + count + download.
         if (root.pane === 3 && Backend.currentAlbumId.length > 0)
@@ -305,7 +339,7 @@ Rectangle {
 
     /// Tab walks the surfaces that exist: lyrics is skipped while hidden.
     function cyclePane(forward) {
-        var order = root.lyricsInline ? [1, 3] : [3];
+        var order = root.lyricsInline ? [1, 3, 4] : [3, 4];
         var i = order.indexOf(root.pane);
         if (i < 0)
             i = 0;
@@ -347,6 +381,17 @@ Rectangle {
             return;
         }
 
+        if (pane === 4) {
+            if (action === "enter" && Backend.currentSongId.length > 0) {
+                var trackMenu = root.trackActions();
+                trackMenu.sticky = true;
+                root.quickAction(titleBox, trackMenu);
+            } else if (action === "move_left" || action === "move_right") {
+                root.pane = 3;
+            }
+            return;
+        }
+
         if (pane === 3) {
             // The album name is the action surface: Enter arms its album
             // verbs (favourite, count, download) as a sticky menu.
@@ -381,7 +426,8 @@ Rectangle {
             Backend.scrollHydrate();
             var raw = Backend.scrollEntry("fullscreen");
             var saved = raw ? JSON.parse(raw) : null;
-            pane = saved && (saved.scope === 1 || saved.scope === 3) ? saved.scope : 1;
+            pane = saved && (saved.scope === 1 || saved.scope === 3 || saved.scope === 4)
+                ? saved.scope : 1;
             // Lyrics stay alive while the player is closed: fetch only when
             // the track changed behind the curtain, otherwise the lines stay
             // exactly where they were (no reload, no flick).
@@ -494,13 +540,36 @@ Rectangle {
                     Layout.fillWidth: true
                     spacing: root.width * 0.008
 
-                    FadeText {
+                    Item {
+                        id: titleBox
                         Layout.fillWidth: true
-                        text: Backend.currentTitle.length > 0 ? Backend.currentTitle : "No track playing"
-                        color: Palette.onSurface
-                        font.pixelSize: root.trackTitlePixelSize
-                        font.bold: true
-                        elide: Text.ElideRight
+                        Layout.preferredHeight: titleText.implicitHeight
+
+                        FadeText {
+                            id: titleText
+                            anchors.fill: parent
+                            text: Backend.currentTitle.length > 0 ? Backend.currentTitle : "No track playing"
+                            color: Palette.onSurface
+                            font.pixelSize: root.trackTitlePixelSize
+                            font.bold: true
+                            elide: Text.ElideRight
+                        }
+
+                        ScopeRing {
+                            anchors.fill: parent
+                            shown: root.pane === 4
+                        }
+
+                        HoverHandler {
+                            cursorShape: Qt.PointingHandCursor
+                        }
+
+                        TapHandler {
+                            onTapped: {
+                                root.pane = 4;
+                                root.quickAction(titleBox, root.trackActions());
+                            }
+                        }
                     }
                 }
 
@@ -802,6 +871,7 @@ Rectangle {
                             // phrase with the OutBack spring. The pane's
                             // fade rides the same value.
                             followMs: 300
+                            followCursor: false
                             // A width change re-wraps the lyric rows;
                             // let the shared resize repair recentre the
                             // active line, but never yank a manual scroll.

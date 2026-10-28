@@ -159,6 +159,9 @@ Item {
     // ── Cursor ───────────────────────────────────────────────────────────
 
     property int currentIndex: -1
+    /// Hosts that own the follow (lyrics) can update the highlight without
+    /// recentering on every cursor change.
+    property bool followCursor: true
     onCurrentIndexChanged: root._cursorMoved()
     signal itemActivated(int index)
 
@@ -280,6 +283,14 @@ Item {
             root._scheduleRemember();
     }
 
+    /// Explicit follow for hosts that turned `followCursor` off.
+    function followIndex(index, instant) {
+        if (root.currentIndex < 0 || !root.view)
+            return;
+        root._manualScroll = false;
+        root._follow(root.view, index, instant === true);
+    }
+
     function stopGlide() {
         glide.stop();
         root.glideOverrideMs = 0;
@@ -326,6 +337,10 @@ Item {
         }
         if (v.currentIndex !== index)
             v.currentIndex = index;
+        if (!root.followCursor) {
+            root._settle();
+            return;
+        }
         root._follow(v, index, teleport);
     }
 

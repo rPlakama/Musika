@@ -256,6 +256,7 @@ pub struct Backend {
     current_cover_art: String,
     current_cover_url: String,
     current_song_id: String,
+    current_song_starred: bool,
     /// The playing track's album id — the fullscreen favourite/download
     /// buttons act in album scope.
     current_album_id: String,
@@ -440,6 +441,11 @@ impl Backend {
         "currentSongId",
         Member = current_song_id,
         Notify = current_song_id_changed
+    );
+    qproperty!(
+        "currentSongStarred",
+        Member = current_song_starred,
+        Notify = current_song_starred_changed
     );
     qproperty!(
         "currentAlbumId",
@@ -633,6 +639,8 @@ impl Backend {
     fn current_cover_url_changed(&mut self);
     #[qsignal]
     fn current_song_id_changed(&mut self);
+    #[qsignal]
+    fn current_song_starred_changed(&mut self);
     #[qsignal]
     fn current_album_id_changed(&mut self);
     #[qsignal]

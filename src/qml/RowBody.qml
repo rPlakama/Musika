@@ -42,18 +42,10 @@ Item {
     property string subtitle: ""
     property string meta: ""
 
-    property real titlePixelSize: rowHeight * 0.26
-    property real subtitlePixelSize: rowHeight * 0.19
-    // Text.Fit may shrink a long row title; stop before it becomes
-    // unreadable in a short or narrow row.
-    property real minTitlePixelSize: 11
-    property real minSubtitlePixelSize: 10
     // Stable per-row buckets: no per-delegate Text.Fit measurement.
-    readonly property real rowTitleSize: Math.max(root.minTitlePixelSize,
-        Math.min(root.titlePixelSize, root.rowHeight * 0.30))
-    readonly property real rowSubtitleSize: Math.max(root.minSubtitlePixelSize,
-        Math.min(root.subtitlePixelSize, root.rowHeight * 0.25))
-    property real metaPixelSize: rowHeight * 0.19
+    readonly property real rowTitleSize: Theme.rowFont("title", root.viewWidth, root.rowHeight)
+    readonly property real rowSubtitleSize: Theme.rowFont("subtitle", root.viewWidth, root.rowHeight)
+    readonly property real metaPixelSize: Theme.rowFont("meta", root.viewWidth, root.rowHeight)
     property color titleColor: Palette.onSurface
     property color subtitleColor: Palette.onSurfaceVariant
     property color metaColor: Palette.onSurfaceVariant

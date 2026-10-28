@@ -236,6 +236,23 @@ function fontSize(role, reference) {
     return clamp(reference * spec[0], spec[1], spec[2])
 }
 
+// One row type ramp for every row body (library, queue, search, album
+// tracklists). Height sets the base; width caps it so narrow search columns
+// and the queue do not inherit the wide list size. Fractions are relative to
+// the row, not the window.
+var rowType = {
+    title:    [0.28, 0.050, 10, 24],
+    subtitle: [0.20, 0.032, 9, 17],
+    meta:     [0.20, 0.028, 9, 15]
+}
+
+function rowFont(role, width, height) {
+    var spec = rowType[role]
+    if (!spec)
+        return clamp(height * 0.20, 9, 18)
+    return clamp(Math.min(height * spec[0], width * spec[1]), spec[2], spec[3])
+}
+
 // UI-57: one width-driven type ramp for the chrome (list header title, status
 // bar, player bar) — 1 at `compact` and above, tapering linearly to `floor`
 // (default 0.7) at the `narrow` breakpoint, so type shrinks with the window

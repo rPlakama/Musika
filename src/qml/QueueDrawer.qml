@@ -578,10 +578,7 @@ Item {
                                 title: row.title
                                 subtitle: row.subtitle
                                 meta: row.duration
-                                titlePixelSize: Theme.fontSize("body", root.height)
                                 titleColor: index === root.queueCursor ? Palette.onSecondaryContainer : Palette.onSurface
-                                subtitlePixelSize: Theme.fontSize("label", root.height)
-                                metaPixelSize: Theme.fontSize("mono", root.height)
                                 reserveMeta: true
                                 metaAlignRight: true
                                 leftMargin: row.width * 0.01

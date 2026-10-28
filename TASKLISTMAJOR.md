@@ -1493,6 +1493,10 @@ The product is incomplete without these.
     edge fade (the gradient-band shortcut read as a vignette over the text); `ScrollContent` uses realised-delegate targets
     plus native `indexAt`/`displayMargin`, and only probes Qt for
     unrealised/far targets.
+  - **Row typography:** every `RowBody` (library lists, search columns, queue,
+    album tracklists) uses `Theme.rowFont(role, width, height)`; height sets the
+    base and width caps it, so the same row type stays consistent across
+    surfaces.
   - **Row loading:** the QML `WorkerScript` pipeline was removed (Qt 6.11
     emits `QObject::connect(QJSEngine, QtObject): invalid nullptr parameter`
     for every worker). Rust now shapes album, artist, song, album-track,

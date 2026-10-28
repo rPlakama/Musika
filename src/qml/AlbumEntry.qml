@@ -871,8 +871,6 @@ Rectangle {
                         title: songRow.track.length > 0 ? songRow.track + ". " + songRow.title : songRow.title
                         subtitle: songRow.subtitle
                         meta: songRow.duration
-                        titlePixelSize: songRow.height * 0.34
-                        metaPixelSize: songRow.height * 0.30
                         reserveMeta: true
                         metaAlignRight: true
                         leftMargin: songRow.width * 0.02

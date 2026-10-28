@@ -465,9 +465,6 @@ Item {
                             title: row.title
                             subtitle: row.subtitle
                             meta: row.meta
-                            titlePixelSize: Theme.clamp(row.height * 0.22, 8, 18)
-                            subtitlePixelSize: Theme.clamp(row.height * 0.17, 8, 14)
-                            metaPixelSize: Theme.clamp(row.height * 0.20, 8, 14)
                             titleColor: (row.current && root.active) || row.selectedRow
                                 ? Palette.onSecondaryContainer : Palette.onSurface
                             subtitleColor: (row.current && root.active) || row.selectedRow

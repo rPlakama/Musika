@@ -1740,6 +1740,53 @@ impl Backend {
         self.download_album_impl(album_id, on);
     }
 
+    /// Resolves the album hero art on a runtime task: fetch/cache the cover
+    /// when needed, then emit the local file URL for CoverImage.
+    #[qslot(qml_name = "requestAlbumCover")]
+    fn request_album_cover(&mut self, album_id: String) {
+        let invoker = self.get_qml_method_invoker();
+        self.spawn_task(move |dbs| async move {
+            let Ok(Some(album)) = crate::library::album(&dbs.library, &album_id).await else {
+                return;
+            };
+            let Some(cover) = album.cover_art.filter(|id| !id.is_empty()) else {
+                return;
+            };
+            // Cached art is already local: hand it over without a revalidation
+            // round trip. Only a genuinely missing cover waits on the task.
+            if let Ok(Some(path)) = crate::covers::cached_path(&dbs.covers, &cover).await
+                && let Ok(url) = reqwest::Url::from_file_path(path)
+            {
+                let payload = serde_json::json!({
+                    "album_id": album_id,
+                    "cover": url.to_string(),
+                })
+                .to_string();
+                emit(&invoker, "album_cover", payload);
+                return;
+            }
+            if let Ok(client) = crate::session::client(&dbs).await {
+                let client = std::sync::Arc::new(client);
+                if let Err(err) =
+                    crate::covers::fetch_ids(&dbs.covers, &client, std::slice::from_ref(&cover))
+                        .await
+                {
+                    eprintln!("covers: album hero fetch failed: {err:#}");
+                }
+            }
+            if let Ok(Some(path)) = crate::covers::cached_path(&dbs.covers, &cover).await
+                && let Ok(url) = reqwest::Url::from_file_path(path)
+            {
+                let payload = serde_json::json!({
+                    "album_id": album_id,
+                    "cover": url.to_string(),
+                })
+                .to_string();
+                emit(&invoker, "album_cover", payload);
+            }
+        });
+    }
+
     #[qslot(qml_name = "requestAlbumSongs")]
     fn request_album_songs(&mut self, album_id: String) {
         let offline = self.offline;

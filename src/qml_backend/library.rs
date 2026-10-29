@@ -205,30 +205,7 @@ impl Backend {
             let rating = crate::library::album_rating(&dbs.library, &album_id)
                 .await
                 .unwrap_or(0);
-            // Re-resolve the header cover here too: a sync can replace the
-            // art (or a wipe can drop it) while the page stays open.
-            let cover_ids: Vec<String> = crate::library::album(&dbs.library, &album_id)
-                .await
-                .ok()
-                .flatten()
-                .and_then(|album| album.cover_art)
-                .into_iter()
-                .collect();
-            let covers = crate::covers::url_map_of(&dbs, &cover_ids)
-                .await
-                .unwrap_or_default();
-            let cover = cover_ids
-                .first()
-                .and_then(|id| covers.get(id))
-                .cloned()
-                .unwrap_or_default();
-            Ok(serde_json::json!({
-                "id": album_id,
-                "starred": starred,
-                "rating": rating,
-                "cover": cover,
-            })
-            .to_string())
+            Ok(album_state_payload(&album_id, starred, rating))
         });
     }
     pub(super) fn rate_album_impl(&mut self, album_id: String, rating: i32) {

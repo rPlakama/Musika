@@ -227,6 +227,7 @@ Rectangle {
         root.setNotesExpanded(false);
         Backend.requestAlbumSongs(root.albumId);
         Backend.requestAlbumInfo(root.albumId);
+        Backend.requestAlbumCover(root.albumId);
         // UI-60: the header's favourite + rating marks reconcile here (the
         // opener's row flags may be stale); the cover's Download/Remove verb
         // reads the container rule state.
@@ -564,6 +565,11 @@ Rectangle {
                 root.apply(payload);
             else if (channel === "album_info")
                 root.applyInfo(payload);
+            else if (channel === "album_cover") {
+                var art = JSON.parse(payload);
+                if (art.album_id === root.albumId && art.cover)
+                    root.albumCover = art.cover;
+            }
             else if (channel === "album_artist") {
                 var link = JSON.parse(payload);
                 if (link.album_id === root.albumId && link.artist_id)
@@ -573,8 +579,6 @@ Rectangle {
                 if (state.id === root.albumId) {
                     root.albumStarred = state.starred === true;
                     root.albumRating = Number(state.rating) || 0;
-                    if (state.cover !== undefined)
-                        root.albumCover = state.cover;
                 }
             } else if (channel === "album_cache") {
                 var cache = JSON.parse(payload);

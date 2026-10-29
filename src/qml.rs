@@ -1833,9 +1833,16 @@ impl Backend {
 
     #[qslot(qml_name = "requestAlbumSongs")]
     fn request_album_songs(&mut self, album_id: String) {
+        let invoker = self.get_qml_method_invoker();
         let offline = self.offline;
-        self.spawn_data("album_songs", move |dbs| async move {
-            load_album_songs_json(&dbs, &album_id, offline).await
+        // No data-generation cancellation: several album pages can be alive
+        // in the stack, and a request for one must not bump another page's
+        // payload away. The payload's album_id gates the consumer instead.
+        self.spawn_task(move |dbs| async move {
+            match load_album_songs_json(&dbs, &album_id, offline).await {
+                Ok(payload) => emit(&invoker, "album_songs", payload),
+                Err(err) => eprintln!("qml: album_songs load failed: {err:#}"),
+            }
         });
     }
 

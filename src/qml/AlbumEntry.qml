@@ -79,6 +79,10 @@ Rectangle {
     property bool _restored: false
     property bool _focusApplied: false
     property int _coverTarget: 0
+    property double _coverRequestedAt: 0
+    // Album whose rows request is in flight; avoids reload storms from
+    // duplicate open paths and library-changed notifications.
+    property string _loadingAlbumId: ""
 
     /// Metadata stats merged after the album date:
     /// `<N> Tracks · <m:ss> · <AUDIO TAG>`.
@@ -197,12 +201,19 @@ Rectangle {
         if (target === root._coverTarget)
             return;
         root._coverTarget = target;
+        root._coverRequestedAt = Date.now();
         Backend.requestAlbumCover(root.albumId, target);
     }
 
     function reload() {
         if (root.albumId === "")
             return;
+        // One request per album at a time. Startup can deliver a restored
+        // page and a library-changed notification in the same turn; the
+        // second must not bump the first payload away.
+        if (root._loadingAlbumId === root.albumId)
+            return;
+        root._loadingAlbumId = root.albumId;
         root.loading = true;
         root.onNotes = false;
         root.setNotesExpanded(false);
@@ -219,6 +230,8 @@ Rectangle {
     }
     function applyInfo(payload) {
         var info = JSON.parse(payload);
+        if (info.album_id && info.album_id !== root.albumId)
+            return;
         root.albumNotes = info.notes ? info.notes : "";
         if (root.albumNotes.length === 0) {
             root.onNotes = false;
@@ -277,10 +290,16 @@ Rectangle {
     }
 
     function apply(payload) {
+        var data = JSON.parse(payload);
+        // The album history can have more than one page alive; never let a
+        // payload for another album clear this page.
+        if (data.album_id !== root.albumId)
+            return;
+        var list = data.songs ? data.songs : [];
         // VI-4: a reload invalidates the selected range.
         content.clearSelection();
         songs.clear();
-        var list = JSON.parse(payload);
+        root._loadingAlbumId = "";
         // Tracks-header stats: total runtime + the most common file suffix.
         var total = 0;
         var formats = {};
@@ -553,9 +572,15 @@ Rectangle {
             else if (channel === "album_cover") {
                 var art = JSON.parse(payload);
                 // A slower request for an older width bucket must not replace
-                // the copy requested for the current cover box.
+                // the copy requested for the current cover box. A cold display
+                // copy can also take hundreds of ms to fetch/resize; swapping
+                // it in after the original already painted blanks the cover for
+                // that long. Keep the original visible then (the copy is cached
+                // for the next open), unless there is no cover yet.
                 if (art.album_id === root.albumId && art.cover
-                        && Number(art.size) === root._coverTarget)
+                        && Number(art.size) === root._coverTarget
+                        && (Date.now() - root._coverRequestedAt <= 80
+                            || !coverBackdrop.ready))
                     root.albumCover = art.cover;
             } else if (channel === "album_artist") {
                 var link = JSON.parse(payload);

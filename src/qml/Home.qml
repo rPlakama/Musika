@@ -290,6 +290,20 @@ Item {
         showSegment(root.currentSegment);
     }
 
+    // A song search hit already carries its album id/title/artist/cover, so
+    // the page is pushed without a backend lookup. The rows load from the
+    // album page itself and focusRequestedSong() parks the cursor on the hit.
+    function openSongHit(songId, albumId, albumTitle, artist, cover) {
+        if (!albumId || albumId.length === 0) {
+            // No album context: the old search behaviour is the only useful
+            // fallback.
+            Backend.playSong(songId);
+            return;
+        }
+        root.openAlbum(albumId, albumTitle ? albumTitle : "", artist ? artist : "",
+            "", "0", cover ? cover : "", false, false, songId);
+    }
+
     // Single album-page push used by the album list, the artist entry and the
     // search overlay, so every surface lands in the same page with the same
     // header payload (`starred` feeds the ARC-I-2 header heart).
@@ -1209,7 +1223,8 @@ Item {
 
         // A search song hit is a navigation jump: open its album page and
         // park the cursor on the row. Playback starts only on Enter there.
-        onSongActivated: id => Backend.openSongAlbum(id)
+        onSongActivated: (songId, albumId, albumTitle, artist, cover) =>
+            root.openSongHit(songId, albumId, albumTitle, artist, cover)
         onAlbumActivated: (albumId, title, artist, year, tracks, cover, starred) => root.openAlbum(albumId, title, artist, year, tracks, cover, starred)
         onArtistActivated: (artistId, artistName, artistCover) => {
             root.nowPlayingExpanded = false;
@@ -1260,7 +1275,11 @@ Item {
             Qt.callLater(function () {
                 if (data.queue && data.queue.length > 0)
                     Backend.playerLoadPaused(data.queue, data.start);
-                if (data.album && ("album:" + data.album.id) !== root._bootstrapPageKey)
+                var topAlbumId = contentStack.currentItem
+                    && contentStack.currentItem.albumId
+                    ? String(contentStack.currentItem.albumId) : "";
+                if (data.album && topAlbumId !== data.album.id
+                        && ("album:" + data.album.id) !== root._bootstrapPageKey)
                     root.openAlbum(data.album.id, data.album.title, data.album.artist ? data.album.artist : "", data.album.year ? String(data.album.year) : "", String(data.album.tracks), data.album.cover ? data.album.cover : "", data.album.starred === true);
                 // Session return: the restored album's rows must render
                 // their state marks on arrival — the page only installs its

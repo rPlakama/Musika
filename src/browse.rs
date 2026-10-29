@@ -111,7 +111,14 @@ pub async fn load_album_songs_json(
         songs.retain(|song| filter.contains_song(&song.id));
     }
     let covers = crate::covers::url_map_for(dbs, songs.iter().map(|song| &song.cover_art)).await?;
-    song_rows_json(&songs, &covers)
+    let rows = song_rows_json(&songs, &covers)?;
+    // Album pages share one data channel; carry the id so a page ignores a
+    // payload that belongs to another album in the stack.
+    Ok(format!(
+        "{{\"album_id\":{},\"songs\":{}}}",
+        serde_json::to_string(album_id)?,
+        rows
+    ))
 }
 
 pub async fn load_artists_json(

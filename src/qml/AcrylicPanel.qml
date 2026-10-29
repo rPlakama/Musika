@@ -35,9 +35,12 @@ Rectangle {
     /// `tintAlpha` over the blur.
     property color tint: Palette.surfaceContainerHigh
     property real tintAlpha: Theme.acrylic.tintAlpha
+    /// Temporarily drop the live blur (closing fades over a page that is
+    /// still being laid out) without changing layout or visibility.
+    property bool paused: false
 
     readonly property bool acrylic: Theme.acrylic.enabled && root.backdrop !== null
-        && root.tintAlpha < 0.99
+        && root.tintAlpha < 0.99 && !root.paused
 
     color: root.acrylic
         ? "transparent"

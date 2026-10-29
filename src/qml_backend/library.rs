@@ -266,7 +266,7 @@ impl Backend {
                 emit(
                     &invoker,
                     "album_info",
-                    serde_json::json!({ "notes": notes }).to_string(),
+                    serde_json::json!({ "album_id": &album_id, "notes": notes }).to_string(),
                 );
                 if crate::consts::now_secs() - fetched_at < crate::consts::INFO_TTL_SECS {
                     return;
@@ -278,7 +278,7 @@ impl Backend {
                     emit(
                         &invoker,
                         "album_info",
-                        serde_json::json!({ "notes": "" }).to_string(),
+                        serde_json::json!({ "album_id": &album_id, "notes": "" }).to_string(),
                     );
                 }
                 return;
@@ -291,7 +291,7 @@ impl Backend {
             emit(
                 &invoker,
                 "album_info",
-                serde_json::json!({ "notes": fresh }).to_string(),
+                serde_json::json!({ "album_id": &album_id, "notes": fresh }).to_string(),
             );
         });
     }

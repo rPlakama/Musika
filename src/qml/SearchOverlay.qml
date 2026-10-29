@@ -62,7 +62,7 @@ Item {
         && !root.loading
         && songResults.count + albumResults.count + artistResults.count === 0
 
-    signal songActivated(string id)
+    signal songActivated(string id, string albumId, string albumTitle, string artist, string cover)
     signal albumActivated(string albumId, string title, string artist, string year, string tracks, string cover, bool starred)
     signal artistActivated(string artistId, string artistName, string artistCover)
     /// ARC-I: Alt-hold quick actions armed on the active cursor row; Home
@@ -331,7 +331,10 @@ Item {
         // VI-4: activating a row ends the visual selection.
         resultsColumn.clearSelection();
         if (root.scope === 0)
-            root.songActivated(hit.id);
+            root.songActivated(hit.id, hit.albumId ? hit.albumId : "",
+                hit.albumTitle ? hit.albumTitle : "",
+                hit.artist ? hit.artist : "",
+                hit.cover ? hit.cover : "");
         else if (root.scope === 1)
             root.albumActivated(hit.id, hit.title, hit.artist, hit.year, hit.tracks, hit.cover, hit.starred === true);
         else
@@ -436,6 +439,8 @@ Item {
                 // ARC-I: the recycled Alt verbs key on these names.
                 songId: song.id,
                 albumId: song.album_id ? song.album_id : "",
+                albumTitle: song.album ? String(song.album) : "",
+                artist: song.artist ? String(song.artist) : "",
                 starred: song.starred === true,
                 rating: 0
             });
@@ -585,6 +590,9 @@ Item {
         // container tones for contrast.
         tint: Palette.surface
         backdrop: root.backdrop
+        // The close fade can uncover a freshly pushed AlbumEntry; do not keep
+        // re-blurring that changing page for the length of the fade.
+        paused: !root.opened
         radius: Theme.radius
         border.color: Palette.primary
         border.width: Theme.hairline(root.height)

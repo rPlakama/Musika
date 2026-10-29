@@ -23,6 +23,11 @@ open work; this file is the release history.
   cursor parked on the hit. No queue is built and nothing plays until Enter
   on the album row.
 
+- Open that page from the hit metadata itself, scope album row/info payloads
+  to their album id, and keep a cold display cover from swapping in after
+  the original has painted (the multi-second blank was the cover cache, not
+  the row query).
+
 ## 0.4.11 - _Cover improvements and other minor_
 
 -  `54beb51`  Use DPI for CoverLoading

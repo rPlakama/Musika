@@ -83,57 +83,26 @@ Rectangle {
     // ARC-I-4: the favourite write lives in the shared scroll model now
     // (`wall.markStarred`) — cursor card or the whole selected range.
 
-    /// ARC-43/ARC-UI-1: Alt armed the gesture — anchor on the keyboard cursor
-    /// card with the recycled album verb set; a visual selection swaps in the
-    /// batch verb set (VI-4).
+    /// ARC-43/ARC-UI-1: Alt armed the gesture — the scoped favourite chip
+    /// rates the artist itself; otherwise the shared wall anchors on the
+    /// cursor card with the recycled album verbs (or the selection's batch).
     function armQuickActions() {
-        // UI-60: a scoped header chip owns the gesture. The favourite chip
-        // rates the artist itself (the same south slot the row marks use);
-        // without that, Alt fell through to the album under the grid cursor.
         if (root.chipScope === 2) {
             var artist = {
                 artistId: root.artistId,
                 starred: root.artistStarred,
                 rating: root.artistRating
             };
-            var artistActions = verbs.artist(artist, function(level) {
+            var artistActions = verbs.forItem("artist", artist, false, function (level) {
                 root.artistRating = level;
             });
-            var wantStar = artistActions.south.favorite === true;
-            var toggleStar = artistActions.south.invoke;
-            artistActions.south.invoke = function() {
-                toggleStar();
-                root.artistStarred = wantStar;
-            };
+            verbs.wrapFavorite(artistActions, function (on) {
+                root.artistStarred = on;
+            });
             quickAction(favoriteChip, artistActions);
             return;
         }
-        if (albums.count === 0 || wall.currentIndex < 0)
-            return;
-        var cell = wall.view.itemAtIndex(wall.currentIndex);
-        if (!cell)
-            return;
-        var albumItem = albums.get(wall.currentIndex);
-        var albumPreview = function(level) {
-            albums.setProperty(wall.currentIndex, "rating", level);
-        };
-        var ids = wall.hasSelection
-            ? wall.selectedIds("albumId")
-            : [albumItem.albumId];
-        var actions = wall.hasSelection
-            ? verbs.forSelection("album", ids, wall.selectedStarred("albumId"))
-            : verbs.album(albumItem,
-                Backend.cachedAlbumIds.indexOf(albumItem.albumId) !== -1, albumPreview);
-        // ARC-I-4: the decoration rides the verb so the mark tracks the
-        // action immediately — `south.favorite` is the state the verb leaves
-        // every selected row in (the server call itself is unchanged).
-        var want = actions.south.favorite === true;
-        var star = actions.south.invoke;
-        actions.south.invoke = function() {
-            star();
-            wall.markStarred(want);
-        };
-        quickAction(cell, actions);
+        wall.armQuickActions();
     }
 
     property string artistId: ""
@@ -229,8 +198,7 @@ Rectangle {
             root.artistName = artist.name;
         if (artist.cover && artist.cover.length > 0)
             root.artistCover = artist.cover;
-        var count = Number(artist.album_count);
-        root.artistMeta = count + (count === 1 ? " album" : " albums");
+        root.artistMeta = Theme.countLabel(artist.album_count, "album");
 
         albums.clear();
         var rows = artist.albums ? artist.albums : [];
@@ -239,14 +207,18 @@ Rectangle {
             var meta = [];
             if (album.year)
                 meta.push(String(album.year));
-            meta.push(album.song_count + (album.song_count === 1 ? " song" : " songs"));
+            meta.push(Theme.countLabel(album.song_count, "song"));
             albums.append({
                 albumId: album.id,
                 title: album.title,
+                // The shared CoverCard requires every role; album cards have
+                // no song/subtitle but the delegate model must still bind them.
+                songId: "",
+                subtitle: "",
                 artist: album.artist ? album.artist : "",
                 year: album.year ? String(album.year) : "",
                 tracks: String(album.song_count),
-                meta: meta.join("   ·   "),
+                meta: Theme.metaJoin(meta),
                 cover: album.cover ? album.cover : "",
                 starred: album.starred === true,
                 rating: Number(album.rating) || 0
@@ -257,43 +229,6 @@ Rectangle {
         // UI-54: reopening the entry restores the cursor + offset (and the
         // ARC-UI-3 layout); later reloads keep the live state.
         wall.restore();
-        root.requestMarkWindow();
-    }
-
-    /// The state marks (favourite hearts, download glyphs) render only for
-    /// the cards in the rendered band — same rule as the segments.
-    function markVisible(index) {
-        return wall.firstVisibleIndex >= 0
-            && index >= wall.firstVisibleIndex
-            && index <= wall.lastVisibleIndex;
-    }
-
-    /// Ask the backend for the download state of the rendered cards only:
-    /// album cards are cached when every track of them is finished.
-    function requestMarkWindow(force) {
-        var albumsWindow = [];
-        var lo = wall.firstVisibleIndex;
-        var hi = wall.lastVisibleIndex;
-        if (lo < 0 || hi < lo) {
-            lo = Math.max(0, wall.currentIndex);
-            hi = Math.min(albums.count - 1, lo);
-        }
-        for (var i = lo; i <= hi; ++i) {
-            var album = albums.get(i);
-            if (album && album.albumId)
-                albumsWindow.push(album.albumId);
-        }
-        if (force)
-            Backend.refreshDownloads("[]", JSON.stringify(albumsWindow));
-        else
-            Backend.requestDownloads("[]", JSON.stringify(albumsWindow));
-    }
-
-    Connections {
-        target: wall
-        function onCurrentIndexChanged() { root.requestMarkWindow(); }
-        function onFirstVisibleIndexChanged() { root.requestMarkWindow(); }
-        function onLastVisibleIndexChanged() { root.requestMarkWindow(); }
     }
 
     function activateCurrent() {
@@ -427,28 +362,17 @@ Rectangle {
             else if (channel === "artist_cache")
                 root.applyCache(payload);
         }
-        // A fetch finished: re-read this wall's own window (forced).
-        function onRowReload() {
-            root.requestMarkWindow(true);
-        }
         function onLibrary_changed() {
             root.reload();
         }
         function onAlbum_order_changed() {
             root.reload();
         }
-        // UI-60: patch the header rating or the matching album card.
+        // UI-60: the header rating reconciles here; the wall's MarkWindow
+        // patches the matching album cards.
         function onRatingChanged(kind, id, rating) {
-            if (kind === "artist" && id === root.artistId) {
+            if (kind === "artist" && id === root.artistId)
                 root.artistRating = rating;
-                return;
-            }
-            if (kind !== "album")
-                return;
-            for (var i = 0; i < albums.count; ++i) {
-                if (albums.get(i).albumId === id)
-                    albums.setProperty(i, "rating", rating);
-            }
         }
     }
 
@@ -520,7 +444,7 @@ Rectangle {
 
                     FadeText {
                         Layout.fillWidth: true
-                        text: root.artistMeta + (root.serverTag.length > 0 ? "   ·   " + root.serverTag : "")
+                        text: Theme.metaJoin([root.artistMeta, root.serverTag])
                         color: Palette.onSurfaceVariant
                         font.pixelSize: root.height * 0.02
                         elide: Text.ElideRight
@@ -673,184 +597,36 @@ Rectangle {
                 layout: "list"
                 selectable: true
                 memoryKey: root.memoryKey
+                quickActionKind: "album"
+                markSongs: false
+                markAlbums: true
                 searchFields: ["title", "meta"]
                 emptyText: "No albums indexed yet"
 
                 onItemActivated: (index) => root.activateCurrent()
+                onQuickAction: (target, actions) => root.quickAction(target, actions)
 
                 cellDelegate: Component {
-                    Rectangle {
-                        radius: Theme.radius
-                        id: cell
-                        required property int index
-                        required property string albumId
-                        required property string title
-                        required property string artist
-                        required property string year
-                        required property string tracks
-                        required property string meta
-                        required property string cover
-                        required property bool starred
-                        /// UI-60: 0..=5 album user rating.
-                        required property int rating
+                    CoverCard {
+                        current: GridView.isCurrentItem
+                        selected: wall.isSelected(index)
+                        showRatingMark: true
+                        showSubtitle: false
+                        // The wall's historic metrics (kept via the ratios).
+                        titleRatio: 0.0525
+                        metaRatio: 0.04
+                        titleTopRatio: 0.025
+                        metaGapRatio: 0.015
+                        firstVisible: wall.firstVisibleIndex
+                        lastVisible: wall.lastVisibleIndex
+                        searchQuery: wall.searchQuery
+                        searchCurrent: index === wall.searchCurrentRow
 
-                        readonly property bool current: GridView.isCurrentItem
-                        // UI-50: cursor or hover expands the cover + title,
-                        // the same selection stage the lists and search use.
-                        readonly property bool emphasized: (cell.current || cellHover.hovered) && !Theme.reduceMotion
-
-                        width: GridView.view.cellWidth
-                        height: GridView.view.cellHeight
-                        color: "transparent"
-
-                        // VI-4: a card inside the visual selection wears the
-                        // cursor fill.
-                        readonly property bool selectedCard: wall.isSelected(cell.index)
-
-                        Rectangle {
-                            anchors.fill: parent
-                            anchors.margins: cell.width * 0.03
-                            radius: Theme.radius
-                            color: (cell.current || cell.selectedCard)
-                                ? Palette.secondaryContainer
-                                : (cellHover.hovered ? Palette.surfaceContainerHigh : "transparent")
-
-                            Behavior on color {
-                                ColorAnimation {
-                                    duration: Theme.motion.quick
-                                    easing.type: Easing.Bezier
-                                    easing.bezierCurve: Theme.ease.standard
-                                }
-                            }
+                        onPicked: {
+                            wall.currentIndex = index;
+                            root.activateCurrent();
                         }
-
-                        Rectangle {
-                            id: coverBox
-                            width: cell.width * 0.78
-                            height: width
-                            anchors.horizontalCenter: parent.horizontalCenter
-                            anchors.top: parent.top
-                            anchors.topMargin: cell.height * 0.05
-                            radius: Theme.radius
-                            color: Palette.surfaceContainerLowest
-                            border.color: cell.current ? Palette.primary : "transparent"
-                            border.width: Math.max(1, cell.height * Theme.hairlineRatio)
-                            clip: true
-
-                            transformOrigin: Item.Center
-                            scale: cell.emphasized ? Theme.selectionEmphasis : 1.0
-
-                            Behavior on scale {
-                                NumberAnimation { duration: Theme.motion.quick; easing.type: Easing.Bezier; easing.bezierCurve: Theme.ease.standard }
-                            }
-
-                            CoverImage {
-                                anchors.fill: parent
-                                source: cell.cover
-                                // ARC-40: ×1.25 headroom for the UI-50 hover scale.
-                                sizeFactor: 1.25
-                            }
-
-                            // UI-56/ARC-I-2/UI-60: a favourited album carries
-                            // its mark inside the cover's bottom-right corner
-                            // with the rating count at its corner; the
-                            // download glyph (every track cached) mirrors it
-                            // on the other side — the same state marks the
-                            // segments show.
-                            Item {
-                                visible: root.markVisible(cell.index)
-                                    && (cell.starred || cell.rating > 0)
-                                anchors.right: parent.right
-                                anchors.bottom: parent.bottom
-                                anchors.margins: parent.width * 0.06
-                                width: parent.width * 0.085
-                                height: width
-
-                                Icon {
-                                    anchors.fill: parent
-                                    visible: cell.starred
-                                    name: "baseline-favorite"
-                                    symbolColor: Theme.iconStrong
-                                }
-
-                                RatingBadge {
-                                    anchors.right: parent.right
-                                    anchors.bottom: parent.bottom
-                                    width: parent.width * 0.84
-                                    height: width
-                                    rating: cell.rating
-                                }
-                            }
-
-                            Icon {
-                                visible: root.markVisible(cell.index)
-                                    && Backend.cachedAlbumIds.indexOf(cell.albumId) !== -1
-                                anchors.left: parent.left
-                                anchors.bottom: parent.bottom
-                                anchors.margins: parent.width * 0.06
-                                width: parent.width * 0.085 * 1.2
-                                height: width
-                                name: "baseline-download"
-                                symbolColor: Palette.tertiary
-                            }
-                        }
-
-                        SearchText {
-                            id: titleText
-                            anchors.top: coverBox.bottom
-                            anchors.topMargin: cell.height * 0.025
-                            anchors.horizontalCenter: parent.horizontalCenter
-                            width: parent.width * 0.86
-                            text: cell.title
-                            color: Palette.onSurface
-                            horizontalAlignment: Text.AlignHCenter
-                            query: wall.searchQuery
-                            currentMatch: cell.index === wall.searchCurrentRow
-                            elide: Text.ElideRight
-                            font.pixelSize: Math.max(10, cell.height * 0.0525)
-                            animated: false
-                            transformOrigin: Item.Center
-                            scale: cell.emphasized
-                                ? Theme.fitScale(titleText.width, titleText.paintedWidth, Theme.selectionEmphasis)
-                                : 1.0
-
-                            Behavior on scale {
-                                NumberAnimation { duration: Theme.motion.quick; easing.type: Easing.Bezier; easing.bezierCurve: Theme.ease.standard }
-                            }
-                        }
-
-                        SearchText {
-                            id: metaText
-                            anchors.top: titleText.bottom
-                            anchors.topMargin: cell.height * 0.015
-                            anchors.horizontalCenter: parent.horizontalCenter
-                            width: parent.width * 0.86
-                            text: cell.meta
-                            color: Palette.onSurfaceVariant
-                            horizontalAlignment: Text.AlignHCenter
-                            elide: Text.ElideRight
-                            font.pixelSize: Math.max(9, cell.height * 0.04)
-                            animated: false
-                            query: wall.searchQuery
-                            currentMatch: cell.index === wall.searchCurrentRow
-                        }
-
-                        HoverHandler {
-                            id: cellHover
-                            cursorShape: Qt.PointingHandCursor
-                        }
-
-                        TapHandler {
-                            acceptedModifiers: Qt.ShiftModifier
-                            onTapped: wall.extendSelectionTo(cell.index)
-                        }
-                        TapHandler {
-                            acceptedModifiers: Qt.NoModifier
-                            onTapped: {
-                                wall.currentIndex = cell.index;
-                                root.activateCurrent();
-                            }
-                        }
+                        onExtendSelection: wall.extendSelectionTo(index)
                     }
                 }
 
@@ -874,87 +650,43 @@ Rectangle {
 
                         width: ListView.view.width
                         height: Math.max(48, root.height * 0.09)
-                        color: (row.current || row.selectedRow)
-                            ? Palette.secondaryContainer
-                            : (rowHover.hovered ? Palette.surfaceContainerHigh : "transparent")
+                        color: "transparent"
 
-                        Behavior on color {
-                            ColorAnimation {
-                                duration: Theme.motion.quick
-                                easing.type: Easing.Bezier
-                                easing.bezierCurve: Theme.ease.standard
-                            }
+                        RowHighlight {
+                            current: row.current
+                            hovered: rowHover.hovered
+                            selected: row.selectedRow
                         }
 
-                        Rectangle {
-                            id: rowCover
-                            anchors.left: parent.left
-                            anchors.leftMargin: row.width * 0.02
-                            anchors.verticalCenter: parent.verticalCenter
-                            width: row.height * 0.78
-                            height: width
-                            radius: Theme.radius
-                            color: Palette.surfaceContainerLowest
-                            clip: true
-
-                            CoverImage {
-                                anchors.fill: parent
-                                source: row.cover
-                                sizeFactor: 1.25
-                            }
-                        }
-
-                        // REC-UI-1: the shared state-mark block on the right
-                        // rail (only the grid cards keep cover corners).
-                        RowMarks {
-                            id: rowMarks
-                            anchors.verticalCenter: parent.verticalCenter
-                            anchors.right: parent.right
-                            anchors.rightMargin: row.width * 0.017
-                            cursor: wall.currentIndex
-                            firstVisible: wall.firstVisibleIndex
-                            lastVisible: wall.lastVisibleIndex
-                            index: row.index
-                            albumId: row.albumId
-                            starred: row.starred
-                            rating: row.rating
-                            showRating: true
-                            base: row.height * 0.15
-                        }
-
-                        Column {
-                            anchors.left: rowCover.right
-                            anchors.leftMargin: row.width * 0.02
-                            anchors.right: parent.right
-                            // The marks own the right rail; the text elides
-                            // before them (0 width when nothing is marked).
-                            anchors.rightMargin: row.width * 0.02 + rowMarks.width
-                                + (rowMarks.width > 0 ? row.width * 0.01 : 0)
-                            anchors.verticalCenter: parent.verticalCenter
-                            spacing: row.height * 0.04
-
-                            SearchText {
-                                width: parent.width
-                                text: row.title
-                                color: Palette.onSurface
-                                elide: Text.ElideRight
-                                font.pixelSize: Theme.clamp(row.height * 0.26, 12, 18)
-                                font.bold: row.current
-                                animated: false
-                                query: wall.searchQuery
-                                currentMatch: row.index === wall.searchCurrentRow
-                            }
-
-                            SearchText {
-                                width: parent.width
-                                text: row.meta
-                                color: Palette.onSurfaceVariant
-                                elide: Text.ElideRight
-                                font.pixelSize: Theme.clamp(row.height * 0.19, 10, 14)
-                                animated: false
-                                query: wall.searchQuery
-                                currentMatch: row.index === wall.searchCurrentRow
-                            }
+                        // The shared list row (same anatomy as the library
+                        // segments and the queue): cover, title/meta, marks.
+                        RowBody {
+                            anchors.fill: parent
+                            viewWidth: row.width
+                            rowHeight: row.height
+                            emphasized: row.current || rowHover.hovered
+                            current: row.current
+                            showCover: true
+                            showSubtitle: false
+                            cover: row.cover
+                            title: row.title
+                            meta: row.meta
+                            reserveMeta: false
+                            metaAlignRight: true
+                            leftMargin: row.width * 0.02
+                            textGap: row.width * 0.02
+                            rightMargin: row.width * 0.02
+                            marksMargin: row.width * 0.017
+                            markCursor: wall.currentIndex
+                            visibleStart: wall.firstVisibleIndex
+                            visibleEnd: wall.lastVisibleIndex
+                            markIndex: row.index
+                            markAlbumId: row.albumId
+                            markStarred: row.starred
+                            markRating: row.rating
+                            markRatingVisible: true
+                            searchQuery: wall.searchQuery
+                            searchCurrent: row.index === wall.searchCurrentRow
                         }
 
                         HoverHandler {

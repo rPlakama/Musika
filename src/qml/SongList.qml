@@ -39,43 +39,14 @@ MediaList {
     orderText: Backend.songOrder
     memoryKey: "songs"
 
-    property bool _preloaded: false
-    property bool _fullLoaded: false
-    property bool _preloadOnly: false
-
-    function start() {
-        if (root._preloadOnly)
-            root.preload();
-        else
-            root.activateTab();
-    }
-
-    function activateTab() {
-        preloadTimer.stop();
-        if (root._fullLoaded)
-            return;
-        root.requestFull(root.count === 0);
-    }
-
-    function preload() {
-        if (root._preloaded)
-            return;
-        root._preloaded = true;
-        preloadTimer.restart();
-    }
-
     function requestPreload() {
         root.loading = true;
         root._loadingPage = true;
         Backend.preloadSongs();
     }
 
-    function reload() {
-        root.requestFull(true);
-    }
-
     function requestFull(showLoading) {
-        preloadTimer.stop();
+        root.stopPreload();
         root._fullLoaded = true;
         // A scope switch loads the whole Songs segment on the uncapped row
         // path: the list is complete before the cursor can reach its end, so
@@ -88,13 +59,6 @@ MediaList {
         root._nextOffset = 0;
         Backend.scrollHydrate();
         Backend.requestAllSongs();
-    }
-
-    Timer {
-        id: preloadTimer
-        interval: 350
-        repeat: false
-        onTriggered: root.requestPreload()
     }
 
     function applyPage(payload) {

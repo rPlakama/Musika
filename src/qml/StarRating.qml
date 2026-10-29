@@ -70,13 +70,7 @@ Row {
             transformOrigin: Item.Center
             scale: starSlot.index === root.pulseIndex ? Theme.selectionEmphasis : 1.0
 
-            Behavior on scale {
-                NumberAnimation {
-                    duration: Theme.motion.quick
-                    easing.type: Easing.Bezier
-                    easing.bezierCurve: Theme.ease.standard
-                }
-            }
+            Behavior on scale { Anim {} }
 
             SymbolIcon {
                 id: starGlyph

@@ -362,23 +362,11 @@ Item {
             opacity: box.isDisabled ? 0.7 : (!root.aimed || box.isAimed ? 1 : 0.55)
             scale: box.isAimed ? 1.3 : 1.0
 
-            Behavior on tint {
-                ColorAnimation {
-                    duration: Theme.motion.micro
-                    easing.type: Easing.Bezier
-                    easing.bezierCurve: Theme.ease.standard
-                }
-            }
+            Behavior on tint { ColorAnim { duration: Theme.motion.micro } }
             Behavior on opacity {
                 NumberAnimation { duration: Theme.motion.micro }
             }
-            Behavior on scale {
-                NumberAnimation {
-                    duration: Theme.motion.micro
-                    easing.type: Easing.Bezier
-                    easing.bezierCurve: Theme.ease.standard
-                }
-            }
+            Behavior on scale { Anim { duration: Theme.motion.micro } }
 
             // ARC-UI-1: the verb is its SVG glyph; an open slot keeps the
             // "—" text.
@@ -463,13 +451,7 @@ Item {
             opacity: root.aimed === "" ? 1.0 : 0.6
             scale: root.aimed === "" ? 1.3 : 1.0
 
-            Behavior on scale {
-                NumberAnimation {
-                    duration: Theme.motion.micro
-                    easing.type: Easing.Bezier
-                    easing.bezierCurve: Theme.ease.standard
-                }
-            }
+            Behavior on scale { Anim { duration: Theme.motion.micro } }
             Behavior on opacity {
                 NumberAnimation { duration: Theme.motion.micro }
             }

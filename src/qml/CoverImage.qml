@@ -111,7 +111,5 @@ Item {
         }
     }
 
-    Behavior on opacity {
-        NumberAnimation { duration: Theme.motion.quick; easing.type: Easing.Bezier; easing.bezierCurve: Theme.ease.standard }
-    }
+    Behavior on opacity { Anim {} }
 }

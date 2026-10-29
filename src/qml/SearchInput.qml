@@ -48,7 +48,7 @@ TextField {
         color: Palette.surfaceContainerHighest
         radius: Theme.radius
         border.color: root.activeFocus ? Palette.primary : Palette.outlineVariant
-        border.width: Math.max(1, root.height * Theme.hairlineRatio)
+        border.width: Theme.hairline(root.height)
     }
 
     Keys.onPressed: event => {

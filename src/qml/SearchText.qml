@@ -20,32 +20,20 @@ import "Theme.js" as Theme
 import "SearchMatch.js" as Match
 
 // ARC-UI-2 M2: the row text with Neovim-style `hlsearch` blocks. The root is
-// a `Text` — a true `FadeText` drop-in, so every cell keeps its natural
-// implicit sizing, elide and alignment — with the blocks and the matched
+// a `FadeText` — so every cell keeps its natural implicit sizing, elide,
+// alignment and the shared create-fade — with the blocks and the matched
 // glyphs redrawn as children: rectangles measured by `FontMetrics` with the
 // same shaper as the painted text (SEARCHACTIONSTUDY §6, kerning exact), then
 // the matched substrings painted over them in the highlight foreground, the
 // actual `Search`/`CurSearch` contrast pair. The children die at the cell
 // edge (`clip`), so a match under the ellipsis cannot leak.
-AppText {
+FadeText {
     id: root
 
     /// The live `/` query ("" = no session, no blocks) and whether this row
     /// is the session's current candidate (`CurSearch`).
     property string query: ""
     property bool currentMatch: false
-    /// FadeText's contract: fade in on creation (off for recycled delegates).
-    property bool animated: true
-
-
-    NumberAnimation on opacity {
-        running: root.animated && !Theme.reduceMotion
-        from: 0
-        to: 1
-        duration: Theme.motion.quick
-        easing.type: Easing.Bezier
-        easing.bezierCurve: Theme.ease.standard
-    }
 
     readonly property var spans: Match.spans(root.text, root.query)
 

@@ -110,7 +110,6 @@ Item {
             AppText {
                 text: root.label
                 color: "white"
-                font.family: Theme.fonts.body
                 font.pixelSize: badge.height * 0.42
             }
 
@@ -118,7 +117,6 @@ Item {
                 visible: root.count > 1
                 text: root.count > 1 ? "×" + root.count : ""
                 color: "white"
-                font.family: Theme.fonts.body
                 font.bold: true
                 font.pixelSize: badge.height * 0.42
             }
@@ -134,11 +132,5 @@ Item {
         }
     }
 
-    Behavior on opacity {
-        NumberAnimation {
-            duration: Theme.motion.quick
-            easing.type: Easing.Bezier
-            easing.bezierCurve: Theme.ease.standard
-        }
-    }
+    Behavior on opacity { Anim {} }
 }

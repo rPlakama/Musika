@@ -59,23 +59,18 @@ Item {
     signal selectionChanged
 
     // ARC-I: which recycled Alt-hold verb set this column arms ("song",
-    // "album" or "artist"); the column only relays the cursor row it anchors.
+    // "album" or "artist"); the body owns the arming and the column only
+    // relays its quickAction signal.
     property string quickActionKind: ""
     /// VI-4: the id field a selection batch resolves to (set by the overlay).
     property string selectionField: "songId"
     signal quickAction(var target, var actions)
 
-    QuickActions {
-        id: verbs
-    }
-
     /// ARC-UI-3: the column owns its cursor; the body mirrors it both ways
-    /// (it cannot be an alias — the body's view swaps list ⇄ grid). The
-    /// mark window follows the rendered rows.
+    /// (it cannot be an alias — the body's view swaps list ⇄ grid).
     onCursorChanged: {
         if (content.currentIndex !== cursor)
             content.currentIndex = cursor;
-        root.requestMarkWindow();
     }
 
     Connections {
@@ -84,8 +79,6 @@ Item {
             if (root.cursor !== content.currentIndex)
                 root.cursor = content.currentIndex;
         }
-        function onFirstVisibleIndexChanged() { root.requestMarkWindow(); }
-        function onLastVisibleIndexChanged() { root.requestMarkWindow(); }
     }
 
     /// The rows this column can actually display (the search fetch cap).
@@ -115,56 +108,13 @@ Item {
         content.clearSelection();
     }
 
-    /// Ask the backend for the download state of the rendered rows only
-    /// (album rows included: cached = every track finished).
+    /// The host's explicit mark-window refresh (a same-count row swap).
     function requestMarkWindow(force) {
-        if (root.model === null)
-            return;
-        var songs = [];
-        var albums = [];
-        var lo = content.firstVisibleIndex;
-        var hi = content.lastVisibleIndex;
-        if (lo < 0 || hi < lo) {
-            lo = Math.max(0, root.cursor);
-            hi = Math.min(root.model.count - 1, lo);
-        }
-        for (var i = lo; i <= hi; ++i) {
-            var row = root.model.get(i);
-            if (!row)
-                continue;
-            if (row.songId)
-                songs.push(row.songId);
-            else if (row.albumId)
-                albums.push(row.albumId);
-        }
-        if (force)
-            Backend.refreshDownloads(JSON.stringify(songs), JSON.stringify(albums));
-        else
-            Backend.requestDownloads(JSON.stringify(songs), JSON.stringify(albums));
+        content.requestMarkWindow(force);
     }
 
-    // A fetch finished: re-read this column's own window (forced).
-    Connections {
-        target: Backend
-        function onRowReload() { root.requestMarkWindow(true); }
-        // UI-60: patch a rated hit in place.
-        function onRatingChanged(kind, id, rating) {
-            if (!root.model)
-                return;
-            for (var i = 0; i < root.model.count; ++i) {
-                var row = root.model.get(i);
-                if (!row)
-                    continue;
-                if ((kind === "album" && row.albumId === id)
-                        || (kind === "artist" && row.artistId === id))
-                    root.model.setProperty(i, "rating", rating);
-            }
-        }
-    }
-
-    /// Instant snap for far jumps (`gg`/`G`): the lists do the same through
-    /// `Theme.cursorEdge`, so the view-owned follow has nothing left to
-    /// animate once the target is already on screen.
+    /// Instant snap for far jumps (`gg`/`G`): the view-owned follow has
+    /// nothing left to animate once the target is already on screen.
     function snapToCursor() {
         content.goto(root.cursor);
     }
@@ -227,41 +177,10 @@ Item {
         root.cursor = content.currentIndex;
     }
 
-    /// ARC-I: Alt armed the gesture — anchor on the cursor row; a visual
-    /// selection swaps in the batch verb set (VI-4).
+    /// ARC-I: the body arms the Alt gesture; the column relays it to the
+    /// overlay (keeps the public method the search overlay calls).
     function armQuickActions() {
-        if (quickActionKind === "" || !model || model.count === 0 || cursor < 0)
-            return;
-        var row = content.view.itemAtIndex(cursor);
-        var actions = null;
-        if (root.hasSelection) {
-            actions = verbs.forSelection(quickActionKind, content.selectionIds(selectionField),
-                content.selectionStarred(selectionField));
-        } else {
-            var item = model.get(cursor);
-            var preview = function(level) {
-                root.model.setProperty(cursor, "rating", level);
-            };
-            actions = item
-                ? (quickActionKind === "artist" ? verbs.artist(item, preview)
-                    : quickActionKind === "album"
-                        ? verbs.album(item, Backend.cachedAlbumIds.indexOf(item.albumId) !== -1, preview)
-                        : verbs.song(item))
-                : null;
-        }
-        if (!actions)
-            return;
-        // ARC-I-4: the heart tracks the verb immediately (see `MediaList`).
-        if (actions.south && actions.south.invoke) {
-            var want = actions.south.favorite === true;
-            var star = actions.south.invoke;
-            actions.south.invoke = function() {
-                star();
-                content.markStarred(want);
-            };
-        }
-        if (row)
-            quickAction(row, actions);
+        content.armQuickActions();
     }
 
     // UI-48: the highlight block overflows the row bounds by this much on both
@@ -365,7 +284,7 @@ Item {
                 radius: Theme.radius
                 color: Palette.surfaceContainerHighest
                 border.color: root.active ? Palette.primary : Palette.outlineVariant
-                border.width: Math.max(1, root.headerH * Theme.hairlineRatio)
+                border.width: Theme.hairline(root.headerH)
 
                 FadeText {
                     id: countLabel
@@ -382,7 +301,7 @@ Item {
                 anchors.left: parent.left
                 anchors.right: parent.right
                 anchors.bottom: parent.bottom
-                height: Math.max(1, parent.height * Theme.hairlineRatio)
+                height: Theme.hairline(parent.height)
                 color: root.active ? Palette.primary : Palette.outlineVariant
             }
         }
@@ -402,7 +321,11 @@ Item {
                 animateDisplacement: true
                 model: root.model
                 selectable: quickActionKind !== ""
+                quickActionKind: root.quickActionKind
+                markSongs: true
+                markAlbums: true
                 onSelectionChanged: root.selectionChanged()
+                onQuickAction: (target, actions) => root.quickAction(target, actions)
                 // ARC-UI-2 M1: the columns paint the same three cells.
                 searchFields: ["title", "subtitle", "meta"]
                 // UI-58: rows scale from the shared panel height (not the
@@ -511,58 +434,52 @@ Item {
                 }
             }
 
-            SymbolIcon {
-                id: noGlyph
-                anchors.centerIn: parent
-                visible: root.noMatches || noGlyph.opacity > 0
-                opacity: root.noMatches ? 1 : 0
-                width: Math.max(14, Math.min(listItem.height * 0.7,
-                    listItem.width * 0.2))
-                height: width
+            StateGlyph {
+                shown: root.noMatches
                 source: "qrc:/app/icons/no.svg"
-                symbolColor: Palette.onSurfaceVariant
-
-                Behavior on opacity {
-                    enabled: !Theme.reduceMotion
-                    NumberAnimation {
-                        duration: 60
-                        easing.type: Easing.Bezier
-                        easing.bezierCurve: Theme.ease.decelerate
-                    }
-                }
             }
 
             // While the request is in flight show the shared fetch loop (the
             // download button's glyph), never the no-result mark. The no.svg
             // only appears once the response landed empty (`noMatches`).
-            SymbolIcon {
-                id: loadingGlyph
-                anchors.centerIn: parent
-                visible: root._showLoading
-                opacity: root._showLoading ? 1 : 0
-                width: Math.max(14, Math.min(listItem.height * 0.7,
-                    listItem.width * 0.2))
-                height: width
+            StateGlyph {
+                shown: root._showLoading
+                spinning: true
                 source: "qrc:/app/icons/loading-loop.svg"
-                symbolColor: Palette.onSurfaceVariant
-
-                Behavior on opacity {
-                    enabled: !Theme.reduceMotion
-                    NumberAnimation {
-                        duration: 60
-                        easing.type: Easing.Bezier
-                        easing.bezierCurve: Theme.ease.decelerate
-                    }
-                }
-
-                NumberAnimation on rotation {
-                    from: 0
-                    to: 360
-                    duration: Theme.motion.spin
-                    loops: Animation.Infinite
-                    running: loadingGlyph.visible && !Theme.reduceMotion
-                }
             }
+        }
+    }
+
+    // The column's one centred state glyph: the no-result mark and the
+    // loading loop share frame, colour, fade and spin. `shown` drives the
+    // fade; the glyph stays visible while collapsing.
+    component StateGlyph: SymbolIcon {
+        id: glyph
+
+        property bool shown: false
+        property bool spinning: false
+
+        anchors.centerIn: parent
+        width: Math.max(14, Math.min(parent.height * 0.7, parent.width * 0.2))
+        height: width
+        symbolColor: Palette.onSurfaceVariant
+        visible: glyph.shown || glyph.opacity > 0
+        opacity: glyph.shown ? 1 : 0
+
+        Behavior on opacity {
+            enabled: !Theme.reduceMotion
+            Anim {
+                duration: 60
+                easing.bezierCurve: Theme.ease.decelerate
+            }
+        }
+
+        NumberAnimation on rotation {
+            from: 0
+            to: 360
+            duration: Theme.motion.spin
+            loops: Animation.Infinite
+            running: glyph.spinning && glyph.shown && !Theme.reduceMotion
         }
     }
 }

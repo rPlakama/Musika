@@ -43,15 +43,15 @@ QtObject {
 
     property ParallelAnimation swing: ParallelAnimation {
         SequentialAnimation {
-            NumberAnimation { target: root; property: "offset"; to: 4.2; duration: Theme.motion.flash; easing.type: Easing.Bezier; easing.bezierCurve: Theme.ease.standard }
-            NumberAnimation { target: root; property: "offset"; to: -3.5; duration: Theme.motion.flash; easing.type: Easing.Bezier; easing.bezierCurve: Theme.ease.standard }
-            NumberAnimation { target: root; property: "offset"; to: 2.8; duration: Theme.motion.flash; easing.type: Easing.Bezier; easing.bezierCurve: Theme.ease.standard }
-            NumberAnimation { target: root; property: "offset"; to: -1.4; duration: Theme.motion.flash; easing.type: Easing.Bezier; easing.bezierCurve: Theme.ease.standard }
-            NumberAnimation { target: root; property: "offset"; to: 0; duration: Theme.motion.flash; easing.type: Easing.Bezier; easing.bezierCurve: Theme.ease.standard }
+            Anim { target: root; property: "offset"; to: 4.2; duration: Theme.motion.flash }
+            Anim { target: root; property: "offset"; to: -3.5; duration: Theme.motion.flash }
+            Anim { target: root; property: "offset"; to: 2.8; duration: Theme.motion.flash }
+            Anim { target: root; property: "offset"; to: -1.4; duration: Theme.motion.flash }
+            Anim { target: root; property: "offset"; to: 0; duration: Theme.motion.flash }
         }
         SequentialAnimation {
-            NumberAnimation { target: root.target; property: "scale"; to: 0.97; duration: Theme.motion.flash; easing.type: Easing.Bezier; easing.bezierCurve: Theme.ease.accelerate }
-            NumberAnimation { target: root.target; property: "scale"; to: 1.0; duration: Theme.motion.micro; easing.type: Easing.Bezier; easing.bezierCurve: Theme.ease.bounce }
+            Anim { target: root.target; property: "scale"; to: 0.97; duration: Theme.motion.flash; easing.bezierCurve: Theme.ease.accelerate }
+            Anim { target: root.target; property: "scale"; to: 1.0; duration: Theme.motion.micro; easing.bezierCurve: Theme.ease.bounce }
         }
     }
 }

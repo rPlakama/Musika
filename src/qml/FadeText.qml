@@ -27,12 +27,9 @@ AppText {
     property bool animated: true
 
 
-    NumberAnimation on opacity {
+    Anim on opacity {
         running: root.animated && !Theme.reduceMotion
         from: 0
         to: 1
-        duration: Theme.motion.quick
-        easing.type: Easing.Bezier
-        easing.bezierCurve: Theme.ease.standard
     }
 }

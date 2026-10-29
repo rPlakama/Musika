@@ -75,9 +75,7 @@ AcrylicPanel {
     opacity: shown ? 1 : 0
     visible: opacity > 0
 
-    Behavior on opacity {
-        NumberAnimation { duration: root.fadeDuration; easing.type: Easing.Bezier; easing.bezierCurve: Theme.ease.standard }
-    }
+    Behavior on opacity { Anim { duration: root.fadeDuration } }
 
     function show(kind, message) {
         root.kind = kind;

@@ -41,20 +41,17 @@ QtObject {
     }
 
     property SequentialAnimation bounce: SequentialAnimation {
-        NumberAnimation {
+        Anim {
             target: root.target
             property: "scale"
             to: root.dip
             duration: Theme.motion.micro
-            easing.type: Easing.Bezier
             easing.bezierCurve: Theme.ease.accelerate
         }
-        NumberAnimation {
+        Anim {
             target: root.target
             property: "scale"
             to: 1.0
-            duration: Theme.motion.quick
-            easing.type: Easing.Bezier
             easing.bezierCurve: Theme.ease.bounce
         }
     }

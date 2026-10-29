@@ -42,13 +42,11 @@ Item {
         easing.overshoot: 1.7
     }
 
-    NumberAnimation {
+    Anim {
         id: spawnOut
         target: root
         property: "value"
         to: 0
-        duration: Theme.motion.quick
-        easing.type: Easing.Bezier
         easing.bezierCurve: Theme.ease.accelerate
     }
 

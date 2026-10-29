@@ -102,6 +102,36 @@ QtObject {
         };
     }
 
+    /// The one row-kind dispatch every scroll body uses: track, album (with
+    /// its cache state) or artist. Returns null for an unknown/absent row.
+    function forItem(kind, item, cached, preview) {
+        if (!item)
+            return null;
+        if (kind === "song")
+            return song(item);
+        if (kind === "album")
+            return album(item, cached === true, preview);
+        if (kind === "artist")
+            return artist(item, preview);
+        return null;
+    }
+
+    /// Wrap the favourite slot so its verb also updates the host's local row
+    /// model immediately (`on` is the state the verb leaves the row in). The
+    /// server call itself is unchanged; `after` receives the target flag.
+    function wrapFavorite(actions, after) {
+        if (!actions || !actions.south || !actions.south.invoke)
+            return actions;
+        var on = actions.south.favorite === true;
+        var star = actions.south.invoke;
+        actions.south.invoke = function () {
+            star();
+            if (after)
+                after(on);
+        };
+        return actions;
+    }
+
     /// VI-4: with a visual selection active the range verbs apply to the
     /// whole selection — Add to Queue and Favorite. `starred` is the flags
     /// array paired with `ids` (Selection.starred): when every row is already

@@ -71,23 +71,20 @@ Item {
     // View transitions (motion §3.1): fade in with decelerate, fade out with
     // accelerate. One factory reused by push/pop/replace.
     component EnterView: Transition {
-        NumberAnimation {
+        Anim {
             property: "opacity"
             from: 0
             to: 1
             duration: Theme.motion.standard
-            easing.type: Easing.Bezier
             easing.bezierCurve: Theme.ease.decelerate
         }
     }
 
     component ExitView: Transition {
-        NumberAnimation {
+        Anim {
             property: "opacity"
             from: 1
             to: 0
-            duration: Theme.motion.quick
-            easing.type: Easing.Bezier
             easing.bezierCurve: Theme.ease.accelerate
         }
     }
@@ -134,19 +131,37 @@ Item {
     function snapshotPlace() {
         var pages = [];
         for (var i = 1; i < contentStack.depth; ++i) {
-            var page = contentStack.get(i);
-            if (!page)
+            var item = contentStack.get(i);
+            if (!item)
                 continue;
-            if (page.albumId !== undefined) {
-                pages.push("album", page.albumId, page.albumTitle, page.albumArtist, page.albumMeta, page.albumCover, page.albumStarred === true ? 1 : 0, "");
-            } else if (page.artistId !== undefined) {
-                pages.push("artist", page.artistId, page.artistName, "", "", page.artistCover, 0, "");
+            if (item.albumId !== undefined) {
+                pages.push({
+                    kind: "album",
+                    page: {
+                        albumId: item.albumId,
+                        albumTitle: item.albumTitle,
+                        albumArtist: item.albumArtist,
+                        albumMeta: item.albumMeta,
+                        albumCover: item.albumCover,
+                        albumStarred: item.albumStarred === true
+                    }
+                });
+            } else if (item.artistId !== undefined) {
+                pages.push({
+                    kind: "artist",
+                    page: {
+                        artistId: item.artistId,
+                        artistName: item.artistName,
+                        artistCover: item.artistCover
+                    }
+                });
             }
         }
-        var row = [root.currentSegment, root.nowPlayingExpanded ? 1 : 0, pages.length / 8];
-        for (var p = 0; p < pages.length; ++p)
-            row.push(pages[p]);
-        return row;
+        return {
+            segment: root.currentSegment,
+            fullscreen: root.nowPlayingExpanded,
+            pages: pages
+        };
     }
 
     function recordPlace() {
@@ -210,47 +225,27 @@ Item {
         applyPlace(placeHistory[target]);
     }
 
-    function applyPlace(row) {
-        if (!row || row.length < 3)
+    function applyPlace(place) {
+        if (!place || !place.pages)
             return;
-        var pageCount = Number(row[2]) || 0;
         _placing = true;
         // One cut, not a cascade of push/pop animations.
         if (contentStack.depth > 1)
             contentStack.pop(null, StackView.Immediate);
-        currentSegment = Number(row[0]) || 0;
+        currentSegment = Number(place.segment) || 0;
         activeRegion = 1;
-        var at = 3;
-        for (var i = 0; i < pageCount; ++i) {
-            if (at + 7 >= row.length)
-                break;
-            var kind = row[at];
-            var id = row[at + 1];
-            var title = row[at + 2];
-            var artist = row[at + 3];
-            var meta = row[at + 4];
-            var cover = row[at + 5];
-            var starred = row[at + 6] === 1;
-            at += 8;
-            if (kind === "album") {
-                Backend.rememberAlbum(id);
-                contentStack.push(albumEntryComponent, {
-                    albumId: id,
-                    albumTitle: title,
-                    albumArtist: artist,
-                    albumMeta: meta,
-                    albumCover: cover,
-                    albumStarred: starred
-                }, StackView.Immediate);
-            } else if (kind === "artist") {
-                contentStack.push(artistEntryComponent, {
-                    artistId: id,
-                    artistName: title,
-                    artistCover: cover
-                }, StackView.Immediate);
+        for (var i = 0; i < place.pages.length; ++i) {
+            var entry = place.pages[i];
+            if (!entry || !entry.page)
+                continue;
+            if (entry.kind === "album") {
+                Backend.rememberAlbum(entry.page.albumId);
+                contentStack.push(albumEntryComponent, entry.page, StackView.Immediate);
+            } else if (entry.kind === "artist") {
+                contentStack.push(artistEntryComponent, entry.page, StackView.Immediate);
             }
         }
-        nowPlayingExpanded = row[1] === 1;
+        nowPlayingExpanded = place.fullscreen === true;
         _placing = false;
     }
 
@@ -260,11 +255,17 @@ Item {
         nowPlayingExpanded = !nowPlayingExpanded;
     }
 
+    /// The one search-open entry: leaving another surface ends the main
+    /// list's visual selection first (VI-4).
+    function openSearch(text) {
+        clearMainSelection();
+        searchOverlay.openWith(text);
+    }
+
     // Clipboard paste (VI-21): the text lands visibly in the search field so
     // the user can correct it; Enter plays the selection.
     function pasteSearch(text) {
-        clearMainSelection();
-        searchOverlay.openWith(text);
+        root.openSearch(text);
     }
 
     // VI-4: entering another surface (search) ends the main list.s
@@ -288,15 +289,12 @@ Item {
     function openAlbum(albumId, title, artist, year, tracks, cover, starred, instant) {
         // P-6 S2: the last opened album page is what a restart reopens.
         Backend.rememberAlbum(albumId);
-        var meta = [];
-        if (year.length > 0)
-            meta.push(year);
         var page = {
             albumId: albumId,
             albumTitle: title,
             albumArtist: artist,
             albumCover: cover,
-            albumMeta: meta.join("   ·   "),
+            albumMeta: Theme.metaJoin([year]),
             albumStarred: starred === true
         };
         if (instant)
@@ -664,16 +662,14 @@ Item {
 
         // Search is global scope: open the floating search from any region.
         if (action === "search") {
-            clearMainSelection();
-            searchOverlay.open();
+            root.openSearch("");
             return;
         }
         // `i` starts typing: opens the floating search in INSERT mode from any
         // region (VI-19); inside the overlay the modal routing above re-enters
         // typing instead.
         if (action === "insert_mode") {
-            clearMainSelection();
-            searchOverlay.openWith("");
+            root.openSearch("");
             return;
         }
         // Transport is global (VI-10/Q-9/UI-51): j/k keeps the list cursor,
@@ -992,11 +988,7 @@ Item {
                         ArtistList {
                             onArtistActivated: (artistId, artistName, artistCover) => {
                                 root.nowPlayingExpanded = false;
-                                contentStack.push(artistEntryComponent, {
-                                    artistId: artistId,
-                                    artistName: artistName,
-                                    artistCover: artistCover
-                                });
+                                root.openArtist(artistId, artistName, artistCover);
                             }
                             // UI-60: the artist row arms the same Alt overlay
                             // as albums/songs — without this relay the south
@@ -1037,13 +1029,7 @@ Item {
                             onBack: contentStack.pop()
                             // The header artist name is a Tab stop; it opens
                             // the album's owning artist page.
-                            onArtistActivated: (artistId, artistName, artistCover) => {
-                                contentStack.push(artistEntryComponent, {
-                                    artistId: artistId,
-                                    artistName: artistName,
-                                    artistCover: artistCover
-                                });
-                            }
+                            onArtistActivated: (artistId, artistName, artistCover) => root.openArtist(artistId, artistName, artistCover)
                             // ARC-I-2: the page arms the shared Alt overlay on
                             // its song rows.
                             onQuickAction: (target, actions) => root.armQuickActions(target, actions)
@@ -1079,13 +1065,7 @@ Item {
         // backdrop fades in/out (`emphasized`), decelerating in and
         // accelerating out (motion §3.1). Toggling mid-fade retargets the same
         // animation, so repeated enter/leave stays one smooth loop.
-        Behavior on opacity {
-            NumberAnimation {
-                duration: Theme.motion.emphasized
-                easing.type: Easing.Bezier
-                easing.bezierCurve: root.nowPlayingExpanded ? Theme.ease.decelerate : Theme.ease.accelerate
-            }
-        }
+        Behavior on opacity { Anim { duration: Theme.motion.emphasized; easing.bezierCurve: root.nowPlayingExpanded ? Theme.ease.decelerate : Theme.ease.accelerate } }
     }
 
     readonly property Item nowPlaying: nowPlayingLoader.item
@@ -1187,20 +1167,13 @@ Item {
         opacity: visible ? 1 : 0
         z: Theme.zToast
 
-        Behavior on opacity {
-            NumberAnimation {
-                duration: Theme.motion.micro
-                easing.type: Easing.Bezier
-                easing.bezierCurve: Theme.ease.standard
-            }
-        }
+        Behavior on opacity { Anim { duration: Theme.motion.micro } }
 
         FadeText {
             id: countLabel
             anchors.centerIn: parent
             text: Backend.keyCount > 0 ? String(Backend.keyCount) : ""
             color: Palette.onSurface
-            font.family: Theme.fonts.body
             font.pixelSize: root.height * 0.026
             animated: false
         }
@@ -1221,11 +1194,7 @@ Item {
         onAlbumActivated: (albumId, title, artist, year, tracks, cover, starred) => root.openAlbum(albumId, title, artist, year, tracks, cover, starred)
         onArtistActivated: (artistId, artistName, artistCover) => {
             root.nowPlayingExpanded = false;
-            contentStack.push(artistEntryComponent, {
-                artistId: artistId,
-                artistName: artistName,
-                artistCover: artistCover
-            });
+            root.openArtist(artistId, artistName, artistCover);
         }
     }
 
@@ -1295,20 +1264,16 @@ Item {
                     Backend.playerLoad(data.queue, data.start);
                     if (!data.album)
                         return;
-                    // Same detour rule as `openAlbum`: this is an album page too.
-                    Backend.rememberAlbum(data.album.id);
-                    nowPlayingExpanded = false;
+                    // Same detour rule as the other page opens: this is an
+                    // album page too.
                     var album = data.album;
-                    var meta = [];
-                    if (album.year)
-                        meta.push(String(album.year));
-                    contentStack.push(albumEntryComponent, {
-                        albumId: album.id,
-                        albumTitle: album.title,
-                        albumArtist: album.artist ? album.artist : "",
-                        albumCover: album.cover ? album.cover : "",
-                        albumMeta: meta.join("   ·   ")
-                    });
+                    root.nowPlayingExpanded = false;
+                    root.openAlbum(album.id, album.title,
+                        album.artist ? album.artist : "",
+                        album.year ? String(album.year) : "",
+                        String(album.tracks || 0),
+                        album.cover ? album.cover : "",
+                        album.starred === true);
                 });
                 return;
             }
@@ -1333,11 +1298,8 @@ Item {
                     // fullscreen is part of arriving (the queue's Alt "Go
                     // to Artist" must actually show the page).
                     root.nowPlayingExpanded = false;
-                    contentStack.push(artistEntryComponent, {
-                        artistId: artist.id,
-                        artistName: artist.name,
-                        artistCover: artist.cover ? artist.cover : ""
-                    });
+                    root.openArtist(artist.id, artist.name,
+                        artist.cover ? artist.cover : "");
                 });
             }
         }
@@ -1372,13 +1334,7 @@ Item {
             border.color: Palette.primary
 
             // Width is instant (R5); only the colour eases.
-            Behavior on border.color {
-                ColorAnimation {
-                    duration: Theme.motion.micro
-                    easing.type: Easing.Bezier
-                    easing.bezierCurve: Theme.ease.standard
-                }
-            }
+            Behavior on border.color { ColorAnim { duration: Theme.motion.micro } }
         }
     }
 

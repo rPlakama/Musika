@@ -44,60 +44,30 @@ Item {
             horizontalAlignment: Text.AlignHCenter
         }
 
-        TextField {
+        FormField {
             id: serverURLField
             width: parent.width
-            implicitHeight: root.height * 0.049
+            formHeight: root.height
             placeholderText: qsTr("Server URL")
-            placeholderTextColor: Palette.onSurfaceVariant
-            color: Palette.onSurface
-            font.family: Theme.fonts.body
-            font.pixelSize: Theme.fontSize("body", root.height)
             text: Backend.serverURL
             onEditingFinished: Backend.serverURL = text
-            background: Rectangle {
-                color: Palette.surfaceContainerHigh
-                radius: Theme.radius
-                border.color: serverURLField.activeFocus ? Palette.primary : Palette.outlineVariant
-                border.width: Math.max(1, root.height * Theme.hairlineRatio)
-            }
         }
-        TextField {
+        FormField {
             id: usernameField
             width: parent.width
-            implicitHeight: root.height * 0.049
+            formHeight: root.height
             placeholderText: qsTr("Username")
-            placeholderTextColor: Palette.onSurfaceVariant
-            color: Palette.onSurface
-            font.family: Theme.fonts.body
-            font.pixelSize: Theme.fontSize("body", root.height)
             text: Backend.username
             onEditingFinished: Backend.username = text
-            background: Rectangle {
-                color: Palette.surfaceContainerHigh
-                radius: Theme.radius
-                border.color: usernameField.activeFocus ? Palette.primary : Palette.outlineVariant
-                border.width: Math.max(1, root.height * Theme.hairlineRatio)
-            }
         }
-        TextField {
+        FormField {
             id: passwordField
             width: parent.width
-            implicitHeight: root.height * 0.049
+            formHeight: root.height
             placeholderText: qsTr("Password")
-            placeholderTextColor: Palette.onSurfaceVariant
-            color: Palette.onSurface
-            font.family: Theme.fonts.body
-            font.pixelSize: Theme.fontSize("body", root.height)
             echoMode: TextInput.Password
             text: Backend.password
             onEditingFinished: Backend.password = text
-            background: Rectangle {
-                color: Palette.surfaceContainerHigh
-                radius: Theme.radius
-                border.color: passwordField.activeFocus ? Palette.primary : Palette.outlineVariant
-                border.width: Math.max(1, root.height * Theme.hairlineRatio)
-            }
         }
 
         Button {
@@ -137,7 +107,7 @@ Item {
                 ? (Backend.loggedIn ? Palette.primaryContainer : Palette.errorContainer)
                 : "transparent"
             border.width: Backend.statusMessage.length > 0
-                ? Math.max(1, root.height * Theme.hairlineRatio)
+                ? Theme.hairline(root.height)
                 : 0
             border.color: Backend.loggedIn ? Palette.primary : Palette.error
             radius: Theme.radius
@@ -155,6 +125,29 @@ Item {
                 horizontalAlignment: Text.AlignHCenter
                 font.pixelSize: Theme.fontSize("label", root.height)
             }
+        }
+    }
+
+    // One form-field chrome: the server/user/password boxes differ only in
+    // their placeholder, text binding and echo mode. `formHeight` is passed
+    // rather than reaching for the page id (inline components keep their own
+    // scope).
+    component FormField: TextField {
+        id: field
+
+        property real formHeight: 0
+
+        implicitHeight: field.formHeight * 0.049
+        placeholderTextColor: Palette.onSurfaceVariant
+        color: Palette.onSurface
+        font.family: Theme.fonts.body
+        font.pixelSize: Theme.fontSize("body", field.formHeight)
+
+        background: Rectangle {
+            color: Palette.surfaceContainerHigh
+            radius: Theme.radius
+            border.color: field.activeFocus ? Palette.primary : Palette.outlineVariant
+            border.width: Theme.hairline(field.formHeight)
         }
     }
 }

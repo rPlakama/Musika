@@ -78,12 +78,10 @@ AbstractButton {
                 return Theme.stateHover;
             return "transparent";
         }
-        border.width: root.activeFocus ? Math.max(1, root.width * Theme.hairlineRatio) : 0
+        border.width: root.activeFocus ? Theme.hairline(root.width) : 0
         border.color: Palette.primary
 
-        Behavior on color {
-            ColorAnimation { duration: Theme.motion.micro; easing.type: Easing.Bezier; easing.bezierCurve: Theme.ease.standard }
-        }
+        Behavior on color { ColorAnim { duration: Theme.motion.micro } }
     }
 
     // Glyph crossfade (UI-31): when the drawn glyph swaps (▶/⏸), the two
@@ -152,7 +150,6 @@ AbstractButton {
             anchors.centerIn: parent
             visible: glyphA.iconGlyph.toString().length === 0 && glyphA.textGlyph.length > 0
             text: glyphA.textGlyph
-            font.family: Theme.fonts.body
             font.pixelSize: root.width * root.symbolRatio
             color: !root.enabled ? Theme.stateDisabledContent : root.symbolColor
         }
@@ -166,9 +163,7 @@ AbstractButton {
             height: width
         }
 
-        Behavior on opacity {
-            NumberAnimation { duration: Theme.motion.quick; easing.type: Easing.Bezier; easing.bezierCurve: Theme.ease.standard }
-        }
+        Behavior on opacity { Anim {} }
     }
 
     Rectangle {
@@ -186,7 +181,6 @@ AbstractButton {
             anchors.centerIn: parent
             visible: glyphB.iconGlyph.toString().length === 0 && glyphB.textGlyph.length > 0
             text: glyphB.textGlyph
-            font.family: Theme.fonts.body
             font.pixelSize: root.width * root.symbolRatio
             color: !root.enabled ? Theme.stateDisabledContent : root.symbolColor
         }
@@ -200,9 +194,7 @@ AbstractButton {
             height: width
         }
 
-        Behavior on opacity {
-            NumberAnimation { duration: Theme.motion.quick; easing.type: Easing.Bezier; easing.bezierCurve: Theme.ease.standard }
-        }
+        Behavior on opacity { Anim {} }
     }
 
     HoverHandler {

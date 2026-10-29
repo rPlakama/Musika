@@ -57,38 +57,6 @@ Item {
         onTriggered: root.finishQueueRemove()
     }
 
-    /// Ask the backend for the download state of the rendered rows only.
-    function requestMarkWindow(force) {
-        var ids = [];
-        var lo = queueContent.firstVisibleIndex;
-        var hi = queueContent.lastVisibleIndex;
-        if (lo < 0 || hi < lo) {
-            lo = Math.max(0, root.queueCursor);
-            hi = Math.min(queueItems.count - 1, lo);
-        }
-        for (var i = lo; i <= hi; ++i) {
-            var row = queueItems.get(i);
-            if (row && row.songId)
-                ids.push(row.songId);
-        }
-        if (force)
-            Backend.refreshDownloads(JSON.stringify(ids), "[]");
-        else
-            Backend.requestDownloads(JSON.stringify(ids), "[]");
-    }
-
-    onQueueCursorChanged: root.requestMarkWindow()
-
-    Connections {
-        target: queueContent
-        function onFirstVisibleIndexChanged() {
-            root.requestMarkWindow();
-        }
-        function onLastVisibleIndexChanged() {
-            root.requestMarkWindow();
-        }
-    }
-
     function moveQueueCursor(delta) {
         if (queueItems.count === 0)
             return;
@@ -276,7 +244,9 @@ Item {
             // row instead of snapping. A rebuilt payload lands instantly.
             root.recallQueueCursor(!rowsChanged);
         }
-        root.requestMarkWindow();
+        // A rebuild can swap the rows without changing the count, so ask for
+        // the window explicitly (MarkWindow coalesces it).
+        queueContent.requestMarkWindow();
     }
 
     /// The queue cursor for a fresh payload (UI-54 re-entry remembers; a
@@ -297,27 +267,9 @@ Item {
             queueContent.land(queueCursor);
     }
 
-    /// ARC-UI-1: Alt armed the gesture — the open drawer anchors on the row
-    /// under the cursor.
+    /// ARC-UI-1: the shared body arms the open drawer's Alt gesture.
     function armQuickActions() {
-        if (queueItems.count === 0 || queueContent.currentIndex < 0)
-            return;
-        var item = queueItems.get(queueContent.currentIndex);
-        var row = queueContent.view.itemAtIndex(queueContent.currentIndex);
-        var actions = root.hasSelection ? verbs.forSelection("song", queueContent.selectionIds("songId"), queueContent.selectionStarred("songId")) : (item ? verbs.song(item) : null);
-        if (!actions)
-            return;
-        // ARC-I-4: the heart tracks the verb immediately (see `MediaList`).
-        if (actions.south && actions.south.invoke) {
-            var want = actions.south.favorite === true;
-            var star = actions.south.invoke;
-            actions.south.invoke = function () {
-                star();
-                queueContent.markStarred(want);
-            };
-        }
-        if (row)
-            root.quickAction(row, actions);
+        queueContent.armQuickActions();
     }
 
     // The open drawer owns its navigation keys; the caller routes here while
@@ -404,25 +356,11 @@ Item {
     }
 
     // ── Scrim + drawer -----------------------------------------------------
-    Rectangle {
+    Scrim {
         id: queueScrim
-        anchors.fill: parent
-        color: Palette.scrim
-        opacity: root.open ? Theme.scrimOpacity : 0
-        visible: opacity > 0
-
-        Behavior on opacity {
-            NumberAnimation {
-                duration: Theme.motion.standard
-                easing.type: Easing.Bezier
-                easing.bezierCurve: Theme.ease.standard
-            }
-        }
-
-        TapHandler {
-            enabled: root.open
-            onTapped: root.closeQueue()
-        }
+        shown: root.open
+        tapToDismiss: true
+        onDismissed: root.closeQueue()
     }
 
     AcrylicPanel {
@@ -434,7 +372,7 @@ Item {
         tintAlpha: 0.80
         backdrop: root.backdrop
         border.color: Palette.primary
-        border.width: Math.max(1, root.width * Theme.hairlineRatio)
+        border.width: Theme.hairline(root.width)
         radius: Theme.radius
         clip: true
         visible: root.open
@@ -477,7 +415,7 @@ Item {
             Rectangle {
                 radius: Theme.radius
                 Layout.fillWidth: true
-                Layout.preferredHeight: Math.max(1, root.height * Theme.hairlineRatio)
+                Layout.preferredHeight: Theme.hairline(root.height)
                 color: Palette.primary
             }
 
@@ -497,17 +435,13 @@ Item {
                     model: queueItems
                     selectable: true
                     memoryKey: "queue"
+                    quickActionKind: "song"
                     // ARC-UI-2 M1: the queue rows paint title and duration.
                     searchFields: ["title", "subtitle", "duration"]
                     visible: queueItems.count > 0
+                    onQuickAction: (target, actions) => root.quickAction(target, actions)
 
-                    Behavior on opacity {
-                        NumberAnimation {
-                            duration: Theme.motion.quick
-                            easing.type: Easing.Bezier
-                            easing.bezierCurve: Theme.ease.standard
-                        }
-                    }
+                    Behavior on opacity { Anim {} }
 
                     rowDelegate: Component {
                         Rectangle {
@@ -533,24 +467,12 @@ Item {
                             property bool removing: false
                             opacity: removing ? 0 : 1
 
-                            Behavior on opacity {
-                                NumberAnimation {
-                                    duration: Theme.reduceMotion ? 0 : Theme.motion.standard * 1.3
-                                    easing.type: Easing.Bezier
-                                    easing.bezierCurve: Theme.ease.standard
-                                }
-                            }
+                            Behavior on opacity { Anim { duration: Theme.reduceMotion ? 0 : Theme.motion.standard * 1.3 } }
 
                             transform: Translate {
                                 x: row.removing ? -row.width : 0
 
-                                Behavior on x {
-                                    NumberAnimation {
-                                        duration: Theme.reduceMotion ? 0 : Theme.motion.standard * 1.3
-                                        easing.type: Easing.Bezier
-                                        easing.bezierCurve: Theme.ease.standard
-                                    }
-                                }
+                                Behavior on x { Anim { duration: Theme.reduceMotion ? 0 : Theme.motion.standard * 1.3 } }
                             }
 
                             RowHighlight {
@@ -631,20 +553,11 @@ Item {
         id: queueItems
     }
 
-    // ARC-UI-1: the recycled Alt verb set; queue rows are tracks.
-    QuickActions {
-        id: verbs
-    }
-
     Connections {
         target: Backend
         function onDataReady(channel, payload) {
             if (channel === "queue")
                 root.applyQueue(payload);
-        }
-        // A fetch finished: re-read the queue's own window (forced).
-        function onRowReload() {
-            root.requestMarkWindow(true);
         }
         // A favourite landed (per row, no payload): patch every matching
         // queue row in place. The cursor stays where the user left it.

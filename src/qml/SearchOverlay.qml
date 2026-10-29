@@ -304,8 +304,7 @@ Item {
 
     // S-9: the "Most played" right-hand meta.
     function playCountLabel(count) {
-        var n = Number(count) || 0;
-        return n + (n === 1 ? " play" : " plays");
+        return Theme.countLabel(count, "play");
     }
 
     // VI-11: `gg`/`G` on the unified list. The list follows its cursor
@@ -464,7 +463,7 @@ Item {
             artistRows.push({
                 id: artist.id,
                 title: artist.name,
-                subtitle: artist.album_count + (artist.album_count === 1 ? " album" : " albums"),
+                subtitle: Theme.countLabel(artist.album_count, "album"),
                 meta: "",
                 cover: artist.cover,
                 artistId: artist.id,
@@ -568,24 +567,10 @@ Item {
     }
 
     // Dim backdrop (the one sanctioned scrim); click outside to dismiss.
-    Rectangle {
-        radius: Theme.radius
-        anchors.fill: parent
-        color: Palette.scrim
-        opacity: root.opened ? Theme.scrimOpacity : 0
-
-        Behavior on opacity {
-            NumberAnimation {
-                duration: Theme.motion.standard
-                easing.type: Easing.Bezier
-                easing.bezierCurve: Theme.ease.standard
-            }
-        }
-
-        TapHandler {
-            enabled: root.opened
-            onTapped: root.close()
-        }
+    Scrim {
+        shown: root.opened
+        tapToDismiss: true
+        onDismissed: root.close()
     }
 
     AcrylicPanel {
@@ -602,23 +587,11 @@ Item {
         backdrop: root.backdrop
         radius: Theme.radius
         border.color: Palette.primary
-        border.width: Math.max(1, root.height * Theme.hairlineRatio)
+        border.width: Theme.hairline(root.height)
         opacity: root.opened ? 1 : 0
 
-        Behavior on opacity {
-            NumberAnimation {
-                duration: Theme.motion.standard
-                easing.type: Easing.Bezier
-                easing.bezierCurve: root.opened ? Theme.ease.decelerate : Theme.ease.accelerate
-            }
-        }
-        Behavior on y {
-            NumberAnimation {
-                duration: Theme.motion.standard
-                easing.type: Easing.Bezier
-                easing.bezierCurve: root.opened ? Theme.ease.decelerate : Theme.ease.accelerate
-            }
-        }
+        Behavior on opacity { Anim { duration: Theme.motion.standard; easing.bezierCurve: root.opened ? Theme.ease.decelerate : Theme.ease.accelerate } }
+        Behavior on y { Anim { duration: Theme.motion.standard; easing.bezierCurve: root.opened ? Theme.ease.decelerate : Theme.ease.accelerate } }
         ColumnLayout {
             anchors.fill: parent
             anchors.margins: root.panelRefHeight * 0.042
@@ -671,7 +644,6 @@ Item {
                     visible: field.text.length === 0
                     text: "Search artists, albums, songs"
                     color: Palette.onSurfaceVariant
-                    font.family: Theme.fonts.body
                     font.pixelSize: root.panelRefHeight * 0.030
                     horizontalAlignment: Text.AlignHCenter
                     verticalAlignment: Text.AlignVCenter
@@ -684,7 +656,7 @@ Item {
                     anchors.fill: field
                     radius: Theme.radius
                     color: "transparent"
-                    border.width: Math.max(1, root.height * Theme.hairlineRatio)
+                    border.width: Theme.hairline(root.height)
                     border.color: Palette.error
                     opacity: 0
                 }
@@ -743,24 +715,12 @@ Item {
                                     color: scopeChip.selected
                                         ? Palette.primary : Palette.onSurfaceVariant
                                     opacity: scopeChip.selected ? 1.0 : 0.60
-                                    Behavior on opacity {
-                                        NumberAnimation {
-                                            duration: Theme.motion.quick
-                                            easing.type: Easing.Bezier
-                                            easing.bezierCurve: Theme.ease.standard
-                                        }
-                                    }
+                                    Behavior on opacity { Anim {} }
                                     font.pixelSize: scopeChip.labelSize
                                     scalable: true
                                     scale: scopeChip.labelScale
                                     transformOrigin: Item.Center
-                                    Behavior on scale {
-                                        NumberAnimation {
-                                            duration: Theme.motion.standard
-                                            easing.type: Easing.Bezier
-                                            easing.bezierCurve: Theme.ease.decelerate
-                                        }
-                                    }
+                                    Behavior on scale { Anim { duration: Theme.motion.standard; easing.bezierCurve: Theme.ease.decelerate } }
                                     // font.bold: scopeChip.selected
                                     animated: true
                                 }
@@ -793,13 +753,7 @@ Item {
                 verticalAlignment: Text.AlignVCenter
                 animated: false
 
-                Behavior on opacity {
-                    NumberAnimation {
-                        duration: Theme.motion.quick
-                        easing.type: Easing.Bezier
-                        easing.bezierCurve: Theme.ease.accelerate
-                    }
-                }
+                Behavior on opacity { Anim { duration: Theme.motion.quick; easing.bezierCurve: Theme.ease.accelerate } }
             }
 
             // One unified result list. The scope strip is the only section
@@ -827,20 +781,14 @@ Item {
                     root.activate();
                 }
 
-                Behavior on opacity {
-                    NumberAnimation {
-                        duration: Theme.motion.quick
-                        easing.type: Easing.Bezier
-                        easing.bezierCurve: Theme.ease.standard
-                    }
-                }
+                Behavior on opacity { Anim {} }
             }
 
             // Footer rule: separates the keybinds from the snapped row area.
             Rectangle {
                 radius: Theme.radius
                 Layout.fillWidth: true
-                Layout.preferredHeight: Math.max(1, root.height * Theme.hairlineRatio)
+                Layout.preferredHeight: Theme.hairline(root.height)
                 color: Palette.outlineVariant
             }
 

@@ -53,13 +53,12 @@ trap 'rm -f "$log"' EXIT
 
 # The runtime `musika` module and its derived noise are expected; any other
 # import/type/syntax problem is a real, engine-time failure. The filtered
-# `missing-property` cases are the runtime-registered Palette roles, the
-# dynamic surface methods QML reaches through `Item`, and MediaList's
-# host-implemented `reload()` — a typo on a real component still fails.
+# `missing-property` cases are the runtime-registered Palette roles and the
+# dynamic surface methods QML reaches through `Item` — a typo on a real
+# component still fails.
 problems=$(grep -E '^(Warning|Error):' "$log" \
     | grep -vE 'Failed to import musika|Warnings occurred while importing module "musika"|\[unqualified\]' \
     | grep -vE 'not found on type "(QQuickPalette|QQuickItem|QObject)"' \
-    | grep -vE 'Member "reload" not found on type "MediaList"' \
     | grep -E '\[(import|syntax|compiler|unresolved-type|missing-type|missing-property)\]|^Error:' || true)
 
 if [ -n "$problems" ]; then

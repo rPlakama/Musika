@@ -44,13 +44,7 @@ Rectangle {
         ? Palette.secondaryContainer
         : Palette.surfaceContainerHigh
 
-    Behavior on color {
-        ColorAnimation {
-            duration: Theme.motion.quick
-            easing.type: Easing.Bezier
-            easing.bezierCurve: Theme.ease.standard
-        }
-    }
+    Behavior on color { ColorAnim {} }
 
     // Exit glyph + key hint. SymbolIcon: white-baked asset, re-coloured to
     // the fixed strong glyph tone; the fixed frame keeps it still.

@@ -79,13 +79,11 @@ Item {
 
         // The stop lands the glyph upright: animate the leftover angle to
         // the nearest full turn (visually the start orientation).
-        NumberAnimation {
+        Anim {
             id: settle
             target: glyph
             property: "rotation"
             duration: Theme.motion.micro
-            easing.type: Easing.Bezier
-            easing.bezierCurve: Theme.ease.standard
             to: Math.round(glyph.rotation / 360) * 360
         }
     }

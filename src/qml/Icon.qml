@@ -86,7 +86,7 @@ Item {
             radius: width * 0.5
             color: root.badgeBackground
             border.color: Palette.surface
-            border.width: Math.max(1, width * Theme.hairlineRatio)
+            border.width: Theme.hairline(width)
 
             FadeText {
                 anchors.centerIn: parent

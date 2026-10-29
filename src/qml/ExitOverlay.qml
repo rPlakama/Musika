@@ -84,14 +84,12 @@ Item {
 
                 ParallelAnimation {
                     id: spawn
-                    NumberAnimation {
+                    Anim {
                         target: letter
                         property: "opacity"
                         from: 0
                         to: 1
                         duration: 200
-                        easing.type: Easing.Bezier
-                        easing.bezierCurve: Theme.ease.standard
                     }
                     NumberAnimation {
                         target: letter
@@ -106,14 +104,12 @@ Item {
         }
     }
 
-    NumberAnimation {
+    Anim {
         id: fadeIn
         target: root
         property: "opacity"
         from: 0
         to: 1
         duration: 200
-        easing.type: Easing.Bezier
-        easing.bezierCurve: Theme.ease.standard
     }
 }

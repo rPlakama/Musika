@@ -16,6 +16,7 @@
 
 import QtQuick
 import QtQuick.Layouts
+import musika
 import "ScrollProfiles.js" as ScrollProfiles
 import "Theme.js" as Theme
 
@@ -110,6 +111,21 @@ Item {
     property int memoryScope: -1
     property bool selectable: false
     property bool resetPending: false
+
+    // ── Row marks / Alt verbs ────────────────────────────────────────────
+
+    /// ARC-UI-1: which recycled Alt-hold verb set this scroll body arms
+    /// ("song"/"album"/"artist"); "" disables the overlay.
+    property string quickActionKind: ""
+    /// The id role a selection batch resolves to.
+    readonly property string quickActionField: root.quickActionKind === "album"
+        ? "albumId" : (root.quickActionKind === "artist" ? "artistId" : "songId")
+    /// The download-window row kinds this surface renders.
+    property bool markSongs: true
+    property bool markAlbums: false
+    /// ARC-UI-1: relayed from the body to the host (Home routes it to the
+    /// shared overlay).
+    signal quickAction(var target, var actions)
 
     // ── Row metric ───────────────────────────────────────────────────────
 
@@ -640,6 +656,63 @@ Item {
         }
     }
 
+    // The recycled Alt verb sets and the one download-mark window. Both are
+    // cursor/selection concerns, so the body owns them once for every host.
+    QuickActions {
+        id: quickVerbs
+    }
+
+    MarkWindow {
+        id: markWindow
+        model: root.model
+        firstVisible: root.firstVisibleIndex
+        lastVisible: root.lastVisibleIndex
+        cursor: root.currentIndex
+        songs: root.markSongs
+        albums: root.markAlbums
+    }
+
+    function requestMarkWindow(force) {
+        markWindow.request(force === true);
+    }
+
+    /// ARC-UI-1: arm the Alt overlay on the cursor row (or the selection's
+    /// batch verbs). The host routes the emitted actions to the shared
+    /// overlay; the optimistic heart write keeps the rows in step.
+    function armQuickActions() {
+        if (root.quickActionKind === "" || root.count === 0 || root.currentIndex < 0)
+            return;
+        var item = root.model ? root.model.get(root.currentIndex) : null;
+        if (!item)
+            return;
+
+        var actions = null;
+        if (root.hasSelection) {
+            actions = quickVerbs.forSelection(root.quickActionKind,
+                root.selectionIds(root.quickActionField),
+                root.selectionStarred(root.quickActionField));
+        } else {
+            var preview = function (level) {
+                if (root.model && root.model.setProperty && item.rating !== undefined)
+                    root.model.setProperty(root.currentIndex, "rating", level);
+            };
+            actions = quickVerbs.forItem(root.quickActionKind, item,
+                Backend.cachedAlbumIds.indexOf(item.albumId) !== -1, preview);
+        }
+        if (!actions)
+            return;
+
+        // ARC-I-4: the heart tracks the verb immediately — the cursor row or
+        // the whole selected range is written in place, no reload.
+        quickVerbs.wrapFavorite(actions, function (on) {
+            rowState.markStarred(on);
+        });
+
+        var row = root.view ? root.view.itemAtIndex(root.currentIndex) : null;
+        if (row)
+            root.quickAction(row, actions);
+    }
+
     readonly property bool hasSelection: rowState.hasSelection
     readonly property int selectionCount: rowState.selectionCount
 
@@ -740,10 +813,9 @@ Item {
 
     Transition {
         id: displacedTransition
-        NumberAnimation {
+        Anim {
             properties: "x,y"
             duration: Theme.motion.standard
-            easing.type: Easing.Bezier
             easing.bezierCurve: Theme.ease.decelerate
         }
     }

@@ -64,11 +64,7 @@ Rectangle {
     // tapering to 0.7 at the `narrow` breakpoint ArtistEntry uses; it is
     // continuous, so resizing — or crossing the breakpoint — never jumps.
     readonly property real widthScale: Theme.widthScale(root.width)
-    readonly property real titlePixelSize: {
-        // The linear-toward-a-clamp ramp ArtistEntry's description uses.
-        var full = Theme.fontSize("headline", root.height);
-        return Theme.clamp(full * root.widthScale, 18, full);
-    }
+    readonly property real titlePixelSize: Theme.rampFontSize("headline", root.height, root.width)
     readonly property real effectiveHeaderRatio: root.headerRatio * root.widthScale
 
     /// The room the body has under the header; also the stable row reference
@@ -110,6 +106,11 @@ Rectangle {
     property alias selectable: content.selectable
     readonly property alias hasSelection: content.hasSelection
     readonly property alias selectionCount: content.selectionCount
+    /// ARC-UI-1: the Alt-hold verb kind and the row kinds whose download
+    /// marks this panel requests (forwards to `ScrollContent`).
+    property alias quickActionKind: content.quickActionKind
+    property alias markSongs: content.markSongs
+    property alias markAlbums: content.markAlbums
     property string memoryKey: ""
     property int memoryScope: -1
     property bool _restored: false
@@ -119,6 +120,8 @@ Rectangle {
     signal itemActivated(int index)
     /// ARC-UI-7.9: forwarded from the shared body for host badges/status.
     signal selectionChanged
+    /// ARC-UI-1: the armed Alt verbs, anchored on the cursor row.
+    signal quickAction(var target, var actions)
 
     color: "transparent"
 
@@ -160,6 +163,13 @@ Rectangle {
     function selectedStarred(field) {
         return content.selectionStarred(field);
     }
+
+    /// ARC-UI-1: arm the shared Alt overlay on the cursor row.
+    function armQuickActions() {
+        content.armQuickActions();
+    }
+
+
 
     /// VI-8a: the universal row clipboard — hosts name the row kind
     /// (`song`/`album`/`artist`); paste only ever targets the queue.
@@ -399,6 +409,7 @@ Rectangle {
                 memoryScope: root.memoryScope
                 onItemActivated: (index) => root.itemActivated(index)
                 onSelectionChanged: root.selectionChanged()
+                onQuickAction: (target, actions) => root.quickAction(target, actions)
             }
     
             FadeText {

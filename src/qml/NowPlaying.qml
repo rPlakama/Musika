@@ -42,13 +42,9 @@ Rectangle {
 
     // UI-57: the track title ramps with the window width like the list
     // headers do (ScrollPanel), toward the headline floor — never below it.
-    readonly property real widthScale: Theme.widthScale(root.width)
     /// Star hitbox side under the album name (five slots total).
     readonly property real starUnit: Math.max(14, Math.min(30, root.height * 0.045))
-    readonly property real trackTitlePixelSize: {
-        var full = Theme.fontSize("headline", root.height);
-        return Theme.clamp(full * root.widthScale, 18, full);
-    }
+    readonly property real trackTitlePixelSize: Theme.rampFontSize("headline", root.height, root.width)
     // Keyboard pane: 1 = lyrics, 3 = album actions. Transport is never a pane.
     property int pane: 1
     property bool albumStarred: false
@@ -72,16 +68,6 @@ Rectangle {
             root._lyricsHeld = false;
             root.followLyric();
         }
-    }
-
-    // The seek row's timecode metric: the widest timecode the labels can
-    // render ("00:00:00"), measured in the exact font the labels use. The
-    // boxes below reserve that room, so digits ticking and tracks changing
-    // never resize them (and never move the seek bar).
-    FontMetrics {
-        id: timeMetrics
-        font.family: Theme.fonts.body
-        font.pixelSize: Theme.fontSize("mono", root.height)
     }
 
     // Lyrics (override → cache → server; see src/lyrics.rs).
@@ -220,6 +206,20 @@ Rectangle {
         view.contentY = Math.max(lo, Math.min(limit, view.contentY + delta));
     }
 
+    /// The lyric scroll grammar shared by the inline pane and the overlay.
+    function scrollLyricsBy(action) {
+        // VI-7: the count scales the line motions, not the page motions.
+        var steps = Math.max(1, Backend.keyCount);
+        if (action === "move_up")
+            scrollLyrics(-lyricsView.height * 0.3 * steps);
+        else if (action === "move_down")
+            scrollLyrics(lyricsView.height * 0.3 * steps);
+        else if (action === "page_up")
+            scrollLyrics(-lyricsView.height * 0.5);
+        else if (action === "page_down")
+            scrollLyrics(lyricsView.height * 0.5);
+    }
+
     function holdLyrics() {
         root._lyricsHeld = true;
         lyricsView.stopGlide();
@@ -257,6 +257,16 @@ Rectangle {
         root._lyricsHeld = false;
         if (lyricsView)
             lyricsView.resetView();
+    }
+
+    /// Fetch only when the track changed behind the curtain; re-entry keeps
+    /// the lines, cursor and follow state otherwise (no reload, no flick).
+    function requestLyricsIfChanged() {
+        if (root._lyricsSongId === Backend.currentSongId)
+            return;
+        root.resetLyricsScroll();
+        root.lyricsLoading = true;
+        Backend.requestLyrics();
     }
 
     function applyLyrics(payload) {
@@ -313,21 +323,24 @@ Rectangle {
 
     onActiveLyricChanged: root.followLyric()
 
-    // When a fetch settles with no lyrics, pane 1 no longer exists.
-    onLyricsVisibleChanged: {
+    /// Keep the focus pane valid when lyrics appear/disappear or the split
+    /// collapses (pane 1 only exists while an inline/overlay lyrics surface
+    /// does).
+    function syncPaneWithLyrics() {
         if (!root.lyricsVisible) {
             root.closeLyricsOverlay();
             if (root.pane === 1)
                 root.pane = 3;
+            return;
         }
-    }
-
-    onLyricsInlineChanged: {
         if (root.lyricsInline)
             root.closeLyricsOverlay();
         else if (!root.lyricsOverlayOpen && root.pane === 1)
             root.pane = 3;
     }
+
+    onLyricsVisibleChanged: root.syncPaneWithLyrics()
+    onLyricsInlineChanged: root.syncPaneWithLyrics()
 
     // LYR-8: re-arm the idle window when pane focus moves (5 s vs 2 s).
     onPaneChanged: if (root._lyricsHeld)
@@ -366,14 +379,8 @@ Rectangle {
         if (root.lyricsOverlayOpen) {
             if (action === "back" || action === "cancel")
                 root.closeLyricsOverlay();
-            else if (action === "move_up")
-                scrollLyrics(-lyricsView.height * 0.3 * Math.max(1, Backend.keyCount));
-            else if (action === "move_down")
-                scrollLyrics(lyricsView.height * 0.3 * Math.max(1, Backend.keyCount));
-            else if (action === "page_up")
-                scrollLyrics(-lyricsView.height * 0.5);
-            else if (action === "page_down")
-                scrollLyrics(lyricsView.height * 0.5);
+            else
+                root.scrollLyricsBy(action);
             return;
         }
         if (action === "next_track") {
@@ -414,16 +421,9 @@ Rectangle {
             return;
         }
 
-        // VI-7: the count scales the lyric scroll.
-        var lyricSteps = Math.max(1, Backend.keyCount);
-        if (action === "move_up")
-            scrollLyrics(-lyricsView.height * 0.3 * lyricSteps);
-        else if (action === "move_down")
-            scrollLyrics(lyricsView.height * 0.3 * lyricSteps);
-        else if (action === "page_up")
-            scrollLyrics(-lyricsView.height * 0.5);
-        else if (action === "page_down")
-            scrollLyrics(lyricsView.height * 0.5);
+        if (action === "move_up" || action === "move_down"
+                || action === "page_up" || action === "page_down")
+            root.scrollLyricsBy(action);
         else if (action === "move_left" || action === "move_right")
             root.pane = 3;
     }
@@ -440,11 +440,7 @@ Rectangle {
             // Lyrics stay alive while the player is closed: fetch only when
             // the track changed behind the curtain, otherwise the lines stay
             // exactly where they were (no reload, no flick).
-            if (root._lyricsSongId !== Backend.currentSongId) {
-                root.resetLyricsScroll();
-                lyricsLoading = true;
-                Backend.requestLyrics();
-            }
+            root.requestLyricsIfChanged();
             if (root.pane === 1 && !root.lyricsInline && !root.lyricsOverlayOpen)
                 root.pane = 3;
             // The keybar's album actions reconcile on entry too.
@@ -487,11 +483,8 @@ Rectangle {
                 root.requestAlbumActions();
         }
         function onCurrent_song_id_changed() {
-            if (root.visible) {
-                root.resetLyricsScroll();
-                root.lyricsLoading = true;
-                Backend.requestLyrics();
-            }
+            if (root.visible)
+                root.requestLyricsIfChanged();
         }
         // LYR-8: a seek (keys, seek bar, MPRIS) must not wait out the manual-
         // scroll resume window — drop the hold and re-centre at once, so the
@@ -650,22 +643,10 @@ Rectangle {
                     // next to it keeps a steady length. The digits hug the
                     // box's left edge — the seek row's first mark lines up
                     // with the title and the artist above it.
-                    Rectangle {
-                        radius: Theme.radius
-                        Layout.preferredWidth: timeMetrics.advanceWidth("00:00:00")
-                        Layout.preferredHeight: elapsedText.implicitHeight
+                    TimeLabel {
                         Layout.alignment: Qt.AlignVCenter
-                        color: "transparent"
-
-                        FadeText {
-                            id: elapsedText
-                            anchors.fill: parent
-                            text: Theme.formatTime(Backend.position)
-                            color: Palette.onSurfaceVariant
-                            font.pixelSize: Theme.fontSize("mono", root.height)
-                            horizontalAlignment: Text.AlignLeft
-                            animated: false
-                        }
+                        pixelSize: Theme.fontSize("mono", root.height)
+                        text: Theme.formatTime(Backend.position)
                     }
 
                     ScrubBar {
@@ -677,22 +658,10 @@ Rectangle {
                         onMoved: Backend.playerSeek(value * Backend.duration)
                     }
 
-                    Rectangle {
-                        radius: Theme.radius
-                        Layout.preferredWidth: timeMetrics.advanceWidth("00:00:00")
-                        Layout.preferredHeight: durationText.implicitHeight
+                    TimeLabel {
                         Layout.alignment: Qt.AlignVCenter
-                        color: "transparent"
-
-                        FadeText {
-                            id: durationText
-                            anchors.fill: parent
-                            text: Theme.formatTime(Backend.duration)
-                            color: Palette.onSurfaceVariant
-                            font.pixelSize: Theme.fontSize("mono", root.height)
-                            horizontalAlignment: Text.AlignLeft
-                            animated: false
-                        }
+                        pixelSize: Theme.fontSize("mono", root.height)
+                        text: Theme.formatTime(Backend.duration)
                     }
                 }
 
@@ -811,13 +780,7 @@ Rectangle {
                 enabled: root.lyricsInline
                 opacity: root.lyricsInline ? 1 : 0
 
-                Behavior on opacity {
-                    NumberAnimation {
-                        duration: Theme.motion.quick
-                        easing.type: Easing.Bezier
-                        easing.bezierCurve: Theme.ease.standard
-                    }
-                }
+                Behavior on opacity { Anim {} }
 
                 TapHandler {
                     onTapped: root.pane = 1
@@ -867,6 +830,9 @@ Rectangle {
                             context: "lyrics"
                             visible: root.lyricsAvailable
                             model: lyricModel
+                            // Lyrics carry no download marks or Alt verbs.
+                            markSongs: false
+                            markAlbums: false
                             rowSpacing: root.lyricSize * 0.9
                             // Centred follow, clamped at the pane ends:
                             // the opening and closing lines pin to the
@@ -894,13 +860,7 @@ Rectangle {
                             // LYR-8: the fade in/out shares the follow's
                             // transition value, so a new song arrives and
                             // settles as one motion.
-                            Behavior on opacity {
-                                NumberAnimation {
-                                    duration: lyricsView.followMs
-                                    easing.type: Easing.Bezier
-                                    easing.bezierCurve: Theme.ease.decelerate
-                                }
-                            }
+                            Behavior on opacity { Anim { duration: lyricsView.followMs; easing.bezierCurve: Theme.ease.decelerate } }
 
                             rowDelegate: Component {
                                 FadeText {
@@ -954,27 +914,9 @@ Rectangle {
                                     opacity: lyricLine.distance < 0 ? Theme.contentDim : (lyricLine.active ? 1.0 : (lyricLine.distance === 1 ? Theme.contentDim : Theme.contentDimFar))
                                     scale: lyricLine.emphasis
 
-                                    Behavior on opacity {
-                                        NumberAnimation {
-                                            duration: Theme.motion.quick
-                                            easing.type: Easing.Bezier
-                                            easing.bezierCurve: Theme.ease.standard
-                                        }
-                                    }
-                                    Behavior on scale {
-                                        NumberAnimation {
-                                            duration: Theme.motion.quick
-                                            easing.type: Easing.Bezier
-                                            easing.bezierCurve: Theme.ease.standard
-                                        }
-                                    }
-                                    Behavior on color {
-                                        ColorAnimation {
-                                            duration: Theme.motion.micro
-                                            easing.type: Easing.Bezier
-                                            easing.bezierCurve: Theme.ease.standard
-                                        }
-                                    }
+                                    Behavior on opacity { Anim {} }
+                                    Behavior on scale { Anim {} }
+                                    Behavior on color { ColorAnim { duration: Theme.motion.micro } }
                                 }
                             }
                         }
@@ -1056,26 +998,14 @@ Rectangle {
         }
     }
 
-    Rectangle {
+    Scrim {
         id: lyricsScrim
-        anchors.fill: parent
-        color: "#000000"
-        opacity: root.lyricsOverlayOpen ? 0.35 : 0
-        visible: opacity > 0
+        shown: root.lyricsOverlayOpen
+        strength: 0.35
+        duration: Theme.motion.quick
+        tapToDismiss: true
+        onDismissed: root.closeLyricsOverlay()
         z: Theme.zOverlay
-
-        Behavior on opacity {
-            NumberAnimation {
-                duration: Theme.motion.quick
-                easing.type: Easing.Bezier
-                easing.bezierCurve: Theme.ease.standard
-            }
-        }
-
-        TapHandler {
-            enabled: root.lyricsOverlayOpen
-            onTapped: root.closeLyricsOverlay()
-        }
     }
 
     Item {
@@ -1085,5 +1015,34 @@ Rectangle {
         height: parent.height
         visible: root.lyricsOverlayOpen
         z: Theme.zOverlay + 1
+    }
+
+    // Fixed-width timecode: the widest string the font can paint reserves the
+    // box, so ticking digits and track changes never move the seek bar.
+    component TimeLabel: Rectangle {
+        id: label
+
+        property string text: ""
+        property real pixelSize: 12
+
+        radius: Theme.radius
+        implicitWidth: metrics.advanceWidth("00:00:00")
+        implicitHeight: valueText.implicitHeight
+        color: "transparent"
+
+        FontMetrics {
+            id: metrics
+            font: valueText.font
+        }
+
+        FadeText {
+            id: valueText
+            anchors.fill: parent
+            text: label.text
+            color: Palette.onSurfaceVariant
+            font.pixelSize: label.pixelSize
+            horizontalAlignment: Text.AlignLeft
+            animated: false
+        }
     }
 }

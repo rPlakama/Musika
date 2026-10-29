@@ -196,20 +196,10 @@ Item {
     }
 
     // The dim, not a blur: everything under the prompt drops to half light.
-    Rectangle {
-        radius: Theme.radius
-        id: scrim
-        anchors.fill: parent
-        color: "black"
-        opacity: root.opened ? 0.5 : 0
-
-        Behavior on opacity {
-            NumberAnimation {
-                duration: Theme.motion.standard
-                easing.type: Easing.Bezier
-                easing.bezierCurve: root.opened ? Theme.ease.decelerate : Theme.ease.accelerate
-            }
-        }
+    Scrim {
+        shown: root.opened
+        strength: 0.5
+        easingCurve: root.opened ? Theme.ease.decelerate : Theme.ease.accelerate
     }
 
     // The command line itself: full width, the shared soft radius, no border
@@ -227,20 +217,8 @@ Item {
         opacity: root.opened ? 1 : 0
         clip: true
 
-        Behavior on y {
-            NumberAnimation {
-                duration: Theme.motion.standard
-                easing.type: Easing.Bezier
-                easing.bezierCurve: root.opened ? Theme.ease.decelerate : Theme.ease.accelerate
-            }
-        }
-        Behavior on opacity {
-            NumberAnimation {
-                duration: Theme.motion.standard
-                easing.type: Easing.Bezier
-                easing.bezierCurve: root.opened ? Theme.ease.decelerate : Theme.ease.accelerate
-            }
-        }
+        Behavior on y { Anim { duration: Theme.motion.standard; easing.bezierCurve: root.opened ? Theme.ease.decelerate : Theme.ease.accelerate } }
+        Behavior on opacity { Anim { duration: Theme.motion.standard; easing.bezierCurve: root.opened ? Theme.ease.decelerate : Theme.ease.accelerate } }
 
         RowLayout {
             anchors.fill: parent
@@ -252,7 +230,6 @@ Item {
             AppText {
                 text: "/"
                 color: Palette.primary
-                font.family: Theme.fonts.body
                 font.pixelSize: bar.height * 0.42
                 font.bold: true
                 Layout.alignment: Qt.AlignVCenter
@@ -290,7 +267,6 @@ Item {
                     visible: field.text.length === 0
                     text: "Search this surface"
                     color: Palette.onSurfaceVariant
-                    font.family: Theme.fonts.body
                     font.pixelSize: bar.height * 0.36
                     horizontalAlignment: Text.AlignLeft
                     verticalAlignment: Text.AlignVCenter
@@ -302,7 +278,6 @@ Item {
             AppText {
                 text: root.counterText
                 color: Palette.onSurfaceVariant
-                font.family: Theme.fonts.body
                 font.pixelSize: bar.height * 0.3
                 Layout.alignment: Qt.AlignVCenter
                 visible: text.length > 0
@@ -316,7 +291,7 @@ Item {
             anchors.left: parent.left
             anchors.right: parent.right
             anchors.bottom: parent.bottom
-            height: Math.max(1, root.height * Theme.hairlineRatio) * 2
+            height: Theme.hairline(root.height) * 2
             color: Palette.error
             opacity: 0
         }

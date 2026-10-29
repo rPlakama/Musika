@@ -83,22 +83,15 @@ Rectangle {
         var parts = [];
         var count = songs.count;
         if (count > 0)
-            parts.push(count + (count === 1 ? " Track" : " Tracks"));
+            parts.push(Theme.countLabel(count, "Track"));
         if (root.tracksDuration > 0)
             parts.push(Theme.formatTime(root.tracksDuration));
         if (root.tracksFormat.length > 0)
             parts.push(root.tracksFormat);
-        return parts.join(" · ");
+        return Theme.metaJoin(parts);
     }
     /// The header metadata line: date first, then the track stats.
-    readonly property string albumMetaLine: {
-        var parts = [];
-        if (root.albumMeta.length > 0)
-            parts.push(root.albumMeta);
-        if (root.tracksSummary.length > 0)
-            parts.push(root.tracksSummary);
-        return parts.join(" · ");
-    }
+    readonly property string albumMetaLine: Theme.metaJoin([root.albumMeta, root.tracksSummary])
 
     /// Star hitbox side in the header (five slots total). 60% larger than
     /// the old strip, matching the album-title scale.
@@ -123,26 +116,6 @@ Rectangle {
     /// owns only its cursor/toolbar semantics.
     readonly property bool hasSelection: content.hasSelection
     readonly property int selectionCount: content.selectionCount
-
-    /// Ask the backend for the download state of the rendered rows only.
-    function requestMarkWindow(force) {
-        var ids = [];
-        var lo = content.firstVisibleIndex;
-        var hi = content.lastVisibleIndex;
-        if (lo < 0 || hi < lo) {
-            lo = Math.max(0, content.currentIndex);
-            hi = Math.min(songs.count - 1, lo);
-        }
-        for (var i = lo; i <= hi; ++i) {
-            var row = songs.get(i);
-            if (row && row.songId)
-                ids.push(row.songId);
-        }
-        if (force)
-            Backend.refreshDownloads(JSON.stringify(ids), "[]");
-        else
-            Backend.requestDownloads(JSON.stringify(ids), "[]");
-    }
 
     /// VI-4: `v` toggles visual mode on the cursor row (the toolbar owns no
     /// selection).
@@ -191,31 +164,16 @@ Rectangle {
     }
 
     /// ARC-I-2: Alt armed the gesture — on the cover it arms the album verbs;
-    /// otherwise anchor on the song row under the cursor (the toolbar is a
-    /// no-op, like an empty list). A visual selection swaps in the batch verb
-    /// set (VI-4).
+    /// otherwise the shared body anchors on the song row under the cursor
+    /// (the toolbar is a no-op, like an empty list).
     function armQuickActions() {
         if (root.onCover) {
             root.armCoverActions(false);
             return;
         }
-        if (root.onToolbar || songs.count === 0 || content.currentIndex < 0)
+        if (root.onToolbar)
             return;
-        var row = content.view.itemAtIndex(content.currentIndex);
-        var actions = root.hasSelection ? verbs.forSelection("song", content.selectionIds("songId"), content.selectionStarred("songId")) : (songs.get(content.currentIndex) ? verbs.song(songs.get(content.currentIndex)) : null);
-        if (!actions)
-            return;
-        // ARC-I-4: the heart tracks the verb immediately (see `MediaList`).
-        if (actions.south && actions.south.invoke) {
-            var want = actions.south.favorite === true;
-            var star = actions.south.invoke;
-            actions.south.invoke = function () {
-                star();
-                content.markStarred(want);
-            };
-        }
-        if (row)
-            quickAction(row, actions);
+        content.armQuickActions();
     }
 
     function reload() {
@@ -263,6 +221,17 @@ Rectangle {
         root.notesExpanded = expanded === true;
         if (notesView)
             notesView.contentY = 0;
+    }
+
+    /// Clear every header Tab stop so the rows regain focus; the notes
+    /// reader collapses too unless a caller is about to toggle it.
+    function clearHeaderStops(collapseNotes) {
+        root.onCover = false;
+        root.onArtist = false;
+        root.onNotes = false;
+        root.onToolbar = false;
+        if (collapseNotes !== false)
+            root.setNotesExpanded(false);
     }
 
     function scrollNotes(delta) {
@@ -321,7 +290,6 @@ Rectangle {
             if (!root.followCurrentTrack(false) && !content.restore() && songs.count > 0)
                 content.land(0);
         }
-        root.requestMarkWindow();
     }
 
     /// Place the cursor on the playing track when this page's album is the
@@ -348,8 +316,8 @@ Rectangle {
 
     Component.onCompleted: reload()
 
-    // The mark window follows the song cursor; the cursor follows the
-    // playing track while this album is the one playing.
+    // The cursor follows the playing track while this album is the one
+    // playing.
     Connections {
         target: Screen
         function onDevicePixelRatioChanged() {
@@ -357,18 +325,6 @@ Rectangle {
                 var targetSize = Math.ceil(coverBackdrop.width * Screen.devicePixelRatio);
                 Backend.requestAlbumCover(root.albumId, targetSize);
             }
-        }
-    }
-    Connections {
-        target: content
-        function onCurrentIndexChanged() {
-            root.requestMarkWindow();
-        }
-        function onFirstVisibleIndexChanged() {
-            root.requestMarkWindow();
-        }
-        function onLastVisibleIndexChanged() {
-            root.requestMarkWindow();
         }
     }
     Connections {
@@ -433,11 +389,7 @@ Rectangle {
         if (action === "top" || action === "bottom") {
             if (songs.count === 0)
                 return;
-            root.onCover = false;
-            root.onArtist = false;
-            root.onNotes = false;
-            root.onToolbar = false;
-            root.setNotesExpanded(false);
+            root.clearHeaderStops();
             content.edgeJump(action === "bottom");
             return;
         }
@@ -448,22 +400,14 @@ Rectangle {
             }
             if (songs.count === 0)
                 return;
-            root.onCover = false;
-            root.onArtist = false;
-            root.onNotes = false;
-            root.onToolbar = false;
-            root.setNotesExpanded(false);
+            root.clearHeaderStops();
             content.pageJump(action === "page_down");
             return;
         }
         if (action.indexOf("extend_") === 0) {
             if (songs.count === 0)
                 return;
-            root.onCover = false;
-            root.onArtist = false;
-            root.onNotes = false;
-            root.onToolbar = false;
-            root.setNotesExpanded(false);
+            root.clearHeaderStops();
             content.extendSelection("move_" + action.substring(7));
             return;
         }
@@ -584,10 +528,6 @@ Rectangle {
                     root.albumCacheOn = cache.on === true;
             }
         }
-        // A fetch finished: re-read this page's own window (forced).
-        function onRowReload() {
-            root.requestMarkWindow(true);
-        }
         function onLibrary_changed() {
             root.reload();
         }
@@ -647,11 +587,8 @@ Rectangle {
 
                     TapHandler {
                         onTapped: {
-                            root.onToolbar = false;
-                            root.onArtist = false;
-                            root.onNotes = false;
+                            root.clearHeaderStops();
                             root.onCover = true;
-                            root.setNotesExpanded(false);
                             root.armCoverActions(true);
                         }
                     }
@@ -686,9 +623,7 @@ Rectangle {
 
                     TapHandler {
                         onTapped: {
-                            root.onCover = false;
-                            root.onNotes = false;
-                            root.onToolbar = false;
+                            root.clearHeaderStops(false);
                             root.onArtist = true;
                             root.activateArtist();
                         }
@@ -789,9 +724,7 @@ Rectangle {
                 TapHandler {
                     enabled: root.albumNotes.length > 0
                     onTapped: {
-                        root.onCover = false;
-                        root.onArtist = false;
-                        root.onToolbar = false;
+                        root.clearHeaderStops(false);
                         root.onNotes = true;
                         root.setNotesExpanded(!root.notesExpanded);
                     }
@@ -814,6 +747,8 @@ Rectangle {
                 model: songs
                 selectable: true
                 memoryKey: root.memoryKey
+                quickActionKind: "song"
+                onQuickAction: (target, actions) => root.quickAction(target, actions)
                 visible: !(root.loading && songs.count === 0)
                 // ARC-UI-2 M1: the rows paint track, title and duration.
                 searchFields: ["track", "title", "subtitle", "duration"]
@@ -842,20 +777,25 @@ Rectangle {
 
                         // VI-4: a row inside the visual selection wears the cursor fill.
                         readonly property bool selectedRow: content.selected(index)
+                        // Attached `ListView.isCurrentItem` only resolves on
+                        // the delegate root; children read this instead.
+                        readonly property bool currentItem: ListView.isCurrentItem && !root.onToolbar
                         readonly property bool emphasized: ListView.isCurrentItem || rowHover.hovered
 
                         width: ListView.view ? ListView.view.width : 0
                         z: emphasized ? 1 : 0
                         // UI-58: the model's page-relative adaptive row.
                         height: content.adaptiveRowHeight
-                        color: ((ListView.isCurrentItem && !root.onToolbar) || songRow.selectedRow) ? Palette.secondaryContainer : (rowHover.hovered ? Palette.surfaceContainerHigh : (index % 2 === 0 ? Palette.surface : Palette.surfaceContainerLowest))
+                        color: "transparent"
 
-                        Behavior on color {
-                            ColorAnimation {
-                                duration: Theme.motion.quick
-                                easing.type: Easing.Bezier
-                                easing.bezierCurve: Theme.ease.standard
-                            }
+                        // The shared fill layer: zebra, hover, cursor and range.
+                        RowHighlight {
+                            index: songRow.index
+                            striped: true
+                            baseColor: Palette.surface
+                            current: songRow.currentItem
+                            hovered: rowHover.hovered
+                            selected: songRow.selectedRow
                         }
 
                         // The shared list row: AlbumEntry is the no-cover context.
@@ -864,7 +804,7 @@ Rectangle {
                             viewWidth: songRow.width
                             rowHeight: songRow.height
                             emphasized: songRow.emphasized
-                            current: ListView.isCurrentItem && !root.onToolbar
+                            current: songRow.currentItem
                             showCover: false
                             showSubtitle: songRow.subtitle.length > 0
                             title: songRow.track.length > 0 ? songRow.track + ". " + songRow.title : songRow.title
@@ -896,10 +836,7 @@ Rectangle {
                         TapHandler {
                             acceptedModifiers: Qt.ShiftModifier
                             onTapped: {
-                                root.onCover = false;
-                                root.onNotes = false;
-                                root.onToolbar = false;
-                                root.setNotesExpanded(false);
+                                root.clearHeaderStops();
                                 content.extendSelectionTo(songRow.index);
                             }
                         }
@@ -907,10 +844,7 @@ Rectangle {
                             acceptedModifiers: Qt.NoModifier
                             onTapped: {
                                 // VI-4: direct play ends the visual selection.
-                                root.onCover = false;
-                                root.onNotes = false;
-                                root.onToolbar = false;
-                                root.setNotesExpanded(false);
+                                root.clearHeaderStops();
                                 content.clearSelection();
                                 content.currentIndex = songRow.index;
                                 Backend.playAlbum(root.albumId, songRow.index);

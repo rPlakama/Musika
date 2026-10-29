@@ -55,13 +55,7 @@ Item {
             ? Palette.primary
             : (chipHover.hovered ? Palette.onSurface : Palette.onSurfaceVariant)
 
-        Behavior on symbolColor {
-            ColorAnimation {
-                duration: Theme.motion.quick
-                easing.type: Easing.Bezier
-                easing.bezierCurve: Theme.ease.standard
-            }
-        }
+        Behavior on symbolColor { ColorAnim {} }
     }
 
     HoverHandler {

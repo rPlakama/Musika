@@ -76,10 +76,6 @@ var ease = {
     // by OutBack + easing.overshoot instead.
 }
 
-// Legacy aliases; new code uses motion.* / ease.*.
-var duration = motion.quick
-var easeOut = ease.standard
-
 // ---------------------------------------------------------------------------
 // Layering (z) — a single ladder so future surfaces don't invent values.
 // ---------------------------------------------------------------------------
@@ -97,6 +93,14 @@ var playerRatio = 0.0828
 
 // 1px-ish hairlines, but proportional so they survive scaling.
 var hairlineRatio = 0.0018
+
+/// The one hairline clamp: a reference edge scaled by `hairlineRatio`, never
+/// thinner than a device pixel. Callers pass the dimension they already use
+/// (a border's box, a divider's span); `Theme.hairline` is the only owner of
+/// the `Math.max(1, …)` recipe.
+function hairline(reference) {
+    return Math.max(1, reference * hairlineRatio)
+}
 
 // Responsive breakpoints (logical px, UI-32): one shared vocabulary instead of
 // ad-hoc width checks. Clamps here are sanctioned like `fontSize`.
@@ -265,6 +269,14 @@ function widthScale(width, floor) {
         / (breakpoints.compact - breakpoints.narrow)), base, 1)
 }
 
+/// The shared headline ramp: a type role sized from the height, scaled by the
+/// width ramp, floored at `floor` and capped at the role's own size. Used by
+/// the list/detail headers so their titles share one formula.
+function rampFontSize(role, referenceHeight, referenceWidth, floor) {
+    var full = fontSize(role, referenceHeight)
+    return clamp(full * widthScale(referenceWidth), (floor === undefined) ? 18 : floor, full)
+}
+
 // UI-58: adaptive rows. A row may lose at most 18% of its baseline
 // (default-window) height; past that it stops shrinking instead of trading a
 // whole row. The old row-count step made the row unit discontinuous, so a
@@ -293,21 +305,6 @@ function volumeIcon(volume, muted) {
     return "qrc:/app/icons/vol-high-svgrepo-com.svg"
 }
 
-// VI-11: `gg`/`G` land a list cursor on the first/last row and keep it
-// visible. `last` picks the edge; `mode` is the ListView position mode
-// (callers pass ListView.Contain — a `.pragma library` has no QtQuick globals).
-// Empty lists are no-ops. The view is snapped even when the cursor already
-// sits on the edge: the view can be elsewhere (mouse scroll, a lagging
-// follow), and skipping the snap made the next key animatively swoosh the
-// whole way back.
-function cursorEdge(list, last, mode) {
-    if (!list || list.count === 0)
-        return;
-    var target = last ? list.count - 1 : 0;
-    list.currentIndex = target;
-    list.positionViewAtIndex(target, mode);
-}
-
 // UI-45: cap a selection emphasis so the scaled text stops at its own box
 // edge (the lyrics stage does the same against the pane margin). `room` is
 // the text box width, `needed` its painted width.
@@ -315,6 +312,24 @@ function fitScale(room, needed, max) {
     if (room <= 0 || needed <= 0)
         return max;
     return Math.min(max, room / needed);
+}
+
+// One metadata separator for the whole app: the wide dot used between the
+// parts of a row/header meta line (artist, album, year, runtime, count).
+// Empty parts are dropped, so a host never assembles its own separator.
+function metaJoin(parts) {
+    var out = []
+    for (var i = 0; i < parts.length; ++i) {
+        if (parts[i] !== undefined && parts[i] !== null && String(parts[i]).length > 0)
+            out.push(String(parts[i]))
+    }
+    return out.join("   ·   ")
+}
+
+// The one English count phrase (`1 Track`, `2 Tracks`, `1 album`, …).
+function countLabel(count, singular, plural) {
+    var n = Number(count) || 0
+    return n + " " + (n === 1 ? singular : (plural === undefined ? singular + "s" : plural))
 }
 
 // Shared "m:ss" (h:mm:ss past the hour), used by every time label (UI-26).

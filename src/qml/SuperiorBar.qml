@@ -137,7 +137,7 @@ Rectangle {
         anchors.left: parent.left
         anchors.right: parent.right
         anchors.bottom: parent.bottom
-        height: Math.max(1, root.height * Theme.hairlineRatio)
+        height: Theme.hairline(root.height)
         color: Palette.outlineVariant
     }
 
@@ -335,12 +335,11 @@ Rectangle {
                         easing.type: Easing.Linear
                     }
 
-                    NumberAnimation {
+                    Anim {
                         id: settleSpin
                         target: syncIcon
                         property: "rotation"
                         duration: Theme.motion.standard
-                        easing.type: Easing.Bezier
                         easing.bezierCurve: Theme.ease.bounce
                     }
 
@@ -363,9 +362,7 @@ Rectangle {
                         // nothing shifts layout.
                         transform: Translate { x: syncFx.offset }
 
-                        Behavior on opacity {
-                            NumberAnimation { duration: Theme.motion.micro; easing.type: Easing.Bezier; easing.bezierCurve: Theme.ease.standard }
-                        }
+                        Behavior on opacity { Anim { duration: Theme.motion.micro } }
                     }
 
                     ScopeRing {
@@ -418,9 +415,7 @@ Rectangle {
                         height: width
                         opacity: Backend.librarySyncing ? 0.38 : (wipeHover.hovered ? 1.0 : 0.85)
 
-                        Behavior on opacity {
-                            NumberAnimation { duration: Theme.motion.micro; easing.type: Easing.Bezier; easing.bezierCurve: Theme.ease.standard }
-                        }
+                        Behavior on opacity { Anim { duration: Theme.motion.micro } }
                     }
 
                     ScopeRing {

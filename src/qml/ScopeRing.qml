@@ -25,7 +25,7 @@ Rectangle {
     id: root
 
     property bool shown: false
-    property real lineWidth: Math.max(1, root.height * Theme.hairlineRatio * 3.25)
+    property real lineWidth: Theme.hairline(root.height * 3.25)
 
     anchors.fill: parent
     radius: Theme.radius
@@ -34,11 +34,5 @@ Rectangle {
     border.color: Palette.primary
     opacity: root.shown ? 1 : 0
 
-    Behavior on opacity {
-        NumberAnimation {
-            duration: Theme.motion.micro
-            easing.type: Easing.Bezier
-            easing.bezierCurve: Theme.ease.standard
-        }
-    }
+    Behavior on opacity { Anim { duration: Theme.motion.micro } }
 }

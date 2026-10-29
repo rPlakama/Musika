@@ -43,6 +43,11 @@ Rectangle {
     property bool selected: false
     /// How far the block bleeds past the row on each side.
     property real overflow: 0
+    /// Zebra rows: alternate `stripeColor` below the hover/cursor fills.
+    property bool striped: false
+    property int index: -1
+    property color baseColor: "transparent"
+    property color stripeColor: Palette.surfaceContainerLowest
 
     anchors.left: parent.left
     anchors.right: parent.right
@@ -52,11 +57,10 @@ Rectangle {
     anchors.rightMargin: -root.overflow
     color: root.selected || (root.current && root.active)
         ? Palette.secondaryContainer
-        : (root.hovered ? Palette.surfaceContainerHigh : "transparent")
+        : (root.hovered ? Palette.surfaceContainerHigh
+            : (root.striped && root.index % 2 !== 0 ? root.stripeColor : root.baseColor))
 
-    Behavior on color {
-        ColorAnimation { duration: Theme.motion.quick; easing.type: Easing.Bezier; easing.bezierCurve: Theme.ease.standard }
-    }
+    Behavior on color { ColorAnim {} }
 
     // Inactive-column cue: a dim accent tick on the block.
     Rectangle {

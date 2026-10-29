@@ -95,13 +95,7 @@ Item {
         // Off keeps the slot but is visually absent; the click and Ctrl-R
         // still cycle it.
         opacity: Backend.repeatMode === 0 ? 0.0 : 1.0
-        Behavior on opacity {
-            NumberAnimation {
-                duration: Theme.motion.quick
-                easing.type: Easing.Bezier
-                easing.bezierCurve: Theme.ease.standard
-            }
-        }
+        Behavior on opacity { Anim {} }
         onClicked: Backend.cycleRepeat()
 
         Icon {

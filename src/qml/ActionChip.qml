@@ -43,15 +43,9 @@ Rectangle {
     radius: Theme.radius
     color: chipHover.hovered ? Palette.secondaryContainer : Palette.surfaceContainerHigh
     border.color: Palette.outlineVariant
-    border.width: Math.max(1, chip.unit * Theme.hairlineRatio)
+    border.width: Theme.hairline(chip.unit)
 
-    Behavior on color {
-        ColorAnimation {
-            duration: Theme.motion.quick
-            easing.type: Easing.Bezier
-            easing.bezierCurve: Theme.ease.standard
-        }
-    }
+    Behavior on color { ColorAnim {} }
 
     Row {
         id: content

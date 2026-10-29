@@ -107,6 +107,7 @@
         preBuild = ''
           sh scripts/check-icons.sh
           QMLLINT=${qt}/bin/qmllint sh scripts/check-qml.sh
+          sh scripts/check-dry.sh
         '';
 
         # Wrap by hand: the merged `qt` env is what qtbridge resolves against,

@@ -159,15 +159,13 @@ ApplicationWindow {
 
     onPaletteTChanged: pushPalette(paletteT)
 
-    NumberAnimation {
+    Anim {
         id: paletteFade
         target: root
         property: "paletteT"
         from: 0
         to: 1
         duration: Theme.motion.standard
-        easing.type: Easing.Bezier
-        easing.bezierCurve: Theme.ease.standard
     }
 
     // Global key handler. It wraps the screen stack so unhandled keys bubble up

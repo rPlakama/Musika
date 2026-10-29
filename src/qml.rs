@@ -1780,6 +1780,7 @@ impl Backend {
             let payload = serde_json::json!({
                 "album_id": album_id,
                 "cover": url,
+                "size": target_size,
             })
             .to_string();
             emit(&invoker, "album_cover", payload);
@@ -1804,6 +1805,7 @@ impl Backend {
             let payload = serde_json::json!({
                 "artist_id": artist_id,
                 "cover": url,
+                "size": target_size,
             })
             .to_string();
             emit(&invoker, "artist_cover", payload);
@@ -1822,6 +1824,7 @@ impl Backend {
             let payload = serde_json::json!({
                 "id": cover_id,
                 "cover": url,
+                "size": target_size,
             })
             .to_string();
             emit(&invoker, "cover", payload);

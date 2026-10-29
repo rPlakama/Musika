@@ -530,7 +530,9 @@ Rectangle {
                     Backend.ResetRowMarks();
             } else if (channel === "cover") {
                 var art = JSON.parse(payload);
-                if (art.id === Backend.currentCoverArt && art.cover)
+                // Drop a reply for an older pane size or a previous track.
+                if (art.id === Backend.currentCoverArt && art.cover
+                        && Number(art.size) === root._coverTarget)
                     root._displayCoverUrl = art.cover;
             } else if (channel === "album_state") {
                 var state = JSON.parse(payload);

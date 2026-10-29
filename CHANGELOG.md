@@ -15,6 +15,10 @@ open work; this file is the release history.
   late full-size payload can no longer overwrite an already-loaded display
   copy.
 
+- Keep display-sized covers stable across width changes: resized files no
+  longer derive a missing `.thumb.jpg`, and a late reply for an older size
+  bucket is discarded instead of replacing the current cover.
+
 ## 0.4.11 - _Cover improvements and other minor_
 
 -  `54beb51`  Use DPI for CoverLoading

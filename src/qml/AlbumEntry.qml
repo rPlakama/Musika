@@ -187,7 +187,11 @@ Rectangle {
     function requestCoverNow() {
         var target = CoverSize.target(coverBackdrop.coverSide, Screen.devicePixelRatio,
             Math.max(Screen.width, Screen.height));
-        if (target <= 0 || target === root._coverTarget)
+        if (target <= 0) {
+            root._coverTarget = 0;
+            return;
+        }
+        if (target === root._coverTarget)
             return;
         root._coverTarget = target;
         Backend.requestAlbumCover(root.albumId, target);
@@ -527,7 +531,10 @@ Rectangle {
                 root.applyInfo(payload);
             else if (channel === "album_cover") {
                 var art = JSON.parse(payload);
-                if (art.album_id === root.albumId && art.cover)
+                // A slower request for an older width bucket must not replace
+                // the copy requested for the current cover box.
+                if (art.album_id === root.albumId && art.cover
+                        && Number(art.size) === root._coverTarget)
                     root.albumCover = art.cover;
             } else if (channel === "album_artist") {
                 var link = JSON.parse(payload);

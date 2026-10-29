@@ -167,7 +167,11 @@ Rectangle {
     function requestCoverNow() {
         var target = CoverSize.target(coverBackdrop.coverSide, Screen.devicePixelRatio,
             Math.max(Screen.width, Screen.height));
-        if (target <= 0 || target === root._coverTarget)
+        if (target <= 0) {
+            root._coverTarget = 0;
+            return;
+        }
+        if (target === root._coverTarget)
             return;
         root._coverTarget = target;
         Backend.requestArtistCover(root.artistId, target);
@@ -404,7 +408,9 @@ Rectangle {
                 root.applyCache(payload);
             else if (channel === "artist_cover") {
                 var art = JSON.parse(payload);
-                if (art.artist_id === root.artistId && art.cover) {
+                // Reject a reply for an older width bucket.
+                if (art.artist_id === root.artistId && art.cover
+                        && Number(art.size) === root._coverTarget) {
                     root.artistCover = art.cover;
                     root._coverFromDisplay = true;
                 }

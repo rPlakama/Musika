@@ -67,6 +67,22 @@ Item {
     // Keep in sync with `THUMB_EDGE` in src/covers.rs.
     readonly property int thumbEdge: 320
 
+    // A display-sized copy (`raw-hash_768x768.jpg`) already is the DPI
+    // target. Deriving `…_768x768.thumb.jpg` from it would point at a file
+    // the cache never writes; keep the display copy as-is when the surface
+    // shrinks below the thumb edge (the sourceSize still downscales it).
+    readonly property var _displayMatch: /_([0-9]+)x[0-9]+\./.exec(root.source.toString())
+    readonly property int displayEdge: root._displayMatch ? Number(root._displayMatch[1]) : 0
+    readonly property bool displayCopy: root.displayEdge > 0
+
+    // Decode a display copy at its own bucket, not at the live painted size:
+    // resizing inside one bucket must not restart the async decode every
+    // 32 px (the cover would blink while the window moves).
+    readonly property int sourceWidth: root.usingThumb
+        ? root.thumbEdge : (root.displayCopy ? root.displayEdge : root.decodeWidth)
+    readonly property int sourceHeight: root.usingThumb
+        ? root.thumbEdge : (root.displayCopy ? root.displayEdge : root.decodeHeight)
+
     function thumbUrl(u) {
         var text = u.toString()
         var slash = text.lastIndexOf("/")
@@ -80,7 +96,7 @@ Item {
             return ""
         if (text.indexOf("file:") !== 0)
             return root.source
-        if (root.thumbFailed)
+        if (root.thumbFailed || root.displayCopy)
             return root.source
         var deviceEdge = Math.max(root.decodeWidth, root.decodeHeight) * Screen.devicePixelRatio
         return deviceEdge <= root.thumbEdge ? root.thumbUrl(text) : root.source
@@ -90,8 +106,8 @@ Item {
         id: image
         anchors.fill: parent
         source: root.imageSource
-        sourceSize.width: root.usingThumb ? root.thumbEdge : root.decodeWidth
-        sourceSize.height: root.usingThumb ? root.thumbEdge : root.decodeHeight
+        sourceSize.width: root.sourceWidth
+        sourceSize.height: root.sourceHeight
         asynchronous: true
         // MEMORY: Qt's image cache keeps decoded covers after their delegate
         // dies, so scrolling a wall or changing tabs grows without bound.
@@ -105,7 +121,7 @@ Item {
         mipmap: true
         visible: root.ready
         onStatusChanged: {
-            if (status === Image.Error && !root.thumbFailed
+            if (status === Image.Error && !root.thumbFailed && !root.displayCopy
                     && root.imageSource.toString() !== root.source.toString())
                 root.thumbFailed = true
         }

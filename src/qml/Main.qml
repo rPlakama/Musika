@@ -30,6 +30,25 @@ ApplicationWindow {
     color: Palette.background
     title: exitOverlay.running ? "Bye!" : qsTr("Musika")
 
+    // An account already present in the DB opens Home immediately. The async
+    // startup auth still runs behind it; only a real failure can route back
+    // to Login.
+    property bool homeActive: Backend.hasStoredAuth()
+
+    function showHome() {
+        if (root.homeActive)
+            return;
+        root.homeActive = true;
+        stack.replace(homeScreen);
+    }
+
+    function showLogin() {
+        if (!root.homeActive)
+            return;
+        root.homeActive = false;
+        stack.replace(loginScreen);
+    }
+
     // Debug only: report the first paint, then stay quiet.
     property bool frontendReadySent: false
     onAfterRendering: {
@@ -345,18 +364,18 @@ ApplicationWindow {
         StackView {
             id: stack
             anchors.fill: parent
-            initialItem: loginScreen
+            initialItem: root.homeActive ? homeScreen : loginScreen
 
             Connections {
                 target: Backend
                 function onLogged_in_changed() {
                     if (Backend.loggedIn)
-                        stack.replace(homeScreen);
+                        root.showHome();
                     else
-                        stack.replace(loginScreen);
+                        root.showLogin();
                 }
                 function onLoginRequired() {
-                    stack.replace(loginScreen);
+                    root.showLogin();
                 }
             }
         }

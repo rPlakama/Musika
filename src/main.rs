@@ -212,6 +212,16 @@ fn main() {
     };
     #[cfg(debug_assertions)]
     crate::debug_info::report("db.init", db_started);
+
+    // The login screen must not flash for an account already in the DB.
+    // Read it before QML loads; the async startup ping still owns the
+    // online/offline state and the failure fallback.
+    let has_stored_auth = crate::app::runtime()
+        .block_on(crate::sqlite::load_credentials(&dbs.credentials))
+        .ok()
+        .flatten()
+        .is_some();
+    crate::qml::set_bootstrap_has_auth(has_stored_auth);
     crate::app::set_dbs(dbs);
 
     let mut app = QApp::new();

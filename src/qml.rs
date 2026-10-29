@@ -18,7 +18,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::LazyLock;
 use std::sync::Mutex;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use qtbridge::{QmlObject, qobject};
 use serde::ser::{Serialize, SerializeSeq, SerializeStruct, Serializer};
@@ -53,6 +53,15 @@ use crate::session::client;
 use download::selection_toggle;
 use support::{album_state_payload, emit, raise};
 use sync::{index_value, spawn_sync};
+
+/// True when the credentials DB already has a usable account at process start.
+/// Read once in main before QML loads; it decides whether Main opens Home or
+/// Login without waiting for the async auth ping.
+static BOOTSTRAP_HAS_AUTH: AtomicBool = AtomicBool::new(false);
+
+pub(crate) fn set_bootstrap_has_auth(has_auth: bool) {
+    BOOTSTRAP_HAS_AUTH.store(has_auth, Ordering::Relaxed);
+}
 
 /// Bumped by every status change; the debounced writer only persists when its
 /// captured generation is still the latest (P-6 / roadmap "Session status").
@@ -757,6 +766,13 @@ impl Backend {
     #[qslot]
     fn startup(&mut self) {
         self.startup_impl();
+    }
+
+    /// Whether Main should open Home directly at process start. Set from the
+    /// credentials DB before the QML engine loads.
+    #[qslot(qml_name = "hasStoredAuth")]
+    fn has_stored_auth(&self) -> bool {
+        BOOTSTRAP_HAS_AUTH.load(Ordering::Relaxed)
     }
 
     /// Debug only: the first rendered frame (no-op in release).

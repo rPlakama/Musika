@@ -106,9 +106,7 @@ Rectangle {
 
     /// The header gap follows the cover but never eats more than 75% of
     /// the usable page height; wide pages keep room for the rows.
-    readonly property real headerCoverBottom: Math.min(
-        coverBackdrop.coverSide - root.width * 0.02,
-        (root.height - root.width * 0.04) * 0.75)
+    readonly property real headerCoverBottom: Math.min(coverBackdrop.coverSide - root.width * 0.02, (root.height - root.width * 0.04) * 0.75)
 
     color: Palette.surface
 
@@ -228,14 +226,20 @@ Rectangle {
         root.setNotesExpanded(false);
         Backend.requestAlbumSongs(root.albumId);
         Backend.requestAlbumInfo(root.albumId);
-        Backend.requestAlbumCover(root.albumId);
-        // UI-60: the header's favourite + rating marks reconcile here (the
-        // opener's row flags may be stale); the cover's Download/Remove verb
-        // reads the container rule state.
+
+        // Calculate physical pixels based on Screen DPI/scale factor:
+        var targetSize = Math.ceil(coverBackdrop.width * Screen.devicePixelRatio);
+        // Ensure a reasonable fallback size if the layout hasn't completed yet
+        if (targetSize <= 0) {
+            targetSize = Math.ceil(root.headerCoverBottom * Screen.devicePixelRatio);
+        }
+
+        // Pass the calculated pixel size to the C++ / Rust backend
+        Backend.requestAlbumCover(root.albumId, targetSize);
+
         Backend.requestAlbumState(root.albumId);
         Backend.requestAlbumCache(root.albumId);
     }
-
     function applyInfo(payload) {
         var info = JSON.parse(payload);
         root.albumNotes = info.notes ? info.notes : "";
@@ -347,6 +351,15 @@ Rectangle {
     // The mark window follows the song cursor; the cursor follows the
     // playing track while this album is the one playing.
     Connections {
+        target: Screen
+        function onDevicePixelRatioChanged() {
+            if (root.albumId !== "") {
+                var targetSize = Math.ceil(coverBackdrop.width * Screen.devicePixelRatio);
+                Backend.requestAlbumCover(root.albumId, targetSize);
+            }
+        }
+    }
+    Connections {
         target: content
         function onCurrentIndexChanged() {
             root.requestMarkWindow();
@@ -381,9 +394,7 @@ Rectangle {
     function yankRows(rowOnly) {
         if (songs.count === 0 || content.currentIndex < 0)
             return;
-        var indices = (rowOnly || !root.hasSelection)
-            ? [content.currentIndex]
-            : content.selectionIndices();
+        var indices = (rowOnly || !root.hasSelection) ? [content.currentIndex] : content.selectionIndices();
         var ids = [];
         for (var i = 0; i < indices.length; ++i) {
             var item = songs.get(indices[i]);
@@ -405,8 +416,7 @@ Rectangle {
             var state = root.onCover ? 1 : (root.onArtist ? 2 : (root.onNotes ? 3 : (root.onToolbar ? 4 : 0)));
             do {
                 state = (state + (action === "pane_cycle" ? 1 : 4)) % 5;
-            } while ((state === 2 && root.albumArtist.length === 0)
-                || (state === 3 && root.albumNotes.length === 0))
+            } while ((state === 2 && root.albumArtist.length === 0) || (state === 3 && root.albumNotes.length === 0))
             root.onCover = state === 1;
             root.onArtist = state === 2;
             root.onNotes = state === 3;
@@ -558,8 +568,7 @@ Rectangle {
                 var art = JSON.parse(payload);
                 if (art.album_id === root.albumId && art.cover)
                     root.albumCover = art.cover;
-            }
-            else if (channel === "album_artist") {
+            } else if (channel === "album_artist") {
                 var link = JSON.parse(payload);
                 if (link.album_id === root.albumId && link.artist_id)
                     root.artistActivated(link.artist_id, root.albumArtist, root.albumCover);
@@ -608,8 +617,7 @@ Rectangle {
             id: header
             Layout.fillWidth: true
             // The rows start below the displayed square art, not on top of it.
-            Layout.bottomMargin: Math.max(0, root.headerCoverBottom - header.implicitHeight
-                - (headerGap.visible ? root.height * 0.22 : 0))
+            Layout.bottomMargin: Math.max(0, root.headerCoverBottom - header.implicitHeight - (headerGap.visible ? root.height * 0.22 : 0))
             spacing: root.height * 0.008
 
             // Description.
@@ -743,9 +751,7 @@ Rectangle {
                 anchors.top: parent.top
                 anchors.left: parent.left
                 anchors.right: parent.right
-                height: root.albumNotes.length > 0
-                    ? Math.min(parent.height, root.height * 0.325)
-                    : 0
+                height: root.albumNotes.length > 0 ? Math.min(parent.height, root.height * 0.325) : 0
                 visible: root.albumNotes.length > 0
                 clip: true
 
@@ -822,115 +828,115 @@ Rectangle {
                 rowRefHeight: root.height
 
                 rowDelegate: Component {
-                Rectangle {
-                    id: songRow
-                    radius: Theme.radius
-                    required property int index
-                    required property string track
-                    required property string title
-                    required property string subtitle
-                    required property string duration
-                    required property string songId
-                    required property string albumId
-                    required property bool starred
+                    Rectangle {
+                        id: songRow
+                        radius: Theme.radius
+                        required property int index
+                        required property string track
+                        required property string title
+                        required property string subtitle
+                        required property string duration
+                        required property string songId
+                        required property string albumId
+                        required property bool starred
 
-                    // VI-4: a row inside the visual selection wears the cursor fill.
-                    readonly property bool selectedRow: content.selected(index)
-                    readonly property bool emphasized: ListView.isCurrentItem || rowHover.hovered
+                        // VI-4: a row inside the visual selection wears the cursor fill.
+                        readonly property bool selectedRow: content.selected(index)
+                        readonly property bool emphasized: ListView.isCurrentItem || rowHover.hovered
 
-                    width: ListView.view ? ListView.view.width : 0
-                    z: emphasized ? 1 : 0
-                    // UI-58: the model's page-relative adaptive row.
-                    height: content.adaptiveRowHeight
-                    color: ((ListView.isCurrentItem && !root.onToolbar) || songRow.selectedRow) ? Palette.secondaryContainer : (rowHover.hovered ? Palette.surfaceContainerHigh : (index % 2 === 0 ? Palette.surface : Palette.surfaceContainerLowest))
+                        width: ListView.view ? ListView.view.width : 0
+                        z: emphasized ? 1 : 0
+                        // UI-58: the model's page-relative adaptive row.
+                        height: content.adaptiveRowHeight
+                        color: ((ListView.isCurrentItem && !root.onToolbar) || songRow.selectedRow) ? Palette.secondaryContainer : (rowHover.hovered ? Palette.surfaceContainerHigh : (index % 2 === 0 ? Palette.surface : Palette.surfaceContainerLowest))
 
-                    Behavior on color {
-                        ColorAnimation {
-                            duration: Theme.motion.quick
-                            easing.type: Easing.Bezier
-                            easing.bezierCurve: Theme.ease.standard
+                        Behavior on color {
+                            ColorAnimation {
+                                duration: Theme.motion.quick
+                                easing.type: Easing.Bezier
+                                easing.bezierCurve: Theme.ease.standard
+                            }
                         }
-                    }
 
-                    // The shared list row: AlbumEntry is the no-cover context.
-                    RowBody {
-                        anchors.fill: parent
-                        viewWidth: songRow.width
-                        rowHeight: songRow.height
-                        emphasized: songRow.emphasized
-                        current: ListView.isCurrentItem && !root.onToolbar
-                        showCover: false
-                        showSubtitle: songRow.subtitle.length > 0
-                        title: songRow.track.length > 0 ? songRow.track + ". " + songRow.title : songRow.title
-                        subtitle: songRow.subtitle
-                        meta: songRow.duration
-                        reserveMeta: true
-                        metaAlignRight: true
-                        leftMargin: songRow.width * 0.02
-                        textGap: songRow.width * 0.02
-                        rightMargin: songRow.width * 0.02
-                        marksMargin: songRow.width * 0.01275
-                        markCursor: content.currentIndex
-                        visibleStart: content.firstVisibleIndex
-                        visibleEnd: content.lastVisibleIndex
-                        markIndex: songRow.index
-                        markSongId: songRow.songId
-                        markAlbumId: songRow.albumId
-                        markStarred: songRow.starred
-                        markRatingVisible: false
-                        searchQuery: content.searchQuery
-                        searchCurrent: songRow.index === content.searchCurrentRow
-                    }
-
-                    HoverHandler {
-                        id: rowHover
-                        cursorShape: Qt.PointingHandCursor
-                    }
-
-                    TapHandler {
-                        acceptedModifiers: Qt.ShiftModifier
-                        onTapped: {
-                            root.onCover = false;
-                            root.onNotes = false;
-                            root.onToolbar = false;
-                            root.setNotesExpanded(false);
-                            content.extendSelectionTo(songRow.index);
+                        // The shared list row: AlbumEntry is the no-cover context.
+                        RowBody {
+                            anchors.fill: parent
+                            viewWidth: songRow.width
+                            rowHeight: songRow.height
+                            emphasized: songRow.emphasized
+                            current: ListView.isCurrentItem && !root.onToolbar
+                            showCover: false
+                            showSubtitle: songRow.subtitle.length > 0
+                            title: songRow.track.length > 0 ? songRow.track + ". " + songRow.title : songRow.title
+                            subtitle: songRow.subtitle
+                            meta: songRow.duration
+                            reserveMeta: true
+                            metaAlignRight: true
+                            leftMargin: songRow.width * 0.02
+                            textGap: songRow.width * 0.02
+                            rightMargin: songRow.width * 0.02
+                            marksMargin: songRow.width * 0.01275
+                            markCursor: content.currentIndex
+                            visibleStart: content.firstVisibleIndex
+                            visibleEnd: content.lastVisibleIndex
+                            markIndex: songRow.index
+                            markSongId: songRow.songId
+                            markAlbumId: songRow.albumId
+                            markStarred: songRow.starred
+                            markRatingVisible: false
+                            searchQuery: content.searchQuery
+                            searchCurrent: songRow.index === content.searchCurrentRow
                         }
-                    }
-                    TapHandler {
-                        acceptedModifiers: Qt.NoModifier
-                        onTapped: {
-                            // VI-4: direct play ends the visual selection.
-                            root.onCover = false;
-                            root.onNotes = false;
-                            root.onToolbar = false;
-                            root.setNotesExpanded(false);
-                            content.clearSelection();
-                            content.currentIndex = songRow.index;
-                            Backend.playAlbum(root.albumId, songRow.index);
+
+                        HoverHandler {
+                            id: rowHover
+                            cursorShape: Qt.PointingHandCursor
+                        }
+
+                        TapHandler {
+                            acceptedModifiers: Qt.ShiftModifier
+                            onTapped: {
+                                root.onCover = false;
+                                root.onNotes = false;
+                                root.onToolbar = false;
+                                root.setNotesExpanded(false);
+                                content.extendSelectionTo(songRow.index);
+                            }
+                        }
+                        TapHandler {
+                            acceptedModifiers: Qt.NoModifier
+                            onTapped: {
+                                // VI-4: direct play ends the visual selection.
+                                root.onCover = false;
+                                root.onNotes = false;
+                                root.onToolbar = false;
+                                root.setNotesExpanded(false);
+                                content.clearSelection();
+                                content.currentIndex = songRow.index;
+                                Backend.playAlbum(root.albumId, songRow.index);
+                            }
                         }
                     }
                 }
             }
-        }
 
-        // UI-22: the songs area has a wait state and a real empty-album state.
-        SkeletonList {
-            Layout.fillWidth: true
-            Layout.fillHeight: true
-            visible: root.loading && songs.count === 0
-        }
+            // UI-22: the songs area has a wait state and a real empty-album state.
+            SkeletonList {
+                Layout.fillWidth: true
+                Layout.fillHeight: true
+                visible: root.loading && songs.count === 0
+            }
 
-        FadeText {
-            Layout.fillWidth: true
-            Layout.fillHeight: true
-            visible: !root.loading && songs.count === 0
-            text: "No tracks in this album"
-            color: Palette.onSurfaceVariant
-            font.pixelSize: Theme.fontSize("body", root.height)
-            horizontalAlignment: Text.AlignHCenter
-            verticalAlignment: Text.AlignVCenter
-        }
+            FadeText {
+                Layout.fillWidth: true
+                Layout.fillHeight: true
+                visible: !root.loading && songs.count === 0
+                text: "No tracks in this album"
+                color: Palette.onSurfaceVariant
+                font.pixelSize: Theme.fontSize("body", root.height)
+                horizontalAlignment: Text.AlignHCenter
+                verticalAlignment: Text.AlignVCenter
+            }
         }
     }
 }

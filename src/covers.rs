@@ -30,6 +30,7 @@
 
 #![allow(dead_code)]
 
+use image::imageops::FilterType;
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, LazyLock, Mutex, MutexGuard, PoisonError};
@@ -759,6 +760,37 @@ fn unique_ids(ids: &[String]) -> Vec<&str> {
     unique.sort_unstable();
     unique.dedup();
     unique
+}
+
+pub async fn get_or_create_resized_cover(
+    original_path: &Path,
+    target_size: u32,
+) -> Option<PathBuf> {
+    let stem = original_path.file_stem()?.to_str()?;
+    let ext = original_path.extension()?.to_str()?;
+
+    // Create a sub-file name such as cover_id_300x300.jpg
+    let resized_filename = format!("{stem}_{target_size}x{target_size}.{ext}");
+    let resized_path = original_path.parent()?.join(resized_filename);
+
+    // If thumbnail exists, return immediately
+    if resized_path.exists() {
+        return Some(resized_path);
+    }
+
+    // Offload image decoding and scaling to a blocking thread pool
+    let orig = original_path.to_path_buf();
+    let target = resized_path.clone();
+
+    tokio::task::spawn_blocking(move || {
+        let img = image::open(&orig).ok()?;
+        // Triangle/Bilinear filter provides fast, high-quality downscaling for UI elements
+        let resized = img.resize(target_size, target_size, FilterType::Triangle);
+        resized.save(&target).ok()?;
+        Some(target)
+    })
+    .await
+    .ok()?
 }
 
 async fn cached_urls(pool: &SqlitePool, ids: &[String]) -> Result<HashMap<String, String>> {

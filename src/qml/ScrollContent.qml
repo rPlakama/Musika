@@ -38,11 +38,10 @@ Item {
     property string context: ""
     readonly property var profile: ScrollProfiles.get(root.context)
     /// Context-only keyboard permissions (e.g. queue reorder).
-    property var flags: root.profile.flags !== undefined
-        ? root.profile.flags : ({})
+    property var flags: root.profile.flags !== undefined ? root.profile.flags : ({})
 
     function allows(name) {
-        return root.flags[name] === true
+        return root.flags[name] === true;
     }
 
     // ── Inputs ───────────────────────────────────────────────────────────
@@ -51,31 +50,24 @@ Item {
     property Component rowDelegate: null
     property Component cellDelegate: null
     /// Gutter bleed on each side (UI-48); 0 clips at the list edge.
-    property real bleed: root.profile.bleedRatio !== undefined
-        ? root.width * root.profile.bleedRatio : 0
+    property real bleed: root.profile.bleedRatio !== undefined ? root.width * root.profile.bleedRatio : 0
 
     /// ARC-UI-3: supported layouts in toggle order ("list", "grid").
     property var layouts: ["list"]
     property string layout: "list"
     /// Grid geometry: columns per row and the cell height (0 = square).
-    property int columns: root.profile.columns !== undefined
-        ? root.profile.columns : 1
-    property real cellHeight: root.profile.cellAspect !== undefined
-        ? root.cellWidth * root.profile.cellAspect
-          + root.height * (root.profile.cellExtra || 0)
-        : 0
+    property int columns: root.profile.columns !== undefined ? root.profile.columns : 1
+    property real cellHeight: root.profile.cellAspect !== undefined ? root.cellWidth * root.profile.cellAspect + root.height * (root.profile.cellExtra || 0) : 0
     readonly property real cellWidth: Math.max(1, root.width / Math.max(1, root.effectiveColumns))
 
     /// Row sizing: nominal fraction of the reference height (0 = delegates
     /// own their heights, e.g. lyrics).
-    property real rowRatio: root.profile.rowRatio !== undefined
-        ? root.profile.rowRatio : 0
+    property real rowRatio: root.profile.rowRatio !== undefined ? root.profile.rowRatio : 0
     /// The host's stable sizing reference (panel body room, page height…),
     /// never the body's own height (that would feed the row unit back into
     /// the layout).
     property real rowRefHeight: 0
-    property real rowHeightScale: root.profile.rowHeightScale !== undefined
-        ? root.profile.rowHeightScale : 1.0
+    property real rowHeightScale: root.profile.rowHeightScale !== undefined ? root.profile.rowHeightScale : 1.0
     property real rowSpacing: 0
     /// Extra rows kept alive above and below the viewport, so a continuous
     /// scroll never has to create a delegate at the edge.
@@ -89,8 +81,7 @@ Item {
     // A grid cell never gets narrower than this; the wall drops columns
     // instead of shrinking every card into unreadable thumbnails.
     property real minCellWidth: 185
-    readonly property int effectiveColumns: Math.max(1, Math.min(root.columns,
-        Math.floor(root.width / Math.max(1, root.minCellWidth))))
+    readonly property int effectiveColumns: Math.max(1, Math.min(root.columns, Math.floor(root.width / Math.max(1, root.minCellWidth))))
     /// Kept for host compatibility; the extent is Qt's own now.
     property real contentHeightHint: 0
     property bool recenterOnWidth: root.layout === "grid"
@@ -124,20 +115,16 @@ Item {
 
     /// A list with a uniform row unit (grids use their cell, variable-height
     /// lists such as lyrics have none).
-    readonly property bool adaptiveRows:
-        root.layout !== "grid" && root.rowRatio > 0
+    readonly property bool adaptiveRows: root.layout !== "grid" && root.rowRatio > 0
 
     function adaptiveRowFor(viewHeight) {
         if (root.rowRatio <= 0)
             return 0;
-        return Math.max(root.minRowHeight,
-            viewHeight * root.rowRatio * root.rowHeightScale);
+        return Math.max(root.minRowHeight, viewHeight * root.rowRatio * root.rowHeightScale);
     }
 
-    readonly property real adaptiveRowHeight: root.adaptiveRowFor(
-        root.rowRefHeight > 0 ? root.rowRefHeight : root.height)
-    readonly property real rowStride:
-        root.adaptiveRows ? root.adaptiveRowHeight + root.rowSpacing : 0
+    readonly property real adaptiveRowHeight: root.adaptiveRowFor(root.rowRefHeight > 0 ? root.rowRefHeight : root.height)
+    readonly property real rowStride: root.adaptiveRows ? root.adaptiveRowHeight + root.rowSpacing : 0
 
     /// Native ListView header that fills the shortfall when a uniform list
     /// does not fill the viewport, pushing its rows to the bottom. The gap
@@ -210,7 +197,10 @@ Item {
     readonly property var _visibleBounds: {
         var v = root.view;
         if (!v || v.count === 0 || v.height <= 0)
-            return { first: -1, last: -1 };
+            return {
+                first: -1,
+                last: -1
+            };
         var overscan = root.renderOverscanRows;
         var first = v.indexAt(v.width * 0.5, v.contentY);
         var last = v.indexAt(v.width * 0.5, v.contentY + v.height - 1);
@@ -234,8 +224,7 @@ Item {
         var item = v.itemAtIndex(index);
         if (item && item.height > 0) {
             var max = Math.max(0, v.contentHeight - v.height);
-            return Math.max(0, Math.min(max,
-                item.y - (v.height - item.height) / 2));
+            return Math.max(0, Math.min(max, item.y - (v.height - item.height) / 2));
         }
         var old = v.contentY;
         v.positionViewAtIndex(index, ListView.Center);
@@ -427,8 +416,7 @@ Item {
             return;
         if (v.currentIndex !== root.currentIndex)
             v.currentIndex = root.currentIndex;
-        if (root._pendingFollow >= 0 && root._pendingFollow === root.currentIndex
-                && v.count > root._pendingFollow) {
+        if (root._pendingFollow >= 0 && root._pendingFollow === root.currentIndex && v.count > root._pendingFollow) {
             var i = root._pendingFollow;
             root._pendingFollow = -1;
             root._follow(v, i, false);
@@ -504,15 +492,12 @@ Item {
     function pageJump(down, fraction) {
         if (root.count === 0 || !root.view)
             return false;
-        var rowH = root.layout === "grid"
-            ? (root.cellHeight > 0 ? root.cellHeight : root.cellWidth)
-            : root.adaptiveRowHeight;
+        var rowH = root.layout === "grid" ? (root.cellHeight > 0 ? root.cellHeight : root.cellWidth) : root.adaptiveRowHeight;
         if (rowH <= 0)
             rowH = root._stride(root.view);
         if (rowH <= 0)
             return false;
-        var rows = Math.max(1, Math.floor(
-            root.view.height * (fraction === undefined ? 0.5 : fraction) / rowH));
+        var rows = Math.max(1, Math.floor(root.view.height * (fraction === undefined ? 0.5 : fraction) / rowH));
         return root.moveStep(down ? "move_down" : "move_up", rows);
     }
 
@@ -537,9 +522,7 @@ Item {
 
     function remember(scope) {
         if (root.memoryKey)
-            scroll.remember(root.memoryKey, root.view,
-                scope === undefined ? root.memoryScope : scope, root.layout,
-                root.currentIndex);
+            scroll.remember(root.memoryKey, root.view, scope === undefined ? root.memoryScope : scope, root.layout, root.currentIndex);
     }
 
     property bool _rememberScheduled: false
@@ -633,7 +616,8 @@ Item {
 
     Component.onCompleted: root.applySavedLayout()
     onMemoryKeyChanged: root.applySavedLayout()
-    onWidthChanged: if (root.recenterOnWidth) root._scheduleResizeRecenter()
+    onWidthChanged: if (root.recenterOnWidth)
+        root._scheduleResizeRecenter()
     onHeightChanged: root._scheduleResizeRecenter()
     onAdaptiveRowHeightChanged: root._scheduleResizeRecenter()
     onCellHeightChanged: root._scheduleResizeRecenter()
@@ -651,32 +635,49 @@ Item {
     }
     Connections {
         target: rowState
-        function onSelectionChanged() { root.selectionChanged(); }
+        function onSelectionChanged() {
+            root.selectionChanged();
+        }
     }
 
     readonly property bool hasSelection: rowState.hasSelection
     readonly property int selectionCount: rowState.selectionCount
 
-    function toggleSelection() { rowState.toggle(); }
-    function selectAllRows() { rowState.selectAllRows(); }
+    function toggleSelection() {
+        rowState.toggle();
+    }
+    function selectAllRows() {
+        rowState.selectAllRows();
+    }
     function extendSelection(action) {
         if (!rowState.extendTo(root.currentIndex))
             return false;
         return root.moveStep(action, 1);
     }
     function extendSelectionTo(index) {
-        if (index < 0 || index >= root.count
-                || !rowState.extendTo(root.currentIndex))
+        if (index < 0 || index >= root.count || !rowState.extendTo(root.currentIndex))
             return false;
         root.currentIndex = index;
         return true;
     }
-    function clearSelection() { rowState.clear(); }
-    function selected(index) { return rowState.selected(index); }
-    function selectionIds(field) { return rowState.ids(field); }
-    function selectionIndices() { return rowState.indices(); }
-    function selectionStarred(field) { return rowState.starred(field); }
-    function markStarred(on) { rowState.markStarred(on); }
+    function clearSelection() {
+        rowState.clear();
+    }
+    function selected(index) {
+        return rowState.selected(index);
+    }
+    function selectionIds(field) {
+        return rowState.ids(field);
+    }
+    function selectionIndices() {
+        return rowState.indices();
+    }
+    function selectionStarred(field) {
+        return rowState.starred(field);
+    }
+    function markStarred(on) {
+        rowState.markStarred(on);
+    }
 
     // ── Search (ARC-UI-2) ────────────────────────────────────────────────
 
@@ -687,7 +688,9 @@ Item {
         fields: root.searchFields
     }
 
-    function searchRows() { return searchContract.rows(); }
+    function searchRows() {
+        return searchContract.rows();
+    }
     function searchJump(row) {
         if (row < 0 || row >= root.count)
             return;
@@ -707,8 +710,7 @@ Item {
             root.view.positionViewAtBeginning();
         }
         if (root.memoryKey)
-            scroll.remember(root.memoryKey, root.view, root.memoryScope,
-                root.layout, 0);
+            scroll.remember(root.memoryKey, root.view, root.memoryScope, root.layout, 0);
     }
 
     function resetViewNow() {
@@ -716,8 +718,7 @@ Item {
             return;
         root.land(0);
         if (root.memoryKey)
-            scroll.remember(root.memoryKey, root.view, root.memoryScope,
-                root.layout, 0);
+            scroll.remember(root.memoryKey, root.view, root.memoryScope, root.layout, 0);
     }
 
     // ── The views ────────────────────────────────────────────────────────
@@ -769,8 +770,7 @@ Item {
                 width: list.width
                 Item {
                     width: parent.width
-                    height: Math.max(0,
-                        root._shortContentGap - headerLoader.height)
+                    height: Math.max(0, root._shortContentGap - headerLoader.height)
                 }
                 Loader {
                     id: headerLoader
@@ -803,8 +803,7 @@ Item {
                 width: grid.width
                 Item {
                     width: parent.width
-                    height: Math.max(0,
-                        root._shortContentGap - headerLoaderGrid.height)
+                    height: Math.max(0, root._shortContentGap - headerLoaderGrid.height)
                 }
                 Loader {
                     id: headerLoaderGrid

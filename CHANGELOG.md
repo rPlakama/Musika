@@ -3,6 +3,19 @@
 All notable changes to Musika, newest first. `TASKLISTMAJOR.md` tracks the
 open work; this file is the release history.
 
+## 0.4.11 - _Cover improvements and other minor_
+
+-  `54beb51`  Use DPI for CoverLoading
+-  `f9b588c`  Bound QML cover and search result memory
+-  `f2ff9c3`  Keep album track rows out of the Tab cycle
+-  `7c80aae`  Add a Recent order backed by created timestamps
+-  `74c883f`  Fix for index err
+-  `63507c9`  Load the album cover on a background task
+-  `d918965`  Restore the saved page and spawn the queue as an overlay
+-  `73f1a7e`  Warm the library tabs behind the restored page
+-  `9617df0`  Restore the saved album before the first Home frame
+-  `f27c552`  Open Home directly when stored credentials exist
+
 ## 0.4.10 - _Internal Mechanism, Polishing Search and smaller things_
 
 Notable changes since `v0.4.9`:

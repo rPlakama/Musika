@@ -233,7 +233,19 @@ Item {
     }
 
     function _maxY(v) {
-        return v ? Math.max(0, root._extent(v) - v.height) : 0;
+        if (!v)
+            return 0;
+        var maxY = Math.max(0, root._extent(v) - v.height);
+        // The row-unit extent can disagree with the realised tail (spacing,
+        // header gap, rounding); once the last row exists, its bottom is the
+        // authority, so the final row stays glued to the viewport edge.
+        var last = v.count > 0 ? v.itemAtIndex(v.count - 1) : null;
+        if (last && last.height > 0) {
+            var tail = last.y + last.height - v.height;
+            if (tail >= 0)
+                maxY = Math.min(maxY, tail);
+        }
+        return maxY;
     }
 
     /// The centred target from the row unit: pin the first/last screenful,

@@ -34,9 +34,10 @@ open work; this file is the release history.
   manually scrolled Library viewport by its visual top row, and finish the
   repair when an idle window becomes active.
 - Rebuild the list follow from the row unit: pin the first/last screenful,
-  derive maxY from the row extent, clamp contentHeight churn, and keep the
-  cursor visible on settle — so the bottom row stays flush and height
-  changes no longer chase stale delegate geometry.
+  derive maxY from the row extent (the realised tail wins once it exists),
+  clamp contentHeight churn, and keep the cursor visible on settle — so the
+  bottom row stays flush and height changes no longer chase stale delegate
+  geometry.
 - Land `gg`/`G` through the reveal path again: pre-position to the
   row-unit extent, let the target row realise, then settle it, so `G`
   actually loads the bottom instead of waiting for the delegate.

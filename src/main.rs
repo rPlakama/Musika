@@ -216,12 +216,35 @@ fn main() {
     // The login screen must not flash for an account already in the DB.
     // Read it before QML loads; the async startup ping still owns the
     // online/offline state and the failure fallback.
-    let has_stored_auth = crate::app::runtime()
+    let credentials = crate::app::runtime()
         .block_on(crate::sqlite::load_credentials(&dbs.credentials))
         .ok()
-        .flatten()
-        .is_some();
+        .flatten();
+    let has_stored_auth = credentials.is_some();
     crate::qml::set_bootstrap_has_auth(has_stored_auth);
+
+    // If the saved session points at an album, build its row now so Home can
+    // push that page before its first frame instead of flashing the library.
+    let initial_album = credentials.as_ref().and_then(|credentials| {
+        let status = crate::app::runtime()
+            .block_on(crate::status::load(&dbs.status))
+            .ok()
+            .flatten()?;
+        if status.server_url != credentials.server_url || status.username != credentials.username {
+            return None;
+        }
+        let album_id = status.album_id.filter(|id| !id.is_empty())?;
+        let album = crate::app::runtime()
+            .block_on(crate::library::album(&dbs.library, &album_id))
+            .ok()
+            .flatten()?;
+        let cover_ids: Vec<String> = album.cover_art.clone().into_iter().collect();
+        let covers = crate::app::runtime()
+            .block_on(crate::covers::url_map_of(&dbs, &cover_ids))
+            .unwrap_or_default();
+        Some(crate::browse::album_json(&album, &covers, None).to_string())
+    });
+    crate::qml::set_bootstrap_album(initial_album);
     crate::app::set_dbs(dbs);
 
     let mut app = QApp::new();

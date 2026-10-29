@@ -59,8 +59,18 @@ use sync::{index_value, spawn_sync};
 /// Login without waiting for the async auth ping.
 static BOOTSTRAP_HAS_AUTH: AtomicBool = AtomicBool::new(false);
 
+/// Startup album target from the saved session (serialized album row) so
+/// Home can push its page before the first frame.
+static BOOTSTRAP_ALBUM: Mutex<Option<String>> = Mutex::new(None);
+
 pub(crate) fn set_bootstrap_has_auth(has_auth: bool) {
     BOOTSTRAP_HAS_AUTH.store(has_auth, Ordering::Relaxed);
+}
+
+pub(crate) fn set_bootstrap_album(payload: Option<String>) {
+    *BOOTSTRAP_ALBUM
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner) = payload;
 }
 
 /// Bumped by every status change; the debounced writer only persists when its
@@ -773,6 +783,16 @@ impl Backend {
     #[qslot(qml_name = "hasStoredAuth")]
     fn has_stored_auth(&self) -> bool {
         BOOTSTRAP_HAS_AUTH.load(Ordering::Relaxed)
+    }
+
+    /// Serialized album target for the first frame, or an empty string.
+    #[qslot(qml_name = "initialAlbum")]
+    fn initial_album(&self) -> String {
+        BOOTSTRAP_ALBUM
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
+            .unwrap_or_default()
     }
 
     /// Debug only: the first rendered frame (no-op in release).

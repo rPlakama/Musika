@@ -36,6 +36,13 @@ Item {
     property int activeRegion: 1
     property bool nowPlayingExpanded: false
     property int currentSegment: 0
+    // P-6: album already restored before the first frame, so statusRestored
+    // must not push the same page twice.
+    property string _bootstrapAlbumId: ""
+    // If a page is restored on the first frame, keep the library segment
+    // loaders dormant until Back actually returns to Home.
+    readonly property bool _bootstrapTarget: Backend.initialAlbum().length > 0
+    property bool _bootstrapPending: root._bootstrapTarget
     // True only at the root: no page, drawer or fullscreen player above it.
     readonly property bool atHome: contentStack.depth === 1
         && !nowPlayingExpanded && !queueDrawer.open
@@ -276,6 +283,25 @@ Item {
             albumMeta: meta.join("   ·   "),
             albumStarred: starred === true
         });
+    }
+
+    // Startup restore: push the saved album page during component creation so
+    // the first visible frame is the target, not the library behind it.
+    function restoreBootstrapAlbum() {
+        var payload = Backend.initialAlbum();
+        if (payload.length === 0) {
+            root._bootstrapPending = false;
+            return;
+        }
+        var album = JSON.parse(payload);
+        root._bootstrapAlbumId = album.id;
+        root.openAlbum(album.id, album.title,
+                       album.artist ? album.artist : "",
+                       album.year ? String(album.year) : "",
+                       String(album.song_count || album.tracks || 0),
+                       album.cover ? album.cover : "",
+                       album.starred === true);
+        root._bootstrapPending = false;
     }
 
     // ARC-43/ARC-UI-1/ARC-I: a surface arms the Alt-hold overlay through here;
@@ -887,7 +913,9 @@ Item {
                             delegate: Loader {
                                 required property int index
                                 anchors.fill: parent
-                                active: index === root.currentSegment || index <= 2
+                                active: !root._bootstrapPending
+                                    && (index === root.currentSegment || index <= 2)
+                                    && (!root._bootstrapTarget || root.contentStack.depth === 1)
                                 visible: index === root.currentSegment
                                 onItemChanged: {
                                     if (index === root.currentSegment)
@@ -1238,7 +1266,7 @@ Item {
             Qt.callLater(function() {
                 if (data.queue && data.queue.length > 0)
                     Backend.playerLoadPaused(data.queue, data.start);
-                if (data.album)
+                if (data.album && data.album.id !== root._bootstrapAlbumId)
                     root.openAlbum(data.album.id, data.album.title,
                                    data.album.artist ? data.album.artist : "",
                                    data.album.year ? String(data.album.year) : "",
@@ -1363,6 +1391,10 @@ Item {
         actionBadge.showAction(action, count);
     }
 
-    // ARC-45: the travel log starts on the first place.
-    Component.onCompleted: root.recordPlace()
+    // ARC-45: the travel log starts on the first place. The restored target
+    // page, when present, is pushed before the first rendered frame.
+    Component.onCompleted: {
+        root.recordPlace();
+        root.restoreBootstrapAlbum();
+    }
 }

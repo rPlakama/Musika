@@ -19,6 +19,7 @@ import QtQuick.Layouts
 import QtQuick.Effects
 import musika
 import "Theme.js" as Theme
+import "CoverSize.js" as CoverSize
 
 // Album entry: the album art is the page ambience, with the identity and
 // track list laid over it instead of a second hero cover (roadmap D-5).
@@ -74,6 +75,7 @@ Rectangle {
     // UI-54: per-album scroll memory for the songs viewport.
     readonly property string memoryKey: "album:" + root.albumId
     property bool _restored: false
+    property int _coverTarget: 0
 
     /// Metadata stats merged after the album date:
     /// `<N> Tracks · <m:ss> · <AUDIO TAG>`.
@@ -176,6 +178,21 @@ Rectangle {
         content.armQuickActions();
     }
 
+    function scheduleCover() {
+        if (root.albumId === "")
+            return;
+        coverTimer.restart();
+    }
+
+    function requestCoverNow() {
+        var target = CoverSize.target(coverBackdrop.coverSide, Screen.devicePixelRatio,
+            Math.max(Screen.width, Screen.height));
+        if (target <= 0 || target === root._coverTarget)
+            return;
+        root._coverTarget = target;
+        Backend.requestAlbumCover(root.albumId, target);
+    }
+
     function reload() {
         if (root.albumId === "")
             return;
@@ -185,15 +202,10 @@ Rectangle {
         Backend.requestAlbumSongs(root.albumId);
         Backend.requestAlbumInfo(root.albumId);
 
-        // Calculate physical pixels based on Screen DPI/scale factor:
-        var targetSize = Math.ceil(coverBackdrop.width * Screen.devicePixelRatio);
-        // Ensure a reasonable fallback size if the layout hasn't completed yet
-        if (targetSize <= 0) {
-            targetSize = Math.ceil(root.headerCoverBottom * Screen.devicePixelRatio);
-        }
-
-        // Pass the calculated pixel size to the C++ / Rust backend
-        Backend.requestAlbumCover(root.albumId, targetSize);
+        // The display copy is requested from the painted cover box (DPR +
+        // screen-capped bucket); the original stays on screen until it lands.
+        root._coverTarget = 0;
+        root.scheduleCover();
 
         Backend.requestAlbumState(root.albumId);
         Backend.requestAlbumCache(root.albumId);
@@ -314,6 +326,13 @@ Rectangle {
         return false;
     }
 
+    Timer {
+        id: coverTimer
+        interval: 120
+        repeat: false
+        onTriggered: root.requestCoverNow()
+    }
+
     Component.onCompleted: reload()
 
     // The cursor follows the playing track while this album is the one
@@ -321,10 +340,8 @@ Rectangle {
     Connections {
         target: Screen
         function onDevicePixelRatioChanged() {
-            if (root.albumId !== "") {
-                var targetSize = Math.ceil(coverBackdrop.width * Screen.devicePixelRatio);
-                Backend.requestAlbumCover(root.albumId, targetSize);
-            }
+            root._coverTarget = 0;
+            root.scheduleCover();
         }
     }
     Connections {
@@ -541,6 +558,7 @@ Rectangle {
         // Leave the bottom quarter for the rows; the square never grows
         // behind them.
         maxSide: (root.height - root.width * 0.04) * 0.75
+        onCoverSideChanged: root.scheduleCover()
     }
 
     ColumnLayout {

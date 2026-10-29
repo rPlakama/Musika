@@ -16,6 +16,51 @@
 
 use qtbridge::QmlMethodInvoker;
 
+/// Resolve one cover id to a cached file, fetching it on demand, then return
+/// a `file://` URL for a display-sized copy. `target_size <= 0` returns the
+/// original; a missing cache/fetch leaves the caller without a payload (the
+/// QML surface keeps its original URL until a display copy lands).
+///
+/// `target_size` comes from `CoverSize.js` — a screen/DPR bucket, never the
+/// provider's full-resolution image. The resize runs off the Qt thread.
+pub(super) async fn resized_cover_url(
+    dbs: &crate::db::Dbs,
+    cover_id: &str,
+    target_size: i32,
+) -> Option<String> {
+    if cover_id.is_empty() {
+        return None;
+    }
+    let mut path = crate::covers::cached_path(&dbs.covers, cover_id)
+        .await
+        .ok()
+        .flatten();
+    if path.is_none()
+        && let Ok(client) = crate::session::client(dbs).await
+    {
+        let client = std::sync::Arc::new(client);
+        let ids = [cover_id.to_string()];
+        if let Err(err) = crate::covers::fetch_ids(&dbs.covers, &client, &ids).await {
+            eprintln!("covers: display fetch failed for {cover_id}: {err:#}");
+        }
+        path = crate::covers::cached_path(&dbs.covers, cover_id)
+            .await
+            .ok()
+            .flatten();
+    }
+    let path = path?;
+    let path = if target_size > 0 {
+        crate::covers::get_or_create_resized_cover(&path, target_size as u32)
+            .await
+            .unwrap_or(path)
+    } else {
+        path
+    };
+    reqwest::Url::from_file_path(path)
+        .ok()
+        .map(|url| url.to_string())
+}
+
 pub(super) fn emit(invoker: &QmlMethodInvoker, channel: &str, payload: String) {
     qtbridge::invoke_method!(invoker, "emitData", channel.to_string(), payload);
 }

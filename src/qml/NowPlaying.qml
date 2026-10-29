@@ -19,6 +19,7 @@ import QtQuick.Effects
 import QtQuick.Layouts
 import musika
 import "Theme.js" as Theme
+import "CoverSize.js" as CoverSize
 
 // Fullscreen player ("mainscreen"):
 //   body   — lyrics own the space above the header;
@@ -70,6 +71,13 @@ Rectangle {
         }
     }
 
+    Timer {
+        id: coverTimer
+        interval: 120
+        repeat: false
+        onTriggered: root.requestCoverNow()
+    }
+
     // Lyrics (override → cache → server; see src/lyrics.rs).
     property bool lyricsSynced: false
     property bool lyricsAvailable: false
@@ -94,6 +102,15 @@ Rectangle {
     // reload, no "Loading lyrics…" flash, no re-centring flick).
     property string _lyricsSongId: ""
     property var _lyricTimestamps: []
+
+    // The large cover follows a screen/DPR bucket; `_displayCoverUrl` is the
+    // resized copy while it lasts, falling back to the player URL.
+    property string _displayCoverUrl: ""
+    property string _coverArt: ""
+    property int _coverTarget: 0
+    property string _coverArtRequested: ""
+    readonly property url coverSource: _displayCoverUrl.length > 0
+        ? _displayCoverUrl : Backend.currentCoverUrl
 
     // Lyrics type is sized from the pane itself (parent rectangle), never the
     // window, so lines can't outgrow the pane's walls; the stage caps the
@@ -158,6 +175,44 @@ Rectangle {
         root.lyricsOverlayOpen = false;
         if (!root.lyricsInline && root.pane === 1)
             root.pane = 3;
+    }
+
+    function scheduleCover() {
+        coverTimer.restart();
+    }
+
+    /// Reset the display copy on a track change and request the bucket for
+    /// the current cover pane (the original URL shows until it lands).
+    function syncCover() {
+        var art = Backend.currentCoverArt;
+        // A different track starts from its original URL; re-entry with the
+        // same art keeps the display-sized copy already on screen.
+        if (art !== root._coverArt || root._displayCoverUrl.length === 0)
+            root._displayCoverUrl = Backend.currentCoverUrl;
+        root._coverArt = art;
+        root._coverTarget = 0;
+        root._coverArtRequested = "";
+        root.scheduleCover();
+    }
+
+    function requestCoverNow() {
+        var art = Backend.currentCoverArt;
+        if (art.length === 0)
+            return;
+        var side = Math.min(coverPane.width, coverPane.height);
+        var target = CoverSize.target(side, Screen.devicePixelRatio,
+            Math.max(Screen.width, Screen.height));
+        if (target <= 0) {
+            root._coverTarget = 0;
+            root._coverArtRequested = "";
+            root._displayCoverUrl = Backend.currentCoverUrl;
+            return;
+        }
+        if (target === root._coverTarget && art === root._coverArtRequested)
+            return;
+        root._coverTarget = target;
+        root._coverArtRequested = art;
+        Backend.requestCover(art, target);
     }
 
     /// The keybar's album-scope state (favourite + container download) for
@@ -445,6 +500,9 @@ Rectangle {
                 root.pane = 3;
             // The keybar's album actions reconcile on entry too.
             root.requestAlbumActions();
+            // Re-request the display copy for this pane size; the original
+            // stays visible until the bucket lands.
+            root.syncCover();
         } else {
             root.closeLyricsOverlay();
         }
@@ -470,6 +528,10 @@ Rectangle {
                 var artistCache = JSON.parse(payload);
                 if (!artistCache.active && artistCache.on !== true)
                     Backend.ResetRowMarks();
+            } else if (channel === "cover") {
+                var art = JSON.parse(payload);
+                if (art.id === Backend.currentCoverArt && art.cover)
+                    root._displayCoverUrl = art.cover;
             } else if (channel === "album_state") {
                 var state = JSON.parse(payload);
                 if (state.id === Backend.currentAlbumId) {
@@ -483,8 +545,12 @@ Rectangle {
                 root.requestAlbumActions();
         }
         function onCurrent_song_id_changed() {
+            root.syncCover();
             if (root.visible)
                 root.requestLyricsIfChanged();
+        }
+        function onCurrent_cover_art_changed() {
+            root.syncCover();
         }
         // LYR-8: a seek (keys, seek bar, MPRIS) must not wait out the manual-
         // scroll resume window — drop the hold and re-centre at once, so the
@@ -493,6 +559,13 @@ Rectangle {
             root._lyricsHeld = false;
             lyricResume.stop();
             root.followLyric();
+        }
+    }
+
+    Connections {
+        target: Screen
+        function onDevicePixelRatioChanged() {
+            root.syncCover();
         }
     }
 
@@ -764,9 +837,12 @@ Rectangle {
                 Layout.preferredWidth: 0
                 clip: true
 
+                onWidthChanged: if (root.visible) root.scheduleCover()
+                onHeightChanged: if (root.visible) root.scheduleCover()
+
                 CoverImage {
                     anchors.fill: parent
-                    source: Backend.currentCoverUrl
+                    source: root.coverSource
                     fillMode: Image.PreserveAspectFit
                 }
             }

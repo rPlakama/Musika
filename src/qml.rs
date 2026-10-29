@@ -51,7 +51,7 @@ mod sync;
 
 use crate::session::client;
 use download::selection_toggle;
-use support::{album_state_payload, emit, raise};
+use support::{album_state_payload, emit, raise, resized_cover_url};
 use sync::{index_value, spawn_sync};
 
 /// True when the credentials DB already has a usable account at process start.
@@ -1762,7 +1762,8 @@ impl Backend {
     }
 
     /// Resolves the album hero art on a runtime task: fetch/cache the cover
-    /// when needed, then emit the local file URL for CoverImage.
+    /// when needed, then emit the local file URL for CoverImage at the
+    /// QML-computed display bucket (`target_size`).
     #[qslot(qml_name = "requestAlbumCover")]
     fn request_album_cover(&mut self, album_id: String, target_size: i32) {
         let invoker = self.get_qml_method_invoker();
@@ -1773,56 +1774,60 @@ impl Backend {
             let Some(cover) = album.cover_art.filter(|id| !id.is_empty()) else {
                 return;
             };
-
-            // Helper to retrieve or generate the resized thumbnail file path
-            let get_cover_url = |path: std::path::PathBuf| async move {
-                if target_size <= 0 {
-                    return reqwest::Url::from_file_path(path).ok();
-                }
-
-                // Generate thumbnail path (e.g., image_300x300.jpg)
-                let resized_path =
-                    crate::covers::get_or_create_resized_cover(&path, target_size as u32).await;
-                reqwest::Url::from_file_path(resized_path.unwrap_or(path)).ok()
-            };
-
-            // 1. Check local cache first
-            if let Ok(Some(path)) = crate::covers::cached_path(&dbs.covers, &cover).await
-                && let Some(url) = get_cover_url(path).await
-            {
-                let payload = serde_json::json!({
-                    "album_id": album_id,
-                    "cover": url.to_string(),
-                })
-                .to_string();
-                emit(&invoker, "album_cover", payload);
+            let Some(url) = resized_cover_url(&dbs, &cover, target_size).await else {
                 return;
-            }
-
-            // 2. Fetch missing original from remote if not cached
-            if let Ok(client) = crate::session::client(&dbs).await {
-                let client = std::sync::Arc::new(client);
-                if let Err(err) =
-                    crate::covers::fetch_ids(&dbs.covers, &client, std::slice::from_ref(&cover))
-                        .await
-                {
-                    eprintln!("covers: album hero fetch failed: {err:#}");
-                }
-            }
-
-            // 3. Re-check cache after remote fetch
-            if let Ok(Some(path)) = crate::covers::cached_path(&dbs.covers, &cover).await
-                && let Some(url) = get_cover_url(path).await
-            {
-                let payload = serde_json::json!({
-                    "album_id": album_id,
-                    "cover": url.to_string(),
-                })
-                .to_string();
-                emit(&invoker, "album_cover", payload);
-            }
+            };
+            let payload = serde_json::json!({
+                "album_id": album_id,
+                "cover": url,
+            })
+            .to_string();
+            emit(&invoker, "album_cover", payload);
         });
     }
+
+    /// The artist-page twin of `requestAlbumCover`: look up the artist's
+    /// cover id, resolve a display-sized copy and emit `artist_cover`.
+    #[qslot(qml_name = "requestArtistCover")]
+    fn request_artist_cover(&mut self, artist_id: String, target_size: i32) {
+        let invoker = self.get_qml_method_invoker();
+        self.spawn_task(move |dbs| async move {
+            let Ok(Some(artist)) = crate::library::artist(&dbs.library, &artist_id).await else {
+                return;
+            };
+            let Some(cover) = artist.cover_art.filter(|id| !id.is_empty()) else {
+                return;
+            };
+            let Some(url) = resized_cover_url(&dbs, &cover, target_size).await else {
+                return;
+            };
+            let payload = serde_json::json!({
+                "artist_id": artist_id,
+                "cover": url,
+            })
+            .to_string();
+            emit(&invoker, "artist_cover", payload);
+        });
+    }
+
+    /// The playback twin: resolve the current track's cover id to a
+    /// display-sized copy and emit `cover` with the id for staleness checks.
+    #[qslot(qml_name = "requestCover")]
+    fn request_cover(&mut self, cover_id: String, target_size: i32) {
+        let invoker = self.get_qml_method_invoker();
+        self.spawn_task(move |dbs| async move {
+            let Some(url) = resized_cover_url(&dbs, &cover_id, target_size).await else {
+                return;
+            };
+            let payload = serde_json::json!({
+                "id": cover_id,
+                "cover": url,
+            })
+            .to_string();
+            emit(&invoker, "cover", payload);
+        });
+    }
+
     #[qslot(qml_name = "requestAlbumSongs")]
     fn request_album_songs(&mut self, album_id: String) {
         let offline = self.offline;

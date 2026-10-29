@@ -18,6 +18,7 @@ import QtQuick
 import QtQuick.Layouts
 import musika
 import "Theme.js" as Theme
+import "CoverSize.js" as CoverSize
 
 // Artist entry (P-8, milestone A): round avatar + name over a four-column
 // album grid with titles under the covers. Pushed from ArtistList and from
@@ -129,6 +130,10 @@ Rectangle {
     property bool artistDownloading: false
     // UI-54: per-artist scroll memory for the album grid.
     readonly property string memoryKey: "artist:" + root.artistId
+    property int _coverTarget: 0
+    // A display copy already won the race against the full `artist` payload.
+    property bool _coverFromDisplay: false
+
     // Home uses this to send `Esc` straight to Main (P-8) instead of popping
     // back to the Artists segment or a search result.
     readonly property bool exitsToMain: true
@@ -153,6 +158,21 @@ Rectangle {
         id: verbs
     }
 
+    function scheduleCover() {
+        if (root.artistId === "")
+            return;
+        coverTimer.restart();
+    }
+
+    function requestCoverNow() {
+        var target = CoverSize.target(coverBackdrop.coverSide, Screen.devicePixelRatio,
+            Math.max(Screen.width, Screen.height));
+        if (target <= 0 || target === root._coverTarget)
+            return;
+        root._coverTarget = target;
+        Backend.requestArtistCover(root.artistId, target);
+    }
+
     function reload() {
         if (root.artistId === "")
             return;
@@ -162,6 +182,11 @@ Rectangle {
         Backend.requestArtistUser(root.artistId);
         Backend.requestArtistInfo(root.artistId);
         Backend.requestArtistCache(root.artistId);
+        // The page art uses a screen/DPR bucket; the original stays on
+        // screen until the display copy lands.
+        root._coverTarget = 0;
+        root._coverFromDisplay = false;
+        root.scheduleCover();
     }
 
     // CACHE-5/8: the stored container selection (`artist_cache` channel).
@@ -196,7 +221,7 @@ Rectangle {
         var artist = JSON.parse(payload);
         if (artist.name && artist.name.length > 0)
             root.artistName = artist.name;
-        if (artist.cover && artist.cover.length > 0)
+        if (artist.cover && artist.cover.length > 0 && !root._coverFromDisplay)
             root.artistCover = artist.cover;
         root.artistMeta = Theme.countLabel(artist.album_count, "album");
 
@@ -229,6 +254,7 @@ Rectangle {
         // UI-54: reopening the entry restores the cursor + offset (and the
         // ARC-UI-3 layout); later reloads keep the live state.
         wall.restore();
+        root.scheduleCover();
     }
 
     function activateCurrent() {
@@ -289,6 +315,21 @@ Rectangle {
     function shuffle() {
         if (root.artistId.length > 0)
             Backend.shuffleArtist(root.artistId);
+    }
+
+    Timer {
+        id: coverTimer
+        interval: 120
+        repeat: false
+        onTriggered: root.requestCoverNow()
+    }
+
+    Connections {
+        target: Screen
+        function onDevicePixelRatioChanged() {
+            root._coverTarget = 0;
+            root.scheduleCover();
+        }
     }
 
     Component.onCompleted: reload()
@@ -361,6 +402,13 @@ Rectangle {
                 root.applyInfo(payload);
             else if (channel === "artist_cache")
                 root.applyCache(payload);
+            else if (channel === "artist_cover") {
+                var art = JSON.parse(payload);
+                if (art.artist_id === root.artistId && art.cover) {
+                    root.artistCover = art.cover;
+                    root._coverFromDisplay = true;
+                }
+            }
         }
         function onLibrary_changed() {
             root.reload();
@@ -381,6 +429,7 @@ Rectangle {
         id: coverBackdrop
         anchors.fill: parent
         source: root.artistCover
+        onCoverSideChanged: root.scheduleCover()
     }
 
     ColumnLayout {

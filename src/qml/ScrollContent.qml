@@ -16,6 +16,7 @@
 
 import QtQuick
 import QtQuick.Layouts
+import QtQuick.Window
 import musika
 import "ScrollProfiles.js" as ScrollProfiles
 import "Theme.js" as Theme
@@ -594,6 +595,48 @@ Item {
     /// behind the viewport. The next user move clears it.
     property bool _resizeRepair: false
     property bool _resizeFollowing: false
+    /// A height change while the window is inactive can land before Qt has
+    /// laid the view out; finish the repair once the window is active again.
+    property bool _resizeWhileInactive: false
+    /// The visual top row while the user (not the cursor) owns the viewport.
+    /// A resize restores this row instead of yanking the view back to the
+    /// keyboard cursor.
+    property int _anchorRow: 0
+    property real _anchorFraction: 0
+
+    /// Remember the visual top row when the user owns the viewport.
+    function _captureAnchor() {
+        var v = root.view;
+        if (!v || v.count === 0)
+            return;
+        var stride = root._stride(v);
+        if (stride <= 0)
+            return;
+        root._anchorRow = Math.max(0, Math.min(v.count - 1,
+            Math.floor(v.contentY / stride)));
+        root._anchorFraction = Math.max(0, Math.min(0.999,
+            (v.contentY - root._anchorRow * stride) / stride));
+    }
+
+    /// A resize keeps the keyboard cursor centred when the follow owns the
+    /// view; after a manual scroll it keeps the visual top row instead.
+    function _applyResizeAnchor() {
+        var v = root.view;
+        if (!v || v.count === 0)
+            return;
+        if (!root._manualScroll && root.currentIndex >= 0
+                && root.currentIndex < v.count) {
+            root._follow(v, root.currentIndex, true);
+            return;
+        }
+        var stride = root._stride(v);
+        if (stride <= 0)
+            return;
+        var maxY = Math.max(0, v.contentHeight - v.height);
+        var row = Math.max(0, Math.min(v.count - 1, root._anchorRow));
+        var target = (row + root._anchorFraction) * stride;
+        v.contentY = Math.max(0, Math.min(maxY, target));
+    }
 
     /// One deferred pass per resize batch, off the compositor event.
     function _scheduleResizeRecenter() {
@@ -603,8 +646,9 @@ Item {
         // the old content extent; the timer coalesces the repeat passes.
         root.stopGlide();
         root._resizeRepair = true;
-        if (root.currentIndex >= 0 && root.currentIndex < root.view.count)
-            root._follow(root.view, root.currentIndex, true);
+        if (Window.window && !Window.window.active)
+            root._resizeWhileInactive = true;
+        root._applyResizeAnchor();
         if (root._resizeScheduled)
             return;
         root._resizeScheduled = true;
@@ -618,11 +662,10 @@ Item {
             return;
         root.stopGlide();
         root._resizeRepair = true;
-        if (root.currentIndex >= 0 && root.currentIndex < v.count) {
-            if (v.currentIndex !== root.currentIndex)
-                v.currentIndex = root.currentIndex;
-            root._follow(v, root.currentIndex, true);
-        }
+        if (root.currentIndex >= 0 && root.currentIndex < v.count
+                && v.currentIndex !== root.currentIndex)
+            v.currentIndex = root.currentIndex;
+        root._applyResizeAnchor();
     }
 
     // Timers, not Qt.callLater: a Loader can destroy this ScrollContent
@@ -920,8 +963,22 @@ Item {
     }
 
     Connections {
+        target: Window.window
+        function onActiveChanged() {
+            if (target && target.active && root._resizeWhileInactive) {
+                root._resizeWhileInactive = false;
+                // Finish against the now-active window's layout, not the
+                // geometry seen while it was idle.
+                root._scheduleResizeRecenter();
+            }
+        }
+    }
+
+    Connections {
         target: root.view
         function onContentYChanged() {
+            if (root._manualScroll && !glide.running && !root._landing)
+                root._captureAnchor();
             if (root.memoryKey && !glide.running)
                 root._scheduleRemember();
         }
@@ -932,11 +989,13 @@ Item {
         function onContentHeightChanged() {
             // Multi-frame relayout after a height change: re-snap while the
             // extent is still settling. stopGlide()/user movement ends repair.
-            if (root._resizeRepair && root.currentIndex >= 0
-                    && root.currentIndex < target.count && !root._landing
-                    && !root._resizeFollowing) {
+            if (root._resizeRepair && !root._landing
+                    && !root._resizeFollowing
+                    && (root._manualScroll
+                        || (root.currentIndex >= 0
+                            && root.currentIndex < target.count))) {
                 root._resizeFollowing = true;
-                root._follow(target, root.currentIndex, true);
+                root._applyResizeAnchor();
                 root._resizeFollowing = false;
             }
         }

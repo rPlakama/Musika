@@ -29,9 +29,9 @@ open work; this file is the release history.
 - Let the cover box settle before decoding, and never swap a display copy in
   after the original has painted: the session-restored AlbumEntry cover now
   loads once instead of reloading through the startup geometry changes.
-- Re-snap the shared scroll follow through multi-frame height relayouts, so
-  changing the window height no longer leaves the Library rows behind the
-  cursor.
+- Re-snap the shared scroll follow through multi-frame height relayouts,
+  preserve a manually scrolled Library viewport by its visual top row, and
+  finish the repair when an idle window becomes active.
 
 ## 0.4.11 - _Cover improvements and other minor_
 

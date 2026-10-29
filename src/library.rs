@@ -430,22 +430,19 @@ pub async fn search_artists_albums(
              SELECT 1 FROM albums WHERE albums.artist_id = artists.id)
          AND name LIKE ?1 ESCAPE '\\' ORDER BY name LIMIT ?2"
     );
-    let artists = sqlx::query_as::<_, ArtistRow>(sqlx::AssertSqlSafe(artist_sql))
-        .bind(&like)
-        .bind(limit)
-        .fetch_all(pool)
-        .await?;
-
     let album_sql = format!(
         "{ALBUM_SELECT} WHERE name LIKE ?1 ESCAPE '\\' OR artist LIKE ?1 ESCAPE '\\'{} LIMIT ?2",
         album_order("Artist", true)
     );
-    let albums = sqlx::query_as::<_, AlbumRow>(sqlx::AssertSqlSafe(album_sql))
+    let artists_fut = sqlx::query_as::<_, ArtistRow>(sqlx::AssertSqlSafe(artist_sql))
         .bind(&like)
         .bind(limit)
-        .fetch_all(pool)
-        .await?;
-
+        .fetch_all(pool);
+    let albums_fut = sqlx::query_as::<_, AlbumRow>(sqlx::AssertSqlSafe(album_sql))
+        .bind(&like)
+        .bind(limit)
+        .fetch_all(pool);
+    let (artists, albums) = tokio::try_join!(artists_fut, albums_fut)?;
     Ok((artists, albums))
 }
 

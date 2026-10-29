@@ -198,17 +198,17 @@ async fn search_value_fts(
         // The unified search's empty-query surface browses every scope, so
         // artists and albums are full name-ordered lists (songs stay Most
         // played, S-9).
-        let artists = crate::library::artists(&dbs.library, "Name").await?;
-        let albums = crate::library::albums(&dbs.library, None, "Artist").await?;
-        (
-            artists,
-            albums,
-            crate::search::most_played(&dbs.search, fetch as i64).await?,
-        )
+        let (artists, albums, songs) = tokio::try_join!(
+            crate::library::artists(&dbs.library, "Name"),
+            crate::library::albums(&dbs.library, None, "Artist"),
+            crate::search::most_played(&dbs.search, fetch as i64),
+        )?;
+        (artists, albums, songs)
     } else {
-        let (artists, albums) =
-            crate::library::search_artists_albums(&dbs.library, &cleaned, fetch as i64).await?;
-        let songs = crate::search::search(&dbs.search, &cleaned, fetch as i64).await?;
+        let ((artists, albums), songs) = tokio::try_join!(
+            crate::library::search_artists_albums(&dbs.library, &cleaned, fetch as i64),
+            crate::search::search(&dbs.search, &cleaned, fetch as i64),
+        )?;
         (artists, albums, songs)
     };
     let (mut artists, mut albums) = match &filter {
@@ -232,8 +232,10 @@ async fn search_value_fts(
     songs.truncate(limit);
 
     let song_ids: Vec<String> = songs.iter().map(|song| song.song_id.clone()).collect();
-    let song_covers = crate::library::song_cover_ids(&dbs.library, &song_ids).await?;
-    let song_albums = crate::library::song_album_ids(&dbs.library, &song_ids).await?;
+    let (song_covers, song_albums) = tokio::try_join!(
+        crate::library::song_cover_ids(&dbs.library, &song_ids),
+        crate::library::song_album_ids(&dbs.library, &song_ids),
+    )?;
     let songs: Vec<SearchSong> = songs
         .into_iter()
         .map(|song| {
@@ -284,16 +286,12 @@ pub(crate) async fn search_value_index(
         // The unified search's empty-query surface browses every scope:
         // artists and albums are full name-ordered lists, songs stay Most
         // played (S-9).
-        let artists = crate::library::artists(&dbs.library, "Name")
-            .await?
-            .into_iter()
-            .map(std::sync::Arc::new)
-            .collect();
-        let albums = crate::library::albums(&dbs.library, None, "Artist")
-            .await?
-            .into_iter()
-            .map(std::sync::Arc::new)
-            .collect();
+        let (artists, albums) = tokio::try_join!(
+            crate::library::artists(&dbs.library, "Name"),
+            crate::library::albums(&dbs.library, None, "Artist"),
+        )?;
+        let artists = artists.into_iter().map(std::sync::Arc::new).collect();
+        let albums = albums.into_iter().map(std::sync::Arc::new).collect();
         (
             artists,
             albums,

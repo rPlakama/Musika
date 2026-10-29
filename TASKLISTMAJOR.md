@@ -1493,6 +1493,9 @@ The product is incomplete without these.
     edge fade (the gradient-band shortcut read as a vignette over the text); `ScrollContent` uses realised-delegate targets
     plus native `indexAt`/`displayMargin`, and only probes Qt for
     unrealised/far targets.
+  - **Search:** the FTS, artist, album and song readers run concurrently with
+    `tokio::try_join!`; `search_artists_albums` issues its two SQL reads in
+    parallel, and the song cover/album-id lookups run together.
   - **Row typography:** every `RowBody` (library lists, search columns, queue,
     album tracklists) uses `Theme.rowFont(role, width, height)`; height sets the
     base and width caps it, so the same row type stays consistent across

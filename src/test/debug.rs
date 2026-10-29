@@ -64,6 +64,10 @@ pub(crate) fn idle(entered: bool) {
     );
 }
 
+pub(crate) fn search_result(started: Instant) {
+    println!("[musika/debug] Result reached {:.2} ms", ms(started));
+}
+
 pub(crate) fn albums_loaded(started: Instant, rows: usize, bytes: usize) {
     report_with(
         "albums.load",

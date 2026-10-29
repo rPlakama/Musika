@@ -19,8 +19,9 @@ open work; this file is the release history.
   longer derive a missing `.thumb.jpg`, and a late reply for an older size
   bucket is discarded instead of replacing the current cover.
 
-- Open the album page from a song result before the playback queue finishes
-  serializing, matching the album-list / search-album path.
+- A song search hit is now a navigation jump: its album page opens with the
+  cursor parked on the hit. No queue is built and nothing plays until Enter
+  on the album row.
 
 ## 0.4.11 - _Cover improvements and other minor_
 

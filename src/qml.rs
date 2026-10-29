@@ -2157,6 +2157,22 @@ impl Backend {
         });
     }
 
+    /// Navigation-only song jump: resolve the song's album page and emit
+    /// `open_album` with the song id, so Home opens AlbumEntry and parks the
+    /// cursor on that row. No queue and no playback.
+    #[qslot(qml_name = "openSongAlbum")]
+    fn open_song_album(&mut self, song_id: String) {
+        let invoker = self.get_qml_method_invoker();
+        let Some(dbs) = crate::app::dbs() else {
+            return;
+        };
+        crate::app::runtime().spawn(async move {
+            if let Ok(page) = crate::queue::song_album_page_json(&dbs, &song_id).await {
+                emit(&invoker, "open_album", page);
+            }
+        });
+    }
+
     /// Opens the song's album page first, then pumps the `song_album` queue
     /// event. The page navigation is one indexed album read (the same
     /// `open_album` payload the Go to Album verb uses); the queue build

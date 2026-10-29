@@ -293,7 +293,7 @@ Item {
     // Single album-page push used by the album list, the artist entry and the
     // search overlay, so every surface lands in the same page with the same
     // header payload (`starred` feeds the ARC-I-2 header heart).
-    function openAlbum(albumId, title, artist, year, tracks, cover, starred, instant) {
+    function openAlbum(albumId, title, artist, year, tracks, cover, starred, instant, focusSongId) {
         // P-6 S2: the last opened album page is what a restart reopens.
         Backend.rememberAlbum(albumId);
         var page = {
@@ -302,7 +302,9 @@ Item {
             albumArtist: artist,
             albumCover: cover,
             albumMeta: Theme.metaJoin([year]),
-            albumStarred: starred === true
+            albumStarred: starred === true,
+            // A song search hit opens the album with its row already parked.
+            focusSongId: focusSongId ? focusSongId : ""
         };
         if (instant)
             contentStack.push(albumEntryComponent, page, StackView.Immediate);
@@ -518,6 +520,13 @@ Item {
     // Actions dispatched from the global key handler, scoped to the active
     // region: movement only ever affects the region the cursor is in.
     function handleAction(action) {
+        // Navigation-only song jump (search song hits, IPC): open the album
+        // page and park the cursor, no queue/playback.
+        if (action.indexOf("open_song_album ") === 0) {
+            Backend.openSongAlbum(action.substring("open_song_album ".length));
+            return;
+        }
+
         // Command pump: the search overlay (and external IPC via `ipc.sock`)
         // both express this as `play_song_in_album <song-id>`.
         if (action.indexOf("play_song_in_album ") === 0) {
@@ -1198,9 +1207,9 @@ Item {
         // ARC-I: the active column arms the shared Alt overlay.
         onQuickAction: (target, actions) => root.armQuickActions(target, actions)
 
-        // A search song hit goes through the same command pump as external
-        // IPC, so the flow stays scriptable and single-sourced.
-        onSongActivated: id => Backend.handleCommand("play_song_in_album " + id)
+        // A search song hit is a navigation jump: open its album page and
+        // park the cursor on the row. Playback starts only on Enter there.
+        onSongActivated: id => Backend.openSongAlbum(id)
         onAlbumActivated: (albumId, title, artist, year, tracks, cover, starred) => root.openAlbum(albumId, title, artist, year, tracks, cover, starred)
         onArtistActivated: (artistId, artistName, artistCover) => {
             root.nowPlayingExpanded = false;
@@ -1284,7 +1293,7 @@ Item {
                 Qt.callLater(function () {
                     if (searchOverlay.opened)
                         searchOverlay.close();
-                    root.openAlbum(page.id, page.title, page.artist ? page.artist : "", page.year ? String(page.year) : "", String(page.tracks), page.cover ? page.cover : "", page.starred === true);
+                    root.openAlbum(page.id, page.title, page.artist ? page.artist : "", page.year ? String(page.year) : "", String(page.tracks), page.cover ? page.cover : "", page.starred === true, false, page.song_id ? page.song_id : "");
                 });
                 return;
             }

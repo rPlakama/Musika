@@ -372,7 +372,11 @@ pub async fn song_album_page_json(dbs: &crate::db::Dbs, song_id: &str) -> anyhow
         .ok_or_else(|| anyhow::anyhow!("album not found in index"))?;
     let cover_ids: Vec<String> = album.cover_art.clone().into_iter().collect();
     let covers = crate::covers::url_map_of(dbs, &cover_ids).await?;
-    Ok(queue_album_json(&album, &covers).to_string())
+    let mut page = queue_album_json(&album, &covers);
+    // The page may open from a song hit or the Go to Album verb; carrying
+    // the song id lets AlbumEntry park its cursor on that row.
+    page["song_id"] = serde_json::json!(song_id);
+    Ok(page.to_string())
 }
 
 /// Artist-page payload for ARC-43 "Go to Artist" (navigation only).

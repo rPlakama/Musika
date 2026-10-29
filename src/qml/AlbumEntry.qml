@@ -39,6 +39,8 @@ Rectangle {
     signal artistActivated(string artistId, string artistName, string artistCover)
 
     property string albumId: ""
+    /// Search-hit song to park the cursor on once the rows land.
+    property string focusSongId: ""
     property bool onToolbar: false
     /// UI-60: the big cover is a selectable album surface (Enter/click arms
     /// its favourite + count + download verbs).
@@ -75,6 +77,7 @@ Rectangle {
     // UI-54: per-album scroll memory for the songs viewport.
     readonly property string memoryKey: "album:" + root.albumId
     property bool _restored: false
+    property bool _focusApplied: false
     property int _coverTarget: 0
 
     /// Metadata stats merged after the album date:
@@ -257,6 +260,22 @@ Rectangle {
         notesView.contentY = Math.max(0, Math.min(max, notesView.contentY + delta));
     }
 
+    /// Park the cursor on the song a search hit asked for, once its row
+    /// exists. Returns false when there is no focus or the song is not in
+    /// this album (the normal restore / row-0 path then applies).
+    function focusRequestedSong() {
+        if (root._focusApplied || root.focusSongId.length === 0)
+            return false;
+        for (var i = 0; i < songs.count; ++i) {
+            if (songs.get(i).songId !== root.focusSongId)
+                continue;
+            root._focusApplied = true;
+            content.land(i);
+            return true;
+        }
+        return false;
+    }
+
     function apply(payload) {
         // VI-4: a reload invalidates the selected range.
         content.clearSelection();
@@ -294,9 +313,11 @@ Rectangle {
         }
         root.tracksFormat = format.toUpperCase();
         root.loading = false;
-        // UI-54: reopening the page restores the cursor + offset; later
-        // reloads (library change, resync) keep the live state.
-        if (!root._restored) {
+        // A search jump owns the first cursor; otherwise UI-54 reopens on the
+        // remembered cursor and later reloads keep the live state.
+        if (root.focusRequestedSong()) {
+            root._restored = true;
+        } else if (!root._restored) {
             root._restored = true;
             // The playing album opens on the playing track (the page is a
             // performance surface for it); otherwise a remembered cursor

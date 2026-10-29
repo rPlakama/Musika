@@ -2295,6 +2295,7 @@ mod library {
             name: "Kid A".into(),
             artist: Some("Radiohead".into()),
             song_count: 1,
+            created: Some("2020-10-02T00:00:00Z".into()),
             ..AlbumID3::default()
         };
         let song = Child {
@@ -2303,6 +2304,7 @@ mod library {
             artist_id: Some("ar1".into()),
             title: "Everything in Its Right Place".into(),
             track: Some(1),
+            created: Some("2020-10-02T00:00:00Z".into()),
             ..Child::default()
         };
 
@@ -2327,6 +2329,15 @@ mod library {
             .await
             .unwrap();
         assert_eq!(songs, 1);
+        let (album_created, song_created): (Option<String>, Option<String>) = sqlx::query_as(
+            "SELECT (SELECT created FROM albums WHERE id = 'al1'),
+                        (SELECT created FROM songs WHERE id = 's1')",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(album_created.as_deref(), Some("2020-10-02T00:00:00Z"));
+        assert_eq!(song_created.as_deref(), Some("2020-10-02T00:00:00Z"));
         assert_eq!(last_modified(&pool).await.unwrap(), 42);
     }
 
@@ -2449,8 +2460,10 @@ mod library {
     fn order_cycles_both_ways() {
         assert_eq!(cycle_order("Artist", 1), "Name");
         assert_eq!(cycle_order("Name", 1), "Year");
-        assert_eq!(cycle_order("Year", 1), "Artist");
-        assert_eq!(cycle_order("Artist", -1), "Year");
+        assert_eq!(cycle_order("Year", 1), "Recent");
+        assert_eq!(cycle_order("Recent", 1), "Artist");
+        assert_eq!(cycle_order("Artist", -1), "Recent");
+        assert_eq!(cycle_order("Recent", -1), "Year");
         assert_eq!(cycle_order("Year", -1), "Name");
         // Unknown values snap back to the first order.
         assert_eq!(cycle_order("", 1), "Name");
@@ -2563,6 +2576,52 @@ mod library {
                 .unwrap()
                 .is_empty()
         );
+    }
+
+    #[tokio::test]
+    async fn recent_orders_follow_created_then_name() {
+        let pool = memory_pool().await;
+        for (id, name, created) in [
+            ("al-old", "Old", "2020-01-01T00:00:00Z"),
+            ("al-new", "New", "2023-01-01T00:00:00Z"),
+            ("al-tie", "Alpha", "2023-01-01T00:00:00Z"),
+        ] {
+            sqlx::query("INSERT INTO albums (id, name, created) VALUES (?1, ?2, ?3)")
+                .bind(id)
+                .bind(name)
+                .bind(created)
+                .execute(&pool)
+                .await
+                .unwrap();
+        }
+        let album_ids: Vec<String> = albums(&pool, None, "Recent")
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|album| album.id)
+            .collect();
+        assert_eq!(album_ids, ["al-tie", "al-new", "al-old"]);
+
+        for (id, title, created) in [
+            ("s-old", "Old", "2020-01-01T00:00:00Z"),
+            ("s-new", "New", "2023-01-01T00:00:00Z"),
+            ("s-tie", "Alpha", "2023-01-01T00:00:00Z"),
+        ] {
+            sqlx::query("INSERT INTO songs (id, title, created) VALUES (?1, ?2, ?3)")
+                .bind(id)
+                .bind(title)
+                .bind(created)
+                .execute(&pool)
+                .await
+                .unwrap();
+        }
+        let song_ids: Vec<String> = all_songs(&pool, "Recent")
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|song| song.id)
+            .collect();
+        assert_eq!(song_ids, ["s-tie", "s-new", "s-old"]);
     }
 
     #[tokio::test]

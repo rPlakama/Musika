@@ -60,7 +60,8 @@ pub async fn replace(
     let mut old_albums: HashMap<String, AlbumSeen> = HashMap::new();
     {
         let mut rows = sqlx::query_as::<_, AlbumSnapshot>(
-            "SELECT id, artist_id, name, artist, year, genre, song_count, duration, cover_art
+            "SELECT id, artist_id, name, artist, year, genre, song_count, duration, cover_art,
+                    created
              FROM albums",
         )
         .fetch(&mut *tx);
@@ -91,7 +92,7 @@ pub async fn replace(
     {
         let mut rows = sqlx::query_as::<_, SongSnapshot>(
             "SELECT id, album_id, artist_id, title, album, artist, track, disc_number, year,
-                    genre, duration, bit_rate, suffix, size, path, cover_art
+                    genre, duration, bit_rate, suffix, size, path, cover_art, created
              FROM songs",
         )
         .fetch(&mut *tx);
@@ -157,7 +158,8 @@ pub async fn replace(
     crate::cache::insert_many(
         &mut tx,
         "INSERT INTO albums
-             (id, artist_id, name, artist, year, genre, song_count, duration, cover_art, starred, rating) ",
+             (id, artist_id, name, artist, year, genre, song_count, duration, cover_art, starred,
+              rating, created) ",
         albums,
         |mut row, album| {
             row.push_bind(&album.id)
@@ -170,7 +172,8 @@ pub async fn replace(
                 .push_bind(album.duration)
                 .push_bind(&album.cover_art)
                 .push_bind(&album.starred)
-                .push_bind(album.user_rating.unwrap_or(0).clamp(0, 5));
+                .push_bind(album.user_rating.unwrap_or(0).clamp(0, 5))
+                .push_bind(&album.created);
         },
     )
     .await?;
@@ -179,7 +182,8 @@ pub async fn replace(
         &mut tx,
         "INSERT OR REPLACE INTO songs
              (id, album_id, artist_id, title, album, artist, track, disc_number, year,
-              genre, duration, bit_rate, suffix, size, path, cover_art, play_count, starred) ",
+              genre, duration, bit_rate, suffix, size, path, cover_art, play_count, starred,
+              created) ",
         songs,
         |mut row, song| {
             row.push_bind(&song.id)
@@ -199,7 +203,8 @@ pub async fn replace(
                 .push_bind(&song.path)
                 .push_bind(&song.cover_art)
                 .push_bind(song.play_count)
-                .push_bind(&song.starred);
+                .push_bind(&song.starred)
+                .push_bind(&song.created);
         },
     )
     .await?;

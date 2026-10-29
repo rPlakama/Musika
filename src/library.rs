@@ -68,6 +68,7 @@ struct AlbumSnapshot {
     song_count: i64,
     duration: i64,
     cover_art: Option<String>,
+    created: Option<String>,
 }
 
 impl AlbumSnapshot {
@@ -82,6 +83,7 @@ impl AlbumSnapshot {
             song_count: i64::from(album.song_count),
             duration: i64::from(album.duration),
             cover_art: album.cover_art.clone(),
+            created: album.created.clone(),
         }
     }
 }
@@ -125,6 +127,7 @@ struct SongSnapshot {
     size: Option<i64>,
     path: Option<String>,
     cover_art: Option<String>,
+    created: Option<String>,
 }
 
 impl SongSnapshot {
@@ -146,6 +149,7 @@ impl SongSnapshot {
             size: song.size,
             path: song.path.clone(),
             cover_art: song.cover_art.clone(),
+            created: song.created.clone(),
         }
     }
 }
@@ -571,8 +575,8 @@ pub struct ArtistRow {
 /// Orderings offered by the album list and the song list (`Shift-H`/
 /// `Shift-L`). The labels map to the Subsonic `getAlbumList2` types they
 /// approximate: Artist = alphabeticalByArtist, Name = alphabeticalByName,
-/// Year = byYear.
-pub const ORDERS: [&str; 3] = ["Artist", "Name", "Year"];
+/// Year = byYear, Recent = newest (the provider's `created` timestamp).
+pub const ORDERS: [&str; 4] = ["Artist", "Name", "Year", "Recent"];
 
 /// Orderings offered by the artist list (`Shift-H`/`Shift-L`): alphabetical,
 /// or most albums first.
@@ -708,6 +712,7 @@ fn album_order(order: &str, by_artist: bool) -> &'static str {
     match (by_artist, order) {
         (_, "Name") => " ORDER BY name",
         (_, "Year") => " ORDER BY year DESC, name",
+        (_, "Recent") => " ORDER BY created DESC, name",
         (true, _) => " ORDER BY artist, name",
         (false, _) => " ORDER BY year, name",
     }
@@ -722,6 +727,7 @@ fn song_order(order: &str) -> &'static str {
     match order {
         "Name" => " ORDER BY s.title, s.artist, s.album",
         "Year" => " ORDER BY s.year DESC, s.title, s.artist",
+        "Recent" => " ORDER BY s.created DESC, s.title, s.artist",
         _ => " ORDER BY s.artist, s.album, s.disc_number, s.track, s.title",
     }
 }

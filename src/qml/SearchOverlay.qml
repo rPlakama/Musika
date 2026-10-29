@@ -334,6 +334,63 @@ Item {
         close();
     }
 
+    function rowEqual(current, next) {
+        for (var key in next) {
+            if (current[key] !== next[key])
+                return false;
+        }
+        return true;
+    }
+
+    function sameRows(model, rows) {
+        if (!model || model.count !== rows.length)
+            return false;
+        for (var i = 0; i < rows.length; ++i) {
+            if (!root.rowEqual(model.get(i), rows[i]))
+                return false;
+        }
+        return true;
+    }
+
+    function sameIds(model, rows) {
+        if (!model || model.count !== rows.length)
+            return false;
+        for (var i = 0; i < rows.length; ++i) {
+            if (model.get(i).id !== rows[i].id)
+                return false;
+        }
+        return true;
+    }
+
+    /// Reconcile the model by identity, not by rebuilding it. Existing rows
+    /// are moved to their new index (ListView.displaced animates that move),
+    /// unchanged rows are left alone, and only genuinely new/removed rows are
+    /// inserted/removed.
+    function syncRows(model, rows) {
+        for (var i = 0; i < rows.length; ++i) {
+            var from = -1;
+            for (var j = i; j < model.count; ++j) {
+                if (model.get(j).id === rows[i].id) {
+                    from = j;
+                    break;
+                }
+            }
+            if (from < 0) {
+                model.insert(i, rows[i]);
+                continue;
+            }
+            if (from !== i)
+                model.move(from, i, 1);
+            var current = model.get(i);
+            if (!root.rowEqual(current, rows[i])) {
+                for (var key in rows[i])
+                    model.setProperty(i, key, rows[i][key]);
+            }
+        }
+        while (model.count > rows.length)
+            model.remove(model.count - 1);
+    }
+
     function apply(payload) {
         if (!root.opened)
             return;
@@ -343,16 +400,25 @@ Item {
         if (data.query !== undefined && data.query !== field.text)
             return;
 
-        // UI-41: results crossfade in on payload swaps instead of flashing.
-        resultsColumn.opacity = 0;
-        songResults.clear();
-        albumResults.clear();
-        artistResults.clear();
+        // A repeated response with the same rows must not churn the models:
+        // clearing/repopulating the ListModels reloads the top delegate and
+        // makes an identical result flicker.
+        if (root.sameRows(songResults, data.songs)
+                && root.sameRows(albumResults, data.albums)
+                && root.sameRows(artistResults, data.artists)) {
+            loading = false;
+            return;
+        }
+
+        // UI-41: results update in place; unchanged rows keep their delegates.
+        var songRows = [];
+        var albumRows = [];
+        var artistRows = [];
 
         var i;
         for (i = 0; i < data.songs.length; i++) {
             var song = data.songs[i];
-            songResults.append({
+            songRows.push({
                 id: song.id,
                 title: song.title,
                 subtitle: (song.artist ? song.artist : "") + (song.album ? " · " + song.album : ""),
@@ -371,7 +437,7 @@ Item {
         }
         for (i = 0; i < data.albums.length; i++) {
             var album = data.albums[i];
-            albumResults.append({
+            albumRows.push({
                 id: album.id,
                 title: album.title,
                 subtitle: album.artist ? album.artist : "",
@@ -389,7 +455,7 @@ Item {
         for (i = 0; i < data.artists.length; i++) {
             var artist = data.artists[i];
             // Count stacks under the name (two-line cell).
-            artistResults.append({
+            artistRows.push({
                 id: artist.id,
                 title: artist.name,
                 subtitle: artist.album_count + (artist.album_count === 1 ? " album" : " albums"),
@@ -403,28 +469,37 @@ Item {
             });
         }
 
-        // Fresh hits reset every scope's cursor; the active scope starts on
-        // its first row. An empty scope falls through to the next one, so a
-        // query with only song hits lands there instead of showing a blank
-        // artist list.
-        root.scopeCursors = [0, 0, 0];
-        if (root.scopeCount(root.scope) === 0) {
-            for (var step = 0; step < 3; ++step) {
-                var candidate = (root.scope + step) % 3;
-                if (root.scopeCount(candidate) > 0) {
-                    root.scope = candidate;
-                    break;
+        var idsSame = root.sameIds(songResults, data.songs)
+            && root.sameIds(albumResults, data.albums)
+            && root.sameIds(artistResults, data.artists);
+        root.syncRows(songResults, songRows);
+        root.syncRows(albumResults, albumRows);
+        root.syncRows(artistResults, artistRows);
+        resultsColumn.opacity = 1;
+
+        // Same IDs mean this is an in-place metadata refresh, not a new
+        // result set: keep every scope cursor and the active selection.
+        if (!idsSame) {
+            // Fresh hits reset every scope's cursor; the active scope starts
+            // on its first row. An empty scope falls through to the next one,
+            // so a query with only song hits lands there instead of showing a
+            // blank artist list.
+            root.scopeCursors = [0, 0, 0];
+            if (root.scopeCount(root.scope) === 0) {
+                for (var step = 0; step < 3; ++step) {
+                    var candidate = (root.scope + step) % 3;
+                    if (root.scopeCount(candidate) > 0) {
+                        root.scope = candidate;
+                        break;
+                    }
                 }
             }
+            resultsColumn.cursor = root.scopeCount(root.scope) > 0 ? 0 : -1;
         }
-        resultsColumn.cursor = root.scopeCount(root.scope) > 0 ? 0 : -1;
-        // The mark window follows the fresh result set.
+        // The mark window follows the result set.
         resultsColumn.requestMarkWindow();
 
         loading = false;
-        Qt.callLater(function () {
-            resultsColumn.opacity = 1;
-        });
 
         // UI-49: the response landing on zero hits is denied input — once per
         // distinct query, never again while the same zero query is held. An
@@ -561,7 +636,13 @@ Item {
                     font.family: Theme.fonts.body
                     font.pixelSize: root.panelRefHeight * 0.030
 
-                    onTextChanged: debounce.restart()
+                    onTextChanged: {
+                        // Keep the match highlighter on the same text as the
+                        // debounced request, not only the / command line binding.
+                        resultsColumn.searchQuery = field.text;
+                        resultsColumn.searchCurrentRow = -1;
+                        debounce.restart();
+                    }
 
                     onStepNext: root.moveScope(1)
                     onStepPrevious: root.moveScope(-1)

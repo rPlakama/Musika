@@ -94,6 +94,8 @@ Item {
     /// Kept for host compatibility; the extent is Qt's own now.
     property real contentHeightHint: 0
     property bool recenterOnWidth: root.layout === "grid"
+    /// Animate rows whose index changed after a model move (search results).
+    property bool animateDisplacement: false
     /// Bottom-align a short uniform list instead of leaving its rows at
     /// the top of an otherwise empty viewport (album pages).
     property bool bottomAlignShort: false
@@ -735,6 +737,18 @@ Item {
         onFinished: root._settle()
     }
 
+    Component {
+        id: displacedTransition
+        Transition {
+            NumberAnimation {
+                properties: "x,y"
+                duration: Theme.motion.standard
+                easing.type: Easing.Bezier
+                easing.bezierCurve: Theme.ease.decelerate
+            }
+        }
+    }
+
     // UI-48: the stage is the clip owner when bleed is on.
     Item {
         id: stage
@@ -768,7 +782,10 @@ Item {
             }
             boundsBehavior: Flickable.StopAtBounds
             highlightFollowsCurrentItem: false
-            reuseItems: true
+            reuseItems: !root.animateDisplacement
+            displaced: root.animateDisplacement ? displacedTransition : null
+            move: root.animateDisplacement ? displacedTransition : null
+            moveDisplaced: root.animateDisplacement ? displacedTransition : null
             cacheBuffer: root.renderOverscan
             displayMarginBeginning: root.renderOverscan
             displayMarginEnd: root.renderOverscan
@@ -800,7 +817,10 @@ Item {
             cellHeight: root.cellHeight > 0 ? root.cellHeight : root.cellWidth
             boundsBehavior: Flickable.StopAtBounds
             highlightFollowsCurrentItem: false
-            reuseItems: true
+            reuseItems: !root.animateDisplacement
+            displaced: root.animateDisplacement ? displacedTransition : null
+            move: root.animateDisplacement ? displacedTransition : null
+            moveDisplaced: root.animateDisplacement ? displacedTransition : null
             cacheBuffer: root.renderOverscan
             displayMarginBeginning: root.renderOverscan
             displayMarginEnd: root.renderOverscan

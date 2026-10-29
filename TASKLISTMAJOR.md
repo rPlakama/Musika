@@ -1493,6 +1493,10 @@ The product is incomplete without these.
     edge fade (the gradient-band shortcut read as a vignette over the text); `ScrollContent` uses realised-delegate targets
     plus native `indexAt`/`displayMargin`, and only probes Qt for
     unrealised/far targets.
+  - **Search rows:** results reconcile by id with `ListModel.move`; unchanged
+    rows keep their delegates, and both the moved subject and displaced rows
+    animate vertically. Nucleo uses `prefer_prefix` so one-character queries
+    compete on word starts.
   - **Search:** the FTS, artist, album and song readers run concurrently with
     `tokio::try_join!`; `search_artists_albums` issues its two SQL reads in
     parallel, and the song cover/album-id lookups run together.

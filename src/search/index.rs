@@ -39,6 +39,15 @@ use crate::library::{AlbumRow, ArtistRow};
 /// Nucleo orders by text score; the boost only needs to reorder near-ties,
 /// and this keeps the re-sort bounded on a very common query.
 const MATCH_SCAN: usize = 512;
+
+/// One Nucleo config for the index and the standalone matchers. Prefix
+/// preference makes the first typed character compete on word starts
+/// instead of being treated as an arbitrary fuzzy scatter.
+fn matcher_config() -> Config {
+    let mut config = Config::DEFAULT;
+    config.prefer_prefix = true;
+    config
+}
 /// S-9 usage boost: score units added per play (capped).
 const PLAY_BOOST: i64 = 2;
 const PLAY_CAP: i64 = 500;
@@ -121,7 +130,7 @@ impl SearchIndex {
         artists: Vec<ArtistRow>,
         albums: Vec<AlbumRow>,
     ) -> Self {
-        let nucleo = Nucleo::new(Config::DEFAULT, Arc::new(|| {}), Some(4), 1);
+        let nucleo = Nucleo::new(matcher_config(), Arc::new(|| {}), Some(4), 1);
         {
             let injector = nucleo.injector();
             for song in &songs {
@@ -212,7 +221,7 @@ impl SearchIndex {
         }
 
         let songs = self.search_songs(&pattern, raw, limit);
-        let mut matcher = Matcher::new(Config::DEFAULT);
+        let mut matcher = Matcher::new(matcher_config());
         let artists = match_indexed(&pattern, &self.artists, &mut matcher, limit);
         let albums = match_indexed(&pattern, &self.albums, &mut matcher, limit);
         SearchResults {
@@ -224,13 +233,13 @@ impl SearchIndex {
 
     fn search_songs(&self, pattern: &Pattern, raw: &str, limit: usize) -> Vec<Arc<SongHit>> {
         let mut guard = self.songs.lock().unwrap_or_else(|error| error.into_inner());
-        // Incremental matching is only valid when the previous text is a
-        // prefix of the new one.
-        let append = !guard.last_query.is_empty() && raw.starts_with(&guard.last_query);
+        // Do not reuse the previous ordering when the query grows: an item
+        // that was already on screen must be allowed to move up as the new
+        // query refines the score. Reparse from scratch each keystroke.
         guard
             .nucleo
             .pattern
-            .reparse(0, raw, CaseMatching::Smart, Normalization::Smart, append);
+            .reparse(0, raw, CaseMatching::Smart, Normalization::Smart, false);
         guard.last_query.clear();
         guard.last_query.push_str(raw);
         loop {
@@ -248,7 +257,7 @@ impl SearchIndex {
         // Re-score only the best text matches; the play boost (S-9) then
         // reorders that short list without sorting the whole snapshot.
         let scan = matched.min(MATCH_SCAN.max(limit.saturating_mul(8)));
-        let mut matcher = Matcher::new(Config::DEFAULT);
+        let mut matcher = Matcher::new(matcher_config());
         let mut scored: Vec<(i64, u32, Arc<SongHit>)> = Vec::with_capacity(scan);
         for item in snapshot.matched_items(0..scan as u32) {
             let Some(text_score) = pattern.score(item.matcher_columns[0].slice(..), &mut matcher)

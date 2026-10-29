@@ -399,6 +399,7 @@ Item {
                 id: content
                 anchors.fill: parent
                 context: "search"
+                animateDisplacement: true
                 model: root.model
                 selectable: quickActionKind !== ""
                 onSelectionChanged: root.selectionChanged()

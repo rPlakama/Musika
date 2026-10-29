@@ -32,6 +32,9 @@ open work; this file is the release history.
 - Re-snap the shared scroll follow through multi-frame height relayouts,
   preserve a manually scrolled Library viewport by its visual top row, and
   finish the repair when an idle window becomes active.
+- Clamp the follow against the realised last row again, so the bottom row
+  stays glued to the viewport edge instead of flickering over the inflated
+  contentHeight estimate.
 
 ## 0.4.11 - _Cover improvements and other minor_
 

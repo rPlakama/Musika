@@ -233,6 +233,20 @@ Item {
     readonly property int firstVisibleIndex: root._visibleBounds.first
     readonly property int lastVisibleIndex: root._visibleBounds.last
 
+    /// The furthest contentY that still keeps the real last row flush with
+    /// the viewport bottom. Qt's contentHeight can keep an inflated estimate
+    /// after a row-unit change; the realised tail is authoritative there.
+    function _bottomLimit(v) {
+        var limit = Math.max(0, v.contentHeight - v.height);
+        var last = v.count > 0 ? v.itemAtIndex(v.count - 1) : null;
+        if (last && last.height > 0) {
+            var tail = last.y + last.height - v.height;
+            if (tail >= 0)
+                limit = Math.min(limit, tail);
+        }
+        return limit;
+    }
+
     /// The centred target. Realised delegates give it directly (no layout
     /// probe); only far/unrealised targets fall back to Qt's positioning.
     function _target(v, index) {
@@ -240,7 +254,7 @@ Item {
             return null;
         var item = v.itemAtIndex(index);
         if (item && item.height > 0) {
-            var max = Math.max(0, v.contentHeight - v.height);
+            var max = root._bottomLimit(v);
             return Math.max(0, Math.min(max, item.y - (v.height - item.height) / 2));
         }
         var old = v.contentY;
@@ -268,9 +282,12 @@ Item {
         if (instant || Theme.reduceMotion || root.followMs <= 0) {
             if (index === 0)
                 v.positionViewAtIndex(0, ListView.Beginning);
-            else if (index === v.count - 1)
+            else if (index === v.count - 1) {
                 v.positionViewAtIndex(index, ListView.End);
-            else
+                // End can land on an inflated contentHeight estimate; pull
+                // the viewport back so the realised last row stays flush.
+                v.contentY = Math.min(v.contentY, root._bottomLimit(v));
+            } else
                 v.positionViewAtIndex(index, ListView.Center);
             root._settle();
             return;
@@ -632,7 +649,7 @@ Item {
         var stride = root._stride(v);
         if (stride <= 0)
             return;
-        var maxY = Math.max(0, v.contentHeight - v.height);
+        var maxY = root._bottomLimit(v);
         var row = Math.max(0, Math.min(v.count - 1, root._anchorRow));
         var target = (row + root._anchorFraction) * stride;
         v.contentY = Math.max(0, Math.min(maxY, target));
@@ -997,6 +1014,13 @@ Item {
                 root._resizeFollowing = true;
                 root._applyResizeAnchor();
                 root._resizeFollowing = false;
+            } else if (!root._landing && !glide.running
+                    && root.currentIndex === target.count - 1
+                    && target.count > 0) {
+                // The last delegate just supplied the real tail; keep its
+                // bottom flush instead of leaving the inflated-estimate gap.
+                target.contentY = Math.min(target.contentY,
+                    root._bottomLimit(target));
             }
         }
         function onCurrentIndexChanged() {

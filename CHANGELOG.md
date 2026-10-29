@@ -29,9 +29,10 @@ open work; this file is the release history.
 - Let the cover box settle before decoding, and never swap a display copy in
   after the original has painted: the session-restored AlbumEntry cover now
   loads once instead of reloading through the startup geometry changes.
-- Re-snap the shared scroll follow through multi-frame height relayouts,
-  preserve a manually scrolled Library viewport by its visual top row, and
-  finish the repair when an idle window becomes active.
+- Use the old settled resize-anchor pass (next frame + 100 ms) instead of
+  snapping on every height event: write contentY directly, preserve a
+  manually scrolled Library viewport by its visual top row, and finish the
+  repair when an idle window becomes active.
 - Clamp the follow against the realised last row again, so the bottom row
   stays glued to the viewport edge instead of flickering over the inflated
   contentHeight estimate.

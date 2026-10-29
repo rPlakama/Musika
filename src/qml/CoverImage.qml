@@ -47,6 +47,10 @@ Item {
     // decode at their painted size. Cap pathological uploads to a sane edge.
     readonly property int maxDecodeEdge: 4096
     readonly property real decodeFactor: root.sizeFactor
+    // A page pushed during session bootstrap exists before the first layout
+    // (width/height 0). Do not decode a 32 px cover there and then reload it
+    // at the real size; wait for the first real geometry and load once.
+    readonly property bool sized: width > 0 && height > 0
     readonly property int decodeWidth: Math.min(root.maxDecodeEdge, Math.max(32,
         Math.ceil(width * root.decodeFactor / 32) * 32))
     readonly property int decodeHeight: Math.min(root.maxDecodeEdge, Math.max(32,
@@ -105,7 +109,7 @@ Item {
     Image {
         id: image
         anchors.fill: parent
-        source: root.imageSource
+        source: root.sized ? root.imageSource : ""
         sourceSize.width: root.sourceWidth
         sourceSize.height: root.sourceHeight
         asynchronous: true

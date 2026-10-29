@@ -257,7 +257,10 @@ fn queue_album_json(
 }
 
 /// Single pumped event for "play this song inside its album": the serialized
-/// queue, the start index and the album metadata (or null).
+/// queue and the start index. The album page is a separate `open_album`
+/// event (`song_album_page_json`) emitted first, so the page is not held back
+/// by the queue serialization. `album` stays in the payload as null for shape
+/// compatibility.
 pub async fn song_album_payload(
     dbs: &crate::db::Dbs,
     song_id: &str,
@@ -286,19 +289,13 @@ pub async fn song_album_payload(
     let start = queue_start(&songs, &song.id);
     let queue = tracks_json(dbs, songs).await?;
 
-    let album = match crate::library::album(&dbs.library, album_id).await? {
-        Some(album) => {
-            let cover_ids: Vec<String> = album.cover_art.clone().into_iter().collect();
-            let covers = crate::covers::url_map_of(dbs, &cover_ids).await?;
-            queue_album_json(&album, &covers)
-        }
-        None => serde_json::Value::Null,
-    };
-
+    // The album page is emitted first as `open_album`; the queue event
+    // carries only the tracks so the page is not held back by the cover
+    // lookup. The field stays for payload-shape compatibility.
     Ok(serde_json::json!({
         "queue": queue,
         "start": start,
-        "album": album,
+        "album": serde_json::Value::Null,
     })
     .to_string())
 }

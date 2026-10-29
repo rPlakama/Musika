@@ -19,6 +19,9 @@ open work; this file is the release history.
   longer derive a missing `.thumb.jpg`, and a late reply for an older size
   bucket is discarded instead of replacing the current cover.
 
+- Open the album page from a song result before the playback queue finishes
+  serializing, matching the album-list / search-album path.
+
 ## 0.4.11 - _Cover improvements and other minor_
 
 -  `54beb51`  Use DPI for CoverLoading

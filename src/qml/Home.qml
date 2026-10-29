@@ -1264,26 +1264,15 @@ Item {
                 });
             });
         }
-        // Single pumped event from `playSongInAlbum`: the queue + album
-        // context. Deferred so the backend is not re-entered while the signal
-        // is still being emitted.
+        // Queue staged by `playSongInAlbum` after the page-opening
+        // `open_album` event. Deferred so the backend is not re-entered while
+        // the signal is still being emitted; the album page is already up.
         function onDataReady(channel, payload) {
             if (channel === "song_album") {
                 var data = JSON.parse(payload);
                 Qt.callLater(function () {
                     Backend.playerLoad(data.queue, data.start);
-                    if (!data.album)
-                        return;
-                    // Same detour rule as the other page opens: this is an
-                    // album page too.
-                    var album = data.album;
                     root.nowPlayingExpanded = false;
-                    root.openAlbum(album.id, album.title,
-                        album.artist ? album.artist : "",
-                        album.year ? String(album.year) : "",
-                        String(album.tracks || 0),
-                        album.cover ? album.cover : "",
-                        album.starred === true);
                 });
                 return;
             }

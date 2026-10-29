@@ -2157,10 +2157,10 @@ impl Backend {
         });
     }
 
-    /// Resolves the song's album context and pumps a single `song_album` event
-    /// (queue JSON, start index, album metadata). The UI then calls
-    /// [`player_load`] and opens the album page itself, so no two crossed
-    /// invocations are needed.
+    /// Opens the song's album page first, then pumps the `song_album` queue
+    /// event. The page navigation is one indexed album read (the same
+    /// `open_album` payload the Go to Album verb uses); the queue build
+    /// (tracks, covers, media paths) follows without holding the page back.
     ///
     /// Also reachable from the external IPC pump:
     /// `play_song_in_album <song-id>`.
@@ -2172,6 +2172,11 @@ impl Backend {
         };
         let offline = self.offline;
         crate::app::runtime().spawn(async move {
+            // Navigation first: a song result / IPC command must land on the
+            // album page without waiting for the whole queue to serialize.
+            if let Ok(page) = crate::queue::song_album_page_json(&dbs, &song_id).await {
+                emit(&invoker, "open_album", page);
+            }
             match song_album_payload(&dbs, &song_id, offline).await {
                 Ok(payload) => {
                     emit(&invoker, "song_album", payload);

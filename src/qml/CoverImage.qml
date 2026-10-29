@@ -93,7 +93,11 @@ Item {
         sourceSize.width: root.usingThumb ? root.thumbEdge : root.decodeWidth
         sourceSize.height: root.usingThumb ? root.thumbEdge : root.decodeHeight
         asynchronous: true
-        cache: true
+        // MEMORY: Qt's image cache keeps decoded covers after their delegate
+        // dies, so scrolling a wall or changing tabs grows without bound.
+        // Decode only for the delegates that are alive; the thumbnails keep
+        // re-decodes cheap.
+        cache: false
         fillMode: root.fillMode
         // Cover art is scaled in the page headers and rows: keep bilinear
         // filtering and mipmaps enabled for a clean downscale.

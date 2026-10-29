@@ -71,6 +71,12 @@ Item {
 
     // Keep rendering while the close fade runs (the panel owns the opacity).
     visible: opened || panel.opacity > 0
+    // MEMORY: release the result rows and their delegates once the close fade
+    // has finished; the next open rebuilds them from an empty model.
+    onVisibleChanged: {
+        if (!visible)
+            root.clearResults();
+    }
     z: Theme.zOverlay
 
     // UI-49: denied-input cue for unmatched results. The bar itself never

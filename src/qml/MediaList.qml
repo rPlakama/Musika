@@ -143,11 +143,6 @@ ScrollPanel {
     // feed back into the row unit.
     context: "library"
     rowRefHeight: root.bodyAvail
-    // ARC-UI-3: Shift-C flips every segment between the row list and a cover
-    // wall — the same shared body ArtistEntry uses, with gg/G, the search
-    // contract, selection and the scroll memory.
-    layouts: ["list", "grid"]
-
     /// PATH: fill the model in small event-loop batches, so a large payload
     /// (the album library) cannot block input or the compositor.
     readonly property int fillBatch: 64
@@ -363,25 +358,4 @@ ScrollPanel {
         }
     }
 
-    // The shared cover-wall cell; the host only maps the grid's current /
-    // selected state and its two tap actions.
-    cellDelegate: Component {
-        CoverCard {
-            current: GridView.isCurrentItem
-            selected: root.isSelected(index)
-            roundedArt: root.roundedArt
-            showRatingMark: root.ratingMarks
-            showSubtitle: true
-            firstVisible: root.firstVisibleIndex
-            lastVisible: root.lastVisibleIndex
-            searchQuery: root.searchQuery
-            searchCurrent: index === root.searchCurrentRow
-
-            onPicked: {
-                root.currentIndex = index;
-                root.activate();
-            }
-            onExtendSelection: root.extendSelectionTo(index)
-        }
-    }
 }

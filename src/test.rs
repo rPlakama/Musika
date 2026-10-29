@@ -2164,16 +2164,6 @@ mod keybind {
     }
 
     #[test]
-    fn layout_toggle_keys() {
-        let mut keymap = Keymap::new();
-        assert_eq!(
-            keymap.feed("shift-c"),
-            Outcome::Action(Action::LayoutToggle)
-        );
-        assert_eq!(token_from_qt(0x43, QT_SHIFT).as_deref(), Some("shift-c"));
-    }
-
-    #[test]
     fn vi7_counts_accumulate_and_ride_the_action() {
         // `3 j`.
         let mut keymap = Keymap::new();

@@ -24,9 +24,6 @@ var profiles = {
     library: {
         headerRatio: 0.14,
         rowRatio: 0.105,
-        columns: 4,
-        cellAspect: 0.78,
-        cellExtra: 0.085,
         bleedRatio: 0.012
     },
     album: {

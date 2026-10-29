@@ -70,7 +70,6 @@ Item {
         case "scope_prev": return "Previous Scope";
         case "order_next": return "Next Order";
         case "order_prev": return "Previous Order";
-        case "layout_toggle": return "Layout";
         case "pane_cycle": return "Next Pane";
         case "pane_cycle_back": return "Previous Pane";
         default:

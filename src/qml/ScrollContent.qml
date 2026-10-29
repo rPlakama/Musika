@@ -23,7 +23,7 @@ import "Theme.js" as Theme
 
 // The one scroll surface (the "ScrollModal").
 //
-// Qt owns the geometry: ListView/GridView `currentIndex`, `contentHeight`,
+// Qt owns the geometry: ListView `currentIndex`, `contentHeight`,
 // `contentY`, and `positionViewAtIndex` are authoritative. The follow keeps
 // the Neovim `scrolloff=999` feel by asking Qt for a centred position; Qt
 // clamps the target at the content ends, so the first and last screens pin to
@@ -50,17 +50,8 @@ Item {
 
     property var model: null
     property Component rowDelegate: null
-    property Component cellDelegate: null
     /// Gutter bleed on each side (UI-48); 0 clips at the list edge.
     property real bleed: root.profile.bleedRatio !== undefined ? root.width * root.profile.bleedRatio : 0
-
-    /// ARC-UI-3: supported layouts in toggle order ("list", "grid").
-    property var layouts: ["list"]
-    property string layout: "list"
-    /// Grid geometry: columns per row and the cell height (0 = square).
-    property int columns: root.profile.columns !== undefined ? root.profile.columns : 1
-    property real cellHeight: root.profile.cellAspect !== undefined ? root.cellWidth * root.profile.cellAspect + root.height * (root.profile.cellExtra || 0) : 0
-    readonly property real cellWidth: Math.max(1, root.width / Math.max(1, root.effectiveColumns))
 
     /// Row sizing: nominal fraction of the reference height (0 = delegates
     /// own their heights, e.g. lyrics).
@@ -80,13 +71,11 @@ Item {
     }
     // Keep rows tall enough for the row text even in a short pane.
     property real minRowHeight: 50
-    // A grid cell never gets narrower than this; the wall drops columns
-    // instead of shrinking every card into unreadable thumbnails.
-    property real minCellWidth: 185
-    readonly property int effectiveColumns: Math.max(1, Math.min(root.columns, Math.floor(root.width / Math.max(1, root.minCellWidth))))
     /// Kept for host compatibility; the extent is Qt's own now.
     property real contentHeightHint: 0
-    property bool recenterOnWidth: root.layout === "grid"
+    /// A width change re-wraps variable-height rows (lyrics); let the resize
+    /// repair recentre them. Lists keep the default false.
+    property bool recenterOnWidth: false
     /// Animate rows whose index changed after a model move (search results).
     property bool animateDisplacement: false
     /// Bottom-align a short uniform list instead of leaving its rows at
@@ -130,9 +119,9 @@ Item {
 
     // ── Row metric ───────────────────────────────────────────────────────
 
-    /// A list with a uniform row unit (grids use their cell, variable-height
-    /// lists such as lyrics have none).
-    readonly property bool adaptiveRows: root.layout !== "grid" && root.rowRatio > 0
+    /// A list with a uniform row unit (variable-height lists such as lyrics
+    /// have none).
+    readonly property bool adaptiveRows: root.rowRatio > 0
 
     function adaptiveRowFor(viewHeight) {
         if (root.rowRatio <= 0)
@@ -151,11 +140,6 @@ Item {
         var v = root.view;
         if (!root.bottomAlignShort || !v || v.count === 0 || v.height <= 0)
             return 0;
-        if (root.layout === "grid") {
-            var cell = root.cellHeight > 0 ? root.cellHeight : root.cellWidth;
-            var rows = Math.ceil(v.count / Math.max(1, root.effectiveColumns));
-            return Math.max(0, v.height - rows * cell);
-        }
         if (root.rowStride <= 0)
             return 0;
         var rowsHeight = v.count * root.rowStride - root.rowSpacing;
@@ -171,22 +155,12 @@ Item {
     onCurrentIndexChanged: root._cursorMoved()
     signal itemActivated(int index)
 
-    readonly property var view: root.layout === "grid" ? grid : list
-    onViewChanged: {
-        root.stopGlide();
-        viewLandTimer.restart();
-    }
-    onLayoutChanged: {
-        if (root.memoryKey)
-            scroll.rememberLayout(root.memoryKey, root.layout);
-    }
+    readonly property var view: list
     readonly property int count: root.view ? root.view.count : 0
 
     // ── Geometry helpers ─────────────────────────────────────────────────
 
     function _stride(v) {
-        if (root.layout === "grid")
-            return root.cellHeight > 0 ? root.cellHeight : root.cellWidth;
         if (root.rowStride > 0)
             return root.rowStride;
         // Variable-height rows (lyrics) are measured, not derived.
@@ -210,7 +184,7 @@ Item {
 
     /// First and last *item* indices in the rendered band (viewport plus
     /// overscan), used for marks and mark requests. Both native view types
-    /// answer `indexAt`; no manual grid row arithmetic.
+    /// answer `indexAt`.
     readonly property var _visibleBounds: {
         var v = root.view;
         if (!v || v.count === 0 || v.height <= 0)
@@ -234,13 +208,11 @@ Item {
     readonly property int lastVisibleIndex: root._visibleBounds.last
 
     function _rowOf(index) {
-        return root.layout === "grid"
-            ? Math.floor(index / Math.max(1, root.columns)) : index;
+        return index;
     }
 
     function _rowCount(v) {
-        return root.layout === "grid"
-            ? Math.ceil(v.count / Math.max(1, root.columns)) : v.count;
+        return v.count;
     }
 
     /// The content extent from the row unit, never from delegates that may
@@ -252,13 +224,9 @@ Item {
         if (root.contentHeightHint > 0)
             return root.contentHeightHint;
         var stride = root._stride(v);
-        var uniform = root.layout === "grid" || root.rowRatio > 0;
-        if (uniform && stride > 0) {
-            var base = root.layout === "grid"
-                ? root._rowCount(v) * stride
-                : Math.max(0, v.count * stride - root.rowSpacing);
-            return base + root._shortContentGap;
-        }
+        if (stride > 0 && root.rowRatio > 0)
+            return Math.max(0, v.count * stride - root.rowSpacing)
+                + root._shortContentGap;
         var last = v.count > 0 ? v.itemAtIndex(v.count - 1) : null;
         if (last && last.height > 0)
             return last.y + last.height;
@@ -290,8 +258,6 @@ Item {
         var center;
         if (root.rowStride > 0) {
             center = row * stride + root.adaptiveRowHeight * 0.5 - v.height * 0.5;
-        } else if (root.layout === "grid") {
-            center = row * stride + stride * 0.5 - v.height * 0.5;
         } else {
             var item = v.itemAtIndex(index);
             if (item && item.height > 0)
@@ -539,38 +505,27 @@ Item {
         root.land(last ? root.count - 1 : 0);
     }
 
-    /// Shared cursor step: in grid mode the wall walks by `columns`; in list
-    /// mode it is a plain ±1. `count` steps at once, clamped at the edges.
+    /// Shared cursor step: a plain ±1 row (or `count` rows), clamped.
     function moveStep(action, count) {
         if (root.count === 0)
             return false;
         var n = count === undefined ? 1 : Math.max(1, count);
-        var cols = root.layout === "grid" ? Math.max(1, root.effectiveColumns) : 1;
-        var column = root.currentIndex % cols;
         var target = root.currentIndex;
-        if (action === "move_left") {
-            if (column === 0)
-                return false;
-            target -= Math.min(n, column);
-        } else if (action === "move_right") {
-            if (column === cols - 1 || root.currentIndex + 1 >= root.count)
-                return false;
-            target += Math.min(n, cols - 1 - column, root.count - 1 - root.currentIndex);
-        } else if (action === "move_up") {
-            if (root.currentIndex - cols * n < 0) {
+        if (action === "move_up") {
+            if (root.currentIndex - n < 0) {
                 if (n === 1)
                     return false;
-                target = column;
+                target = 0;
             } else {
-                target -= cols * n;
+                target -= n;
             }
         } else if (action === "move_down") {
-            if (root.currentIndex + cols * n >= root.count) {
+            if (root.currentIndex + n >= root.count) {
                 if (n === 1)
                     return false;
                 target = root.count - 1;
             } else {
-                target += cols * n;
+                target += n;
             }
         } else {
             return false;
@@ -587,7 +542,7 @@ Item {
     function pageJump(down, fraction) {
         if (root.count === 0 || !root.view)
             return false;
-        var rowH = root.layout === "grid" ? (root.cellHeight > 0 ? root.cellHeight : root.cellWidth) : root.adaptiveRowHeight;
+        var rowH = root.adaptiveRowHeight;
         if (rowH <= 0)
             rowH = root._stride(root.view);
         if (rowH <= 0)
@@ -604,7 +559,6 @@ Item {
     // ── Memory (UI-54) ───────────────────────────────────────────────────
 
     function restore() {
-        root.applySavedLayout();
         var index = scroll.savedIndex(root.memoryKey);
         if (index < 0)
             return false;
@@ -617,7 +571,7 @@ Item {
 
     function remember(scope) {
         if (root.memoryKey)
-            scroll.remember(root.memoryKey, root.view, scope === undefined ? root.memoryScope : scope, root.layout, root.currentIndex);
+            scroll.remember(root.memoryKey, root.view, scope === undefined ? root.memoryScope : scope, "list", root.currentIndex);
     }
 
     property bool _rememberScheduled: false
@@ -633,21 +587,6 @@ Item {
             root.remember();
     }
     Component.onDestruction: root._flushRemember()
-
-    // ── Layout helpers (UI-58 / ARC-UI-3) ────────────────────────────────
-
-    function toggleLayout() {
-        if (root.layouts.length < 2)
-            return;
-        var i = root.layouts.indexOf(root.layout);
-        root.layout = root.layouts[(i + 1) % root.layouts.length];
-    }
-
-    function applySavedLayout() {
-        var saved = scroll.savedLayout(root.memoryKey);
-        if (saved.length > 0 && root.layouts.indexOf(saved) >= 0)
-            root.layout = saved;
-    }
 
     // ── Resize ───────────────────────────────────────────────────────────
 
@@ -750,12 +689,6 @@ Item {
         onTriggered: root._resizeSettle()
     }
     Timer {
-        id: viewLandTimer
-        interval: 0
-        repeat: false
-        onTriggered: root.landCursor()
-    }
-    Timer {
         id: countRepairTimer
         interval: 0
         repeat: false
@@ -768,14 +701,10 @@ Item {
         onTriggered: root._flushRemember()
     }
 
-    Component.onCompleted: root.applySavedLayout()
-    onMemoryKeyChanged: root.applySavedLayout()
     onWidthChanged: if (root.recenterOnWidth)
         root._scheduleResizeRecenter()
     onHeightChanged: root._scheduleResizeRecenter()
     onAdaptiveRowHeightChanged: root._scheduleResizeRecenter()
-    onCellHeightChanged: root._scheduleResizeRecenter()
-    onColumnsChanged: root._scheduleResizeRecenter()
 
     // ── Selection (VI-4 / ARC-I-4) ───────────────────────────────────────
 
@@ -921,7 +850,7 @@ Item {
             root.view.positionViewAtBeginning();
         }
         if (root.memoryKey)
-            scroll.remember(root.memoryKey, root.view, root.memoryScope, root.layout, 0);
+            scroll.remember(root.memoryKey, root.view, root.memoryScope, "list", 0);
     }
 
     function resetViewNow() {
@@ -929,7 +858,7 @@ Item {
             return;
         root.land(0);
         if (root.memoryKey)
-            scroll.remember(root.memoryKey, root.view, root.memoryScope, root.layout, 0);
+            scroll.remember(root.memoryKey, root.view, root.memoryScope, "list", 0);
     }
 
     // ── The views ────────────────────────────────────────────────────────
@@ -972,8 +901,7 @@ Item {
             anchors.leftMargin: root.bleed
             anchors.rightMargin: root.bleed
             clip: root.bleed <= 0
-            visible: root.layout !== "grid"
-            model: root.layout === "grid" ? null : root.model
+            model: root.model
             delegate: root.rowDelegate
             spacing: root.rowSpacing
             header: Column {
@@ -988,40 +916,6 @@ Item {
                     sourceComponent: root.headerContent
                 }
             }
-            boundsBehavior: Flickable.StopAtBounds
-            highlightFollowsCurrentItem: false
-            reuseItems: !root.animateDisplacement
-            displaced: root.animateDisplacement ? displacedTransition : null
-            move: root.animateDisplacement ? displacedTransition : null
-            moveDisplaced: root.animateDisplacement ? displacedTransition : null
-            cacheBuffer: root.renderOverscan
-            displayMarginBeginning: root.renderOverscan
-            displayMarginEnd: root.renderOverscan
-        }
-
-        GridView {
-            id: grid
-            anchors.fill: parent
-            anchors.leftMargin: root.bleed
-            anchors.rightMargin: root.bleed
-            clip: root.bleed <= 0
-            visible: root.layout === "grid"
-            model: root.layout === "grid" ? root.model : null
-            delegate: root.cellDelegate
-            cellWidth: root.cellWidth
-            header: Column {
-                width: grid.width
-                Item {
-                    width: parent.width
-                    height: Math.max(0, root._shortContentGap - headerLoaderGrid.height)
-                }
-                Loader {
-                    id: headerLoaderGrid
-                    width: parent.width
-                    sourceComponent: root.headerContent
-                }
-            }
-            cellHeight: root.cellHeight > 0 ? root.cellHeight : root.cellWidth
             boundsBehavior: Flickable.StopAtBounds
             highlightFollowsCurrentItem: false
             reuseItems: !root.animateDisplacement

@@ -36,6 +36,8 @@ open work; this file is the release history.
 - Rebuild the follow target from the row unit again: pin the first/last
   screenful and derive maxY from the row extent, so the bottom row stays
   flush and height changes no longer chase stale delegate geometry.
+- Remove the grid/cover-wall layout mode: Albums, Songs and ArtistEntry
+  are list-only, and Shift-C no longer applies.
 
 ## 0.4.11 - _Cover improvements and other minor_
 

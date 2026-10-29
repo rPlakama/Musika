@@ -20,9 +20,9 @@ import musika
 import "Theme.js" as Theme
 import "CoverSize.js" as CoverSize
 
-// Artist entry (P-8, milestone A): round avatar + name over a four-column
-// album grid with titles under the covers. Pushed from ArtistList and from
-// artist hits in search; Enter on a cover opens the album page, Enter/Back
+// Artist entry (P-8, milestone A): round avatar + name over the album
+// list. Pushed from ArtistList and from artist hits in search; Enter on a
+// row opens the album page, Enter/Back
 // from here always returns to Main (see Home.leaveArtistEntry). Favorite,
 // stars, biography and the cache rule land in milestones B-D.
 Rectangle {
@@ -37,11 +37,9 @@ Rectangle {
     // open "—".
     signal quickAction(var target, var actions)
 
-    /// ARC-UI-3: the album wall rides the same panel as the Main lists
-    /// (`ScrollPanel`, SCROLLGRIDSTUDY.md) in grid mode; `Shift-C` swaps it
-    /// to a compact list and every shared goodie (gg/G, the `/` contract,
-    /// selection, memory, adaptive states) comes with it. The wall lives in
-    /// `wall` below.
+    /// The artist album list rides the same ScrollPanel as the Main lists,
+    /// with gg/G, the `/` contract, selection, memory and adaptive states.
+    /// The list lives in `wall` below.
     readonly property bool hasSelection: wall.hasSelection
     readonly property int selectionCount: wall.selectionCount
 
@@ -128,7 +126,7 @@ Rectangle {
     // CACHE-5: the fetch pass for this artist is running (the chip shows the
     // spinning loading loop while the ledger works through the songs).
     property bool artistDownloading: false
-    // UI-54: per-artist scroll memory for the album grid.
+    // UI-54: per-artist scroll memory for the album list.
     readonly property string memoryKey: "artist:" + root.artistId
     property int _coverTarget: 0
     // A display copy already won the race against the full `artist` payload.
@@ -240,8 +238,8 @@ Rectangle {
             albums.append({
                 albumId: album.id,
                 title: album.title,
-                // The shared CoverCard requires every role; album cards have
-                // no song/subtitle but the delegate model must still bind them.
+                // The shared row delegate requires every role; album rows have
+                // no song/subtitle but the model must still bind them.
                 songId: "",
                 subtitle: "",
                 artist: album.artist ? album.artist : "",
@@ -268,8 +266,8 @@ Rectangle {
     }
 
     /// Header Tab stops: title, biography, then the chips (0 download,
-    /// 1 shuffle, 2 favorite). -1 returns Enter to the album grid; any
-    /// grid move drops the ring back there.
+    /// 1 shuffle, 2 favorite). -1 returns Enter to the album list; any
+    /// list move drops the ring back there.
     property int chipScope: -1
     /// Tab stops above the chips: the artist title and the biography.
     property bool onTitle: false
@@ -338,22 +336,11 @@ Rectangle {
 
     Component.onCompleted: reload()
 
-    // The shared panel owns movement (grid walks the wall by columns, list
-    // steps ±1, gg/G snap through `edgeJump`); this only tracks the header
-    // chip scope and the Home edge contract: false lets `h` leave for the
-    // sidebar from the leftmost column.
-    function moveWithinGrid(action) {
-        if (!wall.moveWithinGrid(action))
-            return false;
-        // Moving the wall ends every header stop (Enter opens albums).
-        root.onTitle = false;
-        root.onDescription = false;
-        root.chipScope = -1;
-        return true;
-    }
+    // The shared panel owns movement (list steps ±1, gg/G snap through
+    // `edgeJump`); this only tracks the header chip scope.
 
     // Chip scope and Enter-on-chip are the host's; everything else goes to
-    // the shared panel (movement, gg/G, Enter on a card, layout_toggle).
+    // the shared panel (movement, gg/G, Enter on a row).
     // `Esc` is handled by Home (leaves the entry for Main regardless of
     // where it was opened from).
     function handleAction(action) {
@@ -385,8 +372,6 @@ Rectangle {
             root.activateChip();
             return;
         }
-        if (moveWithinGrid(action))
-            return;
         wall.handleAction(action);
     }
 
@@ -621,11 +606,9 @@ Rectangle {
                 }
             }
         }
-        // Albums: the shared panel (ARC-UI-3, SCROLLGRIDSTUDY.md) — the same
-        // `ScrollPanel` the Main list segments use, in grid mode: four covers
-        // per row with the title and year/count underneath, gg/G, the `/`
-        // contract, selection, memory and the empty/loading states. Shift-C
-        // swaps it to a compact list.
+        // Albums: the shared ScrollPanel the Main list segments use: rows
+        // with title and year/count, gg/G, the `/` contract, selection,
+        // memory and the empty/loading states.
         Item {
             Layout.fillWidth: true
             Layout.fillHeight: true
@@ -648,8 +631,6 @@ Rectangle {
                 headerRatio: 0
                 model: albums
                 yankKind: "album"
-                layouts: ["grid", "list"]
-                layout: "list"
                 selectable: true
                 memoryKey: root.memoryKey
                 quickActionKind: "album"
@@ -660,31 +641,6 @@ Rectangle {
 
                 onItemActivated: (index) => root.activateCurrent()
                 onQuickAction: (target, actions) => root.quickAction(target, actions)
-
-                cellDelegate: Component {
-                    CoverCard {
-                        current: GridView.isCurrentItem
-                        selected: wall.isSelected(index)
-                        showRatingMark: true
-                        showSubtitle: false
-                        // The wall's historic metrics (kept via the ratios).
-                        titleRatio: 0.0525
-                        metaRatio: 0.04
-                        titleTopRatio: 0.025
-                        metaGapRatio: 0.015
-                        firstVisible: wall.firstVisibleIndex
-                        lastVisible: wall.lastVisibleIndex
-                        searchQuery: wall.searchQuery
-                        searchCurrent: index === wall.searchCurrentRow
-
-                        onPicked: {
-                            wall.currentIndex = index;
-                            root.activateCurrent();
-                        }
-                        onExtendSelection: wall.extendSelectionTo(index)
-                    }
-                }
-
                 rowDelegate: Component {
                     Rectangle {
                         radius: Theme.radius

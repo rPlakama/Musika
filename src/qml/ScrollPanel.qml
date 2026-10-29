@@ -243,32 +243,12 @@ Rectangle {
     property alias rowRefHeight: content.rowRefHeight
     property alias rowHeightScale: content.rowHeightScale
     readonly property alias adaptiveRowHeight: content.adaptiveRowHeight
-    /// ARC-UI-3: layout modes forward to the shared content (a single-entry
-    /// `layouts` keeps the surface list-only).
-    property alias layouts: content.layouts
-    property alias layout: content.layout
-    property alias columns: content.columns
-    property alias cellHeight: content.cellHeight
-    property alias cellDelegate: content.cellDelegate
-    readonly property alias cellWidth: content.cellWidth
-
     function searchRows() {
         return content.searchRows();
     }
 
     function searchJump(row) {
         content.searchJump(row);
-    }
-
-    function toggleLayout() {
-        content.toggleLayout();
-    }
-
-    /// ARC-UI-3: the shared 2-D cursor step (grid walks the wall by columns,
-    /// list steps ±1); Home probes this for `h`, so the leftmost column can
-    /// hand the cursor to the sidebar.
-    function moveWithinGrid(action) {
-        return content.moveStep(action);
     }
 
     /// Instant landing used by paged hosts that finish loading an edge first.
@@ -299,12 +279,6 @@ Rectangle {
         // VI-8a: yank the cursor row (Y) or the visual range (y).
         if (action === "yank" || action === "yank_row") {
             root.yankRows(action === "yank_row");
-            return;
-        }
-        // ARC-UI-3: the layout toggle arms on an empty list too (the view
-        // swap is independent of the payload).
-        if (action === "layout_toggle") {
-            root.toggleLayout();
             return;
         }
         if (count === 0)

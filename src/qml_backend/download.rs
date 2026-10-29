@@ -67,7 +67,7 @@ pub(super) async fn apply_window(
         .cloned()
         .collect();
     crate::debug_log!(
-        "downloads: {} of {} visible songs cached; {} of {} albums fully cached; {} in flight",
+        "[musika/debug] downloads: {} of {} visible songs cached; {} of {} albums fully cached; {} in flight",
         songs_done.len(),
         songs.len(),
         albums_done.len(),

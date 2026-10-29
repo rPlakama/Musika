@@ -3,6 +3,33 @@
 All notable changes to Musika, newest first. `TASKLISTMAJOR.md` tracks the
 open work; this file is the release history.
 
+## 0.4.10 - _Internal Mechanism, Polishing Search and smaller things_
+
+Notable changes since `v0.4.9`:
+
+
+- `e027ed5` Sanitize Nucleo query syntax and cover typo matches
+- `7709c8e` Log search result latency in debug builds
+- `51110a2` proper debug tag in Download/Render sights
+- `6919758` Patch only changed search result rows
+- `889c4f6` Run DB search readers in parallel
+- `35ded39` Render search scopes as raw text
+- `2f2872f`  Give the queue drawer a dark 80 percent tint
+- `c593951`  Return to Home in the scope an entry was opened from
+- `c961c84`  Fix album tab activation after preload
+- `65254bf`  Centralize row typography in one row-size function
+- `3e2349e`  Preload the first 50 rows of each library tab
+- `4c4a366` Load scopes in parallel and make Esc a vi cancel
+
+    - Songs scope loads the whole list instead of a 300-row page.
+    - Album, artist and full song payloads shape rows on rayon's full-core
+      pool, bypassing the quarter-core background budget (order preserved).
+    - Queue drawer: Esc/Ctrl-[ cancel the selection; only q/Ctrl-Q close.
+    - Add ARC-46: preload the first 150 rows of each scope at startup.
+
+- `90a9df1ab` Rowbody increase minimal
+- `2148e58e3` Scale up Rowbody fontSize
+
 ## 0.4.9 — _Rust scroll memory, fullscreen playback, queue/MPV fixes_
 
 Notable changes since `v0.4.8`:

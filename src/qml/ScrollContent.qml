@@ -737,15 +737,13 @@ Item {
         onFinished: root._settle()
     }
 
-    Component {
+    Transition {
         id: displacedTransition
-        Transition {
-            NumberAnimation {
-                properties: "x,y"
-                duration: Theme.motion.standard
-                easing.type: Easing.Bezier
-                easing.bezierCurve: Theme.ease.decelerate
-            }
+        NumberAnimation {
+            properties: "x,y"
+            duration: Theme.motion.standard
+            easing.type: Easing.Bezier
+            easing.bezierCurve: Theme.ease.decelerate
         }
     }
 

@@ -79,7 +79,6 @@ Rectangle {
     property bool _restored: false
     property bool _focusApplied: false
     property int _coverTarget: 0
-    property double _coverRequestedAt: 0
     // Album whose rows request is in flight; avoids reload storms from
     // duplicate open paths and library-changed notifications.
     property string _loadingAlbumId: ""
@@ -201,7 +200,6 @@ Rectangle {
         if (target === root._coverTarget)
             return;
         root._coverTarget = target;
-        root._coverRequestedAt = Date.now();
         Backend.requestAlbumCover(root.albumId, target);
     }
 
@@ -572,15 +570,14 @@ Rectangle {
             else if (channel === "album_cover") {
                 var art = JSON.parse(payload);
                 // A slower request for an older width bucket must not replace
-                // the copy requested for the current cover box. A cold display
-                // copy can also take hundreds of ms to fetch/resize; swapping
-                // it in after the original already painted blanks the cover for
-                // that long. Keep the original visible then (the copy is cached
-                // for the next open), unless there is no cover yet.
+                // the copy requested for the current cover box. Never swap a
+                // display copy in after the original has painted: the second
+                // decode blanks the cover (and on session return the first
+                // cover is already up by the time this cached copy arrives).
+                // The copy is still cached for the next open.
                 if (art.album_id === root.albumId && art.cover
                         && Number(art.size) === root._coverTarget
-                        && (Date.now() - root._coverRequestedAt <= 80
-                            || !coverBackdrop.ready))
+                        && !coverBackdrop.ready)
                     root.albumCover = art.cover;
             } else if (channel === "album_artist") {
                 var link = JSON.parse(payload);

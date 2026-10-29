@@ -51,6 +51,30 @@ Item {
     // (width/height 0). Do not decode a 32 px cover there and then reload it
     // at the real size; wait for the first real geometry and load once.
     readonly property bool sized: width > 0 && height > 0
+    // Session bootstrap creates the page before the shell settles; the cover
+    // box can pass through 0 -> odd interim sizes -> final. Keep the image
+    // unloaded until the geometry has been still for a moment, then load
+    // once at the settled size. Once painted, geometry changes must not
+    // clear the source.
+    property bool _geometryReady: false
+    property bool _hasLoaded: false
+    readonly property bool canLoad: root.sized
+        && (root._geometryReady || root._hasLoaded)
+    Timer {
+        id: settleTimer
+        interval: 32
+        repeat: false
+        onTriggered: root._geometryReady = true
+    }
+    Component.onCompleted: settleTimer.start()
+    onWidthChanged: {
+        if (!root._hasLoaded)
+            settleTimer.restart();
+    }
+    onHeightChanged: {
+        if (!root._hasLoaded)
+            settleTimer.restart();
+    }
     readonly property int decodeWidth: Math.min(root.maxDecodeEdge, Math.max(32,
         Math.ceil(width * root.decodeFactor / 32) * 32))
     readonly property int decodeHeight: Math.min(root.maxDecodeEdge, Math.max(32,
@@ -109,7 +133,7 @@ Item {
     Image {
         id: image
         anchors.fill: parent
-        source: root.sized ? root.imageSource : ""
+        source: root.canLoad ? root.imageSource : ""
         sourceSize.width: root.sourceWidth
         sourceSize.height: root.sourceHeight
         asynchronous: true
@@ -125,6 +149,8 @@ Item {
         mipmap: true
         visible: root.ready
         onStatusChanged: {
+            if (status === Image.Ready)
+                root._hasLoaded = true;
             if (status === Image.Error && !root.thumbFailed && !root.displayCopy
                     && root.imageSource.toString() !== root.source.toString())
                 root.thumbFailed = true

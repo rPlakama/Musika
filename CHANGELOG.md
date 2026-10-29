@@ -26,9 +26,9 @@ open work; this file is the release history.
 - Open that page from the hit metadata itself, scope album row/info payloads
   to their album id, and keep a cold display cover from swapping in after
   the original has painted.
-- Wait for the first real cover geometry before decoding, so the
-  session-restored AlbumEntry no longer decodes a 32 px cover and reloads it
-  at the final size.
+- Let the cover box settle before decoding, and never swap a display copy in
+  after the original has painted: the session-restored AlbumEntry cover now
+  loads once instead of reloading through the startup geometry changes.
 
 ## 0.4.11 - _Cover improvements and other minor_
 

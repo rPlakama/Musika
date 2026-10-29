@@ -33,9 +33,9 @@ open work; this file is the release history.
   snapping on every height event: write contentY directly, preserve a
   manually scrolled Library viewport by its visual top row, and finish the
   repair when an idle window becomes active.
-- Clamp the follow against the realised last row again, so the bottom row
-  stays glued to the viewport edge instead of flickering over the inflated
-  contentHeight estimate.
+- Rebuild the follow target from the row unit again: pin the first/last
+  screenful and derive maxY from the row extent, so the bottom row stays
+  flush and height changes no longer chase stale delegate geometry.
 
 ## 0.4.11 - _Cover improvements and other minor_
 

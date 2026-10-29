@@ -233,66 +233,124 @@ Item {
     readonly property int firstVisibleIndex: root._visibleBounds.first
     readonly property int lastVisibleIndex: root._visibleBounds.last
 
-    /// The furthest contentY that still keeps the real last row flush with
-    /// the viewport bottom. Qt's contentHeight can keep an inflated estimate
-    /// after a row-unit change; the realised tail is authoritative there.
-    function _bottomLimit(v) {
-        var limit = Math.max(0, v.contentHeight - v.height);
-        var last = v.count > 0 ? v.itemAtIndex(v.count - 1) : null;
-        if (last && last.height > 0) {
-            var tail = last.y + last.height - v.height;
-            if (tail >= 0)
-                limit = Math.min(limit, tail);
-        }
-        return limit;
+    function _rowOf(index) {
+        return root.layout === "grid"
+            ? Math.floor(index / Math.max(1, root.columns)) : index;
     }
 
-    /// The centred target. Realised delegates give it directly (no layout
-    /// probe); only far/unrealised targets fall back to Qt's positioning.
+    function _rowCount(v) {
+        return root.layout === "grid"
+            ? Math.ceil(v.count / Math.max(1, root.columns)) : v.count;
+    }
+
+    /// The content extent from the row unit, never from delegates that may
+    /// still carry the previous geometry. Variable-height rows (lyrics)
+    /// consult the realised tail. `bottomAlignShort` adds its header gap.
+    function _extent(v) {
+        if (!v)
+            return 0;
+        if (root.contentHeightHint > 0)
+            return root.contentHeightHint;
+        var stride = root._stride(v);
+        var uniform = root.layout === "grid" || root.rowRatio > 0;
+        if (uniform && stride > 0) {
+            var base = root.layout === "grid"
+                ? root._rowCount(v) * stride
+                : Math.max(0, v.count * stride - root.rowSpacing);
+            return base + root._shortContentGap;
+        }
+        var last = v.count > 0 ? v.itemAtIndex(v.count - 1) : null;
+        if (last && last.height > 0)
+            return last.y + last.height;
+        return v.contentHeight;
+    }
+
+    function _maxY(v) {
+        return v ? Math.max(0, root._extent(v) - v.height) : 0;
+    }
+
+    /// The centred target from the row unit: pin the first/last screenful,
+    /// centre only in the middle band (Neovim `scrolloff=999`). This never
+    /// reads a delegate mid-reflow, so a height change cannot chase stale
+    /// item positions.
     function _target(v, index) {
         if (!v || index < 0 || index >= v.count)
             return null;
-        var item = v.itemAtIndex(index);
-        if (item && item.height > 0) {
-            var max = root._bottomLimit(v);
-            return Math.max(0, Math.min(max, item.y - (v.height - item.height) / 2));
+        var maxY = root._maxY(v);
+        var rows = root._rowCount(v);
+        var row = root._rowOf(index);
+        var half = root.visibleRows() * 0.5;
+        if (row + 1 <= half)
+            return 0;
+        if (row >= rows - half)
+            return maxY;
+        var stride = root._stride(v);
+        if (stride <= 0)
+            return null;
+        var center;
+        if (root.rowStride > 0) {
+            center = row * stride + root.adaptiveRowHeight * 0.5 - v.height * 0.5;
+        } else if (root.layout === "grid") {
+            center = row * stride + stride * 0.5 - v.height * 0.5;
+        } else {
+            var item = v.itemAtIndex(index);
+            if (item && item.height > 0)
+                center = item.y + item.height * 0.5 - v.height * 0.5;
+            else
+                center = row * stride + (stride - root.rowSpacing) * 0.5
+                    - v.height * 0.5;
         }
-        var old = v.contentY;
-        v.positionViewAtIndex(index, ListView.Center);
-        var target = v.contentY;
-        v.contentY = old;
-        return target;
+        return Math.max(0, Math.min(maxY, center));
+    }
+
+    function _clampY(v) {
+        if (!v)
+            return;
+        var maxY = root._maxY(v);
+        if (v.contentY < 0 || v.contentY > maxY)
+            v.contentY = Math.max(0, Math.min(maxY, v.contentY));
+    }
+
+    /// Bring an unrealised row into view without Qt's async Contain/Center
+    /// offsets: anchor it at the top, then let the follow centre it.
+    function _reveal(v, index) {
+        if (!v || index < 0 || index >= v.count)
+            return;
+        v.positionViewAtIndex(index, ListView.Beginning);
+        root._clampY(v);
     }
 
     /// The one follow: native target, short contentY glide.
     function _follow(v, index, instant) {
-        if (!v || v.count === 0 || index < 0 || index >= v.count)
+        if (!v || v.count === 0 || index < 0 || index >= v.count
+                || root._landing)
             return;
-        root._manualScroll = false;
-        var override = root.glideOverrideMs;
-        root.glideOverrideMs = 0;
-        glide.stop();
-
-        // Instant landings are one native positioning call; the target/probe
-        // dance is only for the animated glide.
-        if (instant || Theme.reduceMotion || root.followMs <= 0) {
-            if (index === 0)
-                v.positionViewAtIndex(0, ListView.Beginning);
-            else if (index === v.count - 1) {
-                v.positionViewAtIndex(index, ListView.End);
-                // End can land on an inflated contentHeight estimate; pull
-                // the viewport back so the realised last row stays flush.
-                v.contentY = Math.min(v.contentY, root._bottomLimit(v));
-            } else
-                v.positionViewAtIndex(index, ListView.Center);
-            root._settle();
+        var item = v.itemAtIndex(index);
+        if (!item) {
+            // A row that never realises (zero-height view, a bad delegate)
+            // must not spin the callLater loop forever.
+            if (root._revealTries >= 4) {
+                root._clampY(v);
+                return;
+            }
+            root._revealTries++;
+            root._reveal(v, index);
+            Qt.callLater(function () {
+                if (root.currentIndex === index && root.view)
+                    root._follow(root.view, index, instant);
+            });
             return;
         }
-
+        root._revealTries = 0;
+        root._manualScroll = false;
         var target = root._target(v, index);
         if (target === null)
             return;
-        if (Math.abs(target - v.contentY) < 0.5) {
+        var override = root.glideOverrideMs;
+        root.glideOverrideMs = 0;
+        glide.stop();
+        if (instant || Theme.reduceMotion || root.followMs <= 0
+                || Math.abs(target - v.contentY) < 0.5) {
             v.contentY = target;
             root._settle();
             return;
@@ -304,6 +362,9 @@ Item {
     }
 
     function _settle() {
+        var v = root.view;
+        if (v)
+            root._clampY(v);
         if (root.memoryKey)
             root._scheduleRemember();
     }
@@ -592,6 +653,7 @@ Item {
 
     property bool _manualScroll: false
     property bool _landing: false
+    property int _revealTries: 0
     /// A numeric move above `teleportThreshold` lands natively instead of
     /// gliding through every intermediate row.
     property bool _teleportMove: false
@@ -635,22 +697,8 @@ Item {
             return;
         var target = null;
         if (!root._manualScroll && root.currentIndex >= 0
-                && root.currentIndex < v.count) {
-            var item = v.itemAtIndex(root.currentIndex);
-            if (item && item.height > 0) {
-                target = item.y - (v.height - item.height) * 0.5;
-            } else {
-                var stride = root._stride(v);
-                if (stride > 0) {
-                    var row = root.layout === "grid"
-                        ? Math.floor(root.currentIndex / Math.max(1, root.columns))
-                        : root.currentIndex;
-                    var unit = root.layout === "grid" || root.adaptiveRowHeight <= 0
-                        ? stride : root.adaptiveRowHeight;
-                    target = row * stride + unit * 0.5 - v.height * 0.5;
-                }
-            }
-        }
+                && root.currentIndex < v.count)
+            target = root._target(v, root.currentIndex);
         if (target === null) {
             var s = root._stride(v);
             if (s > 0) {
@@ -658,10 +706,8 @@ Item {
                 target = (anchor + root._anchorFraction) * s;
             }
         }
-        if (target !== null) {
-            var maxY = root._bottomLimit(v);
-            v.contentY = Math.max(0, Math.min(maxY, target));
-        }
+        if (target !== null)
+            v.contentY = Math.max(0, Math.min(root._maxY(v), target));
     }
 
     /// One deferred pass per resize batch, off the compositor event. Wait a
@@ -1022,7 +1068,7 @@ Item {
                 // The last delegate just supplied the real tail; keep its
                 // bottom flush instead of leaving the inflated-estimate gap.
                 target.contentY = Math.min(target.contentY,
-                    root._bottomLimit(target));
+                    root._maxY(target));
             }
         }
         function onCurrentIndexChanged() {

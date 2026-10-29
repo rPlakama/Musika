@@ -3,6 +3,18 @@
 All notable changes to Musika, newest first. `TASKLISTMAJOR.md` tracks the
 open work; this file is the release history.
 
+## 0.4.12 - _Shared QML ownership and screen-sized covers_
+
+- `c8908ea` Share the QML row, motion and mark seams
+- `70183b0` Reset the key register when the navigation context changes
+- `c6adc6f` Load display-sized cover art for large surfaces
+
+  Cover loading for the album page, artist page and fullscreen player now
+  picks a screen/DPR bucket from the painted box instead of decoding the
+  provider's full-resolution art. Buckets are reused across resizes, and a
+  late full-size payload can no longer overwrite an already-loaded display
+  copy.
+
 ## 0.4.11 - _Cover improvements and other minor_
 
 -  `54beb51`  Use DPI for CoverLoading

@@ -5339,6 +5339,8 @@ mod status {
             username: "demo".to_string(),
             album_id: Some("al1".to_string()),
             song_id: Some("s1".to_string()),
+            page_kind: "album".to_string(),
+            page_id: "al1".to_string(),
             queue: r#"["s1","s2","s3"]"#.to_string(),
             queue_index: 1,
             position: 61.5,

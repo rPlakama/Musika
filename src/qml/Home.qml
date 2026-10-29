@@ -36,12 +36,16 @@ Item {
     property int activeRegion: 1
     property bool nowPlayingExpanded: false
     property int currentSegment: 0
-    // P-6: album already restored before the first frame, so statusRestored
+    // P-6: page already restored before the first frame, so statusRestored
     // must not push the same page twice.
-    property string _bootstrapAlbumId: ""
+    property string _bootstrapPageKey: ""
+    readonly property var _bootstrapData: {
+        var raw = Backend.initialTarget();
+        return raw.length > 0 ? JSON.parse(raw) : null;
+    }
     // If a page is restored on the first frame, keep the library segment
     // loaders dormant until Back actually returns to Home.
-    readonly property bool _bootstrapTarget: Backend.initialAlbum().length > 0
+    readonly property bool _bootstrapTarget: root._bootstrapData !== null
     property bool _bootstrapPending: root._bootstrapTarget
     // True only at the root: no page, drawer or fullscreen player above it.
     readonly property bool atHome: contentStack.depth === 1
@@ -161,6 +165,17 @@ Item {
             rows.shift();
         placeHistory = rows;
         placeIndex = rows.length - 1;
+
+        // Persist the top page for the next launch (album, artist or Home).
+        if (contentStack.depth > 1) {
+            var page = contentStack.get(contentStack.depth - 1);
+            if (page && page.albumId !== undefined)
+                Backend.rememberPage("album", page.albumId);
+            else if (page && page.artistId !== undefined)
+                Backend.rememberPage("artist", page.artistId);
+        } else {
+            Backend.rememberPage("", "");
+        }
     }
 
     /// Transient overlays are not places: the first history press closes
@@ -269,38 +284,60 @@ Item {
     // Single album-page push used by the album list, the artist entry and the
     // search overlay, so every surface lands in the same page with the same
     // header payload (`starred` feeds the ARC-I-2 header heart).
-    function openAlbum(albumId, title, artist, year, tracks, cover, starred) {
+    function openAlbum(albumId, title, artist, year, tracks, cover, starred,
+                       instant) {
         // P-6 S2: the last opened album page is what a restart reopens.
         Backend.rememberAlbum(albumId);
         var meta = [];
         if (year.length > 0)
             meta.push(year);
-        contentStack.push(albumEntryComponent, {
+        var page = {
             albumId: albumId,
             albumTitle: title,
             albumArtist: artist,
             albumCover: cover,
             albumMeta: meta.join("   ·   "),
             albumStarred: starred === true
-        });
+        };
+        if (instant)
+            contentStack.push(albumEntryComponent, page, StackView.Immediate);
+        else
+            contentStack.push(albumEntryComponent, page);
     }
 
-    // Startup restore: push the saved album page during component creation so
-    // the first visible frame is the target, not the library behind it.
-    function restoreBootstrapAlbum() {
-        var payload = Backend.initialAlbum();
-        if (payload.length === 0) {
+    function openArtist(artistId, artistName, artistCover, instant) {
+        var page = {
+            artistId: artistId,
+            artistName: artistName,
+            artistCover: artistCover
+        };
+        if (instant)
+            contentStack.push(artistEntryComponent, page, StackView.Immediate);
+        else
+            contentStack.push(artistEntryComponent, page);
+    }
+
+    // Startup restore: push the saved target during component creation so the
+    // first visible frame is the entry, not the library behind it.
+    function restoreBootstrapTarget() {
+        var target = root._bootstrapData;
+        if (!target || !target.page) {
             root._bootstrapPending = false;
             return;
         }
-        var album = JSON.parse(payload);
-        root._bootstrapAlbumId = album.id;
-        root.openAlbum(album.id, album.title,
-                       album.artist ? album.artist : "",
-                       album.year ? String(album.year) : "",
-                       String(album.song_count || album.tracks || 0),
-                       album.cover ? album.cover : "",
-                       album.starred === true);
+        var page = target.page;
+        root._bootstrapPageKey = target.kind + ":" + page.id;
+        if (target.kind === "artist") {
+            root.openArtist(page.id, page.name ? page.name : "",
+                            page.cover ? page.cover : "", true);
+        } else if (target.kind === "album") {
+            root.openAlbum(page.id, page.title,
+                           page.artist ? page.artist : "",
+                           page.year ? String(page.year) : "",
+                           String(page.song_count || page.tracks || 0),
+                           page.cover ? page.cover : "",
+                           page.starred === true, true);
+        }
         root._bootstrapPending = false;
     }
 
@@ -800,6 +837,7 @@ Item {
                     Layout.fillWidth: true
                     Layout.fillHeight: true
                     initialItem: segmentHost
+                    opacity: root._bootstrapPending ? 0 : 1
 
                     pushEnter: EnterView {}
                     pushExit: ExitView {}
@@ -1270,7 +1308,7 @@ Item {
             Qt.callLater(function() {
                 if (data.queue && data.queue.length > 0)
                     Backend.playerLoadPaused(data.queue, data.start);
-                if (data.album && data.album.id !== root._bootstrapAlbumId)
+                if (data.album && ("album:" + data.album.id) !== root._bootstrapPageKey)
                     root.openAlbum(data.album.id, data.album.title,
                                    data.album.artist ? data.album.artist : "",
                                    data.album.year ? String(data.album.year) : "",
@@ -1399,6 +1437,6 @@ Item {
     // page, when present, is pushed before the first rendered frame.
     Component.onCompleted: {
         root.recordPlace();
-        root.restoreBootstrapAlbum();
+        root.restoreBootstrapTarget();
     }
 }

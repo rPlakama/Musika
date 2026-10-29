@@ -223,9 +223,10 @@ fn main() {
     let has_stored_auth = credentials.is_some();
     crate::qml::set_bootstrap_has_auth(has_stored_auth);
 
-    // If the saved session points at an album, build its row now so Home can
-    // push that page before its first frame instead of flashing the library.
-    let initial_album = credentials.as_ref().and_then(|credentials| {
+    // If the saved session points at an album or artist, build its row now so
+    // Home can push that page before its first frame instead of flashing the
+    // library. Old rows without page_kind fall back to album_id.
+    let initial_target = credentials.as_ref().and_then(|credentials| {
         let status = crate::app::runtime()
             .block_on(crate::status::load(&dbs.status))
             .ok()
@@ -233,18 +234,51 @@ fn main() {
         if status.server_url != credentials.server_url || status.username != credentials.username {
             return None;
         }
-        let album_id = status.album_id.filter(|id| !id.is_empty())?;
-        let album = crate::app::runtime()
-            .block_on(crate::library::album(&dbs.library, &album_id))
-            .ok()
-            .flatten()?;
-        let cover_ids: Vec<String> = album.cover_art.clone().into_iter().collect();
-        let covers = crate::app::runtime()
-            .block_on(crate::covers::url_map_of(&dbs, &cover_ids))
-            .unwrap_or_default();
-        Some(crate::browse::album_json(&album, &covers, None).to_string())
+        let (kind, id) = if !status.page_kind.is_empty() && !status.page_id.is_empty() {
+            (status.page_kind.clone(), status.page_id.clone())
+        } else {
+            (
+                "album".to_string(),
+                status.album_id.clone().filter(|id| !id.is_empty())?,
+            )
+        };
+        let page = match kind.as_str() {
+            "album" => {
+                let album = crate::app::runtime()
+                    .block_on(crate::library::album(&dbs.library, &id))
+                    .ok()
+                    .flatten()?;
+                let cover_ids: Vec<String> = album.cover_art.clone().into_iter().collect();
+                let covers = crate::app::runtime()
+                    .block_on(crate::covers::url_map_of(&dbs, &cover_ids))
+                    .unwrap_or_default();
+                crate::browse::album_json(&album, &covers, None)
+            }
+            "artist" => {
+                let artist = crate::app::runtime()
+                    .block_on(crate::library::artist(&dbs.library, &id))
+                    .ok()
+                    .flatten()?;
+                let cover_ids: Vec<String> = artist.cover_art.clone().into_iter().collect();
+                let covers = crate::app::runtime()
+                    .block_on(crate::covers::url_map_of(&dbs, &cover_ids))
+                    .unwrap_or_default();
+                let user_starred = crate::app::runtime()
+                    .block_on(crate::artist_user::starred_ids(&dbs.artist_user))
+                    .unwrap_or_default();
+                let starred = artist.starred.is_some() || user_starred.contains(&artist.id);
+                let rating = crate::app::runtime()
+                    .block_on(crate::artist_user::ratings(&dbs.artist_user))
+                    .ok()
+                    .and_then(|ratings| ratings.get(&artist.id).copied())
+                    .unwrap_or(0);
+                crate::browse::artist_json(&artist, &covers, None, starred, rating)
+            }
+            _ => return None,
+        };
+        Some(serde_json::json!({ "kind": kind, "page": page }).to_string())
     });
-    crate::qml::set_bootstrap_album(initial_album);
+    crate::qml::set_bootstrap_target(initial_target);
     crate::app::set_dbs(dbs);
 
     let mut app = QApp::new();

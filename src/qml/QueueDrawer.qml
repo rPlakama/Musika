@@ -437,17 +437,9 @@ Item {
         border.width: Math.max(1, root.width * Theme.hairlineRatio)
         radius: Theme.radius
         clip: true
-        visible: root.open || x < root.width
-        x: root.open ? root.width - width : root.width
+        visible: root.open
+        x: root.width - width
         z: 1
-
-        Behavior on x {
-            NumberAnimation {
-                duration: Theme.motion.standard
-                easing.type: Easing.Bezier
-                easing.bezierCurve: root.open ? Theme.ease.decelerate : Theme.ease.accelerate
-            }
-        }
 
         ColumnLayout {
             anchors.fill: parent

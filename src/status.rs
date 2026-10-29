@@ -34,6 +34,8 @@ pub struct SessionStatus {
     pub username: String,
     pub album_id: Option<String>,
     pub song_id: Option<String>,
+    pub page_kind: String,
+    pub page_id: String,
     pub queue: String,
     pub queue_index: i64,
     pub position: f64,
@@ -46,14 +48,16 @@ pub struct SessionStatus {
 pub async fn save(pool: &SqlitePool, status: &SessionStatus) -> Result<()> {
     sqlx::query(
         "INSERT INTO session_status
-             (id, server_url, username, album_id, song_id, queue, queue_index,
-              position, volume, muted, updated_at)
-         VALUES (1, ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
+             (id, server_url, username, album_id, song_id, page_kind, page_id,
+              queue, queue_index, position, volume, muted, updated_at)
+         VALUES (1, ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
          ON CONFLICT(id) DO UPDATE SET
              server_url  = excluded.server_url,
              username    = excluded.username,
              album_id    = excluded.album_id,
              song_id     = excluded.song_id,
+             page_kind   = excluded.page_kind,
+             page_id     = excluded.page_id,
              queue       = excluded.queue,
              queue_index = excluded.queue_index,
              position    = excluded.position,
@@ -65,6 +69,8 @@ pub async fn save(pool: &SqlitePool, status: &SessionStatus) -> Result<()> {
     .bind(&status.username)
     .bind(&status.album_id)
     .bind(&status.song_id)
+    .bind(&status.page_kind)
+    .bind(&status.page_id)
     .bind(&status.queue)
     .bind(status.queue_index)
     .bind(status.position)
@@ -79,8 +85,8 @@ pub async fn save(pool: &SqlitePool, status: &SessionStatus) -> Result<()> {
 /// Loads the row; `None` when nothing was ever saved (first launch).
 pub async fn load(pool: &SqlitePool) -> Result<Option<SessionStatus>> {
     let row = sqlx::query_as::<_, SessionStatus>(
-        "SELECT server_url, username, album_id, song_id, queue, queue_index,
-                position, volume, muted, updated_at
+        "SELECT server_url, username, album_id, song_id, page_kind, page_id,
+                queue, queue_index, position, volume, muted, updated_at
          FROM session_status WHERE id = 1",
     )
     .fetch_optional(pool)

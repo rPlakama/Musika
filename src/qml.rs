@@ -59,16 +59,16 @@ use sync::{index_value, spawn_sync};
 /// Login without waiting for the async auth ping.
 static BOOTSTRAP_HAS_AUTH: AtomicBool = AtomicBool::new(false);
 
-/// Startup album target from the saved session (serialized album row) so
-/// Home can push its page before the first frame.
-static BOOTSTRAP_ALBUM: Mutex<Option<String>> = Mutex::new(None);
+/// Startup page target from the saved session: `{ kind, page }`, so Home can
+/// push its entry before the first frame.
+static BOOTSTRAP_TARGET: Mutex<Option<String>> = Mutex::new(None);
 
 pub(crate) fn set_bootstrap_has_auth(has_auth: bool) {
     BOOTSTRAP_HAS_AUTH.store(has_auth, Ordering::Relaxed);
 }
 
-pub(crate) fn set_bootstrap_album(payload: Option<String>) {
-    *BOOTSTRAP_ALBUM
+pub(crate) fn set_bootstrap_target(payload: Option<String>) {
+    *BOOTSTRAP_TARGET
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner) = payload;
 }
@@ -373,6 +373,8 @@ pub struct Backend {
     /// Last album page / song the session should return to (P-6).
     status_album: Option<String>,
     status_song: Option<String>,
+    status_page_kind: String,
+    status_page_id: String,
     /// S3: playhead to apply once `Home` loads the restored queue; consumed
     /// by `playerLoadPaused` so a later manual load never seeks.
     status_restore_position: Option<f64>,
@@ -785,10 +787,10 @@ impl Backend {
         BOOTSTRAP_HAS_AUTH.load(Ordering::Relaxed)
     }
 
-    /// Serialized album target for the first frame, or an empty string.
-    #[qslot(qml_name = "initialAlbum")]
-    fn initial_album(&self) -> String {
-        BOOTSTRAP_ALBUM
+    /// Serialized `{ kind, page }` target for the first frame, or empty.
+    #[qslot(qml_name = "initialTarget")]
+    fn initial_target(&self) -> String {
+        BOOTSTRAP_TARGET
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .clone()
@@ -860,6 +862,9 @@ impl Backend {
         self.logged_in_changed();
         self.status_message = "Logged in.".to_string();
         self.status_message_changed();
+        // Persist the page already opened by Home before the async status row
+        // is applied; applyStatus then preserves the current page.
+        self.queue_status_save();
         self.restore_status();
     }
 
@@ -910,6 +915,10 @@ impl Backend {
         self.player.set_muted(status.muted);
         self.status_album = status.album_id;
         self.status_song = status.song_id;
+        if self.status_page_kind.is_empty() && self.status_page_id.is_empty() {
+            self.status_page_kind = status.page_kind;
+            self.status_page_id = status.page_id;
+        }
         // S3: armed here, consumed by `playerLoadPaused` when Home loads the
         // restored queue; a queue-less restore leaves it harmlessly set.
         self.status_restore_position = (status.position > 0.0).then_some(status.position);
@@ -923,6 +932,29 @@ impl Backend {
             return;
         }
         self.status_album = Some(album_id);
+        self.queue_status_save();
+    }
+
+    /// Remembers the top page (album/artist) to reopen on the next launch.
+    /// Empty kind+id means Home itself.
+    #[qslot(qml_name = "rememberPage")]
+    fn remember_page(&mut self, kind: String, id: String) {
+        let kind = kind.trim().to_string();
+        let id = id.trim().to_string();
+        if kind.is_empty() || id.is_empty() {
+            if self.status_page_kind.is_empty() && self.status_page_id.is_empty() {
+                return;
+            }
+            self.status_page_kind.clear();
+            self.status_page_id.clear();
+            self.queue_status_save();
+            return;
+        }
+        if self.status_page_kind == kind && self.status_page_id == id {
+            return;
+        }
+        self.status_page_kind = kind;
+        self.status_page_id = id;
         self.queue_status_save();
     }
 
@@ -941,6 +973,8 @@ impl Backend {
             username: self.username.trim().to_string(),
             album_id: self.status_album.clone(),
             song_id: self.status_song.clone(),
+            page_kind: self.status_page_kind.clone(),
+            page_id: self.status_page_id.clone(),
             queue,
             queue_index: self.player.index() as i64,
             position: self.player.position(),

@@ -59,6 +59,11 @@ Item {
     /// never the body's own height (that would feed the row unit back into
     /// the layout).
     property real rowRefHeight: 0
+    // Cached reference, not a live binding: a resize that changes the row unit
+    // must settle through this stable value instead of feeding the body height
+    // back into the row size.
+    property real _rowRefHeight: root.height
+    readonly property real rowViewHeight: root._rowRefHeight
     property real rowHeightScale: root.profile.rowHeightScale !== undefined ? root.profile.rowHeightScale : 1.0
     property real rowSpacing: 0
     /// Extra rows kept alive above and below the viewport, so a continuous
@@ -68,8 +73,9 @@ Item {
         var stride = root._stride(root.view);
         return stride > 0 ? stride * root.renderOverscanRows : 0;
     }
-    // Keep rows tall enough for the row text even in a short pane.
-    property real minRowHeight: 50
+    // The Theme.adaptiveRow baseline floor is the real guard; this only stops
+    // pathological 1 px rows in a tiny transient pane.
+    property real minRowHeight: 18
     /// Kept for host compatibility; the extent is Qt's own now.
     property real contentHeightHint: 0
     /// A width change re-wraps variable-height rows (lyrics); let the resize
@@ -125,10 +131,22 @@ Item {
     function adaptiveRowFor(viewHeight) {
         if (root.rowRatio <= 0)
             return 0;
-        return Math.max(root.minRowHeight, viewHeight * root.rowRatio * root.rowHeightScale);
+        return Theme.adaptiveRow(viewHeight, root.rowRatio, root._rowBase)
+            * root.rowHeightScale;
     }
 
-    readonly property real adaptiveRowHeight: root.adaptiveRowFor(root.rowRefHeight > 0 ? root.rowRefHeight : root.height)
+    /// Captured once from the first stable reference. The baseline keeps the
+    /// adaptive floor steady across later height changes instead of letting
+    /// the row unit chase every intermediate viewport size.
+    property real _rowBase: 0
+
+    function captureRowBase() {
+        if (root._rowBase <= 0 && root.rowRatio > 0 && root.rowViewHeight > 0)
+            root._rowBase = root.rowViewHeight * root.rowRatio;
+    }
+
+    readonly property real adaptiveRowHeight:
+        Math.max(root.minRowHeight, root.adaptiveRowFor(root.rowViewHeight))
     readonly property real rowStride: root.adaptiveRows ? root.adaptiveRowHeight + root.rowSpacing : 0
 
     /// Native ListView header that fills the shortfall when a uniform list
@@ -182,8 +200,8 @@ Item {
     readonly property int visibleRowCount: root.visibleRows()
 
     /// First and last *item* indices in the rendered band (viewport plus
-    /// overscan), used for marks and mark requests. Both native view types
-    /// answer `indexAt`.
+    /// overscan), used for marks and mark requests. Solved from the row unit,
+    /// so a reflow does not make the mark window chase transient delegates.
     readonly property var _visibleBounds: {
         var v = root.view;
         if (!v || v.count === 0 || v.height <= 0)
@@ -192,15 +210,16 @@ Item {
                 last: -1
             };
         var overscan = root.renderOverscanRows;
-        var first = v.indexAt(v.width * 0.5, v.contentY);
-        var last = v.indexAt(v.width * 0.5, v.contentY + v.height - 1);
-        if (first < 0)
-            first = 0;
-        if (last < 0)
-            last = v.count - 1;
+        var stride = root._stride(v);
+        if (stride <= 0)
+            return {
+                first: 0,
+                last: v.count - 1
+            };
         return {
-            first: Math.max(0, first - overscan),
-            last: Math.min(v.count - 1, last + overscan)
+            first: Math.max(0, Math.floor(v.contentY / stride) - overscan),
+            last: Math.min(v.count - 1,
+                Math.ceil((v.contentY + v.height) / stride) - 1 + overscan)
         };
     }
     readonly property int firstVisibleIndex: root._visibleBounds.first
@@ -434,6 +453,7 @@ Item {
         if (v && v.count > 0)
             index = Math.max(0, Math.min(index, v.count - 1));
         glide.stop();
+        root._modelReset = false;
         root._landing = true;
         root._revealTries = 0;
         root.currentIndex = index;
@@ -492,6 +512,7 @@ Item {
 
     property int _pendingFollow: -1
     property bool _countRepairScheduled: false
+    property bool _modelReset: false
 
     function _scheduleCountRepair() {
         if (root._countRepairScheduled)
@@ -503,28 +524,36 @@ Item {
     function _repairCount() {
         root._countRepairScheduled = false;
         var v = root.view;
-        if (!v)
+        if (!v || v.count === 0 || root.resetPending)
             return;
-        if (v.count === 0) {
-            if (root.currentIndex !== -1)
-                root.currentIndex = -1;
-            return;
-        }
-        if (root.currentIndex >= v.count) {
-            root.land(v.count - 1);
+        if (root._landing) {
+            root._scheduleCountRepair();
             return;
         }
-        if (root.currentIndex < 0)
-            return;
-        if (v.currentIndex !== root.currentIndex)
-            v.currentIndex = root.currentIndex;
-        if (root._pendingFollow >= 0 && root._pendingFollow === root.currentIndex && v.count > root._pendingFollow) {
-            var i = root._pendingFollow;
-            root._pendingFollow = -1;
-            root._follow(v, i, false);
-        }
+        var rebuilt = root._modelReset;
+        root._modelReset = false;
+        if (rebuilt && root.currentIndex >= 0)
+            root._land(root.currentIndex, false);
+        else if (root.currentIndex < 0) {
+            if (scroll.savedIndex(root.memoryKey) < 0)
+                root._land(0, false);
+        } else if (root.currentIndex > v.count - 1)
+            root._land(v.count - 1, false);
+        else if (v.currentIndex !== root.currentIndex)
+            root._land(root.currentIndex, false);
         if (root.memoryKey)
             root.remember();
+        if (root._pendingFollow >= v.count)
+            root._pendingFollow = -1;
+        if (root._pendingFollow >= 0 && root._pendingFollow === root.currentIndex
+                && v.count > root._pendingFollow) {
+            var i = root._pendingFollow;
+            root._pendingFollow = -1;
+            Qt.callLater(function () {
+                if (root.currentIndex === i && root.view && root.view.count > 0)
+                    root._follow(root.view, i, false);
+            });
+        }
     }
 
     /// Top the viewport without touching the cursor (a fresh payload).
@@ -742,9 +771,24 @@ Item {
         onTriggered: root._flushRemember()
     }
 
+    Component.onCompleted: {
+        root._rowRefHeight = root.rowRefHeight > 0
+            ? root.rowRefHeight : root.height;
+        root.captureRowBase();
+    }
+    onRowRefHeightChanged: {
+        root._rowRefHeight = root.rowRefHeight > 0
+            ? root.rowRefHeight : root.height;
+        root.captureRowBase();
+    }
     onWidthChanged: if (root.recenterOnWidth)
         root._scheduleResizeRecenter()
-    onHeightChanged: root._scheduleResizeRecenter()
+    onHeightChanged: {
+        if (root.rowRefHeight <= 0)
+            root._rowRefHeight = root.height;
+        root.captureRowBase();
+        root._scheduleResizeRecenter();
+    }
     onAdaptiveRowHeightChanged: root._scheduleResizeRecenter()
 
     // ── Selection (VI-4 / ARC-I-4) ───────────────────────────────────────
@@ -1012,8 +1056,7 @@ Item {
         }
         function onCountChanged() {
             if (target.count === 0) {
-                if (root.currentIndex !== -1)
-                    root.currentIndex = -1;
+                root._modelReset = true;
                 return;
             }
             root._scheduleCountRepair();

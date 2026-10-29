@@ -5109,6 +5109,8 @@ mod search_index {
 
         assert_eq!(index.search("rdo", 10).songs.len(), 1);
         assert_eq!(index.search("r", 10).songs.len(), 1);
+        assert_eq!(index.search("rdhd", 10).songs.len(), 1);
+        assert_eq!(index.search("\"radiohead", 10).songs.len(), 1);
         assert_eq!(index.search("kid", 10).songs.len(), 1);
         assert!(index.search("zzz", 10).songs.is_empty());
     }

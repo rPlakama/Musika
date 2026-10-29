@@ -206,8 +206,12 @@ impl SearchIndex {
     /// caller; an empty query returns no typed hits (the caller paints the
     /// Most-played surface instead).
     pub fn search(&self, raw: &str, limit: usize) -> SearchResults {
+        // Keep direct callers safe from Nucleo pattern syntax: punctuation is
+        // a separator, so unmatched quotes/operators degrade to a literal
+        // fuzzy query instead of silently matching nothing.
+        let raw = crate::search::clean_query(raw);
         let pattern = Pattern::new(
-            raw,
+            &raw,
             CaseMatching::Smart,
             Normalization::Smart,
             AtomKind::Fuzzy,
@@ -220,7 +224,7 @@ impl SearchIndex {
             };
         }
 
-        let songs = self.search_songs(&pattern, raw, limit);
+        let songs = self.search_songs(&pattern, &raw, limit);
         let mut matcher = Matcher::new(matcher_config());
         let artists = match_indexed(&pattern, &self.artists, &mut matcher, limit);
         let albums = match_indexed(&pattern, &self.albums, &mut matcher, limit);

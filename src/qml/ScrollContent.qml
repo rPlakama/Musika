@@ -253,6 +253,10 @@ Item {
     function _follow(v, index, instant) {
         if (!v || v.count === 0 || index < 0 || index >= v.count)
             return;
+        // A real cursor move (not the resize repair's instant snap) owns the
+        // view again.
+        if (!instant)
+            root._resizeRepair = false;
         root._manualScroll = false;
         var override = root.glideOverrideMs;
         root.glideOverrideMs = 0;
@@ -301,6 +305,7 @@ Item {
     function stopGlide() {
         glide.stop();
         root.glideOverrideMs = 0;
+        root._resizeRepair = false;
     }
 
     /// Re-run the follow for the current cursor over `duration` ms.
@@ -317,6 +322,7 @@ Item {
         if (root.currentIndex < 0 || !root.view)
             return;
         root._manualScroll = false;
+        root._resizeRepair = false;
         root.glideOverrideMs = 0;
         root._follow(root.view, root.currentIndex, true);
     }
@@ -326,6 +332,7 @@ Item {
         root._teleportMove = false;
         if (root._landing)
             return;
+        root._resizeRepair = false;
         root._manualScroll = false;
         var v = root.view;
         if (!v)
@@ -361,6 +368,7 @@ Item {
         if (!v || v.count === 0)
             return;
         index = Math.max(0, Math.min(index, v.count - 1));
+        root._resizeRepair = false;
         root._manualScroll = false;
         // Suppress the glide `_cursorMoved` would start; a landing is one
         // native positioning call.
@@ -580,10 +588,24 @@ Item {
     /// The row count above which a numeric move teleports (`15` = 16+).
     property int teleportThreshold: 15
     property bool _resizeScheduled: false
+    /// A height/row-unit change invalidates the follow target. While this is
+    /// set, every contentHeight change re-snaps the cursor, so a multi-frame
+    /// relayout (Library height changes) cannot leave the rows one layout
+    /// behind the viewport. The next user move clears it.
+    property bool _resizeRepair: false
+    property bool _resizeFollowing: false
 
     /// One deferred pass per resize batch, off the compositor event.
     function _scheduleResizeRecenter() {
-        if (!root.view || root._resizeScheduled)
+        if (!root.view)
+            return;
+        // Snap immediately so the first resized frame is not painted against
+        // the old content extent; the timer coalesces the repeat passes.
+        root.stopGlide();
+        root._resizeRepair = true;
+        if (root.currentIndex >= 0 && root.currentIndex < root.view.count)
+            root._follow(root.view, root.currentIndex, true);
+        if (root._resizeScheduled)
             return;
         root._resizeScheduled = true;
         resizeTimer.restart();
@@ -595,6 +617,7 @@ Item {
         if (!v)
             return;
         root.stopGlide();
+        root._resizeRepair = true;
         if (root.currentIndex >= 0 && root.currentIndex < v.count) {
             if (v.currentIndex !== root.currentIndex)
                 v.currentIndex = root.currentIndex;
@@ -905,6 +928,17 @@ Item {
         function onMovementStarted() {
             root.stopGlide();
             root._manualScroll = true;
+        }
+        function onContentHeightChanged() {
+            // Multi-frame relayout after a height change: re-snap while the
+            // extent is still settling. stopGlide()/user movement ends repair.
+            if (root._resizeRepair && root.currentIndex >= 0
+                    && root.currentIndex < target.count && !root._landing
+                    && !root._resizeFollowing) {
+                root._resizeFollowing = true;
+                root._follow(target, root.currentIndex, true);
+                root._resizeFollowing = false;
+            }
         }
         function onCurrentIndexChanged() {
             if (target.count === 0)

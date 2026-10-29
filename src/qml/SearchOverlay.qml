@@ -472,6 +472,11 @@ Item {
         var idsSame = root.sameIds(songResults, data.songs)
             && root.sameIds(albumResults, data.albums)
             && root.sameIds(artistResults, data.artists);
+        // Drop the cursor before rows disappear: ListView otherwise cancels a
+        // pending delegate whose old index is past the shrunken model (the
+        // `DelegateModel::cancel: index out of range` warning).
+        if (!idsSame)
+            resultsColumn.cursor = -1;
         root.syncRows(songResults, songRows);
         root.syncRows(albumResults, albumRows);
         root.syncRows(artistResults, artistRows);

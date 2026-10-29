@@ -915,7 +915,6 @@ Item {
                                 anchors.fill: parent
                                 active: !root._bootstrapPending
                                     && (index === root.currentSegment || index <= 2)
-                                    && (!root._bootstrapTarget || root.contentStack.depth === 1)
                                 visible: index === root.currentSegment
                                 onItemChanged: {
                                     if (index === root.currentSegment)
@@ -925,8 +924,13 @@ Item {
                                     if (item) {
                                         // The current entry is never a preload target,
                                         // even if its visible flag has not settled yet.
-                                        item._preloadOnly = index !== root.currentSegment;
-                                        if (index === root.currentSegment && item.activateTab)
+                                        // A direct session page gives the tabs time to warm
+                                        // up in the background: load all three full lists.
+                                        // A normal Home still only preloads the hidden tabs.
+                                        item._preloadOnly = !root._bootstrapTarget
+                                            && index !== root.currentSegment;
+                                        if ((root._bootstrapTarget || index === root.currentSegment)
+                                                && item.activateTab)
                                             item.activateTab();
                                     }
                                     if (visible)

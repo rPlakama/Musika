@@ -48,8 +48,7 @@ Item {
     readonly property bool _bootstrapTarget: root._bootstrapData !== null
     property bool _bootstrapPending: root._bootstrapTarget
     // True only at the root: no page, drawer or fullscreen player above it.
-    readonly property bool atHome: contentStack.depth === 1
-        && !nowPlayingExpanded && !queueDrawer.open
+    readonly property bool atHome: contentStack.depth === 1 && !nowPlayingExpanded && !queueDrawer.open
     // A scope switch starts the target segment at row 0 instead of
     // restoring/settling toward its previous cursor.
     property bool _resetSegmentOnShow: false
@@ -73,17 +72,23 @@ Item {
     // accelerate. One factory reused by push/pop/replace.
     component EnterView: Transition {
         NumberAnimation {
-            property: "opacity"; from: 0; to: 1
+            property: "opacity"
+            from: 0
+            to: 1
             duration: Theme.motion.standard
-            easing.type: Easing.Bezier; easing.bezierCurve: Theme.ease.decelerate
+            easing.type: Easing.Bezier
+            easing.bezierCurve: Theme.ease.decelerate
         }
     }
 
     component ExitView: Transition {
         NumberAnimation {
-            property: "opacity"; from: 1; to: 0
+            property: "opacity"
+            from: 1
+            to: 0
             duration: Theme.motion.quick
-            easing.type: Easing.Bezier; easing.bezierCurve: Theme.ease.accelerate
+            easing.type: Easing.Bezier
+            easing.bezierCurve: Theme.ease.accelerate
         }
     }
 
@@ -133,16 +138,12 @@ Item {
             if (!page)
                 continue;
             if (page.albumId !== undefined) {
-                pages.push("album", page.albumId, page.albumTitle,
-                    page.albumArtist, page.albumMeta, page.albumCover,
-                    page.albumStarred === true ? 1 : 0, "");
+                pages.push("album", page.albumId, page.albumTitle, page.albumArtist, page.albumMeta, page.albumCover, page.albumStarred === true ? 1 : 0, "");
             } else if (page.artistId !== undefined) {
-                pages.push("artist", page.artistId, page.artistName, "",
-                    "", page.artistCover, 0, "");
+                pages.push("artist", page.artistId, page.artistName, "", "", page.artistCover, 0, "");
             }
         }
-        var row = [root.currentSegment,
-            root.nowPlayingExpanded ? 1 : 0, pages.length / 8];
+        var row = [root.currentSegment, root.nowPlayingExpanded ? 1 : 0, pages.length / 8];
         for (var p = 0; p < pages.length; ++p)
             row.push(pages[p]);
         return row;
@@ -284,8 +285,7 @@ Item {
     // Single album-page push used by the album list, the artist entry and the
     // search overlay, so every surface lands in the same page with the same
     // header payload (`starred` feeds the ARC-I-2 header heart).
-    function openAlbum(albumId, title, artist, year, tracks, cover, starred,
-                       instant) {
+    function openAlbum(albumId, title, artist, year, tracks, cover, starred, instant) {
         // P-6 S2: the last opened album page is what a restart reopens.
         Backend.rememberAlbum(albumId);
         var meta = [];
@@ -328,15 +328,9 @@ Item {
         var page = target.page;
         root._bootstrapPageKey = target.kind + ":" + page.id;
         if (target.kind === "artist") {
-            root.openArtist(page.id, page.name ? page.name : "",
-                            page.cover ? page.cover : "", true);
+            root.openArtist(page.id, page.name ? page.name : "", page.cover ? page.cover : "", true);
         } else if (target.kind === "album") {
-            root.openAlbum(page.id, page.title,
-                           page.artist ? page.artist : "",
-                           page.year ? String(page.year) : "",
-                           String(page.song_count || page.tracks || 0),
-                           page.cover ? page.cover : "",
-                           page.starred === true, true);
+            root.openAlbum(page.id, page.title, page.artist ? page.artist : "", page.year ? String(page.year) : "", String(page.song_count || page.tracks || 0), page.cover ? page.cover : "", page.starred === true, true);
         }
         root._bootstrapPending = false;
     }
@@ -373,9 +367,7 @@ Item {
             queueDrawer.armQuickActions();
             return;
         }
-        var view = root.activeRegion === 2
-            ? topBar
-            : (root.nowPlayingExpanded ? nowPlaying : contentStack.currentItem);
+        var view = root.activeRegion === 2 ? topBar : (root.nowPlayingExpanded ? nowPlaying : contentStack.currentItem);
         if (view && view.armQuickActions && view.altActionsAvailable !== false)
             view.armQuickActions();
     }
@@ -409,7 +401,9 @@ Item {
             if (!surface || !surface.searchRows)
                 return null;
             return {
-                searchRows: function () { return surface.searchRows(); },
+                searchRows: function () {
+                    return surface.searchRows();
+                },
                 searchJump: function (row) {
                     focus();
                     surface.searchJump(row);
@@ -445,8 +439,12 @@ Item {
             add(out, nowPlaying, noFocus);
             return out;
         }
-        add(out, topBar, function () { root.activeRegion = 2; });
-        add(out, contentStack.currentItem, function () { root.activeRegion = 1; });
+        add(out, topBar, function () {
+            root.activeRegion = 2;
+        });
+        add(out, contentStack.currentItem, function () {
+            root.activeRegion = 1;
+        });
         return out;
     }
 
@@ -510,7 +508,6 @@ Item {
             topBar.scope = back ? 0 : 1;                  // sync ↔ wipe
             return;
         }
-
     }
 
     // Actions dispatched from the global key handler, scoped to the active
@@ -549,8 +546,7 @@ Item {
         }
         // UI-60: Shift-J/K over the aimed favourite slot steps its rating.
         if (action.indexOf("quick_rating ") === 0) {
-            quickActions.adjustRating(
-                action.substring("quick_rating ".length) === "up" ? 1 : -1);
+            quickActions.adjustRating(action.substring("quick_rating ".length) === "up" ? 1 : -1);
             return;
         }
 
@@ -600,8 +596,7 @@ Item {
             if (nowPlayingExpanded || queueDrawer.open)
                 return;
             var scopeCount = 5;
-            var nextScope = (currentSegment
-                + (action === "scope_next" ? 1 : -1) + scopeCount) % scopeCount;
+            var nextScope = (currentSegment + (action === "scope_next" ? 1 : -1) + scopeCount) % scopeCount;
             root.showSegment(nextScope);
             return;
         }
@@ -789,8 +784,7 @@ Item {
                     activeRegion = 2;
                     return;
                 }
-                if (top && top.onToolbar === undefined && top.currentIndex !== undefined
-                        && top.currentIndex <= 0) {
+                if (top && top.onToolbar === undefined && top.currentIndex !== undefined && top.currentIndex <= 0) {
                     activeRegion = 2;
                     return;
                 }
@@ -881,12 +875,9 @@ Item {
                             var loader = segmentLoaders.itemAt(root.currentSegment);
                             return loader ? loader.item : null;
                         }
-                        readonly property bool hasSelection: activeView
-                            ? activeView.hasSelection === true : false
+                        readonly property bool hasSelection: activeView ? activeView.hasSelection === true : false
                         readonly property bool exitsToMain: false
-                        readonly property int currentIndex: (activeView
-                            && activeView.currentIndex !== undefined)
-                            ? activeView.currentIndex : -1
+                        readonly property int currentIndex: (activeView && activeView.currentIndex !== undefined) ? activeView.currentIndex : -1
 
                         /// ARC-UI-2: the live `/` session forwards to the
                         /// visible view (see `Home.lineSearchTargets`).
@@ -902,8 +893,7 @@ Item {
                             try {
                                 v.searchQuery = searchQuery;
                                 v.searchCurrentRow = searchCurrentRow;
-                            } catch (e) {
-                            }
+                            } catch (e) {}
                         }
 
                         function handleAction(action) {
@@ -943,72 +933,57 @@ Item {
                             if (v && v.searchJump)
                                 v.searchJump(row);
                         }
+                    }
+                    Repeater {
+                        id: segmentLoaders
+                        model: 5
 
-                        Repeater {
-                            id: segmentLoaders
-                            model: 5
-
-                            delegate: Loader {
-                                required property int index
-                                anchors.fill: parent
-                                active: !root._bootstrapPending
-                                    && (index === root.currentSegment || index <= 2)
-                                visible: index === root.currentSegment
-                                onItemChanged: {
-                                    if (index === root.currentSegment)
-                                        segmentHost._viewRevision++;
-                                }
-                                onLoaded: {
-                                    if (item) {
-                                        // The current entry is never a preload target,
-                                        // even if its visible flag has not settled yet.
-                                        // A direct session page gives the tabs time to warm
-                                        // up in the background: load all three full lists.
-                                        // A normal Home still only preloads the hidden tabs.
-                                        item._preloadOnly = !root._bootstrapTarget
-                                            && index !== root.currentSegment;
-                                        if ((root._bootstrapTarget || index === root.currentSegment)
-                                                && item.activateTab)
-                                            item.activateTab();
-                                    }
-                                    if (visible)
-                                        root._landOrResetSegment(item);
-                                }
-                                // SCROLLMODELANALYSIS §3: a segment coming
-                                // back lands its cursor instantly.
-                                onVisibleChanged: {
-                                    if (visible && item) {
-                                        item._preloadOnly = false;
-                                        if (item.activateTab)
-                                            item.activateTab();
-                                    }
-                                    if (visible)
-                                        root._landOrResetSegment(item);
-                                }
-                                sourceComponent: index === 1 ? songListComponent
-                                    : index === 2 ? artistListComponent
-                                    : index === 3 ? playlistListComponent
-                                    : index === 4 ? radioListComponent
-                                    : albumListComponent
+                        delegate: Loader {
+                            required property int index
+                            anchors.fill: parent
+                            active: !root._bootstrapPending && (index === root.currentSegment || index <= 2)
+                            visible: index === root.currentSegment
+                            onItemChanged: {
+                                if (index === root.currentSegment)
+                                    segmentHost._viewRevision++;
                             }
+                            onLoaded: {
+                                if (item) {
+                                    // Check if the loaded item actually declares _preloadOnly
+                                    if ("_preloadOnly" in item)
+                                        item._preloadOnly = !root._bootstrapTarget && index !== root.currentSegment;
+                                    if ((root._bootstrapTarget || index === root.currentSegment) && item.activateTab)
+                                        item.activateTab();
+                                }
+                                if (visible)
+                                    root._landOrResetSegment(item);
+                            }
+                            onVisibleChanged: {
+                                if (visible && item) {
+                                    if ("_preloadOnly" in item)
+                                        item._preloadOnly = false;
+                                    if (item.activateTab)
+                                        item.activateTab();
+                                }
+                                if (visible)
+                                    root._landOrResetSegment(item);
+                            }
+                            sourceComponent: index === 1 ? songListComponent : index === 2 ? artistListComponent : index === 3 ? playlistListComponent : index === 4 ? radioListComponent : albumListComponent
                         }
                     }
 
                     Component {
                         id: albumListComponent
                         AlbumList {
-                            onAlbumActivated: (albumId, title, artist, year, tracks, cover, starred) =>
-                                root.openAlbum(albumId, title, artist, year, tracks, cover, starred)
-                            onQuickAction: (target, actions) =>
-                                root.armQuickActions(target, actions)
+                            onAlbumActivated: (albumId, title, artist, year, tracks, cover, starred) => root.openAlbum(albumId, title, artist, year, tracks, cover, starred)
+                            onQuickAction: (target, actions) => root.armQuickActions(target, actions)
                         }
                     }
 
                     Component {
                         id: songListComponent
                         SongList {
-                            onQuickAction: (target, actions) =>
-                                root.armQuickActions(target, actions)
+                            onQuickAction: (target, actions) => root.armQuickActions(target, actions)
                         }
                     }
 
@@ -1027,8 +1002,7 @@ Item {
                             // as albums/songs — without this relay the south
                             // rating step never fired, so the Artists list's
                             // favourite rectangle never reloaded.
-                            onQuickAction: (target, actions) =>
-                                root.armQuickActions(target, actions)
+                            onQuickAction: (target, actions) => root.armQuickActions(target, actions)
                         }
                     }
 
@@ -1036,10 +1010,8 @@ Item {
                         id: artistEntryComponent
                         ArtistEntry {
                             onBack: root.leaveArtistEntry()
-                            onAlbumActivated: (albumId, title, artist, year, tracks, cover, starred) =>
-                                root.openAlbum(albumId, title, artist, year, tracks, cover, starred)
-                            onQuickAction: (target, actions) =>
-                                root.armQuickActions(target, actions)
+                            onAlbumActivated: (albumId, title, artist, year, tracks, cover, starred) => root.openAlbum(albumId, title, artist, year, tracks, cover, starred)
+                            onQuickAction: (target, actions) => root.armQuickActions(target, actions)
                         }
                     }
 
@@ -1074,8 +1046,7 @@ Item {
                             }
                             // ARC-I-2: the page arms the shared Alt overlay on
                             // its song rows.
-                            onQuickAction: (target, actions) =>
-                                root.armQuickActions(target, actions)
+                            onQuickAction: (target, actions) => root.armQuickActions(target, actions)
                         }
                     }
                 }
@@ -1125,12 +1096,8 @@ Item {
     /// list surfaces expose `yankRows`, and Main uses `canYankRows` to decide
     /// between the row verb and the VI-21 text copy.
     readonly property bool queueDrawerIsOpen: queueDrawer.open
-    readonly property var focusedView: contentStack.currentItem
-        && contentStack.currentItem.activeView !== undefined
-        ? contentStack.currentItem.activeView
-        : contentStack.currentItem
-    readonly property bool canYankRows: queueDrawerIsOpen || searchOverlay.opened
-        || (activeRegion === 1 && focusedView && focusedView.yankRows !== undefined)
+    readonly property var focusedView: contentStack.currentItem && contentStack.currentItem.activeView !== undefined ? contentStack.currentItem.activeView : contentStack.currentItem
+    readonly property bool canYankRows: queueDrawerIsOpen || searchOverlay.opened || (activeRegion === 1 && focusedView && focusedView.yankRows !== undefined)
 
     // Ctrl-Q: the standalone play-queue drawer, hosted here so it slides over
     // the library and the fullscreen player alike. The Alt overlay, search,
@@ -1152,9 +1119,7 @@ Item {
         // ARC-I: while the search is open its column arms the same overlay,
         // which must paint above the search panel (search z = zOverlay).
         z: searchOverlay.opened ? Theme.zOverlay + 1 : Theme.zRegion + 1
-        backdrop: (root.nowPlayingExpanded && nowPlaying) ? nowPlaying
-            : (searchOverlay.opened ? searchOverlay
-            : (queueDrawer.open ? queueDrawer : shell))
+        backdrop: (root.nowPlayingExpanded && nowPlaying) ? nowPlaying : (searchOverlay.opened ? searchOverlay : (queueDrawer.open ? queueDrawer : shell))
         // UI-60 "bright": the rating step's stars outlive the tile collapse.
         onRatingStepped: (x, y) => ratingBurst.burstAt(x, y)
     }
@@ -1252,9 +1217,8 @@ Item {
 
         // A search song hit goes through the same command pump as external
         // IPC, so the flow stays scriptable and single-sourced.
-        onSongActivated: (id) => Backend.handleCommand("play_song_in_album " + id)
-        onAlbumActivated: (albumId, title, artist, year, tracks, cover, starred) =>
-            root.openAlbum(albumId, title, artist, year, tracks, cover, starred)
+        onSongActivated: id => Backend.handleCommand("play_song_in_album " + id)
+        onAlbumActivated: (albumId, title, artist, year, tracks, cover, starred) => root.openAlbum(albumId, title, artist, year, tracks, cover, starred)
         onArtistActivated: (artistId, artistName, artistCover) => {
             root.nowPlayingExpanded = false;
             contentStack.push(artistEntryComponent, {
@@ -1305,23 +1269,20 @@ Item {
         // so the backend is not re-entered while the signal is emitted.
         function onStatusRestored(payload) {
             var data = JSON.parse(payload);
-            Qt.callLater(function() {
+            Qt.callLater(function () {
                 if (data.queue && data.queue.length > 0)
                     Backend.playerLoadPaused(data.queue, data.start);
                 if (data.album && ("album:" + data.album.id) !== root._bootstrapPageKey)
-                    root.openAlbum(data.album.id, data.album.title,
-                                   data.album.artist ? data.album.artist : "",
-                                   data.album.year ? String(data.album.year) : "",
-                                   String(data.album.tracks),
-                                   data.album.cover ? data.album.cover : "",
-                                   data.album.starred === true);
+                    root.openAlbum(data.album.id, data.album.title, data.album.artist ? data.album.artist : "", data.album.year ? String(data.album.year) : "", String(data.album.tracks), data.album.cover ? data.album.cover : "", data.album.starred === true);
                 // Session return: the restored album's rows must render
                 // their state marks on arrival — the page only installs its
                 // mark window when its payload lands, and without this the
                 // marks waited for the first cursor move (a row
                 // interaction). One tick later the window is up; the shared
                 // reload re-reads it and notifies every mark.
-                Qt.callLater(function() { Backend.TriggerRowReload(); });
+                Qt.callLater(function () {
+                    Backend.TriggerRowReload();
+                });
             });
         }
         // Single pumped event from `playSongInAlbum`: the queue + album
@@ -1330,7 +1291,7 @@ Item {
         function onDataReady(channel, payload) {
             if (channel === "song_album") {
                 var data = JSON.parse(payload);
-                Qt.callLater(function() {
+                Qt.callLater(function () {
                     Backend.playerLoad(data.queue, data.start);
                     if (!data.album)
                         return;
@@ -1356,19 +1317,16 @@ Item {
             // search hit closes the search so the page is actually shown.
             if (channel === "open_album") {
                 var page = JSON.parse(payload);
-                Qt.callLater(function() {
+                Qt.callLater(function () {
                     if (searchOverlay.opened)
                         searchOverlay.close();
-                    root.openAlbum(page.id, page.title, page.artist ? page.artist : "",
-                                   page.year ? String(page.year) : "",
-                                   String(page.tracks), page.cover ? page.cover : "",
-                                   page.starred === true);
+                    root.openAlbum(page.id, page.title, page.artist ? page.artist : "", page.year ? String(page.year) : "", String(page.tracks), page.cover ? page.cover : "", page.starred === true);
                 });
                 return;
             }
             if (channel === "open_artist") {
                 var artist = JSON.parse(payload);
-                Qt.callLater(function() {
+                Qt.callLater(function () {
                     if (searchOverlay.opened)
                         searchOverlay.close();
                     // The artist page is a shell surface: leaving the
@@ -1391,8 +1349,8 @@ Item {
         model: 2
 
         delegate: Rectangle {
-            radius: Theme.radius
             id: regionBox
+            radius: Theme.radius
             required property int index
 
             readonly property int region: index + 1
@@ -1409,14 +1367,17 @@ Item {
             // queue drawer are overlays, so no region highlight may show
             // above them; the modal search owns the focus border while it is
             // up.
-            visible: !root.nowPlayingExpanded && !queueDrawer.open
-                && !searchOverlay.opened && active
+            visible: !root.nowPlayingExpanded && !queueDrawer.open && !searchOverlay.opened && active
             border.width: 2 * unit
             border.color: Palette.primary
 
             // Width is instant (R5); only the colour eases.
             Behavior on border.color {
-                ColorAnimation { duration: Theme.motion.micro; easing.type: Easing.Bezier; easing.bezierCurve: Theme.ease.standard }
+                ColorAnimation {
+                    duration: Theme.motion.micro
+                    easing.type: Easing.Bezier
+                    easing.bezierCurve: Theme.ease.standard
+                }
             }
         }
     }

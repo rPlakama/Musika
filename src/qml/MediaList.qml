@@ -23,9 +23,36 @@ import "Theme.js" as Theme
 // covers, titles and right-aligned meta. The wrappers (`AlbumList`,
 // `SongList`, `ArtistList`) own the backend channel and map their payload
 // into rows via `setRows`; this component owns the rows and row rendering.
+// Inside MediaList.qml
+
 ScrollPanel {
     id: root
 
+    function reload() {
+        root.requestFull(true);
+    }
+
+    function requestFull(showLoading) { // Base fallback / virtual function to be overridden by child lists
+        // Defines preloadflags here to other inherit it
+    }
+    property bool _preloaded: false
+    property bool _fullLoaded: false
+    property bool _preloadOnly: false
+    Timer {
+        id: preloadTimer
+        interval: 350
+        repeat: false
+        onTriggered: root.requestPreload()
+    }
+
+    // Expose helper functions so derived components can control the timer
+    function stopPreload() {
+        preloadTimer.stop();
+    }
+
+    function startPreloadTimer() {
+        preloadTimer.restart();
+    }
     // Current order label beside the Shift-H / Shift-L cue; an empty label
     // hides the cue (e.g. Artists, whose order is fixed for now).
     property string orderText: ""
@@ -43,26 +70,21 @@ ScrollPanel {
     signal quickAction(var target, var actions)
     /// UI-60: only album/artist rows own a rating; song rows show the heart
     /// alone (no number-0 badge).
-    readonly property bool ratingMarks: quickActionKind === "album"
-        || quickActionKind === "artist"
+    readonly property bool ratingMarks: quickActionKind === "album" || quickActionKind === "artist"
 
     QuickActions {
         id: verbs
     }
 
     /// The shuffle source for this tab ("" = no chip, no Tab stop).
-    readonly property string shuffleKind: root.quickActionKind === "song"
-        ? "songs"
-        : (root.quickActionKind === "album" ? "albums" : "")
+    readonly property string shuffleKind: root.quickActionKind === "song" ? "songs" : (root.quickActionKind === "album" ? "albums" : "")
     hasHeaderChip: root.shuffleKind.length > 0
     onHeaderChipActivated: Backend.toggleShuffle(root.shuffleKind)
 
     /// The state marks (heart/download) render only for the rendered band —
     /// the viewport plus the scroll body's overscan.
     function markVisible(index) {
-        return root.firstVisibleIndex >= 0
-            && index >= root.firstVisibleIndex
-            && index <= root.lastVisibleIndex;
+        return root.firstVisibleIndex >= 0 && index >= root.firstVisibleIndex && index <= root.lastVisibleIndex;
     }
 
     /// Ask the backend for the download state of the rendered rows only —
@@ -99,15 +121,16 @@ ScrollPanel {
     // dedupe must not swallow the update).
     Connections {
         target: Backend
-        function onRowReload() { root.requestMarkWindow(true); }
+        function onRowReload() {
+            root.requestMarkWindow(true);
+        }
         // UI-60: patch a rated album/artist row in place.
         function onRatingChanged(kind, id, rating) {
             for (var i = 0; i < mediaRows.count; ++i) {
                 var row = mediaRows.get(i);
                 if (!row)
                     continue;
-                if ((kind === "album" && row.albumId === id)
-                        || (kind === "artist" && row.artistId === id))
+                if ((kind === "album" && row.albumId === id) || (kind === "artist" && row.artistId === id))
                     mediaRows.setProperty(i, "rating", rating);
             }
         }
@@ -116,8 +139,7 @@ ScrollPanel {
     /// A row's download mark: its song is cached, or it is an album row
     /// whose every track is.
     function markCached(songId, albumId) {
-        return (songId.length > 0 && Backend.downloadedIds.indexOf(songId) !== -1)
-            || (albumId.length > 0 && Backend.cachedAlbumIds.indexOf(albumId) !== -1);
+        return (songId.length > 0 && Backend.downloadedIds.indexOf(songId) !== -1) || (albumId.length > 0 && Backend.cachedAlbumIds.indexOf(albumId) !== -1);
     }
 
     /// An order/type swap reload: UI-10's cursor-position reset rides the
@@ -143,9 +165,7 @@ ScrollPanel {
     selectable: quickActionKind !== ""
     /// VI-8a: the shared yank verb reads the same row kind.
     yankKind: quickActionKind
-    readonly property string selectionField: quickActionKind === "album"
-        ? "albumId"
-        : (quickActionKind === "artist" ? "artistId" : "songId")
+    readonly property string selectionField: quickActionKind === "album" ? "albumId" : (quickActionKind === "artist" ? "artistId" : "songId")
 
     /// ARC-43: Alt armed the gesture — anchor on the keyboard cursor row, or
     /// on the range with the selection verb set (VI-4).
@@ -155,22 +175,15 @@ ScrollPanel {
         var row = view.itemAtIndex(currentIndex);
         var actions = null;
         if (root.hasSelection) {
-            actions = verbs.forSelection(quickActionKind, root.selectedIds(selectionField),
-                root.selectedStarred(selectionField));
+            actions = verbs.forSelection(quickActionKind, root.selectedIds(selectionField), root.selectedStarred(selectionField));
         } else {
             var item = mediaRows.get(currentIndex);
             // UI-60: the overlay's rating step repaints the row from the
             // local model immediately (persistence is separate).
-            var preview = function(level) {
+            var preview = function (level) {
                 mediaRows.setProperty(currentIndex, "rating", level);
             };
-            actions = item
-                ? (quickActionKind === "album"
-                    ? verbs.album(item, Backend.cachedAlbumIds.indexOf(item.albumId) !== -1, preview)
-                    : (quickActionKind === "artist"
-                        ? verbs.artist(item, preview)
-                        : verbs.song(item)))
-                : null;
+            actions = item ? (quickActionKind === "album" ? verbs.album(item, Backend.cachedAlbumIds.indexOf(item.albumId) !== -1, preview) : (quickActionKind === "artist" ? verbs.artist(item, preview) : verbs.song(item))) : null;
         }
         if (!actions)
             return;
@@ -179,7 +192,7 @@ ScrollPanel {
         if (actions.south && actions.south.invoke) {
             var want = actions.south.favorite === true;
             var star = actions.south.invoke;
-            actions.south.invoke = function() {
+            actions.south.invoke = function () {
                 star();
                 root.markStarred(want);
             };
@@ -219,8 +232,7 @@ ScrollPanel {
         id: fillTimer
         interval: 0
         repeat: false
-        onTriggered: root._appendFill(root._fillRows, root._fillStart,
-            root._fillGeneration)
+        onTriggered: root._appendFill(root._fillRows, root._fillStart, root._fillGeneration)
     }
 
     function setRows(rows) {
@@ -276,7 +288,7 @@ ScrollPanel {
         root.requestMarkWindow();
     }
 
-    onItemActivated: (index) => {
+    onItemActivated: index => {
         // VI-4: opening/playing a row ends the visual selection.
         root.clearSelection();
         var item = mediaRows.get(index);
@@ -312,8 +324,7 @@ ScrollPanel {
         anchors.verticalCenter: parent.verticalCenter
         anchors.right: parent.right
         // VI-4: step left of the selection pill when it is up.
-        anchors.rightMargin: root.width * 0.02
-            + (selectionBadge.visible ? selectionBadge.width + root.height * 0.012 : 0)
+        anchors.rightMargin: root.width * 0.02 + (selectionBadge.visible ? selectionBadge.width + root.height * 0.012 : 0)
         spacing: root.height * 0.012
 
         FadeText {
@@ -341,8 +352,8 @@ ScrollPanel {
     // Body (B): one row per payload item.
     rowDelegate: Component {
         Rectangle {
-            radius: Theme.radius
             id: row
+            radius: Theme.radius
             required property int index
             required property string title
             required property string subtitle
@@ -365,14 +376,8 @@ ScrollPanel {
             // letting the row above clip it.
             z: row.emphasized ? 1 : 0
             // UI-58: adaptive — stops at the 18% floor instead of stepping.
-            height: root.adaptiveRowHeight > 0
-                ? root.adaptiveRowHeight
-                : (ListView.view ? ListView.view.height * 0.105 : 0)
-            color: (ListView.isCurrentItem || row.selectedRow)
-                ? Palette.secondaryContainer
-                : (rowHover.hovered
-                    ? Palette.surfaceContainerHigh
-                    : (index % 2 === 0 ? Palette.surface : Palette.surfaceContainerLowest))
+            height: root.adaptiveRowHeight > 0 ? root.adaptiveRowHeight : (ListView.view ? ListView.view.height * 0.105 : 0)
+            color: (ListView.isCurrentItem || row.selectedRow) ? Palette.secondaryContainer : (rowHover.hovered ? Palette.surfaceContainerHigh : (index % 2 === 0 ? Palette.surface : Palette.surfaceContainerLowest))
 
             Behavior on color {
                 ColorAnimation {
@@ -431,8 +436,8 @@ ScrollPanel {
     // (cover with the favourite mark in the corner, title + mixed meta line).
     cellDelegate: Component {
         Rectangle {
-            radius: Theme.radius
             id: cell
+            radius: Theme.radius
             required property int index
             required property string title
             required property string subtitle
@@ -457,9 +462,7 @@ ScrollPanel {
                 anchors.fill: parent
                 anchors.margins: cell.width * 0.03
                 radius: Theme.radius
-                color: (cell.current || cell.selectedCard)
-                    ? Palette.secondaryContainer
-                    : (cellHover.hovered ? Palette.surfaceContainerHigh : "transparent")
+                color: (cell.current || cell.selectedCard) ? Palette.secondaryContainer : (cellHover.hovered ? Palette.surfaceContainerHigh : "transparent")
 
                 Behavior on color {
                     ColorAnimation {
@@ -487,7 +490,11 @@ ScrollPanel {
                 scale: cell.emphasized ? Theme.selectionEmphasis : 1.0
 
                 Behavior on scale {
-                    NumberAnimation { duration: Theme.motion.quick; easing.type: Easing.Bezier; easing.bezierCurve: Theme.ease.standard }
+                    NumberAnimation {
+                        duration: Theme.motion.quick
+                        easing.type: Easing.Bezier
+                        easing.bezierCurve: Theme.ease.standard
+                    }
                 }
 
                 CoverImage {
@@ -501,9 +508,7 @@ ScrollPanel {
                 // the rating count at its bottom-right; the download mark
                 // (the global ledger set) mirrors it on the other corner.
                 Item {
-                    visible: root.markVisible(cell.index)
-                        && (cell.starred
-                            || (root.ratingMarks && cell.rating > 0))
+                    visible: root.markVisible(cell.index) && (cell.starred || (root.ratingMarks && cell.rating > 0))
                     anchors.right: parent.right
                     anchors.bottom: parent.bottom
                     anchors.margins: parent.width * 0.06
@@ -558,12 +563,14 @@ ScrollPanel {
                     query: root.searchQuery
                     currentMatch: cell.index === root.searchCurrentRow
                     transformOrigin: Item.Center
-                    scale: cell.emphasized
-                        ? Theme.fitScale(cellTitle.width, cellTitle.paintedWidth, Theme.selectionEmphasis)
-                        : 1.0
+                    scale: cell.emphasized ? Theme.fitScale(cellTitle.width, cellTitle.paintedWidth, Theme.selectionEmphasis) : 1.0
 
                     Behavior on scale {
-                        NumberAnimation { duration: Theme.motion.quick; easing.type: Easing.Bezier; easing.bezierCurve: Theme.ease.standard }
+                        NumberAnimation {
+                            duration: Theme.motion.quick
+                            easing.type: Easing.Bezier
+                            easing.bezierCurve: Theme.ease.standard
+                        }
                     }
                 }
 
@@ -571,9 +578,7 @@ ScrollPanel {
                 // song reads "Artist · Album · 3:45" under its cover.
                 SearchText {
                     width: parent.width
-                    text: cell.subtitle
-                        + (cell.subtitle.length > 0 && cell.meta.length > 0 ? "   ·   " : "")
-                        + cell.meta
+                    text: cell.subtitle + (cell.subtitle.length > 0 && cell.meta.length > 0 ? "   ·   " : "") + cell.meta
                     color: Palette.onSurfaceVariant
                     horizontalAlignment: Text.AlignHCenter
                     elide: Text.ElideRight

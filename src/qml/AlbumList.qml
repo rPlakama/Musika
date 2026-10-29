@@ -31,69 +31,26 @@ MediaList {
     title: "Albums"
     orderText: Backend.albumOrder
     memoryKey: "albums"
-
-    property bool _preloaded: false
-    property bool _fullLoaded: false
-    property bool _preloadOnly: false
-
-    function start() {
-        if (root._preloadOnly)
-            root.preload();
-        else
-            root.activateTab();
-    }
-
-    function activateTab() {
-        preloadTimer.stop();
-        if (root._fullLoaded)
-            return;
-        root.requestFull(root.count === 0);
-    }
-
-    function preload() {
-        if (root._preloaded)
-            return;
-        root._preloaded = true;
-        preloadTimer.restart();
-    }
+    quickActionKind: "album"
 
     function requestPreload() {
         root.loading = true;
         Backend.preloadAlbums(root.artistFilter);
     }
 
-    function reload() {
-        root.requestFull(true);
-    }
-
     function requestFull(showLoading) {
-        preloadTimer.stop();
+        root.stopPreload();
         root._fullLoaded = true;
         root.loading = showLoading;
         Backend.requestAlbums(root.artistFilter);
-    }
-
-    Timer {
-        id: preloadTimer
-        interval: 350
-        repeat: false
-        onTriggered: root.requestPreload()
     }
 
     function apply(payload) {
         root.setRows(JSON.parse(payload));
     }
 
-    onActivated: (item) => root.albumActivated(item.albumId, item.title, item.artist, item.year, item.tracks, item.cover, item.starred === true)
+    onActivated: item => root.albumActivated(item.albumId, item.title, item.artist, item.year, item.tracks, item.cover, item.starred === true)
 
-    // ARC-UI-1: album rows keep three verbs live and the Go to Album slot
-    // open (Enter already opens the album).
-    quickActionKind: "album"
-
-    Component.onCompleted: Qt.callLater(root.start)
-
-    // UI-10: a new filter is a new list — reset before the payload so the
-    // old cursor is not chased into the rebuilt rows.
     onArtistFilterChanged: {
         root.resetView();
         reload();
@@ -109,7 +66,6 @@ MediaList {
             root.reload();
         }
         function onAlbum_order_changed() {
-            // The cursor-position reset rides the shared row reload.
             root.resetRowReload();
         }
     }

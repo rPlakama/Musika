@@ -411,24 +411,43 @@ Item {
 
     /// Instant landing (semantic jumps: gg/G, search, restores, reset).
     function land(index) {
-        root._land(index);
+        root._land(index, true);
     }
 
-    function _land(index) {
-        var v = root.view;
-        if (!v || v.count === 0)
+    function _land(index, withSettle) {
+        if (index < 0)
             return;
-        index = Math.max(0, Math.min(index, v.count - 1));
         root._manualScroll = false;
-        // Suppress the glide `_cursorMoved` would start; a landing is one
-        // native positioning call.
+        var v = root.view;
+        if (v && v.count > 0)
+            index = Math.max(0, Math.min(index, v.count - 1));
+        glide.stop();
         root._landing = true;
-        if (root.currentIndex !== index)
-            root.currentIndex = index;
-        if (v.currentIndex !== index)
+        root._revealTries = 0;
+        root.currentIndex = index;
+        var unrealised = v && v.count > 0 && !v.itemAtIndex(index);
+        if (v && v.count > 0) {
             v.currentIndex = index;
+            if (unrealised)
+                root._reveal(v, index);
+            var target = root._target(v, index);
+            if (target !== null)
+                v.contentY = target;
+            root._clampY(v);
+        }
         root._landing = false;
-        root._follow(v, index, true);
+        Qt.callLater(function () {
+            var w = root.view;
+            if (!w || w.count === 0 || root.currentIndex !== index)
+                return;
+            if (withSettle && unrealised) {
+                // The anchor only got the row on screen; centre it now that
+                // it exists (a memory restore owns its own offset).
+                root._follow(w, index, true);
+            } else if (withSettle) {
+                root._settle();
+            }
+        });
     }
 
     /// A surface returning to screen calls this: land on the cursor.
@@ -447,17 +466,14 @@ Item {
             i = Math.max(0, Math.min(i, root.count - 1));
         root._manualScroll = false;
         root._pendingFollow = i;
-        root._landing = true;
-        if (root.currentIndex !== i)
-            root.currentIndex = i;
+        root.currentIndex = i;
         var v = root.view;
-        if (!v || v.count === 0) {
-            root._landing = false;
+        if (!v || v.count === 0)
+            return;
+        if (!v.itemAtIndex(i)) {
+            root._land(i, false);
             return;
         }
-        if (v.currentIndex !== i)
-            v.currentIndex = i;
-        root._landing = false;
         root._pendingFollow = -1;
         root._follow(v, i, false);
     }
@@ -577,7 +593,7 @@ Item {
             return false;
         if (root.count > 0)
             index = Math.max(0, Math.min(index, root.count - 1));
-        root._land(index);
+        root._land(index, false);
         var recalled = scroll.recall(root.memoryKey, root.view);
         return recalled.ok || root.count === 0;
     }

@@ -37,6 +37,9 @@ open work; this file is the release history.
   derive maxY from the row extent, clamp contentHeight churn, and keep the
   cursor visible on settle — so the bottom row stays flush and height
   changes no longer chase stale delegate geometry.
+- Land `gg`/`G` through the reveal path again: pre-position to the
+  row-unit extent, let the target row realise, then settle it, so `G`
+  actually loads the bottom instead of waiting for the delegate.
 - Remove the grid/cover-wall layout mode: Albums, Songs and ArtistEntry
   are list-only, and Shift-C no longer applies.
 

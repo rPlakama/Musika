@@ -109,7 +109,10 @@ ApplicationWindow {
 
     // ARC-43: a focus loss can swallow the Alt release; never leave the
     // quick-action overlay armed across applications.
-    onActiveChanged: if (!active) Backend.setAltHeld(false)
+    onActiveChanged: if (!active) {
+        Backend.setAltHeld(false);
+        Backend.resetKeyInput();
+    }
 
     // UI-40: `Palette.apply` snaps every role, so a cover swap is mixed here
     // (the colors payload arrives here) and pushed back through `apply` each

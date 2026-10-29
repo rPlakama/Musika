@@ -1136,6 +1136,7 @@ impl Backend {
         // Leaving the previous context may have left a half-typed sequence.
         self.keymap.reset();
         self.mark_key_pending(false);
+        self.set_key_count(0);
         if self.search_open != open {
             self.search_open = open;
             self.search_open_changed();
@@ -1148,10 +1149,22 @@ impl Backend {
     fn set_line_search_open(&mut self, open: bool) {
         self.keymap.reset();
         self.mark_key_pending(false);
+        self.set_key_count(0);
         if self.line_search_open != open {
             self.line_search_open = open;
             self.line_search_open_changed();
         }
+    }
+
+    /// Drops a half-typed sequence and its count when the navigation
+    /// context changes without a fired key action (mouse back/exit, a page
+    /// pop/push, a segment switch, or a focus loss). Without this, a pending
+    /// `3` could ride the next j/k and skip three rows after returning.
+    #[qslot(qml_name = "resetKeyInput")]
+    fn reset_key_input(&mut self) {
+        self.keymap.reset();
+        self.mark_key_pending(false);
+        self.set_key_count(0);
     }
 
     /// ARC-43: the window reports the bare Alt state; the overlay arms only

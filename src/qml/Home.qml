@@ -61,8 +61,15 @@ Item {
     property bool _placing: false
     readonly property int placeMax: 32
 
-    onCurrentSegmentChanged: root.recordPlace()
-    onNowPlayingExpandedChanged: root.recordPlace()
+    onCurrentSegmentChanged: {
+        root.recordPlace();
+        Backend.resetKeyInput();
+    }
+    onNowPlayingExpandedChanged: {
+        root.recordPlace();
+        if (!root.nowPlayingExpanded)
+            Backend.resetKeyInput();
+    }
 
     readonly property real barH: height * Theme.topBarRatio
     readonly property real playH: height * Theme.playerRatio
@@ -837,7 +844,10 @@ Item {
                     replaceExit: ExitView {}
 
                     // ARC-45: every page push/pop is a place change.
-                    onDepthChanged: root.recordPlace()
+                    onDepthChanged: {
+                        root.recordPlace();
+                        Backend.resetKeyInput();
+                    }
 
                     // The five segments stay alive once instantiated —
                     // switching is visibility, not a rebuild, so returning to

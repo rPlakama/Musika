@@ -44,6 +44,8 @@ open work; this file is the release history.
 - Capture the row base once and derive rows through Theme.adaptiveRow again,
   so a height resize cannot change the row grid underneath the viewport;
   restore the old count repair and stride-based mark band too.
+- After a height resize, if the manual top-row anchor left the cursor
+  outside the viewport, recentre it on its target row.
 - Remove the grid/cover-wall layout mode: Albums, Songs and ArtistEntry
   are list-only, and Shift-C no longer applies.
 

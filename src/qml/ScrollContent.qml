@@ -33,6 +33,18 @@ import "Theme.js" as Theme
 Item {
     id: root
 
+    property var _win: Window.window
+
+    Connections {
+        target: root._win
+        function onActiveChanged() {
+            if (root._win && root._win.active && root._resizeWhileInactive) {
+                root._resizeWhileInactive = false;
+                root._scheduleResizeRecenter();
+            }
+        }
+    }
+
     // ── Context profile ──────────────────────────────────────────────────
 
     /// Context name selecting the metrics/flags defaults (SCROLLMODAL).
@@ -113,8 +125,7 @@ Item {
     /// ("song"/"album"/"artist"); "" disables the overlay.
     property string quickActionKind: ""
     /// The id role a selection batch resolves to.
-    readonly property string quickActionField: root.quickActionKind === "album"
-        ? "albumId" : (root.quickActionKind === "artist" ? "artistId" : "songId")
+    readonly property string quickActionField: root.quickActionKind === "album" ? "albumId" : (root.quickActionKind === "artist" ? "artistId" : "songId")
     /// The download-window row kinds this surface renders.
     property bool markSongs: true
     property bool markAlbums: false
@@ -131,8 +142,7 @@ Item {
     function adaptiveRowFor(viewHeight) {
         if (root.rowRatio <= 0)
             return 0;
-        return Theme.adaptiveRow(viewHeight, root.rowRatio, root._rowBase)
-            * root.rowHeightScale;
+        return Theme.adaptiveRow(viewHeight, root.rowRatio, root._rowBase) * root.rowHeightScale;
     }
 
     /// Captured once from the first stable reference. The baseline keeps the
@@ -145,8 +155,7 @@ Item {
             root._rowBase = root.rowViewHeight * root.rowRatio;
     }
 
-    readonly property real adaptiveRowHeight:
-        Math.max(root.minRowHeight, root.adaptiveRowFor(root.rowViewHeight))
+    readonly property real adaptiveRowHeight: Math.max(root.minRowHeight, root.adaptiveRowFor(root.rowViewHeight))
     readonly property real rowStride: root.adaptiveRows ? root.adaptiveRowHeight + root.rowSpacing : 0
 
     /// Native ListView header that fills the shortfall when a uniform list
@@ -218,8 +227,7 @@ Item {
             };
         return {
             first: Math.max(0, Math.floor(v.contentY / stride) - overscan),
-            last: Math.min(v.count - 1,
-                Math.ceil((v.contentY + v.height) / stride) - 1 + overscan)
+            last: Math.min(v.count - 1, Math.ceil((v.contentY + v.height) / stride) - 1 + overscan)
         };
     }
     readonly property int firstVisibleIndex: root._visibleBounds.first
@@ -243,8 +251,7 @@ Item {
             return root.contentHeightHint;
         var stride = root._stride(v);
         if (stride > 0 && root.rowRatio > 0)
-            return Math.max(0, v.count * stride - root.rowSpacing)
-                + root._shortContentGap;
+            return Math.max(0, v.count * stride - root.rowSpacing) + root._shortContentGap;
         var last = v.count > 0 ? v.itemAtIndex(v.count - 1) : null;
         if (last && last.height > 0)
             return last.y + last.height;
@@ -293,8 +300,7 @@ Item {
             if (item && item.height > 0)
                 center = item.y + item.height * 0.5 - v.height * 0.5;
             else
-                center = row * stride + (stride - root.rowSpacing) * 0.5
-                    - v.height * 0.5;
+                center = row * stride + (stride - root.rowSpacing) * 0.5 - v.height * 0.5;
         }
         return Math.max(0, Math.min(maxY, center));
     }
@@ -318,8 +324,7 @@ Item {
 
     /// The one follow: native target, short contentY glide.
     function _follow(v, index, instant) {
-        if (!v || v.count === 0 || index < 0 || index >= v.count
-                || root._landing)
+        if (!v || v.count === 0 || index < 0 || index >= v.count || root._landing)
             return;
         var item = v.itemAtIndex(index);
         if (!item) {
@@ -345,8 +350,7 @@ Item {
         var override = root.glideOverrideMs;
         root.glideOverrideMs = 0;
         glide.stop();
-        if (instant || Theme.reduceMotion || root.followMs <= 0
-                || Math.abs(target - v.contentY) < 0.5) {
+        if (instant || Theme.reduceMotion || root.followMs <= 0 || Math.abs(target - v.contentY) < 0.5) {
             v.contentY = target;
             root._settle();
             return;
@@ -363,8 +367,7 @@ Item {
             return;
         // Safety net for a row unit that disagrees with real geometry: never
         // leave the cursor fully outside the viewport.
-        var item = root.currentIndex >= 0
-            ? v.itemAtIndex(root.currentIndex) : null;
+        var item = root.currentIndex >= 0 ? v.itemAtIndex(root.currentIndex) : null;
         if (item && item.height > 0) {
             var y = v.contentY;
             if (item.y < y - 0.5)
@@ -545,8 +548,7 @@ Item {
             root.remember();
         if (root._pendingFollow >= v.count)
             root._pendingFollow = -1;
-        if (root._pendingFollow >= 0 && root._pendingFollow === root.currentIndex
-                && v.count > root._pendingFollow) {
+        if (root._pendingFollow >= 0 && root._pendingFollow === root.currentIndex && v.count > root._pendingFollow) {
             var i = root._pendingFollow;
             root._pendingFollow = -1;
             Qt.callLater(function () {
@@ -688,10 +690,8 @@ Item {
         var stride = root._stride(v);
         if (stride <= 0)
             return;
-        root._anchorRow = Math.max(0, Math.min(v.count - 1,
-            Math.floor(v.contentY / stride)));
-        root._anchorFraction = Math.max(0, Math.min(0.999,
-            (v.contentY - root._anchorRow * stride) / stride));
+        root._anchorRow = Math.max(0, Math.min(v.count - 1, Math.floor(v.contentY / stride)));
+        root._anchorFraction = Math.max(0, Math.min(0.999, (v.contentY - root._anchorRow * stride) / stride));
     }
 
     /// A resize keeps the keyboard cursor centred when the follow owns the
@@ -705,8 +705,7 @@ Item {
         if (!v || v.count === 0 || v.height <= 0)
             return;
         var target = null;
-        if (!root._manualScroll && root.currentIndex >= 0
-                && root.currentIndex < v.count)
+        if (!root._manualScroll && root.currentIndex >= 0 && root.currentIndex < v.count)
             target = root._target(v, root.currentIndex);
         if (target === null) {
             var s = root._stride(v);
@@ -715,6 +714,24 @@ Item {
                 target = (anchor + root._anchorFraction) * s;
             }
         }
+        if (target !== null)
+            v.contentY = Math.max(0, Math.min(root._maxY(v), target));
+        root._ensureCursorVisible(v);
+    }
+
+    /// A manual scroll can own the top anchor while the resize leaves the
+    /// keyboard cursor outside the viewport. If that happened, put the cursor
+    /// back on its centred/pinned row; keep the manual anchor when the cursor
+    /// is still visible.
+    function _ensureCursorVisible(v) {
+        if (!v || root.currentIndex < 0 || root.currentIndex >= v.count)
+            return;
+        var item = v.itemAtIndex(root.currentIndex);
+        if (item && item.height > 0
+                && item.y >= v.contentY - 0.5
+                && item.y + item.height <= v.contentY + v.height + 0.5)
+            return;
+        var target = root._target(v, root.currentIndex);
         if (target !== null)
             v.contentY = Math.max(0, Math.min(root._maxY(v), target));
     }
@@ -772,13 +789,11 @@ Item {
     }
 
     Component.onCompleted: {
-        root._rowRefHeight = root.rowRefHeight > 0
-            ? root.rowRefHeight : root.height;
+        root._rowRefHeight = root.rowRefHeight > 0 ? root.rowRefHeight : root.height;
         root.captureRowBase();
     }
     onRowRefHeightChanged: {
-        root._rowRefHeight = root.rowRefHeight > 0
-            ? root.rowRefHeight : root.height;
+        root._rowRefHeight = root.rowRefHeight > 0 ? root.rowRefHeight : root.height;
         root.captureRowBase();
     }
     onWidthChanged: if (root.recenterOnWidth)
@@ -840,16 +855,13 @@ Item {
 
         var actions = null;
         if (root.hasSelection) {
-            actions = quickVerbs.forSelection(root.quickActionKind,
-                root.selectionIds(root.quickActionField),
-                root.selectionStarred(root.quickActionField));
+            actions = quickVerbs.forSelection(root.quickActionKind, root.selectionIds(root.quickActionField), root.selectionStarred(root.quickActionField));
         } else {
             var preview = function (level) {
                 if (root.model && root.model.setProperty && item.rating !== undefined)
                     root.model.setProperty(root.currentIndex, "rating", level);
             };
-            actions = quickVerbs.forItem(root.quickActionKind, item,
-                Backend.cachedAlbumIds.indexOf(item.albumId) !== -1, preview);
+            actions = quickVerbs.forItem(root.quickActionKind, item, Backend.cachedAlbumIds.indexOf(item.albumId) !== -1, preview);
         }
         if (!actions)
             return;
@@ -1010,18 +1022,6 @@ Item {
             cacheBuffer: root.renderOverscan
             displayMarginBeginning: root.renderOverscan
             displayMarginEnd: root.renderOverscan
-        }
-    }
-
-    Connections {
-        target: Window.window
-        function onActiveChanged() {
-            if (target && target.active && root._resizeWhileInactive) {
-                root._resizeWhileInactive = false;
-                // Finish against the now-active window's layout, not the
-                // geometry seen while it was idle.
-                root._scheduleResizeRecenter();
-            }
         }
     }
 

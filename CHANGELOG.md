@@ -33,9 +33,10 @@ open work; this file is the release history.
   snapping on every height event: write contentY directly, preserve a
   manually scrolled Library viewport by its visual top row, and finish the
   repair when an idle window becomes active.
-- Rebuild the follow target from the row unit again: pin the first/last
-  screenful and derive maxY from the row extent, so the bottom row stays
-  flush and height changes no longer chase stale delegate geometry.
+- Rebuild the list follow from the row unit: pin the first/last screenful,
+  derive maxY from the row extent, clamp contentHeight churn, and keep the
+  cursor visible on settle — so the bottom row stays flush and height
+  changes no longer chase stale delegate geometry.
 - Remove the grid/cover-wall layout mode: Albums, Songs and ArtistEntry
   are list-only, and Shift-C no longer applies.
 

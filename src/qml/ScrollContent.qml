@@ -21,14 +21,13 @@ import musika
 import "ScrollProfiles.js" as ScrollProfiles
 import "Theme.js" as Theme
 
-// The one scroll surface (the "ScrollModal").
+// The one scroll surface (the "ScrollModal"), list-only.
 //
-// Qt owns the geometry: ListView `currentIndex`, `contentHeight`,
-// `contentY`, and `positionViewAtIndex` are authoritative. The follow keeps
-// the Neovim `scrolloff=999` feel by asking Qt for a centred position; Qt
-// clamps the target at the content ends, so the first and last screens pin to
-// the edge without padding. Only the glide itself is custom (Qt has no
-// animated `positionViewAtIndex`): a short OutCubic `contentY` animation.
+// The follow keeps the Neovim `scrolloff=999` feel: the cursor row stays
+// centred, and the first/last screenful pins to the content edge. The
+// content extent and target are solved from the row unit (count × stride),
+// never from delegates that may still carry the previous geometry. The
+// realised tail overrides the extent for variable-height rows.
 //
 // Hosts never write `contentY` or call `positionViewAtIndex` themselves.
 Item {
@@ -329,8 +328,22 @@ Item {
 
     function _settle() {
         var v = root.view;
-        if (v)
-            root._clampY(v);
+        if (!v)
+            return;
+        // Safety net for a row unit that disagrees with real geometry: never
+        // leave the cursor fully outside the viewport.
+        var item = root.currentIndex >= 0
+            ? v.itemAtIndex(root.currentIndex) : null;
+        if (item && item.height > 0) {
+            var y = v.contentY;
+            if (item.y < y - 0.5)
+                y = item.y;
+            else if (item.y + item.height > y + v.height + 0.5)
+                y = item.y + item.height - v.height;
+            if (Math.abs(y - v.contentY) > 1)
+                v.contentY = y;
+        }
+        root._clampY(v);
         if (root.memoryKey)
             root._scheduleRemember();
     }
@@ -954,16 +967,12 @@ Item {
         }
         function onContentHeightChanged() {
             // The resize pass owns the viewport until its 100 ms settle; do
-            // not fight it from intermediate contentHeight updates.
+            // not fight it from intermediate contentHeight updates. While a
+            // glide runs the target absorbs the shift.
             if (root._landing || root._resizing || root._resizeApplyPending)
                 return;
-            if (!glide.running && root.currentIndex === target.count - 1
-                    && target.count > 0) {
-                // The last delegate just supplied the real tail; keep its
-                // bottom flush instead of leaving the inflated-estimate gap.
-                target.contentY = Math.min(target.contentY,
-                    root._maxY(target));
-            }
+            if (!glide.running)
+                root._clampY(target);
         }
         function onCurrentIndexChanged() {
             if (target.count === 0)

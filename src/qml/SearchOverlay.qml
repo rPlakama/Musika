@@ -606,52 +606,74 @@ Item {
 
                 Row {
                     anchors.centerIn: parent
-                    spacing: root.panelRefHeight * 0.012
+										// Defines margin betwheen Chips of Scope Row
+                     spacing: root.panelRefHeight * 0.025
 
                     Repeater {
                         model: root.scopeTitles
 
-                        delegate: Rectangle {
+                        delegate: Item {
                             id: scopeChip
                             required property int index
                             required property string modelData
 
                             readonly property bool selected: root.scope === index
                             readonly property int count: root.scopeCount(index)
+                            readonly property real labelSize: root.panelRefHeight * 0.0264
+                            readonly property real labelScale: scopeChip.selected
+                                ? 1.0 : (0.022 / 0.0264)
+                            readonly property string labelText:
+                                scopeChip.modelData + " " + scopeChip.count
 
-                            implicitWidth: chipRow.implicitWidth + root.panelRefHeight * 0.032
-                            implicitHeight: root.panelRefHeight * 0.044
-                            radius: Theme.radius
-                            color: selected
-                                ? Palette.primaryContainer
-                                : (chipHover.hovered ? Palette.secondaryContainer : "transparent")
-                            border.width: Math.max(1, root.panelRefHeight * Theme.hairlineRatio)
-                            border.color: selected ? Palette.primary : Palette.outlineVariant
+                            FontMetrics {
+                                id: selectedLabelMetrics
+                                font.family: Theme.fonts.body
+                                font.pixelSize: root.panelRefHeight * 0.0264
+                                font.bold: true
+                            }
+                            readonly property real labelSlotWidth:
+                                selectedLabelMetrics.advanceWidth(scopeChip.labelText)
 
-                            Row {
-                                id: chipRow
-                                anchors.centerIn: parent
-                                spacing: root.panelRefHeight * 0.012
+                            implicitWidth: labelSlotWidth
+                            implicitHeight: selectedLabelMetrics.height
+
+                            // Fixed transparent slots: the text renders once at its selected
+                            // size and scales inside the slot without reflowing the row.
+                            Rectangle {
+                                id: labelSlot
+                                width: scopeChip.labelSlotWidth
+                                height: parent.height
+                                color: "transparent"
 
                                 FadeText {
-                                    anchors.verticalCenter: parent.verticalCenter
-                                    text: scopeChip.modelData
+                                    anchors.centerIn: parent
+                                    text: scopeChip.labelText
                                     color: scopeChip.selected
-                                        ? Palette.onPrimaryContainer : Palette.onSurfaceVariant
-                                    font.pixelSize: root.panelRefHeight * 0.022
-                                    font.bold: scopeChip.selected
-                                    animated: false
-                                }
-
-                                FadeText {
-                                    anchors.verticalCenter: parent.verticalCenter
-                                    text: scopeChip.count
-                                    color: scopeChip.selected
-                                        ? Palette.onPrimaryContainer : Palette.onSurfaceVariant
-                                    font.pixelSize: root.panelRefHeight * 0.020
-                                    animated: false
+                                        ? Palette.primary : Palette.onSurfaceVariant
+                                    opacity: scopeChip.selected ? 1.0 : 0.60
+                                    Behavior on opacity {
+                                        NumberAnimation {
+                                            duration: Theme.motion.quick
+                                            easing.type: Easing.Bezier
+                                            easing.bezierCurve: Theme.ease.standard
+                                        }
+                                    }
+                                    font.pixelSize: scopeChip.labelSize
+                                    scalable: true
+                                    scale: scopeChip.labelScale
+                                    transformOrigin: Item.Center
+                                    Behavior on scale {
+                                        NumberAnimation {
+                                            duration: Theme.motion.standard
+                                            easing.type: Easing.Bezier
+                                            easing.bezierCurve: Theme.ease.decelerate
+                                        }
+                                    }
+                                    // font.bold: scopeChip.selected
+                                    animated: true
                                 }
                             }
+
 
                             HoverHandler {
                                 id: chipHover

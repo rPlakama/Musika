@@ -1100,6 +1100,7 @@ Item {
                         id: playlistListComponent
                         PlaylistList {
                             onPlaylistActivated: (playlistId, title) => root.openPlaylist(playlistId, title)
+                            onQuickAction: (target, actions) => root.armQuickActions(target, actions)
                         }
                     }
 
@@ -1128,6 +1129,7 @@ Item {
                         id: playlistEntryComponent
                         PlaylistEntry {
                             onBack: contentStack.pop()
+                            onQuickAction: (target, actions) => root.armQuickActions(target, actions)
                         }
                     }
                 }

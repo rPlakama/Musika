@@ -33,7 +33,7 @@ MediaList {
         id: virtualAlbums
     }
     virtualModel: virtualAlbums
-    model: virtualAlbums
+    model: virtualAlbums.ready ? virtualAlbums : null
 
     title: "Albums"
     orderText: Backend.albumOrder

@@ -250,6 +250,8 @@ mod tests {
 pub mod row_model {
     use std::collections::HashMap;
 
+    use qtbridge::qtbridge_runtime::QObjectHolder;
+    use qtbridge::qtbridge_type_lib::QModelIndex;
     use qtbridge::{QListModel, QListModelBase};
 
     use super::{LIVE_WINDOW_ROWS, RowRecord, queue_snapshot};
@@ -260,6 +262,7 @@ pub mod row_model {
         order: String,
         filter: String,
         count: usize,
+        ready: bool,
         rows: HashMap<usize, RowRecord>,
         placeholder: RowRecord,
     }
@@ -287,18 +290,22 @@ pub mod row_model {
 
     impl RowModel {
         qproperty!("count", Member = count, Notify = count_changed);
+        qproperty!("ready", Member = ready, Notify = ready_changed);
 
         #[qsignal]
         fn count_changed(&mut self);
+
+        #[qsignal]
+        fn ready_changed(&mut self);
 
         #[qslot(qml_name = "setSurface")]
         pub fn set_surface(&mut self, surface: String) {
             if self.surface != surface {
                 self.surface = surface;
-                self.count = 0;
+                self.ready = false;
+                self.ready_changed();
                 self.rows.clear();
-                self.count_changed();
-                self.reset();
+                self.publish_count(0);
             }
         }
 
@@ -306,8 +313,9 @@ pub mod row_model {
         pub fn set_order(&mut self, order: String) {
             if self.order != order {
                 self.order = order;
+                self.ready = false;
+                self.ready_changed();
                 self.rows.clear();
-                self.reset();
             }
         }
 
@@ -315,8 +323,9 @@ pub mod row_model {
         pub fn set_filter(&mut self, filter: String) {
             if self.filter != filter {
                 self.filter = filter;
+                self.ready = false;
+                self.ready_changed();
                 self.rows.clear();
-                self.reset();
             }
         }
 
@@ -356,6 +365,31 @@ pub mod row_model {
             (end >= start).then_some((start, end, changed))
         }
 
+        fn publish_count(&mut self, count: usize) {
+            let old = self.count;
+            if count == old {
+                return;
+            }
+            let parent = QModelIndex::default();
+            if let Some(proxy) = self.try_get_rust_proxy_ptr() {
+                unsafe {
+                    if count > old {
+                        (&mut *proxy).base_begin_insert_rows(&mut *self, &parent, old as i32, count as i32 - 1);
+                        self.count = count;
+                        (&mut *proxy).base_end_insert_rows(&mut *self);
+                    } else {
+                        (&mut *proxy).base_begin_remove_rows(&mut *self, &parent, count as i32, old as i32 - 1);
+                        self.count = count;
+                        self.rows.retain(|index, _| *index < count);
+                        (&mut *proxy).base_end_remove_rows(&mut *self);
+                    }
+                }
+            } else {
+                self.count = count;
+                self.rows.retain(|index, _| *index < count);
+            }
+        }
+
         fn finish_window(
             &mut self,
             count: usize,
@@ -363,10 +397,13 @@ pub mod row_model {
             records: Vec<(usize, RowRecord)>,
         ) {
             if reset {
-                self.count = count;
+                self.ready = false;
+                self.ready_changed();
                 self.rows = records.into_iter().collect();
-                self.count_changed();
-                self.reset();
+                self.rows.retain(|index, _| *index < count);
+                self.publish_count(count);
+                self.ready = true;
+                self.ready_changed();
             } else {
                 for (index, row) in records {
                     self.set(index, row);

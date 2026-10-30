@@ -31,7 +31,7 @@ MediaList {
         id: virtualArtists
     }
     virtualModel: virtualArtists
-    model: virtualArtists
+    model: virtualArtists.ready ? virtualArtists : null
 
     title: "Artists"
     roundedArt: true

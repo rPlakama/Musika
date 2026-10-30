@@ -335,11 +335,13 @@ pub mod row_model {
                 return None;
             }
             let changed = count != self.count;
-            let start = start.max(0) as usize;
-            let end = end
-                .max(start as i64)
-                .min(start as i64 + LIVE_WINDOW_ROWS as i64)
-                .min(count as i64 - 1) as usize;
+            let mut start = start.max(0) as usize;
+            let mut end = end.max(start as i64).min(count as i64 - 1) as usize;
+            if end - start + 1 > LIVE_WINDOW_ROWS {
+                let trim = (end - start + 1 - LIVE_WINDOW_ROWS) / 2;
+                start += trim;
+                end = start + LIVE_WINDOW_ROWS - 1;
+            }
             (end >= start).then_some((start, end, changed))
         }
 

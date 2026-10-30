@@ -119,8 +119,8 @@ Item {
     }
 
     readonly property url imageSource: {
-        var text = root.source.toString()
-        if (text.length === 0)
+        var text = root.source ? root.source.toString() : ""
+        if (text.length === 0 || text === "undefined")
             return ""
         if (text.indexOf("file:") !== 0)
             return root.source

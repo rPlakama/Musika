@@ -635,8 +635,14 @@ Rectangle {
             // backdrop; alpha is on the fill so the text keeps full opacity.
             Rectangle {
                 id: headerPanel
-                Layout.fillWidth: true
+                // The panel hugs the longest identity line, capped by the page
+                // width; alpha is on the fill so the text keeps full opacity.
+                Layout.alignment: Qt.AlignLeft
+                Layout.fillWidth: false
+                implicitWidth: Math.min(headerContent.implicitWidth + root.width * 0.02, root.width * 0.96)
                 implicitHeight: headerContent.implicitHeight + root.width * 0.02
+                Layout.preferredWidth: implicitWidth
+                Layout.maximumWidth: root.width * 0.96
                 Layout.preferredHeight: implicitHeight
                 color: Qt.rgba(0, 0, 0, 0.4)
                 radius: Theme.radius
@@ -644,11 +650,12 @@ Rectangle {
                 layer.effect: MultiEffect {
                     shadowEnabled: true
                     shadowColor: Qt.rgba(0, 0, 0, 0.5)
-                    shadowBlur: 0.8
-                    shadowOpacity: 0.35
-                    shadowVerticalOffset: 4
+                    shadowBlur: 1.0
+                    shadowOpacity: 0.28
+                    shadowVerticalOffset: 5
                     shadowHorizontalOffset: 0
-                    blurMax: 32
+                    blurMax: 64
+                    autoPaddingEnabled: true
                 }
                 ColumnLayout {
                     id: headerContent

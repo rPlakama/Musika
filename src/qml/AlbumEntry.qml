@@ -633,8 +633,8 @@ Rectangle {
 
             // The identity sits on the artwork, so give it a 40% dark
             // backdrop; alpha is on the fill so the text keeps full opacity.
-            Rectangle {
-                id: headerPanel
+            Item {
+                id: headerPanelWrap
                 // The panel hugs the longest identity line, capped by the page
                 // width; alpha is on the fill so the text keeps full opacity.
                 Layout.alignment: Qt.AlignLeft
@@ -644,20 +644,34 @@ Rectangle {
                 Layout.preferredWidth: implicitWidth
                 Layout.maximumWidth: root.width * 0.96
                 Layout.preferredHeight: implicitHeight
-                color: Qt.rgba(0, 0, 0, 0.4)
-                radius: Theme.radius
-                layer.enabled: true
-                layer.effect: MultiEffect {
-                    shadowEnabled: true
-                    shadowColor: Qt.rgba(0, 0, 0, 0.5)
-                    shadowBlur: 1.0
-                    shadowOpacity: 0.28
-                    shadowVerticalOffset: 5
-                    shadowHorizontalOffset: 0
-                    blurMax: 64
-                    autoPaddingEnabled: true
+
+                // A separate blurred silhouette behind the panel; a layer shadow
+                // on the panel itself clips at the panel edge and reads sharp.
+                Rectangle {
+                    id: headerShadow
+                    x: root.width * 0.008
+                    y: root.width * 0.01
+                    width: parent.width
+                    height: parent.height
+                    radius: Theme.radius
+                    color: Qt.rgba(0, 0, 0, 0.55)
+                    opacity: 0.35
+                    layer.enabled: true
+                    layer.effect: MultiEffect {
+                        blurEnabled: true
+                        blur: 1.0
+                        blurMax: 64
+                        autoPaddingEnabled: true
+                    }
                 }
-                ColumnLayout {
+
+                Rectangle {
+                    id: headerPanel
+                    anchors.fill: parent
+                    color: Qt.rgba(0, 0, 0, 0.4)
+                    radius: Theme.radius
+
+                    ColumnLayout {
                     id: headerContent
                     anchors.fill: parent
                     anchors.margins: root.width * 0.01
@@ -769,6 +783,7 @@ Rectangle {
             }
                 }
             }
+        }
         }
 
         // The header's bottom gap: an empty band (or the description when

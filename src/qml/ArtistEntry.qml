@@ -154,8 +154,8 @@ Rectangle {
     color: Palette.surface
 
 
-    RowModel {
-        id: virtualAlbums
+    ListModel {
+        id: albums
     }
 
     QuickActions {
@@ -233,11 +233,31 @@ Rectangle {
             root.artistCover = artist.cover;
         root.artistMeta = Theme.countLabel(artist.album_count, "album");
 
-        virtualAlbums.setSurface("artist_albums");
-        virtualAlbums.setFilter(root.artistId);
-        virtualAlbums.setOrder("Year");
-        virtualAlbums.ensure(0, Theme.rowBudget - 1);
-        if (wall.count > 0 && (wall.currentIndex < 0 || wall.currentIndex >= wall.count))
+        albums.clear();
+        var rows = artist.albums ? artist.albums : [];
+        for (var i = 0; i < rows.length; i++) {
+            var album = rows[i];
+            var meta = [];
+            if (album.year)
+                meta.push(String(album.year));
+            meta.push(Theme.countLabel(album.song_count, "song"));
+            albums.append({
+                albumId: album.id,
+                title: album.title,
+                // The shared row delegate requires every role; album rows have
+                // no song/subtitle but the model must still bind them.
+                songId: "",
+                subtitle: "",
+                artist: album.artist ? album.artist : "",
+                year: album.year ? String(album.year) : "",
+                tracks: String(album.song_count),
+                meta: Theme.metaJoin(meta),
+                cover: album.cover ? album.cover : "",
+                starred: album.starred === true,
+                rating: Number(album.rating) || 0
+            });
+        }
+        if (albums.count > 0 && (wall.currentIndex < 0 || wall.currentIndex >= albums.count))
             wall.currentIndex = 0;
         // UI-54: reopening the entry restores the cursor + offset (and the
         // ARC-UI-3 layout); later reloads keep the live state.
@@ -245,16 +265,8 @@ Rectangle {
         root.scheduleCover();
     }
 
-    function ensureAlbums() {
-        if (root.artistId === "" || wall.firstVisibleIndex < 0
-                || wall.lastVisibleIndex < wall.firstVisibleIndex)
-            return;
-        virtualAlbums.ensure(Math.max(0, wall.firstVisibleIndex - Theme.rowBudget),
-            wall.lastVisibleIndex + Theme.rowBudget);
-    }
-
     function activateCurrent() {
-        var album = JSON.parse(virtualAlbums.row(wall.currentIndex));
+        var album = albums.get(wall.currentIndex);
         if (album)
             root.albumActivated(album.albumId, album.title, album.artist, album.year, album.tracks, album.cover, album.starred === true);
     }
@@ -326,13 +338,6 @@ Rectangle {
             root._coverTarget = 0;
             root.scheduleCover();
         }
-    }
-
-    Connections {
-        target: wall
-        function onFirstVisibleIndexChanged() { root.ensureAlbums() }
-        function onLastVisibleIndexChanged() { root.ensureAlbums() }
-        function onCurrentIndexChanged() { root.ensureAlbums() }
     }
 
     Component.onCompleted: reload()
@@ -630,7 +635,7 @@ Rectangle {
                 title: ""
                 context: "library"
                 headerRatio: 0
-                model: virtualAlbums
+                model: albums
                 yankKind: "album"
                 selectable: true
                 memoryKey: root.memoryKey

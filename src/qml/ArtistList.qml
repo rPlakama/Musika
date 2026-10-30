@@ -16,7 +16,6 @@
 
 import QtQuick
 import musika
-import "Theme.js" as Theme
 
 // Artists segment: all indexed artists. The list structure (header, cursor,
 // gg/G, selection stage, gutters) is the shared `MediaList`, same as the
@@ -26,12 +25,6 @@ MediaList {
     id: root
 
     signal artistActivated(string artistId, string artistName, string artistCover)
-
-    RowModel {
-        id: virtualArtists
-    }
-    virtualModel: virtualArtists
-    model: virtualArtists
 
     title: "Artists"
     roundedArt: true
@@ -43,31 +36,21 @@ MediaList {
 
     function requestPreload() {
         root.loading = true;
-        virtualArtists.setSurface("artists");
-        virtualArtists.setOrder(Backend.artistOrder);
-        virtualArtists.ensure(0, Theme.rowBudget - 1);
-        root.loading = false;
-        root.finishVirtualReset();
+        Backend.preloadArtists();
     }
 
     function requestFull(showLoading) {
         root.stopPreload();
         root._fullLoaded = true;
         root.loading = showLoading;
-        virtualArtists.setSurface("artists");
-        virtualArtists.setOrder(Backend.artistOrder);
-        virtualArtists.ensure(0, Theme.rowBudget - 1);
-        root.loading = false;
-        root.finishVirtualReset();
+        Backend.requestArtists();
     }
 
     function apply(payload) {
-        if (root.virtualModel)
-            return;
         root.setRows(JSON.parse(payload));
     }
 
-    onActivated: (item) => root.artistActivated(item.artistId, item.artist, item.artistCover)
+    onActivated: (item) => root.artistActivated(item.artistId, item.artistName, item.artistCover)
 
     Component.onCompleted: Qt.callLater(root.start)
 

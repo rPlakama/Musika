@@ -16,7 +16,6 @@
 
 import QtQuick
 import musika
-import "Theme.js" as Theme
 
 // Albums segment: the indexed album list fed asynchronously from library.db.
 // The list UI and cursor behaviour live in the shared `MediaList`; this
@@ -29,12 +28,6 @@ MediaList {
 
     property string artistFilter: ""
 
-    RowModel {
-        id: virtualAlbums
-    }
-    virtualModel: virtualAlbums
-    model: virtualAlbums
-
     title: "Albums"
     orderText: Backend.albumOrder
     memoryKey: "albums"
@@ -42,33 +35,19 @@ MediaList {
 
     function requestPreload() {
         root.loading = true;
-        virtualAlbums.setSurface("albums");
-        virtualAlbums.setOrder(Backend.albumOrder);
-        virtualAlbums.setFilter(root.artistFilter);
-        virtualAlbums.ensure(0, Theme.rowBudget - 1);
-        root.loading = false;
-        root.finishVirtualReset();
+        Backend.preloadAlbums(root.artistFilter);
     }
 
     function requestFull(showLoading) {
         root.stopPreload();
         root._fullLoaded = true;
         root.loading = showLoading;
-        virtualAlbums.setSurface("albums");
-        virtualAlbums.setOrder(Backend.albumOrder);
-        virtualAlbums.setFilter(root.artistFilter);
-        virtualAlbums.ensure(0, Theme.rowBudget - 1);
-        root.loading = false;
-        root.finishVirtualReset();
+        Backend.requestAlbums(root.artistFilter);
     }
 
     function apply(payload) {
-        if (root.virtualModel)
-            return;
         root.setRows(JSON.parse(payload));
     }
-
-    Component.onCompleted: Qt.callLater(root.start)
 
     onActivated: item => root.albumActivated(item.albumId, item.title, item.artist, item.year, item.tracks, item.cover, item.starred === true)
 

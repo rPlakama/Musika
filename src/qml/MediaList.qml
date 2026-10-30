@@ -51,8 +51,6 @@ ScrollPanel {
     property bool _preloaded: false
     property bool _fullLoaded: false
     property bool _preloadOnly: false
-    /// Set by hosts that use a sparse virtual RowModel instead of mediaRows.
-    property var virtualModel: null
 
     function start() {
         if (root._preloadOnly)
@@ -128,10 +126,7 @@ ScrollPanel {
         Backend.TriggerRowReload();
     }
 
-    onCurrentIndexChanged: {
-        root.cursorMoved(root.currentIndex);
-        root.ensureVirtualWindow();
-    }
+    onCurrentIndexChanged: root.cursorMoved(root.currentIndex)
 
     /// VI-4: the selection state lives in `ScrollContent` and is forwarded by
     /// `ScrollPanel` (`toggleSelection`/`selectAll`/`clearSelection`/…); the
@@ -220,30 +215,10 @@ ScrollPanel {
             mediaRows.append(rows[i]);
     }
 
-    function finishVirtualReset() {
-        if (root.resetPending) {
-            root.resetPending = false;
-            root.resetViewNow();
-        }
-    }
-
-    function ensureVirtualWindow() {
-        if (!root.virtualModel || root.firstVisibleIndex < 0
-                || root.lastVisibleIndex < root.firstVisibleIndex)
-            return;
-        root.virtualModel.ensure(Math.max(0, root.firstVisibleIndex - Theme.rowBudget),
-            root.lastVisibleIndex + Theme.rowBudget);
-    }
-    onFirstVisibleIndexChanged: root.ensureVirtualWindow()
-    onLastVisibleIndexChanged: root.ensureVirtualWindow()
-    onWidthChanged: Qt.callLater(root.ensureVirtualWindow)
-    onHeightChanged: Qt.callLater(root.ensureVirtualWindow)
-    onCountChanged: root.ensureVirtualWindow()
-
     onItemActivated: index => {
         // VI-4: opening/playing a row ends the visual selection.
         root.clearSelection();
-        var item = root.virtualModel ? JSON.parse(root.virtualModel.row(index)) : mediaRows.get(index);
+        var item = mediaRows.get(index);
         if (item)
             root.activated(item);
     }

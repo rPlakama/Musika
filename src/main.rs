@@ -48,8 +48,6 @@ mod player;
 mod playlists;
 mod qml;
 mod queue;
-#[allow(dead_code)]
-mod row_cache;
 mod scroll_memory;
 mod search;
 mod session;
@@ -291,7 +289,6 @@ fn main() {
     app.application_name("musika")
         .register::<qml::Backend>()
         .register::<palette::Palette>()
-        .register::<row_cache::row_model::RowModel>()
         .load_qml_from_file("qrc:/app/qml/Main.qml");
     #[cfg(debug_assertions)]
     {

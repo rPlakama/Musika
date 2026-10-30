@@ -39,7 +39,6 @@ impl Backend {
         // COW snapshot: the task borrows the rows instead of cloning three
         // strings per queued track on the Qt thread.
         let queue = self.player.queue_snapshot();
-        crate::row_cache::set_queue_snapshot(queue.clone());
         let Some(dbs) = crate::app::dbs() else {
             return;
         };
@@ -80,9 +79,11 @@ impl Backend {
         self.request_colors();
     }
 
-    /// Publishes the queue snapshot with resolved covers and stars. A clean
-    /// revision coalesces unless `force` is set; a stale async emit is dropped
-    /// before it serializes the row tree.
+    /// Destructive maintenance (the SuperiorBar trashcan's quadrant menu —
+    /// a click or Alt while it is scoped): `scope` is "all", "library",
+    /// "indexes" or "covers". The databases are dropped and re-migrated from
+    /// the embedded schema; "all" also removes credentials and returns to the
+    /// Login screen.
     pub(super) fn emit_queue(&mut self, force: bool) {
         let revision = self.player.revision();
         if !force && !self.queue_rows_dirty && self.queue_revision == Some(revision) {
@@ -145,8 +146,8 @@ impl Backend {
         });
     }
 
-    /// Publishes changed scalar player fields; the 500 ms tick compares first
-    /// so unchanged strings are never re-emitted.
+    /// Re-reads the download ledger for the requested window (`songs` and
+    /// `albums` are the JSON arrays of the currently visible rows) — the row
     pub(super) fn sync_player(&mut self) {
         // ARC-10: only emit when a value actually changed — the 500 ms tick
         // must not republish every string on every frame. Compare first (no

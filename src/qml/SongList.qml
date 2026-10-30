@@ -31,12 +31,6 @@ MediaList {
     property bool _loadingPage: false
     property bool _edgeTargetBottom: false
 
-    RowModel {
-        id: virtualSongs
-    }
-    virtualModel: virtualSongs
-    model: virtualSongs
-
     // `G` on the Songs list lands on the true last row. The tail-page path
     // remains for any paged payload; a scope load arrives complete.
     edgeJumpOverride: function(last, count) { root.jumpToEdge(last, count); }
@@ -47,12 +41,8 @@ MediaList {
 
     function requestPreload() {
         root.loading = true;
-        root._loadingPage = false;
-        virtualSongs.setSurface("songs");
-        virtualSongs.setOrder(Backend.songOrder);
-        virtualSongs.ensure(0, Theme.rowBudget - 1);
-        root.loading = false;
-        root.finishVirtualReset();
+        root._loadingPage = true;
+        Backend.preloadSongs();
     }
 
     function requestFull(showLoading) {
@@ -63,21 +53,15 @@ MediaList {
         // no page cap applies while switching between scopes. Library and
         // order reloads ride the same full read.
         root.loading = showLoading;
-        root._allLoaded = true;
-        root._loadingPage = false;
+        root._allLoaded = false;
+        root._loadingPage = true;
         root._edgeTargetBottom = false;
         root._nextOffset = 0;
-        virtualSongs.setSurface("songs");
-        virtualSongs.setOrder(Backend.songOrder);
-        virtualSongs.ensure(0, Theme.rowBudget - 1);
-        root.loading = false;
-        root.finishVirtualReset();
         Backend.scrollHydrate();
+        Backend.requestAllSongs();
     }
 
     function applyPage(payload) {
-        if (root.virtualModel)
-            return;
         var data = JSON.parse(payload);
         // A page from before a reload/order swap must not append to the new
         // model (only the first page may restart the list).
@@ -101,8 +85,6 @@ MediaList {
             root.loadMore();
         else if (!root._allLoaded && root.count > 0 && root.currentIndex >= root.count - 20)
             root.loadMore();
-        if (root.virtualModel)
-            return;
         if (root._edgeTargetBottom) {
             if (root._allLoaded) {
                 root._edgeTargetBottom = false;
@@ -114,8 +96,6 @@ MediaList {
     }
 
     function loadMore(limit) {
-        if (root.virtualModel)
-            return;
         if (root._allLoaded || root._loadingPage)
             return;
         root._loadingPage = true;

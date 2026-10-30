@@ -26,10 +26,6 @@ import "Theme.js" as Theme
 Item {
     id: root
 
-    RowModel {
-        id: virtualQueue
-    }
-
     RowMetrics {
         id: rowMetrics
         viewWidth: queueContent.width
@@ -68,9 +64,9 @@ Item {
     }
 
     function moveQueueCursor(delta) {
-        if (queueContent.count === 0)
+        if (queueItems.count === 0)
             return;
-        queueCursor = Math.max(0, Math.min(queueContent.count - 1, queueCursor + delta));
+        queueCursor = Math.max(0, Math.min(queueItems.count - 1, queueCursor + delta));
         // The view follows cursor changes itself (SCROLLCONTENTSTUDY.md).
         queueContent.currentIndex = queueCursor;
     }
@@ -85,7 +81,7 @@ Item {
             return;
         var ids = [];
         for (var i = 0; i < indices.length; ++i) {
-            var item = JSON.parse(virtualQueue.row(indices[i]));
+            var item = queueItems.get(indices[i]);
             if (item && item.songId)
                 ids.push(item.songId);
         }
@@ -102,13 +98,13 @@ Item {
         if (Backend.clipboardCount <= 0)
             return;
         var at = root.queueCursor + (above ? 0 : 1);
-        root._pendingQueueCursor = Math.max(0, Math.min(queueContent.count, at));
+        root._pendingQueueCursor = Math.max(0, Math.min(queueItems.count, at));
         queueContent.clearSelection();
         Backend.pasteQueueRows(root.queueCursor, above);
     }
 
     function removeQueueRow(index) {
-        if (root._removingIndex >= 0 || index < 0 || index >= queueContent.count)
+        if (root._removingIndex >= 0 || index < 0 || index >= queueItems.count)
             return;
         root._removingIndex = index;
         queueContent.clearSelection();
@@ -145,9 +141,9 @@ Item {
     }
 
     function selectAll() {
-        if (queueContent.count === 0)
+        if (queueItems.count === 0)
             return;
-        queueCursor = queueContent.count - 1;
+        queueCursor = queueItems.count - 1;
         queueContent.currentIndex = queueCursor;
         queueContent.selectAllRows();
         queueContent.goto(queueCursor);
@@ -162,7 +158,7 @@ Item {
     function openQueue() {
         root.open = true;
         root._recallQueue = true;
-        if (queueContent.count === 0)
+        if (queueItems.count === 0)
             Backend.requestQueue();
         else
             root.recallQueueCursor();
@@ -170,7 +166,7 @@ Item {
     }
 
     function closeQueue() {
-        if (queueContent.count > 0)
+        if (queueItems.count > 0)
             queueContent.remember();
         queueContent.clearSelection();
         root.open = false;
@@ -199,14 +195,6 @@ Item {
         queueCursor = queueContent.currentIndex;
     }
 
-    function ensureQueue() {
-        if (queueContent.firstVisibleIndex < 0
-                || queueContent.lastVisibleIndex < queueContent.firstVisibleIndex)
-            return;
-        virtualQueue.ensure(Math.max(0, queueContent.firstVisibleIndex - Theme.rowBudget),
-            queueContent.lastVisibleIndex + Theme.rowBudget);
-    }
-
     function applyQueue(payload) {
         var data = JSON.parse(payload);
         var rowsChanged = data.hash !== root._queueHash;
@@ -227,8 +215,18 @@ Item {
             // UI-41: payload swaps fade in quickly; a reorder keeps the list live.
             if (!root._reordering)
                 queueContent.opacity = 0;
-            virtualQueue.setSurface("queue");
-            root.ensureQueue();
+            queueItems.clear();
+            for (var i = 0; i < data.items.length; i++) {
+                var track = data.items[i];
+                queueItems.append({
+                    title: track.title,
+                    subtitle: track.subtitle ? track.subtitle : "",
+                    duration: track.meta,
+                    songId: track.songId,
+                    albumId: track.albumId ? track.albumId : "",
+                    starred: track.starred === true
+                });
+            }
             Qt.callLater(function () {
                 queueContent.opacity = 1;
             });
@@ -237,14 +235,14 @@ Item {
         queueIndex = data.index;
         if (root._pendingQueueCursor >= 0 && rowsChanged) {
             root._recallQueue = false;
-            queueCursor = Math.max(0, Math.min(queueContent.count - 1, root._pendingQueueCursor));
+            queueCursor = Math.max(0, Math.min(queueItems.count - 1, root._pendingQueueCursor));
             root._pendingQueueCursor = -1;
             queueContent.currentIndex = queueCursor;
             queueContent.land(queueCursor);
         } else if (root._reordering) {
             root._reordering = false;
             root._recallQueue = false;
-            queueCursor = Math.max(0, Math.min(queueContent.count - 1, queueCursor));
+            queueCursor = Math.max(0, Math.min(queueItems.count - 1, queueCursor));
             queueContent.currentIndex = queueCursor;
             queueContent.goto(queueCursor);
         } else {
@@ -267,7 +265,7 @@ Item {
             return;
         }
         root._recallQueue = false;
-        queueCursor = Math.max(0, Math.min(queueIndex, Math.max(0, queueContent.count - 1)));
+        queueCursor = Math.max(0, Math.min(queueIndex, Math.max(0, queueItems.count - 1)));
         queueContent.currentIndex = queueCursor;
         if (animate)
             queueContent.goto(queueCursor);
@@ -336,7 +334,7 @@ Item {
             Backend.queueMove(queueCursor, queueCursor - 1);
             queueCursor -= 1;
             queueContent.currentIndex = queueCursor;
-        } else if (action === "queue_down" && queueContent.allows("reorder") && queueCursor < queueContent.count - 1) {
+        } else if (action === "queue_down" && queueContent.allows("reorder") && queueCursor < queueItems.count - 1) {
             root._reordering = true;
             queueContent.clearSelection();
             Backend.queueMove(queueCursor, queueCursor + 1);
@@ -440,13 +438,13 @@ Item {
                     context: "queue"
                     rowRatio: 0.06
                     rowRefHeight: queueDrawer.height
-                    model: virtualQueue
+                    model: queueItems
                     selectable: true
                     memoryKey: "queue"
                     quickActionKind: "song"
                     // ARC-UI-2 M1: the queue rows paint title and duration.
                     searchFields: ["title", "subtitle", "duration"]
-                    visible: queueContent.count > 0
+                    visible: queueItems.count > 0
                     onQuickAction: (target, actions) => root.quickAction(target, actions)
                     onRowTapped: (index, shift) => {
                         if (shift) {
@@ -535,7 +533,7 @@ Item {
             FadeText {
                 Layout.fillWidth: true
                 Layout.fillHeight: true
-                visible: queueContent.count === 0
+                visible: queueItems.count === 0
                 text: "Queue is empty"
                 color: Palette.onSurfaceVariant
                 font.pixelSize: Theme.fontSize("label", root.height)
@@ -545,6 +543,11 @@ Item {
         }
     }
 
+    // The queue model stays live while the drawer is closed, so a later
+    // Ctrl-Q opens on current rows and the remembered highlight.
+    ListModel {
+        id: queueItems
+    }
 
     Connections {
         target: Backend
@@ -557,8 +560,10 @@ Item {
         function onFavoriteChanged(kind, id, on) {
             if (kind !== "song")
                 return;
-            if (on !== undefined)
-                root.ensureQueue();
+            for (var i = 0; i < queueItems.count; ++i) {
+                if (queueItems.get(i).songId === id)
+                    queueItems.setProperty(i, "starred", on === true);
+            }
         }
         // A skip/advance is deduped backend-side: the index property carries
         // the move — adopt it and follow exactly like a fresh payload would.
@@ -568,11 +573,5 @@ Item {
             root.queueIndex = Backend.queueIndex;
             root.recallQueueCursor(true);
         }
-    }
-
-    Connections {
-        target: queueContent
-        function onFirstVisibleIndexChanged() { root.ensureQueue() }
-        function onLastVisibleIndexChanged() { root.ensureQueue() }
     }
 }

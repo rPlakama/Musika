@@ -67,6 +67,11 @@ impl RowKey {
 pub struct RowRecord {
     pub songId: String,
     pub albumId: String,
+    pub artistId: String,
+    pub artistName: String,
+    pub artistCover: String,
+    pub year: i32,
+    pub tracks: i32,
     pub cover: String,
     pub title: String,
     pub subtitle: String,
@@ -249,6 +254,7 @@ pub mod row_model {
     pub struct RowModel {
         surface: String,
         order: String,
+        filter: String,
         count: usize,
         rows: HashMap<usize, RowRecord>,
     }
@@ -294,71 +300,140 @@ pub mod row_model {
             }
         }
 
+        #[qslot(qml_name = "setFilter")]
+        pub fn set_filter(&mut self, filter: String) {
+            if self.filter != filter {
+                self.filter = filter;
+                self.rows.clear();
+                self.reset();
+            }
+        }
+
         /// Loads the requested inclusive index range into the sparse model.
         /// Synchronous for this first surface: the window is bounded to 30
         /// rows, so the SQLite read is short and the GUI never waits on the
         /// whole library.
         #[qslot(qml_name = "ensure")]
         pub fn ensure(&mut self, start: i64, end: i64) {
-            if self.surface != "songs" {
-                return;
+            match self.surface.as_str() {
+                "songs" => self.ensure_songs(start, end),
+                "albums" => self.ensure_albums(start, end),
+                "artists" => self.ensure_artists(start, end),
+                _ => {}
             }
-            let Some(dbs) = crate::app::dbs() else {
-                return;
-            };
-            let runtime = crate::app::runtime();
-            let count = runtime
-                .block_on(crate::library::song_count(&dbs.library))
-                .unwrap_or(0);
+        }
+
+        fn prepare_window(&mut self, count: usize, start: i64, end: i64) -> Option<(usize, usize)> {
             if count != self.count {
                 self.count = count;
                 self.rows.clear();
                 self.reset();
             }
             if self.count == 0 {
-                return;
+                return None;
             }
             let start = start.max(0) as usize;
             let end = end.max(start as i64).min(self.count as i64 - 1) as usize;
-            if end < start {
-                return;
-            }
-            let order = if self.order.is_empty() {
-                "Title".to_string()
-            } else {
-                self.order.clone()
-            };
+            (end >= start).then_some((start, end))
+        }
+
+        fn ensure_songs(&mut self, start: i64, end: i64) {
+            let Some(dbs) = crate::app::dbs() else { return };
+            let runtime = crate::app::runtime();
+            let count = runtime.block_on(crate::library::song_count(&dbs.library)).unwrap_or(0);
+            let Some((start, end)) = self.prepare_window(count, start, end) else { return };
+            let order = if self.order.is_empty() { "Title".to_string() } else { self.order.clone() };
             self.rows.retain(|index, _| *index >= start && *index <= end);
-            let rows = runtime
-                .block_on(crate::library::songs_range(
-                    &dbs.library,
-                    start as i64,
-                    (end - start + 1) as i64,
-                    &order,
-                ))
-                .unwrap_or_default();
-            let covers = runtime
-                .block_on(crate::covers::url_map_for(
-                    &dbs,
-                    rows.iter().map(|row| &row.cover_art),
-                ))
-                .unwrap_or_default();
+            let rows = runtime.block_on(crate::library::songs_range(
+                &dbs.library, start as i64, (end - start + 1) as i64, &order,
+            )).unwrap_or_default();
+            let covers = runtime.block_on(crate::covers::url_map_for(
+                &dbs, rows.iter().map(|row| &row.cover_art),
+            )).unwrap_or_default();
             for (offset, row) in rows.into_iter().enumerate() {
                 let record = RowRecord {
                     songId: row.id.clone(),
                     albumId: row.album_id.clone().unwrap_or_default(),
-                    cover: row
-                        .cover_art
-                        .as_ref()
-                        .and_then(|id| covers.get(id).cloned())
-                        .unwrap_or_default(),
+                    cover: row.cover_art.as_ref().and_then(|id| covers.get(id).cloned()).unwrap_or_default(),
                     title: row.title,
                     subtitle: row.artist.unwrap_or_default(),
                     meta: crate::browse::rows::format_duration(row.duration),
                     track: row.track.unwrap_or(0),
                     duration: row.duration.unwrap_or(0),
                     starred: row.starred.is_some(),
-                    rating: 0,
+                    ..RowRecord::default()
+                };
+                self.set(start + offset, record);
+            }
+        }
+
+        fn ensure_albums(&mut self, start: i64, end: i64) {
+            let Some(dbs) = crate::app::dbs() else { return };
+            let runtime = crate::app::runtime();
+            let artist = (!self.filter.is_empty()).then(|| self.filter.clone());
+            let count = runtime
+                .block_on(crate::library::album_count(&dbs.library, artist.as_deref()))
+                .unwrap_or(0);
+            let Some((start, end)) = self.prepare_window(count, start, end) else { return };
+            let order = if self.order.is_empty() { "Artist".to_string() } else { self.order.clone() };
+            self.rows.retain(|index, _| *index >= start && *index <= end);
+            let rows = runtime.block_on(crate::library::albums_range(
+                &dbs.library, artist.as_deref(), &order, start as i64, (end - start + 1) as i64,
+            )).unwrap_or_default();
+            let covers = runtime.block_on(crate::covers::url_map_for(
+                &dbs, rows.iter().map(|row| &row.cover_art),
+            )).unwrap_or_default();
+            for (offset, row) in rows.into_iter().enumerate() {
+                let cover = row.cover_art.as_ref().and_then(|id| covers.get(id).cloned()).unwrap_or_default();
+                let subtitle = match row.year {
+                    Some(year) => format!("{} · {year}", row.artist.as_deref().unwrap_or("")),
+                    None => row.artist.clone().unwrap_or_default(),
+                };
+                let record = RowRecord {
+                    albumId: row.id,
+                    cover,
+                    title: row.title,
+                    artistName: row.artist.clone().unwrap_or_default(),
+                    subtitle,
+                    meta: format!("{} track{}", row.song_count, if row.song_count == 1 { "" } else { "s" }),
+                    tracks: row.song_count as i32,
+                    year: row.year.unwrap_or(0),
+                    starred: row.starred.is_some(),
+                    rating: row.rating as i32,
+                    ..RowRecord::default()
+                };
+                self.set(start + offset, record);
+            }
+        }
+
+        fn ensure_artists(&mut self, start: i64, end: i64) {
+            let Some(dbs) = crate::app::dbs() else { return };
+            let runtime = crate::app::runtime();
+            let count = runtime.block_on(crate::library::artist_count(&dbs.library)).unwrap_or(0);
+            let Some((start, end)) = self.prepare_window(count, start, end) else { return };
+            let order = if self.order.is_empty() { "Name".to_string() } else { self.order.clone() };
+            self.rows.retain(|index, _| *index >= start && *index <= end);
+            let rows = runtime.block_on(crate::library::artists_range(
+                &dbs.library, &order, start as i64, (end - start + 1) as i64,
+            )).unwrap_or_default();
+            let covers = runtime.block_on(crate::covers::url_map_for(
+                &dbs, rows.iter().map(|row| &row.cover_art),
+            )).unwrap_or_default();
+            let starred = runtime.block_on(crate::artist_user::starred_ids(&dbs.artist_user)).unwrap_or_default();
+            let ratings = runtime.block_on(crate::artist_user::ratings(&dbs.artist_user)).unwrap_or_default();
+            for (offset, row) in rows.into_iter().enumerate() {
+                let cover = row.cover_art.as_ref().and_then(|id| covers.get(id).cloned()).unwrap_or_default();
+                let record = RowRecord {
+                    artistId: row.id.clone(),
+                    artistName: row.name.clone(),
+                    artistCover: cover.clone(),
+                    cover,
+                    title: row.name,
+                    meta: format!("{} album{}", row.album_count, if row.album_count == 1 { "" } else { "s" }),
+                    tracks: row.album_count as i32,
+                    starred: row.starred.is_some() || starred.contains(&row.id),
+                    rating: ratings.get(&row.id).copied().unwrap_or(0) as i32,
+                    ..RowRecord::default()
                 };
                 self.set(start + offset, record);
             }

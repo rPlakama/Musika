@@ -26,6 +26,11 @@ MediaList {
 
     signal artistActivated(string artistId, string artistName, string artistCover)
 
+    RowModel {
+        id: virtualArtists
+    }
+    virtualModel: virtualArtists
+
     title: "Artists"
     roundedArt: true
     orderText: Backend.artistOrder
@@ -36,17 +41,25 @@ MediaList {
 
     function requestPreload() {
         root.loading = true;
-        Backend.preloadArtists();
+        virtualArtists.setSurface("artists");
+        virtualArtists.setOrder(Backend.artistOrder);
+        virtualArtists.ensure(0, Theme.rowBudget - 1);
+        root.loading = false;
     }
 
     function requestFull(showLoading) {
         root.stopPreload();
         root._fullLoaded = true;
         root.loading = showLoading;
-        Backend.requestArtists();
+        virtualArtists.setSurface("artists");
+        virtualArtists.setOrder(Backend.artistOrder);
+        virtualArtists.ensure(0, Theme.rowBudget - 1);
+        root.loading = false;
     }
 
     function apply(payload) {
+        if (root.virtualModel)
+            return;
         root.setRows(JSON.parse(payload));
     }
 

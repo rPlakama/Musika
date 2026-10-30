@@ -656,6 +656,50 @@ pub async fn albums_limited(
     Ok(rows)
 }
 
+/// Number of albums, optionally scoped to an artist name.
+pub async fn album_count(pool: &SqlitePool, artist: Option<&str>) -> Result<usize> {
+    let count: i64 = match artist {
+        Some(artist) => {
+            sqlx::query_scalar("SELECT COUNT(*) FROM albums WHERE artist = ?1")
+                .bind(artist)
+                .fetch_one(pool)
+                .await?
+        }
+        None => sqlx::query_scalar("SELECT COUNT(*) FROM albums")
+            .fetch_one(pool)
+            .await?,
+    };
+    Ok(count.max(0) as usize)
+}
+
+/// A window of albums in list order (the virtual list model).
+pub async fn albums_range(
+    pool: &SqlitePool,
+    artist: Option<&str>,
+    order: &str,
+    offset: i64,
+    limit: i64,
+) -> Result<Vec<AlbumRow>> {
+    let filter = if artist.is_some() {
+        " WHERE artist = ?1"
+    } else {
+        ""
+    };
+    let sql = format!(
+        "{ALBUM_SELECT}{filter}{} LIMIT ?2 OFFSET ?3",
+        album_order(order, true)
+    );
+    let mut query = sqlx::query_as::<_, AlbumRow>(sqlx::AssertSqlSafe(sql));
+    if let Some(artist) = artist {
+        query = query.bind(artist);
+    }
+    Ok(query
+        .bind(limit.max(0))
+        .bind(offset.max(0))
+        .fetch_all(pool)
+        .await?)
+}
+
 /// Albums of one artist by id (ArtistEntry grid), ordered by one of
 /// [`ORDERS`]. Static SQL, like [`albums`].
 pub async fn artist_albums(
@@ -700,6 +744,40 @@ pub async fn artists_limited(
     }
     let rows = query.fetch_all(pool).await?;
     Ok(rows)
+}
+
+/// Number of artists that own at least one album.
+pub async fn artist_count(pool: &SqlitePool) -> Result<usize> {
+    let count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM artists WHERE EXISTS (
+             SELECT 1 FROM albums WHERE albums.artist_id = artists.id)",
+    )
+    .fetch_one(pool)
+    .await?;
+    Ok(count.max(0) as usize)
+}
+
+/// A window of artists in list order (the virtual list model).
+pub async fn artists_range(
+    pool: &SqlitePool,
+    order: &str,
+    offset: i64,
+    limit: i64,
+) -> Result<Vec<ArtistRow>> {
+    let order = match order {
+        "Albums" => " ORDER BY album_count DESC, name",
+        _ => " ORDER BY name",
+    };
+    let sql = format!(
+        "{ARTIST_SELECT} WHERE EXISTS (
+             SELECT 1 FROM albums WHERE albums.artist_id = artists.id){order}
+         LIMIT ?1 OFFSET ?2"
+    );
+    Ok(sqlx::query_as::<_, ArtistRow>(sqlx::AssertSqlSafe(sql))
+        .bind(limit.max(0))
+        .bind(offset.max(0))
+        .fetch_all(pool)
+        .await?)
 }
 
 const ALBUM_SELECT: &str =

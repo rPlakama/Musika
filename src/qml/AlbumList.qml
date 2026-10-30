@@ -28,6 +28,11 @@ MediaList {
 
     property string artistFilter: ""
 
+    RowModel {
+        id: virtualAlbums
+    }
+    virtualModel: virtualAlbums
+
     title: "Albums"
     orderText: Backend.albumOrder
     memoryKey: "albums"
@@ -35,21 +40,31 @@ MediaList {
 
     function requestPreload() {
         root.loading = true;
-        Backend.preloadAlbums(root.artistFilter);
+        virtualAlbums.setSurface("albums");
+        virtualAlbums.setOrder(Backend.albumOrder);
+        virtualAlbums.setFilter(root.artistFilter);
+        virtualAlbums.ensure(0, Theme.rowBudget - 1);
+        root.loading = false;
     }
 
     function requestFull(showLoading) {
         root.stopPreload();
         root._fullLoaded = true;
         root.loading = showLoading;
-        Backend.requestAlbums(root.artistFilter);
+        virtualAlbums.setSurface("albums");
+        virtualAlbums.setOrder(Backend.albumOrder);
+        virtualAlbums.setFilter(root.artistFilter);
+        virtualAlbums.ensure(0, Theme.rowBudget - 1);
+        root.loading = false;
     }
 
     function apply(payload) {
+        if (root.virtualModel)
+            return;
         root.setRows(JSON.parse(payload));
     }
 
-    onActivated: item => root.albumActivated(item.albumId, item.title, item.artist, item.year, item.tracks, item.cover, item.starred === true)
+    onActivated: item => root.albumActivated(item.albumId, item.title, item.artistName, item.year, item.tracks, item.cover, item.starred === true)
 
     onArtistFilterChanged: {
         root.resetView();

@@ -562,13 +562,17 @@ Item {
         }
         // A skip/advance is deduped backend-side: the index property carries
         // the move — adopt it and follow exactly like a fresh payload would.
-        function onFirstVisibleIndexChanged() { root.ensureQueue() }
-        function onLastVisibleIndexChanged() { root.ensureQueue() }
         function onQueue_index_changed() {
             if (root.queueIndex === Backend.queueIndex)
                 return;
             root.queueIndex = Backend.queueIndex;
             root.recallQueueCursor(true);
         }
+    }
+
+    Connections {
+        target: queueContent
+        function onFirstVisibleIndexChanged() { root.ensureQueue() }
+        function onLastVisibleIndexChanged() { root.ensureQueue() }
     }
 }

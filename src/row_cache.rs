@@ -283,12 +283,18 @@ pub mod row_model {
     }
 
     impl RowModel {
+        qproperty!("count", Member = count, Notify = count_changed);
+
+        #[qsignal]
+        fn count_changed(&mut self);
+
         #[qslot(qml_name = "setSurface")]
         pub fn set_surface(&mut self, surface: String) {
             if self.surface != surface {
                 self.surface = surface;
                 self.count = 0;
                 self.rows.clear();
+                self.count_changed();
                 self.reset();
             }
         }
@@ -356,6 +362,7 @@ pub mod row_model {
             if reset {
                 self.count = count;
                 self.rows = records.into_iter().collect();
+                self.count_changed();
                 self.reset();
             } else {
                 for (index, row) in records {

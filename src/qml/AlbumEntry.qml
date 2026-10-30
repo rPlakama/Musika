@@ -183,7 +183,15 @@ Rectangle {
     }
 
     function armCoverActions(sticky) {
-        if (root.isPlaylist || root.albumId.length === 0)
+        if (root.isPlaylist) {
+            if (root.playlistId.length === 0)
+                return;
+            var playlistActions = verbs.playlist({ playlistId: root.playlistId });
+            playlistActions.sticky = sticky === true;
+            root.quickAction(coverBox, playlistActions);
+            return;
+        }
+        if (root.albumId.length === 0)
             return;
         var actions = root.coverActions();
         actions.sticky = sticky === true;

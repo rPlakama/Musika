@@ -102,6 +102,25 @@ QtObject {
         };
     }
 
+    /// Playlist row/page: Enter opens the playlist; Alt offers Play and Add to
+    /// Queue. Playlists have no server star/rating in the Subsonic API.
+    function playlist(item) {
+        return {
+            north: {
+                label: "Play Playlist",
+                icon: "qrc:/app/icons/play-1001-svgrepo-com.svg",
+                invoke: function() { Backend.playPlaylist(item.playlistId, 0) }
+            },
+            south: {
+                label: "Add to Queue",
+                icon: "qrc:/app/icons/baseline-playlist-add.svg",
+                invoke: function() { Backend.altAddToQueue("playlist", item.playlistId) }
+            },
+            west: null,
+            east: null
+        };
+    }
+
     /// The one row-kind dispatch every scroll body uses: track, album (with
     /// its cache state) or artist. Returns null for an unknown/absent row.
     function forItem(kind, item, cached, preview) {
@@ -113,6 +132,8 @@ QtObject {
             return album(item, cached === true, preview);
         if (kind === "artist")
             return artist(item, preview);
+        if (kind === "playlist")
+            return playlist(item);
         return null;
     }
 

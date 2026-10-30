@@ -2699,7 +2699,14 @@ impl Backend {
         };
         let offline = self.offline;
         crate::app::runtime().spawn(async move {
-            match crate::queue::quick_tracks_json(&dbs, &kind, &id, offline).await {
+            let queued = if kind == "playlist" {
+                crate::queue::playlist_tracks_json(&dbs, &id, offline, 0)
+                    .await
+                    .map(|(json, _)| json)
+            } else {
+                crate::queue::quick_tracks_json(&dbs, &kind, &id, offline).await
+            };
+            match queued {
                 Ok(json) => {
                     qtbridge::invoke_method!(invoker, "playerAppend", json);
                 }

@@ -28,6 +28,8 @@ MediaList {
     signal playlistActivated(string playlistId, string title)
 
     title: "Playlists"
+    quickActionKind: "playlist"
+    selectable: false
     memoryKey: "playlists"
     showRowCover: false
     emptyText: "No playlists yet — drop .m3u files in the playlists folder"

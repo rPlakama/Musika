@@ -634,6 +634,7 @@ pub async fn page_json(dbs: &Dbs, playlist_id: &str, offline: bool) -> Result<St
     let filter = crate::offline::load(dbs, offline).await?;
 
     let mut collage: Vec<String> = Vec::new();
+    let mut collage_origins: Vec<String> = Vec::new();
     let mut songs = Vec::with_capacity(rows.len());
     for row in &rows {
         let library_song = row
@@ -650,7 +651,13 @@ pub async fn page_json(dbs: &Dbs, playlist_id: &str, offline: bool) -> Result<St
                     .and_then(|id| covers.get(id).cloned())
             })
             .unwrap_or_default();
-        if !cover.is_empty() && !collage.contains(&cover) && collage.len() < 3 {
+        let origin = library_song
+            .and_then(|song| song.album_id.clone())
+            .filter(|id| !id.is_empty())
+            .or_else(|| row.album.clone().filter(|album| !album.is_empty()))
+            .unwrap_or_else(|| format!("#{position}", position = row.position));
+        if !cover.is_empty() && collage_origins.len() < 3 && !collage_origins.contains(&origin) {
+            collage_origins.push(origin);
             collage.push(cover.clone());
         }
         let playable = library_song.is_some()

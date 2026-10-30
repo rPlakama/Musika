@@ -169,7 +169,15 @@ Item {
             var item = contentStack.get(i);
             if (!item)
                 continue;
-            if (item.albumId !== undefined) {
+            if (item.isPlaylist === true) {
+                pages.push({
+                    kind: "playlist",
+                    page: {
+                        playlistId: item.playlistId,
+                        playlistTitle: item.playlistTitle
+                    }
+                });
+            } else if (item.albumId !== undefined) {
                 pages.push({
                     kind: "album",
                     page: {
@@ -179,14 +187,6 @@ Item {
                         albumMeta: item.albumMeta,
                         albumCover: item.albumCover,
                         albumStarred: item.albumStarred === true
-                    }
-                });
-            } else if (item.playlistId !== undefined) {
-                pages.push({
-                    kind: "playlist",
-                    page: {
-                        playlistId: item.playlistId,
-                        playlistTitle: item.playlistTitle
                     }
                 });
             } else if (item.artistId !== undefined) {

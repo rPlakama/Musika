@@ -36,7 +36,7 @@ Item {
         var out = []
         for (var i = 0; i < root.sources.length && out.length < 3; ++i) {
             var source = root.sources[i]
-            if (source && source.toString().length > 0 && out.indexOf(source) < 0)
+            if (source && source.toString().length > 0)
                 out.push(source)
         }
         return out

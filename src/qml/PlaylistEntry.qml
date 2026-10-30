@@ -356,5 +356,6 @@ Rectangle {
         }
     }
 
+    onPlaylistIdChanged: Qt.callLater(root.reload)
     Component.onCompleted: reload()
 }

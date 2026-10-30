@@ -530,6 +530,42 @@ pub async fn list_json(dbs: &Dbs) -> Result<String> {
     Ok(serde_json::to_string(&rows)?)
 }
 
+/// M2: fetch one Subsonic playlist's contents on demand. The list refresh only
+/// stores identities; the page is the first place that needs the ordered
+/// entries. Positions are rewritten so server reorders/duplicates are exact.
+async fn load_subsonic_songs(
+    dbs: &Dbs,
+    client: &SubsonicClient,
+    playlist_id: &str,
+) -> Result<()> {
+    let page = client.get_playlist(playlist_id).await?;
+    let mut tx = dbs.playlist.begin().await?;
+    sqlx::query("DELETE FROM playlist_song WHERE playlist_id = ?1")
+        .bind(playlist_id)
+        .execute(&mut *tx)
+        .await?;
+    for (position, song) in page.entry.iter().enumerate() {
+        sqlx::query(
+            "INSERT INTO playlist_song
+                 (playlist_id, position, song_id, title, artist, album, duration, cover_art)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+        )
+        .bind(playlist_id)
+        .bind(position as i64)
+        .bind(&song.id)
+        .bind(&song.title)
+        .bind(&song.artist)
+        .bind(&song.album)
+        .bind(song.duration.map(i64::from))
+        .bind(&song.cover_art)
+        .execute(&mut *tx)
+        .await?;
+    }
+    tx.commit().await?;
+    Ok(())
+}
+
+
 /// The playlist page payload: identity, song rows and the first three distinct
 /// song covers for the header collage. Rows keep playlist order and duplicates.
 pub async fn page_json(dbs: &Dbs, playlist_id: &str, offline: bool) -> Result<String> {
@@ -562,6 +598,20 @@ pub async fn page_json(dbs: &Dbs, playlist_id: &str, offline: bool) -> Result<St
     .fetch_optional(&dbs.playlist)
     .await?
     .ok_or_else(|| anyhow::anyhow!("playlist not found"))?;
+
+    let existing: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM playlist_song WHERE playlist_id = ?1",
+    )
+    .bind(playlist_id)
+    .fetch_one(&dbs.playlist)
+    .await?;
+    if playlist.source == "subsonic" && existing == 0 {
+        if let Ok(client) = crate::session::client(dbs).await {
+            if let Err(err) = load_subsonic_songs(dbs, &client, playlist_id).await {
+                eprintln!("playlists: could not load {playlist_id}: {err:#}");
+            }
+        }
+    }
 
     let rows = sqlx::query_as::<_, SongRow>(
         "SELECT position, song_id, title, artist, album, duration, cover_art

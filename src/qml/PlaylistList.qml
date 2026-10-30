@@ -25,7 +25,7 @@ import "Theme.js" as Theme
 MediaList {
     id: root
 
-    signal playlistActivated(string playlistId)
+    signal playlistActivated(string playlistId, string title)
 
     title: "Playlists"
     memoryKey: "playlists"
@@ -41,7 +41,7 @@ MediaList {
         root.setRows(JSON.parse(payload));
     }
 
-    onActivated: (item) => root.playlistActivated(item.playlistId)
+    onActivated: (item) => root.playlistActivated(item.playlistId, item.title)
 
     Component.onCompleted: reload()
 

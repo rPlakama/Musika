@@ -1099,7 +1099,7 @@ Item {
                     Component {
                         id: playlistListComponent
                         PlaylistList {
-                            onPlaylistActivated: (playlistId) => root.openPlaylist(playlistId, "")
+                            onPlaylistActivated: (playlistId, title) => root.openPlaylist(playlistId, title)
                         }
                     }
 

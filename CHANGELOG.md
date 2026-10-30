@@ -3,18 +3,29 @@
 All notable changes to Musika, newest first. `TASKLISTMAJOR.md` tracks the
 open work; this file is the release history.
 
-## 0.5.2 - _Small patches_
+## 0.5.2 - _Playlists aren't my bunisses_
 
-- Run the cursor-preserving resize anchor on width changes as well as height
-  changes.
-- Ignore undefined cover URLs in `CoverImage` instead of constructing a
-  `qrc:/app/qml/undefined` thumbnail.
+- Add a real PlaylistEntry page: AlbumEntry's anchors, adaptive rows,
+  selection and keys, with per-row song covers and playlist playback.
+- Add the golden-ratio playlist header collage. It renders one full cover for
+  a single album origin and splits into two or three panes only when the
+  playlist draws from multiple albums.
+- Playlist tab rows stay coverless; playlist entry rows keep their covers.
+- Fetch Subsonic playlist contents lazily on first page open, then build the
+  playlist queue from the ordered entries.
+- Playlist playback preserves order and duplicates, supports non-local
+  Subsonic songs, and routes Enter through `playPlaylist`.
+- Add Playlists to the unified search payload and SearchOverlay scope strip,
+  including playlist activation.
+- Add playlist Alt verbs: Play Playlist and Add to Queue, on both tab rows
+  and the page header.
+- Persist and restore the last opened playlist page through the session.
+- Recentre the cursor row on height changes; width changes keep their
+  existing resize anchor.
+- Ignore undefined cover URLs in `CoverImage`.
 - Back out the sparse `RowModel`/`RowCache` list surfaces and the vendored
-  qtbridge patch. The sparse QListModel path triggered a release-only
-  reentrancy abort in the Qt bridge; all list surfaces return to the stable
-  full-ListModel paths.
-- Keep the 0.5.1 virtual order, queue and cursor changes out of this release
-  until the virtual model can be reintroduced without the bridge abort.
+  qtbridge patch because the sparse QListModel path triggered a release-only
+  reentrancy abort; list surfaces use the stable full-ListModel paths.
 
 ## 0.5.1 - _Sparse row windows and range-backed lists_
 

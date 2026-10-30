@@ -34,16 +34,13 @@ FadeText {
     /// is the session's current candidate (`CurSearch`).
     property string query: ""
     property bool currentMatch: false
+    /// Shared FontMetrics from RowMetrics (same font as this cell).
+    required property FontMetrics metrics
 
     readonly property var spans: Match.spans(root.text, root.query)
 
     // A block (or redraw) for a match under the ellipsis dies at the edge.
     clip: true
-
-    FontMetrics {
-        id: fm
-        font: root.font
-    }
 
     // Where the glyphs actually start: alignment shifts the painted run.
     readonly property real _originX: {
@@ -61,11 +58,11 @@ FadeText {
             radius: Theme.radius
             required property var modelData
 
-            x: root._originX + fm.advanceWidth(root.text.substring(0, modelData.start))
-            y: Math.max(0, (root.height - fm.height) / 2)
-            width: fm.advanceWidth(root.text.substring(0, modelData.end))
-                - fm.advanceWidth(root.text.substring(0, modelData.start))
-            height: fm.height
+            x: root._originX + root.metrics.advanceWidth(root.text.substring(0, modelData.start))
+            y: Math.max(0, (root.height - root.metrics.height) / 2)
+            width: root.metrics.advanceWidth(root.text.substring(0, modelData.end))
+                - root.metrics.advanceWidth(root.text.substring(0, modelData.start))
+            height: root.metrics.height
             color: root.currentMatch ? Palette.primary : Palette.primaryContainer
         }
     }
@@ -76,8 +73,8 @@ FadeText {
         delegate: AppText {
             required property var modelData
 
-            x: root._originX + fm.advanceWidth(root.text.substring(0, modelData.start))
-            y: Math.max(0, (root.height - fm.height) / 2)
+            x: root._originX + root.metrics.advanceWidth(root.text.substring(0, modelData.start))
+            y: Math.max(0, (root.height - root.metrics.height) / 2)
             text: root.text.substring(modelData.start, modelData.end)
             font: root.font
             color: root.currentMatch ? Palette.onPrimary : Palette.onPrimaryContainer

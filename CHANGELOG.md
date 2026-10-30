@@ -51,6 +51,9 @@ open work; this file is the release history.
 - Keep dormant library loaders dormant behind a restored page and skip
   full reloads on preload heads; only the visible scope loads on return to
   Home, and hidden heads warm afterward.
+- Share row FontMetrics per surface, move row hover/tap to one list-level
+  handler, create mark buttons only when needed, and drop the duplicate
+  delegate display margins.
 
 ## 0.4.11 - _Cover improvements and other minor_
 

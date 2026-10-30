@@ -31,6 +31,12 @@ Rectangle {
     id: root
     radius: Theme.radius
 
+    RowMetrics {
+        id: rowMetrics
+        viewWidth: content.width
+        rowHeight: content.adaptiveRowHeight
+    }
+
     signal back
     /// ARC-I-2: Alt-hold quick actions on the song row under the cursor;
     /// Home routes it to the shared overlay.
@@ -829,6 +835,17 @@ Rectangle {
                 // the top of the scroller.
                 bottomAlignShort: true
                 rowRefHeight: root.height
+                onRowTapped: (index, shift) => {
+                    if (shift) {
+                        root.clearHeaderStops();
+                        content.extendSelectionTo(index);
+                        return;
+                    }
+                    root.clearHeaderStops();
+                    content.clearSelection();
+                    content.currentIndex = index;
+                    Backend.playAlbum(root.albumId, index);
+                }
 
                 rowDelegate: Component {
                     Rectangle {
@@ -848,7 +865,7 @@ Rectangle {
                         // Attached `ListView.isCurrentItem` only resolves on
                         // the delegate root; children read this instead.
                         readonly property bool currentItem: ListView.isCurrentItem && !root.onToolbar
-                        readonly property bool emphasized: ListView.isCurrentItem || rowHover.hovered
+                        readonly property bool emphasized: ListView.isCurrentItem || songRow.index === content.hoveredIndex
 
                         width: ListView.view ? ListView.view.width : 0
                         z: emphasized ? 1 : 0
@@ -862,7 +879,7 @@ Rectangle {
                             striped: true
                             baseColor: Palette.surface
                             current: songRow.currentItem
-                            hovered: rowHover.hovered
+                            hovered: songRow.index === content.hoveredIndex
                             selected: songRow.selectedRow
                         }
 
@@ -871,6 +888,7 @@ Rectangle {
                             anchors.fill: parent
                             viewWidth: songRow.width
                             rowHeight: songRow.height
+                            metrics: rowMetrics
                             emphasized: songRow.emphasized
                             current: songRow.currentItem
                             showCover: false
@@ -894,29 +912,6 @@ Rectangle {
                             markRatingVisible: false
                             searchQuery: content.searchQuery
                             searchCurrent: songRow.index === content.searchCurrentRow
-                        }
-
-                        HoverHandler {
-                            id: rowHover
-                            cursorShape: Qt.PointingHandCursor
-                        }
-
-                        TapHandler {
-                            acceptedModifiers: Qt.ShiftModifier
-                            onTapped: {
-                                root.clearHeaderStops();
-                                content.extendSelectionTo(songRow.index);
-                            }
-                        }
-                        TapHandler {
-                            acceptedModifiers: Qt.NoModifier
-                            onTapped: {
-                                // VI-4: direct play ends the visual selection.
-                                root.clearHeaderStops();
-                                content.clearSelection();
-                                content.currentIndex = songRow.index;
-                                Backend.playAlbum(root.albumId, songRow.index);
-                            }
                         }
                     }
                 }

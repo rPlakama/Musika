@@ -26,6 +26,12 @@ import "Theme.js" as Theme
 Item {
     id: root
 
+    RowMetrics {
+        id: rowMetrics
+        viewWidth: queueContent.width
+        rowHeight: queueContent.adaptiveRowHeight
+    }
+
     /// Whether the drawer is slid in.
     property bool open: false
     /// The item behind the panel whose pixels feed the acrylic pass (Home
@@ -440,6 +446,15 @@ Item {
                     searchFields: ["title", "subtitle", "duration"]
                     visible: queueItems.count > 0
                     onQuickAction: (target, actions) => root.quickAction(target, actions)
+                    onRowTapped: (index, shift) => {
+                        if (shift) {
+                            queueContent.extendSelectionTo(index);
+                            root.queueCursor = queueContent.currentIndex;
+                            return;
+                        }
+                        root.queueCursor = index;
+                        Backend.queueJump(index);
+                    }
 
                     Behavior on opacity { Anim {} }
 
@@ -454,7 +469,7 @@ Item {
                             required property string songId
                             required property bool starred
 
-                            readonly property bool emphasized: index === root.queueCursor || rowHover.hovered
+                            readonly property bool emphasized: index === root.queueCursor || index === queueContent.hoveredIndex
 
                             width: ListView.view.width
                             z: emphasized ? 1 : 0
@@ -477,7 +492,7 @@ Item {
 
                             RowHighlight {
                                 current: index === root.queueCursor
-                                hovered: rowHover.hovered
+                                hovered: index === queueContent.hoveredIndex
                                 selected: queueContent.selected(index)
                                 overflow: queueContent.bleed
                             }
@@ -486,6 +501,7 @@ Item {
                                 anchors.fill: parent
                                 viewWidth: row.width
                                 rowHeight: row.height
+                                metrics: rowMetrics
                                 emphasized: row.emphasized
                                 current: index === root.queueCursor
                                 showCover: false
@@ -508,26 +524,6 @@ Item {
                                 markStarred: row.starred
                                 searchQuery: queueContent.searchQuery
                                 searchCurrent: index === queueContent.searchCurrentRow
-                            }
-
-                            HoverHandler {
-                                id: rowHover
-                                cursorShape: Qt.PointingHandCursor
-                            }
-
-                            TapHandler {
-                                acceptedModifiers: Qt.ShiftModifier
-                                onTapped: {
-                                    queueContent.extendSelectionTo(row.index);
-                                    root.queueCursor = queueContent.currentIndex;
-                                }
-                            }
-                            TapHandler {
-                                acceptedModifiers: Qt.NoModifier
-                                onTapped: {
-                                    root.queueCursor = row.index;
-                                    Backend.queueJump(row.index);
-                                }
                             }
                         }
                     }

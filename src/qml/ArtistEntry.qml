@@ -29,6 +29,12 @@ Rectangle {
     radius: Theme.radius
     id: root
 
+    RowMetrics {
+        id: rowMetrics
+        viewWidth: wall.width
+        rowHeight: Math.max(48, root.height * 0.09)
+    }
+
     signal back
     signal albumActivated(string albumId, string title, string artist, string year, string tracks, string cover, bool starred)
 
@@ -640,6 +646,14 @@ Rectangle {
                 emptyText: "No albums indexed yet"
 
                 onItemActivated: (index) => root.activateCurrent()
+                onRowTapped: (index, shift) => {
+                    if (shift) {
+                        wall.extendSelectionTo(index);
+                        return;
+                    }
+                    wall.currentIndex = index;
+                    root.activateCurrent();
+                }
                 onQuickAction: (target, actions) => root.quickAction(target, actions)
                 rowDelegate: Component {
                     Rectangle {
@@ -665,7 +679,7 @@ Rectangle {
 
                         RowHighlight {
                             current: row.current
-                            hovered: rowHover.hovered
+                            hovered: row.index === wall.hoveredIndex
                             selected: row.selectedRow
                         }
 
@@ -675,7 +689,8 @@ Rectangle {
                             anchors.fill: parent
                             viewWidth: row.width
                             rowHeight: row.height
-                            emphasized: row.current || rowHover.hovered
+                            metrics: rowMetrics
+                            emphasized: row.current || row.index === wall.hoveredIndex
                             current: row.current
                             showCover: true
                             showSubtitle: false
@@ -698,23 +713,6 @@ Rectangle {
                             markRatingVisible: true
                             searchQuery: wall.searchQuery
                             searchCurrent: row.index === wall.searchCurrentRow
-                        }
-
-                        HoverHandler {
-                            id: rowHover
-                            cursorShape: Qt.PointingHandCursor
-                        }
-
-                        TapHandler {
-                            acceptedModifiers: Qt.ShiftModifier
-                            onTapped: wall.extendSelectionTo(row.index)
-                        }
-                        TapHandler {
-                            acceptedModifiers: Qt.NoModifier
-                            onTapped: {
-                                wall.currentIndex = row.index;
-                                root.activateCurrent();
-                            }
                         }
                     }
                 }

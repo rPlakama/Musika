@@ -49,77 +49,79 @@ Rectangle {
     required property real base
     readonly property real box: root.base * 1.08
 
+    // Only rows inside the host viewport may paint a mark. Before the host
+    // has a band (count/height not laid out yet) keep the row cheap.
+    readonly property bool windowed: root.firstVisible >= 0
+        && root.lastVisible >= root.firstVisible
+        && root.index >= root.firstVisible
+        && root.index <= root.lastVisible
+    /// The row's fetch is running (queued/active in the ledger).
+    readonly property bool active: root.windowed
+        && ((root.songId.length > 0
+                && Backend.downloadingIds.indexOf(root.songId) !== -1)
+            || (root.albumId.length > 0
+                && Backend.downloadingIds.indexOf(root.albumId) !== -1))
+    /// The card's cache state, or the track's own.
+    readonly property bool cached: root.windowed
+        && ((root.songId.length > 0
+                && Backend.downloadedIds.indexOf(root.songId) !== -1)
+            || (root.albumId.length > 0
+                && Backend.cachedAlbumIds.indexOf(root.albumId) !== -1))
+    /// UI-60: the rating count exists only for a real level.
+    readonly property bool ratingMark: root.windowed && root.showRating
+        && root.rating > 0
+    /// Keep the button subtree alive only when it has something to paint.
+    readonly property bool needsMarks: root.visible
+        && (root.active || root.cached || root.starred || root.ratingMark)
+
     // UI-60: one zero-alpha, content-sized box owns the symbols; every mark
-    // is vertically centred against the same Row axis (the download mark
-    // used to sit top-aligned while the heart/counter centred, which read as
-    // a diagonal). The box takes the Row's intrinsic size and centres it;
-    // binding to `implicit*` (not the anchored position) keeps it loop-free.
+    // is vertically centred against the same Row axis. The box takes the
+    // loader's intrinsic size and centres it; the mark buttons are created
+    // lazily so unmarked rows do not carry their object trees.
     color: "transparent"
-    width: symbolsRow.implicitWidth
-    height: symbolsRow.implicitHeight
+    width: markLoader.item ? markLoader.item.implicitWidth : 0
+    height: markLoader.item ? markLoader.item.implicitHeight : 0
 
-    Row {
-        id: symbolsRow
+    Loader {
+        id: markLoader
         anchors.centerIn: parent
-        spacing: root.box * 0.25
+        active: root.needsMarks
+        sourceComponent: markSymbols
+    }
 
-        // Only the rows inside the host viewport may paint a mark. Before
-        // the host has a band (count/height not laid out yet) keep the row
-        // cheap instead of falling back to an offscreen window.
-        readonly property bool windowed: root.firstVisible >= 0
-            && root.lastVisible >= root.firstVisible
-            && root.index >= root.firstVisible
-            && root.index <= root.lastVisible
-        /// The row's fetch is running (queued/active in the ledger): the row
-        /// shows the shared loading loop, spinning, instead of the filled mark.
-        /// Album rows ride the same set through their own id — a container pass
-        /// also lights the album's row.
-        readonly property bool active: windowed
-            && ((root.songId.length > 0
-                    && Backend.downloadingIds.indexOf(root.songId) !== -1)
-                || (root.albumId.length > 0
-                    && Backend.downloadingIds.indexOf(root.albumId) !== -1))
-        /// The card's cache state, or the track's own.
-        readonly property bool cached: windowed
-            && ((root.songId.length > 0
-                    && Backend.downloadedIds.indexOf(root.songId) !== -1)
-                || (root.albumId.length > 0
-                    && Backend.cachedAlbumIds.indexOf(root.albumId) !== -1))
+    Component {
+        id: markSymbols
 
-        /// UI-60: the rating count owns its slot beside the heart and only
-        /// exists for a real level — an unrated (0) row shows the heart
-        /// alone. Sized 10% down from the balanced pass so the drawn digit
-        /// matches the row symbols' size ratio.
-        readonly property bool ratingMark: windowed && root.showRating
-            && root.rating > 0
+        Row {
+            spacing: root.box * 0.25
 
-        Rectangle {
-            radius: Theme.radius
-            visible: symbolsRow.active || symbolsRow.cached
-            anchors.verticalCenter: parent.verticalCenter
-            width: root.box * 1.2
-            height: width
-            color: "transparent"
+            Rectangle {
+                radius: Theme.radius
+                visible: root.active || root.cached
+                anchors.verticalCenter: parent.verticalCenter
+                width: root.box * 1.2
+                height: width
+                color: "transparent"
 
-            // ARC-UI-6: the shared download visual (loading while fetching,
-            // filled when cached, spin settling upright).
-            DownloadButton {
-                anchors.centerIn: parent
-                base: parent.width
-                fetching: symbolsRow.active
-                done: symbolsRow.cached
+                // ARC-UI-6: the shared download visual.
+                DownloadButton {
+                    anchors.centerIn: parent
+                    base: parent.width
+                    fetching: root.active
+                    done: root.cached
+                }
             }
-        }
 
-        // UI-60: the shared favourite button owns the heart + count pairing.
-        FavoriteButton {
-            variant: "row"
-            unit: root.box * 1.2
-            anchors.verticalCenter: parent.verticalCenter
-            starred: root.starred
-            rating: root.rating
-            showGlyph: symbolsRow.windowed && root.starred
-            showCount: symbolsRow.ratingMark
+            // UI-60: the shared favourite button owns the heart + count.
+            FavoriteButton {
+                variant: "row"
+                unit: root.box * 1.2
+                anchors.verticalCenter: parent.verticalCenter
+                starred: root.starred
+                rating: root.rating
+                showGlyph: root.windowed && root.starred
+                showCount: root.ratingMark
+            }
         }
     }
 }

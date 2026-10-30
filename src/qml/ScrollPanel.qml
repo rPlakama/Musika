@@ -243,6 +243,10 @@ Rectangle {
     property alias rowRefHeight: content.rowRefHeight
     property alias rowHeightScale: content.rowHeightScale
     readonly property alias adaptiveRowHeight: content.adaptiveRowHeight
+    /// Row under the pointer (-1 outside the data rows).
+    readonly property alias hoveredIndex: content.hoveredIndex
+    /// Pointer tap on a row; hosts own the click semantics.
+    signal rowTapped(int index, bool shift)
     function searchRows() {
         return content.searchRows();
     }
@@ -384,6 +388,7 @@ Rectangle {
                 onItemActivated: (index) => root.itemActivated(index)
                 onSelectionChanged: root.selectionChanged()
                 onQuickAction: (target, actions) => root.quickAction(target, actions)
+                onRowTapped: (index, shift) => root.rowTapped(index, shift)
             }
     
             FadeText {

@@ -180,9 +180,27 @@ Item {
     property bool followCursor: true
     onCurrentIndexChanged: root._cursorMoved()
     signal itemActivated(int index)
+    /// Row under a pointer, -1 outside the data rows.
+    property int hoveredIndex: -1
+    /// Pointer tap on a row; hosts apply their own click semantics.
+    signal rowTapped(int index, bool shift)
 
     readonly property var view: list
     readonly property int count: root.view ? root.view.count : 0
+
+    function rowAt(x, y) {
+        var v = root.view;
+        return v ? v.indexAt(x, v.contentY + y) : -1;
+    }
+
+    function refreshHovered() {
+        if (!rowHover.hovered) {
+            root.hoveredIndex = -1;
+            return;
+        }
+        root.hoveredIndex = root.rowAt(rowHover.point.position.x,
+            rowHover.point.position.y);
+    }
 
     // ── Geometry helpers ─────────────────────────────────────────────────
 
@@ -1020,14 +1038,32 @@ Item {
             move: root.animateDisplacement ? displacedTransition : null
             moveDisplaced: root.animateDisplacement ? displacedTransition : null
             cacheBuffer: root.renderOverscan
-            displayMarginBeginning: root.renderOverscan
-            displayMarginEnd: root.renderOverscan
+
+            HoverHandler {
+                id: rowHover
+                cursorShape: root.hoveredIndex >= 0
+                    ? Qt.PointingHandCursor : Qt.ArrowCursor
+                onPointChanged: root.refreshHovered()
+                onHoveredChanged: root.refreshHovered()
+            }
+
+            TapHandler {
+                acceptedButtons: Qt.LeftButton
+                acceptedModifiers: Qt.KeyboardModifierMask
+                onTapped: {
+                    var index = root.rowAt(point.position.x, point.position.y);
+                    if (index >= 0)
+                        root.rowTapped(index,
+                            (point.modifiers & Qt.ShiftModifier) !== 0);
+                }
+            }
         }
     }
 
     Connections {
         target: root.view
         function onContentYChanged() {
+            root.refreshHovered();
             if (root._manualScroll && !glide.running && !root._landing)
                 root._captureAnchor();
             if (root.memoryKey && !glide.running)

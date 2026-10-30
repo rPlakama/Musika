@@ -24,6 +24,12 @@ import "Theme.js" as Theme
 Item {
     id: root
 
+    RowMetrics {
+        id: rowMetrics
+        viewWidth: content.width
+        rowHeight: content.adaptiveRowHeight
+    }
+
     property string title: ""
     /// The unified search hides the column header; the scope strip carries
     /// the title and count instead.
@@ -326,6 +332,13 @@ Item {
                 markAlbums: true
                 onSelectionChanged: root.selectionChanged()
                 onQuickAction: (target, actions) => root.quickAction(target, actions)
+                onRowTapped: (index, shift) => {
+                    if (shift) {
+                        root.extendSelectionTo(index);
+                        return;
+                    }
+                    root.picked(index);
+                }
                 // ARC-UI-2 M1: the columns paint the same three cells.
                 searchFields: ["title", "subtitle", "meta"]
                 // UI-58: rows scale from the shared panel height (not the
@@ -352,7 +365,7 @@ Item {
                         // VI-4: the row sits inside the visual selection range.
                         readonly property bool selectedRow: content.selected(index)
                         // UI-45: the focused cursor or any hovered row leads.
-                        readonly property bool emphasized: (row.current && root.active) || rowHover.hovered
+                        readonly property bool emphasized: (row.current && root.active) || row.index === content.hoveredIndex
 
                         width: ListView.view.width
                         height: content.adaptiveRowHeight
@@ -368,7 +381,7 @@ Item {
                         RowHighlight {
                             current: row.current
                             active: root.active
-                            hovered: rowHover.hovered
+                            hovered: row.index === content.hoveredIndex
                             selected: row.selectedRow
                             overflow: root.overflow
                         }
@@ -380,6 +393,7 @@ Item {
                             anchors.fill: parent
                             viewWidth: row.width
                             rowHeight: row.height
+                            metrics: rowMetrics
                             emphasized: row.emphasized
                             current: row.current && root.active
                             roundedArt: root.roundedArt
@@ -413,22 +427,6 @@ Item {
                                 || root.quickActionKind === "artist"
                             searchQuery: content.searchQuery
                             searchCurrent: row.index === content.searchCurrentRow
-                        }
-
-                        // Hover only signals clickability (S-5); the cursor moves
-                        // on click or keys, never on hover.
-                        HoverHandler {
-                            id: rowHover
-                            cursorShape: Qt.PointingHandCursor
-                        }
-
-                        TapHandler {
-                            acceptedModifiers: Qt.ShiftModifier
-                            onTapped: root.extendSelectionTo(row.index)
-                        }
-                        TapHandler {
-                            acceptedModifiers: Qt.NoModifier
-                            onTapped: root.picked(row.index)
                         }
                     }
                 }

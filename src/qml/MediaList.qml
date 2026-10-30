@@ -28,6 +28,12 @@ import "Theme.js" as Theme
 ScrollPanel {
     id: root
 
+    RowMetrics {
+        id: rowMetrics
+        viewWidth: root.width
+        rowHeight: root.adaptiveRowHeight
+    }
+
     // The wrappers hook their backend channel through these two virtual
     // functions; the base versions keep a wrapper without a loader inert.
     function reload() {
@@ -217,6 +223,16 @@ ScrollPanel {
             root.activated(item);
     }
 
+    /// One list-level pointer handler owns row clicks.
+    onRowTapped: (index, shift) => {
+        if (shift) {
+            root.extendSelectionTo(index);
+            return;
+        }
+        root.currentIndex = index;
+        root.activate();
+    }
+
     // VI-4: the selection count pill rides at the header's right edge.
     SelectionBadge {
         id: selectionBadge
@@ -292,7 +308,7 @@ ScrollPanel {
             // report false).
             readonly property bool currentItem: ListView.isCurrentItem
             // Mouse/keyboard parity: the hovered row expands like the cursor.
-            readonly property bool emphasized: row.currentItem || rowHover.hovered
+            readonly property bool emphasized: row.currentItem || row.index === root.hoveredIndex
             // VI-4: the row sits inside the visual selection range.
             readonly property bool selectedRow: root.isSelected(index)
 
@@ -310,7 +326,7 @@ ScrollPanel {
                 striped: true
                 baseColor: Palette.surface
                 current: row.currentItem
-                hovered: rowHover.hovered
+                hovered: row.index === root.hoveredIndex
                 selected: row.selectedRow
             }
 
@@ -318,6 +334,7 @@ ScrollPanel {
                 anchors.fill: parent
                 viewWidth: row.viewWidth
                 rowHeight: row.height
+                metrics: rowMetrics
                 emphasized: row.emphasized
                 current: row.currentItem
                 roundedArt: root.roundedArt
@@ -338,23 +355,6 @@ ScrollPanel {
                 markRatingVisible: root.ratingMarks
                 searchQuery: root.searchQuery
                 searchCurrent: row.index === root.searchCurrentRow
-            }
-
-            HoverHandler {
-                id: rowHover
-                cursorShape: Qt.PointingHandCursor
-            }
-
-            TapHandler {
-                acceptedModifiers: Qt.ShiftModifier
-                onTapped: root.extendSelectionTo(row.index)
-            }
-            TapHandler {
-                acceptedModifiers: Qt.NoModifier
-                onTapped: {
-                    root.currentIndex = row.index;
-                    root.activate();
-                }
             }
         }
     }

@@ -28,6 +28,8 @@ Item {
 
     required property real viewWidth
     required property real rowHeight
+    /// Shared FontMetrics from the surface RowMetrics.
+    required property RowMetrics metrics
     property bool emphasized: false
     property bool current: false
     property bool roundedArt: false
@@ -131,6 +133,7 @@ Item {
 
                 SearchText {
                     id: titleText
+                    metrics: root.metrics.title
                     width: parent.width
                     height: root.showSubtitle ? root.rowHeight * 0.55 : root.rowHeight
                     text: root.title
@@ -148,6 +151,7 @@ Item {
 
                 SearchText {
                     visible: root.showSubtitle
+                    metrics: root.metrics.subtitle
                     width: parent.width
                     height: root.showSubtitle ? root.rowHeight * 0.39 : 0
                     text: root.subtitle
@@ -202,19 +206,13 @@ Item {
             anchors.right: parent.right
             anchors.rightMargin: root.rightMargin
             width: root.reserveMeta
-                ? metaMetrics.advanceWidth("00:00:00")
+                ? root.metrics.metaReserveWidth
                 : metaLabel.implicitWidth
             height: metaLabel.implicitHeight
             color: "transparent"
-
-            FontMetrics {
-                id: metaMetrics
-                font.family: Theme.fonts.body
-                font.pixelSize: metaLabel.font.pixelSize
-            }
-
             SearchText {
                 id: metaLabel
+                metrics: root.metrics.meta
                 anchors.fill: parent
                 text: root.meta
                 color: root.metaColor

@@ -23,6 +23,7 @@
 //! are wired to it.
 
 use std::collections::{HashMap, HashSet, VecDeque};
+use std::sync::{Arc, LazyLock, Mutex};
 
 use qtbridge::{QModelItem, qobject};
 
@@ -251,7 +252,7 @@ pub mod row_model {
 
     use qtbridge::{QListModel, QListModelBase};
 
-    use super::{LIVE_WINDOW_ROWS, RowRecord};
+    use super::{LIVE_WINDOW_ROWS, RowRecord, queue_snapshot};
 
     #[derive(Default)]
     pub struct RowModel {
@@ -321,6 +322,7 @@ pub mod row_model {
                 "albums" => self.ensure_albums(start, end),
                 "artists" => self.ensure_artists(start, end),
                 "artist_albums" => self.ensure_artist_albums(start, end),
+                "queue" => self.ensure_queue(start, end),
                 _ => {}
             }
         }
@@ -532,6 +534,40 @@ pub mod row_model {
         }
 
 
+        fn ensure_queue(&mut self, start: i64, end: i64) {
+            let snapshot = queue_snapshot();
+            let count = snapshot.len();
+            let Some((start, end, reset)) = self.prepare_window(count, start, end) else { return };
+            if !reset {
+                self.rows.retain(|index, _| *index >= start && *index <= end);
+            }
+            let mut records = Vec::new();
+            for (offset, track) in snapshot[start..=end].iter().enumerate() {
+                records.push((
+                    start + offset,
+                    RowRecord {
+                        songId: track.id.clone(),
+                        albumId: track.album_id.clone(),
+                        artistId: String::new(),
+                        artist: track.artist.clone(),
+                        artistCover: String::new(),
+                        year: 0,
+                        tracks: 0,
+                        cover: track.cover_url.clone(),
+                        title: track.title.clone(),
+                        subtitle: track.artist.clone(),
+                        meta: crate::browse::rows::format_duration(Some(track.duration.round() as i32)),
+                        track: 0,
+                        duration: track.duration.round() as i32,
+                        starred: track.favorite,
+                        rating: 0,
+                    },
+                ));
+            }
+            self.finish_window(count, reset, records);
+        }
+
+
         #[qslot(qml_name = "row")]
         pub fn row_json(&self, index: i64) -> String {
             let index = index.max(0) as usize;
@@ -541,4 +577,20 @@ pub mod row_model {
                 .unwrap_or_else(|| "null".to_string())
         }
     }
+}
+
+static QUEUE_SNAPSHOT: LazyLock<Mutex<Arc<Vec<crate::player::Track>>>> =
+    LazyLock::new(|| Mutex::new(Arc::new(Vec::new())));
+
+/// The player publishes its queue snapshot here before emitting the queue
+/// payload; the virtual QueueDrawer reads it by index instead of copying every
+/// track into a QML ListModel.
+pub(crate) fn set_queue_snapshot(queue: Arc<Vec<crate::player::Track>>) {
+    *QUEUE_SNAPSHOT
+        .lock()
+        .unwrap_or_else(|error| error.into_inner()) = queue;
+}
+
+fn queue_snapshot() -> Arc<Vec<crate::player::Track>> {
+    Arc::clone(&QUEUE_SNAPSHOT.lock().unwrap_or_else(|error| error.into_inner()))
 }

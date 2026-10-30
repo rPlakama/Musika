@@ -39,6 +39,7 @@ impl Backend {
         // COW snapshot: the task borrows the rows instead of cloning three
         // strings per queued track on the Qt thread.
         let queue = self.player.queue_snapshot();
+        crate::row_cache::set_queue_snapshot(queue.clone());
         let Some(dbs) = crate::app::dbs() else {
             return;
         };

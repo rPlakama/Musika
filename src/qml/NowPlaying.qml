@@ -924,7 +924,6 @@ Rectangle {
                             // A width change re-wraps the lyric rows;
                             // let the shared resize repair recentre the
                             // active line, but never yank a manual scroll.
-                            recenterOnWidth: root.visible && root.lyricsSynced && root.activeLyric >= 0 && !root._lyricsHeld && lyricsView.currentIndex === root.activeLyric
 
                             // A hand on the pane owns it until the next
                             // track.

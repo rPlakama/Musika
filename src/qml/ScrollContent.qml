@@ -90,9 +90,6 @@ Item {
     property real minRowHeight: 18
     /// Kept for host compatibility; the extent is Qt's own now.
     property real contentHeightHint: 0
-    /// A width change re-wraps variable-height rows (lyrics); let the resize
-    /// repair recentre them. Lists keep the default false.
-    property bool recenterOnWidth: false
     /// Animate rows whose index changed after a model move (search results).
     property bool animateDisplacement: false
     /// Bottom-align a short uniform list instead of leaving its rows at
@@ -814,8 +811,7 @@ Item {
         root._rowRefHeight = root.rowRefHeight > 0 ? root.rowRefHeight : root.height;
         root.captureRowBase();
     }
-    onWidthChanged: if (root.recenterOnWidth)
-        root._scheduleResizeRecenter()
+    onWidthChanged: root._scheduleResizeRecenter()
     onHeightChanged: {
         if (root.rowRefHeight <= 0)
             root._rowRefHeight = root.height;

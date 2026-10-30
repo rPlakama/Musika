@@ -688,6 +688,8 @@ Item {
     property bool _resizeScheduled: false
     property bool _resizing: false
     property bool _resizeApplyPending: false
+    /// Height changes recenter the cursor row; width changes keep the anchor.
+    property bool _resizeCenterCursor: false
     /// A height change while the window is inactive can land before Qt has
     /// laid the view out; finish the repair once the window is active again.
     property bool _resizeWhileInactive: false
@@ -720,7 +722,10 @@ Item {
         if (!v || v.count === 0 || v.height <= 0)
             return;
         var target = null;
-        if (!root._manualScroll && root.currentIndex >= 0 && root.currentIndex < v.count)
+        if (root._resizeCenterCursor && root.currentIndex >= 0
+                && root.currentIndex < v.count)
+            target = root._target(v, root.currentIndex);
+        else if (!root._manualScroll && root.currentIndex >= 0 && root.currentIndex < v.count)
             target = root._target(v, root.currentIndex);
         if (target === null) {
             var s = root._stride(v);
@@ -755,9 +760,11 @@ Item {
     /// frame and then 100 ms for the row unit to settle; snapping on every
     /// intermediate height event is what broke the scroll during an
     /// application-window resize.
-    function _scheduleResizeRecenter() {
+    function _scheduleResizeRecenter(centerCursor) {
         if (!root.view)
             return;
+        if (centerCursor === true)
+            root._resizeCenterCursor = true;
         root.stopGlide();
         root._resizing = true;
         if (Window.window && !Window.window.active)
@@ -779,6 +786,7 @@ Item {
         root._resizeScheduled = false;
         root._applyResizeAnchor();
         root._resizing = false;
+        root._resizeCenterCursor = false;
     }
 
     // Timers, not Qt.callLater: a Loader can destroy this ScrollContent
@@ -816,7 +824,7 @@ Item {
         if (root.rowRefHeight <= 0)
             root._rowRefHeight = root.height;
         root.captureRowBase();
-        root._scheduleResizeRecenter();
+        root._scheduleResizeRecenter(true);
     }
     onAdaptiveRowHeightChanged: root._scheduleResizeRecenter()
 

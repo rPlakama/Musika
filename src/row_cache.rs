@@ -278,9 +278,7 @@ pub mod row_model {
             true
         }
 
-        fn reset_unnotified(&mut self) {
-            self.rows.clear();
-        }
+        fn reset_unnotified(&mut self) {}
     }
 
     impl RowModel {
@@ -327,36 +325,57 @@ pub mod row_model {
             }
         }
 
-        fn prepare_window(&mut self, count: usize, start: i64, end: i64) -> Option<(usize, usize)> {
-            if count != self.count {
-                self.count = count;
-                self.rows.clear();
-                self.reset();
-            }
-            if self.count == 0 {
+        fn prepare_window(
+            &self,
+            count: usize,
+            start: i64,
+            end: i64,
+        ) -> Option<(usize, usize, bool)> {
+            if count == 0 {
                 return None;
             }
+            let changed = count != self.count;
             let start = start.max(0) as usize;
             let end = end
                 .max(start as i64)
-                .min(start as i64 + LIVE_WINDOW_ROWS as i64 - 1)
-                .min(self.count as i64 - 1) as usize;
-            (end >= start).then_some((start, end))
+                .min(start as i64 + LIVE_WINDOW_ROWS as i64)
+                .min(count as i64 - 1) as usize;
+            (end >= start).then_some((start, end, changed))
+        }
+
+        fn finish_window(
+            &mut self,
+            count: usize,
+            reset: bool,
+            records: Vec<(usize, RowRecord)>,
+        ) {
+            if reset {
+                self.count = count;
+                self.rows = records.into_iter().collect();
+                self.reset();
+            } else {
+                for (index, row) in records {
+                    self.set(index, row);
+                }
+            }
         }
 
         fn ensure_songs(&mut self, start: i64, end: i64) {
             let Some(dbs) = crate::app::dbs() else { return };
             let runtime = crate::app::runtime();
             let count = runtime.block_on(crate::library::song_count(&dbs.library)).unwrap_or(0);
-            let Some((start, end)) = self.prepare_window(count, start, end) else { return };
+            let Some((start, end, reset)) = self.prepare_window(count, start, end) else { return };
             let order = if self.order.is_empty() { "Title".to_string() } else { self.order.clone() };
-            self.rows.retain(|index, _| *index >= start && *index <= end);
+            if !reset {
+                self.rows.retain(|index, _| *index >= start && *index <= end);
+            }
             let rows = runtime.block_on(crate::library::songs_range(
                 &dbs.library, start as i64, (end - start + 1) as i64, &order,
             )).unwrap_or_default();
             let covers = runtime.block_on(crate::covers::url_map_for(
                 &dbs, rows.iter().map(|row| &row.cover_art),
             )).unwrap_or_default();
+            let mut records = Vec::new();
             for (offset, row) in rows.into_iter().enumerate() {
                 let record = RowRecord {
                     songId: row.id.clone(),
@@ -370,8 +389,9 @@ pub mod row_model {
                     starred: row.starred.is_some(),
                     ..RowRecord::default()
                 };
-                self.set(start + offset, record);
+                records.push((start + offset, record));
             }
+            self.finish_window(count, reset, records);
         }
 
         fn ensure_albums(&mut self, start: i64, end: i64) {
@@ -381,15 +401,18 @@ pub mod row_model {
             let count = runtime
                 .block_on(crate::library::album_count(&dbs.library, artist.as_deref()))
                 .unwrap_or(0);
-            let Some((start, end)) = self.prepare_window(count, start, end) else { return };
+            let Some((start, end, reset)) = self.prepare_window(count, start, end) else { return };
             let order = if self.order.is_empty() { "Artist".to_string() } else { self.order.clone() };
-            self.rows.retain(|index, _| *index >= start && *index <= end);
+            if !reset {
+                self.rows.retain(|index, _| *index >= start && *index <= end);
+            }
             let rows = runtime.block_on(crate::library::albums_range(
                 &dbs.library, artist.as_deref(), &order, start as i64, (end - start + 1) as i64,
             )).unwrap_or_default();
             let covers = runtime.block_on(crate::covers::url_map_for(
                 &dbs, rows.iter().map(|row| &row.cover_art),
             )).unwrap_or_default();
+            let mut records = Vec::new();
             for (offset, row) in rows.into_iter().enumerate() {
                 let cover = row.cover_art.as_ref().and_then(|id| covers.get(id).cloned()).unwrap_or_default();
                 let subtitle = match row.year {
@@ -409,17 +432,20 @@ pub mod row_model {
                     rating: row.rating as i32,
                     ..RowRecord::default()
                 };
-                self.set(start + offset, record);
+                records.push((start + offset, record));
             }
+            self.finish_window(count, reset, records);
         }
 
         fn ensure_artists(&mut self, start: i64, end: i64) {
             let Some(dbs) = crate::app::dbs() else { return };
             let runtime = crate::app::runtime();
             let count = runtime.block_on(crate::library::artist_count(&dbs.library)).unwrap_or(0);
-            let Some((start, end)) = self.prepare_window(count, start, end) else { return };
+            let Some((start, end, reset)) = self.prepare_window(count, start, end) else { return };
             let order = if self.order.is_empty() { "Name".to_string() } else { self.order.clone() };
-            self.rows.retain(|index, _| *index >= start && *index <= end);
+            if !reset {
+                self.rows.retain(|index, _| *index >= start && *index <= end);
+            }
             let rows = runtime.block_on(crate::library::artists_range(
                 &dbs.library, &order, start as i64, (end - start + 1) as i64,
             )).unwrap_or_default();
@@ -428,6 +454,7 @@ pub mod row_model {
             )).unwrap_or_default();
             let starred = runtime.block_on(crate::artist_user::starred_ids(&dbs.artist_user)).unwrap_or_default();
             let ratings = runtime.block_on(crate::artist_user::ratings(&dbs.artist_user)).unwrap_or_default();
+            let mut records = Vec::new();
             for (offset, row) in rows.into_iter().enumerate() {
                 let cover = row.cover_art.as_ref().and_then(|id| covers.get(id).cloned()).unwrap_or_default();
                 let record = RowRecord {
@@ -442,8 +469,9 @@ pub mod row_model {
                     rating: ratings.get(&row.id).copied().unwrap_or(0) as i32,
                     ..RowRecord::default()
                 };
-                self.set(start + offset, record);
+                records.push((start + offset, record));
             }
+            self.finish_window(count, reset, records);
         }
 
         fn ensure_artist_albums(&mut self, start: i64, end: i64) {
@@ -453,9 +481,11 @@ pub mod row_model {
             let count = runtime
                 .block_on(crate::library::artist_album_count(&dbs.library, &artist_id))
                 .unwrap_or(0);
-            let Some((start, end)) = self.prepare_window(count, start, end) else { return };
+            let Some((start, end, reset)) = self.prepare_window(count, start, end) else { return };
             let order = if self.order.is_empty() { "Year".to_string() } else { self.order.clone() };
-            self.rows.retain(|index, _| *index >= start && *index <= end);
+            if !reset {
+                self.rows.retain(|index, _| *index >= start && *index <= end);
+            }
             let rows = runtime
                 .block_on(crate::library::artist_albums_range(
                     &dbs.library,
@@ -471,6 +501,7 @@ pub mod row_model {
                     rows.iter().map(|row| &row.cover_art),
                 ))
                 .unwrap_or_default();
+            let mut records = Vec::new();
             for (offset, row) in rows.into_iter().enumerate() {
                 let cover = row
                     .cover_art
@@ -494,7 +525,7 @@ pub mod row_model {
                     rating: row.rating as i32,
                     ..RowRecord::default()
                 };
-                self.set(start + offset, record);
+                records.push((start + offset, record));
             }
         }
 

@@ -16,6 +16,7 @@
 
 import QtQuick
 import musika
+import "Theme.js" as Theme
 
 // Artists segment: all indexed artists. The list structure (header, cursor,
 // gg/G, selection stage, gutters) is the shared `MediaList`, same as the
@@ -30,6 +31,7 @@ MediaList {
         id: virtualArtists
     }
     virtualModel: virtualArtists
+    model: virtualArtists
 
     title: "Artists"
     roundedArt: true

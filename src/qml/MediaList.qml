@@ -143,7 +143,7 @@ ScrollPanel {
         id: mediaRows
     }
 
-    model: root.virtualModel ? root.virtualModel : mediaRows
+    model: mediaRows
     titleHint: "(Shift-J/K) cycle filter"
     // ARC-UI-2 M1: the rows paint title, subtitle and meta; nothing else.
     searchFields: ["title", "subtitle", "meta"]

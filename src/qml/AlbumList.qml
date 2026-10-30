@@ -16,6 +16,7 @@
 
 import QtQuick
 import musika
+import "Theme.js" as Theme
 
 // Albums segment: the indexed album list fed asynchronously from library.db.
 // The list UI and cursor behaviour live in the shared `MediaList`; this
@@ -32,6 +33,7 @@ MediaList {
         id: virtualAlbums
     }
     virtualModel: virtualAlbums
+    model: virtualAlbums
 
     title: "Albums"
     orderText: Backend.albumOrder

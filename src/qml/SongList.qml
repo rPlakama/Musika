@@ -35,6 +35,7 @@ MediaList {
         id: virtualSongs
     }
     virtualModel: virtualSongs
+    model: virtualSongs
 
     // `G` on the Songs list lands on the true last row. The tail-page path
     // remains for any paged payload; a scope load arrives complete.

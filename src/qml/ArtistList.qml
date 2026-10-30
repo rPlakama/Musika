@@ -63,7 +63,7 @@ MediaList {
         root.setRows(JSON.parse(payload));
     }
 
-    onActivated: (item) => root.artistActivated(item.artistId, item.artistName, item.artistCover)
+    onActivated: (item) => root.artistActivated(item.artistId, item.artist, item.artistCover)
 
     Component.onCompleted: Qt.callLater(root.start)
 

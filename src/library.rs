@@ -718,6 +718,35 @@ pub async fn artist_albums(
     Ok(rows)
 }
 
+/// Number of albums owned by one artist.
+pub async fn artist_album_count(pool: &SqlitePool, artist_id: &str) -> Result<usize> {
+    let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM albums WHERE artist_id = ?1")
+        .bind(artist_id)
+        .fetch_one(pool)
+        .await?;
+    Ok(count.max(0) as usize)
+}
+
+/// A window of one artist's albums in list order.
+pub async fn artist_albums_range(
+    pool: &SqlitePool,
+    artist_id: &str,
+    order: &str,
+    offset: i64,
+    limit: i64,
+) -> Result<Vec<AlbumRow>> {
+    let sql = format!(
+        "{ALBUM_SELECT} WHERE artist_id = ?1{} LIMIT ?2 OFFSET ?3",
+        album_order(order, false)
+    );
+    Ok(sqlx::query_as::<_, AlbumRow>(sqlx::AssertSqlSafe(sql))
+        .bind(artist_id)
+        .bind(limit.max(0))
+        .bind(offset.max(0))
+        .fetch_all(pool)
+        .await?)
+}
+
 /// All artists, ordered by one of [`ARTIST_ORDERS`].
 pub async fn artists(pool: &SqlitePool, order: &str) -> Result<Vec<ArtistRow>> {
     artists_limited(pool, order, 0).await

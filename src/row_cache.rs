@@ -71,7 +71,7 @@ pub struct RowRecord {
     pub songId: String,
     pub albumId: String,
     pub artistId: String,
-    pub artistName: String,
+    pub artist: String,
     pub artistCover: String,
     pub year: i32,
     pub tracks: i32,
@@ -322,6 +322,7 @@ pub mod row_model {
                 "songs" => self.ensure_songs(start, end),
                 "albums" => self.ensure_albums(start, end),
                 "artists" => self.ensure_artists(start, end),
+                "artist_albums" => self.ensure_artist_albums(start, end),
                 _ => {}
             }
         }
@@ -399,7 +400,7 @@ pub mod row_model {
                     albumId: row.id,
                     cover,
                     title: row.title,
-                    artistName: row.artist.clone().unwrap_or_default(),
+                    artist: row.artist.clone().unwrap_or_default(),
                     subtitle,
                     meta: format!("{} track{}", row.song_count, if row.song_count == 1 { "" } else { "s" }),
                     tracks: row.song_count as i32,
@@ -431,7 +432,7 @@ pub mod row_model {
                 let cover = row.cover_art.as_ref().and_then(|id| covers.get(id).cloned()).unwrap_or_default();
                 let record = RowRecord {
                     artistId: row.id.clone(),
-                    artistName: row.name.clone(),
+                    artist: row.name.clone(),
                     artistCover: cover.clone(),
                     cover,
                     title: row.name,
@@ -444,6 +445,59 @@ pub mod row_model {
                 self.set(start + offset, record);
             }
         }
+
+        fn ensure_artist_albums(&mut self, start: i64, end: i64) {
+            let Some(dbs) = crate::app::dbs() else { return };
+            let runtime = crate::app::runtime();
+            let artist_id = self.filter.clone();
+            let count = runtime
+                .block_on(crate::library::artist_album_count(&dbs.library, &artist_id))
+                .unwrap_or(0);
+            let Some((start, end)) = self.prepare_window(count, start, end) else { return };
+            let order = if self.order.is_empty() { "Year".to_string() } else { self.order.clone() };
+            self.rows.retain(|index, _| *index >= start && *index <= end);
+            let rows = runtime
+                .block_on(crate::library::artist_albums_range(
+                    &dbs.library,
+                    &artist_id,
+                    &order,
+                    start as i64,
+                    (end - start + 1) as i64,
+                ))
+                .unwrap_or_default();
+            let covers = runtime
+                .block_on(crate::covers::url_map_for(
+                    &dbs,
+                    rows.iter().map(|row| &row.cover_art),
+                ))
+                .unwrap_or_default();
+            for (offset, row) in rows.into_iter().enumerate() {
+                let cover = row
+                    .cover_art
+                    .as_ref()
+                    .and_then(|id| covers.get(id).cloned())
+                    .unwrap_or_default();
+                let subtitle = match row.year {
+                    Some(year) => format!("{} · {year}", row.artist.as_deref().unwrap_or("")),
+                    None => row.artist.clone().unwrap_or_default(),
+                };
+                let record = RowRecord {
+                    albumId: row.id,
+                    artist: row.artist.clone().unwrap_or_default(),
+                    cover,
+                    title: row.title,
+                    subtitle,
+                    meta: format!("{} track{}", row.song_count, if row.song_count == 1 { "" } else { "s" }),
+                    tracks: row.song_count as i32,
+                    year: row.year.unwrap_or(0),
+                    starred: row.starred.is_some(),
+                    rating: row.rating as i32,
+                    ..RowRecord::default()
+                };
+                self.set(start + offset, record);
+            }
+        }
+
 
         #[qslot(qml_name = "row")]
         pub fn row_json(&self, index: i64) -> String {

@@ -128,7 +128,10 @@ ScrollPanel {
         Backend.TriggerRowReload();
     }
 
-    onCurrentIndexChanged: root.cursorMoved(root.currentIndex)
+    onCurrentIndexChanged: {
+        root.cursorMoved(root.currentIndex);
+        root.ensureVirtualWindow();
+    }
 
     /// VI-4: the selection state lives in `ScrollContent` and is forwarded by
     /// `ScrollPanel` (`toggleSelection`/`selectAll`/`clearSelection`/…); the
@@ -233,7 +236,6 @@ ScrollPanel {
     }
     onFirstVisibleIndexChanged: root.ensureVirtualWindow()
     onLastVisibleIndexChanged: root.ensureVirtualWindow()
-    onCurrentIndexChanged: root.ensureVirtualWindow()
     onWidthChanged: Qt.callLater(root.ensureVirtualWindow)
     onHeightChanged: Qt.callLater(root.ensureVirtualWindow)
     onCountChanged: root.ensureVirtualWindow()

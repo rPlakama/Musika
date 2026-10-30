@@ -643,7 +643,7 @@ Rectangle {
                 content.currentIndex = Math.min(songs.count - 1, content.currentIndex + 1);
         } else if (action === "enter") {
             content.clearSelection();
-            Backend.playAlbum(root.albumId, content.currentIndex);
+            root.playRow(content.currentIndex);
         }
     }
 

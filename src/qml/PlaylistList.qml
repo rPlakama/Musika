@@ -29,6 +29,7 @@ MediaList {
 
     title: "Playlists"
     memoryKey: "playlists"
+    showRowCover: false
     emptyText: "No playlists yet — drop .m3u files in the playlists folder"
 
     function reload() {

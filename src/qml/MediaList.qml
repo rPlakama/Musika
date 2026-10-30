@@ -95,6 +95,8 @@ ScrollPanel {
     property string orderText: ""
     // Artists wear a circle avatar (the one sanctioned circle, R3).
     property bool roundedArt: false
+    /// False for surfaces whose rows carry no cover (the Playlists tab).
+    property bool showRowCover: true
 
     signal activated(var item)
     /// PATH-3: pages append on demand; hosts use this to fetch the next one.
@@ -338,6 +340,7 @@ ScrollPanel {
                 emphasized: row.emphasized
                 current: row.currentItem
                 roundedArt: root.roundedArt
+                showCover: root.showRowCover
                 cover: row.cover
                 title: row.title
                 subtitle: row.subtitle

@@ -529,3 +529,129 @@ pub async fn list_json(dbs: &Dbs) -> Result<String> {
         .collect();
     Ok(serde_json::to_string(&rows)?)
 }
+
+/// The playlist page payload: identity, song rows and the first three distinct
+/// song covers for the header collage. Rows keep playlist order and duplicates.
+pub async fn page_json(dbs: &Dbs, playlist_id: &str, offline: bool) -> Result<String> {
+    #[derive(sqlx::FromRow)]
+    struct PlaylistRow {
+        id: String,
+        source: String,
+        name: String,
+        comment: Option<String>,
+        owner: Option<String>,
+        song_count: i64,
+        duration: i64,
+    }
+    #[derive(sqlx::FromRow)]
+    struct SongRow {
+        position: i64,
+        song_id: Option<String>,
+        title: String,
+        artist: Option<String>,
+        album: Option<String>,
+        duration: Option<i64>,
+        cover_art: Option<String>,
+    }
+
+    let playlist = sqlx::query_as::<_, PlaylistRow>(
+        "SELECT id, source, name, comment, owner, song_count, duration
+         FROM playlist WHERE id = ?1",
+    )
+    .bind(playlist_id)
+    .fetch_optional(&dbs.playlist)
+    .await?
+    .ok_or_else(|| anyhow::anyhow!("playlist not found"))?;
+
+    let rows = sqlx::query_as::<_, SongRow>(
+        "SELECT position, song_id, title, artist, album, duration, cover_art
+         FROM playlist_song WHERE playlist_id = ?1 ORDER BY position",
+    )
+    .bind(playlist_id)
+    .fetch_all(&dbs.playlist)
+    .await?;
+
+    let ids: Vec<String> = rows.iter().filter_map(|row| row.song_id.clone()).collect();
+    let library = crate::library::songs_by_ids(&dbs.library, &ids).await?;
+    let by_id: HashMap<String, crate::library::SongRow> =
+        library.into_iter().map(|song| (song.id.clone(), song)).collect();
+    let cover_ids: Vec<Option<String>> = rows
+        .iter()
+        .map(|row| row.cover_art.clone())
+        .chain(by_id.values().map(|song| song.cover_art.clone()))
+        .collect();
+    let covers = crate::covers::url_map_for(&dbs, cover_ids.iter()).await?;
+    let filter = crate::offline::load(dbs, offline).await?;
+
+    let mut collage: Vec<String> = Vec::new();
+    let mut songs = Vec::with_capacity(rows.len());
+    for row in &rows {
+        let library_song = row
+            .song_id
+            .as_ref()
+            .and_then(|id| by_id.get(id));
+        let cover = row
+            .cover_art
+            .as_ref()
+            .and_then(|id| covers.get(id).cloned())
+            .or_else(|| {
+                library_song
+                    .and_then(|song| song.cover_art.as_ref())
+                    .and_then(|id| covers.get(id).cloned())
+            })
+            .unwrap_or_default();
+        if !cover.is_empty() && !collage.contains(&cover) && collage.len() < 3 {
+            collage.push(cover.clone());
+        }
+        let playable = library_song.is_some()
+            && filter
+                .as_ref()
+                .is_none_or(|filter| filter.contains_song(row.song_id.as_deref().unwrap_or("")));
+        let duration = row
+            .duration
+            .or_else(|| library_song.and_then(|song| song.duration.map(i64::from)));
+        let album_id = library_song
+            .and_then(|song| song.album_id.clone())
+            .unwrap_or_default();
+        let track = library_song
+            .and_then(|song| song.track)
+            .unwrap_or(row.position as i32 + 1);
+        songs.push(serde_json::json!({
+            "position": row.position,
+            "track": track.to_string(),
+            "title": row.title,
+            "subtitle": row.artist.clone().or_else(|| library_song.and_then(|s| s.artist.clone())).unwrap_or_default(),
+            "album": row.album.clone().or_else(|| library_song.and_then(|s| s.album.clone())).unwrap_or_default(),
+            "duration": duration.map(|seconds| crate::browse::rows::format_duration(Some(seconds as i32))).unwrap_or_default(),
+            "cover": cover,
+            "songId": row.song_id.clone().unwrap_or_default(),
+            "albumId": album_id,
+            "starred": library_song.and_then(|song| song.starred.as_ref()).is_some(),
+            "playable": playable,
+        }));
+    }
+
+    let origin = if playlist.source == "m3u" {
+        "M3U".to_string()
+    } else if let Some(owner) = playlist.owner.as_ref().filter(|owner| !owner.is_empty()) {
+        owner.clone()
+    } else {
+        "Playlist".to_string()
+    };
+    Ok(serde_json::json!({
+        "playlist_id": playlist.id,
+        "name": playlist.name,
+        "comment": playlist.comment.unwrap_or_default(),
+        "subtitle": format!("{origin} · {} song{}", playlist.song_count,
+            if playlist.song_count == 1 { "" } else { "s" }),
+        "meta": if playlist.duration > 0 {
+            crate::browse::rows::format_duration(Some(playlist.duration as i32))
+        } else {
+            String::new()
+        },
+        "song_count": playlist.song_count,
+        "collage": collage,
+        "songs": songs,
+    })
+    .to_string())
+}

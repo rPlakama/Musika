@@ -30,7 +30,7 @@ use crate::browse::{
 };
 use crate::keybind::{Keymap, Outcome};
 use crate::player::{Player, State};
-use crate::queue::{album_tracks_json, library_queue_payload, song_album_payload};
+use crate::queue::{album_tracks_json, library_queue_payload, playlist_tracks_json, song_album_payload};
 
 #[path = "qml_backend/artist.rs"]
 mod artist;
@@ -1529,6 +1529,38 @@ impl Backend {
             match client(&dbs).await {
                 Ok(client) => crate::playlists::refresh(&dbs, &client).await,
                 Err(_) => crate::playlists::scan(&dbs).await,
+            }
+        });
+    }
+
+    /// ARC-44 M2: the playlist page payload (identity, songs, collage).
+    #[qslot(qml_name = "requestPlaylist")]
+    fn request_playlist(&mut self, playlist_id: String) {
+        let invoker = self.get_qml_method_invoker();
+        let offline = self.offline;
+        self.spawn_task(move |dbs| async move {
+            match crate::playlists::page_json(&dbs, &playlist_id, offline).await {
+                Ok(payload) => emit(&invoker, "playlist", payload),
+                Err(err) => eprintln!("qml: playlist load failed: {err:#}"),
+            }
+        });
+    }
+
+    /// Plays a playlist from the clicked row, translating unplayable rows to
+    /// the next playable queue index.
+    #[qslot(qml_name = "playPlaylist")]
+    fn play_playlist(&mut self, playlist_id: String, start: i64) {
+        let invoker = self.get_qml_method_invoker();
+        let offline = self.offline;
+        self.spawn_task(move |dbs| async move {
+            match playlist_tracks_json(&dbs, &playlist_id, offline, start).await {
+                Ok((json, queue_start)) => {
+                    qtbridge::invoke_method!(invoker, "playerLoad", json, queue_start);
+                }
+                Err(err) => {
+                    eprintln!("player: could not start playlist: {err:#}");
+                    raise(&invoker, "playback", format!("{err:#}"))
+                }
             }
         });
     }

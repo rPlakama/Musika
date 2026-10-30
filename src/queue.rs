@@ -120,6 +120,42 @@ pub async fn album_tracks_json(
     tracks_json(dbs, songs).await
 }
 
+/// The playlist queue: playlist order preserved, duplicate tracks kept,
+/// missing/offline rows skipped, and the clicked row translated to its
+/// playable queue index.
+pub async fn playlist_tracks_json(
+    dbs: &crate::db::Dbs,
+    playlist_id: &str,
+    offline: bool,
+    start_row: i64,
+) -> anyhow::Result<(String, i64)> {
+    let ids: Vec<Option<String>> = sqlx::query_scalar(
+        "SELECT song_id FROM playlist_song WHERE playlist_id = ?1 ORDER BY position",
+    )
+    .bind(playlist_id)
+    .fetch_all(&dbs.playlist)
+    .await?;
+    let unique: Vec<String> = ids.iter().flatten().cloned().collect();
+    let library = crate::library::songs_by_ids(&dbs.library, &unique).await?;
+    let by_id: std::collections::HashMap<String, crate::library::SongRow> =
+        library.into_iter().map(|song| (song.id.clone(), song)).collect();
+    let filter = crate::offline::load(dbs, offline).await?;
+    let mut songs = Vec::new();
+    let mut start = 0i64;
+    for (position, id) in ids.iter().enumerate() {
+        let Some(id) = id.as_ref() else { continue };
+        let Some(song) = by_id.get(id) else { continue };
+        if filter.as_ref().is_some_and(|filter| !filter.contains_song(id)) {
+            continue;
+        }
+        if position < start_row.max(0) as usize {
+            start += 1;
+        }
+        songs.push(song.clone());
+    }
+    Ok((tracks_json(dbs, songs).await?, start))
+}
+
 /// The artist's shuffle queue: the artist's albums (the albums table's
 /// mapping) Fisher–Yates shuffled, each expanding to its tracklist — one
 /// album after another until the array ends. The queue holds the songs of

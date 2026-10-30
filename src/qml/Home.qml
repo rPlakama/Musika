@@ -181,6 +181,14 @@ Item {
                         albumStarred: item.albumStarred === true
                     }
                 });
+            } else if (item.playlistId !== undefined) {
+                pages.push({
+                    kind: "playlist",
+                    page: {
+                        playlistId: item.playlistId,
+                        playlistTitle: item.playlistTitle
+                    }
+                });
             } else if (item.artistId !== undefined) {
                 pages.push({
                     kind: "artist",
@@ -278,6 +286,8 @@ Item {
                 contentStack.push(albumEntryComponent, entry.page, StackView.Immediate);
             } else if (entry.kind === "artist") {
                 contentStack.push(artistEntryComponent, entry.page, StackView.Immediate);
+            } else if (entry.kind === "playlist") {
+                contentStack.push(playlistEntryComponent, entry.page, StackView.Immediate);
             }
         }
         nowPlayingExpanded = place.fullscreen === true;
@@ -353,6 +363,13 @@ Item {
             contentStack.push(albumEntryComponent, page, StackView.Immediate);
         else
             contentStack.push(albumEntryComponent, page);
+    }
+
+    function openPlaylist(playlistId, title) {
+        contentStack.push(playlistEntryComponent, {
+            playlistId: playlistId,
+            playlistTitle: title ? title : ""
+        });
     }
 
     function openArtist(artistId, artistName, artistCover, instant) {
@@ -1082,8 +1099,7 @@ Item {
                     Component {
                         id: playlistListComponent
                         PlaylistList {
-                            // ARC-44 M0: the list lands first; the entry page
-                            // (M2) hangs off this signal.
+                            onPlaylistActivated: (playlistId) => root.openPlaylist(playlistId, "")
                         }
                     }
 
@@ -1105,6 +1121,13 @@ Item {
                             // ARC-I-2: the page arms the shared Alt overlay on
                             // its song rows.
                             onQuickAction: (target, actions) => root.armQuickActions(target, actions)
+                        }
+                    }
+
+                    Component {
+                        id: playlistEntryComponent
+                        PlaylistEntry {
+                            onBack: contentStack.pop()
                         }
                     }
                 }

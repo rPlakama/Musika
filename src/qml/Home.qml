@@ -1292,6 +1292,7 @@ Item {
             root.nowPlayingExpanded = false;
             root.openArtist(artistId, artistName, artistCover);
         }
+        onPlaylistActivated: (playlistId, playlistName) => root.openPlaylist(playlistId, playlistName)
     }
 
     // ARC-UI-2 M0: the `/` in-surface search command line. `zCommand` rides

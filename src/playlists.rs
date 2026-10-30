@@ -660,10 +660,11 @@ pub async fn page_json(dbs: &Dbs, playlist_id: &str, offline: bool) -> Result<St
             collage_origins.push(origin);
             collage.push(cover.clone());
         }
-        let playable = library_song.is_some()
-            && filter
+        let playable = row.song_id.as_ref().is_some_and(|id| {
+            filter
                 .as_ref()
-                .is_none_or(|filter| filter.contains_song(row.song_id.as_deref().unwrap_or("")));
+                .is_none_or(|filter| filter.contains_song(id))
+        });
         let duration = row
             .duration
             .or_else(|| library_song.and_then(|song| song.duration.map(i64::from)));
@@ -711,4 +712,57 @@ pub async fn page_json(dbs: &Dbs, playlist_id: &str, offline: bool) -> Result<St
         "songs": songs,
     })
     .to_string())
+}
+
+/// Playlist hits for the unified search. Playlists live in their own database,
+/// so they are matched here by name rather than through the song FTS index.
+pub async fn search_rows(
+    dbs: &Dbs,
+    query: &str,
+    limit: i64,
+) -> Result<Vec<serde_json::Value>> {
+    let like = format!("%{}%", query.trim());
+    let rows: Vec<PlaylistListRow> = sqlx::query_as(
+        "SELECT id, source, name, song_count, duration, owner
+         FROM playlist
+         WHERE song_count > 0 AND lower(name) LIKE lower(?1)
+         ORDER BY lower(name) LIMIT ?2",
+    )
+    .bind(like)
+    .bind(limit.max(1))
+    .fetch_all(&dbs.playlist)
+    .await?;
+    Ok(rows
+        .into_iter()
+        .map(|row| {
+            let origin = if row.source == "m3u" {
+                "M3U".to_string()
+            } else if let Some(owner) = row.owner.as_ref().filter(|owner| !owner.is_empty()) {
+                owner.clone()
+            } else {
+                "Playlist".to_string()
+            };
+            serde_json::json!({
+                "id": row.id,
+                "name": row.name,
+                "song_count": row.song_count,
+                "duration": row.duration,
+                "owner": row.owner,
+                "title": row.name,
+                "subtitle": format!("{origin} · {} song{}", row.song_count,
+                    if row.song_count == 1 { "" } else { "s" }),
+                "meta": if row.duration > 0 {
+                    crate::browse::rows::format_duration(Some(row.duration as i32))
+                } else {
+                    String::new()
+                },
+                "playlistId": row.id,
+                "songId": "",
+                "albumId": "",
+                "cover": "",
+                "starred": false,
+                "rating": 0,
+            })
+        })
+        .collect())
 }

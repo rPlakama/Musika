@@ -129,29 +129,51 @@ pub async fn playlist_tracks_json(
     offline: bool,
     start_row: i64,
 ) -> anyhow::Result<(String, i64)> {
-    let ids: Vec<Option<String>> = sqlx::query_scalar(
-        "SELECT song_id FROM playlist_song WHERE playlist_id = ?1 ORDER BY position",
+    #[derive(sqlx::FromRow)]
+    struct PlaylistSong {
+        position: i64,
+        song_id: Option<String>,
+        title: String,
+        artist: Option<String>,
+        album: Option<String>,
+        duration: Option<i64>,
+        cover_art: Option<String>,
+    }
+    let rows = sqlx::query_as::<_, PlaylistSong>(
+        "SELECT position, song_id, title, artist, album, duration, cover_art
+         FROM playlist_song WHERE playlist_id = ?1 ORDER BY position",
     )
     .bind(playlist_id)
     .fetch_all(&dbs.playlist)
     .await?;
-    let unique: Vec<String> = ids.iter().flatten().cloned().collect();
+    let unique: Vec<String> = rows.iter().filter_map(|row| row.song_id.clone()).collect();
     let library = crate::library::songs_by_ids(&dbs.library, &unique).await?;
     let by_id: std::collections::HashMap<String, crate::library::SongRow> =
         library.into_iter().map(|song| (song.id.clone(), song)).collect();
     let filter = crate::offline::load(dbs, offline).await?;
     let mut songs = Vec::new();
     let mut start = 0i64;
-    for (position, id) in ids.iter().enumerate() {
-        let Some(id) = id.as_ref() else { continue };
-        let Some(song) = by_id.get(id) else { continue };
+    for row in &rows {
+        let Some(id) = row.song_id.as_ref() else { continue };
         if filter.as_ref().is_some_and(|filter| !filter.contains_song(id)) {
             continue;
         }
-        if position < start_row.max(0) as usize {
+        let song = by_id.get(id).cloned().unwrap_or_else(|| crate::library::SongRow {
+            id: id.clone(),
+            title: row.title.clone(),
+            artist: row.artist.clone(),
+            album: row.album.clone(),
+            album_id: None,
+            track: Some(row.position as i32 + 1),
+            duration: row.duration.map(|value| value as i32),
+            suffix: None,
+            cover_art: row.cover_art.clone(),
+            starred: None,
+        });
+        if row.position < start_row.max(0) {
             start += 1;
         }
-        songs.push(song.clone());
+        songs.push(song);
     }
     Ok((tracks_json(dbs, songs).await?, start))
 }

@@ -38,14 +38,14 @@ Item {
     // default; a scope with no hits falls through to the next one.
     property int scope: 0
     // Per-scope cursor memory, so switching scope returns to the last row.
-    property var scopeCursors: [0, 0, 0]
+    property var scopeCursors: [0, 0, 0, 0]
     // UI-55: the item behind the floating panel whose pixels feed the acrylic
     // blur (the shell, or the fullscreen player when it is up).
     property Item backdrop: null
     // UI-49: last query that already got the denied cue, so one response (or
     // one Enter) lights it once and holding a zero query never strobes.
     property string _zeroQuery: ""
-    readonly property var scopeTitles: ["Songs", "Albums", "Artists"]
+    readonly property var scopeTitles: ["Songs", "Albums", "Artists", "Playlists"]
     /// The panel's stable height (chrome, row sizing and the panel itself).
     readonly property real panelRefHeight: root.height * 0.78
     /// Only fetch the rows the list can actually paint. Before the layout has
@@ -60,11 +60,12 @@ Item {
     /// with one message.
     readonly property bool nothingFound: field.text.length > 0
         && !root.loading
-        && songResults.count + albumResults.count + artistResults.count === 0
+        && songResults.count + albumResults.count + artistResults.count + playlistResults.count === 0
 
     signal songActivated(string id, string albumId, string albumTitle, string artist, string cover)
     signal albumActivated(string albumId, string title, string artist, string year, string tracks, string cover, bool starred)
     signal artistActivated(string artistId, string artistName, string artistCover)
+    signal playlistActivated(string playlistId, string playlistName)
     /// ARC-I: Alt-hold quick actions armed on the active cursor row; Home
     /// routes it to the shared overlay.
     signal quickAction(var target, var actions)
@@ -232,8 +233,9 @@ Item {
         songResults.clear();
         albumResults.clear();
         artistResults.clear();
+        playlistResults.clear();
         resultsColumn.cursor = -1;
-        root.scopeCursors = [0, 0, 0];
+        root.scopeCursors = [0, 0, 0, 0];
         root._zeroQuery = "";
     }
 
@@ -242,7 +244,9 @@ Item {
             return songResults;
         if (index === 1)
             return albumResults;
-        return artistResults;
+        if (index === 2)
+            return artistResults;
+        return playlistResults;
     }
 
     function scopeCount(index) {
@@ -265,7 +269,7 @@ Item {
     function moveScope(delta) {
         // VI-4: one scope's selection at a time.
         resultsColumn.clearSelection();
-        setScope((root.scope + delta + 3) % 3);
+        setScope((root.scope + delta + root.scopeTitles.length) % root.scopeTitles.length);
     }
 
     /// ARC-UI-2: the overlay as one `/` surface — the visible scope's rows.
@@ -337,8 +341,10 @@ Item {
                 hit.cover ? hit.cover : "");
         else if (root.scope === 1)
             root.albumActivated(hit.id, hit.title, hit.artist, hit.year, hit.tracks, hit.cover, hit.starred === true);
-        else
+        else if (root.scope === 2)
             root.artistActivated(hit.id, hit.title, hit.cover);
+        else
+            root.playlistActivated(hit.id, hit.title);
         close();
     }
 
@@ -413,7 +419,8 @@ Item {
         // makes an identical result flicker.
         if (root.sameRows(songResults, data.songs)
                 && root.sameRows(albumResults, data.albums)
-                && root.sameRows(artistResults, data.artists)) {
+                && root.sameRows(artistResults, data.artists)
+                && root.sameRows(playlistResults, data.playlists || [])) {
             loading = false;
             return;
         }
@@ -422,6 +429,7 @@ Item {
         var songRows = [];
         var albumRows = [];
         var artistRows = [];
+        var playlistRows = [];
 
         var i;
         for (i = 0; i < data.songs.length; i++) {
@@ -479,9 +487,27 @@ Item {
             });
         }
 
+        var playlists = data.playlists || [];
+        for (i = 0; i < playlists.length; i++) {
+            var playlist = playlists[i];
+            playlistRows.push({
+                id: playlist.id,
+                title: playlist.name,
+                subtitle: playlist.subtitle ? String(playlist.subtitle) : "",
+                meta: playlist.meta ? String(playlist.meta) : "",
+                cover: "",
+                songId: "",
+                albumId: "",
+                playlistId: playlist.id,
+                starred: false,
+                rating: 0
+            });
+        }
+
         var idsSame = root.sameIds(songResults, data.songs)
             && root.sameIds(albumResults, data.albums)
-            && root.sameIds(artistResults, data.artists);
+            && root.sameIds(artistResults, data.artists)
+            && root.sameIds(playlistResults, data.playlists || []);
         // Drop the cursor before rows disappear: ListView otherwise cancels a
         // pending delegate whose old index is past the shrunken model (the
         // `DelegateModel::cancel: index out of range` warning).
@@ -490,6 +516,7 @@ Item {
         root.syncRows(songResults, songRows);
         root.syncRows(albumResults, albumRows);
         root.syncRows(artistResults, artistRows);
+        root.syncRows(playlistResults, playlistRows);
         resultsColumn.opacity = 1;
 
         // Same IDs mean this is an in-place metadata refresh, not a new
@@ -499,10 +526,10 @@ Item {
             // on its first row. An empty scope falls through to the next one,
             // so a query with only song hits lands there instead of showing a
             // blank artist list.
-            root.scopeCursors = [0, 0, 0];
+            root.scopeCursors = [0, 0, 0, 0];
             if (root.scopeCount(root.scope) === 0) {
-                for (var step = 0; step < 3; ++step) {
-                    var candidate = (root.scope + step) % 3;
+                for (var step = 0; step < root.scopeTitles.length; ++step) {
+                    var candidate = (root.scope + step) % root.scopeTitles.length;
                     if (root.scopeCount(candidate) > 0) {
                         root.scope = candidate;
                         break;
@@ -519,7 +546,7 @@ Item {
         // UI-49: the response landing on zero hits is denied input — once per
         // distinct query, never again while the same zero query is held. An
         // empty library is not denied input.
-        var total = songResults.count + albumResults.count + artistResults.count;
+        var total = songResults.count + albumResults.count + artistResults.count + playlistResults.count;
         if (!data.most_played && total === 0) {
             if (field.text !== root._zeroQuery)
                 root.denied();
@@ -539,6 +566,10 @@ Item {
 
     ListModel {
         id: artistResults
+    }
+
+    ListModel {
+        id: playlistResults
     }
 
     Timer {
@@ -779,8 +810,8 @@ Item {
                 loading: root.loading
                 hasQuery: field.text.length > 0
                 headerRefHeight: root.panelRefHeight
-                quickActionKind: root.scope === 0 ? "song" : (root.scope === 1 ? "album" : "artist")
-                selectionField: root.scope === 0 ? "songId" : (root.scope === 1 ? "albumId" : "artistId")
+                quickActionKind: root.scope === 0 ? "song" : (root.scope === 1 ? "album" : (root.scope === 2 ? "artist" : ""))
+                selectionField: root.scope === 0 ? "songId" : (root.scope === 1 ? "albumId" : (root.scope === 2 ? "artistId" : ""))
 
                 onQuickAction: (target, actions) => root.quickAction(target, actions)
 

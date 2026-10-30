@@ -263,6 +263,7 @@ async fn search_value_fts(
         albums.into_iter().map(std::sync::Arc::new).collect(),
         songs,
         None,
+        limit,
     )
     .await
 }
@@ -346,6 +347,7 @@ pub(crate) async fn search_value_index(
         albums,
         songs,
         album_context,
+        limit,
     )
     .await
 }
@@ -358,7 +360,9 @@ async fn search_payload_value(
     albums: Vec<std::sync::Arc<crate::library::AlbumRow>>,
     songs: Vec<SearchSong>,
     album_context: Option<String>,
+    limit: usize,
 ) -> anyhow::Result<serde_json::Value> {
+    let playlists = crate::playlists::search_rows(dbs, query, limit as i64).await?;
     let mut cover_ids: Vec<String> = albums
         .iter()
         .filter_map(|album| album.cover_art.clone())
@@ -429,5 +433,6 @@ async fn search_payload_value(
         "artists": artist_rows,
         "albums": album_rows,
         "songs": song_rows,
+        "playlists": playlists,
     }))
 }

@@ -52,6 +52,7 @@ MediaList {
         virtualSongs.setOrder(Backend.songOrder);
         virtualSongs.ensure(0, Theme.rowBudget - 1);
         root.loading = false;
+        root.finishVirtualReset();
     }
 
     function requestFull(showLoading) {
@@ -70,6 +71,7 @@ MediaList {
         virtualSongs.setOrder(Backend.songOrder);
         virtualSongs.ensure(0, Theme.rowBudget - 1);
         root.loading = false;
+        root.finishVirtualReset();
         Backend.scrollHydrate();
     }
 

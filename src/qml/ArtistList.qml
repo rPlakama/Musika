@@ -47,6 +47,7 @@ MediaList {
         virtualArtists.setOrder(Backend.artistOrder);
         virtualArtists.ensure(0, Theme.rowBudget - 1);
         root.loading = false;
+        root.finishVirtualReset();
     }
 
     function requestFull(showLoading) {
@@ -57,6 +58,7 @@ MediaList {
         virtualArtists.setOrder(Backend.artistOrder);
         virtualArtists.ensure(0, Theme.rowBudget - 1);
         root.loading = false;
+        root.finishVirtualReset();
     }
 
     function apply(payload) {

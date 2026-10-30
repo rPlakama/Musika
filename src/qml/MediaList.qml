@@ -217,6 +217,13 @@ ScrollPanel {
             mediaRows.append(rows[i]);
     }
 
+    function finishVirtualReset() {
+        if (root.resetPending) {
+            root.resetPending = false;
+            root.resetViewNow();
+        }
+    }
+
     function ensureVirtualWindow() {
         if (!root.virtualModel || root.firstVisibleIndex < 0
                 || root.lastVisibleIndex < root.firstVisibleIndex)

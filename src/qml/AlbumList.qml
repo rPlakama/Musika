@@ -47,6 +47,7 @@ MediaList {
         virtualAlbums.setFilter(root.artistFilter);
         virtualAlbums.ensure(0, Theme.rowBudget - 1);
         root.loading = false;
+        root.finishVirtualReset();
     }
 
     function requestFull(showLoading) {
@@ -58,6 +59,7 @@ MediaList {
         virtualAlbums.setFilter(root.artistFilter);
         virtualAlbums.ensure(0, Theme.rowBudget - 1);
         root.loading = false;
+        root.finishVirtualReset();
     }
 
     function apply(payload) {

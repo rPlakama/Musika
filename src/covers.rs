@@ -803,7 +803,7 @@ async fn cached_urls(pool: &SqlitePool, ids: &[String]) -> Result<HashMap<String
     let mut thumb_jobs: Vec<(String, PathBuf)> = Vec::new();
     for chunk in unique.chunks(crate::cache::IN_BATCH) {
         let mut builder = sqlx::QueryBuilder::new("SELECT id, file FROM covers WHERE id IN (");
-        crate::cache::push_in_list_refs(&mut builder, chunk);
+        crate::cache::push_in_list(&mut builder, chunk);
         let rows: Vec<(String, String)> = builder.build_query_as().fetch_all(pool).await?;
         for (id, file) in rows {
             let path = dir.join(&file);

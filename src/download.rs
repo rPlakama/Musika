@@ -129,25 +129,21 @@ pub async fn done_ids(pool: &SqlitePool) -> Result<Vec<String>> {
     Ok(ids)
 }
 
-/// The downloaded catalog while offline; `None` when online.
-pub async fn offline_song_ids(
+/// The downloaded catalog. Callers gate this on the offline flag.
+pub async fn downloaded_song_ids(
     dbs: &crate::db::Dbs,
-    offline: bool,
-) -> Result<Option<std::collections::HashSet<String>>> {
-    if !offline {
-        return Ok(None);
-    }
-    Ok(Some(done_ids(&dbs.download).await?.into_iter().collect()))
+) -> Result<std::collections::HashSet<String>> {
+    Ok(done_ids(&dbs.download).await?.into_iter().collect())
 }
 
-/// The finished subset of `ids` — the row marks' window read. One batched
-/// query; an empty window costs nothing.
-pub async fn done_ids_of(pool: &SqlitePool, ids: &[String]) -> Result<Vec<String>> {
+/// The subset of `ids` whose ledger state satisfies `state_sql` — the row
+/// marks' window read. One batched query; an empty window costs nothing.
+async fn ids_of(pool: &SqlitePool, ids: &[String], state_sql: &str) -> Result<Vec<String>> {
     let mut out = Vec::new();
     for chunk in ids.chunks(crate::cache::IN_BATCH) {
-        let mut builder = sqlx::QueryBuilder::new(
-            "SELECT song_id FROM download WHERE state = 'done' AND song_id IN (",
-        );
+        let mut builder = sqlx::QueryBuilder::new(format!(
+            "SELECT song_id FROM download WHERE {state_sql} AND song_id IN ("
+        ));
         crate::cache::push_in_list(&mut builder, chunk);
         let rows = builder
             .build_query_scalar::<String>()
@@ -156,24 +152,17 @@ pub async fn done_ids_of(pool: &SqlitePool, ids: &[String]) -> Result<Vec<String
         out.extend(rows);
     }
     Ok(out)
+}
+
+/// The finished subset of `ids`.
+pub async fn done_ids_of(pool: &SqlitePool, ids: &[String]) -> Result<Vec<String>> {
+    ids_of(pool, ids, "state = 'done'").await
 }
 
 /// The in-flight subset of `ids` (`queued`/`active`) — the row marks show
 /// the loading glyph for these while the fetch runs.
 pub async fn pending_ids_of(pool: &SqlitePool, ids: &[String]) -> Result<Vec<String>> {
-    let mut out = Vec::new();
-    for chunk in ids.chunks(crate::cache::IN_BATCH) {
-        let mut builder = sqlx::QueryBuilder::new(
-            "SELECT song_id FROM download WHERE state IN ('queued', 'active') AND song_id IN (",
-        );
-        crate::cache::push_in_list(&mut builder, chunk);
-        let rows = builder
-            .build_query_scalar::<String>()
-            .fetch_all(pool)
-            .await?;
-        out.extend(rows);
-    }
-    Ok(out)
+    ids_of(pool, ids, "state IN ('queued', 'active')").await
 }
 
 /// Per-state counts for the status UI (`CACHE-7`): queued / active / done /

@@ -21,7 +21,7 @@
 //! columns, because SQLite cannot join across databases.
 
 use anyhow::Result;
-use sqlx::FromRow;
+use sqlx::AssertSqlSafe;
 use sqlx::sqlite::SqlitePool;
 
 use crate::library::SongSearchRow;
@@ -52,17 +52,11 @@ pub fn engine() -> Engine {
     }
 }
 
-/// A full-text search result.
-#[derive(Debug, Clone, FromRow)]
-pub struct SearchHit {
-    pub song_id: String,
-    pub title: String,
-    pub artist: Option<String>,
-    pub album: Option<String>,
-    #[allow(dead_code)]
-    pub duration: Option<i32>,
-    pub play_count: i64,
-}
+/// The columns a search hit shares with a library search row. The FTS table
+/// names its primary key `song_id`, so alias it to the library role.
+const SEARCH_COLUMNS: &str = "song_id AS id, title, artist, album,
+    CAST(NULLIF(duration, '') AS INTEGER) AS duration,
+    COALESCE(play_count, 0) AS play_count";
 
 /// How much one play (from the server's play count) nudges an FTS rank.
 /// Rank leads: a strong text match still beats a heavily played weak one.
@@ -132,44 +126,40 @@ pub async fn rebuild_from_library(pool: &SqlitePool) -> Result<()> {
 /// prefix, so punctuation and FTS5 operators typed by the user are literal and
 /// `radio` matches `Radiohead` while the palette is being typed. The rank is
 /// nudged by the play count (S-9's usage boost) but the text rank still leads.
-pub async fn search(pool: &SqlitePool, raw: &str, limit: i64) -> Result<Vec<SearchHit>> {
+pub async fn search(pool: &SqlitePool, raw: &str, limit: i64) -> Result<Vec<SongSearchRow>> {
     let query = fts_query(raw);
     if query.is_empty() {
         return Ok(Vec::new());
     }
 
-    let hits = sqlx::query_as::<_, SearchHit>(
-        "SELECT song_id, title, artist, album,
-                CAST(NULLIF(duration, '') AS INTEGER) AS duration,
-                COALESCE(play_count, 0) AS play_count
-         FROM song_search
+    let sql = format!(
+        "SELECT {SEARCH_COLUMNS} FROM song_search
          WHERE song_search MATCH ?1
          ORDER BY rank - COALESCE(play_count, 0) * ?3, rank
-         LIMIT ?2",
-    )
-    .bind(query)
-    .bind(limit)
-    .bind(PLAY_BOOST)
-    .fetch_all(pool)
-    .await?;
+         LIMIT ?2"
+    );
+    let hits = sqlx::query_as::<_, SongSearchRow>(AssertSqlSafe(sql))
+        .bind(query)
+        .bind(limit)
+        .bind(PLAY_BOOST)
+        .fetch_all(pool)
+        .await?;
 
     Ok(hits)
 }
 
 /// The empty-query surface (S-9): the most played songs, tie-broken by title.
 /// A library with no play counts still returns its songs in title order.
-pub async fn most_played(pool: &SqlitePool, limit: i64) -> Result<Vec<SearchHit>> {
-    let hits = sqlx::query_as::<_, SearchHit>(
-        "SELECT song_id, title, artist, album,
-                CAST(NULLIF(duration, '') AS INTEGER) AS duration,
-                COALESCE(play_count, 0) AS play_count
-         FROM song_search
+pub async fn most_played(pool: &SqlitePool, limit: i64) -> Result<Vec<SongSearchRow>> {
+    let sql = format!(
+        "SELECT {SEARCH_COLUMNS} FROM song_search
          ORDER BY COALESCE(play_count, 0) DESC, title
-         LIMIT ?1",
-    )
-    .bind(limit)
-    .fetch_all(pool)
-    .await?;
+         LIMIT ?1"
+    );
+    let hits = sqlx::query_as::<_, SongSearchRow>(AssertSqlSafe(sql))
+        .bind(limit)
+        .fetch_all(pool)
+        .await?;
 
     Ok(hits)
 }

@@ -227,11 +227,11 @@ async fn search_value_fts(
     artists.truncate(limit);
     albums.truncate(limit);
     if let Some(filter) = &filter {
-        songs.retain(|song| filter.contains_song(&song.song_id));
+        songs.retain(|song| filter.contains_song(&song.id));
     }
     songs.truncate(limit);
 
-    let song_ids: Vec<String> = songs.iter().map(|song| song.song_id.clone()).collect();
+    let song_ids: Vec<String> = songs.iter().map(|song| song.id.clone()).collect();
     let (song_covers, song_albums) = tokio::try_join!(
         crate::library::song_cover_ids(&dbs.library, &song_ids),
         crate::library::song_album_ids(&dbs.library, &song_ids),
@@ -239,10 +239,10 @@ async fn search_value_fts(
     let songs: Vec<SearchSong> = songs
         .into_iter()
         .map(|song| {
-            let cover_art = song_covers.get(&song.song_id).cloned();
-            let album_id = song_albums.get(&song.song_id).cloned();
+            let cover_art = song_covers.get(&song.id).cloned();
+            let album_id = song_albums.get(&song.id).cloned();
             SearchSong {
-                id: song.song_id,
+                id: song.id,
                 title: song.title,
                 artist: song.artist,
                 album: song.album,
@@ -250,7 +250,7 @@ async fn search_value_fts(
                 track: None,
                 duration: song.duration,
                 cover_art,
-                play_count: song.play_count,
+                play_count: song.play_count.unwrap_or(0),
             }
         })
         .collect();

@@ -267,7 +267,7 @@ pub async fn album_covers_refs(
         let mut builder = sqlx::QueryBuilder::new(
             "SELECT id, cover_art FROM albums WHERE cover_art IS NOT NULL AND id IN (",
         );
-        crate::cache::push_in_list_refs(&mut builder, chunk);
+        crate::cache::push_in_list(&mut builder, chunk);
         let rows: Vec<(String, String)> = builder.build_query_as().fetch_all(pool).await?;
         covers.extend(rows);
     }
@@ -351,7 +351,7 @@ pub async fn existing_song_ids(
     for chunk in ids.chunks(crate::cache::IN_BATCH) {
         let mut builder =
             sqlx::QueryBuilder::<sqlx::Sqlite>::new("SELECT id FROM songs WHERE id IN (");
-        crate::cache::push_in_list_refs(&mut builder, chunk);
+        crate::cache::push_in_list(&mut builder, chunk);
         let found: Vec<String> = builder.build_query_scalar().fetch_all(pool).await?;
         existing.extend(found);
     }
@@ -860,7 +860,7 @@ pub async fn songs_by_ids_refs(pool: &SqlitePool, ids: &[&str]) -> Result<Vec<So
     }
 
     let mut builder = sqlx::QueryBuilder::new(format!("{SONG_SELECT} WHERE s.id IN ("));
-    crate::cache::push_in_list_refs(&mut builder, ids);
+    crate::cache::push_in_list(&mut builder, ids);
 
     let rows: Vec<SongRow> = builder.build_query_as().fetch_all(pool).await?;
     let mut by_id: std::collections::HashMap<String, SongRow> =

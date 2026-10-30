@@ -415,16 +415,16 @@ pub async fn resume_payload(
 ) -> anyhow::Result<String> {
     // CACHE-9: offline, only downloaded content comes back; the album page
     // reopens only when it owns downloads.
-    let offline_albums = match crate::download::offline_song_ids(dbs, offline).await? {
-        Some(songs) => {
-            let ids: Vec<String> = songs.into_iter().collect();
-            Some(
-                crate::library::downloaded_owners(&dbs.library, &ids)
-                    .await?
-                    .0,
-            )
-        }
-        None => None,
+    let offline_albums = if offline {
+        let songs = crate::download::downloaded_song_ids(dbs).await?;
+        let ids: Vec<String> = songs.into_iter().collect();
+        Some(
+            crate::library::downloaded_owners(&dbs.library, &ids)
+                .await?
+                .0,
+        )
+    } else {
+        None
     };
 
     let album = match status.album_id.as_deref().filter(|id| !id.is_empty()) {

@@ -92,6 +92,29 @@ pub(super) async fn apply_window(
     qtbridge::invoke_method!(invoker, "applyDownloadedIds", json);
 }
 
+/// Reports one finished/failed song and, on success, flips its album when
+/// that tracklist just became complete. Returns the invoker because it is
+/// neither `Clone` nor `Sync` and cannot be borrowed across the await.
+async fn report_song_state(
+    dbs: &crate::db::Dbs,
+    invoker: qtbridge::QmlMethodInvoker,
+    song_id: &str,
+    state: &str,
+) -> qtbridge::QmlMethodInvoker {
+    qtbridge::invoke_method!(
+        invoker,
+        "noteDownloadState",
+        song_id.to_string(),
+        state.to_string()
+    );
+    if state == crate::download::DONE {
+        if let Some(album) = completed_album(dbs, song_id).await {
+            qtbridge::invoke_method!(invoker, "markAlbumCached", album);
+        }
+    }
+    invoker
+}
+
 /// CACHE-5/8: the pass, three songs at a time, in order (the 2-D shape: the
 /// caller's list arrives album-major, so a chunk usually *is* one album's
 /// head). The loading glyph is **existence-based, not queue-based**: a
@@ -105,7 +128,7 @@ pub(super) async fn fetch_marked(
     songs: &[String],
     container_id: &str,
     album_container: bool,
-    invoker: qtbridge::QmlMethodInvoker,
+    mut invoker: qtbridge::QmlMethodInvoker,
 ) {
     for chunk in songs.chunks(crate::consts::DOWNLOAD_CONCURRENCY) {
         // The chunk's albums: their rows light up alongside its songs.
@@ -143,17 +166,7 @@ pub(super) async fn fetch_marked(
                 Ok(state) => state,
                 Err(_) => crate::download::ERROR,
             };
-            qtbridge::invoke_method!(
-                invoker,
-                "noteDownloadState",
-                song.clone(),
-                state.to_string()
-            );
-            if state == crate::download::DONE {
-                if let Some(album) = completed_album(dbs, &song).await {
-                    qtbridge::invoke_method!(invoker, "markAlbumCached", album);
-                }
-            }
+            invoker = report_song_state(dbs, invoker, &song, state).await;
         }
         // The chunk is over: its albums stop loading unless later chunks
         // hold their tracks (the container id stays held all pass).
@@ -259,6 +272,33 @@ pub(super) async fn album_container_off(dbs: &crate::db::Dbs, album_id: &str) {
     }
 }
 
+/// Selects every album's container, collects its songs, and starts one fetch
+/// pass. Album and artist selections share this tail.
+async fn queue_album_selection(
+    dbs: &crate::db::Dbs,
+    album_ids: &[String],
+    invoker: qtbridge::QmlMethodInvoker,
+    error_invoker: qtbridge::QmlMethodInvoker,
+) -> anyhow::Result<()> {
+    let mut songs: Vec<String> = Vec::new();
+    for id in album_ids {
+        match album_container_on(dbs, id).await {
+            Ok(list) => songs.extend(list),
+            Err(err) => eprintln!("download: could not select the album container: {err:#}"),
+        }
+    }
+    if songs.is_empty() {
+        raise(
+            &error_invoker,
+            "error",
+            "Nothing to download here.".to_string(),
+        );
+        return Ok(());
+    }
+    fetch_marked(dbs, &songs, "", false, invoker).await;
+    Ok(())
+}
+
 /// The Alt selection's Download toggle (VI-4), converged like the Favorite
 /// verb: when every target already holds its content the selection is
 /// removed (blob/rule), otherwise only the targets still missing are queued
@@ -313,24 +353,7 @@ pub(super) async fn selection_toggle(
                 );
                 qtbridge::invoke_method!(invoker, "ResetRowMarks");
             } else {
-                let mut songs: Vec<String> = Vec::new();
-                for id in &missing {
-                    match album_container_on(dbs, id).await {
-                        Ok(list) => songs.extend(list),
-                        Err(err) => {
-                            eprintln!("download: could not select the album container: {err:#}")
-                        }
-                    }
-                }
-                if songs.is_empty() {
-                    raise(
-                        &error_invoker,
-                        "error",
-                        "Nothing to download here.".to_string(),
-                    );
-                    return Ok(());
-                }
-                fetch_marked(dbs, &songs, "", false, invoker).await;
+                queue_album_selection(dbs, &missing, invoker, error_invoker).await?;
             }
         }
         "artist" => {
@@ -371,26 +394,11 @@ pub(super) async fn selection_toggle(
                 );
                 qtbridge::invoke_method!(invoker, "ResetRowMarks");
             } else {
-                let mut songs: Vec<String> = Vec::new();
-                for (_artist, albums) in &albums_of {
-                    for album in albums {
-                        match album_container_on(dbs, album).await {
-                            Ok(list) => songs.extend(list),
-                            Err(err) => {
-                                eprintln!("download: could not select the album container: {err:#}")
-                            }
-                        }
-                    }
-                }
-                if songs.is_empty() {
-                    raise(
-                        &error_invoker,
-                        "error",
-                        "Nothing to download here.".to_string(),
-                    );
-                    return Ok(());
-                }
-                fetch_marked(dbs, &songs, "", false, invoker).await;
+                let album_ids: Vec<String> = albums_of
+                    .iter()
+                    .flat_map(|(_, albums)| albums.iter().cloned())
+                    .collect();
+                queue_album_selection(dbs, &album_ids, invoker, error_invoker).await?;
             }
         }
         other => return Err(anyhow::anyhow!("unknown download kind: {other}")),
@@ -556,25 +564,10 @@ impl Backend {
         self.spawn_task(move |dbs| async move {
             match download_one(&dbs, &song_id).await {
                 Ok(state) => {
-                    qtbridge::invoke_method!(
-                        invoker,
-                        "noteDownloadState",
-                        song_id.clone(),
-                        state.to_string()
-                    );
-                    if state == crate::download::DONE {
-                        if let Some(album) = completed_album(&dbs, &song_id).await {
-                            qtbridge::invoke_method!(invoker, "markAlbumCached", album);
-                        }
-                    }
+                    report_song_state(&dbs, invoker, &song_id, state).await;
                 }
                 Err(err) => {
-                    qtbridge::invoke_method!(
-                        invoker,
-                        "noteDownloadState",
-                        song_id.clone(),
-                        crate::download::ERROR.to_string()
-                    );
+                    report_song_state(&dbs, invoker, &song_id, crate::download::ERROR).await;
                     raise(&error_invoker, "error", format!("Download failed: {err:#}"));
                 }
             }

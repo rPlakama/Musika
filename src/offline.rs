@@ -81,9 +81,7 @@ pub(crate) async fn load(dbs: &crate::db::Dbs, offline: bool) -> Result<Option<A
             return Ok(Some(Arc::clone(filter)));
         }
     }
-    let Some(songs) = crate::download::offline_song_ids(dbs, offline).await? else {
-        return Ok(None);
-    };
+    let songs = crate::download::downloaded_song_ids(dbs).await?;
     let ids: Vec<String> = songs.iter().cloned().collect();
     let (albums, artists) = crate::library::downloaded_owners(&dbs.library, &ids).await?;
     let filter = Arc::new(Filter {

@@ -4909,10 +4909,10 @@ mod search {
 
         let hits = search(&pool, "hello", 10).await.unwrap();
         assert_eq!(hits.len(), 1);
-        assert_eq!(hits[0].song_id, "1");
+        assert_eq!(hits[0].id, "1");
         assert_eq!(hits[0].artist.as_deref(), Some("The Testers"));
         assert_eq!(hits[0].duration, Some(200));
-        assert_eq!(hits[0].play_count, 7);
+        assert_eq!(hits[0].play_count, Some(7));
 
         assert!(search(&pool, "missing", 10).await.unwrap().is_empty());
         assert!(search(&pool, "   ", 10).await.unwrap().is_empty());
@@ -4945,7 +4945,7 @@ mod search {
         .unwrap();
 
         let hits = most_played(&pool, 10).await.unwrap();
-        let ids: Vec<&str> = hits.iter().map(|hit| hit.song_id.as_str()).collect();
+        let ids: Vec<&str> = hits.iter().map(|hit| hit.id.as_str()).collect();
         // Two 9-play ties break by title, then the 4, then the 0.
         assert_eq!(ids, ["2", "4", "3", "1"]);
     }
@@ -4959,7 +4959,7 @@ mod search {
             .unwrap();
 
         let hits = search(&pool, "hello", 10).await.unwrap();
-        let ids: Vec<&str> = hits.iter().map(|hit| hit.song_id.as_str()).collect();
+        let ids: Vec<&str> = hits.iter().map(|hit| hit.id.as_str()).collect();
         assert_eq!(ids, ["loud", "quiet"]);
     }
 
@@ -4981,7 +4981,7 @@ mod search {
         rebuild_from_library(&pool).await.unwrap();
         assert_eq!(count(&pool).await.unwrap(), 600);
         let hits = search(&pool, "599", 10).await.unwrap();
-        assert_eq!(hits[0].song_id, "s0599");
+        assert_eq!(hits[0].id, "s0599");
 
         // A second pass replaces the table instead of appending to it.
         rebuild_from_library(&pool).await.unwrap();
@@ -5006,7 +5006,7 @@ mod search {
 
         let hits = search(&pool, "hello", 10).await.unwrap();
         assert_eq!(
-            hits[0].song_id, "strong",
+            hits[0].id, "strong",
             "a strong match survives a small usage boost"
         );
 
@@ -5015,7 +5015,7 @@ mod search {
         rows[1].play_count = Some(60);
         rebuild(&pool, &rows).await.unwrap();
         let hits = search(&pool, "hello", 10).await.unwrap();
-        assert_eq!(hits[0].song_id, "weak");
+        assert_eq!(hits[0].id, "weak");
     }
 
     #[test]
@@ -5034,7 +5034,7 @@ mod search {
         for query in ["(hello)", "\"world\"", "[hello] world"] {
             let hits = search(&pool, query, 10).await.unwrap();
             assert_eq!(hits.len(), 1, "query {query:?}");
-            assert_eq!(hits[0].song_id, "1");
+            assert_eq!(hits[0].id, "1");
         }
     }
 

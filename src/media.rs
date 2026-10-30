@@ -594,7 +594,7 @@ pub async fn path_map_of(pool: &SqlitePool, ids: &[String]) -> Result<HashMap<St
     for chunk in unique.chunks(crate::cache::IN_BATCH) {
         let mut builder =
             sqlx::QueryBuilder::new("SELECT song_id, kind, file FROM media WHERE song_id IN (");
-        crate::cache::push_in_list_refs(&mut builder, chunk);
+        crate::cache::push_in_list(&mut builder, chunk);
         let rows: Vec<Stored> = builder.build_query_as().fetch_all(pool).await?;
         for row in rows {
             if let Ok(dir) = tier_dir(&row.kind) {

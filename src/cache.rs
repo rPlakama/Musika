@@ -71,22 +71,12 @@ where
     Ok(())
 }
 
-/// Appends a comma-separated `?` list and the closing parenthesis.
-pub fn push_in_list(builder: &mut sqlx::QueryBuilder<sqlx::Sqlite>, ids: &[String]) {
+/// Appends a comma-separated `?` list and the closing parenthesis. Generic
+/// over owned and borrowed ids, so scanned pages do not allocate just to bind.
+pub fn push_in_list<S: AsRef<str>>(builder: &mut sqlx::QueryBuilder<sqlx::Sqlite>, ids: &[S]) {
     let mut separated = builder.separated(", ");
     for id in ids {
-        separated.push_bind(id);
-    }
-    separated.push_unseparated(")");
-}
-
-/// Borrowed twin of [`push_in_list`] for callers whose ids already exist as
-/// `&str` (a scanned page) and would otherwise allocate one `String` per id
-/// just to bind it.
-pub fn push_in_list_refs(builder: &mut sqlx::QueryBuilder<sqlx::Sqlite>, ids: &[&str]) {
-    let mut separated = builder.separated(", ");
-    for id in ids {
-        separated.push_bind(*id);
+        separated.push_bind(id.as_ref());
     }
     separated.push_unseparated(")");
 }

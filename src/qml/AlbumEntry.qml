@@ -640,7 +640,16 @@ Rectangle {
                 Layout.preferredHeight: implicitHeight
                 color: Qt.rgba(0, 0, 0, 0.4)
                 radius: Theme.radius
-
+                layer.enabled: true
+                layer.effect: MultiEffect {
+                    shadowEnabled: true
+                    shadowColor: Qt.rgba(0, 0, 0, 0.5)
+                    shadowBlur: 0.8
+                    shadowOpacity: 0.35
+                    shadowVerticalOffset: 4
+                    shadowHorizontalOffset: 0
+                    blurMax: 32
+                }
                 ColumnLayout {
                     id: headerContent
                     anchors.fill: parent

@@ -61,7 +61,8 @@ ScrollPanel {
     }
 
     function preload() {
-        if (root._preloaded)
+        // Never shrink an already-loaded model back to a warm head.
+        if (root._preloaded || root._fullLoaded)
             return;
         root._preloaded = true;
         root.startPreloadTimer();

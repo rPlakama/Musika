@@ -48,6 +48,9 @@ open work; this file is the release history.
   outside the viewport, recentre it on its target row.
 - Remove the grid/cover-wall layout mode: Albums, Songs and ArtistEntry
   are list-only, and Shift-C no longer applies.
+- Keep dormant library loaders dormant behind a restored page and skip
+  full reloads on preload heads; only the visible scope loads on return to
+  Home, and hidden heads warm afterward.
 
 ## 0.4.11 - _Cover improvements and other minor_
 

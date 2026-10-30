@@ -96,6 +96,33 @@ Item {
         }
     }
 
+    /// Load the scope that is actually on screen. Bootstrap restore keeps the
+    /// library loaders dormant behind the restored page; this fires when the
+    /// page stack returns to Home.
+    function activateSegment(index) {
+        var loader = segmentLoaders.itemAt(index);
+        var item = loader ? loader.item : null;
+        if (!item)
+            return;
+        if ("_preloadOnly" in item)
+            item._preloadOnly = false;
+        if (item.activateTab)
+            item.activateTab();
+    }
+
+    /// Warm the hidden library heads only after Home is visible again, never
+    /// while a restored page owns the screen.
+    function preloadHiddenSegments() {
+        for (var i = 0; i <= 2; ++i) {
+            if (i === root.currentSegment)
+                continue;
+            var loader = segmentLoaders.itemAt(i);
+            var item = loader ? loader.item : null;
+            if (item && item.preload && !item._fullLoaded)
+                item.preload();
+        }
+    }
+
     function showSegment(index) {
         // ARC-45: a segment switch pops every page; record the final place
         // once, not each intermediate pop.
@@ -111,6 +138,7 @@ Item {
         activeRegion = 1;
         _placing = restoring;
         recordPlace();
+        root.activateSegment(index);
     }
 
     /// A segment becoming visible either lands where it was (page return) or
@@ -870,6 +898,10 @@ Item {
                     onDepthChanged: {
                         root.recordPlace();
                         Backend.resetKeyInput();
+                        if (contentStack.depth === 1 && !root._bootstrapPending) {
+                            root.activateSegment(root.currentSegment);
+                            root.preloadHiddenSegments();
+                        }
                     }
 
                     // The five segments stay alive once instantiated —
@@ -978,11 +1010,17 @@ Item {
                             }
                             onLoaded: {
                                 if (item) {
-                                    // Check if the loaded item actually declares _preloadOnly
+                                    // A restored page keeps every library
+                                    // segment dormant behind it; Home activates
+                                    // the visible scope when it returns.
                                     if ("_preloadOnly" in item)
-                                        item._preloadOnly = !root._bootstrapTarget && index !== root.currentSegment;
-                                    if ((root._bootstrapTarget || index === root.currentSegment) && item.activateTab)
-                                        item.activateTab();
+                                        item._preloadOnly = root._bootstrapTarget || index !== root.currentSegment;
+                                    if (!root._bootstrapTarget) {
+                                        if (index === root.currentSegment && item.activateTab)
+                                            item.activateTab();
+                                        else if (item.start)
+                                            item.start();
+                                    }
                                 }
                                 if (visible)
                                     root._landOrResetSegment(item);

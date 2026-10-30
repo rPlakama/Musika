@@ -61,11 +61,13 @@ MediaList {
                 root.apply(payload);
         }
         function onLibrary_changed() {
-            root.reload();
+            if (!root._preloadOnly)
+                root.reload();
         }
         function onArtist_order_changed() {
             // The cursor-position reset rides the shared row reload.
-            root.resetRowReload();
+            if (!root._preloadOnly)
+                root.resetRowReload();
         }
     }
 }

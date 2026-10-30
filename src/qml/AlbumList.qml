@@ -63,10 +63,14 @@ MediaList {
                 root.apply(payload);
         }
         function onLibrary_changed() {
-            root.reload();
+            // A dormant head must not turn into a full reload during the
+            // startup sync; activation will request the fresh full payload.
+            if (!root._preloadOnly)
+                root.reload();
         }
         function onAlbum_order_changed() {
-            root.resetRowReload();
+            if (!root._preloadOnly)
+                root.resetRowReload();
         }
     }
 }

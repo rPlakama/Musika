@@ -245,6 +245,8 @@ function fontSize(role, reference) {
 // tracklists). Height sets the base; width caps it so narrow search columns
 // and the queue do not inherit the wide list size. Fractions are relative to
 // the row, not the window.
+var rowBudget = 30
+
 var rowType = {
     title:    [0.28, 0.050, 10, 24],
     subtitle: [0.20, 0.032, 9, 17],

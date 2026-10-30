@@ -51,6 +51,8 @@ ScrollPanel {
     property bool _preloaded: false
     property bool _fullLoaded: false
     property bool _preloadOnly: false
+    /// Set by hosts that use a sparse virtual RowModel instead of mediaRows.
+    property var virtualModel: null
 
     function start() {
         if (root._preloadOnly)
@@ -141,7 +143,7 @@ ScrollPanel {
         id: mediaRows
     }
 
-    model: mediaRows
+    model: root.virtualModel ? root.virtualModel : mediaRows
     titleHint: "(Shift-J/K) cycle filter"
     // ARC-UI-2 M1: the rows paint title, subtitle and meta; nothing else.
     searchFields: ["title", "subtitle", "meta"]
@@ -215,10 +217,21 @@ ScrollPanel {
             mediaRows.append(rows[i]);
     }
 
+    function ensureVirtualWindow() {
+        if (!root.virtualModel || root.firstVisibleIndex < 0
+                || root.lastVisibleIndex < root.firstVisibleIndex)
+            return;
+        root.virtualModel.ensure(Math.max(0, root.firstVisibleIndex - Theme.rowBudget),
+            root.lastVisibleIndex + Theme.rowBudget);
+    }
+    onFirstVisibleIndexChanged: root.ensureVirtualWindow()
+    onLastVisibleIndexChanged: root.ensureVirtualWindow()
+    onCountChanged: root.ensureVirtualWindow()
+
     onItemActivated: index => {
         // VI-4: opening/playing a row ends the visual selection.
         root.clearSelection();
-        var item = mediaRows.get(index);
+        var item = root.virtualModel ? JSON.parse(root.virtualModel.row(index)) : mediaRows.get(index);
         if (item)
             root.activated(item);
     }

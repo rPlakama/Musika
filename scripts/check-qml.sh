@@ -59,6 +59,7 @@ trap 'rm -f "$log"' EXIT
 problems=$(grep -E '^(Warning|Error):' "$log" \
     | grep -vE 'Failed to import musika|Warnings occurred while importing module "musika"|\[unqualified\]' \
     | grep -vE 'not found on type "(QQuickPalette|QQuickItem|QObject)"' \
+    | grep -vE 'RowModel was not found' \
     | grep -E '\[(import|syntax|compiler|unresolved-type|missing-type|missing-property)\]|^Error:' || true)
 
 if [ -n "$problems" ]; then

@@ -197,8 +197,7 @@ Rectangle {
     }
 
     function requestCoverNow() {
-        var target = CoverSize.target(coverBackdrop.coverSide, Screen.devicePixelRatio,
-            Math.max(Screen.width, Screen.height));
+        var target = CoverSize.target(coverBackdrop.coverSide, Screen.devicePixelRatio, Math.max(Screen.width, Screen.height));
         if (target <= 0) {
             root._coverTarget = 0;
             return;
@@ -581,9 +580,7 @@ Rectangle {
                 // decode blanks the cover (and on session return the first
                 // cover is already up by the time this cached copy arrives).
                 // The copy is still cached for the next open.
-                if (art.album_id === root.albumId && art.cover
-                        && Number(art.size) === root._coverTarget
-                        && !coverBackdrop.ready)
+                if (art.album_id === root.albumId && art.cover && Number(art.size) === root._coverTarget && !coverBackdrop.ready)
                     root.albumCover = art.cover;
             } else if (channel === "album_artist") {
                 var link = JSON.parse(payload);
@@ -633,6 +630,22 @@ Rectangle {
             // The rows start below the displayed square art, not on top of it.
             Layout.bottomMargin: Math.max(0, root.headerCoverBottom - header.implicitHeight - (headerGap.visible ? root.height * 0.22 : 0))
             spacing: root.height * 0.008
+
+            // The identity sits on the artwork, so give it a 40% dark
+            // backdrop; alpha is on the fill so the text keeps full opacity.
+            Rectangle {
+                id: headerPanel
+                Layout.fillWidth: true
+                implicitHeight: headerContent.implicitHeight + root.width * 0.02
+                Layout.preferredHeight: implicitHeight
+                color: Qt.rgba(0, 0, 0, 0.4)
+                radius: Theme.radius
+
+                ColumnLayout {
+                    id: headerContent
+                    anchors.fill: parent
+                    anchors.margins: root.width * 0.01
+                    spacing: root.height * 0.006
 
             // Description.
             ColumnLayout {
@@ -736,6 +749,8 @@ Rectangle {
                         count: root.selectionCount
                         pixelSize: root.height * 0.02
                     }
+                }
+            }
                 }
             }
         }

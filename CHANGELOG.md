@@ -54,6 +54,8 @@ open work; this file is the release history.
 - Share row FontMetrics per surface, move row hover/tap to one list-level
   handler, create mark buttons only when needed, and drop the duplicate
   delegate display margins.
+- Give the AlbumEntry identity header a 40% dark backdrop so the title,
+  stars and metadata stay legible over the album art.
 
 ## 0.4.11 - _Cover improvements and other minor_
 

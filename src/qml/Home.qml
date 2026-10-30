@@ -228,7 +228,9 @@ Item {
         // Persist the top page for the next launch (album, artist or Home).
         if (contentStack.depth > 1) {
             var page = contentStack.get(contentStack.depth - 1);
-            if (page && page.albumId !== undefined)
+            if (page && page.isPlaylist === true)
+                Backend.rememberPage("playlist", page.playlistId);
+            else if (page && page.albumId !== undefined && page.albumId.length > 0)
                 Backend.rememberPage("album", page.albumId);
             else if (page && page.artistId !== undefined)
                 Backend.rememberPage("artist", page.artistId);
@@ -365,11 +367,15 @@ Item {
             contentStack.push(albumEntryComponent, page);
     }
 
-    function openPlaylist(playlistId, title) {
-        contentStack.push(playlistEntryComponent, {
+    function openPlaylist(playlistId, title, instant) {
+        var page = {
             playlistId: playlistId,
             playlistTitle: title ? title : ""
-        });
+        };
+        if (instant)
+            contentStack.push(playlistEntryComponent, page, StackView.Immediate);
+        else
+            contentStack.push(playlistEntryComponent, page);
     }
 
     function openArtist(artistId, artistName, artistCover, instant) {
@@ -393,9 +399,12 @@ Item {
             return;
         }
         var page = target.page;
-        root._bootstrapPageKey = target.kind + ":" + page.id;
+        root._bootstrapPageKey = target.kind + ":"
+            + (target.kind === "playlist" ? page.playlistId : page.id);
         if (target.kind === "artist") {
             root.openArtist(page.id, page.name ? page.name : "", page.cover ? page.cover : "", true);
+        } else if (target.kind === "playlist") {
+            root.openPlaylist(page.playlistId, page.playlistTitle, true);
         } else if (target.kind === "album") {
             root.openAlbum(page.id, page.title, page.artist ? page.artist : "", page.year ? String(page.year) : "", String(page.song_count || page.tracks || 0), page.cover ? page.cover : "", page.starred === true, true, "", true);
         }
@@ -1344,7 +1353,8 @@ Item {
                     && contentStack.currentItem.albumId
                     ? String(contentStack.currentItem.albumId) : "";
                 if (data.album && topAlbumId !== data.album.id
-                        && ("album:" + data.album.id) !== root._bootstrapPageKey)
+                        && ("album:" + data.album.id) !== root._bootstrapPageKey
+                        && root._bootstrapPageKey.indexOf("playlist:") !== 0)
                     root.openAlbum(data.album.id, data.album.title, data.album.artist ? data.album.artist : "", data.album.year ? String(data.album.year) : "", String(data.album.tracks), data.album.cover ? data.album.cover : "", data.album.starred === true, false, "", true);
                 // Session return: the restored album's rows must render
                 // their state marks on arrival — the page only installs its

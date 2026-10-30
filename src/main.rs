@@ -254,6 +254,13 @@ fn main() {
                     .unwrap_or_default();
                 crate::browse::album_json(&album, &covers, None)
             }
+            "playlist" => {
+                let name = crate::app::runtime()
+                    .block_on(crate::playlists::name(&dbs, &id))
+                    .ok()
+                    .flatten()?;
+                serde_json::json!({ "playlistId": id, "playlistTitle": name })
+            }
             "artist" => {
                 let artist = crate::app::runtime()
                     .block_on(crate::library::artist(&dbs.library, &id))

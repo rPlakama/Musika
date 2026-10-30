@@ -566,6 +566,14 @@ async fn load_subsonic_songs(
 }
 
 
+/// Just the display name, for the startup bootstrap target.
+pub async fn name(dbs: &Dbs, playlist_id: &str) -> Result<Option<String>> {
+    Ok(sqlx::query_scalar("SELECT name FROM playlist WHERE id = ?1")
+        .bind(playlist_id)
+        .fetch_optional(&dbs.playlist)
+        .await?)
+}
+
 /// The playlist page payload: identity, song rows and the first three distinct
 /// song covers for the header collage. Rows keep playlist order and duplicates.
 pub async fn page_json(dbs: &Dbs, playlist_id: &str, offline: bool) -> Result<String> {

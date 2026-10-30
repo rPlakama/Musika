@@ -66,6 +66,8 @@ MediaList {
         root.setRows(JSON.parse(payload));
     }
 
+    Component.onCompleted: Qt.callLater(root.start)
+
     onActivated: item => root.albumActivated(item.albumId, item.title, item.artist, item.year, item.tracks, item.cover, item.starred === true)
 
     onArtistFilterChanged: {

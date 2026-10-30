@@ -685,8 +685,13 @@ pub async fn albums_range(
     } else {
         ""
     };
+    let limit_offset = if artist.is_some() {
+        " LIMIT ?2 OFFSET ?3"
+    } else {
+        " LIMIT ?1 OFFSET ?2"
+    };
     let sql = format!(
-        "{ALBUM_SELECT}{filter}{} LIMIT ?2 OFFSET ?3",
+        "{ALBUM_SELECT}{filter}{}{limit_offset}",
         album_order(order, true)
     );
     let mut query = sqlx::query_as::<_, AlbumRow>(sqlx::AssertSqlSafe(sql));

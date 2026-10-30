@@ -3,6 +3,26 @@
 All notable changes to Musika, newest first. `TASKLISTMAJOR.md` tracks the
 open work; this file is the release history.
 
+## 0.5.1 - _Sparse row windows and range-backed lists_
+
+- Add the `RowModel` sparse QML model and the `RowCache` budget core with
+  per-surface generations, LRU eviction, visible-row pinning and a 120-row
+  resident ceiling.
+- Move Albums, Songs, Artists and the ArtistEntry album wall to 30-row
+  virtual windows backed by count/range queries, preserving absolute counts,
+  cursor indices, scroll memory and row activation.
+- Add album, artist and artist-album count/range queries, including the
+  filtered album range path.
+- Fix the virtual home lists: import `Theme` into the Album/Artist wrappers,
+  bind the virtual model directly, fill rows before the count reset, centre
+  the clamped window on the viewport, and bind the optional album filter with
+  the correct SQL placeholders.
+- Guard `CoverImage` against an undefined cover URL instead of constructing a
+  `qrc:/app/qml/undefined` thumbnail.
+- Deduplicate the download id filters, completion reporter, album/artist
+  selection tail, search row type and SQL column list, generic IN-list binder,
+  and offline guard; fix two copied player doc comments.
+
 ## 0.5.0 - _First 'Stable' Release._
 
 The first stable release. It gathers the 0.4.12 cover/album work and the

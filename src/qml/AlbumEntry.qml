@@ -83,6 +83,8 @@ Rectangle {
     // UI-54: per-album scroll memory for the songs viewport.
     readonly property string memoryKey: "album:" + root.albumId
     property bool _restored: false
+    /// A session-restored page starts on row 0, like a scope or order reset.
+    property bool resetCursorOnOpen: false
     property bool _focusApplied: false
     property int _coverTarget: 0
     // Album whose rows request is in flight; avoids reload storms from
@@ -335,6 +337,13 @@ Rectangle {
         }
         root.tracksFormat = format.toUpperCase();
         root.loading = false;
+        // Session return resets the page cursor, matching a scope/order reset.
+        if (root.resetCursorOnOpen) {
+            root._restored = true;
+            if (songs.count > 0)
+                content.land(0);
+            return;
+        }
         // A search jump owns the first cursor; otherwise UI-54 reopens on the
         // remembered cursor and later reloads keep the live state.
         if (root.focusRequestedSong()) {

@@ -335,7 +335,7 @@ Item {
     // Single album-page push used by the album list, the artist entry and the
     // search overlay, so every surface lands in the same page with the same
     // header payload (`starred` feeds the ARC-I-2 header heart).
-    function openAlbum(albumId, title, artist, year, tracks, cover, starred, instant, focusSongId) {
+    function openAlbum(albumId, title, artist, year, tracks, cover, starred, instant, focusSongId, sessionReturn) {
         // P-6 S2: the last opened album page is what a restart reopens.
         Backend.rememberAlbum(albumId);
         var page = {
@@ -346,7 +346,8 @@ Item {
             albumMeta: Theme.metaJoin([year]),
             albumStarred: starred === true,
             // A song search hit opens the album with its row already parked.
-            focusSongId: focusSongId ? focusSongId : ""
+            focusSongId: focusSongId ? focusSongId : "",
+            resetCursorOnOpen: sessionReturn === true
         };
         if (instant)
             contentStack.push(albumEntryComponent, page, StackView.Immediate);
@@ -379,7 +380,7 @@ Item {
         if (target.kind === "artist") {
             root.openArtist(page.id, page.name ? page.name : "", page.cover ? page.cover : "", true);
         } else if (target.kind === "album") {
-            root.openAlbum(page.id, page.title, page.artist ? page.artist : "", page.year ? String(page.year) : "", String(page.song_count || page.tracks || 0), page.cover ? page.cover : "", page.starred === true, true);
+            root.openAlbum(page.id, page.title, page.artist ? page.artist : "", page.year ? String(page.year) : "", String(page.song_count || page.tracks || 0), page.cover ? page.cover : "", page.starred === true, true, "", true);
         }
         root._bootstrapPending = false;
     }
@@ -1318,7 +1319,7 @@ Item {
                     ? String(contentStack.currentItem.albumId) : "";
                 if (data.album && topAlbumId !== data.album.id
                         && ("album:" + data.album.id) !== root._bootstrapPageKey)
-                    root.openAlbum(data.album.id, data.album.title, data.album.artist ? data.album.artist : "", data.album.year ? String(data.album.year) : "", String(data.album.tracks), data.album.cover ? data.album.cover : "", data.album.starred === true);
+                    root.openAlbum(data.album.id, data.album.title, data.album.artist ? data.album.artist : "", data.album.year ? String(data.album.year) : "", String(data.album.tracks), data.album.cover ? data.album.cover : "", data.album.starred === true, false, "", true);
                 // Session return: the restored album's rows must render
                 // their state marks on arrival — the page only installs its
                 // mark window when its payload lands, and without this the

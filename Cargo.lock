@@ -1865,6 +1865,8 @@ dependencies = [
 [[package]]
 name = "qtbridge-interfaces"
 version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "faa99a01ad113bf1092bffbf3da4648b04add0a44a7f22bcf9a657254d4023fc"
 dependencies = [
  "cxx",
  "cxx-build",

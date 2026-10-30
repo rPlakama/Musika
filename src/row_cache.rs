@@ -29,6 +29,9 @@ use qtbridge::{QModelItem, qobject};
 /// Hard ceiling for row records resident across every list surface.
 pub const MAX_RESIDENT_ROWS: usize = 120;
 
+/// Maximum rows any one surface may hold around its viewport.
+pub const LIVE_WINDOW_ROWS: usize = 30;
+
 /// The list surface a cached row belongs to.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Surface {
@@ -248,7 +251,7 @@ pub mod row_model {
 
     use qtbridge::{QListModel, QListModelBase};
 
-    use super::RowRecord;
+    use super::{LIVE_WINDOW_ROWS, RowRecord};
 
     #[derive(Default)]
     pub struct RowModel {
@@ -333,7 +336,10 @@ pub mod row_model {
                 return None;
             }
             let start = start.max(0) as usize;
-            let end = end.max(start as i64).min(self.count as i64 - 1) as usize;
+            let end = end
+                .max(start as i64)
+                .min(start as i64 + LIVE_WINDOW_ROWS as i64 - 1)
+                .min(self.count as i64 - 1) as usize;
             (end >= start).then_some((start, end))
         }
 

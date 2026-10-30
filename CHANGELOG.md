@@ -5,19 +5,16 @@ open work; this file is the release history.
 
 ## 0.5.2 - _Small patches_
 
-- Move QueueDrawer onto the virtual queue snapshot and a 30-row window;
-  remove the per-track `queueItems.append()` population.
-- Expose the notified `RowModel.count` property and attach the queue
-  viewport signals to `queueContent` instead of `Backend`.
-- Reset the cursor to row 0 after a virtual order change instead of leaving
-  it at `-1` until the first scroll.
-- Return a placeholder row for an in-range index outside the loaded sparse
-  window, and refresh the window on cursor/size changes, removing transient
-  undefined roles and cover URLs.
 - Run the cursor-preserving resize anchor on width changes as well as height
   changes.
-- Fix the duplicate `onCurrentIndexChanged` handler that prevented
-  `MediaList` and Home from loading.
+- Ignore undefined cover URLs in `CoverImage` instead of constructing a
+  `qrc:/app/qml/undefined` thumbnail.
+- Back out the sparse `RowModel`/`RowCache` list surfaces and the vendored
+  qtbridge patch. The sparse QListModel path triggered a release-only
+  reentrancy abort in the Qt bridge; all list surfaces return to the stable
+  full-ListModel paths.
+- Keep the 0.5.1 virtual order, queue and cursor changes out of this release
+  until the virtual model can be reintroduced without the bridge abort.
 
 ## 0.5.1 - _Sparse row windows and range-backed lists_
 

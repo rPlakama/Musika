@@ -233,6 +233,9 @@ ScrollPanel {
     }
     onFirstVisibleIndexChanged: root.ensureVirtualWindow()
     onLastVisibleIndexChanged: root.ensureVirtualWindow()
+    onCurrentIndexChanged: root.ensureVirtualWindow()
+    onWidthChanged: Qt.callLater(root.ensureVirtualWindow)
+    onHeightChanged: Qt.callLater(root.ensureVirtualWindow)
     onCountChanged: root.ensureVirtualWindow()
 
     onItemActivated: index => {

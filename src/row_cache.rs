@@ -261,6 +261,7 @@ pub mod row_model {
         filter: String,
         count: usize,
         rows: HashMap<usize, RowRecord>,
+        placeholder: RowRecord,
     }
 
     impl QListModel for RowModel {
@@ -271,7 +272,9 @@ pub mod row_model {
         }
 
         fn get(&self, index: usize) -> Option<&Self::Item> {
-            self.rows.get(&index)
+            self.rows
+                .get(&index)
+                .or_else(|| (index < self.count).then_some(&self.placeholder))
         }
 
         fn set_unnotified(&mut self, index: usize, value: Self::Item) -> bool {

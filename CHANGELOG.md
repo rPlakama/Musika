@@ -3,6 +3,31 @@
 All notable changes to Musika, newest first. `TASKLISTMAJOR.md` tracks the
 open work; this file is the release history.
 
+## 0.5.0 - _First 'Stable' Release._
+
+The first stable release. It gathers the 0.4.12 cover/album work and the
+scroll, preload and row-cost stabilization that followed it.
+
+- `AlbumEntry` opens from a search song hit without building a queue, and
+the album page is pushed before the playback queue is serialized.
+
+- DPI covers stay stable across width changes, cold display copies no longer
+blank the painted cover, and a session-restored cover decodes once.
+
+- The `ScrollModal` is list-only again: row-unit follow, pinned first/last
+screenful, realised-tail bottom anchoring, settled resize anchors and the
+pre-positioning `gg`/`G` landing path.
+
+- The cover-wall/grid mode is removed; Albums, Songs and the artist page
+are list-only.
+
+- Preload heads stay dormant behind a restored page and no longer turn the
+startup sync into full hidden-scope loads; row `FontMetrics` are shared per
+surface and hover/click lives at the list level.
+
+- `RowMarks` creates its buttons only for rows with a mark, and the album
+header got an implicit-width 40% backdrop with a soft blurred shadow.
+
 ## 0.4.12 - _Shared QML ownership and screen-sized covers_
 
 - `c8908ea` Share the QML row, motion and mark seams

@@ -5512,6 +5512,89 @@ mod benchmark {
         );
     }
 
+    /// Cover file read + decode, split into stages so an io_uring reader can
+    /// be compared against `std::fs` without changing the decode harness.
+    ///
+    /// `cargo test test::benchmark::bench_cover_load -- --ignored --nocapture`
+    #[ignore = "benchmark, run explicitly"]
+    #[test]
+    fn bench_cover_load() {
+        use image::{ImageFormat, Rgb, RgbImage};
+
+        const ROUNDS: usize = 40;
+        const WARMUP: usize = 3;
+
+        fn percentile(sorted: &[Duration], p: f64) -> Duration {
+            let index = ((sorted.len() - 1) as f64 * p).round() as usize;
+            sorted[index]
+        }
+
+        fn sample(path: &Path) -> (Duration, Duration) {
+            let read_started = Instant::now();
+            // The swappable read stage: io_uring replaces this call, while
+            // decode stays identical for a fair comparison.
+            let bytes = std::fs::read(path).expect("read cover");
+            let read = read_started.elapsed();
+            let decode_started = Instant::now();
+            let image = image::load_from_memory_with_format(&bytes, ImageFormat::Jpeg)
+                .expect("decode cover");
+            let decode = decode_started.elapsed();
+            drop(image);
+            (read, decode)
+        }
+
+        let dir = std::env::temp_dir().join(format!(
+            "musika-cover-bench-{}-{}",
+            std::process::id(),
+            crate::consts::now_nanos()
+        ));
+        std::fs::create_dir_all(&dir).expect("bench dir");
+        let raw_path = dir.join("raw.jpg");
+        let thumb_path = dir.join("thumb.jpg");
+
+        let raw = RgbImage::from_fn(2_400, 2_400, |x, y| {
+            Rgb([(x % 251) as u8, (y % 251) as u8, ((x + y) % 251) as u8])
+        });
+        image::DynamicImage::ImageRgb8(raw)
+            .save_with_format(&raw_path, ImageFormat::Jpeg)
+            .expect("save raw");
+        let source = image::open(&raw_path).expect("open raw");
+        let thumb = source.thumbnail(320, 320);
+        thumb
+            .save_with_format(&thumb_path, ImageFormat::Jpeg)
+            .expect("save thumb");
+
+        for path in [&thumb_path, &raw_path] {
+            let name = path.file_stem().unwrap().to_string_lossy();
+            let bytes = std::fs::metadata(path).unwrap().len();
+            for _ in 0..WARMUP {
+                let _ = sample(path);
+            }
+            let mut reads = Vec::with_capacity(ROUNDS);
+            let mut decodes = Vec::with_capacity(ROUNDS);
+            let started = Instant::now();
+            for _ in 0..ROUNDS {
+                let (read, decode) = sample(path);
+                reads.push(read);
+                decodes.push(decode);
+            }
+            let total = started.elapsed();
+            reads.sort();
+            decodes.sort();
+            println!(
+                "[bench] cover.{name} ({bytes} B): read p50 {:.2} ms p95 {:.2} ms | \
+                 decode p50 {:.2} ms p95 {:.2} ms | {:.2} ms/load",
+                percentile(&reads, 0.50).as_secs_f64() * 1000.0,
+                percentile(&reads, 0.95).as_secs_f64() * 1000.0,
+                percentile(&decodes, 0.50).as_secs_f64() * 1000.0,
+                percentile(&decodes, 0.95).as_secs_f64() * 1000.0,
+                total.as_secs_f64() * 1000.0 / ROUNDS as f64,
+            );
+        }
+
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
     /// Reports the same GPU/Vulkan facts as the debug binary.
     ///
     /// `cargo test test::benchmark::vulkan_probe -- --nocapture`

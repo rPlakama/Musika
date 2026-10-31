@@ -35,6 +35,8 @@ mod download;
 mod fanout;
 mod hex;
 mod http_client;
+#[cfg(feature = "io-uring")]
+mod io_uring_read;
 mod index;
 mod ipc;
 mod keybind;

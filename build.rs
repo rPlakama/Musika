@@ -36,7 +36,15 @@ fn main() {
         // QML-only edit keeps `cargo run` on the previous engine payload.
         "src/qml",
         "src/icons",
+        "native",
     ] {
         println!("cargo:rerun-if-changed={dir}");
     }
+    if std::env::var_os("CARGO_FEATURE_IO_URING").is_some() {
+        cc::Build::new()
+            .file("native/io_uring_read.c")
+            .compile("io_uring_read");
+        println!("cargo:rustc-link-lib=uring");
+    }
+
 }

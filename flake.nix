@@ -88,6 +88,7 @@
 
         buildInputs = [
           pkgs.openssl
+          pkgs.liburing
           pkgs.sqlite
           pkgs.libglvnd
           qt
@@ -176,6 +177,7 @@
           sqls
           rustfmt
           libglvnd
+          liburing
           openssl
           sqlx-cli
           vulkan-tools # vulkaninfo for test::benchmark::vulkan_probe

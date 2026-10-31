@@ -5529,11 +5529,11 @@ mod benchmark {
             sorted[index]
         }
 
-        fn sample(path: &Path) -> (Duration, Duration) {
+        type Reader = fn(&Path) -> std::io::Result<Vec<u8>>;
+
+        fn sample(path: &Path, reader: Reader) -> (Duration, Duration) {
             let read_started = Instant::now();
-            // The swappable read stage: io_uring replaces this call, while
-            // decode stays identical for a fair comparison.
-            let bytes = std::fs::read(path).expect("read cover");
+            let bytes = reader(path).expect("read cover");
             let read = read_started.elapsed();
             let decode_started = Instant::now();
             let image = image::load_from_memory_with_format(&bytes, ImageFormat::Jpeg)
@@ -5541,6 +5541,10 @@ mod benchmark {
             let decode = decode_started.elapsed();
             drop(image);
             (read, decode)
+        }
+
+        fn read_std(path: &Path) -> std::io::Result<Vec<u8>> {
+            std::fs::read(path)
         }
 
         let dir = std::env::temp_dir().join(format!(
@@ -5564,35 +5568,56 @@ mod benchmark {
             .save_with_format(&thumb_path, ImageFormat::Jpeg)
             .expect("save thumb");
 
+        #[allow(unused_mut)]
+        let mut readers: Vec<(&str, Reader)> = vec![("std", read_std)];
+        #[cfg(feature = "io-uring")]
+        readers.push(("io_uring", crate::io_uring_read::read_file));
         for path in [&thumb_path, &raw_path] {
             let name = path.file_stem().unwrap().to_string_lossy();
             let bytes = std::fs::metadata(path).unwrap().len();
-            for _ in 0..WARMUP {
-                let _ = sample(path);
+            for &(reader_name, reader) in &readers {
+                for _ in 0..WARMUP {
+                    let _ = sample(path, reader);
+                }
+                let mut reads = Vec::with_capacity(ROUNDS);
+                let mut decodes = Vec::with_capacity(ROUNDS);
+                let started = Instant::now();
+                for _ in 0..ROUNDS {
+                    let (read, decode) = sample(path, reader);
+                    reads.push(read);
+                    decodes.push(decode);
+                }
+                let total = started.elapsed();
+                reads.sort();
+                decodes.sort();
+                println!(
+                    "[bench] cover.{name}.{reader_name} ({bytes} B): read p50 {:.2} ms p95 {:.2} ms | \
+                     decode p50 {:.2} ms p95 {:.2} ms | {:.2} ms/load",
+                    percentile(&reads, 0.50).as_secs_f64() * 1000.0,
+                    percentile(&reads, 0.95).as_secs_f64() * 1000.0,
+                    percentile(&decodes, 0.50).as_secs_f64() * 1000.0,
+                    percentile(&decodes, 0.95).as_secs_f64() * 1000.0,
+                    total.as_secs_f64() * 1000.0 / ROUNDS as f64,
+                );
             }
-            let mut reads = Vec::with_capacity(ROUNDS);
-            let mut decodes = Vec::with_capacity(ROUNDS);
-            let started = Instant::now();
-            for _ in 0..ROUNDS {
-                let (read, decode) = sample(path);
-                reads.push(read);
-                decodes.push(decode);
-            }
-            let total = started.elapsed();
-            reads.sort();
-            decodes.sort();
-            println!(
-                "[bench] cover.{name} ({bytes} B): read p50 {:.2} ms p95 {:.2} ms | \
-                 decode p50 {:.2} ms p95 {:.2} ms | {:.2} ms/load",
-                percentile(&reads, 0.50).as_secs_f64() * 1000.0,
-                percentile(&reads, 0.95).as_secs_f64() * 1000.0,
-                percentile(&decodes, 0.50).as_secs_f64() * 1000.0,
-                percentile(&decodes, 0.95).as_secs_f64() * 1000.0,
-                total.as_secs_f64() * 1000.0 / ROUNDS as f64,
-            );
         }
 
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[cfg(feature = "io-uring")]
+    #[test]
+    fn io_uring_read_matches_std_fs() {
+        let path = std::env::temp_dir().join(format!(
+            "musika-uring-read-{}-{}",
+            std::process::id(),
+            crate::consts::now_nanos()
+        ));
+        let expected: Vec<u8> = (0..16_384).map(|index| (index % 251) as u8).collect();
+        std::fs::write(&path, &expected).expect("write probe");
+        let actual = crate::io_uring_read::read_file(&path).expect("io_uring read");
+        assert_eq!(actual, expected);
+        let _ = std::fs::remove_file(path);
     }
 
     /// Reports the same GPU/Vulkan facts as the debug binary.

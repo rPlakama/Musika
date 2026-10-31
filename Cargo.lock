@@ -1588,6 +1588,7 @@ name = "musika"
 version = "0.5.2"
 dependencies = [
  "anyhow",
+ "cc",
  "futures-util",
  "image",
  "material-colors",

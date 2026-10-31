@@ -115,12 +115,10 @@
 
         # Wrap by hand: the merged `qt` env is what qtbridge resolves against,
         # and adding individual Qt modules breaks that discovery. The wrapper
-        # mirrors the dev-shell environment (plugins, QML imports) and puts the
-        # runtime playback engine (mpv) on PATH.
+        # mirrors the dev-shell environment (plugins, QML imports).
 
         postInstall = ''
           wrapProgram $out/bin/musika \
-            --prefix PATH : ${pkgs.lib.makeBinPath [ pkgs.mpv ]} \
             --prefix XDG_DATA_DIRS : ${fontDataDirs} \
             --prefix QT_PLUGIN_PATH : ${qt}/lib/qt-6/plugins \
             --prefix QML_IMPORT_PATH : ${qt}/lib/qt-6/qml \
@@ -172,7 +170,6 @@
         buildInputs = with pkgs; [
           rustc
           cargo
-          mpv
           rust-analyzer
           sqlite
           sqlite-analyzer

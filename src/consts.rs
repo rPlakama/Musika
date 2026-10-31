@@ -23,7 +23,7 @@ pub const FETCH_CONCURRENCY: usize = 8;
 /// in flight at once (the shared pool stays polite to the server).
 pub const DOWNLOAD_CONCURRENCY: usize = 3;
 
-/// Default player volume before mpv/UI overrides.
+/// Default player volume before UI overrides.
 pub const DEFAULT_VOLUME: f64 = 70.0;
 
 /// PATH-8: album and artist metadata is served from cache while this fresh.

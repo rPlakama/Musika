@@ -22,8 +22,7 @@
 //! channel the backend drains on its tick, so every MPRIS action goes through
 //! the same dispatcher as keyboard/IPC input.
 //!
-//! Without a session bus this is a no-op; with `MUSIKA_MPRIS_SCRIPT` set the
-//! mpv fallback stays in charge (single MPRIS node).
+//! Without a session bus this is a no-op.
 
 use std::borrow::Cow;
 use std::collections::HashMap;
@@ -134,12 +133,6 @@ fn put_nonempty(map: &mut HashMap<String, OwnedValue>, key: &str, value: &str) {
     }
 }
 
-pub fn mpris_script() -> Option<String> {
-    std::env::var("MUSIKA_MPRIS_SCRIPT")
-        .ok()
-        .filter(|script| !script.is_empty())
-}
-
 /// Drains pending control commands (called from the player tick).
 pub fn drain() -> Vec<String> {
     let Some(rx) = COMMAND_RX.get() else {
@@ -168,10 +161,6 @@ pub fn init() {
 async fn serve() {
     if std::env::var_os("DBUS_SESSION_BUS_ADDRESS").is_none() {
         eprintln!("mpris: no session bus; native MPRIS disabled");
-        return;
-    }
-    if cfg!(not(feature = "pipewire")) && mpris_script().is_some() {
-        eprintln!("mpris: MUSIKA_MPRIS_SCRIPT is set; keeping the mpv fallback");
         return;
     }
 

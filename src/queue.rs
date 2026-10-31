@@ -20,7 +20,7 @@
 //!
 //! Every queue is built from the local index only — `library.db` rows,
 //! `covers.db` URL map and the locally decrypted credentials; `stream_url`
-//! is pure URL construction. The network is only touched later by mpv.
+//! is pure URL construction. The network is only touched later by the native decoder.
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -29,9 +29,9 @@ use serde::ser::{Error as _, Serialize, SerializeSeq, SerializeStruct, Serialize
 
 use crate::http_client::SubsonicClient;
 
-/// CACHE-1 local-first: a cached blob is handed to mpv as a `file://` URL,
+/// CACHE-1 local-first: a cached blob is handed to the native decoder as a `file://` URL,
 /// otherwise the stream URL is used. The network is still only touched by
-/// mpv; "prefer server online" is CACHE-6.
+/// native decoder; "prefer server online" is CACHE-6.
 pub(crate) fn track_url(
     client: &SubsonicClient,
     song: &crate::library::SongRow,

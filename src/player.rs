@@ -14,45 +14,18 @@
 // You should have received a copy of the GNU General Public License
 // along with this program; if not, see <https://www.gnu.org/licenses/>.
 
-//! Playback engine built on an `mpv` subprocess controlled over its JSON IPC
-//! socket.
+//! Native PipeWire playback engine.
 //!
-//! mpv decodes with FFmpeg and exposes real `time-pos`/`duration`/`pause`
-//! state, plus seeking, so the UI gets an accurate progress bar. Unlike the
-//! previous `ffplay` approach there is no wall-clock guessing and no
-//! SIGSTOP hack: mpv runs in `--idle` mode for the whole session.
-//!
-//! Q-5 window model (`PLAYBACKSTUDY.md`): the current track is played as an
-//! mpv *playlist* — the current entry plus the next one appended once the
-//! current reports `file-loaded` — so mpv advances gap-free with
-//! `--gapless-audio=yes` and a cache-bounded `--prefetch-playlist=yes`.
-//! A load failure has no next entry to auto-advance to, so it can be
-//! retried in place with `playlist-play-index` before the queue moves on.
-//! The Rust queue stays the source of truth; `playlist-pos` maps back into
-//! it (`index = window_base + pos`).
-//!
-//! A small reader thread owns the read half of the socket and mirrors mpv's
-//! observed properties and events into a shared [`Shared`] snapshot that the
-//! Qt thread reads during [`Player::pump`]. Stale `end-file` events from
-//! replaced files are dropped while a load is pending, so fast skips never
-//! depend on network timing (the queue advances on keypress, not on the
-//! stream).
+//! The queue is owned here; [`pipewire`] owns the libpipewire sink, the
+//! FFmpeg decoder thread and the native clock. [`Player::pump`] mirrors that
+//! transport state into the shared snapshot used by QML and MPRIS.
 
-use std::os::unix::net::UnixStream;
-use std::path::PathBuf;
-use std::process::Child;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use serde_json::json;
 
-#[cfg(not(feature = "pipewire"))]
-mod mpv;
-#[cfg(feature = "pipewire")]
 mod pipewire;
-
-#[cfg(all(test, not(feature = "pipewire")))]
-pub(crate) use mpv::apply_event;
 
 /// A queued track, including the resolved `stream` URL.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -125,35 +98,12 @@ impl State {
     }
 }
 
-/// A failed `end-file` for the UI thread to act on (Q-5).
-#[derive(Debug, Clone)]
-pub(crate) struct ErrorInfo {
-    /// mpv's `file_error` string ("loading failed", …).
-    pub(crate) message: String,
-    /// `true` when the file had already produced media (`position > 0`):
-    /// mid-track failures advance, load failures retry.
-    pub(crate) played: bool,
-}
-
-/// Snapshot of mpv state, written by the reader thread and read by the UI.
+/// Snapshot of native transport state, read by QML and MPRIS.
 #[derive(Debug, Default)]
 pub(crate) struct Shared {
     pub(crate) position: f64,
     pub(crate) duration: f64,
     pub(crate) paused: bool,
-    /// The current entry's file loaded successfully (`file-loaded`).
-    pub(crate) loaded: bool,
-    /// mpv playlist index of the playing entry (`-1`/`None` when idle).
-    pub(crate) playlist_pos: Option<i64>,
-    /// mpv entered idle mode (end of the window).
-    pub(crate) idle: bool,
-    /// Set once per failed `end-file`, consumed by [`Player::pump`].
-    pub(crate) error: Option<ErrorInfo>,
-    /// `true` between issuing a load and mpv reporting `start-file`.
-    /// While set, `end-file` events belong to the file we deliberately
-    /// replaced and must not advance the queue (fast skip/previous races).
-    pub(crate) pending_load: bool,
-    /// Playback envelope from mpv astats metadata (0..1).
     pub(crate) audio_level: f64,
     pub(crate) audio_peak: f64,
     pub(crate) audio_at: Option<std::time::Instant>,
@@ -163,28 +113,19 @@ impl Shared {
     fn reset(&mut self) {
         self.position = 0.0;
         self.duration = 0.0;
-        self.error = None;
         self.audio_level = 0.0;
         self.audio_peak = 0.0;
         self.audio_at = None;
     }
 }
 
-/// `playlist-play-index` attempts after a failed load before advancing (Q-5).
-
-/// FIX-1/FIX-11: outcome of [`Player::ensure_ready`].
+/// Outcome of [`Player::ensure_ready`].
 pub(crate) enum Ready {
-    /// The IPC socket is connected; commands can flow.
     Connected,
-    /// mpv is spawned (or resurrected from the previous attempt); its socket
-    /// is not up yet. The start is deferred to the pump.
-    Connecting,
-    /// The spawn failed, or the connect deadline passed and the child was
-    /// reaped. Nothing is attached; a later start re-spawns.
     Failed,
 }
 
-/// Playback queue plus the running `mpv` process and its IPC connection.
+/// Playback queue plus the native transport.
 pub struct Player {
     /// Copy-on-write: readers (`emit_queue`, session snapshots) clone an
     /// `Arc`, and only a real row mutation pays for the deep copy. The queue
@@ -194,33 +135,16 @@ pub struct Player {
     pub(crate) index: usize,
     pub(crate) state: State,
     pub(crate) repeat: Repeat,
-    pub(crate) child: Option<Child>,
-    pub(crate) ipc: Option<UnixStream>,
-    pub(crate) socket: Option<PathBuf>,
     pub(crate) shared: Arc<Mutex<Shared>>,
-    pub(crate) request_id: i64,
     pub(crate) fallback_duration: f64,
     pub(crate) volume: f64,
     pub(crate) muted: bool,
-    /// Queue index of mpv playlist entry 0; `index - window_base` is the
-    /// current entry's playlist position. Fixed between rebuilds.
-    pub(crate) window_base: usize,
-    /// Entries currently in the mpv playlist.
-    pub(crate) window_len: usize,
-    /// Retries already spent on the current load (Q-5).
     pub(crate) retries: u32,
-    /// When the next retry is due (backoff between attempts).
     pub(crate) retry_at: Option<Instant>,
-    /// FIX-11: when the current deferred connect attempt times out; `None`
-    /// once connected or reaped.
-    pub(crate) connect_deadline: Option<Instant>,
-    /// FIX-11: `play_current` is waiting for the socket; rebuild on the pump.
-    pub(crate) deferred_start: bool,
     /// Row revision (QUEUEROWSTUDY QR-1): bumped by every mutation of the
     /// queue's rows, so `emit_queue` can skip its O(N) clone/read/serialize
     /// when only the index moved (a skip or an advance).
     pub(crate) revision: u64,
-    #[cfg(feature = "pipewire")]
     pub(crate) native: Option<pipewire::Native>,
 }
 
@@ -237,22 +161,13 @@ impl Player {
             index: 0,
             state: State::Stopped,
             repeat: Repeat::Off,
-            child: None,
-            ipc: None,
-            socket: None,
             shared: Arc::new(Mutex::new(Shared::default())),
-            request_id: 0,
             fallback_duration: 0.0,
             volume: crate::consts::DEFAULT_VOLUME,
             muted: false,
-            window_base: 0,
-            window_len: 0,
             retries: 0,
             retry_at: None,
-            connect_deadline: None,
-            deferred_start: false,
             revision: 0,
-            #[cfg(feature = "pipewire")]
             native: None,
         }
     }
@@ -393,51 +308,20 @@ impl Player {
         }
         match self.ensure_ready() {
             Ready::Connected => {
-                self.deferred_start = false;
                 self.rebuild();
-            }
-            Ready::Connecting => {
-                // FIX-11: the socket is still coming up; the rebuild rides
-                // the pump instead of sleeping here (UI pumping).
-                self.state = State::Playing;
-                self.deferred_start = true;
-                *self.shared() = Shared::default();
             }
             Ready::Failed => self.state = State::Stopped,
         }
     }
 
-    /// Resolves a deferred start now that the socket is live. While the
-    /// connect was pending, `pause`/`seek` commands were dropped with no
-    /// socket — replay that intent after the rebuild, so a restored session
-    /// still comes up paused at its saved playhead instead of autoplaying.
-    pub(crate) fn finish_deferred_start(&mut self) {
-        let paused = self.state == State::Paused;
-        let position = self.shared().position;
-        self.deferred_start = false;
-        self.rebuild();
-        if paused {
-            self.pause();
-        }
-        if position > 0.0 {
-            self.seek(position);
-        }
-    }
-
-    /// Loads the current track as a fresh one-entry playlist window. A
-    /// `loadfile … replace` clears whatever was queued (`PLAYBACKSTUDY.md`
-    /// §4); the tail entry is appended by [`Self::refill`] once this one is
-    /// loaded, so a load failure has nothing to auto-advance to.
+    /// Loads the current track into the native decoder/sink.
     fn rebuild(&mut self) {
         let track = self.queue[self.index].clone();
         *self.shared() = Shared {
             duration: track.duration,
-            pending_load: true,
             ..Shared::default()
         };
         self.fallback_duration = track.duration;
-        self.window_base = self.index;
-        self.window_len = 1;
         self.retries = 0;
         self.retry_at = None;
 
@@ -446,34 +330,13 @@ impl Player {
             json!(track.url.clone()),
             json!("replace"),
         ]);
-        self.push_metadata(&track);
-        self.apply_repeat();
         self.set_property("pause", json!(false));
         self.state = State::Playing;
     }
 
-    /// `mpris:artUrl` / `metadata` feed mpv's MPRIS (when the plugin is
-    /// loaded); position and pause state follow automatically.
-    fn push_metadata(&mut self, track: &Track) {
-        let metadata = json!({
-            "title": track.title,
-            "artist": track.artist,
-            "album": track.album,
-            "artUrl": track.cover_url,
-            "mpris:artUrl": track.cover_url,
-        });
-        self.set_property("metadata", metadata);
-    }
-
     pub fn cycle_repeat(&mut self) -> Repeat {
         self.repeat = self.repeat.cycle();
-        self.apply_repeat();
         self.repeat
-    }
-
-    fn apply_repeat(&mut self) {
-        let mode = if self.repeat == Repeat::One { "inf" } else { "no" };
-        self.set_property("loop-file", json!(mode));
     }
 
     pub fn toggle(&mut self) {
@@ -506,17 +369,9 @@ impl Player {
 
     pub fn stop(&mut self) {
         self.command(vec![json!("stop")]);
-        {
-            let mut shared = self.shared();
-            shared.reset();
-            shared.idle = false;
-            shared.playlist_pos = None;
-        }
-        self.window_base = self.index;
-        self.window_len = 0;
+        self.shared().reset();
         self.retries = 0;
         self.retry_at = None;
-        self.deferred_start = false;
         self.state = State::Stopped;
     }
 
@@ -525,17 +380,7 @@ impl Player {
             return;
         }
         self.forget_error();
-        let local = self.index - self.window_base;
-        if local + 1 < self.window_len {
-            // The next entry is already in the mpv playlist: it advances
-            // natively (prefetched, cache-bounded), so the skip stays gapless.
-            self.index += 1;
-            self.command(vec![json!("playlist-next")]);
-            self.set_property("pause", json!(false));
-            self.state = State::Playing;
-            let track = self.queue[self.index].clone();
-            self.push_metadata(&track);
-        } else if self.index + 1 < self.queue.len() {
+        if self.index + 1 < self.queue.len() {
             self.index += 1;
             self.play_current();
         } else if self.repeat == Repeat::All {
@@ -551,19 +396,8 @@ impl Player {
             return;
         }
         self.forget_error();
-        let target = self.index.saturating_sub(1);
-        self.index = target;
-        if target >= self.window_base && target - self.window_base < self.window_len {
-            // The previous entry is still in the window: replay it in place.
-            let local = target - self.window_base;
-            self.command(vec![json!("playlist-play-index"), json!(local)]);
-            self.set_property("pause", json!(false));
-            self.state = State::Playing;
-            let track = self.queue[target].clone();
-            self.push_metadata(&track);
-        } else {
-            self.play_current();
-        }
+        self.index = self.index.saturating_sub(1);
+        self.play_current();
     }
 
     /// The current queue, in order.
@@ -614,17 +448,6 @@ impl Player {
         if index < self.index {
             self.index -= 1;
         }
-        if index >= self.window_base {
-            // In the mpv playlist (current or ahead): drop it there too.
-            let local = index - self.window_base;
-            if local < self.window_len {
-                self.command(vec![json!("playlist-remove"), json!(local)]);
-                self.window_len -= 1;
-            }
-        } else {
-            // Before the window: entry 0 shifts down one queue index.
-            self.window_base -= 1;
-        }
     }
 
     /// Removes several tracks in one pass (VI-4 batch delete). Indices are
@@ -647,18 +470,15 @@ impl Player {
     }
 
     /// VI-8a: inserts cloned rows at `at` (clamped), the vim `p`/`P` paste.
-    /// The current track keeps playing: its cursor shifts when the insert is
-    /// at or above it, and an insert inside the mpv window re-anchors the
-    /// window at the same playhead (the `move_item` contract).
+    /// The current track keeps playing; its cursor shifts when the insert is
+    /// at or above it, and the same playhead is reseeked.
     pub fn insert_many(&mut self, at: usize, tracks: Vec<Track>) {
         if tracks.is_empty() {
             return;
         }
         let at = at.min(self.queue.len());
         let count = tracks.len();
-        let playing = self.state != State::Stopped;
-        let window_end = self.window_base + self.window_len;
-        let touched = playing && (at < window_end || at <= self.index);
+        let touched = self.state != State::Stopped && at <= self.index;
         let position = self.position();
         let paused = self.state == State::Paused;
 
@@ -676,11 +496,8 @@ impl Player {
         self.revision += 1;
     }
 
-    /// Moves the track at `from` to position `to`.
-    ///
-    /// Reordering re-anchors the window when the move touches it (or the
-    /// current entry) and seeks back to the playhead; a move that cannot
-    /// reorder the mpv playlist is left to Rust alone.
+    /// Moves the track at `from` to position `to`. When the move crosses the
+    /// current row, the transport re-anchors at the same playhead.
     pub fn move_item(&mut self, from: usize, to: usize) {
         if from >= self.queue.len() || to >= self.queue.len() || from == to {
             return;
@@ -704,10 +521,7 @@ impl Player {
         if self.state == State::Stopped {
             return;
         }
-        let end = self.window_base + self.window_len;
-        let crosses = (from < self.window_base) != (to < self.window_base);
-        let touched = crosses || [from, to].iter().any(|&i| i >= self.window_base && i < end);
-        if touched {
+        if from <= self.index || to <= self.index {
             let position = self.position();
             let paused = self.state == State::Paused;
             self.play_current();

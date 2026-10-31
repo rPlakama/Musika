@@ -19,7 +19,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 
-use super::{ErrorInfo, Player, Ready, State};
+use super::{Player, Ready, State};
 
 #[repr(C)]
 pub(crate) struct MusikaSink {
@@ -376,10 +376,7 @@ impl Player {
                 Ready::Connected
             }
             Err(err) => {
-                self.shared().error = Some(ErrorInfo {
-                    message: err,
-                    played: false,
-                });
+                eprintln!("player: cannot initialise PipeWire: {err}");
                 Ready::Failed
             }
         }
@@ -388,17 +385,6 @@ impl Player {
     pub fn pump(&mut self) -> Option<String> {
         if self.state == State::Stopped {
             return None;
-        }
-        if self.deferred_start {
-            match self.ensure_ready() {
-                Ready::Connected => self.finish_deferred_start(),
-                Ready::Failed => {
-                    self.state = State::Stopped;
-                    self.deferred_start = false;
-                    return None;
-                }
-                Ready::Connecting => return None,
-            }
         }
         let Some(status) = self.native.as_ref().map(Native::poll) else {
             return None;
@@ -429,7 +415,6 @@ impl Player {
     pub(super) fn forget_error(&mut self) {
         self.retries = 0;
         self.retry_at = None;
-        self.shared().error = None;
     }
 
     fn advance_after_error(&mut self) {

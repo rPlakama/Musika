@@ -40,42 +40,41 @@ fn main() {
     ] {
         println!("cargo:rerun-if-changed={dir}");
     }
-    if std::env::var_os("CARGO_FEATURE_PIPEWIRE").is_some() {
-        let mut build = cc::Build::new();
-        for lib in [
-            "libpipewire-0.3",
-            "libavformat",
-            "libavcodec",
-            "libswresample",
-            "libavutil",
-        ] {
-            let output = std::process::Command::new("pkg-config")
-                .args(["--cflags", lib])
-                .output()
-                .unwrap_or_else(|err| panic!("pkg-config failed for {lib}: {err}"));
-            for flag in String::from_utf8_lossy(&output.stdout).split_whitespace() {
-                if let Some(path) = flag.strip_prefix("-I") {
-                    build.include(path);
-                }
-            }
-            let output = std::process::Command::new("pkg-config")
-                .args(["--libs-only-L", lib])
-                .output()
-                .unwrap_or_else(|err| panic!("pkg-config failed for {lib}: {err}"));
-            for flag in String::from_utf8_lossy(&output.stdout).split_whitespace() {
-                if let Some(path) = flag.strip_prefix("-L") {
-                    println!("cargo:rustc-link-search=native={path}");
-                }
+    let mut native = cc::Build::new();
+    for lib in [
+        "libpipewire-0.3",
+        "libavformat",
+        "libavcodec",
+        "libswresample",
+        "libavutil",
+    ] {
+        let cflags = std::process::Command::new("pkg-config")
+            .args(["--cflags", lib])
+            .output()
+            .unwrap_or_else(|err| panic!("pkg-config failed for {lib}: {err}"));
+        for flag in String::from_utf8_lossy(&cflags.stdout).split_whitespace() {
+            if let Some(path) = flag.strip_prefix("-I") {
+                native.include(path);
             }
         }
-        build
-            .file("native/pipewire_decode.c")
-            .file("native/pipewire_sink.c")
-            .compile("pipewire_shims");
-        for lib in ["pipewire-0.3", "avformat", "avcodec", "swresample", "avutil"] {
-            println!("cargo:rustc-link-lib={lib}");
+        let libs = std::process::Command::new("pkg-config")
+            .args(["--libs-only-L", lib])
+            .output()
+            .unwrap_or_else(|err| panic!("pkg-config failed for {lib}: {err}"));
+        for flag in String::from_utf8_lossy(&libs.stdout).split_whitespace() {
+            if let Some(path) = flag.strip_prefix("-L") {
+                println!("cargo:rustc-link-search=native={path}");
+            }
         }
     }
+    native
+        .file("native/pipewire_decode.c")
+        .file("native/pipewire_sink.c")
+        .compile("pipewire_shims");
+    for lib in ["pipewire-0.3", "avformat", "avcodec", "swresample", "avutil"] {
+        println!("cargo:rustc-link-lib={lib}");
+    }
+
     if std::env::var_os("CARGO_FEATURE_IO_URING").is_some() {
         cc::Build::new()
             .file("native/io_uring_read.c")

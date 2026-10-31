@@ -107,6 +107,7 @@ Rectangle {
     // resized copy while it lasts, falling back to the player URL.
     property string _displayCoverUrl: ""
     property string _coverArt: ""
+    property string _coverAlbumId: ""
     property int _coverTarget: 0
     property string _coverArtRequested: ""
     readonly property url coverSource: _displayCoverUrl.length > 0
@@ -183,12 +184,22 @@ Rectangle {
 
     /// Reset the display copy on a track change and request the bucket for
     /// the current cover pane (the original URL shows until it lands).
-    function syncCover() {
+    function syncCover(force) {
         var art = Backend.currentCoverArt;
-        // A different track starts from its original URL; re-entry with the
+        var album = Backend.currentAlbumId;
+        // An album skip keeps the same painted cover and the same display
+        // copy. Only a different album (or a forced pane/DPR rebuild) may
+        // reset the large-art source.
+        var sameAlbum = album.length > 0 && album === root._coverAlbumId;
+        if (!force && sameAlbum && root._displayCoverUrl.length > 0) {
+            root._coverArt = art;
+            return;
+        }
+        // A different album starts from its original URL; re-entry with the
         // same art keeps the display-sized copy already on screen.
-        if (art !== root._coverArt || root._displayCoverUrl.length === 0)
+        if (force || art !== root._coverArt || root._displayCoverUrl.length === 0)
             root._displayCoverUrl = Backend.currentCoverUrl;
+        root._coverAlbumId = album;
         root._coverArt = art;
         root._coverTarget = 0;
         root._coverArtRequested = "";
@@ -502,7 +513,7 @@ Rectangle {
             root.requestAlbumActions();
             // Re-request the display copy for this pane size; the original
             // stays visible until the bucket lands.
-            root.syncCover();
+            root.syncCover(true);
         } else {
             root.closeLyricsOverlay();
         }
@@ -547,12 +558,12 @@ Rectangle {
                 root.requestAlbumActions();
         }
         function onCurrent_song_id_changed() {
-            root.syncCover();
+            root.syncCover(false);
             if (root.visible)
                 root.requestLyricsIfChanged();
         }
         function onCurrent_cover_art_changed() {
-            root.syncCover();
+            root.syncCover(false);
         }
         // LYR-8: a seek (keys, seek bar, MPRIS) must not wait out the manual-
         // scroll resume window — drop the hold and re-centre at once, so the
@@ -567,7 +578,7 @@ Rectangle {
     Connections {
         target: Screen
         function onDevicePixelRatioChanged() {
-            root.syncCover();
+            root.syncCover(true);
         }
     }
 

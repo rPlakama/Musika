@@ -14,7 +14,7 @@ Musika is a Keyboard driven Navidrome/Subsonic Client made with AI assistance. W
 
 3 - Search -- `/` searches the surface in front of you (literal, smartcase, viewport-scoped) with in-place match blocks and `[i/N]` counts; Enter jumps, Esc abandons. The global overlay uses a hybrid search (ARC-SEARCH): the in-process Nucleo fuzzy index answers first, and SQLite FTS5 fills any column that comes back short. `MUSIKA_SEARCH_ENGINE=nucleo` or `fts` pins one engine. The fuzzy catalog is held to a memory budget (`MUSIKA_SEARCH_INDEX_BUDGET_MIB`, 64 MiB by default); a library past it is searched by FTS instead, and `0` restores the old unlimited catalog.
 
-4 - Playback -- MPV runs as the backend subprocess: gapless with prefetch, stream-error retry + auto-advance, native MPRIS, seek/volume, and synced lyrics (OpenSubsonic) that ride the shared scroll body.
+4 - Playback -- MPV runs as the default backend subprocess: gapless with prefetch, stream-error retry + auto-advance, native MPRIS, seek/volume, and synced lyrics (OpenSubsonic) that ride the shared scroll body. An experimental `pipewire` build (`cargo build --features pipewire`) replaces MPV with a native libpipewire sink and raw FFmpeg decoder FFI; the queue and MPRIS interfaces stay the same.
 
 5 - Covers, lyrics and palettes are each cached in their own DB and purged on sync — nothing derived is fetched twice.
 

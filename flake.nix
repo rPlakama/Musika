@@ -88,6 +88,8 @@
 
         buildInputs = [
           pkgs.openssl
+          pkgs.pipewire
+          pkgs.ffmpeg
           pkgs.liburing
           pkgs.sqlite
           pkgs.libglvnd
@@ -178,6 +180,8 @@
           rustfmt
           libglvnd
           liburing
+          pipewire
+          ffmpeg
           openssl
           sqlx-cli
           vulkan-tools # vulkaninfo for test::benchmark::vulkan_probe

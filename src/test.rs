@@ -3693,6 +3693,7 @@ mod mpris {
     }
 }
 
+#[cfg(not(feature = "pipewire"))]
 mod player {
     use super::common::*;
     use crate::player::*;

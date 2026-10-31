@@ -46,9 +46,12 @@ use std::time::Instant;
 
 use serde_json::json;
 
+#[cfg(not(feature = "pipewire"))]
 mod mpv;
+#[cfg(feature = "pipewire")]
+mod pipewire;
 
-#[cfg(test)]
+#[cfg(all(test, not(feature = "pipewire")))]
 pub(crate) use mpv::apply_event;
 
 /// A queued track, including the resolved `stream` URL.
@@ -217,6 +220,8 @@ pub struct Player {
     /// queue's rows, so `emit_queue` can skip its O(N) clone/read/serialize
     /// when only the index moved (a skip or an advance).
     pub(crate) revision: u64,
+    #[cfg(feature = "pipewire")]
+    pub(crate) native: Option<pipewire::Native>,
 }
 
 impl Default for Player {
@@ -247,6 +252,8 @@ impl Player {
             connect_deadline: None,
             deferred_start: false,
             revision: 0,
+            #[cfg(feature = "pipewire")]
+            native: None,
         }
     }
 

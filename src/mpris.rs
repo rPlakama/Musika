@@ -170,7 +170,7 @@ async fn serve() {
         eprintln!("mpris: no session bus; native MPRIS disabled");
         return;
     }
-    if mpris_script().is_some() {
+    if cfg!(not(feature = "pipewire")) && mpris_script().is_some() {
         eprintln!("mpris: MUSIKA_MPRIS_SCRIPT is set; keeping the mpv fallback");
         return;
     }

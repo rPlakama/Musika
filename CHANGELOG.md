@@ -3,6 +3,40 @@
 All notable changes to Musika, newest first. `TASKLISTMAJOR.md` tracks the
 open work; this file is the release history.
 
+## 0.5.5 - _Warm the live databases, trace the first frame, and prebuild the search catalog._
+
+Startup is measured and warmed end to end: the live databases are opened on
+the startup path, release builds can trace the first frame, and the search
+catalog is ready by the time the search bar is used. The SQLite write path also
+gets per-database durability and a demoted background sync writer.
+
+- Warm `library.db`, `media.db` and their WAL files during database open,
+  treating missing files as a normal first run, and move the developer
+  diagnostics print off the startup path.
+- Split the legacy database absorption into independent library/media halves
+  and keep a pre-existing 0-byte older-version file from confusing the
+  importer; legacy files are still not deleted automatically.
+- Add always-compiled startup marks (`main`, `db.init`, `session.restore`,
+  `qapp.new`, `qml.loaded`, `frontend.ready`), enabled by
+  `MUSIKA_STARTUP_TRACE=1`.
+- Add `MUSIKA_STARTUP_EXIT=1` so the release binary closes after the first
+  rendered frame, making the whole startup run easy to measure with
+  `hyperfine`.
+- Trace cold search results and catalog builds in release builds.
+- Prebuild the in-memory search catalog 500 ms after the first frame for the
+  hybrid/Nucleo engines, skipping FTS-only and over-budget libraries; the first
+  search no longer pays the catalog build cost.
+- Keep `library.db` on `FULL` durability (it also holds credentials and
+  user-authored state), use WAL `NORMAL` for the media/search pools, bound the
+  journal at 64 MiB, run `optimize_on_close`, and checkpoint-truncate only
+  after a successful sync.
+- Give the background sync write a dedicated single connection and demote its
+  SQLx worker to `SCHED_IDLE` + `IOPRIO_CLASS_IDLE`; GUI reads keep their own
+  pools.
+- Keep Vulkan as the default RHI backend: it measured 515.8 ms versus 527.3 ms
+  for OpenGL and 543.2 ms for software in the 15-run release startup
+  benchmark, and `QSG_RHI_BACKEND` remains the override.
+
 ## 0.5.4 - _How fast can it be? Faster, how fast it needs to be? Even faster, how can I make it faster? I need to research! The *fastest* release yet!_
 
 The fastest release yet. Native playback replaces MPV, the home lists and

@@ -643,6 +643,20 @@ Item {
             return;
         }
 
+        // Shift-Q is the one global escape hatch: close every overlay, leave
+        // fullscreen and pop every page without changing the library scope.
+        if (action === "home") {
+            if (lineSearch.opened)
+                lineSearch.handleAction("cancel");
+            if (searchOverlay.opened)
+                searchOverlay.close();
+            if (queueDrawer.open)
+                queueDrawer.closeQueue();
+            nowPlayingExpanded = false;
+            root.showSegment(root.currentSegment);
+            return;
+        }
+
         // ARC-UI-2 M0: the `/` command line is the topmost modal while it is
         // up (the keymap is dead in Backend, so this normally only sees IPC);
         // `/` opens it over whatever surface or overlay is on top.

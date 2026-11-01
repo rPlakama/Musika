@@ -36,14 +36,22 @@ MediaList {
 
     function requestPreload() {
         root.loading = true;
-        Backend.preloadArtists();
+        if (Backend.offline) {
+            Backend.preloadArtists();
+            return;
+        }
+        root.startVirtual("artists", "", Backend.artistOrder);
     }
 
     function requestFull(showLoading) {
         root.stopPreload();
         root._fullLoaded = true;
         root.loading = showLoading;
-        Backend.requestArtists();
+        if (Backend.offline) {
+            Backend.requestArtists();
+            return;
+        }
+        root.startVirtual("artists", "", Backend.artistOrder);
     }
 
     function apply(payload) {

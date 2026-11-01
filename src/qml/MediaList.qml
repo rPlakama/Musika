@@ -128,7 +128,12 @@ ScrollPanel {
         Backend.TriggerRowReload();
     }
 
-    onCurrentIndexChanged: root.cursorMoved(root.currentIndex)
+    onCurrentIndexChanged: {
+        root.cursorMoved(root.currentIndex);
+        root.ensureVirtualWindow();
+    }
+    onFirstVisibleIndexChanged: root.ensureVirtualWindow()
+    onLastVisibleIndexChanged: root.ensureVirtualWindow()
 
     /// VI-4: the selection state lives in `ScrollContent` and is forwarded by
     /// `ScrollPanel` (`toggleSelection`/`selectAll`/`clearSelection`/…); the
@@ -168,6 +173,8 @@ ScrollPanel {
 
     function setRows(rows) {
         // VI-4: a reload invalidates the selected range.
+        placeholderTimer.stop();
+        root._placeholderGeneration++;
         root.clearSelection();
         mediaRows.clear();
         root.loading = true;
@@ -215,6 +222,171 @@ ScrollPanel {
     function appendRows(rows) {
         for (var i = 0; i < rows.length; i++)
             mediaRows.append(rows[i]);
+    }
+
+
+    // ── Rust-owned virtual row slots ─────────────────────────────────────
+    // The ListModel is a structural slot table: each entry carries the row
+    // keys so delegates can bind, but the payload stays empty until the live
+    // window lands. Rust owns the count, order, filter and range query.
+    property string _virtualSurface: ""
+    property string _virtualKey: ""
+    property string _virtualOrder: ""
+    property int _virtualGen: -1
+    property int _virtualCount: 0
+    property int _liveStart: -1
+    property int _liveEnd: -1
+    property int _requestedStart: -1
+    property int _requestedEnd: -1
+    property int _requestedGen: -1
+    property int _placeholderGeneration: 0
+    property int _placeholderAt: 0
+    property int _placeholderCount: 0
+    readonly property var _rowFields: [
+        "id", "title", "subtitle", "meta", "cover", "songId", "albumId",
+        "starred", "rating", "artist", "year", "tracks", "artistId",
+        "artistName", "artistCover", "playlistId"
+    ]
+
+    Timer {
+        id: placeholderTimer
+        interval: 0
+        repeat: false
+        onTriggered: root._appendPlaceholders(root._placeholderGeneration)
+    }
+
+    function _emptySlot() {
+        return {
+            id: "", title: "", subtitle: "", meta: "", cover: "",
+            songId: "", albumId: "", starred: false, rating: 0,
+            artist: "", year: "", tracks: "", artistId: "",
+            artistName: "", artistCover: "", playlistId: ""
+        };
+    }
+
+    function startVirtual(surface, key, order) {
+        placeholderTimer.stop();
+        root._placeholderGeneration++;
+        root._virtualSurface = surface;
+        root._virtualKey = key ? key : "";
+        root._virtualOrder = order ? order : "";
+        root._virtualCount = 0;
+        root._liveStart = -1;
+        root._liveEnd = -1;
+        root._requestedStart = -1;
+        root._requestedEnd = -1;
+        root._requestedGen = -1;
+        root.clearSelection();
+        mediaRows.clear();
+        root.loading = true;
+        root._virtualGen = Backend.beginRows(surface, root._virtualKey, root._virtualOrder);
+    }
+
+    function _fillVirtual(count) {
+        root._virtualCount = count;
+        root._placeholderGeneration++;
+        root._placeholderAt = 0;
+        root._placeholderCount = count;
+        mediaRows.clear();
+        root.loading = true;
+        placeholderTimer.stop();
+        root._appendPlaceholders(root._placeholderGeneration);
+    }
+
+    function _appendPlaceholders(generation) {
+        if (generation !== root._placeholderGeneration)
+            return;
+        var end = Math.min(root._placeholderCount, root._placeholderAt + root.fillBatch);
+        for (var i = root._placeholderAt; i < end; i++)
+            mediaRows.append(root._emptySlot());
+        if (end < root._placeholderCount) {
+            root._placeholderAt = end;
+            placeholderTimer.restart();
+            return;
+        }
+        root.loading = false;
+        if (root.resetPending) {
+            root.resetPending = false;
+            root.resetViewNow();
+        } else if (root.restore()) {
+            // restored cursor is enough; the window follows below
+        } else if (root.count > 0 && (root.currentIndex < 0 || root.currentIndex >= root.count)) {
+            root.currentIndex = 0;
+        }
+        root.ensureVirtualWindow();
+    }
+
+    function _clearSlot(index) {
+        var empty = root._emptySlot();
+        for (var i = 0; i < root._rowFields.length; i++)
+            mediaRows.setProperty(index, root._rowFields[i], empty[root._rowFields[i]]);
+    }
+
+    function _applySlot(index, row) {
+        for (var i = 0; i < root._rowFields.length; i++) {
+            var key = root._rowFields[i];
+            var value = row[key];
+            if (value === undefined || value === null)
+                value = root._emptySlot()[key];
+            mediaRows.setProperty(index, key, value);
+        }
+    }
+
+    function _applyRowWindow(data) {
+        if (data.surface !== root._virtualSurface
+                || data.generation !== root._virtualGen)
+            return;
+        var start = Number(data.start) || 0;
+        var rows = data.rows || [];
+        var end = start + rows.length - 1;
+        for (var old = root._liveStart; old >= 0 && old <= root._liveEnd; old++) {
+            if (old < start || old > end)
+                root._clearSlot(old);
+        }
+        for (var i = 0; i < rows.length; i++)
+            root._applySlot(start + i, rows[i]);
+        root._liveStart = start;
+        root._liveEnd = end;
+        root._requestedStart = start;
+        root._requestedEnd = end;
+        root._requestedGen = root._virtualGen;
+    }
+
+    function ensureVirtualWindow() {
+        if (root._virtualGen < 0 || root._virtualCount === 0)
+            return;
+        var first = root.firstVisibleIndex;
+        var last = root.lastVisibleIndex;
+        if (first < 0)
+            first = root.currentIndex >= 0 ? root.currentIndex : 0;
+        if (last < 0)
+            last = first;
+        var probe = root.currentIndex >= 0 ? root.currentIndex : first;
+        var start = Math.max(0, Math.min(first, last, probe) - 20);
+        var end = Math.min(root._virtualCount - 1,
+            Math.max(first, last, probe) + 20);
+        if (start === root._requestedStart && end === root._requestedEnd
+                && root._requestedGen === root._virtualGen)
+            return;
+        root._requestedStart = start;
+        root._requestedEnd = end;
+        root._requestedGen = root._virtualGen;
+        Backend.requestRowWindow(root._virtualSurface, root._virtualGen,
+            root._virtualKey, root._virtualOrder, start, end - start + 1);
+    }
+
+    Connections {
+        target: Backend
+        function onDataReady(channel, payload) {
+            if (channel === "rows_count") {
+                var count = JSON.parse(payload);
+                if (count.surface === root._virtualSurface
+                        && count.generation === root._virtualGen)
+                    root._fillVirtual(Number(count.count) || 0);
+            } else if (channel === "row_window") {
+                root._applyRowWindow(JSON.parse(payload));
+            }
+        }
     }
 
     onItemActivated: index => {

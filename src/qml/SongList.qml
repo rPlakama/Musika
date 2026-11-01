@@ -25,107 +25,47 @@ import "Theme.js" as Theme
 MediaList {
     id: root
 
-    readonly property int pageSize: 300
-    property int _nextOffset: 0
-    property bool _allLoaded: false
-    property bool _loadingPage: false
-    property bool _edgeTargetBottom: false
-
-    // `G` on the Songs list lands on the true last row. The tail-page path
-    // remains for any paged payload; a scope load arrives complete.
-    edgeJumpOverride: function(last, count) { root.jumpToEdge(last, count); }
-
     title: "Songs"
     orderText: Backend.songOrder
     memoryKey: "songs"
 
     function requestPreload() {
         root.loading = true;
-        root._loadingPage = true;
-        Backend.preloadSongs();
+        if (Backend.offline) {
+            Backend.preloadSongs();
+            return;
+        }
+        root.startVirtual("songs", "", Backend.songOrder);
     }
 
     function requestFull(showLoading) {
         root.stopPreload();
         root._fullLoaded = true;
-        // A scope switch loads the whole Songs segment on the uncapped row
-        // path: the list is complete before the cursor can reach its end, so
-        // no page cap applies while switching between scopes. Library and
-        // order reloads ride the same full read.
         root.loading = showLoading;
-        root._allLoaded = false;
-        root._loadingPage = true;
-        root._edgeTargetBottom = false;
-        root._nextOffset = 0;
         Backend.scrollHydrate();
-        Backend.requestAllSongs();
-    }
-
-    function applyPage(payload) {
-        var data = JSON.parse(payload);
-        // A page from before a reload/order swap must not append to the new
-        // model (only the first page may restart the list).
-        if (data.offset !== 0 && data.offset !== root._nextOffset)
+        if (Backend.offline) {
+            Backend.requestAllSongs();
             return;
-        var rows = data.rows;
-        if (data.offset === 0) {
-            // MediaList owns the loading state while it fills the model in
-            // batches.
-            root.setRows(rows);
-        } else {
-            root.appendRows(rows);
-            root.loading = false;
         }
-        root._nextOffset = data.next;
-        root._allLoaded = data.has_more !== true;
-        root._loadingPage = false;
-        if (root.count > 0 && root.currentIndex < 0)
-            root.currentIndex = 0;
-        if (rows.length === 0 && data.has_more === true)
-            root.loadMore();
-        else if (!root._allLoaded && root.count > 0 && root.currentIndex >= root.count - 20)
-            root.loadMore();
-        if (root._edgeTargetBottom) {
-            if (root._allLoaded) {
-                root._edgeTargetBottom = false;
-                root.land(root.count - 1);
-            } else {
-                root.loadMore(root.pageSize * 4);
-            }
-        }
+        root.startVirtual("songs", "", Backend.songOrder);
     }
 
-    function loadMore(limit) {
-        if (root._allLoaded || root._loadingPage)
-            return;
-        root._loadingPage = true;
-        var size = limit === undefined ? root.pageSize : Math.max(root.pageSize, limit);
-        Backend.requestSongsPage(root._nextOffset, size);
-    }
-
-    /// `G` on a paged list: finish the tail, then land on the real last row.
-    function jumpToEdge(last, count) {
-        if (count !== undefined && count > 1) {
+    // G lands on the real last row: the count is already virtual, so land
+    // directly after the slot table has it.
+    edgeJumpOverride: function(last, count) {
+        if (count !== undefined && count > 1)
             root.land(Math.min(count, root.count) - 1);
-            return;
-        }
-        if (!last) {
-            root.land(0);
-            return;
-        }
-        if (root._allLoaded) {
-            root.land(root.count - 1);
-            return;
-        }
-        root._edgeTargetBottom = true;
-        root.loadMore(root.pageSize * 4);
+        else
+            root.land(last ? root.count - 1 : 0);
     }
 
-    onCursorMoved: (index) => {
-        if (root._edgeTargetBottom && index < root.count - 1)
-            root._edgeTargetBottom = false;
-        if (index >= root.count - 20)
-            root.loadMore();
+    function applyOfflinePage(payload) {
+        var data = JSON.parse(payload);
+        if (data.offset === 0)
+            root.setRows(data.rows);
+        else
+            root.appendRows(data.rows);
+        root.loading = false;
     }
 
     onActivated: (item) => Backend.playSong(item.songId)
@@ -139,7 +79,7 @@ MediaList {
         target: Backend
         function onDataReady(channel, payload) {
             if (channel === "songs_page")
-                root.applyPage(payload);
+                root.applyOfflinePage(payload);
         }
         function onLibrary_changed() {
             if (!root._preloadOnly)

@@ -44,6 +44,8 @@ mod library;
 mod marks;
 #[path = "qml_backend/player.rs"]
 mod player;
+#[path = "qml_backend/rows.rs"]
+pub(crate) mod rows;
 #[path = "qml_backend/support.rs"]
 mod support;
 #[path = "qml_backend/sync.rs"]
@@ -380,6 +382,8 @@ pub struct Backend {
     status_restore_position: Option<f64>,
     /// S3: throttle for the periodic position write (10 s) while playing.
     last_position_save: Option<std::time::Instant>,
+    /// Per-surface virtual row generations (no row storage).
+    row_generations: std::collections::HashMap<String, u64>,
 }
 
 #[qobject(Singleton)]
@@ -1483,6 +1487,77 @@ impl Backend {
         let invoker = self.get_qml_method_invoker();
         crate::ipc::serve(crate::ipc::socket_path(), move |command| {
             qtbridge::invoke_method!(invoker, "handleCommand", command);
+        });
+    }
+
+    /// Starts a virtual row surface and returns the generation the QML slot
+    /// table must quote in every window request.
+    #[qslot(qml_name = "beginRows")]
+    fn begin_rows(&mut self, surface: String, key: String, order: String) -> i64 {
+        let generation = rows::next_generation(&mut self.row_generations, &surface) as i64;
+        let invoker = self.get_qml_method_invoker();
+        let offline = self.offline;
+        self.spawn_task(move |dbs| async move {
+            match rows::count(&dbs, &surface, &key, &order, offline).await {
+                Ok(count) => {
+                    emit(
+                    &invoker,
+                    "rows_count",
+                    serde_json::json!({
+                        "surface": surface,
+                        "generation": generation,
+                        "count": count,
+                    })
+                    .to_string(),
+                    );
+                }
+                Err(err) => eprintln!("rows: count {surface} failed: {err:#}"),
+            }
+        });
+        generation
+    }
+
+    #[qslot(qml_name = "requestRowWindow")]
+    fn request_row_window(
+        &mut self,
+        surface: String,
+        generation: i64,
+        key: String,
+        order: String,
+        start: i64,
+        count: i64,
+    ) {
+        let invoker = self.get_qml_method_invoker();
+        let offline = self.offline;
+        self.spawn_task(move |dbs| async move {
+            match rows::window(
+                &dbs,
+                &surface,
+                &key,
+                &order,
+                start.max(0) as usize,
+                count.max(1) as usize,
+                offline,
+            )
+            .await
+            {
+                Ok(payload) => {
+                    let value: serde_json::Value =
+                        serde_json::from_str(&payload).unwrap_or_default();
+                    emit(
+                        &invoker,
+                        "row_window",
+                        serde_json::json!({
+                            "surface": surface,
+                            "generation": generation,
+                            "start": value.get("start").cloned().unwrap_or_default(),
+                            "rows": value.get("rows").cloned().unwrap_or_default(),
+                        })
+                        .to_string(),
+                    );
+                }
+                Err(err) => eprintln!("rows: window {surface} failed: {err:#}"),
+            }
         });
     }
 

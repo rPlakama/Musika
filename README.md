@@ -35,15 +35,6 @@ then as a user/system package.
 inputs.musika.packages.${pkgs.system}.default
 ```
 
-# Technical Information
-
-It works with two databases:
-
-- `library.db` -- the server and account, artists/albums/songs, the FTS index,
-  artist stars and ratings, playlists, session resume and cover-derived colors
-- `media.db` -- cover URLs + cached art, cached lyrics, download blobs + rules
-  and the download ledger
-
 # Sections
 
 - Library scopes: Albums, Songs, Artists, Playlists (Radio is a placeholder). Shift-J/K cycles the scope; Shift-H/L cycles the ordering.
@@ -70,7 +61,7 @@ GPL-2.0-or-later.
 
 # Module Cross-Talk
 
-> Directed edges = `crate::` references found by static analysis across every source file (tests excluded).  
+> Directed edges = `crate::` references found by static analysis across every source file (tests excluded).
 > Source: [`docs/imgs/module_cross_talk.gv`](docs/imgs/module_cross_talk.gv)
 
 <p align="center">

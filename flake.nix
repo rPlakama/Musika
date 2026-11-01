@@ -181,6 +181,7 @@
           ffmpeg
           openssl
           sqlx-cli
+          clippy
           vulkan-tools # vulkaninfo for test::benchmark::vulkan_probe
           qt
         ];

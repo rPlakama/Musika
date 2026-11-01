@@ -18,6 +18,7 @@ use std::ffi::{CString, c_char, c_double, c_int};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
+use std::time::{Duration, Instant};
 
 use super::{Player, Ready, State};
 
@@ -80,6 +81,7 @@ pub(crate) struct Native {
     stop: Arc<AtomicBool>,
     status: Arc<Mutex<Status>>,
     seek: Arc<Mutex<Option<f64>>>,
+    seek_at: Arc<Mutex<Option<Instant>>>,
     position_origin: Arc<Mutex<f64>>,
 }
 
@@ -100,6 +102,7 @@ impl Native {
             stop: Arc::new(AtomicBool::new(false)),
             status: Arc::new(Mutex::new(Status::default())),
             seek: Arc::new(Mutex::new(None)),
+            seek_at: Arc::new(Mutex::new(None)),
             position_origin: Arc::new(Mutex::new(0.0)),
         })
     }
@@ -126,13 +129,17 @@ impl Native {
             ..Status::default()
         }));
         let seek = Arc::new(Mutex::new(None));
+        *self.seek_at
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
         let sink = SinkPtr(self.sink);
         let thread_stop = Arc::clone(&stop);
         let thread_status = Arc::clone(&status);
         let thread_seek = Arc::clone(&seek);
+        let thread_seek_at = Arc::clone(&self.seek_at);
         let url = url.to_string();
         self.decoder = Some(thread::spawn(move || {
-            decode_loop(sink, &url, thread_stop, thread_status, thread_seek);
+            decode_loop(sink, &url, thread_stop, thread_status, thread_seek, thread_seek_at);
         }));
         self.stop = stop;
         self.status = status;
@@ -164,6 +171,9 @@ impl Native {
         // Drop the already-buffered audio at once; the decoder thread will
         // perform the codec-level seek on its next wakeup.
         unsafe { musika_sink_flush(self.sink) };
+        *self.seek_at
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(Instant::now());
         *self
             .seek
             .lock()
@@ -217,6 +227,7 @@ fn decode_loop(
     stop: Arc<AtomicBool>,
     status: Arc<Mutex<Status>>,
     seek: Arc<Mutex<Option<f64>>>,
+    seek_at: Arc<Mutex<Option<Instant>>>,
 ) {
     let Ok(c_url) = CString::new(url) else {
         set_failed(&status, "invalid media URL");
@@ -239,16 +250,36 @@ fn decode_loop(
         if stop.load(Ordering::Relaxed) {
             break;
         }
-        if let Some(seconds) = seek
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .take()
-        {
+        let requested = {
+            let mut pending = seek
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            pending.take()
+        };
+        if let Some(seconds) = requested {
+            let recent = seek_at
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .map_or(false, |at| at.elapsed() < Duration::from_millis(50));
+            if recent {
+                let mut pending = seek
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                if pending.is_none() {
+                    *pending = Some(seconds);
+                }
+                drop(pending);
+                std::thread::sleep(Duration::from_millis(5));
+                continue;
+            }
             let ret = unsafe { musika_decoder_seek(decoder, seconds) };
             if ret < 0 {
                 set_failed(&status, "could not seek the media stream");
                 break;
             }
+            *seek_at
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
             unsafe { musika_sink_flush(sink.0) };
             lock(&status).position = seconds;
         }

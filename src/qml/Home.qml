@@ -1203,14 +1203,22 @@ Item {
 
         // A search song hit is a navigation jump: open its album page and
         // park the cursor on the row. Playback starts only on Enter there.
-        onSongActivated: (songId, albumId, albumTitle, artist, cover) =>
-            root.openSongHit(songId, albumId, albumTitle, artist, cover)
-        onAlbumActivated: (albumId, title, artist, year, tracks, cover, starred) => root.openAlbum(albumId, title, artist, year, tracks, cover, starred)
+        onSongActivated: (songId, albumId, albumTitle, artist, cover) => {
+            root.nowPlayingExpanded = false;
+            root.openSongHit(songId, albumId, albumTitle, artist, cover);
+        }
+        onAlbumActivated: (albumId, title, artist, year, tracks, cover, starred) => {
+            root.nowPlayingExpanded = false;
+            root.openAlbum(albumId, title, artist, year, tracks, cover, starred);
+        }
         onArtistActivated: (artistId, artistName, artistCover) => {
             root.nowPlayingExpanded = false;
             root.openArtist(artistId, artistName, artistCover);
         }
-        onPlaylistActivated: (playlistId, playlistName) => root.openPlaylist(playlistId, playlistName)
+        onPlaylistActivated: (playlistId, playlistName) => {
+            root.nowPlayingExpanded = false;
+            root.openPlaylist(playlistId, playlistName);
+        }
     }
 
     // ARC-UI-2 M0: the `/` in-surface search command line. `zCommand` rides

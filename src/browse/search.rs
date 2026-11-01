@@ -352,6 +352,7 @@ pub(crate) async fn search_value_index(
     .await
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn search_payload_value(
     dbs: &crate::db::Dbs,
     query: &str,

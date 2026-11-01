@@ -78,18 +78,25 @@ fn main() {
         }
     }
     native
+        .opt_level(2)
         .file("native/pipewire_decode.c")
         .file("native/pipewire_sink.c")
         .compile("pipewire_shims");
-    for lib in ["pipewire-0.3", "avformat", "avcodec", "swresample", "avutil"] {
+    for lib in [
+        "pipewire-0.3",
+        "avformat",
+        "avcodec",
+        "swresample",
+        "avutil",
+    ] {
         println!("cargo:rustc-link-lib={lib}");
     }
 
     if std::env::var_os("CARGO_FEATURE_IO_URING").is_some() {
         cc::Build::new()
+            .opt_level(2)
             .file("native/io_uring_read.c")
             .compile("io_uring_read");
         println!("cargo:rustc-link-lib=uring");
     }
-
 }

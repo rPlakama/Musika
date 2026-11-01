@@ -168,17 +168,19 @@ pub async fn fetch_into(
 ) -> Result<CoverScheme> {
     let generator = options.generator();
     if let Some(row) = load(pool, cover_art).await?
-        && row.cover_hash == cover_hash && row.generator == generator {
-            let roles = serde_json::from_str(&row.dark)
-                .with_context(|| format!("stored colors for {cover_art} are malformed"))?;
-            return Ok(CoverScheme {
-                scheme: row.scheme,
-                seed: row.seed as u32,
-                colorfulness: row.colorfulness,
-                role_hash: row.role_hash,
-                roles,
-            });
-        }
+        && row.cover_hash == cover_hash
+        && row.generator == generator
+    {
+        let roles = serde_json::from_str(&row.dark)
+            .with_context(|| format!("stored colors for {cover_art} are malformed"))?;
+        return Ok(CoverScheme {
+            scheme: row.scheme,
+            seed: row.seed as u32,
+            colorfulness: row.colorfulness,
+            role_hash: row.role_hash,
+            roles,
+        });
+    }
 
     let resolved = seed::resolve(
         pool,

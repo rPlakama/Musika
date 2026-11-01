@@ -87,15 +87,17 @@ pub(crate) fn worker_limit() -> usize {
 
 pub fn runtime() -> &'static Runtime {
     static RT: OnceLock<Runtime> = OnceLock::new();
-    RT.get_or_init(|| match tokio::runtime::Builder::new_multi_thread()
-        .worker_threads(worker_limit())
-        .enable_all()
-        .build()
-    {
-        Ok(runtime) => runtime,
-        Err(err) => {
-            eprintln!("runtime: could not start Tokio: {err}");
-            std::process::exit(1);
+    RT.get_or_init(|| {
+        match tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(worker_limit())
+            .enable_all()
+            .build()
+        {
+            Ok(runtime) => runtime,
+            Err(err) => {
+                eprintln!("runtime: could not start Tokio: {err}");
+                std::process::exit(1);
+            }
         }
     })
 }

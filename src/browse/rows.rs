@@ -176,6 +176,7 @@ pub(crate) fn album_json(
     })
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn song_json(
     id: &str,
     title: &str,
@@ -304,8 +305,14 @@ impl Serialize for ArtistElement<'_> {
         state.serialize_field("rating", &self.rating)?;
         state.serialize_field("title", &self.artist.name)?;
         state.serialize_field("subtitle", "")?;
-        state.serialize_field("meta", &format!("{} album{}", self.album_count,
-            if self.album_count == 1 { "" } else { "s" }))?;
+        state.serialize_field(
+            "meta",
+            &format!(
+                "{} album{}",
+                self.album_count,
+                if self.album_count == 1 { "" } else { "s" }
+            ),
+        )?;
         state.serialize_field("artistId", &self.artist.id)?;
         state.serialize_field("artistName", &self.artist.name)?;
         state.serialize_field("artistCover", self.cover)?;

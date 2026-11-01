@@ -120,9 +120,10 @@ where
         // unchanged library can still have an empty index. Rebuild it here
         // rather than waiting for the next library change.
         if crate::search::count(&dbs.search).await.unwrap_or(0) == 0
-            && let Err(err) = rebuild_search(dbs).await {
-                eprintln!("search: could not rebuild the index: {err:#}");
-            }
+            && let Err(err) = rebuild_search(dbs).await
+        {
+            eprintln!("search: could not rebuild the index: {err:#}");
+        }
         // The library is unchanged, but the derived caches may still need
         // topping up (first run interrupted, or entries that previously
         // failed): the caller starts the cover pass asynchronously after this
@@ -193,14 +194,9 @@ where
 
     // 1. library metadata
     report(&mut progress, "Indexing library…", 65);
-    let changes = crate::library::replace(
-        &dbs.sync,
-        &artists,
-        &albums,
-        &songs,
-        indexes.last_modified,
-    )
-    .await?;
+    let changes =
+        crate::library::replace(&dbs.sync, &artists, &albums, &songs, indexes.last_modified)
+            .await?;
 
     // The provider date moved: any description or lyric document cached
     // before that update is older than the provider's copy. Drop it so the

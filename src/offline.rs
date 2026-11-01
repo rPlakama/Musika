@@ -58,7 +58,8 @@ impl Filter {
 /// PATH-12: the offline catalog is the same for every payload between ledger
 /// changes; a short TTL coalesces paging/search bursts, and download settles
 /// clear it eagerly.
-static CACHE: OnceLock<Mutex<Option<(Instant, Arc<Filter>)>>> = OnceLock::new();
+type CachedCatalog = Mutex<Option<(Instant, Arc<Filter>)>>;
+static CACHE: OnceLock<CachedCatalog> = OnceLock::new();
 const TTL: Duration = Duration::from_secs(2);
 
 pub(crate) fn clear_cache() {

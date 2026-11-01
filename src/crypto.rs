@@ -146,9 +146,10 @@ pub fn decrypt_password(encoded: &str) -> Result<String> {
 
 fn key_path() -> Result<PathBuf> {
     if let Ok(path) = std::env::var("MUSIKA_KEY_FILE")
-        && !path.is_empty() {
-            return Ok(PathBuf::from(path));
-        }
+        && !path.is_empty()
+    {
+        return Ok(PathBuf::from(path));
+    }
 
     // Honor XDG_CONFIG_HOME through the shared config-dir helper (ARC-9).
     Ok(crate::db::config_dir()?.join("key"))

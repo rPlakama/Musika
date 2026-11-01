@@ -276,11 +276,11 @@ pub(crate) async fn store_in_dir(
         return Err(err);
     }
 
-    if let Some(old) = previous {
-        if (old.file != file || old.kind != kind)
-            && let Ok(old_dir) = tier_dir(&old.kind) {
-                let _ = std::fs::remove_file(old_dir.join(&old.file));
-            }
+    if let Some(old) = previous
+        && (old.file != file || old.kind != kind)
+        && let Ok(old_dir) = tier_dir(&old.kind)
+    {
+        let _ = std::fs::remove_file(old_dir.join(&old.file));
     }
     Ok(final_path)
 }

@@ -39,12 +39,7 @@ pub(crate) struct MusikaDecoder {
 
 unsafe extern "C" {
     fn musika_sink_init(err: *mut c_char, err_len: usize) -> *mut MusikaSink;
-    fn musika_sink_write(
-        sink: *mut MusikaSink,
-        data: *const i16,
-        frames: usize,
-        epoch: u64,
-    );
+    fn musika_sink_write(sink: *mut MusikaSink, data: *const i16, frames: usize, epoch: u64);
     fn musika_sink_epoch(sink: *mut MusikaSink) -> u64;
     fn musika_sink_set_paused(sink: *mut MusikaSink, paused: c_int);
     fn musika_sink_set_muted(sink: *mut MusikaSink, muted: c_int);
@@ -142,7 +137,8 @@ impl Native {
             ..Status::default()
         }));
         let seek = Arc::new(Mutex::new(None));
-        *self.seek_at
+        *self
+            .seek_at
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
         let sink = SinkPtr(self.sink);
@@ -160,7 +156,15 @@ impl Native {
             }
             reset_sink(sink, false);
             let epoch = unsafe { musika_sink_epoch(sink.0) };
-            decode_loop(sink, &url, thread_stop, thread_status, thread_seek, thread_seek_at, epoch);
+            decode_loop(
+                sink,
+                &url,
+                thread_stop,
+                thread_status,
+                thread_seek,
+                thread_seek_at,
+                epoch,
+            );
         }));
         self.stop = stop;
         self.status = status;
@@ -202,7 +206,8 @@ impl Native {
             .unwrap_or_else(std::sync::PoisonError::into_inner) = seconds.max(0.0);
         // The decoder owns ring flush; the Qt thread only posts the request.
         // The decoder flushes after applying the codec-level seek.
-        *self.seek_at
+        *self
+            .seek_at
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(Instant::now());
         *self
@@ -413,15 +418,17 @@ impl Player {
             }
             "volume" => {
                 if let Some(volume) = value.as_f64()
-                    && let Some(native) = self.native.as_ref() {
-                        native.set_volume(volume);
-                    }
+                    && let Some(native) = self.native.as_ref()
+                {
+                    native.set_volume(volume);
+                }
             }
             "mute" => {
                 if let Some(muted) = value.as_bool()
-                    && let Some(native) = self.native.as_ref() {
-                        native.set_muted(muted);
-                    }
+                    && let Some(native) = self.native.as_ref()
+                {
+                    native.set_muted(muted);
+                }
             }
             _ => {}
         }
@@ -485,9 +492,7 @@ impl Player {
         if self.state == State::Stopped {
             return None;
         }
-        let Some(status) = self.native.as_ref().map(Native::poll) else {
-            return None;
-        };
+        let status = self.native.as_ref().map(Native::poll)?;
         {
             let mut shared = self.shared();
             shared.position = status.position;
@@ -619,23 +624,30 @@ mod tests {
         ));
         std::fs::write(&path, wav_bytes_for(480_000)).expect("write wav");
         let mut player = Player::new();
-        player.load(vec![Track {
-            id: "seek-test".to_string(),
-            title: "Seek test".to_string(),
-            artist: String::new(),
-            album: String::new(),
-            album_id: String::new(),
-            favorite: false,
-            duration: 10.0,
-            url: format!("file://{}", path.display()),
-            cover_art: String::new(),
-            cover_url: String::new(),
-        }], 0);
+        player.load(
+            vec![Track {
+                id: "seek-test".to_string(),
+                title: "Seek test".to_string(),
+                artist: String::new(),
+                album: String::new(),
+                album_id: String::new(),
+                favorite: false,
+                duration: 10.0,
+                url: format!("file://{}", path.display()),
+                cover_art: String::new(),
+                cover_url: String::new(),
+            }],
+            0,
+        );
         std::thread::sleep(std::time::Duration::from_millis(200));
         player.seek(5.0);
         std::thread::sleep(std::time::Duration::from_millis(100));
         let _ = player.pump();
-        assert!(player.position() >= 4.9, "seek landed at {}", player.position());
+        assert!(
+            player.position() >= 4.9,
+            "seek landed at {}",
+            player.position()
+        );
         player.stop();
         let _ = std::fs::remove_file(path);
     }
@@ -683,32 +695,35 @@ mod tests {
         std::fs::write(&first, wav_bytes_for(2_400)).expect("first");
         std::fs::write(&second, wav_bytes_for(480_000)).expect("second");
         let mut player = Player::new();
-        player.load(vec![
-            Track {
-                id: "first".to_string(),
-                title: "First".to_string(),
-                artist: String::new(),
-                album: String::new(),
-                album_id: String::new(),
-                favorite: false,
-                duration: 0.05,
-                url: format!("file://{}", first.display()),
-                cover_art: String::new(),
-                cover_url: String::new(),
-            },
-            Track {
-                id: "second".to_string(),
-                title: "Second".to_string(),
-                artist: String::new(),
-                album: String::new(),
-                album_id: String::new(),
-                favorite: false,
-                duration: 10.0,
-                url: format!("file://{}", second.display()),
-                cover_art: String::new(),
-                cover_url: String::new(),
-            },
-        ], 0);
+        player.load(
+            vec![
+                Track {
+                    id: "first".to_string(),
+                    title: "First".to_string(),
+                    artist: String::new(),
+                    album: String::new(),
+                    album_id: String::new(),
+                    favorite: false,
+                    duration: 0.05,
+                    url: format!("file://{}", first.display()),
+                    cover_art: String::new(),
+                    cover_url: String::new(),
+                },
+                Track {
+                    id: "second".to_string(),
+                    title: "Second".to_string(),
+                    artist: String::new(),
+                    album: String::new(),
+                    album_id: String::new(),
+                    favorite: false,
+                    duration: 10.0,
+                    url: format!("file://{}", second.display()),
+                    cover_art: String::new(),
+                    cover_url: String::new(),
+                },
+            ],
+            0,
+        );
         std::thread::sleep(std::time::Duration::from_millis(700));
         for _ in 0..10 {
             let _ = player.pump();
@@ -733,14 +748,15 @@ mod tests {
         std::fs::write(&path, wav_bytes_for(96_000)).expect("write wav");
         let c_path = CString::new(path.to_string_lossy().as_bytes()).expect("path");
         let mut error = [0 as c_char; 512];
-        let decoder =
-            unsafe { musika_decoder_open(
+        let decoder = unsafe {
+            musika_decoder_open(
                 c_path.as_ptr(),
                 std::ptr::null(),
                 0,
                 error.as_mut_ptr(),
                 error.len(),
-            ) };
+            )
+        };
         assert!(!decoder.is_null(), "decoder: {}", c_string(&error));
         let mut pcm = [0i16; 4096];
         let mut frames = 0;
@@ -773,8 +789,8 @@ fn fetch_media_into(url: &str, media: &mut Vec<u8>, stop: &AtomicBool) -> Result
         let path = parsed
             .to_file_path()
             .map_err(|_| "bad file URL".to_string())?;
-        let bytes = std::fs::read(&path)
-            .map_err(|err| format!("cannot read {}: {err}", path.display()))?;
+        let bytes =
+            std::fs::read(&path).map_err(|err| format!("cannot read {}: {err}", path.display()))?;
         media.extend_from_slice(&bytes);
         return Ok(());
     }

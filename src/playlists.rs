@@ -43,9 +43,10 @@ pub struct M3uEntry {
 /// The folder the app owns for local playlists.
 pub fn m3u_dir() -> Result<PathBuf> {
     if let Some(dir) = std::env::var_os("MUSIKA_PLAYLISTS_DIR")
-        && !dir.is_empty() {
-            return Ok(PathBuf::from(dir));
-        }
+        && !dir.is_empty()
+    {
+        return Ok(PathBuf::from(dir));
+    }
     Ok(crate::db::config_dir()?.join("playlists"))
 }
 
@@ -236,9 +237,9 @@ impl Matcher {
             && let Some(i) = self
                 .by_artist_title
                 .get(&format!("{}\t{}", norm(artist), norm(title)))
-            {
-                return Some(*i);
-            }
+        {
+            return Some(*i);
+        }
         None
     }
 }
@@ -531,11 +532,7 @@ pub async fn list_json(dbs: &Dbs) -> Result<String> {
 /// M2: fetch one Subsonic playlist's contents on demand. The list refresh only
 /// stores identities; the page is the first place that needs the ordered
 /// entries. Positions are rewritten so server reorders/duplicates are exact.
-async fn load_subsonic_songs(
-    dbs: &Dbs,
-    client: &SubsonicClient,
-    playlist_id: &str,
-) -> Result<()> {
+async fn load_subsonic_songs(dbs: &Dbs, client: &SubsonicClient, playlist_id: &str) -> Result<()> {
     let page = client.get_playlist(playlist_id).await?;
     let mut tx = dbs.playlist.begin().await?;
     sqlx::query("DELETE FROM playlist_song WHERE playlist_id = ?1")
@@ -563,13 +560,14 @@ async fn load_subsonic_songs(
     Ok(())
 }
 
-
 /// Just the display name, for the startup bootstrap target.
 pub async fn name(dbs: &Dbs, playlist_id: &str) -> Result<Option<String>> {
-    Ok(sqlx::query_scalar("SELECT name FROM playlist WHERE id = ?1")
-        .bind(playlist_id)
-        .fetch_optional(&dbs.playlist)
-        .await?)
+    Ok(
+        sqlx::query_scalar("SELECT name FROM playlist WHERE id = ?1")
+            .bind(playlist_id)
+            .fetch_optional(&dbs.playlist)
+            .await?,
+    )
 }
 
 /// The playlist page payload: identity, song rows and the first three distinct
@@ -605,17 +603,18 @@ pub async fn page_json(dbs: &Dbs, playlist_id: &str, offline: bool) -> Result<St
     .await?
     .ok_or_else(|| anyhow::anyhow!("playlist not found"))?;
 
-    let existing: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM playlist_song WHERE playlist_id = ?1",
-    )
-    .bind(playlist_id)
-    .fetch_one(&dbs.playlist)
-    .await?;
-    if playlist.source == "subsonic" && existing == 0
+    let existing: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM playlist_song WHERE playlist_id = ?1")
+            .bind(playlist_id)
+            .fetch_one(&dbs.playlist)
+            .await?;
+    if playlist.source == "subsonic"
+        && existing == 0
         && let Ok(client) = crate::session::client(dbs).await
-            && let Err(err) = load_subsonic_songs(dbs, &client, playlist_id).await {
-                eprintln!("playlists: could not load {playlist_id}: {err:#}");
-            }
+        && let Err(err) = load_subsonic_songs(dbs, &client, playlist_id).await
+    {
+        eprintln!("playlists: could not load {playlist_id}: {err:#}");
+    }
 
     let rows = sqlx::query_as::<_, SongRow>(
         "SELECT position, song_id, title, artist, album, duration, cover_art
@@ -627,8 +626,10 @@ pub async fn page_json(dbs: &Dbs, playlist_id: &str, offline: bool) -> Result<St
 
     let ids: Vec<String> = rows.iter().filter_map(|row| row.song_id.clone()).collect();
     let library = crate::library::songs_by_ids(&dbs.library, &ids).await?;
-    let by_id: HashMap<String, crate::library::SongRow> =
-        library.into_iter().map(|song| (song.id.clone(), song)).collect();
+    let by_id: HashMap<String, crate::library::SongRow> = library
+        .into_iter()
+        .map(|song| (song.id.clone(), song))
+        .collect();
     let cover_ids: Vec<Option<String>> = rows
         .iter()
         .map(|row| row.cover_art.clone())
@@ -641,10 +642,7 @@ pub async fn page_json(dbs: &Dbs, playlist_id: &str, offline: bool) -> Result<St
     let mut collage_origins: Vec<String> = Vec::new();
     let mut songs = Vec::with_capacity(rows.len());
     for row in &rows {
-        let library_song = row
-            .song_id
-            .as_ref()
-            .and_then(|id| by_id.get(id));
+        let library_song = row.song_id.as_ref().and_then(|id| by_id.get(id));
         let cover = row
             .cover_art
             .as_ref()
@@ -720,11 +718,7 @@ pub async fn page_json(dbs: &Dbs, playlist_id: &str, offline: bool) -> Result<St
 
 /// Playlist hits for the unified search. Playlists live in their own database,
 /// so they are matched here by name rather than through the song FTS index.
-pub async fn search_rows(
-    dbs: &Dbs,
-    query: &str,
-    limit: i64,
-) -> Result<Vec<serde_json::Value>> {
+pub async fn search_rows(dbs: &Dbs, query: &str, limit: i64) -> Result<Vec<serde_json::Value>> {
     let like = format!("%{}%", query.trim());
     let rows: Vec<PlaylistListRow> = sqlx::query_as(
         "SELECT id, source, name, song_count, duration, owner

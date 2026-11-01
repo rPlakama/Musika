@@ -120,15 +120,14 @@ pub async fn init() -> Result<Dbs> {
 /// dependency, so this uses a buffered pass (the page cache is the goal).
 pub fn warm_startup() {
     std::thread::spawn(|| {
-        for path in [
-            library_path(),
-            search_path(),
-            covers_path(),
-        ]
-        .into_iter()
-        .flatten()
+        for path in [library_path(), search_path(), covers_path()]
+            .into_iter()
+            .flatten()
         {
-            for candidate in [path.clone(), PathBuf::from(format!("{}-wal", path.display()))] {
+            for candidate in [
+                path.clone(),
+                PathBuf::from(format!("{}-wal", path.display())),
+            ] {
                 if let Err(err) = warm_file(&candidate) {
                     crate::debug_log!("db: warm {} failed: {err}", candidate.display());
                 }
@@ -403,7 +402,10 @@ pub async fn wipe(dbs: &Dbs) -> Result<()> {
     wipe_and_migrate(&dbs.media, sqlx::migrate!("./migrations_media")).await?;
     crate::search::index::clear();
 
-    for dir in [covers_dir(), media_dir(), playback_dir()].into_iter().flatten() {
+    for dir in [covers_dir(), media_dir(), playback_dir()]
+        .into_iter()
+        .flatten()
+    {
         remove_dir(&dir)?;
     }
     remove_mirror();
@@ -492,13 +494,21 @@ fn demote_new_sqlite_workers(before: &std::collections::HashSet<u32>) {
         priority: std::ffi::c_int,
     }
     unsafe extern "C" {
-        fn sched_setscheduler(pid: std::ffi::c_int, policy: std::ffi::c_int, param: *const SchedParam) -> std::ffi::c_int;
+        fn sched_setscheduler(
+            pid: std::ffi::c_int,
+            policy: std::ffi::c_int,
+            param: *const SchedParam,
+        ) -> std::ffi::c_int;
         fn syscall(number: std::ffi::c_long, ...) -> std::ffi::c_long;
     }
     const SCHED_IDLE: std::ffi::c_int = 5;
     const IOPRIO_WHO_PROCESS: std::ffi::c_int = 1;
     const IOPRIO_CLASS_IDLE: std::ffi::c_int = 3;
-    for entry in std::fs::read_dir("/proc/self/task").into_iter().flatten().flatten() {
+    for entry in std::fs::read_dir("/proc/self/task")
+        .into_iter()
+        .flatten()
+        .flatten()
+    {
         let Ok(tid) = entry.file_name().to_string_lossy().parse::<u32>() else {
             continue;
         };
@@ -544,7 +554,11 @@ async fn open_migrated(
 }
 
 /// Opens a pool with the shared connection options (no migrations).
-async fn open_pool(path: PathBuf, max_connections: u32, durability: Durability) -> Result<SqlitePool> {
+async fn open_pool(
+    path: PathBuf,
+    max_connections: u32,
+    durability: Durability,
+) -> Result<SqlitePool> {
     ensure_parent_dir(&path)?;
 
     let options = sqlx::sqlite::SqliteConnectOptions::new()

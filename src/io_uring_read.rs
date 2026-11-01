@@ -32,11 +32,7 @@ struct RawReader {
 }
 
 unsafe extern "C" {
-    fn musika_uring_reader_new(
-        entries: u32,
-        err: *mut c_char,
-        err_len: usize,
-    ) -> *mut RawReader;
+    fn musika_uring_reader_new(entries: u32, err: *mut c_char, err_len: usize) -> *mut RawReader;
     fn musika_uring_reader_free(reader: *mut RawReader);
     fn musika_uring_read_many(
         reader: *mut RawReader,

@@ -77,7 +77,10 @@ impl Serialize for TrackElement<'_> {
         )?;
         state.serialize_field("cover_url", self.cover_url)?;
         state.serialize_field("subtitle", self.song.artist.as_deref().unwrap_or_default())?;
-        state.serialize_field("meta", &crate::browse::rows::format_duration(self.song.duration))?;
+        state.serialize_field(
+            "meta",
+            &crate::browse::rows::format_duration(self.song.duration),
+        )?;
         state.serialize_field("songId", &self.song.id)?;
         state.serialize_field("albumId", self.song.album_id.as_deref().unwrap_or_default())?;
         state.serialize_field("starred", &self.song.starred.is_some())?;
@@ -148,28 +151,38 @@ pub async fn playlist_tracks_json(
     .await?;
     let unique: Vec<String> = rows.iter().filter_map(|row| row.song_id.clone()).collect();
     let library = crate::library::songs_by_ids(&dbs.library, &unique).await?;
-    let by_id: std::collections::HashMap<String, crate::library::SongRow> =
-        library.into_iter().map(|song| (song.id.clone(), song)).collect();
+    let by_id: std::collections::HashMap<String, crate::library::SongRow> = library
+        .into_iter()
+        .map(|song| (song.id.clone(), song))
+        .collect();
     let filter = crate::offline::load(dbs, offline).await?;
     let mut songs = Vec::new();
     let mut start = 0i64;
     for row in &rows {
-        let Some(id) = row.song_id.as_ref() else { continue };
-        if filter.as_ref().is_some_and(|filter| !filter.contains_song(id)) {
+        let Some(id) = row.song_id.as_ref() else {
+            continue;
+        };
+        if filter
+            .as_ref()
+            .is_some_and(|filter| !filter.contains_song(id))
+        {
             continue;
         }
-        let song = by_id.get(id).cloned().unwrap_or_else(|| crate::library::SongRow {
-            id: id.clone(),
-            title: row.title.clone(),
-            artist: row.artist.clone(),
-            album: row.album.clone(),
-            album_id: None,
-            track: Some(row.position as i32 + 1),
-            duration: row.duration.map(|value| value as i32),
-            suffix: None,
-            cover_art: row.cover_art.clone(),
-            starred: None,
-        });
+        let song = by_id
+            .get(id)
+            .cloned()
+            .unwrap_or_else(|| crate::library::SongRow {
+                id: id.clone(),
+                title: row.title.clone(),
+                artist: row.artist.clone(),
+                album: row.album.clone(),
+                album_id: None,
+                track: Some(row.position as i32 + 1),
+                duration: row.duration.map(|value| value as i32),
+                suffix: None,
+                cover_art: row.cover_art.clone(),
+                starred: None,
+            });
         if row.position < start_row.max(0) {
             start += 1;
         }

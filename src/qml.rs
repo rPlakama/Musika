@@ -29,7 +29,9 @@ use crate::browse::{
 };
 use crate::keybind::{Keymap, Outcome};
 use crate::player::{Player, State};
-use crate::queue::{album_tracks_json, library_queue_payload, playlist_tracks_json, song_album_payload};
+use crate::queue::{
+    album_tracks_json, library_queue_payload, playlist_tracks_json, song_album_payload,
+};
 
 #[path = "qml_backend/artist.rs"]
 mod artist;
@@ -78,10 +80,6 @@ pub(crate) fn set_bootstrap_target(payload: Option<String>) {
 /// captured generation is still the latest (P-6 / roadmap "Session status").
 static STATUS_WRITE_GEN: AtomicU64 = AtomicU64::new(0);
 
-/// Bumped by every queue emit; the async ledger lookup only delivers when its
-/// captured generation is still the latest (out-of-order emits would flip the
-/// queue back to a stale index).
-
 /// Bumped by every mark-window request; the debounced reader only applies
 /// when its generation is still the latest (fast scrolling coalesces into
 /// the final cursor window instead of stacking DB tasks).
@@ -101,8 +99,7 @@ struct PreparedQueue {
     paused: bool,
 }
 
-static PREPARED_QUEUE: LazyLock<Mutex<Option<PreparedQueue>>> =
-    LazyLock::new(|| Mutex::new(None));
+static PREPARED_QUEUE: LazyLock<Mutex<Option<PreparedQueue>>> = LazyLock::new(|| Mutex::new(None));
 static QUEUE_LOAD_GEN: AtomicU64 = AtomicU64::new(0);
 
 /// Bumped by every scroll-memory flush; an older async write must not land
@@ -1019,9 +1016,9 @@ impl Backend {
         if self.player.state() != State::Playing || self.player.position() <= 0.0 {
             return;
         }
-        let due = self.last_position_save.is_none_or(|at| {
-            at.elapsed() >= std::time::Duration::from_secs(10)
-        });
+        let due = self
+            .last_position_save
+            .is_none_or(|at| at.elapsed() >= std::time::Duration::from_secs(10));
         if due {
             self.last_position_save = Some(std::time::Instant::now());
             self.queue_status_save();
@@ -1467,14 +1464,14 @@ impl Backend {
             match rows::count(&dbs, &surface, &key, &order, offline).await {
                 Ok(count) => {
                     emit(
-                    &invoker,
-                    "rows_count",
-                    serde_json::json!({
-                        "surface": surface,
-                        "generation": generation,
-                        "count": count,
-                    })
-                    .to_string(),
+                        &invoker,
+                        "rows_count",
+                        serde_json::json!({
+                            "surface": surface,
+                            "generation": generation,
+                            "count": count,
+                        })
+                        .to_string(),
                     );
                 }
                 Err(err) => eprintln!("rows: count {surface} failed: {err:#}"),

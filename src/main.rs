@@ -27,7 +27,7 @@ mod covers;
 mod crypto;
 mod db;
 mod debug;
-#[cfg(debug_assertions)]
+#[cfg(any(debug_assertions, test))]
 #[path = "test/debug.rs"]
 mod debug_info;
 mod digest;
@@ -35,9 +35,9 @@ mod download;
 mod fanout;
 mod hex;
 mod http_client;
+mod index;
 #[cfg(feature = "io-uring")]
 mod io_uring_read;
-mod index;
 mod ipc;
 mod keybind;
 mod library;

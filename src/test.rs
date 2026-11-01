@@ -22,9 +22,6 @@
 
 #![allow(unused_imports)]
 
-#[path = "test/debug.rs"]
-mod debug_info;
-
 mod common {
     pub use crate::api::{AlbumID3, ArtistID3, Child, LyricsList};
     pub use crate::consts::now_secs;
@@ -1953,7 +1950,10 @@ mod keybind {
     fn lyrics_overlay_binding() {
         let mut keymap = Keymap::new();
         assert_eq!(keymap.feed("?"), Outcome::Action(Action::LyricsOverlay));
-        assert_eq!(keymap.feed("shift-/"), Outcome::Action(Action::LyricsOverlay));
+        assert_eq!(
+            keymap.feed("shift-/"),
+            Outcome::Action(Action::LyricsOverlay)
+        );
     }
 
     #[test]
@@ -1974,7 +1974,7 @@ mod keybind {
     #[test]
     fn slash_opens_the_surface_search() {
         let mut keymap = Keymap::new();
-        assert_eq!(keymap.feed("/"), Outcome::Action(Action::SearchAction));
+        assert_eq!(keymap.feed("/"), Outcome::Action(Action::SearchSubmit));
     }
 
     #[test]
@@ -3960,7 +3960,7 @@ mod qml {
                 artist: Some("Radiohead".to_string()),
                 album: Some("Kid A".to_string()),
                 album_id: Some(format!("al{}", i % 2000)),
-                track: Some((i % 10) as i32 + 1),
+                track: Some(i % 10 + 1),
                 duration: Some(180 + i % 120),
                 suffix: Some("flac".to_string()),
                 cover_art: Some(format!("c{}", i % 2000)),
@@ -4027,7 +4027,6 @@ mod qml {
             "direct deserialization must beat the Value tree plus subtree clones"
         );
     }
-
 }
 
 mod qml_download {
@@ -5329,13 +5328,17 @@ mod benchmark {
             .map(|index| dir.join(format!("file-{index}.bin")))
             .collect();
         for (index, path) in paths.iter().enumerate() {
-            let bytes: Vec<u8> = (0..(index * 1000)).map(|value| (value % 251) as u8).collect();
+            let bytes: Vec<u8> = (0..(index * 1000))
+                .map(|value| (value % 251) as u8)
+                .collect();
             std::fs::write(path, &bytes).expect("write");
         }
         let reader = crate::io_uring_read::Reader::new().expect("reader");
         let results = reader.read_many(&paths);
         for (index, result) in results.into_iter().enumerate() {
-            let expected: Vec<u8> = (0..(index * 1000)).map(|value| (value % 251) as u8).collect();
+            let expected: Vec<u8> = (0..(index * 1000))
+                .map(|value| (value % 251) as u8)
+                .collect();
             assert_eq!(result.expect("batch read"), expected, "file {index}");
         }
         let _ = std::fs::remove_dir_all(dir);
@@ -5361,13 +5364,13 @@ mod benchmark {
     /// `cargo test test::benchmark::vulkan_probe -- --nocapture`
     #[test]
     fn idle_log_labels_are_stable() {
-        assert_eq!(super::debug_info::idle_event(true), "enter");
-        assert_eq!(super::debug_info::idle_event(false), "leave");
+        assert_eq!(crate::debug_info::idle_event(true), "enter");
+        assert_eq!(crate::debug_info::idle_event(false), "leave");
     }
 
     #[test]
     fn vulkan_probe() {
-        for line in super::debug_info::diagnostics() {
+        for line in crate::debug_info::diagnostics() {
             println!("[bench] {line}");
         }
     }
@@ -5383,8 +5386,7 @@ mod scroll_memory {
         remember(&key, 7, 123.5, 2, "grid");
         assert_eq!(saved_index(&key), 7);
         assert_eq!(saved_layout(&key), "grid");
-        let entry: serde_json::Value =
-            serde_json::from_str(&entry_json(&key)).expect("entry JSON");
+        let entry: serde_json::Value = serde_json::from_str(&entry_json(&key)).expect("entry JSON");
         assert_eq!(entry["index"], 7);
         assert_eq!(entry["y"], 123.5);
         assert_eq!(entry["scope"], 2);
@@ -5446,8 +5448,15 @@ mod rows {
         sqlx::query("INSERT INTO songs (id, title, artist, album, album_id, track, duration, suffix, starred, cover_art) VALUES ('s1', 'Song', 'Artist', 'Album', 'al1', 1, 120, 'flac', NULL, '')")
             .execute(&library).await.unwrap();
         let dbs = dbs(&library, &media);
-        assert_eq!(crate::qml::rows::count(&dbs, "albums", "", "Artist", false).await.unwrap(), 1);
-        let payload = crate::qml::rows::window(&dbs, "albums", "", "Artist", 0, 10, false).await.unwrap();
+        assert_eq!(
+            crate::qml::rows::count(&dbs, "albums", "", "Artist", false)
+                .await
+                .unwrap(),
+            1
+        );
+        let payload = crate::qml::rows::window(&dbs, "albums", "", "Artist", 0, 10, false)
+            .await
+            .unwrap();
         let value: Value = serde_json::from_str(&payload).unwrap();
         assert_eq!(value["start"], 0);
         assert_eq!(value["rows"].as_array().unwrap().len(), 1);

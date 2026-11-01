@@ -58,9 +58,9 @@ impl Backend {
                             &info.kind,
                         )
                         .await
-                        {
-                            eprintln!("Failed to persist credentials: {err:#}");
-                        }
+                    {
+                        eprintln!("Failed to persist credentials: {err:#}");
+                    }
                     online_authenticated(
                         &invoker,
                         sync_finish,

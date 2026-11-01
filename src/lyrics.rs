@@ -44,8 +44,6 @@ pub(crate) const MISS_TTL_SECS: i64 = 7 * 24 * 60 * 60;
 /// How many missing/expired songs one sync pass will fetch lyrics for.
 pub const SYNC_BACKFILL_LIMIT: usize = 64;
 
-/// Bounded concurrency for the sync backfill (mirrors the index fetchers).
-
 /// How long a cached *plain* document is trusted: Navidrome may gain a `.lrc`
 /// for a track later, so an unsynced hit must be revalidated eventually.
 pub(crate) const UNSYNCED_TTL_SECS: i64 = 24 * 60 * 60;
@@ -167,9 +165,10 @@ pub async fn fetch(dbs: &Dbs, client: Option<&SubsonicClient>, song_id: &str) ->
     }
 
     if let Some((document, fetched_at)) = load_cached(&dbs.lyrics, song_id).await?
-        && !cache_is_stale(&document, fetched_at) {
-            return Ok(document);
-        }
+        && !cache_is_stale(&document, fetched_at)
+    {
+        return Ok(document);
+    }
 
     let Some(client) = client else {
         return Ok(Document::missing(song_id));

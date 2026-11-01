@@ -665,9 +665,11 @@ pub async fn album_count(pool: &SqlitePool, artist: Option<&str>) -> Result<usiz
                 .fetch_one(pool)
                 .await?
         }
-        None => sqlx::query_scalar("SELECT COUNT(*) FROM albums")
-            .fetch_one(pool)
-            .await?,
+        None => {
+            sqlx::query_scalar("SELECT COUNT(*) FROM albums")
+                .fetch_one(pool)
+                .await?
+        }
     };
     Ok(count.max(0) as usize)
 }
@@ -758,11 +760,7 @@ pub async fn artists(pool: &SqlitePool, order: &str) -> Result<Vec<ArtistRow>> {
 }
 
 /// The first `limit` artists of [`artists`]; `limit <= 0` means all.
-pub async fn artists_limited(
-    pool: &SqlitePool,
-    order: &str,
-    limit: i64,
-) -> Result<Vec<ArtistRow>> {
+pub async fn artists_limited(pool: &SqlitePool, order: &str, limit: i64) -> Result<Vec<ArtistRow>> {
     let order = match order {
         "Albums" => " ORDER BY album_count DESC, name",
         _ => " ORDER BY name",

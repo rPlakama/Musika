@@ -16,7 +16,10 @@ use serde_json::{Value, json};
 
 use crate::db::Dbs;
 
-pub(crate) fn next_generation(generations: &mut std::collections::HashMap<String, u64>, surface: &str) -> u64 {
+pub(crate) fn next_generation(
+    generations: &mut std::collections::HashMap<String, u64>,
+    surface: &str,
+) -> u64 {
     let generation = generations.entry(surface.to_string()).or_insert(0);
     *generation += 1;
     *generation
@@ -56,24 +59,19 @@ pub(crate) async fn window(
             let artist = (!key.is_empty()).then_some(key);
             let albums =
                 crate::library::albums_range(&dbs.library, artist, order, start, count).await?;
-            let covers = crate::covers::url_map_for(
-                dbs,
-                albums.iter().map(|album| &album.cover_art),
-            )
-            .await?;
+            let covers =
+                crate::covers::url_map_for(dbs, albums.iter().map(|album| &album.cover_art))
+                    .await?;
             albums
                 .iter()
                 .map(|album| crate::browse::rows::album_json(album, &covers, None))
                 .collect()
         }
         "artists" => {
-            let artists =
-                crate::library::artists_range(&dbs.library, order, start, count).await?;
-            let covers = crate::covers::url_map_for(
-                dbs,
-                artists.iter().map(|artist| &artist.cover_art),
-            )
-            .await?;
+            let artists = crate::library::artists_range(&dbs.library, order, start, count).await?;
+            let covers =
+                crate::covers::url_map_for(dbs, artists.iter().map(|artist| &artist.cover_art))
+                    .await?;
             let starred: std::collections::HashSet<String> =
                 crate::artist_user::starred_ids(&dbs.artist_user)
                     .await?

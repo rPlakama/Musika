@@ -35,9 +35,10 @@ use std::path::{Path, PathBuf};
 /// Path of the IPC socket (`MUSIKA_IPC_SOCKET` overrides).
 pub fn socket_path() -> PathBuf {
     if let Ok(path) = std::env::var("MUSIKA_IPC_SOCKET")
-        && !path.is_empty() {
-            return PathBuf::from(path);
-        }
+        && !path.is_empty()
+    {
+        return PathBuf::from(path);
+    }
     crate::db::config_socket("ipc.sock")
 }
 

@@ -178,7 +178,11 @@ pub(crate) fn entry_json(key: &str) -> String {
 }
 
 pub(crate) fn saved_index(key: &str) -> i64 {
-    store().entries.get(key).map(|entry| entry.index).unwrap_or(-1)
+    store()
+        .entries
+        .get(key)
+        .map(|entry| entry.index)
+        .unwrap_or(-1)
 }
 
 pub(crate) fn saved_layout(key: &str) -> String {

@@ -234,7 +234,13 @@ fn decode_loop(
         return;
     };
     let mut error = [0 as c_char; 512];
-    let decoder = unsafe { musika_decoder_open(c_url.as_ptr(), error.as_mut_ptr(), error.len()) };
+    let decoder = unsafe {
+        musika_decoder_open(
+            c_url.as_ptr(),
+            error.as_mut_ptr(),
+            error.len(),
+        )
+    };
     if decoder.is_null() {
         set_failed(&status, &c_string(&error));
         return;
@@ -576,6 +582,35 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "requires a running PipeWire session"]
+    fn seek_resumes_the_sink_quickly() {
+        let path = std::env::temp_dir().join(format!(
+            "musika-pipewire-resume-{}-{}.wav",
+            std::process::id(),
+            crate::consts::now_nanos()
+        ));
+        std::fs::write(&path, wav_bytes_for(480_000)).expect("write wav");
+        let mut native = Native::new().expect("pipewire sink");
+        native.load(&path.to_string_lossy());
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        native.seek_to(5.0);
+        let started = std::time::Instant::now();
+        let mut resumed = false;
+        while started.elapsed() < std::time::Duration::from_secs(2) {
+            if unsafe { musika_sink_played_frames(native.sink) } > 0 {
+                let _ = native.poll();
+                resumed = true;
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        eprintln!("seek resume after {:?}", started.elapsed());
+        assert!(resumed, "sink never resumed after seek");
+        native.stop();
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
     fn decoder_reads_a_wav() {
         let path = std::env::temp_dir().join(format!(
             "musika-pipewire-{}-{}.wav",
@@ -586,7 +621,11 @@ mod tests {
         let c_path = CString::new(path.to_string_lossy().as_bytes()).expect("path");
         let mut error = [0 as c_char; 512];
         let decoder =
-            unsafe { musika_decoder_open(c_path.as_ptr(), error.as_mut_ptr(), error.len()) };
+            unsafe { musika_decoder_open(
+                c_path.as_ptr(),
+                error.as_mut_ptr(),
+                error.len(),
+            ) };
         assert!(!decoder.is_null(), "decoder: {}", c_string(&error));
         let mut pcm = [0i16; 4096];
         let mut frames = 0;

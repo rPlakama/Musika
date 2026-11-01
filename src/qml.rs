@@ -21,7 +21,6 @@ use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use qtbridge::{QmlObject, qobject};
-use serde::ser::{Serialize, SerializeSeq, SerializeStruct, Serializer};
 
 use crate::browse::{
     load_album_songs_json, load_albums_json, load_albums_json_limited, load_all_songs_json,
@@ -82,7 +81,6 @@ static STATUS_WRITE_GEN: AtomicU64 = AtomicU64::new(0);
 /// Bumped by every queue emit; the async ledger lookup only delivers when its
 /// captured generation is still the latest (out-of-order emits would flip the
 /// queue back to a stale index).
-static QUEUE_EMIT_GEN: AtomicU64 = AtomicU64::new(0);
 
 /// Bumped by every mark-window request; the debounced reader only applies
 /// when its generation is still the latest (fast scrolling coalesces into
@@ -162,56 +160,6 @@ fn add_mark_id(ids: &mut Vec<String>, id: &str) -> bool {
 /// Plural word for the queue clipboard toasts.
 fn rows(count: usize) -> &'static str {
     if count == 1 { "row" } else { "rows" }
-}
-
-/// The hash of the last published queue rows ("RowAlreadyPublished"): the
-/// automatic emits dedupe on it so skips don't republish the same rows.
-static QUEUE_ROWS_HASH: AtomicU64 = AtomicU64::new(0);
-
-/// One queue row, streamed straight from the player's queue. The queue can
-/// hold the whole library, so building a `Value` map per track before
-/// serializing doubled the transient payload cost.
-struct QueueRow<'a> {
-    track: &'a crate::player::Track,
-    starred: bool,
-}
-
-impl Serialize for QueueRow<'_> {
-    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        let mut state = serializer.serialize_struct("queue_row", 10)?;
-        state.serialize_field("id", &self.track.id)?;
-        state.serialize_field("title", &self.track.title)?;
-        state.serialize_field("album_id", &self.track.album_id)?;
-        state.serialize_field("starred", &self.starred)?;
-        state.serialize_field("duration", &self.track.duration)?;
-        state.serialize_field("cover", &self.track.cover_url)?;
-        state.serialize_field("subtitle", &self.track.artist)?;
-        state.serialize_field(
-            "meta",
-            &crate::browse::rows::format_duration(Some(self.track.duration as i32)),
-        )?;
-        state.serialize_field("songId", &self.track.id)?;
-        state.serialize_field("albumId", &self.track.album_id)?;
-        state.end()
-    }
-}
-
-pub(crate) struct QueueRows<'a> {
-    pub(crate) queue: &'a [crate::player::Track],
-    pub(crate) starred: &'a std::collections::HashSet<String>,
-}
-
-impl Serialize for QueueRows<'_> {
-    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        let mut seq = serializer.serialize_seq(Some(self.queue.len()))?;
-        for track in self.queue {
-            seq.serialize_element(&QueueRow {
-                track,
-                starred: self.starred.contains(&track.id),
-            })?;
-        }
-        seq.end()
-    }
 }
 
 /// The `applyQueueCovers` payload, deserialized straight into its final
@@ -2619,6 +2567,42 @@ impl Backend {
         // The explicit request always publishes (the drawer/entry may have
         // missed the automatic stream).
         self.emit_queue(true);
+    }
+
+    #[qslot(qml_name = "requestQueueWindow")]
+    fn request_queue_window(&mut self, start: i64, count: i64) {
+        let queue = self.player.queue_snapshot();
+        let revision = self.player.revision();
+        let start = start.max(0) as usize;
+        let end = (start + count.max(1) as usize).min(queue.len());
+        let rows: Vec<serde_json::Value> = queue[start..end]
+            .iter()
+            .map(|track| {
+                let meta = crate::browse::rows::format_duration(Some(track.duration as i32));
+                serde_json::json!({
+                    "id": track.id,
+                    "title": track.title,
+                    "subtitle": track.artist,
+                    "duration": meta,
+                    "meta": meta,
+                    "songId": track.id,
+                    "albumId": track.album_id,
+                    "cover": track.cover_url,
+                    "starred": track.favorite,
+                })
+            })
+            .collect();
+        let invoker = self.get_qml_method_invoker();
+        emit(
+            &invoker,
+            "queue_window",
+            serde_json::json!({
+                "start": start,
+                "revision": revision,
+                "rows": rows,
+            })
+            .to_string(),
+        );
     }
 
     #[qslot(qml_name = "queueJump")]

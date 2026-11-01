@@ -4023,41 +4023,6 @@ mod qml {
         );
     }
 
-    /// The queue stream must publish exactly the roles the drawer paints
-    /// (QR-4) and the live favourite flag, without the old `Value` tree.
-    #[test]
-    fn queue_rows_stream_the_published_shape() {
-        let track = crate::player::Track {
-            id: "s1".to_string(),
-            title: "Everything In Its Right Place".to_string(),
-            artist: "Radiohead".to_string(),
-            album: "Kid A".to_string(),
-            album_id: "al1".to_string(),
-            favorite: true,
-            duration: 240.0,
-            url: "https://server/stream?id=s1".to_string(),
-            cover_art: "cov1".to_string(),
-            cover_url: "file:///c.jpg".to_string(),
-        };
-        let starred: std::collections::HashSet<String> = ["s1".to_string()].into_iter().collect();
-        let rows = QueueRows {
-            queue: std::slice::from_ref(&track),
-            starred: &starred,
-        };
-
-        let parsed: serde_json::Value =
-            serde_json::from_str(&serde_json::to_string(&rows).unwrap()).unwrap();
-        assert_eq!(parsed[0]["id"], "s1");
-        assert_eq!(parsed[0]["title"], "Everything In Its Right Place");
-        assert_eq!(parsed[0]["album_id"], "al1");
-        assert_eq!(parsed[0]["starred"], true);
-        assert_eq!(parsed[0]["duration"], 240.0);
-        assert_eq!(parsed[0]["cover"], "file:///c.jpg");
-        assert!(
-            parsed[0].get("artist").is_none() && parsed[0].get("album").is_none(),
-            "QR-4: the drawer never painted subtitle roles"
-        );
-    }
 }
 
 mod qml_download {

@@ -195,43 +195,98 @@ Item {
         queueCursor = queueContent.currentIndex;
     }
 
+
+    // ── Virtual queue row slots ───────────────────────────────────────────
+    property int _queueCount: 0
+    property int _queueLiveStart: -1
+    property int _queueLiveEnd: -1
+    property int _queueRequestStart: -1
+    property int _queueRequestEnd: -1
+
+    function emptyQueueSlot() {
+        return {
+            title: "", subtitle: "", duration: "", songId: "",
+            albumId: "", starred: false
+        };
+    }
+
+    function fillQueueSlots(count) {
+        queueItems.clear();
+        for (var i = 0; i < count; ++i)
+            queueItems.append(root.emptyQueueSlot());
+        root._queueCount = count;
+        root._queueLiveStart = -1;
+        root._queueLiveEnd = -1;
+        root._queueRequestStart = -1;
+        root._queueRequestEnd = -1;
+    }
+
+    function clearQueueSlot(index) {
+        var empty = root.emptyQueueSlot();
+        queueItems.setProperty(index, "title", empty.title);
+        queueItems.setProperty(index, "subtitle", empty.subtitle);
+        queueItems.setProperty(index, "duration", empty.duration);
+        queueItems.setProperty(index, "songId", empty.songId);
+        queueItems.setProperty(index, "albumId", empty.albumId);
+        queueItems.setProperty(index, "starred", empty.starred);
+    }
+
+    function applyQueueWindow(data) {
+        var start = Number(data.start) || 0;
+        var rows = data.rows || [];
+        var end = start + rows.length - 1;
+        for (var old = root._queueLiveStart; old >= 0 && old <= root._queueLiveEnd; ++old) {
+            if (old < start || old > end)
+                root.clearQueueSlot(old);
+        }
+        for (var i = 0; i < rows.length; ++i) {
+            var row = rows[i];
+            var index = start + i;
+            queueItems.setProperty(index, "title", row.title ? row.title : "");
+            queueItems.setProperty(index, "subtitle", row.subtitle ? row.subtitle : "");
+            queueItems.setProperty(index, "duration", row.duration ? row.duration : "");
+            queueItems.setProperty(index, "songId", row.songId ? row.songId : "");
+            queueItems.setProperty(index, "albumId", row.albumId ? row.albumId : "");
+            queueItems.setProperty(index, "starred", row.starred === true);
+        }
+        root._queueLiveStart = start;
+        root._queueLiveEnd = end;
+        root._queueRequestStart = start;
+        root._queueRequestEnd = end;
+        queueContent.requestMarkWindow();
+    }
+
+    function ensureQueueWindow() {
+        if (root._queueCount === 0)
+            return;
+        var first = queueContent.firstVisibleIndex;
+        var last = queueContent.lastVisibleIndex;
+        var probe = queueContent.currentIndex >= 0 ? queueContent.currentIndex : root.queueCursor;
+        if (first < 0)
+            first = Math.max(0, probe);
+        if (last < 0)
+            last = first;
+        var start = Math.max(0, Math.min(first, last, probe) - 20);
+        var end = Math.min(root._queueCount - 1, Math.max(first, last, probe) + 20);
+        if (start === root._queueRequestStart && end === root._queueRequestEnd)
+            return;
+        root._queueRequestStart = start;
+        root._queueRequestEnd = end;
+        Backend.requestQueueWindow(start, end - start + 1);
+    }
+
     function applyQueue(payload) {
         var data = JSON.parse(payload);
-        var rowsChanged = data.hash !== root._queueHash;
-
-        // A skip or an auto-advance re-delivers the exact same rows with a
-        // new playing index. Rebuilding the model for that flicked the pane
-        // (clear + fade) and, when the follow raced the refill, corrupted
-        // the view's layout (realised rows stopped at the old window and
-        // later jumps inflated the item offsets — SC-5). So: rebuild only
-        // when the rows really changed; a pure move just follows the index.
+        var rowsChanged = String(data.hash) !== root._queueHash;
         if (rowsChanged) {
-            root._queueHash = data.hash;
-            // ARC-memory: a different row set is a new queue — drop the old
-            // queue's remembered scroll/prefetch target before it can be
-            // restored.
+            root._queueHash = String(data.hash);
             Backend.scrollClear("fullscreen");
             root._recallQueue = false;
-            // UI-41: payload swaps fade in quickly; a reorder keeps the list live.
             if (!root._reordering)
                 queueContent.opacity = 0;
-            queueItems.clear();
-            for (var i = 0; i < data.items.length; i++) {
-                var track = data.items[i];
-                queueItems.append({
-                    title: track.title,
-                    subtitle: track.subtitle ? track.subtitle : "",
-                    duration: track.meta,
-                    songId: track.songId,
-                    albumId: track.albumId ? track.albumId : "",
-                    starred: track.starred === true
-                });
-            }
-            Qt.callLater(function () {
-                queueContent.opacity = 1;
-            });
+            root.fillQueueSlots(Number(data.count) || 0);
+            Qt.callLater(function () { queueContent.opacity = 1; });
         }
-
         queueIndex = data.index;
         if (root._pendingQueueCursor >= 0 && rowsChanged) {
             root._recallQueue = false;
@@ -246,12 +301,9 @@ Item {
             queueContent.currentIndex = queueCursor;
             queueContent.goto(queueCursor);
         } else {
-            // A pure index move is a skip/advance: glide to the new playing
-            // row instead of snapping. A rebuilt payload lands instantly.
             root.recallQueueCursor(!rowsChanged);
         }
-        // A rebuild can swap the rows without changing the count, so ask for
-        // the window explicitly (MarkWindow coalesces it).
+        root.ensureQueueWindow();
         queueContent.requestMarkWindow();
     }
 
@@ -445,6 +497,9 @@ Item {
                     // ARC-UI-2 M1: the queue rows paint title and duration.
                     searchFields: ["title", "subtitle", "duration"]
                     visible: queueItems.count > 0
+                    onFirstVisibleIndexChanged: root.ensureQueueWindow()
+                    onLastVisibleIndexChanged: root.ensureQueueWindow()
+                    onCurrentIndexChanged: root.ensureQueueWindow()
                     onQuickAction: (target, actions) => root.quickAction(target, actions)
                     onRowTapped: (index, shift) => {
                         if (shift) {
@@ -554,6 +609,8 @@ Item {
         function onDataReady(channel, payload) {
             if (channel === "queue")
                 root.applyQueue(payload);
+            else if (channel === "queue_window")
+                root.applyQueueWindow(JSON.parse(payload));
         }
         // A favourite landed (per row, no payload): patch every matching
         // queue row in place. The cursor stays where the user left it.

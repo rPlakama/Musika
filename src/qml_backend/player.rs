@@ -16,11 +16,9 @@
 
 //! Queue publishing and the player→bridge sync used by the QML slots.
 
-use std::sync::atomic::Ordering;
-
 use qtbridge::QmlObject;
 
-use super::{Backend, QUEUE_EMIT_GEN, QUEUE_ROWS_HASH, QueueCoversEnvelope, QueueRows, emit};
+use super::{Backend, QueueCoversEnvelope, emit};
 
 impl Backend {
     /// The player queue as a JSON id array (P-6 S3 snapshot).
@@ -90,60 +88,20 @@ impl Backend {
             return;
         }
         let invoker = self.get_qml_method_invoker();
-        let Some(dbs) = crate::app::dbs() else {
-            return;
-        };
-        // Record the revision only once the emit is actually going out: a
-        // missing DB must leave the next call free to retry.
+        // Queue rows are virtual: publish only the queue identity. The drawer
+        // asks for its visible window through `requestQueueWindow`, so a
+        // library-wide queue no longer serializes thousands of rows.
         self.queue_revision = Some(revision);
         self.queue_rows_dirty = false;
         let queue = self.player.queue_snapshot();
-        let index = self.player.index();
-        let generation = QUEUE_EMIT_GEN.fetch_add(1, Ordering::Relaxed) + 1;
-        crate::app::runtime().spawn(async move {
-            let starred: std::collections::HashSet<String> =
-                crate::library::starred_song_ids(&dbs.library)
-                    .await
-                    .unwrap_or_default()
-                    .into_iter()
-                    .collect();
-            // A newer emit already went out: this one is stale. Check before
-            // the serialization, not after it: a stale pass used to build the
-            // whole row tree and only then discover it had lost.
-            if QUEUE_EMIT_GEN.load(Ordering::Relaxed) != generation {
-                return;
-            }
-            // Stream the row set once: the queue can hold the entire library,
-            // and this string doubles as the dedupe hash input.
-            let _row_count = queue.len();
-            let rows = QueueRows {
-                queue: queue.as_slice(),
-                starred: &starred,
-            };
-            let Ok(rows_json) = serde_json::to_string(&rows) else {
-                eprintln!("queue: could not serialize the queue rows");
-                return;
-            };
-            let mut hasher = std::collections::hash_map::DefaultHasher::new();
-            std::hash::Hash::hash(&rows_json, &mut hasher);
-            let rows_hash = std::hash::Hasher::finish(&hasher);
-            // QR-3: swap unconditionally — a forced publish must store its
-            // hash too, or the next automatic emit of the same rows
-            // republishes against a stale value.
-            let previous = QUEUE_ROWS_HASH.swap(rows_hash, Ordering::Relaxed);
-            if !force && previous == rows_hash {
-                return;
-            }
-            crate::debug_log!("queue: published {_row_count} rows");
-            // The rows were just serialized for the hash; splice that string
-            // into the envelope instead of serializing the whole row set a
-            // second time (the queue can hold the entire library).
-            let json = format!(
-                r#"{{"index":{},"items":{},"hash":"{}"}}"#,
-                index, rows_json, rows_hash
-            );
-            emit(&invoker, "queue", json);
-        });
+        let json = serde_json::json!({
+            "index": self.player.index(),
+            "count": queue.len(),
+            "hash": revision,
+        })
+        .to_string();
+        crate::debug_log!("queue: published {} rows", queue.len());
+        emit(&invoker, "queue", json);
     }
 
     /// Re-reads the download ledger for the requested window (`songs` and

@@ -206,7 +206,8 @@ impl Native {
             origin + unsafe { musika_sink_played_frames(self.sink) } as f64 / 48_000.0;
         status.failed = self.lock_status().failed.take();
         if status.ended {
-            status.ended = false;
+            // Keep this poll.s view true so Player::pump can advance; only
+            // clear the shared flag for the next poll.
             self.lock_status().ended = false;
         }
         if unsafe { musika_sink_failed(self.sink) } != 0 && status.failed.is_none() {
@@ -619,6 +620,60 @@ mod tests {
         assert!(resumed, "sink never resumed after seek");
         native.stop();
         let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    #[ignore = "requires a running PipeWire session"]
+    fn auto_advances_when_the_track_ends() {
+        let dir = std::env::temp_dir().join(format!(
+            "musika-pipewire-advance-{}-{}",
+            std::process::id(),
+            crate::consts::now_nanos()
+        ));
+        std::fs::create_dir_all(&dir).expect("dir");
+        let first = dir.join("first.wav");
+        let second = dir.join("second.wav");
+        std::fs::write(&first, wav_bytes_for(2_400)).expect("first");
+        std::fs::write(&second, wav_bytes_for(480_000)).expect("second");
+        let mut player = Player::new();
+        player.load(vec![
+            Track {
+                id: "first".to_string(),
+                title: "First".to_string(),
+                artist: String::new(),
+                album: String::new(),
+                album_id: String::new(),
+                favorite: false,
+                duration: 0.05,
+                url: format!("file://{}", first.display()),
+                cover_art: String::new(),
+                cover_url: String::new(),
+            },
+            Track {
+                id: "second".to_string(),
+                title: "Second".to_string(),
+                artist: String::new(),
+                album: String::new(),
+                album_id: String::new(),
+                favorite: false,
+                duration: 10.0,
+                url: format!("file://{}", second.display()),
+                cover_art: String::new(),
+                cover_url: String::new(),
+            },
+        ], 0);
+        std::thread::sleep(std::time::Duration::from_millis(700));
+        for _ in 0..10 {
+            let _ = player.pump();
+            if player.index() == 1 {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        assert_eq!(player.index(), 1, "queue did not advance at end-of-stream");
+        assert_eq!(player.state(), State::Playing);
+        player.stop();
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]

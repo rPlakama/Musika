@@ -739,6 +739,8 @@ Rectangle {
                         Layout.fillWidth: true
                         Layout.preferredHeight: Math.max(8, root.height * 0.02)
                         trackHeight: Math.max(2, root.height * 0.006)
+                        enabled: !Backend.loading
+                        opacity: Backend.loading ? 0.45 : 1.0
                         value: Backend.duration > 0
                             ? Math.min(1, Backend.position / Backend.duration) : 0
                         onMoved: Backend.playerSeek(value * Backend.duration)

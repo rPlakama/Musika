@@ -153,6 +153,7 @@ impl Backend {
             }};
         }
 
+        sync_field!(loading, loading_changed, self.player.is_loading());
         sync_field!(
             playback_state,
             playback_state_changed,

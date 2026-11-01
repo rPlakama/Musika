@@ -28,8 +28,15 @@ pub(crate) const CLIENT_NAME: &str = "musika";
 /// refcount bump, so per-action clients stay cheap.
 static HTTP_CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
 
-fn shared_http_client() -> reqwest::Client {
-    HTTP_CLIENT.get_or_init(reqwest::Client::new).clone()
+pub(crate) fn shared_http_client() -> reqwest::Client {
+    HTTP_CLIENT
+        .get_or_init(|| {
+            reqwest::Client::builder()
+                .connect_timeout(std::time::Duration::from_secs(5))
+                .build()
+                .unwrap_or_else(|_| reqwest::Client::new())
+        })
+        .clone()
 }
 
 /// A reusable client for the [Subsonic API](https://www.subsonic.org/pages/api.jsp).

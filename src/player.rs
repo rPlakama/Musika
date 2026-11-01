@@ -20,12 +20,38 @@
 //! FFmpeg decoder thread and the native clock. [`Player::pump`] mirrors that
 //! transport state into the shared snapshot used by QML and MPRIS.
 
-use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, LazyLock, Mutex};
 use std::time::Instant;
 
 use serde_json::json;
 
 mod pipewire;
+
+/// The sink is created once off the Qt thread at startup; the first play
+/// takes it from here instead of connecting PipeWire on the GUI thread.
+static WARM_NATIVE: LazyLock<Mutex<Option<Result<pipewire::Native, String>>>> =
+    LazyLock::new(|| Mutex::new(None));
+static WARM_STARTED: AtomicBool = AtomicBool::new(false);
+
+pub(crate) fn warm_native() {
+    if WARM_STARTED.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    std::thread::spawn(|| {
+        let native = pipewire::Native::new();
+        *WARM_NATIVE
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(native);
+    });
+}
+
+pub(crate) fn take_warm_native() -> Option<Result<pipewire::Native, String>> {
+    WARM_NATIVE
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .take()
+}
 
 /// A queued track, including the resolved `stream` URL.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -146,6 +172,8 @@ pub struct Player {
     /// when only the index moved (a skip or an advance).
     pub(crate) revision: u64,
     pub(crate) native: Option<pipewire::Native>,
+    #[cfg(test)]
+    pub(crate) loads: u32,
 }
 
 impl Default for Player {
@@ -169,6 +197,8 @@ impl Player {
             retry_at: None,
             revision: 0,
             native: None,
+            #[cfg(test)]
+            loads: 0,
         }
     }
 
@@ -267,6 +297,11 @@ impl Player {
         self.shared().position
     }
 
+    /// True while the current native decoder is still opening its stream.
+    pub fn is_loading(&self) -> bool {
+        self.native.as_ref().is_some_and(|native| native.loading())
+    }
+
     pub(crate) fn audio_level(&self) -> f64 {
         self.shared().audio_level
     }
@@ -305,6 +340,10 @@ impl Player {
         if self.queue.is_empty() {
             self.state = State::Stopped;
             return;
+        }
+        #[cfg(test)]
+        {
+            self.loads += 1;
         }
         match self.ensure_ready() {
             Ready::Connected => {
@@ -376,28 +415,47 @@ impl Player {
     }
 
     pub fn next(&mut self) {
-        if self.queue.is_empty() {
-            return;
-        }
-        self.forget_error();
-        if self.index + 1 < self.queue.len() {
-            self.index += 1;
-            self.play_current();
-        } else if self.repeat == Repeat::All {
-            self.index = 0;
-            self.play_current();
-        } else {
-            self.stop();
-        }
+        self.advance_by(1);
     }
 
     pub fn previous(&mut self) {
-        if self.queue.is_empty() {
+        self.retreat_by(1);
+    }
+
+    /// Move forward by `steps` rows, loading at most once.
+    pub fn advance_by(&mut self, steps: usize) {
+        if self.queue.is_empty() || steps == 0 {
             return;
         }
         self.forget_error();
-        self.index = self.index.saturating_sub(1);
-        self.play_current();
+        let mut index = self.index;
+        for _ in 0..steps {
+            if index + 1 < self.queue.len() {
+                index += 1;
+            } else if self.repeat == Repeat::All {
+                index = 0;
+            } else {
+                self.stop();
+                return;
+            }
+        }
+        if index != self.index {
+            self.index = index;
+            self.play_current();
+        }
+    }
+
+    /// Move backward by `steps` rows, loading at most once.
+    pub fn retreat_by(&mut self, steps: usize) {
+        if self.queue.is_empty() || steps == 0 {
+            return;
+        }
+        self.forget_error();
+        let index = self.index.saturating_sub(steps);
+        if index != self.index {
+            self.index = index;
+            self.play_current();
+        }
     }
 
     /// The current queue, in order.
@@ -462,11 +520,29 @@ impl Player {
             .collect();
         indices.sort_unstable();
         indices.dedup();
-        let count = indices.len();
-        for index in indices.into_iter().rev() {
-            self.remove(index);
+        if indices.is_empty() {
+            return 0;
         }
-        count
+        let old_index = self.index;
+        let removed_current = indices.binary_search(&old_index).is_ok();
+        let below = indices.partition_point(|&index| index < old_index);
+        for index in indices.iter().rev() {
+            self.queue_mut().remove(*index);
+        }
+        self.revision += 1;
+        if self.queue.is_empty() {
+            self.stop();
+            return indices.len();
+        }
+        self.index = if removed_current {
+            old_index.saturating_sub(below).min(self.queue.len() - 1)
+        } else {
+            old_index - below
+        };
+        if removed_current {
+            self.play_current();
+        }
+        indices.len()
     }
 
     /// VI-8a: inserts cloned rows at `at` (clamped), the vim `p`/`P` paste.
@@ -478,20 +554,9 @@ impl Player {
         }
         let at = at.min(self.queue.len());
         let count = tracks.len();
-        let touched = self.state != State::Stopped && at <= self.index;
-        let position = self.position();
-        let paused = self.state == State::Paused;
-
         self.queue_mut().splice(at..at, tracks);
         if at <= self.index {
             self.index += count;
-        }
-        if touched {
-            self.play_current();
-            if paused {
-                self.pause();
-            }
-            self.seek(position);
         }
         self.revision += 1;
     }
@@ -506,7 +571,6 @@ impl Player {
         let track = queue.remove(from);
         queue.insert(to, track);
         self.revision += 1;
-        // Track the current index across the reorder.
         if self.index == from {
             self.index = to;
         } else {
@@ -516,19 +580,6 @@ impl Player {
             if to <= self.index {
                 self.index += 1;
             }
-        }
-
-        if self.state == State::Stopped {
-            return;
-        }
-        if from <= self.index || to <= self.index {
-            let position = self.position();
-            let paused = self.state == State::Paused;
-            self.play_current();
-            if paused {
-                self.pause();
-            }
-            self.seek(position);
         }
     }
 
@@ -553,5 +604,68 @@ impl Player {
 
     pub fn toggle_mute(&mut self) {
         self.set_muted(!self.muted);
+    }
+}
+
+#[cfg(test)]
+mod navigation_tests {
+    use super::*;
+
+    fn tracks(count: usize) -> Vec<Track> {
+        (0..count)
+            .map(|index| Track {
+                id: format!("song-{index}"),
+                title: format!("Song {index}"),
+                artist: String::new(),
+                album: String::new(),
+                album_id: String::new(),
+                favorite: false,
+                duration: 0.0,
+                url: String::new(),
+                cover_art: String::new(),
+                cover_url: String::new(),
+            })
+            .collect()
+    }
+
+    fn player(count: usize) -> Player {
+        let mut player = Player::new();
+        player.queue = Arc::new(tracks(count));
+        player.state = State::Playing;
+        player
+    }
+
+    #[test]
+    fn advance_by_loads_once() {
+        let mut player = player(10);
+        player.advance_by(5);
+        assert_eq!(player.index(), 5);
+        assert_eq!(player.loads, 1);
+    }
+
+    #[test]
+    fn insert_above_current_does_not_reload() {
+        let mut player = player(10);
+        player.index = 5;
+        player.insert_many(0, tracks(2));
+        assert_eq!(player.index(), 7);
+        assert_eq!(player.loads, 0);
+    }
+
+    #[test]
+    fn reorder_across_current_does_not_reload() {
+        let mut player = player(10);
+        player.index = 5;
+        player.move_item(0, 7);
+        assert_eq!(player.index(), 4);
+        assert_eq!(player.loads, 0);
+    }
+
+    #[test]
+    fn removing_current_loads_once() {
+        let mut player = player(10);
+        player.index = 5;
+        player.remove_many(&[5]);
+        assert_eq!(player.loads, 1);
     }
 }

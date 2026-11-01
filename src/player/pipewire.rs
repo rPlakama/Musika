@@ -79,6 +79,7 @@ struct Status {
     peak: f64,
 }
 
+#[derive(Clone, Copy)]
 struct SinkPtr(*mut MusikaSink);
 unsafe impl Send for SinkPtr {}
 
@@ -121,11 +122,10 @@ impl Native {
     }
 
     fn load(&mut self, url: &str) {
-        self.stop();
-        unsafe {
-            musika_sink_reset(self.sink);
-            musika_sink_set_paused(self.sink, 0);
-        }
+        // Never join the old decoder on the Qt thread: a stalled fetch can
+        // take seconds. The new worker owns the reaper and joins first.
+        self.stop_async();
+        let previous = self.decoder.take();
         let stop = Arc::new(AtomicBool::new(false));
         *self
             .position_origin
@@ -146,6 +146,13 @@ impl Native {
         let thread_seek_at = Arc::clone(&self.seek_at);
         let url = url.to_string();
         self.decoder = Some(thread::spawn(move || {
+            if let Some(previous) = previous {
+                let _ = previous.join();
+            }
+            if thread_stop.load(Ordering::Relaxed) {
+                return;
+            }
+            reset_sink(sink, false);
             decode_loop(sink, &url, thread_stop, thread_status, thread_seek, thread_seek_at);
         }));
         self.stop = stop;
@@ -153,23 +160,27 @@ impl Native {
         self.seek = seek;
     }
 
-    fn stop(&mut self) {
+    fn stop_async(&mut self) {
         self.stop.store(true, Ordering::Relaxed);
         unsafe { musika_sink_close_writes(self.sink) };
-        if let Some(decoder) = self.decoder.take() {
-            let _ = decoder.join();
-        }
-        // The decoder owns the whole-track download buffer. Its worker thread
-        // exits with the buffer, but glibc keeps that thread's arena cached;
-        // return the free pages before the next track allocates another one.
-        #[cfg(target_os = "linux")]
-        unsafe {
-            let _ = malloc_trim(0);
-        }
-        unsafe {
-            musika_sink_reset(self.sink);
-            musika_sink_set_paused(self.sink, 1);
-        }
+        let previous = self.decoder.take();
+        let sink = SinkPtr(self.sink);
+        self.decoder = Some(thread::spawn(move || {
+            if let Some(previous) = previous {
+                let _ = previous.join();
+            }
+            reset_sink(sink, true);
+            #[cfg(target_os = "linux")]
+            unsafe {
+                let _ = malloc_trim(0);
+            }
+        }));
+    }
+
+    /// Explicit stop: reset the visible state now, tear the sink down on the
+    /// reaper thread so a stalled decoder never blocks the caller.
+    fn stop(&mut self) {
+        self.stop_async();
         *self.lock_status() = Status::default();
         *self
             .position_origin
@@ -208,6 +219,10 @@ impl Native {
         unsafe { musika_sink_set_muted(self.sink, muted as c_int) };
     }
 
+    pub(super) fn loading(&self) -> bool {
+        self.lock_status().loading
+    }
+
     fn poll(&self) -> Status {
         let mut status = self.lock_status().clone();
         let origin = *self
@@ -231,7 +246,10 @@ impl Native {
 
 impl Drop for Native {
     fn drop(&mut self) {
-        self.stop();
+        self.stop_async();
+        if let Some(decoder) = self.decoder.take() {
+            let _ = decoder.join();
+        }
         unsafe { musika_sink_destroy(self.sink) };
     }
 }
@@ -250,8 +268,10 @@ fn decode_loop(
     };
     let mut error = [0 as c_char; 512];
     let mut media = Vec::new();
-    if let Err(err) = fetch_media_into(url, &mut media) {
-        set_failed(&status, &err);
+    if let Err(err) = fetch_media_into(url, &mut media, &stop) {
+        if err != CANCELLED.to_string() {
+            set_failed(&status, &err);
+        }
         return;
     }
     let decoder = unsafe {
@@ -342,6 +362,13 @@ fn decode_loop(
     #[cfg(target_os = "linux")]
     unsafe {
         let _ = malloc_trim(0);
+    }
+}
+
+fn reset_sink(sink: SinkPtr, paused: bool) {
+    unsafe {
+        musika_sink_reset(sink.0);
+        musika_sink_set_paused(sink.0, paused as c_int);
     }
 }
 
@@ -437,7 +464,7 @@ impl Player {
         if self.native.is_some() {
             return Ready::Connected;
         }
-        match Native::new() {
+        match crate::player::take_warm_native().unwrap_or_else(Native::new) {
             Ok(native) => {
                 self.native = Some(native);
                 Ready::Connected
@@ -723,8 +750,14 @@ mod tests {
 
 /// One stream is materialized in RAM for the decoder so every seek is a
 /// memory seek, not another network round trip.
-fn fetch_media_into(url: &str, media: &mut Vec<u8>) -> Result<(), String> {
+const CANCELLED: &str = "cancelled";
+const FETCH_TIMEOUT: Duration = Duration::from_secs(10);
+
+fn fetch_media_into(url: &str, media: &mut Vec<u8>, stop: &AtomicBool) -> Result<(), String> {
     media.clear();
+    if stop.load(Ordering::Relaxed) {
+        return Err(CANCELLED.to_string());
+    }
     if !url.contains("://") {
         let bytes = std::fs::read(url).map_err(|err| format!("cannot read {url}: {err}"))?;
         media.extend_from_slice(&bytes);
@@ -741,20 +774,70 @@ fn fetch_media_into(url: &str, media: &mut Vec<u8>) -> Result<(), String> {
         return Ok(());
     }
 
+    let client = crate::http_client::shared_http_client();
     crate::app::runtime().block_on(async move {
-        let mut response = reqwest::get(parsed)
+        let mut response = tokio::time::timeout(FETCH_TIMEOUT, client.get(parsed).send())
             .await
-            .map_err(|err| format!("stream download failed: {err}"))?;
-        response = response
+            .map_err(|_| "stream download timed out".to_string())?
+            .map_err(|err| format!("stream download failed: {err}"))?
             .error_for_status()
             .map_err(|err| format!("stream download failed: {err}"))?;
-        while let Some(chunk) = response
-            .chunk()
-            .await
-            .map_err(|err| format!("stream body failed: {err}"))?
-        {
+        if let Some(length) = response.content_length() {
+            media.reserve(length as usize);
+        }
+        loop {
+            if stop.load(Ordering::Relaxed) {
+                return Err(CANCELLED.to_string());
+            }
+            let next = tokio::select! {
+                _ = async {
+                    while !stop.load(Ordering::Relaxed) {
+                        tokio::time::sleep(Duration::from_millis(25)).await;
+                    }
+                } => return Err(CANCELLED.to_string()),
+                result = tokio::time::timeout(FETCH_TIMEOUT, response.chunk()) => result
+                    .map_err(|_| "stream body timed out".to_string())?
+                    .map_err(|err| format!("stream body failed: {err}"))?,
+            };
+            let Some(chunk) = next else {
+                break;
+            };
             media.extend_from_slice(&chunk);
         }
         Ok::<(), String>(())
     })
+}
+
+#[cfg(test)]
+mod fetch_tests {
+    use super::*;
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+
+    #[test]
+    fn stalled_fetch_is_cancelled() {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("listener");
+        let url = format!("http://{}/stream", listener.local_addr().unwrap());
+        let server = std::thread::spawn(move || {
+            let (mut socket, _) = listener.accept().expect("accept");
+            let mut request = [0u8; 1024];
+            let _ = socket.read(&mut request);
+            socket
+                .write_all(b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n1\r\nx\r\n")
+                .expect("headers");
+            std::thread::sleep(Duration::from_secs(1));
+        });
+        let stop = Arc::new(AtomicBool::new(false));
+        let stop_thread = Arc::clone(&stop);
+        std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(50));
+            stop_thread.store(true, Ordering::Relaxed);
+        });
+        let started = Instant::now();
+        let mut media = Vec::new();
+        let result = fetch_media_into(&url, &mut media, &stop);
+        assert_eq!(result, Err(CANCELLED.to_string()));
+        assert!(started.elapsed() < Duration::from_secs(2));
+        let _ = server.join();
+    }
 }

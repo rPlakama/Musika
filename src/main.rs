@@ -204,6 +204,8 @@ fn main() {
         return;
     }
 
+    crate::player::warm_native();
+
     #[cfg(debug_assertions)]
     crate::debug_info::start();
 

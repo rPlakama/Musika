@@ -284,6 +284,7 @@ pub struct Backend {
     recent_mark_requests: std::collections::VecDeque<(Vec<String>, Vec<String>)>,
     /// Pending mark ids waiting on the debounced reader (PATH-5).
     mark_pending: std::sync::Arc<std::sync::Mutex<MarkPending>>,
+    loading: bool,
     playback_state: String,
     /// 0 = off, 1 = repeat one, 2 = repeat queue.
     repeat_mode: i64,
@@ -467,6 +468,7 @@ impl Backend {
         Member = while_download_request,
         Notify = while_download_request_changed
     );
+    qproperty!("loading", Member = loading, Notify = loading_changed);
     qproperty!(
         "playbackState",
         Member = playback_state,
@@ -682,6 +684,8 @@ impl Backend {
     fn login_required(&mut self);
     #[qsignal]
     fn playback_state_changed(&mut self);
+    #[qsignal]
+    fn loading_changed(&mut self);
     #[qsignal(qml_name = "repeatModeChanged")]
     fn repeat_mode_changed(&mut self);
     /// The playhead jumped (a seek, not playback progression): the lyrics
@@ -2403,9 +2407,7 @@ impl Backend {
     #[qslot(qml_name = "playerNextBy")]
     fn player_next_by(&mut self, count: i64) {
         let steps = (count.max(1) as usize).min(self.player.queue().len().max(1));
-        for _ in 0..steps {
-            self.player.next();
-        }
+        self.player.advance_by(steps);
         self.sync_player();
         self.emit_queue(false);
         self.track_skipped(true);
@@ -2414,9 +2416,7 @@ impl Backend {
     #[qslot(qml_name = "playerPreviousBy")]
     fn player_previous_by(&mut self, count: i64) {
         let steps = (count.max(1) as usize).min(self.player.queue().len().max(1));
-        for _ in 0..steps {
-            self.player.previous();
-        }
+        self.player.retreat_by(steps);
         self.sync_player();
         self.emit_queue(false);
         self.track_skipped(false);

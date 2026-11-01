@@ -63,9 +63,11 @@ Item {
             Layout.minimumHeight: root.unit * root.playRatio
             Layout.alignment: Qt.AlignVCenter
             symbolRatio: 0.6
-            iconSource: Backend.playbackState === "playing"
-                ? "qrc:/app/icons/pause-svgrepo-com.svg"
-                : "qrc:/app/icons/play-1001-svgrepo-com.svg"
+            iconSource: Backend.loading
+                ? "qrc:/app/icons/loading-loop.svg"
+                : (Backend.playbackState === "playing"
+                    ? "qrc:/app/icons/pause-svgrepo-com.svg"
+                    : "qrc:/app/icons/play-1001-svgrepo-com.svg")
             symbolColor: Theme.iconStrong
             onClicked: Backend.playerToggle()
         }

@@ -39,6 +39,9 @@ use sqlx::sqlite::{SqliteJournalMode, SqlitePool, SqlitePoolOptions, SqliteSynch
 pub struct Dbs {
     pub credentials: SqlitePool,
     pub library: SqlitePool,
+    /// Single-connection writer used by the background sync; its sqlx worker
+    /// is demoted so a bulk rebuild cannot starve the GUI.
+    pub sync: SqlitePool,
     pub search: SqlitePool,
     pub covers: SqlitePool,
     pub media: SqlitePool,
@@ -89,6 +92,7 @@ pub async fn init() -> Result<Dbs> {
         Durability::Normal,
     )
     .await?;
+    let sync = open_sync_pool(library_path()?).await?;
     absorb_legacy(&library, &media).await?;
     // Search gets its own connections over the same library file: a slow or
     // cancelled query can never occupy the writer's pool (the search box
@@ -98,6 +102,7 @@ pub async fn init() -> Result<Dbs> {
     Ok(Dbs {
         credentials: library.clone(),
         library: library.clone(),
+        sync,
         search,
         covers: media.clone(),
         media: media.clone(),
@@ -455,6 +460,76 @@ pub fn ensure_parent_dir(path: &Path) -> Result<()> {
     }
     Ok(())
 }
+
+async fn open_sync_pool(path: PathBuf) -> Result<SqlitePool> {
+    let before = sqlite_workers();
+    let pool = open_pool(path, 1, Durability::Full).await?;
+    // Force the worker to exist, then demote only newly created sqlx workers.
+    let _ = pool.acquire().await?;
+    demote_new_sqlite_workers(&before);
+    Ok(pool)
+}
+
+#[cfg(target_os = "linux")]
+fn sqlite_workers() -> std::collections::HashSet<u32> {
+    let mut out = std::collections::HashSet::new();
+    let Ok(entries) = std::fs::read_dir("/proc/self/task") else {
+        return out;
+    };
+    for entry in entries.flatten() {
+        if let Ok(tid) = entry.file_name().to_string_lossy().parse::<u32>() {
+            out.insert(tid);
+        }
+    }
+    out
+}
+
+#[cfg(not(target_os = "linux"))]
+fn sqlite_workers() -> std::collections::HashSet<u32> {
+    std::collections::HashSet::new()
+}
+
+#[cfg(target_os = "linux")]
+fn demote_new_sqlite_workers(before: &std::collections::HashSet<u32>) {
+    #[repr(C)]
+    struct SchedParam {
+        priority: std::ffi::c_int,
+    }
+    unsafe extern "C" {
+        fn sched_setscheduler(pid: std::ffi::c_int, policy: std::ffi::c_int, param: *const SchedParam) -> std::ffi::c_int;
+        fn ioprio_set(which: std::ffi::c_int, who: std::ffi::c_int, ioprio: std::ffi::c_int) -> std::ffi::c_int;
+    }
+    const SCHED_IDLE: std::ffi::c_int = 5;
+    const IOPRIO_WHO_PROCESS: std::ffi::c_int = 1;
+    const IOPRIO_CLASS_IDLE: std::ffi::c_int = 3;
+    for entry in std::fs::read_dir("/proc/self/task").into_iter().flatten().flatten() {
+        let Ok(tid) = entry.file_name().to_string_lossy().parse::<u32>() else {
+            continue;
+        };
+        if before.contains(&tid) {
+            continue;
+        }
+        let comm = std::fs::read_to_string(entry.path().join("comm")).unwrap_or_default();
+        if !comm.trim().starts_with("sqlx-sqlite-worker") {
+            continue;
+        }
+        let param = SchedParam { priority: 0 };
+        let sched = unsafe { sched_setscheduler(tid as std::ffi::c_int, SCHED_IDLE, &param) };
+        let io = unsafe {
+            ioprio_set(
+                IOPRIO_WHO_PROCESS,
+                tid as std::ffi::c_int,
+                IOPRIO_CLASS_IDLE << 13,
+            )
+        };
+        if sched != 0 || io != 0 {
+            crate::debug_log!("db: could not demote sync worker {tid}: sched={sched}, io={io}");
+        }
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+fn demote_new_sqlite_workers(_before: &std::collections::HashSet<u32>) {}
 
 async fn open_migrated(
     path: PathBuf,

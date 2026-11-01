@@ -509,6 +509,7 @@ mod browse {
         let dbs = crate::db::Dbs {
             credentials: library.clone(),
             library: library.clone(),
+            sync: library.clone(),
             search: library.clone(),
             covers,
             media: library.clone(),
@@ -601,6 +602,7 @@ mod browse {
         let dbs = crate::db::Dbs {
             credentials: library.clone(),
             library: library.clone(),
+            sync: library.clone(),
             search: library.clone(),
             covers,
             media: library.clone(),
@@ -3392,6 +3394,7 @@ mod media {
         let dbs = crate::db::Dbs {
             credentials: library.clone(),
             library: library.clone(),
+            sync: library.clone(),
             search: library.clone(),
             covers: library.clone(),
             lyrics: library.clone(),
@@ -3594,6 +3597,7 @@ mod media {
         let dbs = crate::db::Dbs {
             credentials: library.clone(),
             library: library.clone(),
+            sync: library.clone(),
             search: library.clone(),
             covers: library.clone(),
             lyrics: library.clone(),
@@ -3705,6 +3709,7 @@ mod playlists {
         Dbs {
             credentials: pools.clone(),
             library: pools.clone(),
+            sync: pools.clone(),
             search: pools.clone(),
             covers: pools.clone(),
             media: pools.clone(),
@@ -4048,6 +4053,7 @@ mod qml_download {
         crate::db::Dbs {
             credentials: pool.clone(),
             library: pool.clone(),
+            sync: pool.clone(),
             search: pool.clone(),
             covers: pool.clone(),
             media: pool.clone(),
@@ -4253,6 +4259,7 @@ mod queue {
         let download = crate::test::memory_pool(sqlx::migrate!("./migrations_download")).await;
         crate::db::Dbs {
             credentials,
+            sync: library.clone(),
             library,
             search: crate::test::memory_pool(None).await,
             covers,
@@ -5111,6 +5118,7 @@ mod benchmark {
         Dbs {
             credentials: library.clone(),
             library: library.clone(),
+            sync: library.clone(),
             search: library.clone(),
             covers: media.clone(),
             media: media.clone(),
@@ -5414,6 +5422,7 @@ mod rows {
         Dbs {
             credentials: library.clone(),
             library: library.clone(),
+            sync: library.clone(),
             search: library.clone(),
             covers: media.clone(),
             media: media.clone(),

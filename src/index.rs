@@ -195,7 +195,7 @@ where
     // 1. library metadata
     report(&mut progress, "Indexing library…", 65);
     let changes = crate::library::replace(
-        &dbs.library,
+        &dbs.sync,
         &artists,
         &albums,
         &songs,
@@ -364,9 +364,9 @@ where
 async fn rebuild_search(dbs: &Dbs) -> Result<()> {
     // Paged rebuild: the old path collected every search row into a Vec
     // before writing the FTS table (FIX-26).
-    crate::search::rebuild_from_library(&dbs.search).await?;
+    crate::search::rebuild_from_library(&dbs.sync).await?;
     if crate::search::index::enabled()
-        && let Err(err) = crate::search::index::rebuild(&dbs.library).await
+        && let Err(err) = crate::search::index::rebuild(&dbs.sync).await
     {
         eprintln!("search: could not rebuild the in-memory index: {err:#}");
     }

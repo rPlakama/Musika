@@ -312,6 +312,7 @@ impl Player {
 
     /// Replaces the queue and starts at `start`.
     pub fn load(&mut self, tracks: Vec<Track>, start: usize) {
+        self.repeat = Repeat::Off;
         self.queue = Arc::new(tracks);
         self.index = start.min(self.queue.len().saturating_sub(1));
         self.revision += 1;
@@ -478,6 +479,7 @@ impl Player {
     /// Jumps to and plays the track at `index`.
     pub fn jump(&mut self, index: usize) {
         if index < self.queue.len() {
+            self.repeat = Repeat::Off;
             self.index = index;
             self.play_current();
         }
@@ -667,5 +669,42 @@ mod navigation_tests {
         player.index = 5;
         player.remove_many(&[5]);
         assert_eq!(player.loads, 1);
+    }
+}
+
+#[cfg(test)]
+mod repeat_tests {
+    use super::*;
+
+    fn track(id: &str) -> Track {
+        Track {
+            id: id.to_string(),
+            title: id.to_string(),
+            artist: String::new(),
+            album: String::new(),
+            album_id: String::new(),
+            favorite: false,
+            duration: 0.0,
+            url: String::new(),
+            cover_art: String::new(),
+            cover_url: String::new(),
+        }
+    }
+
+    #[test]
+    fn loading_a_queue_clears_repeat() {
+        let mut player = Player::new();
+        player.repeat = Repeat::All;
+        player.load(vec![track("a"), track("b")], 0);
+        assert_eq!(player.repeat, Repeat::Off);
+    }
+
+    #[test]
+    fn jumping_clears_repeat() {
+        let mut player = Player::new();
+        player.queue = Arc::new(vec![track("a"), track("b")]);
+        player.repeat = Repeat::One;
+        player.jump(1);
+        assert_eq!(player.repeat, Repeat::Off);
     }
 }

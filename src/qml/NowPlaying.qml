@@ -91,6 +91,10 @@ Rectangle {
     readonly property bool lyricsInline:
         root.lyricsVisible && root.inlinePaneWidth >= 300
     property bool lyricsOverlayOpen: false
+    /// The user asked for the overlay. Keep that intent across the wide
+    /// inline split, where the overlay cannot be shown, so narrowing the
+    /// window restores it.
+    property bool _lyricsOverlayWanted: false
     readonly property bool lyricsOverlayAvailable:
         root.lyricsVisible && !root.lyricsInline
     property string lyricsSource: ""
@@ -163,16 +167,31 @@ Rectangle {
     }
 
     function toggleLyricsOverlay() {
-        if (!root.lyricsOverlayAvailable) {
-            if (root.lyricsOverlayOpen)
-                root.closeLyricsOverlay();
+        if (root.lyricsOverlayOpen || root._lyricsOverlayWanted) {
+            root.closeLyricsOverlay();
             return;
         }
-        root.lyricsOverlayOpen = true;
-        root.pane = 1;
+        if (!root.lyricsVisible)
+            return;
+        root._lyricsOverlayWanted = true;
+        root.refreshLyricsOverlay();
+    }
+
+    function refreshLyricsOverlay() {
+        if (root._lyricsOverlayWanted && root.lyricsOverlayAvailable) {
+            root.lyricsOverlayOpen = true;
+            root.pane = 1;
+            return;
+        }
+        if (root.lyricsOverlayOpen) {
+            root.lyricsOverlayOpen = false;
+            if (!root.lyricsInline && root.pane === 1)
+                root.pane = 3;
+        }
     }
 
     function closeLyricsOverlay() {
+        root._lyricsOverlayWanted = false;
         root.lyricsOverlayOpen = false;
         if (!root.lyricsInline && root.pane === 1)
             root.pane = 3;
@@ -400,13 +419,14 @@ Rectangle {
             return;
         }
         if (root.lyricsInline)
-            root.closeLyricsOverlay();
+            root.refreshLyricsOverlay();
         else if (!root.lyricsOverlayOpen && root.pane === 1)
             root.pane = 3;
     }
 
     onLyricsVisibleChanged: root.syncPaneWithLyrics()
     onLyricsInlineChanged: root.syncPaneWithLyrics()
+    onLyricsOverlayAvailableChanged: root.refreshLyricsOverlay()
 
     // LYR-8: re-arm the idle window when pane focus moves (5 s vs 2 s).
     onPaneChanged: if (root._lyricsHeld)

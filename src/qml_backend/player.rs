@@ -159,6 +159,7 @@ impl Backend {
             playback_state_changed,
             self.player.state().name().to_string()
         );
+        sync_field!(repeat_mode, repeat_mode_changed, self.player.repeat.code());
         sync_field!(duration, duration_changed, self.player.duration());
         sync_field!(position, position_changed, self.player.position());
         sync_field!(volume, volume_changed, self.player.volume());

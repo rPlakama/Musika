@@ -54,7 +54,7 @@ QtObject {
             var item = root.model.get(i);
             var cells = [];
             for (var f = 0; f < root.fields.length; ++f) {
-                var value = item[root.fields[f]];
+                var value = item ? item[root.fields[f]] : "";
                 cells.push(value === undefined || value === null ? "" : String(value));
             }
             out[i] = cells;

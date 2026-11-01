@@ -85,6 +85,7 @@ Rectangle {
     // --- Body (B) ------------------------------------------------------------
     property Component rowDelegate
     property var model: null
+    readonly property var rowAccess: content.access
     property bool loading: false
     property string emptyText: ""
 
@@ -176,7 +177,7 @@ Rectangle {
     property string yankKind: ""
 
     function yankRows(rowOnly) {
-        if (root.yankKind.length === 0 || !root.model || root.model.count === 0
+        if (root.yankKind.length === 0 || !root.model || root.rowAccess.count === 0
                 || root.currentIndex < 0)
             return;
         var field = root.yankKind === "album"
@@ -187,7 +188,7 @@ Rectangle {
             : content.selectionIndices();
         var ids = [];
         for (var i = 0; i < indices.length; ++i) {
-            var item = root.model.get(indices[i]);
+            var item = root.rowAccess.get(indices[i]);
             if (item && item[field])
                 ids.push(item[field]);
         }

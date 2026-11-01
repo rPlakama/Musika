@@ -60,6 +60,9 @@ Item {
     // ── Inputs ───────────────────────────────────────────────────────────
 
     property var model: null
+    /// Rows may come from a ListModel or the count-only RowWindow.
+    property var rowAccess: null
+    readonly property var access: root.rowAccess ? root.rowAccess : root.model
     property Component rowDelegate: null
     /// Gutter bleed on each side (UI-48); 0 clips at the list edge.
     property real bleed: root.profile.bleedRatio !== undefined ? root.width * root.profile.bleedRatio : 0
@@ -847,7 +850,7 @@ Item {
 
     RowState {
         id: rowState
-        model: root.model
+        model: root.access
         cursor: root.currentIndex
         selectable: root.selectable
     }
@@ -866,7 +869,7 @@ Item {
 
     MarkWindow {
         id: markWindow
-        model: root.model
+        model: root.access
         firstVisible: root.firstVisibleIndex
         lastVisible: root.lastVisibleIndex
         cursor: root.currentIndex
@@ -884,7 +887,7 @@ Item {
     function armQuickActions() {
         if (root.quickActionKind === "" || root.count === 0 || root.currentIndex < 0)
             return;
-        var item = root.model ? root.model.get(root.currentIndex) : null;
+        var item = root.access ? root.access.get(root.currentIndex) : null;
         if (!item)
             return;
 
@@ -893,8 +896,8 @@ Item {
             actions = quickVerbs.forSelection(root.quickActionKind, root.selectionIds(root.quickActionField), root.selectionStarred(root.quickActionField));
         } else {
             var preview = function (level) {
-                if (root.model && root.model.setProperty && item.rating !== undefined)
-                    root.model.setProperty(root.currentIndex, "rating", level);
+                if (root.access && root.access.setProperty && item.rating !== undefined)
+                    root.access.setProperty(root.currentIndex, "rating", level);
             };
             actions = quickVerbs.forItem(root.quickActionKind, item, Backend.cachedAlbumIds.indexOf(item.albumId) !== -1, preview);
         }
@@ -955,7 +958,7 @@ Item {
 
     SearchContract {
         id: searchContract
-        model: root.model
+        model: root.access
         view: root.view
         fields: root.searchFields
     }

@@ -152,7 +152,22 @@ ScrollPanel {
         id: mediaRows
     }
 
-    model: mediaRows
+    RowWindow {
+        id: virtualWindow
+    }
+
+    property bool _virtualMode: false
+    readonly property int _virtualVersion: virtualWindow.version
+    function rowData(index) {
+        if (root._virtualMode) {
+            virtualWindow.version;
+            return virtualWindow.rowAt(index);
+        }
+        return mediaRows.get(index);
+    }
+
+    model: root._virtualMode ? virtualWindow.count : mediaRows
+    rowAccess: root._virtualMode ? virtualWindow : mediaRows
     titleHint: "(Shift-J/K) cycle filter"
     // ARC-UI-2 M1: the rows paint title, subtitle and meta; nothing else.
     searchFields: ["title", "subtitle", "meta"]
@@ -177,8 +192,9 @@ ScrollPanel {
 
     function setRows(rows) {
         // VI-4: a reload invalidates the selected range.
-        placeholderTimer.stop();
-        root._placeholderGeneration++;
+        root._virtualMode = false;
+        root._virtualCount = 0;
+        virtualWindow.reset(0);
         root.clearSelection();
         mediaRows.clear();
         root.loading = true;
@@ -243,39 +259,14 @@ ScrollPanel {
     property int _requestedStart: -1
     property int _requestedEnd: -1
     property int _requestedGen: -1
-    property int _placeholderGeneration: 0
-    property int _placeholderAt: 0
-    property int _placeholderCount: 0
-    readonly property var _rowFields: [
-        "id", "title", "subtitle", "meta", "cover", "songId", "albumId",
-        "starred", "rating", "artist", "year", "tracks", "artistId",
-        "artistName", "artistCover", "playlistId"
-    ]
-
-    Timer {
-        id: placeholderTimer
-        interval: 0
-        repeat: false
-        onTriggered: root._appendPlaceholders(root._placeholderGeneration)
-    }
-
-    function _emptySlot() {
-        return {
-            id: "", title: "", subtitle: "", meta: "", cover: "",
-            songId: "", albumId: "", starred: false, rating: 0,
-            artist: "", year: 0, tracks: 0, artistId: "",
-            artistName: "", artistCover: "", playlistId: ""
-        };
-    }
 
     function startVirtual(surface, key, order) {
-        placeholderTimer.stop();
-        root._placeholderGeneration++;
-        var sameSurface = root._virtualSurface === surface && root.count > 0;
-        if (root._liveStart >= 0) {
-            for (var i = root._liveStart; i <= root._liveEnd; ++i)
-                root._clearSlot(i);
-        }
+        var sameSurface = root._virtualSurface === surface && root._virtualMode;
+        root._virtualMode = true;
+        if (sameSurface)
+            virtualWindow.clearRows();
+        else
+            virtualWindow.reset(0);
         root._virtualSurface = surface;
         root._virtualKey = key ? key : "";
         root._virtualOrder = order ? order : "";
@@ -294,9 +285,9 @@ ScrollPanel {
     }
 
     function releaseRowSlots() {
-        placeholderTimer.stop();
-        root._placeholderGeneration++;
+        virtualWindow.reset(0);
         mediaRows.clear();
+        root._virtualMode = false;
         root._virtualSurface = "";
         root._virtualGen = -1;
         root._virtualCount = 0;
@@ -315,65 +306,17 @@ ScrollPanel {
             root.loading = false;
             return;
         }
-        if (count === root._virtualCount && root.count === count) {
-            root.loading = false;
-            if (root.resetPending) {
-                root.resetPending = false;
-                root.resetViewNow();
-            } else if (!root.restore() && root.count > 0
-                    && (root.currentIndex < 0 || root.currentIndex >= root.count)) {
-                root.currentIndex = 0;
-            }
-            root.ensureVirtualWindow();
-            return;
-        }
         root._virtualCount = count;
-        root._placeholderGeneration++;
-        root._placeholderAt = 0;
-        root._placeholderCount = count;
-        mediaRows.clear();
-        root.loading = true;
-        placeholderTimer.stop();
-        root._appendPlaceholders(root._placeholderGeneration);
-    }
-
-    function _appendPlaceholders(generation) {
-        if (generation !== root._placeholderGeneration)
-            return;
-        var end = Math.min(root._placeholderCount, root._placeholderAt + root.fillBatch);
-        for (var i = root._placeholderAt; i < end; i++)
-            mediaRows.append(root._emptySlot());
-        if (end < root._placeholderCount) {
-            root._placeholderAt = end;
-            placeholderTimer.restart();
-            return;
-        }
+        virtualWindow.count = count;
         root.loading = false;
         if (root.resetPending) {
             root.resetPending = false;
             root.resetViewNow();
         } else if (root.restore()) {
-            // restored cursor is enough; the window follows below
         } else if (root.count > 0 && (root.currentIndex < 0 || root.currentIndex >= root.count)) {
             root.currentIndex = 0;
         }
         root.ensureVirtualWindow();
-    }
-
-    function _clearSlot(index) {
-        var empty = root._emptySlot();
-        for (var i = 0; i < root._rowFields.length; i++)
-            mediaRows.setProperty(index, root._rowFields[i], empty[root._rowFields[i]]);
-    }
-
-    function _applySlot(index, row) {
-        for (var i = 0; i < root._rowFields.length; i++) {
-            var key = root._rowFields[i];
-            var value = row[key];
-            if (value === undefined || value === null)
-                value = root._emptySlot()[key];
-            mediaRows.setProperty(index, key, value);
-        }
     }
 
     function _applyRowWindow(data) {
@@ -383,12 +326,7 @@ ScrollPanel {
         var start = Number(data.start) || 0;
         var rows = data.rows || [];
         var end = start + rows.length - 1;
-        for (var old = root._liveStart; old >= 0 && old <= root._liveEnd; old++) {
-            if (old < start || old > end)
-                root._clearSlot(old);
-        }
-        for (var i = 0; i < rows.length; i++)
-            root._applySlot(start + i, rows[i]);
+        virtualWindow.setWindow(start, rows);
         root._liveStart = start;
         root._liveEnd = end;
         root._requestedStart = start;
@@ -436,7 +374,7 @@ ScrollPanel {
     onItemActivated: index => {
         // VI-4: opening/playing a row ends the visual selection.
         root.clearSelection();
-        var item = mediaRows.get(index);
+        var item = root.rowData(index);
         if (item)
             root.activated(item);
     }
@@ -510,15 +448,12 @@ ScrollPanel {
             id: row
             radius: Theme.radius
             required property int index
-            required property string title
-            required property string subtitle
-            required property string meta
-            required property string cover
-            required property string songId
-            required property string albumId
-            required property bool starred
-            /// UI-60: 0..=5; album/artist rows carry it, songs stay 0.
-            required property int rating
+            // A count-only provider has no roles; read the live row object.
+            property var item: {
+                root._virtualVersion;
+                return root.rowData(index);
+            }
+            readonly property bool hasItem: item !== null && item !== undefined
 
             readonly property real viewWidth: ListView.view ? ListView.view.width : 0
             // Attached `ListView.isCurrentItem` only resolves on the delegate
@@ -557,20 +492,20 @@ ScrollPanel {
                 current: row.currentItem
                 roundedArt: root.roundedArt
                 showCover: root.showRowCover
-                cover: row.cover
-                title: row.title
-                subtitle: row.subtitle
-                meta: row.meta
+                cover: row.hasItem ? row.item.cover : ""
+                title: row.hasItem ? row.item.title : ""
+                subtitle: row.hasItem ? row.item.subtitle : ""
+                meta: row.hasItem ? row.item.meta : ""
                 reserveMeta: root.quickActionKind === "song"
                 metaAlignRight: root.quickActionKind === "song"
                 markCursor: root.currentIndex
                 visibleStart: root.firstVisibleIndex
                 visibleEnd: root.lastVisibleIndex
                 markIndex: row.index
-                markSongId: row.songId
-                markAlbumId: row.albumId
-                markStarred: row.starred
-                markRating: row.rating
+                markSongId: row.hasItem ? row.item.songId : ""
+                markAlbumId: row.hasItem ? row.item.albumId : ""
+                markStarred: row.hasItem ? row.item.starred : false
+                markRating: row.hasItem ? row.item.rating : 0
                 markRatingVisible: root.ratingMarks
                 searchQuery: root.searchQuery
                 searchCurrent: row.index === root.searchCurrentRow

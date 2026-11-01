@@ -18,12 +18,10 @@ import QtQuick
 import musika
 import "Theme.js" as Theme
 
-// Full-width library list shared by the Albums, Songs and Artists segments:
-// the shared `ScrollPanel` shape (title band over the scroll body) carrying
-// covers, titles and right-aligned meta. The wrappers (`AlbumList`,
-// `SongList`, `ArtistList`) own the backend channel and map their payload
-// into rows via `setRows`; this component owns the rows, row rendering and
-// the one lazy-load state machine.
+// Full-width library list shared by every scope: the shared `ScrollPanel`
+// shape (title band over the scroll body) carrying covers, titles and
+// right-aligned meta. `LibraryList` owns the scope/profile dispatch; this
+// component owns the rows, row rendering and the one lazy-load state machine.
 
 ScrollPanel {
     id: root
@@ -286,6 +284,7 @@ ScrollPanel {
     }
 
     function releaseRowSlots() {
+        root.rememberView();
         virtualWindow.reset(0);
         mediaRows.clear();
         root._virtualMode = false;

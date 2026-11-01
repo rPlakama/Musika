@@ -129,6 +129,10 @@ Rectangle {
 
     /// UI-54: first payload after a reopen restores cursor + offset; later
     /// reloads keep the live state. Returns true when a memory was applied.
+    function rememberView() {
+        content.remember();
+    }
+
     function restore() {
         if (root._restored)
             return false;

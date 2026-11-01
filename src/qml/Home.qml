@@ -100,28 +100,14 @@ Item {
     /// library loaders dormant behind the restored page; this fires when the
     /// page stack returns to Home.
     function activateSegment(index) {
-        var loader = segmentLoaders.itemAt(index);
-        var item = loader ? loader.item : null;
-        if (!item)
+        if (index > 3)
             return;
-        if ("_preloadOnly" in item)
-            item._preloadOnly = false;
-        if (item.activateTab)
-            item.activateTab();
+        var names = ["albums", "songs", "artists", "playlists"];
+        libraryList._preloadOnly = false;
+        libraryList.setScope(names[index]);
+        libraryList.activateTab();
     }
 
-    /// Warm the hidden library heads only after Home is visible again, never
-    /// while a restored page owns the screen.
-    function preloadHiddenSegments() {
-        for (var i = 0; i <= 2; ++i) {
-            if (i === root.currentSegment)
-                continue;
-            var loader = segmentLoaders.itemAt(i);
-            var item = loader ? loader.item : null;
-            if (item && item.preload && !item._fullLoaded)
-                item.preload();
-        }
-    }
 
     function showSegment(index) {
         // ARC-45: a segment switch pops every page; record the final place
@@ -927,17 +913,14 @@ Item {
                         Backend.resetKeyInput();
                         if (contentStack.depth === 1 && !root._bootstrapPending) {
                             root.activateSegment(root.currentSegment);
-                            root.preloadHiddenSegments();
                         }
                     }
 
-                    // The five segments stay alive once instantiated —
-                    // switching is visibility, not a rebuild, so returning to
-                    // a tab lands instantly with its cursor, scroll memory and
-                    // model intact (no skeleton beat, no re-restore). Pages
-                    // (album/artist) still push/pop above this host, and every
-                    // row-surface call Home makes on `currentItem` forwards to
-                    // the visible view.
+                    // One persistent library viewport serves Albums, Songs,
+                    // Artists and Playlists; a scope switch swaps its data
+                    // source, not the QML view. Pages (album/artist) still
+                    // push/pop above this host, and every row-surface call
+                    // Home makes on `currentItem` forwards to the visible view.
                     Item {
                         id: segmentHost
 
@@ -949,20 +932,13 @@ Item {
                                 root._landOrResetSegment(activeView);
                         }
 
-                        property int _viewRevision: 0
-
                         // The `count` read is the dependency that re-evaluates
                         // this when the Repeater builds its delegates: a bare
                         // `itemAt()` lookup before they exist returns null and
                         // registers nothing, so the binding would stay null
                         // forever (the "scroll unavailable" bug).
-                        readonly property Item activeView: {
-                            _viewRevision;
-                            if (segmentLoaders.count === 0)
-                                return null;
-                            var loader = segmentLoaders.itemAt(root.currentSegment);
-                            return loader ? loader.item : null;
-                        }
+                        readonly property Item activeView:
+                            root.currentSegment === 4 ? radioList : libraryList
                         readonly property bool hasSelection: activeView ? activeView.hasSelection === true : false
                         readonly property bool exitsToMain: false
                         readonly property int currentIndex: (activeView && activeView.currentIndex !== undefined) ? activeView.currentIndex : -1
@@ -1022,80 +998,25 @@ Item {
                                 v.searchJump(row);
                         }
                     }
-                    Repeater {
-                        id: segmentLoaders
-                        model: 5
-
-                        delegate: Loader {
-                            required property int index
-                            anchors.fill: parent
-                            active: !root._bootstrapPending && (index === root.currentSegment || index <= 2)
-                            visible: index === root.currentSegment
-                            onItemChanged: {
-                                if (index === root.currentSegment)
-                                    segmentHost._viewRevision++;
-                            }
-                            onLoaded: {
-                                if (item) {
-                                    // A restored page keeps every library
-                                    // segment dormant behind it; Home activates
-                                    // the visible scope when it returns.
-                                    if ("_preloadOnly" in item)
-                                        item._preloadOnly = root._bootstrapTarget || index !== root.currentSegment;
-                                    if (!root._bootstrapTarget) {
-                                        if (index === root.currentSegment && item.activateTab)
-                                            item.activateTab();
-                                        else if (item.start)
-                                            item.start();
-                                    }
-                                }
-                                if (visible)
-                                    root._landOrResetSegment(item);
-                            }
-                            onVisibleChanged: {
-                                if (!visible && item && item.releaseRowSlots)
-                                    item.releaseRowSlots();
-                                if (visible && item) {
-                                    if ("_preloadOnly" in item)
-                                        item._preloadOnly = false;
-                                    if (item.activateTab)
-                                        item.activateTab();
-                                }
-                                if (visible)
-                                    root._landOrResetSegment(item);
-                            }
-                            sourceComponent: index === 1 ? songListComponent : index === 2 ? artistListComponent : index === 3 ? playlistListComponent : index === 4 ? radioListComponent : albumListComponent
+                    LibraryList {
+                        id: libraryList
+                        anchors.fill: parent
+                        visible: root.currentSegment <= 3
+                        onAlbumActivated: (albumId, title, artist, year, tracks, cover, starred) => root.openAlbum(albumId, title, artist, year, tracks, cover, starred)
+                        onArtistActivated: (artistId, artistName, artistCover) => {
+                            root.nowPlayingExpanded = false;
+                            root.openArtist(artistId, artistName, artistCover);
                         }
+                        onPlaylistActivated: (playlistId, title) => root.openPlaylist(playlistId, title)
+                        onQuickAction: (target, actions) => root.armQuickActions(target, actions)
                     }
 
-                    Component {
-                        id: albumListComponent
-                        AlbumList {
-                            onAlbumActivated: (albumId, title, artist, year, tracks, cover, starred) => root.openAlbum(albumId, title, artist, year, tracks, cover, starred)
-                            onQuickAction: (target, actions) => root.armQuickActions(target, actions)
-                        }
-                    }
-
-                    Component {
-                        id: songListComponent
-                        SongList {
-                            onQuickAction: (target, actions) => root.armQuickActions(target, actions)
-                        }
-                    }
-
-                    Component {
-                        id: artistListComponent
-                        ArtistList {
-                            onArtistActivated: (artistId, artistName, artistCover) => {
-                                root.nowPlayingExpanded = false;
-                                root.openArtist(artistId, artistName, artistCover);
-                            }
-                            // UI-60: the artist row arms the same Alt overlay
-                            // as albums/songs — without this relay the south
-                            // rating step never fired, so the Artists list's
-                            // favourite rectangle never reloaded.
-                            onQuickAction: (target, actions) => root.armQuickActions(target, actions)
-                        }
+                    PlaceholderList {
+                        id: radioList
+                        anchors.fill: parent
+                        visible: root.currentSegment === 4
+                        title: "Radio"
+                        message: "Internet radio stations are not indexed yet."
                     }
 
                     Component {
@@ -1104,22 +1025,6 @@ Item {
                             onBack: root.leaveArtistEntry()
                             onAlbumActivated: (albumId, title, artist, year, tracks, cover, starred) => root.openAlbum(albumId, title, artist, year, tracks, cover, starred)
                             onQuickAction: (target, actions) => root.armQuickActions(target, actions)
-                        }
-                    }
-
-                    Component {
-                        id: playlistListComponent
-                        PlaylistList {
-                            onPlaylistActivated: (playlistId, title) => root.openPlaylist(playlistId, title)
-                            onQuickAction: (target, actions) => root.armQuickActions(target, actions)
-                        }
-                    }
-
-                    Component {
-                        id: radioListComponent
-                        PlaceholderList {
-                            title: "Radio"
-                            message: "Internet radio stations are not indexed yet."
                         }
                     }
 
@@ -1459,5 +1364,7 @@ Item {
     Component.onCompleted: {
         root.recordPlace();
         root.restoreBootstrapTarget();
+        if (!root._bootstrapTarget)
+            root.activateSegment(root.currentSegment);
     }
 }

@@ -497,7 +497,7 @@ fn demote_new_sqlite_workers(before: &std::collections::HashSet<u32>) {
     }
     unsafe extern "C" {
         fn sched_setscheduler(pid: std::ffi::c_int, policy: std::ffi::c_int, param: *const SchedParam) -> std::ffi::c_int;
-        fn ioprio_set(which: std::ffi::c_int, who: std::ffi::c_int, ioprio: std::ffi::c_int) -> std::ffi::c_int;
+        fn syscall(number: std::ffi::c_long, ...) -> std::ffi::c_long;
     }
     const SCHED_IDLE: std::ffi::c_int = 5;
     const IOPRIO_WHO_PROCESS: std::ffi::c_int = 1;
@@ -516,11 +516,12 @@ fn demote_new_sqlite_workers(before: &std::collections::HashSet<u32>) {
         let param = SchedParam { priority: 0 };
         let sched = unsafe { sched_setscheduler(tid as std::ffi::c_int, SCHED_IDLE, &param) };
         let io = unsafe {
-            ioprio_set(
+            syscall(
+                251,
                 IOPRIO_WHO_PROCESS,
                 tid as std::ffi::c_int,
                 IOPRIO_CLASS_IDLE << 13,
-            )
+            ) as std::ffi::c_int
         };
         if sched != 0 || io != 0 {
             crate::debug_log!("db: could not demote sync worker {tid}: sched={sched}, io={io}");

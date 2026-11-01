@@ -3,6 +3,63 @@
 All notable changes to Musika, newest first. `TASKLISTMAJOR.md` tracks the
 open work; this file is the release history.
 
+## 0.5.4 - _How fast can it be? Faster, how fast it needs to be? Even faster, how can I make it faster? I need to research! The *fastest* release yet!_
+
+The fastest release yet. Native playback replaces MPV, the home lists and
+queue drawer move onto Rust-owned viewport windows, and the storage, cover and
+decoder paths are tuned for a lower, flatter footprint.
+
+- Make the native PipeWire/FFmpeg player the only backend: remove the MPV
+  process/socket transport, the Lua MPRIS script and the MPV-only tests and
+  runtime packaging.
+- Require libpipewire >= 1.6.6, audit the thread-loop/POD-builder path, keep
+  Capability Params out of fixed-format setup, and record that FFmpeg owns
+  resampling.
+- Materialize the current file or HTTP stream in memory once, then seek inside
+  the buffer; local and remote tracks no longer reconnect on every seek, and
+  the buffer is dropped when the track changes.
+- Advance the queue on native end-of-stream, coalesce rapid held seeks without
+  holding the seek lock, flush the sink ring immediately on seek, and make
+  flush/stale writes callback-owned through a sink write epoch.
+- Keep track loads off the Qt thread: a reaper worker owns decoder joins and
+  sink resets, HTTP fetches share a client with chunk timeouts and
+  cancellation, and QML gets a loading icon with the seek bar disabled.
+- Reclaim decoder buffers between skipped tracks by capping glibc at one malloc
+  arena, streaming HTTP bodies into the decoder buffer and trimming after the
+  join, so skip RSS plateaus instead of accumulating one track per skip.
+- Move Albums, Artists and Songs onto Rust count/range viewport windows and a
+  count-only QML row provider; only the live viewport keeps row values, and no
+  placeholder row is allocated per logical index.
+- Virtualize the queue drawer: identity is a lightweight count/index/revision
+  message and the drawer requests only its visible row window, removing the
+  library-wide queue payload that stalled playback from the Songs tab.
+- Share one library MediaList/ListView across Albums, Songs, Artists and
+  Playlists, swapping the profile, row source and memory key instead of
+  instantiating a per-scope QML view; retire the four scope wrappers.
+- Disable ListView delegate reuse and release hidden row slots so scope, order
+  and scroll changes no longer retain old delegates, row objects and covers;
+  preload requests fetch only the count.
+- Stop caching decoded cover pixmaps in Qt's image cache while keeping the
+  320 px thumbnail files cached on disk, and keep the fullscreen cover across
+  same-album skips.
+- Add the gated io_uring cover reader, then reuse one ring with batched reads;
+  keep a thread-local reader for single-file calls and add correctness and
+  batch benchmark coverage.
+- Tune SQLite: FULL durability for library.db, WAL NORMAL for media/search, a
+  64 MiB journal limit, `optimize_on_close(400)`, checkpoint-truncate after
+  successful syncs only, and a background buffered catalog/WAL warmup.
+- Route the bulk replace and FTS rebuild through a dedicated sync pool and
+  demote its sqlx worker to SCHED_IDLE plus IOPRIO_CLASS_IDLE, matching the
+  truncated Linux comm name and using SYS_ioprio_set directly.
+- Parse full queue payloads on the async runtime and hand only a prepared
+  generation to the main thread, so mashing play cannot apply a stale queue.
+- Recentre the cursor on width resizes as well as height changes, with a
+  second 16 ms settle pass after the final row geometry lands.
+- Fix the mark-window null fallback expression, keep virtual row role types
+  stable, let virtual surfaces override `rowAccess`, and give the artist
+  biography the same blurred shadow and translucent panel as AlbumEntry.
+- Add module-talk images to the docs.
+
 ## 0.5.2 - _Playlists aren't my bunisses_
 
 - Add a real PlaylistEntry page: AlbumEntry's anchors, adaptive rows,

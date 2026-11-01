@@ -5282,6 +5282,54 @@ mod benchmark {
             }
         }
 
+        #[cfg(feature = "io-uring")]
+        {
+            use crate::io_uring_read::Reader;
+            let batch: Vec<PathBuf> = (0..32)
+                .map(|index| dir.join(format!("batch-{index}.jpg")))
+                .collect();
+            for path in &batch {
+                std::fs::copy(&thumb_path, path).expect("batch cover");
+            }
+            let reader = Reader::new().expect("batch reader");
+            let _ = reader.read_many(&batch);
+            let started = Instant::now();
+            for _ in 0..10 {
+                let results = reader.read_many(&batch);
+                assert_eq!(results.len(), batch.len());
+                assert!(results.iter().all(|result| result.is_ok()));
+            }
+            println!(
+                "[bench] cover.batch.32 io_uring: {:.2} ms/read",
+                started.elapsed().as_secs_f64() * 1000.0 / (10 * batch.len()) as f64
+            );
+        }
+
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[cfg(feature = "io-uring")]
+    #[test]
+    fn io_uring_read_many_matches_std_fs() {
+        let dir = std::env::temp_dir().join(format!(
+            "musika-uring-batch-{}-{}",
+            std::process::id(),
+            crate::consts::now_nanos()
+        ));
+        std::fs::create_dir_all(&dir).expect("dir");
+        let paths: Vec<PathBuf> = (0..5)
+            .map(|index| dir.join(format!("file-{index}.bin")))
+            .collect();
+        for (index, path) in paths.iter().enumerate() {
+            let bytes: Vec<u8> = (0..(index * 1000)).map(|value| (value % 251) as u8).collect();
+            std::fs::write(path, &bytes).expect("write");
+        }
+        let reader = crate::io_uring_read::Reader::new().expect("reader");
+        let results = reader.read_many(&paths);
+        for (index, result) in results.into_iter().enumerate() {
+            let expected: Vec<u8> = (0..(index * 1000)).map(|value| (value % 251) as u8).collect();
+            assert_eq!(result.expect("batch read"), expected, "file {index}");
+        }
         let _ = std::fs::remove_dir_all(dir);
     }
 

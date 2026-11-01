@@ -16,6 +16,7 @@
 
 import QtQuick
 import QtQuick.Layouts
+import QtQuick.Effects
 import musika
 import "Theme.js" as Theme
 import "CoverSize.js" as CoverSize
@@ -564,11 +565,38 @@ Rectangle {
                     id: descriptionBox
                     Layout.fillWidth: true
                     Layout.preferredHeight: root.height * 0.22
-                    clip: true
+                    clip: false
+
+                    // Same material shadow as AlbumEntry.s header panel.
+                    Rectangle {
+                        id: descriptionShadow
+                        x: root.width * 0.008
+                        y: root.width * 0.01
+                        width: parent.width
+                        height: parent.height
+                        radius: Theme.radius
+                        color: Qt.rgba(0, 0, 0, 0.55)
+                        opacity: 0.35
+                        layer.enabled: true
+                        layer.effect: MultiEffect {
+                            blurEnabled: true
+                            blur: 1.0
+                            blurMax: 64
+                            autoPaddingEnabled: true
+                        }
+                    }
+
+                    Rectangle {
+                        id: descriptionPanel
+                        anchors.fill: parent
+                        color: Qt.rgba(0, 0, 0, 0.4)
+                        radius: Theme.radius
+                    }
 
                     Flickable {
                         id: descriptionView
                         anchors.fill: parent
+                        anchors.margins: root.width * 0.01
                         contentWidth: width
                         contentHeight: descriptionText.implicitHeight
                         boundsBehavior: Flickable.StopAtBounds

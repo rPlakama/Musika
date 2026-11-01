@@ -510,7 +510,7 @@ fn demote_new_sqlite_workers(before: &std::collections::HashSet<u32>) {
             continue;
         }
         let comm = std::fs::read_to_string(entry.path().join("comm")).unwrap_or_default();
-        if !comm.trim().starts_with("sqlx-sqlite-worker") {
+        if !comm.trim().starts_with("sqlx-sqlite-wor") {
             continue;
         }
         let param = SchedParam { priority: 0 };

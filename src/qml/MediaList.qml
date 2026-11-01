@@ -259,7 +259,7 @@ ScrollPanel {
         return {
             id: "", title: "", subtitle: "", meta: "", cover: "",
             songId: "", albumId: "", starred: false, rating: 0,
-            artist: "", year: "", tracks: "", artistId: "",
+            artist: "", year: 0, tracks: 0, artistId: "",
             artistName: "", artistCover: "", playlistId: ""
         };
     }

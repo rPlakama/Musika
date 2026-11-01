@@ -42,7 +42,7 @@ QtObject {
     property bool songs: true
     property bool albums: false
 
-    property int count: root.model ? root.model.count : 0
+    property int count: root.model?.count ?? 0
     readonly property bool enabled: (root.songs || root.albums)
         && root.model !== null && root.model.get !== undefined
         && root.model.count !== undefined

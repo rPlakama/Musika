@@ -85,7 +85,7 @@ Rectangle {
     // --- Body (B) ------------------------------------------------------------
     property Component rowDelegate
     property var model: null
-    readonly property var rowAccess: content.access
+    property var rowAccess: content.access
     property bool loading: false
     property string emptyText: ""
 

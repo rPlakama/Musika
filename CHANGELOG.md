@@ -3,6 +3,26 @@
 All notable changes to Musika, newest first. `TASKLISTMAJOR.md` tracks the
 open work; this file is the release history.
 
+## 0.5.6 - _Small Ergonomic Patches._
+
+Three small ergonomic fixes keep navigation and playback predictable, and every
+bind is now written down in the README.
+
+- Add a README **Binds** page covering the global keymap, list motions, queue
+  drawer, fullscreen player, floating search, `/` line search, Alt quick
+  actions and the mouse gestures, including count prefixes and sequence
+  timeouts.
+- Clear repeat mode whenever a new queue starts or the queue cursor jumps to a
+  track.
+- Make the lyrics overlay a persistent toggle: it remembers that it was
+  enabled across the wide inline split, and `?` now closes it as well as
+  opening it.
+- Leave fullscreen playback when a song, album, artist or playlist search
+  result opens its page.
+- Add `Shift-Q` as a direct Home jump: it closes the line search, floating
+  search and queue drawer, leaves fullscreen and pops every page back to the
+  current library scope.
+
 ## 0.5.5 - _Warm the live databases, trace the first frame, and prebuild the search catalog._
 
 Startup is measured and warmed end to end: the live databases are opened on

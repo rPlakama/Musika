@@ -137,10 +137,10 @@ Item {
         sourceSize.width: root.sourceWidth
         sourceSize.height: root.sourceHeight
         asynchronous: true
-        // Cache the bounded 320 px thumbnails so repeated rows reuse one
-        // decoded pixmap; raw and display-sized covers stay uncached because
-        // they are large and per-surface.
-        cache: root.usingThumb
+        // MEMORY: do not retain decoded covers in Qt's image cache. Delegates
+        // own their pixmap while alive; once a scope/delegate dies the RAM is
+        // released. The 320 px thumbnail file still keeps re-decodes cheap.
+        cache: false
         fillMode: root.fillMode
         // Cover art is scaled in the page headers and rows: keep bilinear
         // filtering and mipmaps enabled for a clean downscale.

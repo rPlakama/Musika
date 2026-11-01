@@ -91,6 +91,20 @@ static MARK_WINDOW_GEN: AtomicU64 = AtomicU64::new(0);
 /// no newer keystroke owns it, and a superseded task skips its DB work.
 static SEARCH_GEN: AtomicU64 = AtomicU64::new(0);
 
+/// A queue built off the Qt thread, waiting for the main-thread player
+/// handoff. Only the newest generation may be applied.
+struct PreparedQueue {
+    generation: u64,
+    tracks: Vec<crate::player::Track>,
+    start: usize,
+    announce: bool,
+    paused: bool,
+}
+
+static PREPARED_QUEUE: LazyLock<Mutex<Option<PreparedQueue>>> =
+    LazyLock::new(|| Mutex::new(None));
+static QUEUE_LOAD_GEN: AtomicU64 = AtomicU64::new(0);
+
 /// Bumped by every scroll-memory flush; an older async write must not land
 /// after a newer one.
 static SCROLL_WRITE_GEN: AtomicU64 = AtomicU64::new(0);
@@ -2271,52 +2285,84 @@ impl Backend {
     /// (album pages, search hits).
     #[qslot(qml_name = "playerLoad")]
     fn player_load(&mut self, tracks_json: String, start: i64) {
-        self.load_queue(tracks_json, start, true);
+        self.prepare_queue(tracks_json, start, true, false);
     }
 
     /// Loads the restored queue paused (P-6 S2): no autoplay, no fullscreen;
     /// `Space` resumes immediately.
     #[qslot(qml_name = "playerLoadPaused")]
     fn player_load_paused(&mut self, tracks_json: String, start: i64) {
-        match serde_json::from_str::<Vec<crate::player::Track>>(&tracks_json) {
-            Ok(tracks) => {
-                self.player.load_paused(tracks, index_value(start));
-                // S3: the saved playhead, applied once to the restored queue.
-                if let Some(position) = self.status_restore_position.take() {
-                    self.player.seek(position);
-                }
-                self.sync_player();
-                self.emit_queue(false);
-            }
-            Err(err) => {
-                eprintln!("player: bad queue payload: {err}");
-                self.error_raised("playback".to_string(), format!("Bad queue payload: {err}"));
-            }
-        }
+        self.prepare_queue(tracks_json, start, false, true);
     }
 
     /// Loads the Songs-segment queue (the whole index from the clicked row)
     /// without the fullscreen flip (Q-10 refinement).
     #[qslot(qml_name = "playerLoadLibrary")]
     fn player_load_library(&mut self, tracks_json: String, start: i64) {
-        self.load_queue(tracks_json, start, false);
+        self.prepare_queue(tracks_json, start, false, false);
     }
 
-    fn load_queue(&mut self, tracks_json: String, start: i64, announce: bool) {
-        match serde_json::from_str::<Vec<crate::player::Track>>(&tracks_json) {
-            Ok(tracks) => {
-                self.player.load(tracks, index_value(start));
-                self.sync_player();
-                self.emit_queue(false);
-                if announce {
-                    self.playback_started();
-                }
-            }
-            Err(err) => {
-                eprintln!("player: bad queue payload: {err}");
-                self.error_raised("playback".to_string(), format!("Bad queue payload: {err}"));
-            }
+    /// Main-thread handoff for a queue parsed off the Qt thread.
+    #[qslot(qml_name = "playerLoadPrepared")]
+    fn player_load_prepared(&mut self, generation: i64) {
+        let prepared = PREPARED_QUEUE
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take();
+        let Some(prepared) = prepared else {
+            return;
+        };
+        if prepared.generation != QUEUE_LOAD_GEN.load(Ordering::SeqCst)
+            || prepared.generation != generation.max(0) as u64
+        {
+            return;
         }
+        if prepared.paused {
+            self.player.load_paused(prepared.tracks, prepared.start);
+            // S3: the saved playhead, applied once to the restored queue.
+            if let Some(position) = self.status_restore_position.take() {
+                self.player.seek(position);
+            }
+            self.sync_player();
+            self.emit_queue(false);
+            return;
+        }
+        self.player.load(prepared.tracks, prepared.start);
+        self.sync_player();
+        self.emit_queue(false);
+        if prepared.announce {
+            self.playback_started();
+        }
+    }
+
+    fn prepare_queue(&mut self, tracks_json: String, start: i64, announce: bool, paused: bool) {
+        let generation = QUEUE_LOAD_GEN.fetch_add(1, Ordering::SeqCst) + 1;
+        let invoker = self.get_qml_method_invoker();
+        crate::app::runtime().spawn(async move {
+            let tracks = match serde_json::from_str::<Vec<crate::player::Track>>(&tracks_json) {
+                Ok(tracks) => tracks,
+                Err(err) => {
+                    if generation == QUEUE_LOAD_GEN.load(Ordering::SeqCst) {
+                        eprintln!("player: bad queue payload: {err}");
+                        raise(&invoker, "playback", format!("Bad queue payload: {err}"));
+                    }
+                    return;
+                }
+            };
+            if generation != QUEUE_LOAD_GEN.load(Ordering::SeqCst) {
+                return;
+            }
+            *PREPARED_QUEUE
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(PreparedQueue {
+                generation,
+                tracks,
+                start: index_value(start),
+                announce,
+                paused,
+            });
+            qtbridge::invoke_method!(&invoker, "playerLoadPrepared", generation as i64);
+        });
     }
 
     #[qslot(qml_name = "playerToggle")]

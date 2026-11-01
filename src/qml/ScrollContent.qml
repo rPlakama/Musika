@@ -688,7 +688,7 @@ Item {
     property bool _resizeScheduled: false
     property bool _resizing: false
     property bool _resizeApplyPending: false
-    /// Height changes recenter the cursor row; width changes keep the anchor.
+    /// Height/width changes force the cursor row back to the viewport centre.
     property bool _resizeCenterCursor: false
     /// A height change while the window is inactive can land before Qt has
     /// laid the view out; finish the repair once the window is active again.
@@ -786,7 +786,8 @@ Item {
         root._resizeScheduled = false;
         root._applyResizeAnchor();
         root._resizing = false;
-        root._resizeCenterCursor = false;
+        if (root._resizeCenterCursor)
+            recenterTimer.restart();
     }
 
     // Timers, not Qt.callLater: a Loader can destroy this ScrollContent
@@ -797,6 +798,18 @@ Item {
         interval: 100
         repeat: false
         onTriggered: root._resizeSettle()
+    }
+    // One frame after the resize settles, re-apply the centre against the
+    // final row geometry. The first pass can run before Qt has laid out the
+    // new viewport, which left the cursor a row or two off centre.
+    Timer {
+        id: recenterTimer
+        interval: 16
+        repeat: false
+        onTriggered: {
+            root._applyResizeAnchor();
+            root._resizeCenterCursor = false;
+        }
     }
     Timer {
         id: countRepairTimer
@@ -819,7 +832,7 @@ Item {
         root._rowRefHeight = root.rowRefHeight > 0 ? root.rowRefHeight : root.height;
         root.captureRowBase();
     }
-    onWidthChanged: root._scheduleResizeRecenter()
+    onWidthChanged: root._scheduleResizeRecenter(true)
     onHeightChanged: {
         if (root.rowRefHeight <= 0)
             root._rowRefHeight = root.height;

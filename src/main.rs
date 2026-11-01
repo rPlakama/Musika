@@ -317,7 +317,10 @@ fn main() {
     #[cfg(debug_assertions)]
     {
         crate::debug_info::since_start("qml.loaded");
-        crate::debug_info::print_diagnostics();
+        // `vulkaninfo` is a synchronous subprocess; keep it out of the
+        // startup measurement (and off the main thread) while the event loop
+        // starts.
+        std::thread::spawn(crate::debug_info::print_diagnostics);
     }
     app.run();
 }

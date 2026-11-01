@@ -115,25 +115,45 @@ pub async fn init() -> Result<Dbs> {
     })
 }
 
-/// Warms the catalog files on a plain OS thread; startup and login never wait
-/// for it. `posix_fadvise` would avoid the read, but libc is not a direct
+/// Warms the live catalog files on a plain OS thread; startup and login never
+/// wait for it. `posix_fadvise` would avoid the read, but libc is not a direct
 /// dependency, so this uses a buffered pass (the page cache is the goal).
+///
+/// Only the two physical databases are live now: `search`, `covers`, `lyrics`
+/// and `download` are aliases of these pools, while their old files are read
+/// once by [`absorb_legacy`] and then removed.
 pub fn warm_startup() {
     std::thread::spawn(|| {
-        for path in [library_path(), search_path(), covers_path()]
-            .into_iter()
-            .flatten()
-        {
-            for candidate in [
-                path.clone(),
-                PathBuf::from(format!("{}-wal", path.display())),
-            ] {
-                if let Err(err) = warm_file(&candidate) {
-                    crate::debug_log!("db: warm {} failed: {err}", candidate.display());
-                }
-            }
+        for candidate in warm_startup_paths() {
+            let _ = warm_path(&candidate);
         }
     });
+}
+
+fn warm_startup_paths() -> Vec<PathBuf> {
+    warm_targets([library_path(), media_path()].into_iter().flatten())
+}
+
+fn warm_targets(paths: impl IntoIterator<Item = PathBuf>) -> Vec<PathBuf> {
+    let mut targets = Vec::new();
+    for path in paths {
+        targets.push(path.clone());
+        targets.push(PathBuf::from(format!("{}-wal", path.display())));
+    }
+    targets
+}
+
+fn warm_path(path: &Path) -> std::io::Result<()> {
+    match warm_file(path) {
+        // A `-wal` only exists while writes are pending; its absence is the
+        // normal case, not a warm failure.
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(err) => {
+            crate::debug_log!("db: warm {} failed: {err}", path.display());
+            Err(err)
+        }
+        Ok(()) => Ok(()),
+    }
 }
 
 fn warm_file(path: &Path) -> std::io::Result<()> {
@@ -164,13 +184,20 @@ pub async fn migrate(dbs: &Dbs) -> Result<()> {
 }
 
 /// One-time import of the old per-domain databases (backup, not required).
+///
+/// Each physical database keeps its own flag: a crash between the two halves
+/// must not make the library flag skip the media import forever.
 async fn absorb_legacy(library: &SqlitePool, media: &SqlitePool) -> Result<()> {
-    if meta_flag(library, "legacy_absorbed").await? {
+    absorb_library_legacy(library).await?;
+    absorb_media_legacy(media).await?;
+    Ok(())
+}
+
+async fn absorb_library_legacy(library: &SqlitePool) -> Result<()> {
+    if meta_flag(library).await? {
         return Ok(());
     }
-
-    let mut conn = library.acquire().await?;
-    let library_legacy = [
+    let legacy = [
         (credentials_path()?, &["users"][..]),
         (search_path()?, &["song_search"][..]),
         (artist_user_path()?, &["artist_user"][..]),
@@ -184,37 +211,39 @@ async fn absorb_legacy(library: &SqlitePool, media: &SqlitePool) -> Result<()> {
             &["playlist", "playlist_song", "playlist_meta"][..],
         ),
     ];
-    for (path, tables) in &library_legacy {
-        import_file(&mut conn, path, tables).await?;
-    }
-    sqlx::query(
-        "INSERT INTO meta (key, value) VALUES ('legacy_absorbed', '1')
-         ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-    )
-    .execute(&mut *conn)
-    .await?;
-    drop(conn);
-    for (path, _) in &library_legacy {
-        remove_legacy_db(path);
-    }
+    absorb_files(library, &legacy, "meta").await
+}
 
-    let mut conn = media.acquire().await?;
-    let media_legacy = [
+async fn absorb_media_legacy(media: &SqlitePool) -> Result<()> {
+    if media_meta_flag(media).await? {
+        return Ok(());
+    }
+    let legacy = [
         (covers_path()?, &["covers"][..]),
         (lyrics_path()?, &["lyrics", "lyric_line", "lyrics_meta"][..]),
         (download_path()?, &["download"][..]),
     ];
-    for (path, tables) in &media_legacy {
+    absorb_files(media, &legacy, "media_meta").await
+}
+
+async fn absorb_files(
+    pool: &SqlitePool,
+    legacy: &[(PathBuf, &[&'static str])],
+    flag_table: &str,
+) -> Result<()> {
+    let mut conn = pool.acquire().await?;
+    for (path, tables) in legacy {
         import_file(&mut conn, path, tables).await?;
     }
-    sqlx::query(
-        "INSERT INTO media_meta (key, value) VALUES ('legacy_absorbed', '1')
-         ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-    )
-    .execute(&mut *conn)
-    .await?;
+    let sql = format!(
+        "INSERT INTO {flag_table} (key, value) VALUES ('legacy_absorbed', '1')
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value"
+    );
+    sqlx::raw_sql(sqlx::AssertSqlSafe(sql))
+        .execute(&mut *conn)
+        .await?;
     drop(conn);
-    for (path, _) in &media_legacy {
+    for (path, _) in legacy {
         remove_legacy_db(path);
     }
     Ok(())
@@ -227,11 +256,19 @@ fn remove_legacy_db(path: &Path) {
     }
 }
 
-async fn meta_flag(pool: &SqlitePool, key: &str) -> Result<bool> {
-    let value: Option<String> = sqlx::query_scalar("SELECT value FROM meta WHERE key = ?1")
-        .bind(key)
-        .fetch_optional(pool)
-        .await?;
+async fn meta_flag(pool: &SqlitePool) -> Result<bool> {
+    let value: Option<String> =
+        sqlx::query_scalar("SELECT value FROM meta WHERE key = 'legacy_absorbed'")
+            .fetch_optional(pool)
+            .await?;
+    Ok(value.is_some())
+}
+
+async fn media_meta_flag(pool: &SqlitePool) -> Result<bool> {
+    let value: Option<String> =
+        sqlx::query_scalar("SELECT value FROM media_meta WHERE key = 'legacy_absorbed'")
+            .fetch_optional(pool)
+            .await?;
     Ok(value.is_some())
 }
 
@@ -697,6 +734,116 @@ mod options_tests {
         let started = std::time::Instant::now();
         assert!(warm_file(Path::new("/nonexistent/musika-warm.db")).is_err());
         assert!(started.elapsed() < std::time::Duration::from_secs(1));
+    }
+
+    #[test]
+    fn warm_targets_cover_each_database_and_its_wal() {
+        let dir = std::env::temp_dir().join(format!("musika-db-warm-{}", std::process::id()));
+        let library = dir.join("library.db");
+        let media = dir.join("media.db");
+        assert_eq!(
+            warm_targets([library.clone(), media.clone()]),
+            vec![
+                library.clone(),
+                dir.join("library.db-wal"),
+                media.clone(),
+                dir.join("media.db-wal"),
+            ]
+        );
+        let expected = warm_targets([
+            library_path().expect("library path"),
+            media_path().expect("media path"),
+        ]);
+        assert_eq!(warm_startup_paths(), expected);
+        let startup = warm_startup_paths();
+        assert!(!startup.iter().any(|path| {
+            matches!(
+                path.file_name().and_then(|name| name.to_str()),
+                Some("search.db" | "covers.db" | "search.db-wal" | "covers.db-wal")
+            )
+        }));
+    }
+
+    #[test]
+    fn warm_path_treats_not_found_as_success() {
+        assert!(warm_path(Path::new("/nonexistent/musika-warm-wal")).is_ok());
+        let dir = std::env::temp_dir().join(format!("musika-db-warm-dir-{}", std::process::id()));
+        ensure_dir(&dir).expect("temp dir");
+        assert!(warm_path(&dir).is_err());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn remove_legacy_db_removes_the_file_and_sidecars() {
+        let dir =
+            std::env::temp_dir().join(format!("musika-db-legacy-remove-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        ensure_dir(&dir).expect("temp dir");
+        let path = dir.join("covers.db");
+        for suffix in ["", "-wal", "-shm"] {
+            std::fs::write(
+                PathBuf::from(format!("{}{suffix}", path.display())),
+                b"legacy",
+            )
+            .expect("legacy file");
+        }
+        remove_legacy_db(&path);
+        for suffix in ["", "-wal", "-shm"] {
+            let file = PathBuf::from(format!("{}{suffix}", path.display()));
+            assert!(!file.exists(), "{} was left behind", file.display());
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn absorb_files_imports_then_removes_the_legacy_file() {
+        let dir =
+            std::env::temp_dir().join(format!("musika-db-legacy-absorb-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        ensure_dir(&dir).expect("temp dir");
+        let library = open_migrated(
+            dir.join("library.db"),
+            1,
+            sqlx::migrate!("./migrations_library"),
+            false,
+            Durability::Full,
+        )
+        .await
+        .expect("library");
+        let legacy = dir.join("credentials.db");
+        let legacy_pool = open_pool(legacy.clone(), 1, Durability::Full)
+            .await
+            .expect("legacy");
+        sqlx::raw_sql(
+            "CREATE TABLE users (
+                 id INTEGER PRIMARY KEY AUTOINCREMENT,
+                 username TEXT NOT NULL,
+                 password TEXT NOT NULL,
+                 serverURL TEXT NOT NULL,
+                 created_at TEXT NOT NULL,
+                 server_type TEXT NOT NULL
+             );
+             INSERT INTO users (username, password, serverURL, created_at, server_type)
+                 VALUES ('me', 'secret', 'https://music.example', 'now', 'navidrome');",
+        )
+        .execute(&legacy_pool)
+        .await
+        .expect("legacy rows");
+        legacy_pool.close().await;
+
+        absorb_files(&library, &[(legacy.clone(), &["users"][..])], "meta")
+            .await
+            .expect("absorb");
+
+        let users: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM users")
+            .fetch_one(&library)
+            .await
+            .expect("count");
+        assert_eq!(users, 1);
+        assert!(meta_flag(&library).await.expect("flag"));
+        assert!(!legacy.exists(), "the absorbed legacy file must be removed");
+        library.close().await;
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
 

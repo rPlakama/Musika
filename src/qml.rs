@@ -2025,7 +2025,6 @@ impl Backend {
         // The UI passes the number of rows its columns can paint; keep a sane
         // ceiling for a malformed caller.
         let limit = limit.clamp(1, 100) as usize;
-        #[cfg(debug_assertions)]
         let started = std::time::Instant::now();
         let generation = SEARCH_GEN.fetch_add(1, Ordering::Relaxed) + 1;
         let invoker = self.get_qml_method_invoker();
@@ -2052,6 +2051,7 @@ impl Backend {
                     })
                     .to_string()
                 });
+            crate::startup::trace_elapsed("search.result", started.elapsed());
             #[cfg(debug_assertions)]
             crate::debug_info::search_result(started);
             if SEARCH_GEN.load(Ordering::Relaxed) != generation {

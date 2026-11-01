@@ -447,7 +447,9 @@ pub async fn ensure(pool: &SqlitePool) -> Result<Option<Arc<SearchIndex>>> {
     if OVER_BUDGET.load(Ordering::Relaxed) {
         return Ok(None);
     }
+    let started = std::time::Instant::now();
     rebuild_locked(pool).await?;
+    crate::startup::trace_elapsed("search.catalog.build", started.elapsed());
     drop(build);
     Ok(slot()
         .read()

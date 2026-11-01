@@ -1039,7 +1039,7 @@ Item {
             anchors.rightMargin: root.bleed
             clip: root.bleed <= 0
             model: root.model
-            reuseItems: root.reuseRows
+            reuseItems: root.reuseRows && !root.animateDisplacement
             delegate: root.rowDelegate
             spacing: root.rowSpacing
             header: Column {
@@ -1056,7 +1056,6 @@ Item {
             }
             boundsBehavior: Flickable.StopAtBounds
             highlightFollowsCurrentItem: false
-            reuseItems: !root.animateDisplacement
             displaced: root.animateDisplacement ? displacedTransition : null
             move: root.animateDisplacement ? displacedTransition : null
             moveDisplaced: root.animateDisplacement ? displacedTransition : null

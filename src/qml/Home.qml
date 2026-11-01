@@ -1053,6 +1053,8 @@ Item {
                                     root._landOrResetSegment(item);
                             }
                             onVisibleChanged: {
+                                if (!visible && item && item.releaseRowSlots)
+                                    item.releaseRowSlots();
                                 if (visible && item) {
                                     if ("_preloadOnly" in item)
                                         item._preloadOnly = false;

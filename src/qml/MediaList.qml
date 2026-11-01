@@ -134,6 +134,10 @@ ScrollPanel {
     }
     onFirstVisibleIndexChanged: root.ensureVirtualWindow()
     onLastVisibleIndexChanged: root.ensureVirtualWindow()
+    onVisibleChanged: {
+        if (!root.visible && root._virtualSurface.length > 0)
+            root.releaseRowSlots();
+    }
 
     /// VI-4: the selection state lives in `ScrollContent` and is forwarded by
     /// `ScrollPanel` (`toggleSelection`/`selectAll`/`clearSelection`/…); the
@@ -267,22 +271,62 @@ ScrollPanel {
     function startVirtual(surface, key, order) {
         placeholderTimer.stop();
         root._placeholderGeneration++;
+        var sameSurface = root._virtualSurface === surface && root.count > 0;
+        if (root._liveStart >= 0) {
+            for (var i = root._liveStart; i <= root._liveEnd; ++i)
+                root._clearSlot(i);
+        }
         root._virtualSurface = surface;
         root._virtualKey = key ? key : "";
         root._virtualOrder = order ? order : "";
-        root._virtualCount = 0;
         root._liveStart = -1;
         root._liveEnd = -1;
         root._requestedStart = -1;
         root._requestedEnd = -1;
         root._requestedGen = -1;
         root.clearSelection();
-        mediaRows.clear();
+        if (!sameSurface) {
+            mediaRows.clear();
+            root._virtualCount = 0;
+        }
         root.loading = true;
         root._virtualGen = Backend.beginRows(surface, root._virtualKey, root._virtualOrder);
     }
 
+    function releaseRowSlots() {
+        placeholderTimer.stop();
+        root._placeholderGeneration++;
+        mediaRows.clear();
+        root._virtualSurface = "";
+        root._virtualGen = -1;
+        root._virtualCount = 0;
+        root._liveStart = -1;
+        root._liveEnd = -1;
+        root._requestedStart = -1;
+        root._requestedEnd = -1;
+        root._requestedGen = -1;
+        root._fullLoaded = false;
+        root._preloaded = false;
+        root.loading = false;
+    }
+
     function _fillVirtual(count) {
+        if (root._preloadOnly) {
+            root.loading = false;
+            return;
+        }
+        if (count === root._virtualCount && root.count === count) {
+            root.loading = false;
+            if (root.resetPending) {
+                root.resetPending = false;
+                root.resetViewNow();
+            } else if (!root.restore() && root.count > 0
+                    && (root.currentIndex < 0 || root.currentIndex >= root.count)) {
+                root.currentIndex = 0;
+            }
+            root.ensureVirtualWindow();
+            return;
+        }
         root._virtualCount = count;
         root._placeholderGeneration++;
         root._placeholderAt = 0;

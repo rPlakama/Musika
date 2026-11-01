@@ -62,6 +62,8 @@ Item {
     property var model: null
     /// Rows may come from a ListModel or the count-only RowWindow.
     property var rowAccess: null
+    /// Scope surfaces suppress the released-delegate cache; other lists keep it.
+    property bool reuseRows: true
     readonly property var access: root.rowAccess ? root.rowAccess : root.model
     property Component rowDelegate: null
     /// Gutter bleed on each side (UI-48); 0 clips at the list edge.
@@ -1037,6 +1039,7 @@ Item {
             anchors.rightMargin: root.bleed
             clip: root.bleed <= 0
             model: root.model
+            reuseItems: root.reuseRows
             delegate: root.rowDelegate
             spacing: root.rowSpacing
             header: Column {

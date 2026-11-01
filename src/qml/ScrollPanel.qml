@@ -85,6 +85,7 @@ Rectangle {
     // --- Body (B) ------------------------------------------------------------
     property Component rowDelegate
     property var model: null
+    property alias reuseRows: content.reuseRows
     property var rowAccess: content.access
     property bool loading: false
     property string emptyText: ""

@@ -53,6 +53,19 @@ nix develop     # dev shell (Rust + Qt)
 The native player links PipeWire and FFmpeg development libraries; the flake
 provides both.
 
+To benchmark startup, build a release binary and trace the phases:
+
+```
+nix develop -c cargo build --release
+MUSIKA_STARTUP_TRACE=1 MUSIKA_STARTUP_EXIT=1 ./target/release/musika
+```
+
+`MUSIKA_STARTUP_TRACE=1` prints the six process-relative marks (`main`,
+`db.init`, `session.restore`, `qapp.new`, `qml.loaded`, `frontend.ready`) to
+stderr; `MUSIKA_STARTUP_EXIT=1` closes the window after the first rendered
+frame, so the whole run can be timed with `hyperfine`. Neither variable costs
+anything when unset.
+
 # Contributions
 
 Pull Requests are welcome if properly tested. I have no issues with AI -- since it would be hypocritical. Besides that, the development is nix-first, as my favorite development tool. Besides that, many core tools, which are present in other players, still missing from here, and bugs that I haven't caught yet. Opening an issue for any problem is also very welcome.

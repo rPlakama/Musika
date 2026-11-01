@@ -24,15 +24,7 @@
 #![allow(dead_code)]
 
 use std::process::Command;
-use std::sync::OnceLock;
 use std::time::Instant;
-
-static PROCESS_START: OnceLock<Instant> = OnceLock::new();
-
-/// Starts the process-wide clock. Call once, after the `--version` probe.
-pub(crate) fn start() {
-    let _ = PROCESS_START.set(Instant::now());
-}
 
 fn ms(started: Instant) -> f64 {
     started.elapsed().as_secs_f64() * 1000.0
@@ -47,8 +39,8 @@ pub(crate) fn report_with(label: &str, started: Instant, detail: &str) {
 }
 
 pub(crate) fn since_start(label: &str) {
-    let started = *PROCESS_START.get_or_init(Instant::now);
-    report(label, started);
+    let elapsed = crate::startup::elapsed().as_secs_f64() * 1000.0;
+    println!("[musika/debug] {label}: {elapsed:.2} ms");
 }
 
 pub(crate) fn idle_event(entered: bool) -> &'static str {
@@ -56,11 +48,10 @@ pub(crate) fn idle_event(entered: bool) -> &'static str {
 }
 
 pub(crate) fn idle(entered: bool) {
-    let started = *PROCESS_START.get_or_init(Instant::now);
     println!(
         "[musika/debug] idle.{} at {:.2} ms",
         idle_event(entered),
-        ms(started)
+        crate::startup::elapsed().as_secs_f64() * 1000.0
     );
 }
 

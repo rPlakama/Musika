@@ -54,6 +54,7 @@ mod scroll_memory;
 mod search;
 mod session;
 mod sqlite;
+mod startup;
 mod status;
 
 #[cfg(test)]
@@ -204,11 +205,11 @@ fn main() {
         return;
     }
 
+    crate::startup::start();
+    crate::startup::trace("main");
+
     crate::player::warm_native();
     crate::db::warm_startup();
-
-    #[cfg(debug_assertions)]
-    crate::debug_info::start();
 
     load_dotenv();
 
@@ -227,6 +228,7 @@ fn main() {
             std::process::exit(1);
         }
     };
+    crate::startup::trace("db.init");
     #[cfg(debug_assertions)]
     crate::debug_info::report("db.init", db_started);
 
@@ -304,8 +306,10 @@ fn main() {
     });
     crate::qml::set_bootstrap_target(initial_target);
     crate::app::set_dbs(dbs);
+    crate::startup::trace("session.restore");
 
     let mut app = QApp::new();
+    crate::startup::trace("qapp.new");
     qtbridge::include_bytes_qml!("qml", "app");
     qtbridge::include_bytes_qml!("icons", "app");
     crate::mpris::init();
@@ -314,6 +318,7 @@ fn main() {
         .register::<qml::Backend>()
         .register::<palette::Palette>()
         .load_qml_from_file("qrc:/app/qml/Main.qml");
+    crate::startup::trace("qml.loaded");
     #[cfg(debug_assertions)]
     {
         crate::debug_info::since_start("qml.loaded");

@@ -55,6 +55,8 @@ ApplicationWindow {
         if (!frontendReadySent) {
             frontendReadySent = true;
             Backend.frontendReady();
+            if (Backend.exitAfterReady())
+                Qt.callLater(Qt.quit);
         }
     }
 

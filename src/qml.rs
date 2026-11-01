@@ -772,11 +772,18 @@ impl Backend {
             .unwrap_or_default()
     }
 
-    /// Debug only: the first rendered frame (no-op in release).
+    /// The first rendered frame: the last startup mark.
     #[qslot(qml_name = "frontendReady")]
     fn frontend_ready(&mut self) {
+        crate::startup::trace("frontend.ready");
         #[cfg(debug_assertions)]
         crate::debug_info::since_start("frontend.ready");
+    }
+
+    /// Benchmark mode: quit once the first frame is on screen.
+    #[qslot(qml_name = "exitAfterReady")]
+    fn exit_after_ready(&self) -> bool {
+        crate::startup::exit_after_ready()
     }
 
     #[qslot(qml_name = "prefillCredentials")]

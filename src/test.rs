@@ -4953,6 +4953,19 @@ mod search_index {
         assert!(catalog_cost(&pool).await.unwrap() > 0);
     }
 
+    /// The post-first-frame warm-up builds a catalog that `ensure` then reuses.
+    #[tokio::test]
+    async fn warm_builds_a_reusable_catalog() {
+        if !enabled() {
+            return;
+        }
+        clear();
+        let pool = crate::test::memory_pool(sqlx::migrate!("./migrations_library")).await;
+        warm(&pool).await.unwrap();
+        assert!(ensure(&pool).await.unwrap().is_some());
+        clear();
+    }
+
     /// M0 baseline: `cargo test --release test::search_index::bench -- --ignored --nocapture`.
     #[test]
     #[ignore = "benchmark, run explicitly"]

@@ -457,6 +457,17 @@ pub async fn ensure(pool: &SqlitePool) -> Result<Option<Arc<SearchIndex>>> {
         .clone())
 }
 
+/// Builds the catalog after the first frame, so the first search does not
+/// pay for it. FTS-only and over-budget libraries are skipped; `ensure`
+/// remains the source of truth for both conditions.
+pub async fn warm(pool: &SqlitePool) -> Result<()> {
+    if !enabled() || over_budget() {
+        return Ok(());
+    }
+    ensure(pool).await?;
+    Ok(())
+}
+
 /// Rebuilds the whole catalog from `library.db` (after a sync or on first
 /// use). Serialized with [`ensure`] through [`BUILD`]. The Nucleo injection
 /// runs on a blocking worker.

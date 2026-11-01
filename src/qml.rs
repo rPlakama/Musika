@@ -778,6 +778,18 @@ impl Backend {
         crate::startup::trace("frontend.ready");
         #[cfg(debug_assertions)]
         crate::debug_info::since_start("frontend.ready");
+        // Build the search catalog once the first frame is up. The short
+        // delay lets restore, the first page and a benchmark self-exit settle
+        // before a background read walks `library.db`.
+        let Some(dbs) = crate::app::dbs() else {
+            return;
+        };
+        crate::app::runtime().spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+            if let Err(err) = crate::search::index::warm(&dbs.library).await {
+                eprintln!("search: could not prebuild the in-memory index: {err:#}");
+            }
+        });
     }
 
     /// Benchmark mode: quit once the first frame is on screen.

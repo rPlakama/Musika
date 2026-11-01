@@ -167,8 +167,8 @@ pub async fn fetch_into(
     options: &Options,
 ) -> Result<CoverScheme> {
     let generator = options.generator();
-    if let Some(row) = load(pool, cover_art).await? {
-        if row.cover_hash == cover_hash && row.generator == generator {
+    if let Some(row) = load(pool, cover_art).await?
+        && row.cover_hash == cover_hash && row.generator == generator {
             let roles = serde_json::from_str(&row.dark)
                 .with_context(|| format!("stored colors for {cover_art} are malformed"))?;
             return Ok(CoverScheme {
@@ -179,7 +179,6 @@ pub async fn fetch_into(
                 roles,
             });
         }
-    }
 
     let resolved = seed::resolve(
         pool,
@@ -207,7 +206,7 @@ pub fn generate_from_path(path: &Path, options: &Options) -> Result<CoverScheme>
         Some(argb) => (super::rgb::from_argb(argb), 0.0),
         None => seed::extract(path, options.source)?,
     };
-    Ok(build_scheme(color, colorfulness, options)?)
+    build_scheme(color, colorfulness, options)
 }
 
 /// Convenience wrapper: Tonal Spot at standard contrast under the default

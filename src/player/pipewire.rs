@@ -276,7 +276,7 @@ fn decode_loop(
     let mut error = [0 as c_char; 512];
     let mut media = Vec::new();
     if let Err(err) = fetch_media_into(url, &mut media, &stop) {
-        if err != CANCELLED.to_string() {
+        if err != CANCELLED {
             set_failed(&status, &err);
         }
         return;
@@ -315,7 +315,7 @@ fn decode_loop(
             let recent = seek_at
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .map_or(false, |at| at.elapsed() < Duration::from_millis(50));
+                .is_some_and(|at| at.elapsed() < Duration::from_millis(50));
             if recent {
                 let mut pending = seek
                     .lock()
@@ -412,18 +412,16 @@ impl Player {
                 }
             }
             "volume" => {
-                if let Some(volume) = value.as_f64() {
-                    if let Some(native) = self.native.as_ref() {
+                if let Some(volume) = value.as_f64()
+                    && let Some(native) = self.native.as_ref() {
                         native.set_volume(volume);
                     }
-                }
             }
             "mute" => {
-                if let Some(muted) = value.as_bool() {
-                    if let Some(native) = self.native.as_ref() {
+                if let Some(muted) = value.as_bool()
+                    && let Some(native) = self.native.as_ref() {
                         native.set_muted(muted);
                     }
-                }
             }
             _ => {}
         }

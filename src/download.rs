@@ -56,7 +56,7 @@ async fn set_download_state(
     error: Option<&str>,
     rule_id: Option<&str>,
 ) -> Result<()> {
-    let now = crate::consts::now_secs() as i64;
+    let now = crate::consts::now_secs();
     sqlx::query(
         "INSERT INTO download (song_id, state, error, rule_id, requested_at, updated_at)
          VALUES (?1, ?2, ?3, ?4, ?5, ?5)

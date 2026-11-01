@@ -39,11 +39,11 @@ pub fn encode(bytes: impl AsRef<[u8]>) -> String {
 }
 
 pub fn decode(text: &str) -> Result<Vec<u8>, HexError> {
-    if text.len() % 2 != 0 {
+    if !text.len().is_multiple_of(2) {
         return Err(HexError);
     }
     let mut out = Vec::with_capacity(text.len() / 2);
-    for pair in text.as_bytes().chunks_exact(2) {
+    for pair in text.as_bytes().as_chunks::<2>().0 {
         let (Some(hi), Some(lo)) = (nibble(pair[0]), nibble(pair[1])) else {
             return Err(HexError);
         };

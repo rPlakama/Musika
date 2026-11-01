@@ -107,11 +107,10 @@ async fn report_song_state(
         song_id.to_string(),
         state.to_string()
     );
-    if state == crate::download::DONE {
-        if let Some(album) = completed_album(dbs, song_id).await {
+    if state == crate::download::DONE
+        && let Some(album) = completed_album(dbs, song_id).await {
             qtbridge::invoke_method!(invoker, "markAlbumCached", album);
         }
-    }
     invoker
 }
 
@@ -137,11 +136,10 @@ pub(super) async fn fetch_marked(
             .unwrap_or_default();
         let mut chunk_albums: Vec<String> = Vec::new();
         for song in chunk {
-            if let Some((_, Some(album))) = scopes.get(song) {
-                if !chunk_albums.contains(album) {
+            if let Some((_, Some(album))) = scopes.get(song)
+                && !chunk_albums.contains(album) {
                     chunk_albums.push(album.clone());
                 }
-            }
         }
         let mut batch_ids: Vec<String> = chunk.to_vec();
         batch_ids.extend(chunk_albums.iter().cloned());

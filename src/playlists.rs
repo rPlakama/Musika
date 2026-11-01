@@ -42,11 +42,10 @@ pub struct M3uEntry {
 
 /// The folder the app owns for local playlists.
 pub fn m3u_dir() -> Result<PathBuf> {
-    if let Some(dir) = std::env::var_os("MUSIKA_PLAYLISTS_DIR") {
-        if !dir.is_empty() {
+    if let Some(dir) = std::env::var_os("MUSIKA_PLAYLISTS_DIR")
+        && !dir.is_empty() {
             return Ok(PathBuf::from(dir));
         }
-    }
     Ok(crate::db::config_dir()?.join("playlists"))
 }
 
@@ -233,14 +232,13 @@ impl Matcher {
         if let Some(i) = self.by_base.get(&norm(basename(&path))) {
             return Some(*i);
         }
-        if let (Some(artist), Some(title)) = (&entry.artist, &entry.title) {
-            if let Some(i) = self
+        if let (Some(artist), Some(title)) = (&entry.artist, &entry.title)
+            && let Some(i) = self
                 .by_artist_title
                 .get(&format!("{}\t{}", norm(artist), norm(title)))
             {
                 return Some(*i);
             }
-        }
         None
     }
 }
@@ -613,13 +611,11 @@ pub async fn page_json(dbs: &Dbs, playlist_id: &str, offline: bool) -> Result<St
     .bind(playlist_id)
     .fetch_one(&dbs.playlist)
     .await?;
-    if playlist.source == "subsonic" && existing == 0 {
-        if let Ok(client) = crate::session::client(dbs).await {
-            if let Err(err) = load_subsonic_songs(dbs, &client, playlist_id).await {
+    if playlist.source == "subsonic" && existing == 0
+        && let Ok(client) = crate::session::client(dbs).await
+            && let Err(err) = load_subsonic_songs(dbs, &client, playlist_id).await {
                 eprintln!("playlists: could not load {playlist_id}: {err:#}");
             }
-        }
-    }
 
     let rows = sqlx::query_as::<_, SongRow>(
         "SELECT position, song_id, title, artist, album, duration, cover_art
@@ -638,7 +634,7 @@ pub async fn page_json(dbs: &Dbs, playlist_id: &str, offline: bool) -> Result<St
         .map(|row| row.cover_art.clone())
         .chain(by_id.values().map(|song| song.cover_art.clone()))
         .collect();
-    let covers = crate::covers::url_map_for(&dbs, cover_ids.iter()).await?;
+    let covers = crate::covers::url_map_for(dbs, cover_ids.iter()).await?;
     let filter = crate::offline::load(dbs, offline).await?;
 
     let mut collage: Vec<String> = Vec::new();

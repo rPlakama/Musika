@@ -1019,7 +1019,7 @@ impl Backend {
         if self.player.state() != State::Playing || self.player.position() <= 0.0 {
             return;
         }
-        let due = self.last_position_save.map_or(true, |at| {
+        let due = self.last_position_save.is_none_or(|at| {
             at.elapsed() >= std::time::Duration::from_secs(10)
         });
         if due {

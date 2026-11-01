@@ -49,8 +49,8 @@ impl Backend {
         crate::app::runtime().spawn(async move {
             match crate::http_client::authenticate(&server_url, &username, &password).await {
                 Ok(info) => {
-                    if let Some(pool) = pool.as_ref() {
-                        if let Err(err) = crate::sqlite::save_credentials(
+                    if let Some(pool) = pool.as_ref()
+                        && let Err(err) = crate::sqlite::save_credentials(
                             pool,
                             &username,
                             &password,
@@ -61,7 +61,6 @@ impl Backend {
                         {
                             eprintln!("Failed to persist credentials: {err:#}");
                         }
-                    }
                     online_authenticated(
                         &invoker,
                         sync_finish,

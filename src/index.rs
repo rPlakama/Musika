@@ -119,11 +119,10 @@ where
         // S-9: the search schema migration recreates the FTS table, so an
         // unchanged library can still have an empty index. Rebuild it here
         // rather than waiting for the next library change.
-        if crate::search::count(&dbs.search).await.unwrap_or(0) == 0 {
-            if let Err(err) = rebuild_search(dbs).await {
+        if crate::search::count(&dbs.search).await.unwrap_or(0) == 0
+            && let Err(err) = rebuild_search(dbs).await {
                 eprintln!("search: could not rebuild the index: {err:#}");
             }
-        }
         // The library is unchanged, but the derived caches may still need
         // topping up (first run interrupted, or entries that previously
         // failed): the caller starts the cover pass asynchronously after this

@@ -387,10 +387,8 @@ pub async fn wipe_files(dbs: &Dbs) -> Result<()> {
     // config-tree entry above (env overrides can point it elsewhere), and
     // the playback/rolling tier sits under the XDG cache, outside the config
     // dir — "wipe everything" leaves no media behind anywhere.
-    for dir in [media_dir(), playback_dir()] {
-        if let Ok(dir) = dir {
-            remove_dir(&dir)?;
-        }
+    for dir in [media_dir(), playback_dir()].into_iter().flatten() {
+        remove_dir(&dir)?;
     }
     Ok(())
 }
@@ -405,10 +403,8 @@ pub async fn wipe(dbs: &Dbs) -> Result<()> {
     wipe_and_migrate(&dbs.media, sqlx::migrate!("./migrations_media")).await?;
     crate::search::index::clear();
 
-    for dir in [covers_dir(), media_dir(), playback_dir()] {
-        if let Ok(dir) = dir {
-            remove_dir(&dir)?;
-        }
+    for dir in [covers_dir(), media_dir(), playback_dir()].into_iter().flatten() {
+        remove_dir(&dir)?;
     }
     remove_mirror();
     Ok(())

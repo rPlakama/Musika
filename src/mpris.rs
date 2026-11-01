@@ -100,11 +100,10 @@ fn snapshot() -> Snapshot {
 
 /// Publishes the current player state and wakes the signal emitter.
 pub fn publish(state: Snapshot) {
-    if let Some(lock) = SNAPSHOT.get() {
-        if let Ok(mut guard) = lock.lock() {
+    if let Some(lock) = SNAPSHOT.get()
+        && let Ok(mut guard) = lock.lock() {
             *guard = state;
         }
-    }
     if let Some(notify) = NOTIFY.get() {
         notify.notify_one();
     }

@@ -166,11 +166,10 @@ pub async fn fetch(dbs: &Dbs, client: Option<&SubsonicClient>, song_id: &str) ->
         return Ok(document);
     }
 
-    if let Some((document, fetched_at)) = load_cached(&dbs.lyrics, song_id).await? {
-        if !cache_is_stale(&document, fetched_at) {
+    if let Some((document, fetched_at)) = load_cached(&dbs.lyrics, song_id).await?
+        && !cache_is_stale(&document, fetched_at) {
             return Ok(document);
         }
-    }
 
     let Some(client) = client else {
         return Ok(Document::missing(song_id));

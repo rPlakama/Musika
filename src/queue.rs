@@ -489,7 +489,7 @@ pub async fn resume_payload(
         Some(album_id)
             if offline_albums
                 .as_ref()
-                .map_or(true, |albums| albums.contains_key(album_id)) =>
+                .is_none_or(|albums| albums.contains_key(album_id)) =>
         {
             match crate::library::album(&dbs.library, album_id).await? {
                 Some(album) => {

@@ -48,6 +48,9 @@ Item {
     readonly property bool _bootstrapTarget: root._bootstrapData !== null
     property bool _bootstrapPending: root._bootstrapTarget
     // True only at the root: no page, drawer or fullscreen player above it.
+    // Entry navigation keeps one live page: descriptors preserve Back without
+    // retaining the old QML page objects.
+    property var entryHistory: []
     readonly property bool atHome: contentStack.depth === 1 && !nowPlayingExpanded && !queueDrawer.open
     // A scope switch starts the target segment at row 0 instead of
     // restoring/settling toward its previous cursor.
@@ -116,6 +119,7 @@ Item {
         _placing = true;
         if (currentSegment !== index)
             root._resetSegmentOnShow = true;
+        root.entryHistory = [];
         currentSegment = index;
         while (contentStack.depth > 1)
             contentStack.pop();
@@ -263,6 +267,7 @@ Item {
         // One cut, not a cascade of push/pop animations.
         if (contentStack.depth > 1)
             contentStack.pop(null, StackView.Immediate);
+        root.entryHistory = [];
         currentSegment = Number(place.segment) || 0;
         activeRegion = 1;
         for (var i = 0; i < place.pages.length; ++i) {
@@ -271,9 +276,9 @@ Item {
                 continue;
             if (entry.kind === "album") {
                 Backend.rememberAlbum(entry.page.albumId);
-                contentStack.push(albumEntryComponent, entry.page, StackView.Immediate);
+                root.openEntry("album", entry.page, true, false);
             } else if (entry.kind === "artist") {
-                contentStack.push(artistEntryComponent, entry.page, StackView.Immediate);
+                root.openEntry("artist", entry.page, true, false);
             } else if (entry.kind === "playlist") {
                 contentStack.push(playlistEntryComponent, entry.page, StackView.Immediate);
             }
@@ -330,7 +335,71 @@ Item {
             "", "0", cover ? cover : "", false, false, songId);
     }
 
-    // Single album-page push used by the album list, the artist entry and the
+    /// One entry page stays in the stack. The descriptor history lets Back
+    /// rehydrate the previous page without keeping its QML object alive.
+    function entryKey(kind, page) {
+        if (kind === "artist")
+            return "artist:" + (page.artistId ? page.artistId : "");
+        if (kind === "playlist")
+            return "playlist:" + (page.playlistId ? page.playlistId : "");
+        return "album:" + (page.albumId ? page.albumId : "");
+    }
+
+    function currentEntryKind() {
+        var item = contentStack.currentItem;
+        if (!item || contentStack.depth <= 1)
+            return "";
+        if (item.artistId !== undefined && item.artistId.length > 0)
+            return "artist";
+        if (item.isPlaylist === true)
+            return "playlist";
+        if (item.albumId !== undefined && item.albumId.length > 0)
+            return "album";
+        return "";
+    }
+
+    function openEntry(kind, page, instant, back) {
+        var key = root.entryKey(kind, page);
+        var current = contentStack.currentItem;
+        var currentKind = root.currentEntryKind();
+        if (currentKind && root.entryKey(currentKind, current) === key) {
+            if (current.open)
+                current.open(page);
+            return;
+        }
+        if (!back)
+            root.entryHistory = root.entryHistory.concat([{ kind: kind, page: page }]);
+        var component = kind === "artist" ? artistEntryComponent : albumEntryComponent;
+        if (currentKind) {
+            var sameComponent = (currentKind === "artist") === (kind === "artist");
+            if (sameComponent && current.open) {
+                current.open(page);
+                return;
+            }
+            if (instant)
+                contentStack.replace(component, page, StackView.Immediate);
+            else
+                contentStack.replace(component, page);
+            return;
+        }
+        if (instant)
+            contentStack.push(component, page, StackView.Immediate);
+        else
+            contentStack.push(component, page);
+    }
+
+    function backEntry() {
+        if (root.entryHistory.length > 1) {
+            root.entryHistory = root.entryHistory.slice(0, -1);
+            var entry = root.entryHistory[root.entryHistory.length - 1];
+            root.openEntry(entry.kind, entry.page, true, true);
+            return;
+        }
+        root.entryHistory = [];
+        contentStack.pop();
+    }
+
+    // Single album-page route used by the album list, the artist entry and the
     // search overlay, so every surface lands in the same page with the same
     // header payload (`starred` feeds the ARC-I-2 header heart).
     function openAlbum(albumId, title, artist, year, tracks, cover, starred, instant, focusSongId, sessionReturn) {
@@ -347,10 +416,7 @@ Item {
             focusSongId: focusSongId ? focusSongId : "",
             resetCursorOnOpen: sessionReturn === true
         };
-        if (instant)
-            contentStack.push(albumEntryComponent, page, StackView.Immediate);
-        else
-            contentStack.push(albumEntryComponent, page);
+        root.openEntry("album", page, instant === true, false);
     }
 
     function openPlaylist(playlistId, title, instant) {
@@ -370,10 +436,7 @@ Item {
             artistName: artistName,
             artistCover: artistCover
         };
-        if (instant)
-            contentStack.push(artistEntryComponent, page, StackView.Immediate);
-        else
-            contentStack.push(artistEntryComponent, page);
+        root.openEntry("artist", page, instant === true, false);
     }
 
     // Startup restore: push the saved target during component creation so the
@@ -809,6 +872,12 @@ Item {
                 contentStack.currentItem.clearSelection();
                 return;
             }
+            // Entry descriptors preserve the album/artist route history; a
+            // single live page is rehydrated instead of keeping old pages.
+            if (root.entryHistory.length > 1) {
+                root.backEntry();
+                return;
+            }
             // P-8: an artist entry is a detour — back lands on Main.
             if (contentStack.currentItem && contentStack.currentItem.exitsToMain)
                 root.leaveArtistEntry();
@@ -926,6 +995,7 @@ Item {
                         root.recordPlace();
                         Backend.resetKeyInput();
                         if (contentStack.depth === 1 && !root._bootstrapPending) {
+                            root.entryHistory = [];
                             root.activateSegment(root.currentSegment);
                         }
                     }
@@ -1036,7 +1106,7 @@ Item {
                     Component {
                         id: artistEntryComponent
                         ArtistEntry {
-                            onBack: root.leaveArtistEntry()
+                            onBack: root.backEntry()
                             onAlbumActivated: (albumId, title, artist, year, tracks, cover, starred) => root.openAlbum(albumId, title, artist, year, tracks, cover, starred)
                             onQuickAction: (target, actions) => root.armQuickActions(target, actions)
                         }
@@ -1045,7 +1115,7 @@ Item {
                     Component {
                         id: albumEntryComponent
                         AlbumEntry {
-                            onBack: contentStack.pop()
+                            onBack: root.backEntry()
                             // The header artist name is a Tab stop; it opens
                             // the album's owning artist page.
                             onArtistActivated: (artistId, artistName, artistCover) => root.openArtist(artistId, artistName, artistCover)

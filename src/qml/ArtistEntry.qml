@@ -138,6 +138,8 @@ Rectangle {
     property int _coverTarget: 0
     // A display copy already won the race against the full `artist` payload.
     property bool _coverFromDisplay: false
+    property bool _opening: false
+    property bool _ready: false
 
     // Home uses this to send `Esc` straight to Main (P-8) instead of popping
     // back to the Artists segment or a search result.
@@ -196,6 +198,35 @@ Rectangle {
         root._coverTarget = 0;
         root._coverFromDisplay = false;
         root.scheduleCover();
+    }
+
+    /// Reuses this page for another artist, clearing the previous artist's
+    /// identity, biography and album wall before loading the new one.
+    function open(page) {
+        var next = page.artistId ? String(page.artistId) : "";
+        if (root.artistId === next)
+            return false;
+        root._opening = true;
+        root.artistId = next
+        root.artistName = page.artistName ? String(page.artistName) : ""
+        root.artistCover = page.artistCover ? String(page.artistCover) : ""
+        root.artistMeta = "";
+        root.artistDescription = "";
+        root.artistRating = 0;
+        root.artistStarred = false;
+        root.artistCacheOn = false;
+        root.artistDownloading = false;
+        root._coverTarget = 0;
+        root._coverFromDisplay = false;
+        albums.clear();
+        wall.clearSelection();
+        wall.currentIndex = -1;
+        root.chipScope = -1;
+        root.onTitle = false;
+        root.onDescription = false;
+        root._opening = false;
+        root.reload()
+        return true;
     }
 
     // CACHE-5/8: the stored container selection (`artist_cache` channel).
@@ -341,7 +372,11 @@ Rectangle {
         }
     }
 
-    Component.onCompleted: reload()
+    onArtistIdChanged: if (root._ready && !root._opening) Qt.callLater(root.reload)
+    Component.onCompleted: {
+        root._ready = true;
+        reload();
+    }
 
     // The shared panel owns movement (list steps ±1, gg/G snap through
     // `edgeJump`); this only tracks the header chip scope.

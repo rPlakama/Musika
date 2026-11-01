@@ -99,6 +99,8 @@ Rectangle {
     // Album whose rows request is in flight; avoids reload storms from
     // duplicate open paths and library-changed notifications.
     property string _loadingAlbumId: ""
+    property bool _opening: false
+    property bool _ready: false
 
     /// Metadata stats merged after the album date:
     /// `<N> Tracks · <m:ss> · <AUDIO TAG>`.
@@ -262,6 +264,61 @@ Rectangle {
         Backend.requestAlbumState(root.albumId);
         Backend.requestAlbumCache(root.albumId);
     }
+
+    /// Reuses this page for another album/playlist. The page object, header
+    /// and ScrollPanel stay alive; only the row source and header data swap.
+    /// Returns false when the requested page is already current.
+    function open(page) {
+        var nextPlaylist = page.playlistId ? String(page.playlistId) : "";
+        var nextAlbum = page.albumId ? String(page.albumId) : "";
+        var nextKind = nextPlaylist.length > 0 ? "playlist" : "album";
+        if (root.entryKind === nextKind
+                && root.albumId === nextAlbum
+                && root.playlistId === nextPlaylist) {
+            if (page.focusSongId) {
+                root.focusSongId = String(page.focusSongId);
+                root._focusApplied = false;
+                root.focusRequestedSong();
+            }
+            return false;
+        }
+
+        root._opening = true;
+        root._loadingAlbumId = "";
+        songs.clear();
+        content.clearSelection();
+        content.currentIndex = -1;
+        root.entryKind = nextKind;
+        root.albumId = nextAlbum;
+        root.playlistId = nextPlaylist;
+        root.albumTitle = page.albumTitle ? String(page.albumTitle) : ""
+        root.albumArtist = page.albumArtist ? String(page.albumArtist) : ""
+        root.albumCover = page.albumCover ? String(page.albumCover) : ""
+        root.albumMeta = page.albumMeta ? String(page.albumMeta) : ""
+        root.albumStarred = page.albumStarred === true
+        root.albumRating = 0;
+        root.albumCacheOn = false;
+        root.albumNotes = "";
+        root.playlistSubtitle = page.playlistTitle ? String(page.playlistTitle) : ""
+        root.playlistCollage = [];
+        root.tracksDuration = 0;
+        root.tracksFormat = "";
+        root.loading = true;
+        root.focusSongId = page.focusSongId ? String(page.focusSongId) : ""
+        root.resetCursorOnOpen = page.resetCursorOnOpen === true
+        root._restored = false;
+        root._focusApplied = false;
+        root._coverTarget = 0;
+        root.onCover = false;
+        root.onArtist = false;
+        root.onNotes = false;
+        root.onToolbar = false;
+        root.setNotesExpanded(false);
+        root._opening = false;
+        root.reload()
+        return true;
+    }
+
     function applyInfo(payload) {
         var info = JSON.parse(payload);
         if (info.album_id && info.album_id !== root.albumId)
@@ -456,9 +513,13 @@ Rectangle {
         onTriggered: root.requestCoverNow()
     }
 
-    onPlaylistIdChanged: if (root.isPlaylist) Qt.callLater(root.reload)
-    onEntryKindChanged: if (root.isPlaylist) Qt.callLater(root.reload)
-    Component.onCompleted: reload()
+    onAlbumIdChanged: if (root._ready && !root._opening && !root.isPlaylist) Qt.callLater(root.reload)
+    onPlaylistIdChanged: if (root._ready && !root._opening && root.isPlaylist) Qt.callLater(root.reload)
+    onEntryKindChanged: if (root._ready && !root._opening && root.isPlaylist) Qt.callLater(root.reload)
+    Component.onCompleted: {
+        root._ready = true;
+        reload();
+    }
 
     // The cursor follows the playing track while this album is the one
     // playing.

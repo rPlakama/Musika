@@ -161,6 +161,9 @@ impl Native {
             .position_origin
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner) = seconds.max(0.0);
+        // Drop the already-buffered audio at once; the decoder thread will
+        // perform the codec-level seek on its next wakeup.
+        unsafe { musika_sink_flush(self.sink) };
         *self
             .seek
             .lock()
@@ -506,6 +509,37 @@ mod tests {
         let _ = player.pump();
         assert_eq!(player.state(), State::Playing);
         assert!(player.position() > 0.0, "native clock did not advance");
+        player.stop();
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    #[ignore = "requires a running PipeWire session"]
+    fn native_seek_moves_the_clock_at_once() {
+        let path = std::env::temp_dir().join(format!(
+            "musika-pipewire-seek-{}-{}.wav",
+            std::process::id(),
+            crate::consts::now_nanos()
+        ));
+        std::fs::write(&path, wav_bytes_for(480_000)).expect("write wav");
+        let mut player = Player::new();
+        player.load(vec![Track {
+            id: "seek-test".to_string(),
+            title: "Seek test".to_string(),
+            artist: String::new(),
+            album: String::new(),
+            album_id: String::new(),
+            favorite: false,
+            duration: 10.0,
+            url: format!("file://{}", path.display()),
+            cover_art: String::new(),
+            cover_url: String::new(),
+        }], 0);
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        player.seek(5.0);
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        let _ = player.pump();
+        assert!(player.position() >= 4.9, "seek landed at {}", player.position());
         player.stop();
         let _ = std::fs::remove_file(path);
     }

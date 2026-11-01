@@ -254,8 +254,10 @@ int musika_decoder_seek(MusikaDecoder *d, double seconds)
 {
     if (!d || seconds < 0)
         return -EINVAL;
+    AVStream *stream = d->format->streams[d->stream_index];
     int64_t target = (int64_t)(seconds * AV_TIME_BASE);
-    int ret = av_seek_frame(d->format, -1, target, AVSEEK_FLAG_BACKWARD);
+    int64_t timestamp = av_rescale_q(target, AV_TIME_BASE_Q, stream->time_base);
+    int ret = av_seek_frame(d->format, d->stream_index, timestamp, AVSEEK_FLAG_BACKWARD);
     if (ret < 0)
         return ret;
     avcodec_flush_buffers(d->codec);

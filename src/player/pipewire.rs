@@ -20,6 +20,11 @@ use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
+#[cfg(target_os = "linux")]
+unsafe extern "C" {
+    fn malloc_trim(pad: usize) -> i32;
+}
+
 use super::{Player, Ready, State};
 
 #[repr(C)]
@@ -154,6 +159,13 @@ impl Native {
         if let Some(decoder) = self.decoder.take() {
             let _ = decoder.join();
         }
+        // The decoder owns the whole-track download buffer. Its worker thread
+        // exits with the buffer, but glibc keeps that thread's arena cached;
+        // return the free pages before the next track allocates another one.
+        #[cfg(target_os = "linux")]
+        unsafe {
+            let _ = malloc_trim(0);
+        }
         unsafe {
             musika_sink_reset(self.sink);
             musika_sink_set_paused(self.sink, 1);
@@ -237,13 +249,11 @@ fn decode_loop(
         return;
     };
     let mut error = [0 as c_char; 512];
-    let media = match fetch_media(url) {
-        Ok(media) => media,
-        Err(err) => {
-            set_failed(&status, &err);
-            return;
-        }
-    };
+    let mut media = Vec::new();
+    if let Err(err) = fetch_media_into(url, &mut media) {
+        set_failed(&status, &err);
+        return;
+    }
     let decoder = unsafe {
         musika_decoder_open(
             c_url.as_ptr(),
@@ -328,6 +338,11 @@ fn decode_loop(
         guard.peak = peak as f64 / 32768.0;
     }
     unsafe { musika_decoder_close(decoder) };
+    drop(media);
+    #[cfg(target_os = "linux")]
+    unsafe {
+        let _ = malloc_trim(0);
+    }
 }
 
 fn lock(status: &Arc<Mutex<Status>>) -> std::sync::MutexGuard<'_, Status> {
@@ -706,31 +721,40 @@ mod tests {
     }
 }
 
-/// The playing-track pool: one stream is materialized in RAM for the decoder
-/// so every seek is a memory seek, not another network round trip.
-fn fetch_media(url: &str) -> Result<Vec<u8>, String> {
+/// One stream is materialized in RAM for the decoder so every seek is a
+/// memory seek, not another network round trip.
+fn fetch_media_into(url: &str, media: &mut Vec<u8>) -> Result<(), String> {
+    media.clear();
     if !url.contains("://") {
-        return std::fs::read(url).map_err(|err| format!("cannot read {url}: {err}"));
+        let bytes = std::fs::read(url).map_err(|err| format!("cannot read {url}: {err}"))?;
+        media.extend_from_slice(&bytes);
+        return Ok(());
     }
     let parsed = reqwest::Url::parse(url).map_err(|err| format!("bad media URL: {err}"))?;
     if parsed.scheme() == "file" {
         let path = parsed
             .to_file_path()
             .map_err(|_| "bad file URL".to_string())?;
-        return std::fs::read(&path).map_err(|err| format!("cannot read {}: {err}", path.display()));
+        let bytes = std::fs::read(&path)
+            .map_err(|err| format!("cannot read {}: {err}", path.display()))?;
+        media.extend_from_slice(&bytes);
+        return Ok(());
     }
 
     crate::app::runtime().block_on(async move {
-        let response = reqwest::get(parsed)
+        let mut response = reqwest::get(parsed)
             .await
             .map_err(|err| format!("stream download failed: {err}"))?;
-        let response = response
+        response = response
             .error_for_status()
             .map_err(|err| format!("stream download failed: {err}"))?;
-        let bytes = response
-            .bytes()
+        while let Some(chunk) = response
+            .chunk()
             .await
-            .map_err(|err| format!("stream body failed: {err}"))?;
-        Ok(bytes.to_vec())
+            .map_err(|err| format!("stream body failed: {err}"))?
+        {
+            media.extend_from_slice(&chunk);
+        }
+        Ok::<(), String>(())
     })
 }

@@ -182,6 +182,18 @@ fn load_dotenv() {
 }
 
 fn main() {
+    // Keep glibc from creating a new arena per decoder thread. Each arena
+    // retains its whole-track download buffer pages after the thread exits,
+    // so skipping tracks grows RSS until the arena cap is one.
+    #[cfg(target_os = "linux")]
+    unsafe {
+        unsafe extern "C" {
+            fn mallopt(param: std::ffi::c_int, value: std::ffi::c_int) -> std::ffi::c_int;
+        }
+        const M_ARENA_MAX: std::ffi::c_int = -8;
+        let _ = mallopt(M_ARENA_MAX, 1);
+    }
+
     // CLI probe before any Qt/database work, so `musika --version` also
     // works on a headless host.
     if std::env::args()

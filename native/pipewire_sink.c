@@ -9,7 +9,10 @@
  */
 
 /* Minimal libpipewire output sink.  PCM is S16LE stereo at 48 kHz and moves
- * through a lock-free SPSC ring into the real-time process callback. */
+ * through a lock-free SPSC ring into the real-time process callback.
+ *
+ * PipeWire >= 1.6.6 supplies the priority-inversion-aware pw_thread_loop
+ * implementation used here; the ring atomics do not depend on that lock. */
 
 #include <errno.h>
 #include <stdatomic.h>
@@ -176,6 +179,7 @@ MusikaSink *musika_sink_init(char *err, size_t err_len)
         return NULL;
     }
 
+    /* PipeWire 1.6+ owns the loop locking; do not layer epoll/eventfd here. */
     sink->loop = pw_thread_loop_new("musika", NULL);
     if (!sink->loop) {
         set_error(err, err_len, "cannot create PipeWire thread loop");
@@ -209,6 +213,8 @@ MusikaSink *musika_sink_init(char *err, size_t err_len)
         goto fail;
     }
 
+    /* The POD builder is linked from libpipewire >= 1.6.6 (no vendored
+     * builder).  Keep the capability fixed to S16LE/stereo/48 kHz. */
     struct spa_audio_info_raw info = { 0 };
     info.format = SPA_AUDIO_FORMAT_S16_LE;
     info.rate = MUSIKA_RATE;

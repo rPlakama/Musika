@@ -40,6 +40,16 @@ fn main() {
     ] {
         println!("cargo:rerun-if-changed={dir}");
     }
+    // Musika relies on the 1.6 thread-loop/POD implementation. Fail early
+    // instead of silently compiling against an older libpipewire-dev.
+    let pipewire_version = std::process::Command::new("pkg-config")
+        .args(["--atleast-version=1.6.6", "libpipewire-0.3"])
+        .status()
+        .unwrap_or_else(|err| panic!("pkg-config version check failed: {err}"));
+    if !pipewire_version.success() {
+        panic!("musika requires libpipewire-0.3 >= 1.6.6");
+    }
+
     let mut native = cc::Build::new();
     for lib in [
         "libpipewire-0.3",

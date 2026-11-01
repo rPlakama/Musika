@@ -8,9 +8,9 @@
  * (at your option) any later version.
  */
 
-/* FFmpeg decoder shim for the opt-in PipeWire player.  Output is always
- * interleaved S16 stereo at 48 kHz; the Rust side owns scheduling and the
- * PipeWire ring buffer. */
+/* FFmpeg decoder shim for the PipeWire player.  Output is always interleaved
+ * S16 stereo at 48 kHz: FFmpeg/swresample owns rate conversion, so PipeWire
+ * receives a fixed format and its graph resampler is not in this path. */
 
 #include <errno.h>
 #include <stdarg.h>

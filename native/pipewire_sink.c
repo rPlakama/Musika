@@ -45,6 +45,9 @@ typedef struct MusikaSink {
     _Atomic int failed;
     _Atomic int closed;
     _Atomic uint64_t played_frames;
+    _Atomic uint64_t epoch;
+    _Atomic int flush_requested;
+    _Atomic int reset_requested;
 } MusikaSink;
 
 static void set_error(char *err, size_t len, const char *message)
@@ -53,9 +56,11 @@ static void set_error(char *err, size_t len, const char *message)
         snprintf(err, len, "%s", message);
 }
 
-static void ring_write(MusikaSink *sink, const int16_t *data, size_t frames)
+static void ring_write(MusikaSink *sink, const int16_t *data, size_t frames, uint64_t epoch)
 {
     while (frames > 0) {
+        if (epoch != atomic_load_explicit(&sink->epoch, memory_order_acquire))
+            return;
         if (atomic_load_explicit(&sink->closed, memory_order_relaxed))
             return;
         size_t read = atomic_load_explicit(&sink->read_pos, memory_order_acquire);
@@ -98,8 +103,15 @@ static void on_process(void *userdata)
     if (frames > max_frames)
         frames = max_frames;
 
-    size_t read = atomic_load_explicit(&sink->read_pos, memory_order_relaxed);
+    int reset = atomic_exchange_explicit(&sink->reset_requested, 0, memory_order_acq_rel);
+    int flush = atomic_exchange_explicit(&sink->flush_requested, 0, memory_order_acq_rel);
+    if (reset)
+        atomic_store_explicit(&sink->played_frames, 0, memory_order_relaxed);
+
     size_t write = atomic_load_explicit(&sink->write_pos, memory_order_acquire);
+    size_t read = (reset || flush)
+        ? write
+        : atomic_load_explicit(&sink->read_pos, memory_order_relaxed);
     size_t available = write - read;
     uint32_t take = (uint32_t)(available < frames ? available : frames);
     int16_t *out = data->data;
@@ -172,6 +184,9 @@ MusikaSink *musika_sink_init(char *err, size_t err_len)
     atomic_init(&sink->failed, 0);
     atomic_init(&sink->closed, 0);
     atomic_init(&sink->played_frames, 0);
+    atomic_init(&sink->epoch, 0);
+    atomic_init(&sink->flush_requested, 0);
+    atomic_init(&sink->reset_requested, 0);
     sink->ring = calloc((size_t)RING_FRAMES * MUSIKA_CHANNELS, sizeof(int16_t));
     if (!sink->ring) {
         set_error(err, err_len, "ring allocation failed");
@@ -252,10 +267,15 @@ fail:
     return NULL;
 }
 
-void musika_sink_write(MusikaSink *sink, const int16_t *data, size_t frames)
+void musika_sink_write(MusikaSink *sink, const int16_t *data, size_t frames, uint64_t epoch)
 {
     if (sink && data && frames)
-        ring_write(sink, data, frames);
+        ring_write(sink, data, frames, epoch);
+}
+
+uint64_t musika_sink_epoch(MusikaSink *sink)
+{
+    return sink ? atomic_load_explicit(&sink->epoch, memory_order_acquire) : 0;
 }
 
 void musika_sink_set_paused(MusikaSink *sink, int paused)
@@ -316,10 +336,9 @@ void musika_sink_reset(MusikaSink *sink)
 {
     if (!sink)
         return;
+    atomic_fetch_add_explicit(&sink->epoch, 1, memory_order_acq_rel);
     atomic_store_explicit(&sink->closed, 0, memory_order_relaxed);
-    atomic_store_explicit(&sink->read_pos, 0, memory_order_relaxed);
-    atomic_store_explicit(&sink->write_pos, 0, memory_order_relaxed);
-    atomic_store_explicit(&sink->played_frames, 0, memory_order_relaxed);
+    atomic_store_explicit(&sink->reset_requested, 1, memory_order_release);
     atomic_store_explicit(&sink->failed, 0, memory_order_relaxed);
 }
 
@@ -336,11 +355,6 @@ uint64_t musika_sink_played_frames(MusikaSink *sink)
 
 void musika_sink_flush(MusikaSink *sink)
 {
-    if (!sink)
-        return;
-    atomic_store_explicit(&sink->closed, 1, memory_order_relaxed);
-    atomic_store_explicit(&sink->read_pos, 0, memory_order_relaxed);
-    atomic_store_explicit(&sink->write_pos, 0, memory_order_relaxed);
-    atomic_store_explicit(&sink->played_frames, 0, memory_order_relaxed);
-    atomic_store_explicit(&sink->closed, 0, memory_order_relaxed);
+    if (sink)
+        atomic_store_explicit(&sink->flush_requested, 1, memory_order_release);
 }

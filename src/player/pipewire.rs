@@ -39,7 +39,13 @@ pub(crate) struct MusikaDecoder {
 
 unsafe extern "C" {
     fn musika_sink_init(err: *mut c_char, err_len: usize) -> *mut MusikaSink;
-    fn musika_sink_write(sink: *mut MusikaSink, data: *const i16, frames: usize);
+    fn musika_sink_write(
+        sink: *mut MusikaSink,
+        data: *const i16,
+        frames: usize,
+        epoch: u64,
+    );
+    fn musika_sink_epoch(sink: *mut MusikaSink) -> u64;
     fn musika_sink_set_paused(sink: *mut MusikaSink, paused: c_int);
     fn musika_sink_set_muted(sink: *mut MusikaSink, muted: c_int);
     fn musika_sink_set_volume(sink: *mut MusikaSink, volume: f32);
@@ -153,7 +159,8 @@ impl Native {
                 return;
             }
             reset_sink(sink, false);
-            decode_loop(sink, &url, thread_stop, thread_status, thread_seek, thread_seek_at);
+            let epoch = unsafe { musika_sink_epoch(sink.0) };
+            decode_loop(sink, &url, thread_stop, thread_status, thread_seek, thread_seek_at, epoch);
         }));
         self.stop = stop;
         self.status = status;
@@ -193,9 +200,8 @@ impl Native {
             .position_origin
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner) = seconds.max(0.0);
-        // Drop the already-buffered audio at once; the decoder thread will
-        // perform the codec-level seek on its next wakeup.
-        unsafe { musika_sink_flush(self.sink) };
+        // The decoder owns ring flush; the Qt thread only posts the request.
+        // The decoder flushes after applying the codec-level seek.
         *self.seek_at
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(Instant::now());
@@ -261,6 +267,7 @@ fn decode_loop(
     status: Arc<Mutex<Status>>,
     seek: Arc<Mutex<Option<f64>>>,
     seek_at: Arc<Mutex<Option<Instant>>>,
+    epoch: u64,
 ) {
     let Ok(c_url) = CString::new(url) else {
         set_failed(&status, "invalid media URL");
@@ -343,7 +350,7 @@ fn decode_loop(
             break;
         }
         let frames = frames as usize;
-        unsafe { musika_sink_write(sink.0, pcm.as_ptr(), frames) };
+        unsafe { musika_sink_write(sink.0, pcm.as_ptr(), frames, epoch) };
 
         let mut peak = 0i32;
         for sample in &pcm[..frames * 2] {

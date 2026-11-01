@@ -44,7 +44,54 @@ struct MusikaDecoder {
     int pending_frames;
     int pending_offset;
     double duration;
+    AVIOContext *avio;
+    unsigned char *avio_buffer;
+    void *buffer_io;
 };
+
+typedef struct {
+    const unsigned char *data;
+    size_t len;
+    size_t pos;
+} BufferIO;
+
+static int buffer_read(void *opaque, uint8_t *buf, int size)
+{
+    BufferIO *io = opaque;
+    if (io->pos >= io->len)
+        return AVERROR_EOF;
+    size_t left = io->len - io->pos;
+    if ((size_t)size > left)
+        size = (int)left;
+    memcpy(buf, io->data + io->pos, (size_t)size);
+    io->pos += (size_t)size;
+    return size;
+}
+
+static int64_t buffer_seek(void *opaque, int64_t offset, int whence)
+{
+    BufferIO *io = opaque;
+    int64_t target = 0;
+    if (whence == AVSEEK_SIZE)
+        return (int64_t)io->len;
+    switch (whence & ~AVSEEK_FORCE) {
+    case SEEK_SET:
+        target = offset;
+        break;
+    case SEEK_CUR:
+        target = (int64_t)io->pos + offset;
+        break;
+    case SEEK_END:
+        target = (int64_t)io->len + offset;
+        break;
+    default:
+        return -1;
+    }
+    if (target < 0 || (uint64_t)target > io->len)
+        return -1;
+    io->pos = (size_t)target;
+    return target;
+}
 
 static void set_error(char *err, size_t len, const char *fmt, ...)
 {
@@ -127,11 +174,12 @@ static int decode_more(MusikaDecoder *d)
     }
 }
 
-MusikaDecoder *musika_decoder_open(const char *url, char *err, size_t err_len)
+MusikaDecoder *musika_decoder_open(const char *url, const unsigned char *buffer, size_t buffer_len,
+                                char *err, size_t err_len)
 {
     if (err && err_len)
         err[0] = '\0';
-    if (!url)
+    if (!url && !buffer)
         return NULL;
 
     avformat_network_init();
@@ -143,7 +191,37 @@ MusikaDecoder *musika_decoder_open(const char *url, char *err, size_t err_len)
     }
     d->stream_index = -1;
 
-    int ret = avformat_open_input(&d->format, url, NULL, NULL);
+    int ret;
+    if (buffer && buffer_len > 0) {
+        BufferIO *io = calloc(1, sizeof(*io));
+        if (!io) {
+            set_error(err, err_len, "buffer allocation failed");
+            goto fail;
+        }
+        io->data = buffer;
+        io->len = buffer_len;
+        d->buffer_io = io;
+        d->avio_buffer = av_malloc(4096);
+        if (!d->avio_buffer) {
+            set_error(err, err_len, "io buffer allocation failed");
+            goto fail;
+        }
+        d->avio = avio_alloc_context(d->avio_buffer, 4096, 0, io, buffer_read, NULL, buffer_seek);
+        if (!d->avio) {
+            set_error(err, err_len, "io context allocation failed");
+            goto fail;
+        }
+        d->format = avformat_alloc_context();
+        if (!d->format) {
+            set_error(err, err_len, "format allocation failed");
+            goto fail;
+        }
+        d->format->pb = d->avio;
+        d->format->flags |= AVFMT_FLAG_CUSTOM_IO;
+        ret = avformat_open_input(&d->format, NULL, NULL, NULL);
+    } else {
+        ret = avformat_open_input(&d->format, url, NULL, NULL);
+    }
     if (ret < 0) {
         set_error(err, err_len, "cannot open input: %s", av_err2str(ret));
         goto fail;
@@ -284,6 +362,11 @@ void musika_decoder_close(MusikaDecoder *d)
     swr_free(&d->swr);
     avcodec_free_context(&d->codec);
     avformat_close_input(&d->format);
+    if (d->avio) {
+        av_freep(&d->avio->buffer);
+        avio_context_free(&d->avio);
+    }
+    free(d->buffer_io);
     free(d->pcm);
     free(d);
 }

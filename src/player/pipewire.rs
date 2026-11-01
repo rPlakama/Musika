@@ -47,6 +47,8 @@ unsafe extern "C" {
 
     fn musika_decoder_open(
         url: *const c_char,
+        buffer: *const u8,
+        buffer_len: usize,
         err: *mut c_char,
         err_len: usize,
     ) -> *mut MusikaDecoder;
@@ -234,9 +236,18 @@ fn decode_loop(
         return;
     };
     let mut error = [0 as c_char; 512];
+    let media = match fetch_media(url) {
+        Ok(media) => media,
+        Err(err) => {
+            set_failed(&status, &err);
+            return;
+        }
+    };
     let decoder = unsafe {
         musika_decoder_open(
             c_url.as_ptr(),
+            media.as_ptr(),
+            media.len(),
             error.as_mut_ptr(),
             error.len(),
         )
@@ -623,6 +634,8 @@ mod tests {
         let decoder =
             unsafe { musika_decoder_open(
                 c_path.as_ptr(),
+                std::ptr::null(),
+                0,
                 error.as_mut_ptr(),
                 error.len(),
             ) };
@@ -636,4 +649,33 @@ mod tests {
         unsafe { musika_decoder_close(decoder) };
         let _ = std::fs::remove_file(path);
     }
+}
+
+/// The playing-track pool: one stream is materialized in RAM for the decoder
+/// so every seek is a memory seek, not another network round trip.
+fn fetch_media(url: &str) -> Result<Vec<u8>, String> {
+    if !url.contains("://") {
+        return std::fs::read(url).map_err(|err| format!("cannot read {url}: {err}"));
+    }
+    let parsed = reqwest::Url::parse(url).map_err(|err| format!("bad media URL: {err}"))?;
+    if parsed.scheme() == "file" {
+        let path = parsed
+            .to_file_path()
+            .map_err(|_| "bad file URL".to_string())?;
+        return std::fs::read(&path).map_err(|err| format!("cannot read {}: {err}", path.display()));
+    }
+
+    crate::app::runtime().block_on(async move {
+        let response = reqwest::get(parsed)
+            .await
+            .map_err(|err| format!("stream download failed: {err}"))?;
+        let response = response
+            .error_for_status()
+            .map_err(|err| format!("stream download failed: {err}"))?;
+        let bytes = response
+            .bytes()
+            .await
+            .map_err(|err| format!("stream body failed: {err}"))?;
+        Ok(bytes.to_vec())
+    })
 }

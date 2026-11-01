@@ -92,6 +92,8 @@ pub(super) fn spawn_sync(
 
         match crate::index::sync_library(&dbs, client, progress).await {
             Ok(report) => {
+                let _ = crate::db::checkpoint_truncate(&dbs.library).await;
+                let _ = crate::db::checkpoint_truncate(&dbs.search).await;
                 crate::debug_log!(
                     "index: library updated: {} artists, {} albums, {} songs, {} lyrics, {} playlists",
                     report.artists,

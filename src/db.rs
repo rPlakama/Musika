@@ -32,7 +32,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use sqlx::sqlite::{SqliteJournalMode, SqlitePool, SqlitePoolOptions};
+use sqlx::sqlite::{SqliteJournalMode, SqlitePool, SqlitePoolOptions, SqliteSynchronous};
 
 /// The two physical databases, with the logical pools kept as aliases.
 #[derive(Clone)]
@@ -50,6 +50,27 @@ pub struct Dbs {
     pub playlist: SqlitePool,
 }
 
+/// Per-database durability: the physical library file also holds credentials and
+/// user-authored playlists/status, so it stays FULL; media is a cache plus a
+/// rebuildable download ledger and can use WAL NORMAL.
+#[derive(Clone, Copy)]
+#[allow(dead_code)]
+enum Durability {
+    Full,
+    Normal,
+    Off,
+}
+
+impl Durability {
+    fn synchronous(self) -> SqliteSynchronous {
+        match self {
+            Self::Full => SqliteSynchronous::Full,
+            Self::Normal => SqliteSynchronous::Normal,
+            Self::Off => SqliteSynchronous::Off,
+        }
+    }
+}
+
 /// Opens every database and applies its migrations.
 pub async fn init() -> Result<Dbs> {
     let library = open_migrated(
@@ -57,6 +78,7 @@ pub async fn init() -> Result<Dbs> {
         5,
         sqlx::migrate!("./migrations_library"),
         false,
+        Durability::Full,
     )
     .await?;
     let media = open_migrated(
@@ -64,13 +86,14 @@ pub async fn init() -> Result<Dbs> {
         3,
         sqlx::migrate!("./migrations_media"),
         false,
+        Durability::Normal,
     )
     .await?;
     absorb_legacy(&library, &media).await?;
     // Search gets its own connections over the same library file: a slow or
     // cancelled query can never occupy the writer's pool (the search box
     // stays responsive while a sync rebuilds the FTS table).
-    let search = open_pool(library_path()?, 2).await?;
+    let search = open_pool(library_path()?, 2, Durability::Normal).await?;
 
     Ok(Dbs {
         credentials: library.clone(),
@@ -85,6 +108,45 @@ pub async fn init() -> Result<Dbs> {
         download: media.clone(),
         playlist: library,
     })
+}
+
+/// Warms the catalog files on a plain OS thread; startup and login never wait
+/// for it. `posix_fadvise` would avoid the read, but libc is not a direct
+/// dependency, so this uses a buffered pass (the page cache is the goal).
+pub fn warm_startup() {
+    std::thread::spawn(|| {
+        for path in [
+            library_path(),
+            search_path(),
+            covers_path(),
+        ]
+        .into_iter()
+        .flatten()
+        {
+            for candidate in [path.clone(), PathBuf::from(format!("{}-wal", path.display()))] {
+                if let Err(err) = warm_file(&candidate) {
+                    crate::debug_log!("db: warm {} failed: {err}", candidate.display());
+                }
+            }
+        }
+    });
+}
+
+fn warm_file(path: &Path) -> std::io::Result<()> {
+    use std::io::Read;
+    let mut file = std::fs::File::open(path)?;
+    let mut buffer = vec![0u8; 1024 * 1024];
+    while file.read(&mut buffer)? > 0 {}
+    Ok(())
+}
+
+/// Bounds the WAL after a successful bulk write. Only call this from a
+/// completed sync, never from a cancelled or failed one.
+pub async fn checkpoint_truncate(pool: &SqlitePool) -> Result<()> {
+    sqlx::raw_sql("PRAGMA wal_checkpoint(TRUNCATE)")
+        .execute(pool)
+        .await?;
+    Ok(())
 }
 
 /// Applies both embedded migrations (shared by [`init`] and [`wipe`]).
@@ -399,8 +461,9 @@ async fn open_migrated(
     max_connections: u32,
     mut migrations: sqlx::migrate::Migrator,
     ignore_missing: bool,
+    durability: Durability,
 ) -> Result<SqlitePool> {
-    let pool = open_pool(path, max_connections).await?;
+    let pool = open_pool(path, max_connections, durability).await?;
     if ignore_missing {
         migrations.set_ignore_missing(true);
     }
@@ -409,7 +472,7 @@ async fn open_migrated(
 }
 
 /// Opens a pool with the shared connection options (no migrations).
-async fn open_pool(path: PathBuf, max_connections: u32) -> Result<SqlitePool> {
+async fn open_pool(path: PathBuf, max_connections: u32, durability: Durability) -> Result<SqlitePool> {
     ensure_parent_dir(&path)?;
 
     let options = sqlx::sqlite::SqliteConnectOptions::new()
@@ -431,7 +494,10 @@ async fn open_pool(path: PathBuf, max_connections: u32) -> Result<SqlitePool> {
         // still shares hot pages between connections.
         .pragma("cache_size", "-8192")
         .pragma("mmap_size", "268435456")
-        .pragma("temp_store", "MEMORY");
+        .pragma("temp_store", "MEMORY")
+        .pragma("journal_size_limit", "67108864")
+        .synchronous(durability.synchronous())
+        .optimize_on_close(true, 400);
 
     let pool = SqlitePoolOptions::new()
         .max_connections(max_connections)
@@ -515,4 +581,107 @@ pub fn config_dir() -> Result<PathBuf> {
 
 fn non_empty_env(key: &str) -> Option<String> {
     std::env::var(key).ok().filter(|value| !value.is_empty())
+}
+
+#[cfg(test)]
+mod options_tests {
+    use super::*;
+
+    #[test]
+    fn durability_maps_to_synchronous_pragma() {
+        let dir = std::env::temp_dir().join(format!("musika-db-sync-{}", std::process::id()));
+        ensure_dir(&dir).expect("temp dir");
+        let runtime = crate::app::runtime();
+        for (durability, expected) in [(Durability::Full, 2), (Durability::Normal, 1)] {
+            let path = dir.join(format!("{expected}.db"));
+            let pool = runtime
+                .block_on(open_pool(path, 1, durability))
+                .expect("pool");
+            let value: i64 = runtime
+                .block_on(sqlx::query_scalar("PRAGMA synchronous").fetch_one(&pool))
+                .expect("pragma");
+            assert_eq!(value, expected);
+            runtime.block_on(pool.close());
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn warm_file_tolerates_missing_path() {
+        let started = std::time::Instant::now();
+        assert!(warm_file(Path::new("/nonexistent/musika-warm.db")).is_err());
+        assert!(started.elapsed() < std::time::Duration::from_secs(1));
+    }
+}
+
+#[cfg(test)]
+mod sync_bench {
+    use super::*;
+
+    /// On-disk write/FTS bench. Run explicitly:
+    /// `cargo test db::sync_bench -- --ignored --nocapture`
+    #[test]
+    #[ignore = "sqlite write bench, run explicitly"]
+    fn bench_sync_and_fts_by_synchronous_mode() {
+        let runtime = crate::app::runtime();
+        let dir = std::env::temp_dir().join(format!("musika-db-bench-{}", std::process::id()));
+        ensure_dir(&dir).expect("temp dir");
+        for durability in [Durability::Full, Durability::Normal, Durability::Off] {
+            let path = dir.join(match durability {
+                Durability::Full => "full.db",
+                Durability::Normal => "normal.db",
+                Durability::Off => "off.db",
+            });
+            let _ = std::fs::remove_file(&path);
+            let started = std::time::Instant::now();
+            runtime.block_on(async {
+                let pool = open_migrated(
+                    path.clone(),
+                    1,
+                    sqlx::migrate!("./migrations_library"),
+                    false,
+                    durability,
+                )
+                .await
+                .expect("pool");
+                let mut tx = pool.begin().await.expect("tx");
+                for index in 0..50_000 {
+                    sqlx::query("INSERT INTO songs (id, title) VALUES (?1, ?2)")
+                        .bind(format!("s{index}"))
+                        .bind(format!("Song {index}"))
+                        .execute(&mut *tx)
+                        .await
+                        .expect("song");
+                }
+                tx.commit().await.expect("commit");
+                let write = started.elapsed();
+                let fts = std::time::Instant::now();
+                sqlx::query(
+                    "INSERT INTO song_search (title, artist, album, duration, song_id, play_count)
+                     SELECT title, '', '', 0, id, 0 FROM songs",
+                )
+                .execute(&pool)
+                .await
+                .expect("fts");
+                println!(
+                    "[bench] sync {:?}: write {:?}, fts {:?}",
+                    durability.as_str(),
+                    write,
+                    fts.elapsed()
+                );
+                pool.close().await;
+            });
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+#[cfg(test)]
+impl Durability {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Full => "FULL",
+            Self::Normal => "NORMAL",
+            Self::Off => "OFF",
+        }
+    }
 }

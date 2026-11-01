@@ -67,3 +67,12 @@ provides both.
 Pull Requests are welcome if properly tested. I have no issues with AI -- since it would be hypocritical. Besides that, the development is nix-first, as my favorite development tool. Besides that, many core tools, which are present in other players, still missing from here, and bugs that I haven't caught yet. Opening an issue for any problem is also very welcome.
 
 GPL-2.0-or-later.
+
+# Module Cross-Talk
+
+> Directed edges = `crate::` references found by static analysis across every source file (tests excluded).  
+> Source: [`docs/imgs/module_cross_talk.gv`](docs/imgs/module_cross_talk.gv)
+
+<p align="center">
+  <img src="docs/imgs/module_cross_talk.png" alt="Musika module cross-talk diagram" width="720">
+</p>

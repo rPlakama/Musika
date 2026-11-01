@@ -1,0 +1,288 @@
+digraph musika_cross_talk {
+  rankdir    = TB;
+  concentrate= true;
+  splines    = ortho;
+  bgcolor    = "#0f1117";
+  pad        = 1.0;
+  nodesep    = 0.55;
+  ranksep    = 1.1;
+  fontname   = "sans-serif";
+  fontcolor  = "#e9ecef";
+  labelloc   = "t";
+  label      = <<B>Musika — Module Cross-Talk</B><br/>
+<font point-size="10">(A → B = module A holds a <i>crate::B</i> reference · edges merged with concentrate=true)</font>>;
+
+  node [fontname="sans-serif", fontsize=11, shape=box, style="rounded,filled",
+        fontcolor="#e9ecef", margin="0.16,0.09"];
+  edge [fontname="sans-serif", fontsize=0, arrowsize=0.55];
+
+  /* ── rank pins ─────────────────────────────────────────────── */
+  { rank=source; consts; hex; digest; crypto; fanout; cache; }
+  { rank=same;   db; sqlite; ipc; scroll_memory; }
+  { rank=same;   http_client; api; session; }
+  { rank=same;   app; status; }
+  { rank=same;   library; search; artist_user; }
+  { rank=same;   index; }
+  { rank=same;   covers; colors; lyrics; media; download; offline; }
+  { rank=same;   player; queue; mpris; playlists; }
+  { rank=sink;   browse; keybind; qml; qml_backend; palette; }
+
+  /* ── INFRASTRUCTURE ─── purple #b197fc ─────────────────────── */
+  subgraph cluster_infra {
+    label="Infrastructure"; fontcolor="#b197fc";
+    style="dashed,rounded"; color="#7048e8";
+    consts   [label="consts",  fillcolor="#2b1f4e", color="#b197fc"];
+    hex      [label="hex",     fillcolor="#2b1f4e", color="#b197fc"];
+    digest   [label="digest",  fillcolor="#2b1f4e", color="#b197fc"];
+    crypto   [label="crypto",  fillcolor="#2b1f4e", color="#b197fc"];
+    fanout   [label="fanout",  fillcolor="#2b1f4e", color="#b197fc"];
+    cache    [label="cache",   fillcolor="#2b1f4e", color="#b197fc"];
+  }
+
+  /* ── PERSISTENCE ─── teal #66d9e8 ──────────────────────────── */
+  subgraph cluster_db {
+    label="Persistence"; fontcolor="#66d9e8";
+    style="dashed,rounded"; color="#0c8599";
+    db           [label="db",           fillcolor="#0b3d4d", color="#66d9e8"];
+    sqlite       [label="sqlite",       fillcolor="#0b3d4d", color="#66d9e8"];
+    ipc          [label="ipc",          fillcolor="#0b3d4d", color="#66d9e8"];
+    scroll_memory[label="scroll_memory",fillcolor="#0b3d4d", color="#66d9e8"];
+  }
+
+  /* ── NETWORK ─── orange #ffa94d ────────────────────────────── */
+  subgraph cluster_net {
+    label="Network"; fontcolor="#ffa94d";
+    style="dashed,rounded"; color="#e8590c";
+    http_client [label="http_client", fillcolor="#4d2000", color="#ffa94d"];
+    api         [label="api",         fillcolor="#4d2000", color="#ffa94d"];
+    session     [label="session",     fillcolor="#4d2000", color="#ffa94d"];
+  }
+
+  /* ── APP STATE ─── green #8ce99a ───────────────────────────── */
+  subgraph cluster_app {
+    label="App State"; fontcolor="#8ce99a";
+    style="dashed,rounded"; color="#2f9e44";
+    app    [label="app",    fillcolor="#1a3d1f", color="#8ce99a"];
+    status [label="status", fillcolor="#1a3d1f", color="#8ce99a"];
+  }
+
+  /* ── LIBRARY & METADATA ─── amber #ffe066 ──────────────────── */
+  subgraph cluster_library {
+    label="Library & Metadata"; fontcolor="#ffe066";
+    style="dashed,rounded"; color="#f08c00";
+    library     [label="library",     fillcolor="#5c3d0e", color="#ffe066"];
+    index       [label="index",       fillcolor="#5c3d0e", color="#ffe066"];
+    search      [label="search",      fillcolor="#5c3d0e", color="#ffe066"];
+    artist_user [label="artist_user", fillcolor="#5c3d0e", color="#ffe066"];
+  }
+
+  /* ── MEDIA ASSETS ─── violet #e599f7 ───────────────────────── */
+  subgraph cluster_media_assets {
+    label="Media Assets"; fontcolor="#e599f7";
+    style="dashed,rounded"; color="#9c36b5";
+    covers   [label="covers",   fillcolor="#3a0d4d", color="#e599f7"];
+    colors   [label="colors",   fillcolor="#3a0d4d", color="#e599f7"];
+    lyrics   [label="lyrics",   fillcolor="#3a0d4d", color="#e599f7"];
+    media    [label="media",    fillcolor="#3a0d4d", color="#e599f7"];
+    download [label="download", fillcolor="#3a0d4d", color="#e599f7"];
+    offline  [label="offline",  fillcolor="#3a0d4d", color="#e599f7"];
+  }
+
+  /* ── PLAYBACK ─── sky-blue #74c0fc ─────────────────────────── */
+  subgraph cluster_playback {
+    label="Playback"; fontcolor="#74c0fc";
+    style="dashed,rounded"; color="#1971c2";
+    player    [label="player",    fillcolor="#0b2040", color="#74c0fc"];
+    queue     [label="queue",     fillcolor="#0b2040", color="#74c0fc"];
+    mpris     [label="mpris",     fillcolor="#0b2040", color="#74c0fc"];
+    playlists [label="playlists", fillcolor="#0b2040", color="#74c0fc"];
+  }
+
+  /* ── UI / QML ─── coral #ff8787 ────────────────────────────── */
+  subgraph cluster_ui {
+    label="UI / QML"; fontcolor="#ff8787";
+    style="dashed,rounded"; color="#c92a2a";
+    browse      [label="browse",      fillcolor="#4d0b0b", color="#ff8787"];
+    keybind     [label="keybind",     fillcolor="#4d0b0b", color="#ff8787"];
+    qml         [label="qml",         fillcolor="#4d0b0b", color="#ff8787"];
+    qml_backend [label="qml_backend", fillcolor="#4d0b0b", color="#ff8787"];
+    palette     [label="palette",     fillcolor="#4d0b0b", color="#ff8787"];
+  }
+
+  /* ═══════════════════════════════════════════════════════
+     EDGES — per-cluster accent color, merged at endpoints
+     ═══════════════════════════════════════════════════════ */
+
+  /* infra-internal — purple #9775fa */
+  digest      -> hex          [color="#9775fa"];
+  crypto      -> hex          [color="#9775fa"];
+  crypto      -> db           [color="#9775fa"];
+  fanout      -> consts       [color="#9775fa"];
+
+  /* network — orange #ff922b */
+  http_client -> consts       [color="#ff922b"];
+  http_client -> digest       [color="#ff922b"];
+  api         -> http_client  [color="#ff922b"];
+  session     -> http_client  [color="#ff922b"];
+  session     -> db           [color="#ff922b"];
+  session     -> sqlite       [color="#ff922b"];
+  sqlite      -> crypto       [color="#66d9e8"];
+
+  /* app state — green #69db7c */
+  app         -> db           [color="#69db7c"];
+  app         -> search       [color="#69db7c"];
+
+  /* persistence-internal — teal #3bc9db */
+  db          -> ipc          [color="#3bc9db"];
+  db          -> search       [color="#3bc9db"];
+  ipc         -> db           [color="#3bc9db"];
+  scroll_memory -> db         [color="#3bc9db"];
+
+  /* library — amber #ffe066 */
+  library     -> api          [color="#ffe066"];
+  library     -> cache        [color="#ffe066"];
+  library     -> consts       [color="#ffe066"];
+  library     -> db           [color="#ffe066"];
+  library     -> search       [color="#ffe066"];
+  search      -> cache        [color="#fcc419"];
+  search      -> library      [color="#fcc419"];
+  artist_user -> cache        [color="#ffe066"];
+  artist_user -> consts       [color="#ffe066"];
+
+  /* index — bright yellow #ffd43b, thicker */
+  index       -> api          [color="#ffd43b", penwidth=2.0];
+  index       -> artist_user  [color="#ffd43b", penwidth=2.0];
+  index       -> cache        [color="#ffd43b", penwidth=2.0];
+  index       -> colors       [color="#ffd43b", penwidth=2.0];
+  index       -> consts       [color="#ffd43b", penwidth=2.0];
+  index       -> covers       [color="#ffd43b", penwidth=2.0];
+  index       -> db           [color="#ffd43b", penwidth=2.0];
+  index       -> fanout       [color="#ffd43b", penwidth=2.0];
+  index       -> http_client  [color="#ffd43b", penwidth=2.0];
+  index       -> library      [color="#ffd43b", penwidth=2.0];
+  index       -> lyrics       [color="#ffd43b", penwidth=2.0];
+  index       -> media        [color="#ffd43b", penwidth=2.0];
+  index       -> playlists    [color="#ffd43b", penwidth=2.0];
+  index       -> search       [color="#ffd43b", penwidth=2.0];
+
+  /* media assets — violet #e599f7 */
+  covers      -> app          [color="#e599f7"];
+  covers      -> cache        [color="#e599f7"];
+  covers      -> consts       [color="#e599f7"];
+  covers      -> db           [color="#e599f7"];
+  covers      -> digest       [color="#e599f7"];
+  covers      -> http_client  [color="#e599f7"];
+  covers      -> session      [color="#e599f7"];
+  colors      -> cache        [color="#cc5de8"];
+  colors      -> consts       [color="#cc5de8"];
+  colors      -> covers       [color="#cc5de8"];
+  colors      -> db           [color="#cc5de8"];
+  colors      -> digest       [color="#cc5de8"];
+  lyrics      -> api          [color="#da77f2"];
+  lyrics      -> cache        [color="#da77f2"];
+  lyrics      -> consts       [color="#da77f2"];
+  lyrics      -> db           [color="#da77f2"];
+  lyrics      -> fanout       [color="#da77f2"];
+  lyrics      -> http_client  [color="#da77f2"];
+  lyrics      -> library      [color="#da77f2"];
+  media       -> cache        [color="#e599f7"];
+  media       -> consts       [color="#e599f7"];
+  media       -> db           [color="#e599f7"];
+  media       -> digest       [color="#e599f7"];
+  media       -> library      [color="#e599f7"];
+  download    -> cache        [color="#b197fc"];
+  download    -> consts       [color="#b197fc"];
+  download    -> db           [color="#b197fc"];
+  offline     -> db           [color="#9c36b5"];
+  offline     -> download     [color="#9c36b5"];
+  offline     -> library      [color="#9c36b5"];
+
+  /* playback — sky-blue #74c0fc */
+  player      -> app          [color="#74c0fc"];
+  player      -> consts       [color="#74c0fc"];
+  player      -> library      [color="#74c0fc"];
+  mpris       -> app          [color="#4dabf7"];
+  queue       -> browse       [color="#74c0fc"];
+  queue       -> consts       [color="#74c0fc"];
+  queue       -> covers       [color="#74c0fc"];
+  queue       -> db           [color="#74c0fc"];
+  queue       -> download     [color="#74c0fc"];
+  queue       -> http_client  [color="#74c0fc"];
+  queue       -> library      [color="#74c0fc"];
+  queue       -> media        [color="#74c0fc"];
+  queue       -> offline      [color="#74c0fc"];
+  queue       -> session      [color="#74c0fc"];
+  queue       -> status       [color="#74c0fc"];
+  playlists   -> browse       [color="#4dabf7"];
+  playlists   -> consts       [color="#4dabf7"];
+  playlists   -> covers       [color="#4dabf7"];
+  playlists   -> db           [color="#4dabf7"];
+  playlists   -> http_client  [color="#4dabf7"];
+  playlists   -> library      [color="#4dabf7"];
+  playlists   -> offline      [color="#4dabf7"];
+  playlists   -> session      [color="#4dabf7"];
+
+  /* browse — coral #ff8787 */
+  browse      -> app          [color="#ff8787"];
+  browse      -> artist_user  [color="#ff8787"];
+  browse      -> covers       [color="#ff8787"];
+  browse      -> db           [color="#ff8787"];
+  browse      -> library      [color="#ff8787"];
+  browse      -> offline      [color="#ff8787"];
+  browse      -> playlists    [color="#ff8787"];
+  browse      -> queue        [color="#ff8787"];
+  browse      -> search       [color="#ff8787"];
+  browse      -> session      [color="#ff8787"];
+
+  /* qml — hot red #ff6b6b, thickest */
+  qml         -> app          [color="#ff6b6b", penwidth=2.4];
+  qml         -> artist_user  [color="#ff6b6b", penwidth=2.4];
+  qml         -> browse       [color="#ff6b6b", penwidth=2.4];
+  qml         -> cache        [color="#ff6b6b", penwidth=2.4];
+  qml         -> colors       [color="#ff6b6b", penwidth=2.4];
+  qml         -> consts       [color="#ff6b6b", penwidth=2.4];
+  qml         -> covers       [color="#ff6b6b", penwidth=2.4];
+  qml         -> db           [color="#ff6b6b", penwidth=2.4];
+  qml         -> download     [color="#ff6b6b", penwidth=2.4];
+  qml         -> ipc          [color="#ff6b6b", penwidth=2.4];
+  qml         -> keybind      [color="#ff6b6b", penwidth=2.4];
+  qml         -> library      [color="#ff6b6b", penwidth=2.4];
+  qml         -> lyrics       [color="#ff6b6b", penwidth=2.4];
+  qml         -> mpris        [color="#ff6b6b", penwidth=2.4];
+  qml         -> offline      [color="#ff6b6b", penwidth=2.4];
+  qml         -> player       [color="#ff6b6b", penwidth=2.4];
+  qml         -> playlists    [color="#ff6b6b", penwidth=2.4];
+  qml         -> queue        [color="#ff6b6b", penwidth=2.4];
+  qml         -> scroll_memory[color="#ff6b6b", penwidth=2.4];
+  qml         -> session      [color="#ff6b6b", penwidth=2.4];
+  qml         -> status       [color="#ff6b6b", penwidth=2.4];
+
+  /* qml_backend — deep red #fa5252 */
+  qml_backend -> app          [color="#fa5252", penwidth=2.2];
+  qml_backend -> artist_user  [color="#fa5252", penwidth=2.2];
+  qml_backend -> browse       [color="#fa5252", penwidth=2.2];
+  qml_backend -> consts       [color="#fa5252", penwidth=2.2];
+  qml_backend -> covers       [color="#fa5252", penwidth=2.2];
+  qml_backend -> db           [color="#fa5252", penwidth=2.2];
+  qml_backend -> download     [color="#fa5252", penwidth=2.2];
+  qml_backend -> http_client  [color="#fa5252", penwidth=2.2];
+  qml_backend -> index        [color="#fa5252", penwidth=2.2];
+  qml_backend -> library      [color="#fa5252", penwidth=2.2];
+  qml_backend -> media        [color="#fa5252", penwidth=2.2];
+  qml_backend -> mpris        [color="#fa5252", penwidth=2.2];
+  qml_backend -> offline      [color="#fa5252", penwidth=2.2];
+  qml_backend -> session      [color="#fa5252", penwidth=2.2];
+  qml_backend -> sqlite       [color="#fa5252", penwidth=2.2];
+
+  /* ── Legend ─────────────────────────────────────── */
+  subgraph cluster_legend {
+    rank=sink;
+    label="Legend"; fontcolor="#868e96";
+    style="dashed,rounded"; color="#495057";
+    node [shape=plaintext, fillcolor="transparent", color="transparent",
+          fontsize=10, fontcolor="#adb5bd"];
+    l1 [label="Arrow color = source cluster accent"];
+    l2 [label="Thicker arrows = qml / qml_backend (widest consumers)"];
+    l3 [label="concentrate=true merges shared endpoints into fanouts"];
+  }
+}

@@ -30,12 +30,6 @@ Rectangle {
     radius: Theme.radius
     id: root
 
-    RowMetrics {
-        id: rowMetrics
-        viewWidth: wall.width
-        rowHeight: Math.max(48, root.height * 0.09)
-    }
-
     signal back
     signal albumActivated(string albumId, string title, string artist, string year, string tracks, string cover, bool starred)
 
@@ -295,12 +289,6 @@ Rectangle {
         // ARC-UI-3 layout); later reloads keep the live state.
         wall.restore();
         root.scheduleCover();
-    }
-
-    function activateCurrent() {
-        var album = albums.get(wall.currentIndex);
-        if (album)
-            root.albumActivated(album.albumId, album.title, album.artist, album.year, album.tracks, album.cover, album.starred === true);
     }
 
     /// Header Tab stops: title, biography, then the chips (0 download,
@@ -692,93 +680,28 @@ Rectangle {
                 z: 2
             }
 
-            ScrollPanel {
+            MediaList {
                 id: wall
                 anchors.fill: parent
+                sourceModel: albums
                 title: ""
                 context: "library"
                 headerRatio: 0
-                model: albums
-                yankKind: "album"
-                selectable: true
                 memoryKey: root.memoryKey
                 quickActionKind: "album"
-                markSongs: false
-                markAlbums: true
                 searchFields: ["title", "meta"]
                 emptyText: "No albums indexed yet"
 
-                onItemActivated: (index) => root.activateCurrent()
+                onActivated: (item) => root.albumActivated(item.albumId, item.title, item.artist, item.year, item.tracks, item.cover, item.starred === true)
                 onRowTapped: (index, shift) => {
                     if (shift) {
                         wall.extendSelectionTo(index);
                         return;
                     }
                     wall.currentIndex = index;
-                    root.activateCurrent();
+                    root.albumActivated(wall.rowData(index).albumId, wall.rowData(index).title, wall.rowData(index).artist, wall.rowData(index).year, wall.rowData(index).tracks, wall.rowData(index).cover, wall.rowData(index).starred === true);
                 }
                 onQuickAction: (target, actions) => root.quickAction(target, actions)
-                rowDelegate: Component {
-                    Rectangle {
-                        radius: Theme.radius
-                        id: row
-                        required property int index
-                        required property string albumId
-                        required property string title
-                        required property string artist
-                        required property string year
-                        required property string tracks
-                        required property string meta
-                        required property string cover
-                        required property bool starred
-                        required property int rating
-
-                        readonly property bool current: ListView.isCurrentItem
-                        readonly property bool selectedRow: wall.isSelected(row.index)
-
-                        width: ListView.view.width
-                        height: Math.max(48, root.height * 0.09)
-                        color: "transparent"
-
-                        RowHighlight {
-                            current: row.current
-                            hovered: row.index === wall.hoveredIndex
-                            selected: row.selectedRow
-                        }
-
-                        // The shared list row (same anatomy as the library
-                        // segments and the queue): cover, title/meta, marks.
-                        RowBody {
-                            anchors.fill: parent
-                            viewWidth: row.width
-                            rowHeight: row.height
-                            metrics: rowMetrics
-                            emphasized: row.current || row.index === wall.hoveredIndex
-                            current: row.current
-                            showCover: true
-                            showSubtitle: false
-                            cover: row.cover
-                            title: row.title
-                            meta: row.meta
-                            reserveMeta: false
-                            metaAlignRight: true
-                            leftMargin: row.width * 0.02
-                            textGap: row.width * 0.02
-                            rightMargin: row.width * 0.02
-                            marksMargin: row.width * 0.017
-                            markCursor: wall.currentIndex
-                            visibleStart: wall.firstVisibleIndex
-                            visibleEnd: wall.lastVisibleIndex
-                            markIndex: row.index
-                            markAlbumId: row.albumId
-                            markStarred: row.starred
-                            markRating: row.rating
-                            markRatingVisible: true
-                            searchQuery: wall.searchQuery
-                            searchCurrent: row.index === wall.searchCurrentRow
-                        }
-                    }
-                }
             }
         }
     }

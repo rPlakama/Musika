@@ -155,17 +155,19 @@ ScrollPanel {
     }
 
     property bool _virtualMode: false
+    /// Non-virtual hosts may hold their rows in their own ListModel.
+    property var sourceModel: mediaRows
     readonly property int _virtualVersion: virtualWindow.version
     function rowData(index) {
         if (root._virtualMode) {
             virtualWindow.version;
             return virtualWindow.rowAt(index);
         }
-        return mediaRows.get(index);
+        return root.sourceModel.get(index);
     }
 
-    model: root._virtualMode ? virtualWindow.count : mediaRows
-    rowAccess: root._virtualMode ? virtualWindow : mediaRows
+    model: root._virtualMode ? virtualWindow.count : root.sourceModel
+    rowAccess: root._virtualMode ? virtualWindow : root.sourceModel
     reuseRows: false
     titleHint: "(Shift-J/K) cycle filter"
     // ARC-UI-2 M1: the rows paint title, subtitle and meta; nothing else.

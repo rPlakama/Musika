@@ -253,8 +253,12 @@ impl Native {
             .position_origin
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        status.position =
-            origin + unsafe { musika_sink_played_frames(self.sink) } as f64 / 48_000.0;
+        let played_frames = unsafe { musika_sink_played_frames(self.sink) };
+        status.position = origin + played_frames as f64 / 48_000.0;
+        if status.loading && played_frames > 0 {
+            status.loading = false;
+            self.lock_status().loading = false;
+        }
         status.failed = self.lock_status().failed.take();
         if status.ended {
             // Keep this poll.s view true so Player::pump can advance; only
@@ -314,14 +318,11 @@ fn decode_loop(
     }
     crate::startup::trace("fetch.first_chunk");
     {
-        let mut guard = lock(&status);
-        guard.loading = false;
-        guard.duration = unsafe { musika_decoder_duration(decoder) };
+        lock(&status).duration = unsafe { musika_decoder_duration(decoder) };
     }
 
     let mut pcm = vec![0i16; 4096 * 2];
     let mut first_pcm = true;
-    let mut seek_loading = false;
     loop {
         if stop.load(Ordering::Relaxed) {
             break;
@@ -358,7 +359,6 @@ fn decode_loop(
                 .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
             unsafe { musika_sink_flush(sink.0) };
             lock(&status).position = seconds;
-            seek_loading = true;
         }
 
         let mut frames = 0;
@@ -374,9 +374,14 @@ fn decode_loop(
         }
         let frames = frames as usize;
         unsafe { musika_sink_write(sink.0, pcm.as_ptr(), frames, epoch) };
-        if seek_loading {
-            seek_loading = false;
-            lock(&status).loading = false;
+        // Loading ends when the sink actually consumes samples, not when
+        // the decoder merely writes them: paused seeks stay in the loading
+        // state until playback resumes.
+        if unsafe { musika_sink_played_frames(sink.0) } > 0 {
+            let mut guard = lock(&status);
+            if guard.loading {
+                guard.loading = false;
+            }
         }
         if first_pcm {
             first_pcm = false;

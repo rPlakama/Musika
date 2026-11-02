@@ -916,6 +916,10 @@ Item {
         });
 
         var row = root.view ? root.view.itemAtIndex(root.currentIndex) : null;
+        // A cursor restored past the realised window may not have a delegate
+        // yet; anchor on the viewport so the Alt arm still opens.
+        if (!row)
+            row = root.view;
         if (row)
             root.quickAction(row, actions);
     }

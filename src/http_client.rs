@@ -148,7 +148,13 @@ impl SubsonicClient {
         use tokio::io::AsyncWriteExt;
 
         let url = self.endpoint_url("download", &[("id", id.to_string())])?;
-        let mut response = self.get_checked(url).await?;
+        let mut response = self
+            .send_checked(
+                self.http
+                    .get(url)
+                    .header(reqwest::header::ACCEPT_ENCODING, "identity"),
+            )
+            .await?;
         let mut file = tokio::fs::File::create(dest)
             .await
             .with_context(|| format!("Could not create {}", dest.display()))?;

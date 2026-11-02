@@ -1,3 +1,8 @@
+[profile.release]
+lto = "fat"
+codegen-units = 1
+strip = "symbols"
+
 [package]
 name = "musika"
 version = "0.5.6"
@@ -13,7 +18,7 @@ nucleo = "0.5.0"
 openssl = "0.10.81"
 qtbridge = "0.3.0"
 rayon = "1.12"
-reqwest = { version = "0.13.5", features = [ "json" ] }
+reqwest = { version = "0.13.5", features = [ "json", "gzip", "brotli", "zstd" ] }
 resvg = { version = "0.48.1", default-features = false, features = ["raster-images"] }
 serde = { version = "1.0", features = [ "derive" ] }
 serde_json = "1.0"

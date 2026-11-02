@@ -247,7 +247,7 @@ impl Native {
         self.lock_status().loading
     }
 
-    fn poll(&self) -> Status {
+    fn poll(&self, playing: bool) -> Status {
         let mut status = self.lock_status().clone();
         let origin = *self
             .position_origin
@@ -255,7 +255,7 @@ impl Native {
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         let played_frames = unsafe { musika_sink_played_frames(self.sink) };
         status.position = origin + played_frames as f64 / 48_000.0;
-        if status.loading && played_frames > 0 {
+        if status.loading && playing && played_frames > 0 {
             status.loading = false;
             self.lock_status().loading = false;
         }
@@ -374,15 +374,6 @@ fn decode_loop(
         }
         let frames = frames as usize;
         unsafe { musika_sink_write(sink.0, pcm.as_ptr(), frames, epoch) };
-        // Loading ends when the sink actually consumes samples, not when
-        // the decoder merely writes them: paused seeks stay in the loading
-        // state until playback resumes.
-        if unsafe { musika_sink_played_frames(sink.0) } > 0 {
-            let mut guard = lock(&status);
-            if guard.loading {
-                guard.loading = false;
-            }
-        }
         if first_pcm {
             first_pcm = false;
             crate::startup::trace("first.pcm.written");
@@ -522,7 +513,10 @@ impl Player {
         if self.state == State::Stopped {
             return None;
         }
-        let status = self.native.as_ref().map(Native::poll)?;
+        let status = self
+            .native
+            .as_ref()
+            .map(|native| native.poll(self.state == State::Playing))?;
         {
             let mut shared = self.shared();
             shared.position = status.position;
@@ -605,7 +599,7 @@ mod tests {
         let mut native = Native::new().expect("pipewire sink");
         native.load(&path.to_string_lossy());
         std::thread::sleep(std::time::Duration::from_millis(500));
-        let status = native.poll();
+        let status = native.poll(true);
         assert!(status.failed.is_none(), "sink failed: {:?}", status.failed);
         native.stop();
         let _ = std::fs::remove_file(path);
@@ -699,7 +693,7 @@ mod tests {
         let mut resumed = false;
         while started.elapsed() < std::time::Duration::from_secs(2) {
             if unsafe { musika_sink_played_frames(native.sink) } > 0 {
-                let _ = native.poll();
+                let _ = native.poll(true);
                 resumed = true;
                 break;
             }

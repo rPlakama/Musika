@@ -387,6 +387,7 @@ Rectangle {
                 context: root.context
                 bleed: root.bleed
                 model: root.model
+                rowAccess: root.rowAccess
                 rowDelegate: root.rowDelegate
                 selectable: root.selectable
                 memoryKey: root.memoryKey

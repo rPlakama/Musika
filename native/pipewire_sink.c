@@ -338,6 +338,7 @@ void musika_sink_reset(MusikaSink *sink)
         return;
     atomic_fetch_add_explicit(&sink->epoch, 1, memory_order_acq_rel);
     atomic_store_explicit(&sink->closed, 0, memory_order_relaxed);
+    atomic_store_explicit(&sink->played_frames, 0, memory_order_relaxed);
     atomic_store_explicit(&sink->reset_requested, 1, memory_order_release);
     atomic_store_explicit(&sink->failed, 0, memory_order_relaxed);
 }
@@ -355,6 +356,10 @@ uint64_t musika_sink_played_frames(MusikaSink *sink)
 
 void musika_sink_flush(MusikaSink *sink)
 {
-    if (sink)
-        atomic_store_explicit(&sink->flush_requested, 1, memory_order_release);
+    if (!sink)
+        return;
+    // A seek re-anchors the track clock immediately, including while paused
+    // (the process callback may not run again until playback resumes).
+    atomic_store_explicit(&sink->played_frames, 0, memory_order_relaxed);
+    atomic_store_explicit(&sink->flush_requested, 1, memory_order_release);
 }

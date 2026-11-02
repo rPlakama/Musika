@@ -213,8 +213,9 @@ impl Native {
             .position_origin
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner) = seconds.max(0.0);
-        // The decoder owns ring flush; the Qt thread only posts the request.
-        // The decoder flushes after applying the codec-level seek.
+        // Flush is a callback-owned ring operation, but re-anchoring the clock is
+        // atomic and must happen now so a paused seek updates immediately.
+        unsafe { musika_sink_flush(self.sink) };
         *self
             .seek_at
             .lock()

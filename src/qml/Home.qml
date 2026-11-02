@@ -492,7 +492,15 @@ Item {
             queueDrawer.armQuickActions();
             return;
         }
-        var view = root.activeRegion === 2 ? topBar : (root.nowPlayingExpanded ? nowPlaying : contentStack.currentItem);
+        var view;
+        if (root.activeRegion === 2)
+            view = topBar;
+        else if (root.nowPlayingExpanded)
+            view = nowPlaying;
+        else if (contentStack.depth === 1)
+            view = root.currentSegment === 4 ? radioList : libraryList;
+        else
+            view = contentStack.currentItem;
         if (view && view.armQuickActions && view.altActionsAvailable !== false)
             view.armQuickActions();
     }

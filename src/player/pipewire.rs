@@ -226,6 +226,9 @@ impl Native {
             .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(seconds.max(0.0));
         let mut status = self.lock_status();
         status.position = seconds.max(0.0);
+        // A seek is a re-buffer even on an already-open stream: keep the
+        // loading affordance up until the decoder writes the next PCM.
+        status.loading = true;
     }
 
     fn set_paused(&self, paused: bool) {
@@ -318,6 +321,7 @@ fn decode_loop(
 
     let mut pcm = vec![0i16; 4096 * 2];
     let mut first_pcm = true;
+    let mut seek_loading = false;
     loop {
         if stop.load(Ordering::Relaxed) {
             break;
@@ -354,6 +358,7 @@ fn decode_loop(
                 .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
             unsafe { musika_sink_flush(sink.0) };
             lock(&status).position = seconds;
+            seek_loading = true;
         }
 
         let mut frames = 0;
@@ -369,6 +374,10 @@ fn decode_loop(
         }
         let frames = frames as usize;
         unsafe { musika_sink_write(sink.0, pcm.as_ptr(), frames, epoch) };
+        if seek_loading {
+            seek_loading = false;
+            lock(&status).loading = false;
+        }
         if first_pcm {
             first_pcm = false;
             crate::startup::trace("first.pcm.written");

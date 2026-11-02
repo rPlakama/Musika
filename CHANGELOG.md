@@ -3,6 +3,42 @@
 All notable changes to Musika, newest first. `TASKLISTMAJOR.md` tracks the
 open work; this file is the release history.
 
+## 0.5.7 - _More Ergonomics and UIX, then, in under the hood engine stuff_
+
+Album and artist pages now share one live entry page, Alt quick actions stay
+available wherever the cursor is, and the player's loading state finally
+matches what playback is doing. Under the hood, media streams straight through
+FFmpeg and release builds are LTO'd and compressed.
+
+- Keep one live album/artist entry page: same-kind routes update the header and
+  row source in place, cross-kind routes replace the page, and a descriptor
+  history rehydrates Back without retaining the old QML objects. Reopening the
+  current page only refreshes focus.
+- Build the artist album wall from the shared `MediaList`/`RowBody` surface
+  instead of a duplicate `ScrollPanel` delegate, and size its rows from the
+  full Home-sized column rather than the shortened area below the header.
+- Keep Alt quick actions armed when the cursor row is outside the realised
+  band by anchoring on the viewport, route Alt to Home's active library/radio
+  view directly, and pass `rowAccess` into `ScrollContent` so virtual and
+  source-model rows stop falling back to the integer model.
+- Break the lyrics overscan binding loop: variable-height rows now derive
+  `renderOverscan` from the declared row unit instead of measuring the current
+  delegate, so `cacheBuffer` no longer feeds back into delegate measurement.
+- Stop forcing idle repaint frames: remove the unfocused-window 33 ms timer
+  and one-pixel pulse; Qt now repaints only on real changes while idle state
+  stays available to diagnostics.
+- Re-anchor the track clock on every seek, including while paused, and reset
+  the played-frame count on sink reset. Seeking shows the loading affordance
+  until the decoder writes the next PCM; loading clears only when the player
+  is playing and PipeWire has consumed frames.
+- Stream media through the FFmpeg URL path with an AVIO interrupt callback
+  bound to the stop flag instead of prefetching the whole file, so first audio
+  starts sooner and skipped tracks cancel an in-flight network read. Trace
+  `play.requested`, `fetch.first_chunk`, `first.pcm.written` and `fetch.done`.
+- Build release binaries with fat LTO, one codegen unit and stripped symbols.
+- Enable reqwest's zstd feature for Subsonic JSON/API responses and force
+  `Accept-Encoding: identity` on media downloads so byte ranges stay exact.
+
 ## 0.5.6 - _Small Ergonomic Patches._
 
 Three small ergonomic fixes keep navigation and playback predictable, and every

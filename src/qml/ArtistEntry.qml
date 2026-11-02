@@ -687,6 +687,9 @@ Rectangle {
                 title: ""
                 context: "library"
                 headerRatio: 0
+                // Match Home: size rows from the full content column, not the
+                // shorter album wall left below the artist header.
+                rowRefHeight: root.height
                 memoryKey: root.memoryKey
                 quickActionKind: "album"
                 searchFields: ["title", "meta"]

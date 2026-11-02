@@ -87,7 +87,10 @@ Item {
     /// scroll never has to create a delegate at the edge.
     property int renderOverscanRows: 10
     readonly property real renderOverscan: {
-        var stride = root._stride(root.view);
+        // Use the declared row unit, never a delegate measurement: the
+        // measured-height path for variable rows depends on cacheBuffer and
+        // made cacheBuffer -> delegate -> height -> overscan a binding loop.
+        var stride = root.rowStride > 0 ? root.rowStride : root.rowViewHeight;
         return stride > 0 ? stride * root.renderOverscanRows : 0;
     }
     // The Theme.adaptiveRow baseline floor is the real guard; this only stops

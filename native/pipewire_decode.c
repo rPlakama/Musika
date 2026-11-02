@@ -174,8 +174,9 @@ static int decode_more(MusikaDecoder *d)
     }
 }
 
-MusikaDecoder *musika_decoder_open(const char *url, const unsigned char *buffer, size_t buffer_len,
-                                char *err, size_t err_len)
+static MusikaDecoder *decoder_open(const char *url, const unsigned char *buffer, size_t buffer_len,
+                                   int (*interrupt)(void *), void *opaque,
+                                   char *err, size_t err_len)
 {
     if (err && err_len)
         err[0] = '\0';
@@ -192,6 +193,15 @@ MusikaDecoder *musika_decoder_open(const char *url, const unsigned char *buffer,
     d->stream_index = -1;
 
     int ret;
+    if (interrupt) {
+        d->format = avformat_alloc_context();
+        if (!d->format) {
+            set_error(err, err_len, "format allocation failed");
+            goto fail;
+        }
+        d->format->interrupt_callback.callback = interrupt;
+        d->format->interrupt_callback.opaque = opaque;
+    }
     if (buffer && buffer_len > 0) {
         BufferIO *io = calloc(1, sizeof(*io));
         if (!io) {
@@ -211,15 +221,24 @@ MusikaDecoder *musika_decoder_open(const char *url, const unsigned char *buffer,
             set_error(err, err_len, "io context allocation failed");
             goto fail;
         }
-        d->format = avformat_alloc_context();
         if (!d->format) {
-            set_error(err, err_len, "format allocation failed");
-            goto fail;
+            d->format = avformat_alloc_context();
+            if (!d->format) {
+                set_error(err, err_len, "format allocation failed");
+                goto fail;
+            }
         }
         d->format->pb = d->avio;
         d->format->flags |= AVFMT_FLAG_CUSTOM_IO;
         ret = avformat_open_input(&d->format, NULL, NULL, NULL);
     } else {
+        if (!d->format) {
+            d->format = avformat_alloc_context();
+            if (!d->format) {
+                set_error(err, err_len, "format allocation failed");
+                goto fail;
+            }
+        }
         ret = avformat_open_input(&d->format, url, NULL, NULL);
     }
     if (ret < 0) {
@@ -293,6 +312,18 @@ MusikaDecoder *musika_decoder_open(const char *url, const unsigned char *buffer,
 fail:
     musika_decoder_close(d);
     return NULL;
+}
+
+MusikaDecoder *musika_decoder_open(const char *url, const unsigned char *buffer, size_t buffer_len,
+                                   char *err, size_t err_len)
+{
+    return decoder_open(url, buffer, buffer_len, NULL, NULL, err, err_len);
+}
+
+MusikaDecoder *musika_decoder_open_url(const char *url, int (*interrupt)(void *),
+                                       void *opaque, char *err, size_t err_len)
+{
+    return decoder_open(url, NULL, 0, interrupt, opaque, err, err_len);
 }
 
 int musika_decoder_read(MusikaDecoder *d, int16_t *out, int max_frames, int *frames_read)

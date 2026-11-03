@@ -3,6 +3,38 @@
 All notable changes to Musika, newest first. `TASKLISTMAJOR.md` tracks the
 open work; this file is the release history.
 
+## 0.5.8 - _Better login, stuff and new (bind) for Radio - alt arm_
+
+Startup no longer waits for the auth round-trip, the native decoder preloads
+the next queue track for gapless playback, and Radio finally plays: a song or
+album row seeds a similar-song page from the Alt menu, with its own bind.
+
+- Open Home immediately with the local catalog when stored credentials are
+  present and no downloads are needed, while authentication continues in the
+  background; give the startup ping an 8 second timeout so a stalled Navidrome
+  cannot leave the session pending forever.
+- Predecode the next queue track once the current one enters its final 1.5
+  seconds. At EOF the decoder switches to it and keeps writing PCM, the sink
+  clock is re-anchored and the Player advances its queue index on the next
+  pump; repeat-one and repeat-all supply the next URL, and a failed predecode
+  falls back to the normal reload.
+- Add `getSimilarSongs` to the Subsonic client and a radio page that resolves
+  an album seed to its first track or a song seed to its id, renders the
+  similar songs through the album/playlist shell with a cover collage, and
+  reports the reason when offline or empty.
+- Add **Start Radio** to the Alt menu on song and album rows. The north slot
+  now carries Add to Queue and Start Radio; `Shift-H`/`Shift-L` cycle the
+  aimed slot's verbs, while the favourite slot still steps its rating.
+  Visual selections keep their range verbs and do not offer radio.
+- Replace the placeholder Radio scope with the real radio page: library
+  scopes are Albums, Songs, Artists and Playlists again, and radio opens from
+  the row's Alt arm instead of a fifth tab.
+- Expose the Alt gesture to the IPC socket with `quick_hold on` / `off`, so
+  scripts can arm, aim, cycle and confirm the same menu.
+- Add the new `Shift-H`/`Shift-L` Alt bindings and the radio route to the
+  README **Binds** page, and clamp a restored session segment to the four
+  library scopes.
+
 ## 0.5.7 - _More Ergonomics and UIX, then, in under the hood engine stuff_
 
 Album and artist pages now share one live entry page, Alt quick actions stay

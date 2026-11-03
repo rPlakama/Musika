@@ -570,7 +570,7 @@ pub async fn resume_payload(
     .to_string())
 }
 
-async fn tracks_json(
+pub(crate) async fn tracks_json(
     dbs: &crate::db::Dbs,
     songs: Vec<crate::library::SongRow>,
 ) -> anyhow::Result<String> {

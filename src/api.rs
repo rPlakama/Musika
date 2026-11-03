@@ -233,6 +233,14 @@ pub struct PlaylistWithSongs {
     pub entry: Vec<Child>,
 }
 
+/// `getSimilarSongs` wrapper (ARC-RS-1): the seed song's neighbours.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct SimilarSongs {
+    #[serde(deserialize_with = "one_or_many")]
+    pub song: Vec<Child>,
+}
+
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Child {
@@ -416,6 +424,19 @@ impl SubsonicClient {
     pub async fn get_album(&self, id: &str) -> Result<AlbumWithSongsID3> {
         let params = query(&[("id", Some(id.to_string()))]);
         self.get_key("getAlbum", &params, "album").await
+    }
+
+    /// `getSimilarSongs` — songs similar to the given song (last.fm); the
+    /// radio page's row source (ARC-RS-1).
+    pub async fn get_similar_songs(&self, id: &str, count: Option<u32>) -> Result<Vec<Child>> {
+        let params = query(&[
+            ("id", Some(id.to_string())),
+            ("count", count.map(|value| value.to_string())),
+        ]);
+        let songs: SimilarSongs = self
+            .get_key("getSimilarSongs", &params, "similarSongs")
+            .await?;
+        Ok(songs.song)
     }
 
     /// `getArtistInfo` — biography, images and similar artists (last.fm).

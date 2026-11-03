@@ -30,10 +30,21 @@ QtObject {
     function song(item) {
         var fav = item.starred === true;
         return {
+            // ARC-RS-1: a single row also seeds radio from its own song;
+            // Shift-H/L cycles the two north verbs.
             north: {
-                label: "Add to Queue",
-                icon: "qrc:/app/icons/baseline-playlist-add.svg",
-                invoke: function() { Backend.altAddToQueue("song", item.songId) }
+                actions: [
+                    {
+                        label: "Add to Queue",
+                        icon: "qrc:/app/icons/baseline-playlist-add.svg",
+                        invoke: function() { Backend.altAddToQueue("song", item.songId) }
+                    },
+                    {
+                        label: "Start Radio",
+                        icon: "qrc:/app/icons/radio-svgrepo-com.svg",
+                        invoke: function() { Backend.startRadio("song", item.songId) }
+                    }
+                ]
             },
             south: {
                 label: fav ? "Unfavorite" : "Favorite",
@@ -65,10 +76,21 @@ QtObject {
     function album(item, cached, preview) {
         var fav = item.starred === true;
         return {
+            // ARC-RS-1: the north slot carries two verbs; Shift-H/L cycles
+            // them while the overlay aims here.
             north: {
-                label: "Add to Queue",
-                icon: "qrc:/app/icons/baseline-playlist-add.svg",
-                invoke: function() { Backend.altAddToQueue("album", item.albumId) }
+                actions: [
+                    {
+                        label: "Add to Queue",
+                        icon: "qrc:/app/icons/baseline-playlist-add.svg",
+                        invoke: function() { Backend.altAddToQueue("album", item.albumId) }
+                    },
+                    {
+                        label: "Start Radio",
+                        icon: "qrc:/app/icons/radio-svgrepo-com.svg",
+                        invoke: function() { Backend.startRadio("album", item.albumId) }
+                    }
+                ]
             },
             south: {
                 label: fav ? "Unfavorite" : "Favorite",
@@ -76,8 +98,8 @@ QtObject {
                     ? "qrc:/app/icons/heart-minus.svg"
                     : "qrc:/app/icons/heart-add-fill.svg",
                 favorite: !fav,
-                // UI-60: the rating rides the favourite slot — Shift-J/K
-                // step it while the overlay aims here.
+                // UI-60/ARC-RS-2: the rating rides the favourite slot —
+                // Shift-H/L step it while the overlay aims here.
                 rating: Number(item.rating) || 0,
                 rate: function(level) { Backend.rateAlbum(item.albumId, level) },
                 // UI-60: the host.s local value drives the star colour
@@ -246,8 +268,8 @@ QtObject {
                     ? "qrc:/app/icons/heart-minus.svg"
                     : "qrc:/app/icons/heart-add-fill.svg",
                 favorite: !fav,
-                // UI-60: the rating rides the favourite slot — Shift-J/K
-                // step it while the overlay aims here.
+                // UI-60/ARC-RS-2: the rating rides the favourite slot —
+                // Shift-H/L step it while the overlay aims here.
                 rating: Number(item.rating) || 0,
                 rate: function(level) { Backend.rateArtist(item.artistId, level) },
                 // UI-60: local-first fill; persistence is debounced.

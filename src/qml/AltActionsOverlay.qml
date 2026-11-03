@@ -33,7 +33,9 @@ import "Theme.js" as Theme
 // click arms them) use the same board: clicks on a tile fire it and a click
 // outside the board cancels. The host arms it with the current item and a
 // `{north,south,east,west}` config of `{label, icon, invoke}` slots (null =
-// open, drawn as "—"; the verb is its SVG glyph); one `board` rectangle owns
+// open, drawn as "—"; the verb is its SVG glyph). ARC-RS-2: a slot may carry
+// `actions: [{label, icon, invoke}, …]`; Shift-H/L cycle the aimed slot's
+// action (a rating slot steps its level instead). One `board` rectangle owns
 // the margin and scale and the tiles anchor to its edges. The option tiles
 // are acrylic panels (blurred backdrop, like the search overlay).
 Item {
@@ -47,8 +49,11 @@ Item {
     property Item targetItem: null
     property var config: null
     property string aimed: ""
+    /// ARC-RS-2: the active action per quadrant when a slot carries an
+    /// `actions` list. Shift-H/L cycles it.
+    property var actionIndex: ({ north: 0, south: 0, east: 0, west: 0 })
     /// UI-60: the live rating level while the favourite slot is adjusted
-    /// with Shift-J/K (seeded from the slot's own `rating` on arm).
+    /// with Shift-H/L (seeded from the slot's own `rating` on arm).
     property int ratingValue: 0
     /// A rating step was taken in this hold: the release must not also
     /// toggle the favourite underneath it.
@@ -57,7 +62,7 @@ Item {
     /// flushes it once).
     property bool ratingDirty: false
 
-    // The steps commit on a short idle: a burst of Shift-K/J presses sends
+    // The steps commit on a short idle: a burst of Shift-H/L presses sends
     // one request (the server cannot reorder parallel ratings), while the
     // badge previews every step immediately.
     Timer {
@@ -117,6 +122,74 @@ Item {
         yScale: root.spawn
     }
 
+    /// The slot object a direction resolves to: the whole slot, or the
+    /// active entry when it carries an `actions` list.
+    function activeSlot(direction) {
+        var slot = config ? config[direction] : null;
+        if (!slot || !slot.actions || slot.actions.length === 0)
+            return slot;
+        var index = Number(actionIndex[direction]) || 0;
+        return slot.actions[((index % slot.actions.length) + slot.actions.length)
+            % slot.actions.length];
+    }
+
+    function isOpen(direction) {
+        return !config || !config[direction];
+    }
+
+    function isDisabled(direction) {
+        var slot = config ? config[direction] : null;
+        if (!slot)
+            return false;
+        if (slot.disabled === true)
+            return true;
+        var active = activeSlot(direction);
+        return !!active && active.disabled === true;
+    }
+
+    function boxFor(direction) {
+        if (direction === "north")
+            return northBox;
+        if (direction === "south")
+            return southBox;
+        if (direction === "west")
+            return westBox;
+        if (direction === "east")
+            return eastBox;
+        return null;
+    }
+
+    /// The transport-bar press feel on the tile whose verb just stepped.
+    function bounceAimed() {
+        var box = boxFor(aimed);
+        if (box)
+            box.bounce();
+    }
+
+    /// ARC-RS-2: Shift-H/L in the aimed direction. A rating slot steps the
+    /// level; a multi-action slot cycles its verbs.
+    function cycle(delta) {
+        if (!armed || aimed.length === 0)
+            return;
+        var slot = config ? config[aimed] : null;
+        if (!slot)
+            return;
+        if (typeof slot.rate === "function") {
+            if (adjustRating(delta))
+                bounceAimed();
+            return;
+        }
+        if (!slot.actions || slot.actions.length < 2)
+            return;
+        var count = slot.actions.length;
+        var next = {};
+        for (var key in actionIndex)
+            next[key] = actionIndex[key];
+        next[aimed] = (((Number(actionIndex[aimed]) || 0) + delta) % count + count) % count;
+        actionIndex = next;
+        bounceAimed();
+    }
+
     function arm(item, cfg) {
         if (!available || dismissed || !item || !cfg)
             return;
@@ -124,6 +197,7 @@ Item {
         config = cfg;
         sticky = cfg.sticky === true;
         aimed = "";
+        actionIndex = ({ north: 0, south: 0, east: 0, west: 0 });
         ratingValue = (cfg.south && typeof cfg.south.rate === "function")
             ? (Number(cfg.south.rating) || 0) : 0;
         ratingTouched = false;
@@ -142,7 +216,7 @@ Item {
         pop.collapse();
     }
 
-    /// UI-60: Shift-J/K over the aimed favourite slot steps its rating
+    /// UI-60/ARC-RS-2: Shift-H/L over the aimed favourite slot steps its rating
     /// (`delta` -1/+1, clamped 0..5). Returns false when the aim is not a
     /// rating slot.
     function adjustRating(delta) {
@@ -201,7 +275,7 @@ Item {
         if (!armed)
             return;
         var next = aimed === opposite(direction) ? "" : direction;
-        if (next.length > 0 && (!config || !config[next] || config[next].disabled === true))
+        if (next.length > 0 && (isOpen(next) || isDisabled(next)))
             next = "";
         aimed = next;
     }
@@ -211,7 +285,7 @@ Item {
         // not also toggle the favourite underneath it.
         var ratingAim = ratingTouched && aimed === "south";
         commitRating();
-        var slot = aimed.length > 0 && config ? config[aimed] : null;
+        var slot = aimed.length > 0 ? activeSlot(aimed) : null;
         if (slot && slot.invoke && !ratingAim)
             slot.invoke();
         cancel();
@@ -341,13 +415,13 @@ Item {
             id: box
             required property string direction
 
-            readonly property var slot: root.config ? root.config[box.direction] : null
+            readonly property var slot: root.activeSlot(box.direction)
             readonly property string labelText: box.slot && box.slot.label ? box.slot.label : "—"
             readonly property string iconSource: box.slot && box.slot.icon ? box.slot.icon : ""
             readonly property bool isAimed: root.aimed === box.direction
             // VI-4: a verb that does not apply to the current selection is
             // shown gray and cannot be aimed.
-            readonly property bool isDisabled: !!box.slot && box.slot.disabled === true
+            readonly property bool isDisabled: root.isDisabled(box.direction)
             // UI-60: the favourite slot carries a 0..=5 rating badge.
             readonly property bool ratingSlot: !!box.slot
                 && typeof box.slot.rate === "function"
@@ -367,6 +441,27 @@ Item {
                 NumberAnimation { duration: Theme.motion.micro }
             }
             Behavior on scale { Anim { duration: Theme.motion.micro } }
+
+            // ARC-RS-2: the transport-bar press bounce when Shift-H/L
+            // steps this tile's verb (or rating). A transform, so the aimed
+            // scale binding above keeps owning `scale`.
+            Item {
+                id: bounceProxy
+                visible: false
+            }
+            PressBounce {
+                id: pressFx
+                target: bounceProxy
+            }
+            transform: Scale {
+                origin.x: box.width / 2
+                origin.y: box.height / 2
+                xScale: bounceProxy.scale
+                yScale: bounceProxy.scale
+            }
+            function bounce() {
+                pressFx.press();
+            }
 
             // ARC-UI-1: the verb is its SVG glyph; an open slot keeps the
             // "—" text.

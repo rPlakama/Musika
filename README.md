@@ -37,7 +37,7 @@ inputs.musika.packages.${pkgs.system}.default
 
 # Sections
 
-- Library scopes: Albums, Songs, Artists, Playlists (Radio is a placeholder). Shift-J/K cycles the scope; Shift-H/L cycles the ordering.
+- Library scopes: Albums, Songs, Artists, Playlists. Shift-J/K cycles the scope; Shift-H/L cycles the ordering. Radio opens from a row's Alt menu.
 - Fullscreen player (Enter on a song): transport, seek, volume, and the lyrics pane.
 - Queue drawer (`Ctrl-Q` slides it in from any view, library or fullscreen): `j/k`, Enter jumps, `Ctrl-Shift-J/K` reorder, `dd` removes, `q` or `Ctrl-Q` closes (Esc is a vi key and only ends a visual selection).
 - Clipboard: `y`/`Y` yank the cursor row (or the visual range) from any list — Albums, Songs, Artists, album/artist pages, search and the queue — into the row clipboard; `p`/`P` paste it below/above the cursor in the open queue drawer. `Ctrl-N`/`Ctrl-P` skip tracks anywhere.
@@ -82,7 +82,7 @@ Musika is keyboard-first. The keymap is Vim-flavoured: bindings can be sequences
 | `Ctrl-V` | Paste text into the focused search field |
 | `Enter` | Open/play the row, confirm, or use the focused control |
 | `Tab` / `Shift-Tab` | Walk panes, header stops and status-bar actions |
-| `Shift-J` / `Shift-K` | Next / previous library scope (Albums, Songs, Artists, Playlists, Radio) |
+| `Shift-J` / `Shift-K` | Next / previous library scope (Albums, Songs, Artists, Playlists) |
 | `Shift-L` / `Shift-H` | Next / previous list ordering |
 | `/` | In-surface line search |
 | `Shift-Space F` or `i` | Open the floating search |
@@ -150,9 +150,13 @@ On the album page, `Tab` cycles the cover, artist link, notes and Back chip; `j`
 | --- | --- |
 | Hold `Alt` | Open the quick-action menu on the cursor row |
 | `h` / `j` / `k` / `l` or the arrow keys | Aim west / south / north / east |
-| `Shift-J` / `Shift-K` | Step the aimed favourite's rating up / down |
+| `Shift-H` / `Shift-L` | Within an aimed slot: step the favourite's rating, or cycle its verbs (album/song N cycles Add to Queue → Start Radio) |
 | Release `Alt` | Fire the aimed action; release over the neutral centre cancels |
 | Click a tile / click outside | Fire a tile / cancel a sticky menu |
+
+Single-song rows and album rows/cards seed **Start Radio** from that row; a visual selection keeps the range verbs (no radio).
+
+Automation: the IPC socket drives the same gesture — `quick_hold on`, `quick_aim north`, `quick_cycle next`, `quick_hold off` — for scripted checks.
 
 While `Alt` is held, `Esc` is swallowed so it cannot leak into the keymap; the neutral release is the cancel. Sticky menus (the trashcan wipe menu) aim with `h`/`j`/`k`/`l` or the arrows and fire with `Enter`; `Enter` on the neutral centre or a click outside closes them.
 

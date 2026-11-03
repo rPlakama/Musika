@@ -49,7 +49,12 @@ Rectangle {
     property string albumId: ""
     property string playlistId: ""
     property string playlistTitle: ""
+    /// ARC-RS-1: the radio page uses this shell with a similar-song source.
+    property string radioSeedKind: ""
+    property string radioSeedId: ""
     readonly property bool isPlaylist: root.entryKind === "playlist"
+    readonly property bool isRadio: root.entryKind === "radio"
+    readonly property bool isAlbum: root.entryKind === "album"
     /// Distinct album-origin covers for the playlist collage.
     property var playlistCollage: []
     /// Search-hit song to park the cursor on once the rows land.
@@ -89,8 +94,9 @@ Rectangle {
     // UI-22: true while the album's songs are in flight.
     property bool loading: false
     // UI-54: per-album/per-playlist scroll memory for the songs viewport.
-    readonly property string memoryKey: root.isPlaylist
-        ? "playlist:" + root.playlistId : "album:" + root.albumId
+    readonly property string memoryKey: root.isRadio
+        ? "radio:" + root.radioSeedId
+        : root.isPlaylist ? "playlist:" + root.playlistId : "album:" + root.albumId
     property bool _restored: false
     /// A session-restored page starts on row 0, like a scope or order reset.
     property bool resetCursorOnOpen: false
@@ -127,7 +133,7 @@ Rectangle {
     /// The header gap follows the cover but never eats more than 75% of
     /// the usable page height; wide pages keep room for the rows.
     readonly property real headerCoverBottom: Math.min(
-        (root.isPlaylist ? playlistArt.coverSide : coverBackdrop.coverSide) - root.width * 0.02,
+        (root.isAlbum ? coverBackdrop.coverSide : playlistArt.coverSide) - root.width * 0.02,
         (root.height - root.width * 0.04) * 0.75)
 
     color: Palette.surface
@@ -185,6 +191,8 @@ Rectangle {
     }
 
     function armCoverActions(sticky) {
+        if (root.isRadio)
+            return;
         if (root.isPlaylist) {
             if (root.playlistId.length === 0)
                 return;
@@ -232,6 +240,16 @@ Rectangle {
     }
 
     function reload() {
+        if (root.isRadio) {
+            if (root.radioSeedId === "" || root._loadingAlbumId === "radio:" + root.radioSeedId)
+                return;
+            root._loadingAlbumId = "radio:" + root.radioSeedId;
+            root.loading = true;
+            root.onNotes = false;
+            root.setNotesExpanded(false);
+            Backend.requestRadio(root.radioSeedKind, root.radioSeedId);
+            return;
+        }
         if (root.isPlaylist) {
             if (root.playlistId === "" || root._loadingAlbumId === root.playlistId)
                 return;
@@ -271,10 +289,13 @@ Rectangle {
     function open(page) {
         var nextPlaylist = page.playlistId ? String(page.playlistId) : "";
         var nextAlbum = page.albumId ? String(page.albumId) : "";
-        var nextKind = nextPlaylist.length > 0 ? "playlist" : "album";
+        var nextRadio = page.radioSeedId ? String(page.radioSeedId) : "";
+        var nextKind = nextRadio.length > 0 ? "radio"
+            : nextPlaylist.length > 0 ? "playlist" : "album";
         if (root.entryKind === nextKind
                 && root.albumId === nextAlbum
-                && root.playlistId === nextPlaylist) {
+                && root.playlistId === nextPlaylist
+                && root.radioSeedId === nextRadio) {
             if (page.focusSongId) {
                 root.focusSongId = String(page.focusSongId);
                 root._focusApplied = false;
@@ -291,6 +312,8 @@ Rectangle {
         root.entryKind = nextKind;
         root.albumId = nextAlbum;
         root.playlistId = nextPlaylist;
+        root.radioSeedKind = page.radioSeedKind ? String(page.radioSeedKind) : ""
+        root.radioSeedId = nextRadio;
         root.albumTitle = page.albumTitle ? String(page.albumTitle) : ""
         root.albumArtist = page.albumArtist ? String(page.albumArtist) : ""
         root.albumCover = page.albumCover ? String(page.albumCover) : ""
@@ -332,7 +355,7 @@ Rectangle {
 
     /// Resolve the album's owning artist and let Home push its page.
     function activateArtist() {
-        if (root.isPlaylist || root.albumArtist.length === 0)
+        if (!root.isAlbum || root.albumArtist.length === 0)
             return;
         Backend.requestAlbumArtist(root.albumId);
     }
@@ -398,6 +421,42 @@ Rectangle {
             var row = rows[i];
             songs.append({
                 track: row.track ? String(row.track) : String(i + 1),
+                title: row.title,
+                subtitle: row.subtitle ? String(row.subtitle) : "",
+                duration: row.duration ? String(row.duration) : "",
+                cover: row.cover ? String(row.cover) : "",
+                songId: row.songId ? String(row.songId) : "",
+                albumId: row.albumId ? String(row.albumId) : "",
+                starred: row.starred === true,
+                playable: row.playable === true
+            });
+        }
+        root.loading = false;
+        root._restored = true;
+        if (songs.count > 0)
+            content.land(0);
+    }
+
+    /// ARC-RS-1: the similar-song payload. Radio rows are server tracks, so
+    /// the header keeps the seed identity and the cover art is a collage.
+    function applyRadio(payload) {
+        var data = JSON.parse(payload);
+        if (data.seed_id !== root.radioSeedId || data.seed_kind !== root.radioSeedKind)
+            return;
+        root._loadingAlbumId = "";
+        root.albumTitle = data.title ? String(data.title) : "";
+        root.playlistSubtitle = data.subtitle ? String(data.subtitle) : "";
+        root.albumMeta = data.meta ? String(data.meta) : "";
+        root.playlistCollage = data.collage ? data.collage : [];
+        root.tracksDuration = Number(data.duration) || 0;
+        root.tracksFormat = "";
+        content.clearSelection();
+        songs.clear();
+        var rows = data.songs ? data.songs : [];
+        for (var i = 0; i < rows.length; i++) {
+            var row = rows[i];
+            songs.append({
+                track: "",
                 title: row.title,
                 subtitle: row.subtitle ? String(row.subtitle) : "",
                 duration: row.duration ? String(row.duration) : "",
@@ -488,7 +547,7 @@ Rectangle {
     /// instant landing (page open). Returns true when the page owns the
     /// playing track.
     function followCurrentTrack(glide) {
-        if (root.isPlaylist)
+        if (!root.isAlbum)
             return false;
         if (Backend.currentAlbumId.length === 0 || Backend.currentAlbumId !== root.albumId)
             return false;
@@ -513,9 +572,10 @@ Rectangle {
         onTriggered: root.requestCoverNow()
     }
 
-    onAlbumIdChanged: if (root._ready && !root._opening && !root.isPlaylist) Qt.callLater(root.reload)
+    onAlbumIdChanged: if (root._ready && !root._opening && root.isAlbum) Qt.callLater(root.reload)
     onPlaylistIdChanged: if (root._ready && !root._opening && root.isPlaylist) Qt.callLater(root.reload)
-    onEntryKindChanged: if (root._ready && !root._opening && root.isPlaylist) Qt.callLater(root.reload)
+    onRadioSeedIdChanged: if (root._ready && !root._opening && root.isRadio) Qt.callLater(root.reload)
+    onEntryKindChanged: if (root._ready && !root._opening && !root.isAlbum) Qt.callLater(root.reload)
     Component.onCompleted: {
         root._ready = true;
         reload();
@@ -569,6 +629,10 @@ Rectangle {
     function playRow(index) {
         if (index < 0 || index >= songs.count)
             return;
+        if (root.isRadio) {
+            Backend.playRadio(root.radioSeedKind, root.radioSeedId, index);
+            return;
+        }
         if (root.isPlaylist) {
             var row = songs.get(index);
             if (row && row.playable === true)
@@ -719,7 +783,9 @@ Rectangle {
     Connections {
         target: Backend
         function onDataReady(channel, payload) {
-            if (channel === "playlist") {
+            if (channel === "radio") {
+                root.applyRadio(payload);
+            } else if (channel === "playlist") {
                 root.applyPlaylist(payload);
             } else if (channel === "album_songs")
                 root.apply(payload);
@@ -760,7 +826,7 @@ Rectangle {
     CoverBackdrop {
         id: coverBackdrop
         anchors.fill: parent
-        visible: !root.isPlaylist
+        visible: root.isAlbum
         source: root.albumCover
         // Leave the bottom quarter for the rows; the square never grows
         // behind them.
@@ -772,7 +838,7 @@ Rectangle {
     PlaylistCollage {
         id: playlistArt
         anchors.fill: parent
-        visible: root.isPlaylist
+        visible: !root.isAlbum
         sources: root.playlistCollage
         maxSide: (root.height - root.width * 0.04) * 0.75
     }
@@ -876,7 +942,7 @@ Rectangle {
 
                 FadeText {
                     Layout.fillWidth: true
-                    visible: root.isPlaylist
+                    visible: !root.isAlbum
                     text: root.playlistSubtitle
                     color: Palette.onSurfaceVariant
                     font.pixelSize: root.height * 0.024
@@ -884,7 +950,7 @@ Rectangle {
                 }
 
                 StarRating {
-                    visible: !root.isPlaylist
+                    visible: root.isAlbum
                     Layout.alignment: Qt.AlignLeft
                     unit: root.starUnit
                     rating: root.albumRating
@@ -896,7 +962,7 @@ Rectangle {
 
                 FadeText {
                     id: artistLink
-                    visible: !root.isPlaylist
+                    visible: root.isAlbum
                     Layout.fillWidth: true
                     text: root.albumArtist
                     color: Palette.primary
@@ -927,7 +993,7 @@ Rectangle {
                     // ARC-I-2/UI-60: the album's favourite leads the header
                     // meta (the star row above owns the rating now).
                     Item {
-                        visible: !root.isPlaylist && root.albumStarred
+                        visible: root.isAlbum && root.albumStarred
                         Layout.alignment: Qt.AlignVCenter
                         Layout.preferredWidth: root.height * 0.016
                         Layout.preferredHeight: width
@@ -981,7 +1047,7 @@ Rectangle {
                 anchors.left: parent.left
                 anchors.right: parent.right
                 height: root.albumNotes.length > 0 ? Math.min(parent.height, root.height * 0.325) : 0
-                visible: !root.isPlaylist && root.albumNotes.length > 0
+                visible: root.isAlbum && root.albumNotes.length > 0
                 clip: true
 
                 Flickable {
@@ -1114,7 +1180,7 @@ Rectangle {
                             metrics: rowMetrics
                             emphasized: songRow.emphasized
                             current: songRow.currentItem
-                            showCover: root.isPlaylist
+                            showCover: !root.isAlbum
                             cover: songRow.cover
                             showSubtitle: songRow.subtitle.length > 0
                             title: songRow.track.length > 0 ? songRow.track + ". " + songRow.title : songRow.title
@@ -1152,7 +1218,9 @@ Rectangle {
                 Layout.fillWidth: true
                 Layout.fillHeight: true
                 visible: !root.loading && songs.count === 0
-                text: "No tracks in this album"
+                text: root.isRadio
+                    ? (Backend.offline ? "Radio needs a connection" : "No similar songs found")
+                    : "No tracks in this album"
                 color: Palette.onSurfaceVariant
                 font.pixelSize: Theme.fontSize("body", root.height)
                 horizontalAlignment: Text.AlignHCenter

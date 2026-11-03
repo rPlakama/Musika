@@ -1603,6 +1603,49 @@ impl Backend {
         });
     }
 
+    /// ARC-RS-1: opens RadioEntry for one seed row (album). The page then
+    /// asks for its rows through `requestRadio`.
+    #[qslot(qml_name = "startRadio")]
+    fn start_radio(&mut self, seed_kind: String, seed_id: String) {
+        let invoker = self.get_qml_method_invoker();
+        let payload = serde_json::json!({
+            "seed_kind": seed_kind,
+            "seed_id": seed_id,
+        })
+        .to_string();
+        emit(&invoker, "open_radio", payload);
+    }
+
+    /// ARC-RS-1: the RadioEntry page payload (`getSimilarSongs`).
+    #[qslot(qml_name = "requestRadio")]
+    fn request_radio(&mut self, seed_kind: String, seed_id: String) {
+        let invoker = self.get_qml_method_invoker();
+        let offline = self.offline;
+        self.spawn_task(move |dbs| async move {
+            match crate::radio::page_json(&dbs, &seed_kind, &seed_id, offline).await {
+                Ok(payload) => emit(&invoker, "radio", payload),
+                Err(err) => eprintln!("qml: radio load failed: {err:#}"),
+            }
+        });
+    }
+
+    /// ARC-RS-1: starts the radio queue from the clicked row.
+    #[qslot(qml_name = "playRadio")]
+    fn play_radio(&mut self, seed_kind: String, seed_id: String, start: i64) {
+        let invoker = self.get_qml_method_invoker();
+        self.spawn_task(move |dbs| async move {
+            match crate::radio::tracks_json(&dbs, &seed_kind, &seed_id, start).await {
+                Ok((json, queue_start)) => {
+                    qtbridge::invoke_method!(invoker, "playerLoad", json, queue_start);
+                }
+                Err(err) => {
+                    eprintln!("player: could not start radio: {err:#}");
+                    raise(&invoker, "playback", format!("{err:#}"))
+                }
+            }
+        });
+    }
+
     /// Plays a playlist from the clicked row, translating unplayable rows to
     /// the next playable queue index.
     #[qslot(qml_name = "playPlaylist")]

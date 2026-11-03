@@ -167,6 +167,14 @@ Item {
                         playlistTitle: item.playlistTitle
                     }
                 });
+            } else if (item.isRadio === true) {
+                pages.push({
+                    kind: "radio",
+                    page: {
+                        radioSeedKind: item.radioSeedKind,
+                        radioSeedId: item.radioSeedId
+                    }
+                });
             } else if (item.albumId !== undefined) {
                 pages.push({
                     kind: "album",
@@ -268,7 +276,7 @@ Item {
         if (contentStack.depth > 1)
             contentStack.pop(null, StackView.Immediate);
         root.entryHistory = [];
-        currentSegment = Number(place.segment) || 0;
+        currentSegment = Math.max(0, Math.min(3, Number(place.segment) || 0));
         activeRegion = 1;
         for (var i = 0; i < place.pages.length; ++i) {
             var entry = place.pages[i];
@@ -281,6 +289,8 @@ Item {
                 root.openEntry("artist", entry.page, true, false);
             } else if (entry.kind === "playlist") {
                 contentStack.push(playlistEntryComponent, entry.page, StackView.Immediate);
+            } else if (entry.kind === "radio") {
+                contentStack.push(radioEntryComponent, entry.page, StackView.Immediate);
             }
         }
         nowPlayingExpanded = place.fullscreen === true;
@@ -342,6 +352,9 @@ Item {
             return "artist:" + (page.artistId ? page.artistId : "");
         if (kind === "playlist")
             return "playlist:" + (page.playlistId ? page.playlistId : "");
+        if (kind === "radio")
+            return "radio:" + (page.radioSeedKind ? page.radioSeedKind : "") + ":"
+                + (page.radioSeedId ? page.radioSeedId : "");
         return "album:" + (page.albumId ? page.albumId : "");
     }
 
@@ -353,6 +366,8 @@ Item {
             return "artist";
         if (item.isPlaylist === true)
             return "playlist";
+        if (item.isRadio === true)
+            return "radio";
         if (item.albumId !== undefined && item.albumId.length > 0)
             return "album";
         return "";
@@ -430,6 +445,19 @@ Item {
             contentStack.push(playlistEntryComponent, page);
     }
 
+    /// ARC-RS-1: one seed row opens the similar-song page; the backend
+    /// supplies its identity and rows.
+    function openRadio(seedKind, seedId, instant) {
+        var page = {
+            radioSeedKind: seedKind ? seedKind : "album",
+            radioSeedId: seedId
+        };
+        if (instant)
+            contentStack.push(radioEntryComponent, page, StackView.Immediate);
+        else
+            contentStack.push(radioEntryComponent, page);
+    }
+
     function openArtist(artistId, artistName, artistCover, instant) {
         var page = {
             artistId: artistId,
@@ -498,7 +526,7 @@ Item {
         else if (root.nowPlayingExpanded)
             view = nowPlaying;
         else if (contentStack.depth === 1)
-            view = root.currentSegment === 4 ? radioList : libraryList;
+            view = libraryList;
         else
             view = contentStack.currentItem;
         if (view && view.armQuickActions && view.altActionsAvailable !== false)
@@ -684,9 +712,10 @@ Item {
             quickActions.dismiss();
             return;
         }
-        // UI-60: Shift-J/K over the aimed favourite slot steps its rating.
-        if (action.indexOf("quick_rating ") === 0) {
-            quickActions.adjustRating(action.substring("quick_rating ".length) === "up" ? 1 : -1);
+        // ARC-RS-2: Shift-H/L over the aimed slot steps a rating or cycles
+        // the slot's actions.
+        if (action.indexOf("quick_cycle ") === 0) {
+            quickActions.cycle(action.substring("quick_cycle ".length) === "next" ? 1 : -1);
             return;
         }
 
@@ -749,7 +778,7 @@ Item {
         if (action === "scope_next" || action === "scope_prev") {
             if (nowPlayingExpanded || queueDrawer.open)
                 return;
-            var scopeCount = 5;
+            var scopeCount = 4;
             var nextScope = (currentSegment + (action === "scope_next" ? 1 : -1) + scopeCount) % scopeCount;
             root.showSegment(nextScope);
             return;
@@ -1029,8 +1058,7 @@ Item {
                         // `itemAt()` lookup before they exist returns null and
                         // registers nothing, so the binding would stay null
                         // forever (the "scroll unavailable" bug).
-                        readonly property Item activeView:
-                            root.currentSegment === 4 ? radioList : libraryList
+                        readonly property Item activeView: libraryList
                         readonly property bool hasSelection: activeView ? activeView.hasSelection === true : false
                         readonly property bool exitsToMain: false
                         readonly property int currentIndex: (activeView && activeView.currentIndex !== undefined) ? activeView.currentIndex : -1
@@ -1103,14 +1131,6 @@ Item {
                         onQuickAction: (target, actions) => root.armQuickActions(target, actions)
                     }
 
-                    PlaceholderList {
-                        id: radioList
-                        anchors.fill: parent
-                        visible: root.currentSegment === 4
-                        title: "Radio"
-                        message: "Internet radio stations are not indexed yet."
-                    }
-
                     Component {
                         id: artistEntryComponent
                         ArtistEntry {
@@ -1137,6 +1157,14 @@ Item {
                         id: playlistEntryComponent
                         PlaylistEntry {
                             onBack: contentStack.pop()
+                            onQuickAction: (target, actions) => root.armQuickActions(target, actions)
+                        }
+                    }
+
+                    Component {
+                        id: radioEntryComponent
+                        RadioEntry {
+                            onBack: root.backEntry()
                             onQuickAction: (target, actions) => root.armQuickActions(target, actions)
                         }
                     }
@@ -1395,6 +1423,16 @@ Item {
                     if (searchOverlay.opened)
                         searchOverlay.close();
                     root.openAlbum(page.id, page.title, page.artist ? page.artist : "", page.year ? String(page.year) : "", String(page.tracks), page.cover ? page.cover : "", page.starred === true, false, page.song_id ? page.song_id : "");
+                });
+                return;
+            }
+            if (channel === "open_radio") {
+                var radio = JSON.parse(payload);
+                Qt.callLater(function () {
+                    if (searchOverlay.opened)
+                        searchOverlay.close();
+                    root.nowPlayingExpanded = false;
+                    root.openRadio(radio.seed_kind, radio.seed_id);
                 });
                 return;
             }

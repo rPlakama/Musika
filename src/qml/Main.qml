@@ -279,25 +279,27 @@ ApplicationWindow {
             // in the neutral center fires nothing — and Esc cancels. These
             // keys never reach the keymap.
             if (Backend.altHeld) {
-                // UI-60: Shift-J/K step the aimed favourite slot's rating.
-                // They fire once per press (key auto-repeat would flood the
-                // server); a non-rating aim simply ignores them.
+                // ARC-RS-2: Shift-H/L change the aimed direction's action —
+                // a rating slot steps its level, a multi-action slot cycles.
+                // They fire once per press (auto-repeat would flood).
                 if (!event.isAutoRepeat
                         && (event.modifiers & Qt.ShiftModifier)
-                        && (event.key === Qt.Key_J || event.key === Qt.Key_K)) {
-                    dispatch("quick_rating "
-                        + (event.key === Qt.Key_K ? "up" : "down"));
+                        && (event.key === Qt.Key_H || event.key === Qt.Key_L)) {
+                    dispatch("quick_cycle "
+                        + (event.key === Qt.Key_H ? "prev" : "next"));
                     return;
                 }
                 var aim = "";
-                if (event.key === Qt.Key_H || event.key === Qt.Key_Left)
-                    aim = "west";
-                else if (event.key === Qt.Key_J || event.key === Qt.Key_Down)
-                    aim = "south";
-                else if (event.key === Qt.Key_K || event.key === Qt.Key_Up)
-                    aim = "north";
-                else if (event.key === Qt.Key_L || event.key === Qt.Key_Right)
-                    aim = "east";
+                if (!(event.modifiers & Qt.ShiftModifier)) {
+                    if (event.key === Qt.Key_H || event.key === Qt.Key_Left)
+                        aim = "west";
+                    else if (event.key === Qt.Key_J || event.key === Qt.Key_Down)
+                        aim = "south";
+                    else if (event.key === Qt.Key_K || event.key === Qt.Key_Up)
+                        aim = "north";
+                    else if (event.key === Qt.Key_L || event.key === Qt.Key_Right)
+                        aim = "east";
+                }
                 if (aim.length > 0) {
                     dispatch("quick_aim " + aim);
                     return;
@@ -306,6 +308,10 @@ ApplicationWindow {
                 // neutral centre is. While Alt is held, Esc is swallowed so
                 // it can neither cancel the menu nor leak into the keymap.
                 if (event.key === Qt.Key_Escape)
+                    return;
+                // ARC-RS-2: the remaining Shift chords belong to the
+                // overlay; never let them reach the keymap mid-gesture.
+                if (event.modifiers & Qt.ShiftModifier)
                     return;
             }
             // At Home, q waits briefly for a second q; elsewhere q stays the
@@ -424,6 +430,15 @@ ApplicationWindow {
             }
             if (command === "lyrics_refresh") {
                 Backend.refreshLyrics();
+                return;
+            }
+            // ARC-RS-2 automation/test hook: the IPC socket can hold and
+            // release the Alt gesture, so a script can drive arm -> aim ->
+            // cycle -> confirm without a keyboard. Deferred like every other
+            // command (Backend is borrowed while this signal is emitted).
+            if (command === "quick_hold on" || command === "quick_hold off") {
+                var held = command === "quick_hold on";
+                Qt.callLater(() => Backend.setAltHeld(held));
                 return;
             }
             // MPRIS commands (Q-8) use the same pump: they may call back into

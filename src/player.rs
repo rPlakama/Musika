@@ -172,6 +172,8 @@ pub struct Player {
     /// when only the index moved (a skip or an advance).
     pub(crate) revision: u64,
     pub(crate) native: Option<pipewire::Native>,
+    /// Next queue index the native decoder is already predecoding.
+    gapless_next: Option<usize>,
     #[cfg(test)]
     pub(crate) loads: u32,
 }
@@ -197,6 +199,7 @@ impl Player {
             retry_at: None,
             revision: 0,
             native: None,
+            gapless_next: None,
             #[cfg(test)]
             loads: 0,
         }
@@ -362,14 +365,31 @@ impl Player {
             ..Shared::default()
         };
         self.fallback_duration = track.duration;
+        self.gapless_next = if self.repeat == Repeat::One {
+            Some(self.index)
+        } else if self.index + 1 < self.queue.len() {
+            Some(self.index + 1)
+        } else if self.repeat == Repeat::All && !self.queue.is_empty() {
+            Some(0)
+        } else {
+            None
+        };
         self.retries = 0;
         self.retry_at = None;
 
-        self.command(vec![
-            json!("loadfile"),
-            json!(track.url.clone()),
-            json!("replace"),
-        ]);
+        let next_url = self
+            .gapless_next
+            .and_then(|index| self.queue.get(index))
+            .map(|next| next.url.clone());
+        if let Some(native) = self.native.as_mut() {
+            native.load_with_next(&track.url, next_url);
+        } else {
+            self.command(vec![
+                json!("loadfile"),
+                json!(track.url.clone()),
+                json!("replace"),
+            ]);
+        }
         self.set_property("pause", json!(false));
         self.state = State::Playing;
     }
@@ -412,6 +432,7 @@ impl Player {
         self.shared().reset();
         self.retries = 0;
         self.retry_at = None;
+        self.gapless_next = None;
         self.state = State::Stopped;
     }
 

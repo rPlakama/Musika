@@ -16,6 +16,7 @@
 use serde_json::Value;
 use std::ffi::{CString, c_char, c_double, c_int, c_void};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
@@ -46,6 +47,7 @@ unsafe extern "C" {
     fn musika_sink_set_volume(sink: *mut MusikaSink, volume: f32);
     fn musika_sink_failed(sink: *mut MusikaSink) -> c_int;
     fn musika_sink_played_frames(sink: *mut MusikaSink) -> u64;
+    fn musika_sink_reset_played(sink: *mut MusikaSink);
     fn musika_sink_flush(sink: *mut MusikaSink);
     fn musika_sink_reset(sink: *mut MusikaSink);
     fn musika_sink_close_writes(sink: *mut MusikaSink);
@@ -92,6 +94,9 @@ struct Status {
 struct SinkPtr(*mut MusikaSink);
 unsafe impl Send for SinkPtr {}
 
+struct NextDecoder(*mut MusikaDecoder);
+unsafe impl Send for NextDecoder {}
+
 pub(crate) struct Native {
     sink: *mut MusikaSink,
     decoder: Option<JoinHandle<()>>,
@@ -100,6 +105,8 @@ pub(crate) struct Native {
     seek: Arc<Mutex<Option<f64>>>,
     seek_at: Arc<Mutex<Option<Instant>>>,
     position_origin: Arc<Mutex<f64>>,
+    /// Set by the decoder when it has crossed into the predecoded next track.
+    boundary: Arc<AtomicBool>,
 }
 
 // The raw sink pointer is only used by the player thread and the decoder
@@ -121,6 +128,7 @@ impl Native {
             seek: Arc::new(Mutex::new(None)),
             seek_at: Arc::new(Mutex::new(None)),
             position_origin: Arc::new(Mutex::new(0.0)),
+            boundary: Arc::new(AtomicBool::new(false)),
         })
     }
 
@@ -131,12 +139,17 @@ impl Native {
     }
 
     fn load(&mut self, url: &str) {
+        self.load_with_next(url, None);
+    }
+
+    pub(crate) fn load_with_next(&mut self, url: &str, next_url: Option<String>) {
         crate::startup::trace("play.requested");
         // Never join the old decoder on the Qt thread: a stalled fetch can
         // take seconds. The new worker owns the reaper and joins first.
         self.stop_async();
         let previous = self.decoder.take();
         let stop = Arc::new(AtomicBool::new(false));
+        let boundary = Arc::new(AtomicBool::new(false));
         *self
             .position_origin
             .lock()
@@ -155,6 +168,8 @@ impl Native {
         let thread_status = Arc::clone(&status);
         let thread_seek = Arc::clone(&seek);
         let thread_seek_at = Arc::clone(&self.seek_at);
+        let thread_boundary = Arc::clone(&boundary);
+        let thread_origin = Arc::clone(&self.position_origin);
         let url = url.to_string();
         self.decoder = Some(thread::spawn(move || {
             if let Some(previous) = previous {
@@ -173,15 +188,20 @@ impl Native {
                 thread_seek,
                 thread_seek_at,
                 epoch,
+                next_url,
+                thread_boundary,
+                thread_origin,
             );
         }));
         self.stop = stop;
         self.status = status;
         self.seek = seek;
+        self.boundary = boundary;
     }
 
     fn stop_async(&mut self) {
         self.stop.store(true, Ordering::Relaxed);
+        self.boundary.store(false, Ordering::Relaxed);
         unsafe { musika_sink_close_writes(self.sink) };
         let previous = self.decoder.take();
         let sink = SinkPtr(self.sink);
@@ -243,6 +263,10 @@ impl Native {
         unsafe { musika_sink_set_muted(self.sink, muted as c_int) };
     }
 
+    pub(crate) fn take_boundary(&self) -> bool {
+        self.boundary.swap(false, Ordering::AcqRel)
+    }
+
     pub(super) fn loading(&self) -> bool {
         self.lock_status().loading
     }
@@ -287,6 +311,28 @@ unsafe extern "C" fn stop_interrupt(opaque: *mut c_void) -> c_int {
     stop.load(Ordering::Relaxed) as c_int
 }
 
+fn open_url_decoder(url: &str, stop: &Arc<AtomicBool>) -> Result<NextDecoder, String> {
+    let Ok(c_url) = CString::new(url) else {
+        return Err("invalid media URL".to_string());
+    };
+    let mut error = [0 as c_char; 512];
+    let decoder = unsafe {
+        musika_decoder_open_url(
+            c_url.as_ptr(),
+            Some(stop_interrupt),
+            Arc::as_ptr(stop) as *mut c_void,
+            error.as_mut_ptr(),
+            error.len(),
+        )
+    };
+    if decoder.is_null() {
+        Err(c_string(&error))
+    } else {
+        Ok(NextDecoder(decoder))
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
 fn decode_loop(
     sink: SinkPtr,
     url: &str,
@@ -295,37 +341,63 @@ fn decode_loop(
     seek: Arc<Mutex<Option<f64>>>,
     seek_at: Arc<Mutex<Option<Instant>>>,
     epoch: u64,
+    mut next_url: Option<String>,
+    boundary: Arc<AtomicBool>,
+    position_origin: Arc<Mutex<f64>>,
 ) {
-    let Ok(c_url) = CString::new(url) else {
-        set_failed(&status, "invalid media URL");
-        return;
-    };
-    let mut error = [0 as c_char; 512];
-    let decoder = unsafe {
-        musika_decoder_open_url(
-            c_url.as_ptr(),
-            Some(stop_interrupt),
-            Arc::as_ptr(&stop) as *mut c_void,
-            error.as_mut_ptr(),
-            error.len(),
-        )
-    };
-    if decoder.is_null() {
-        if !stop.load(Ordering::Relaxed) {
-            set_failed(&status, &c_string(&error));
+    let mut decoder = match open_url_decoder(url, &stop) {
+        Ok(decoder) => decoder.0,
+        Err(err) => {
+            if !stop.load(Ordering::Relaxed) {
+                set_failed(&status, &err);
+            }
+            return;
         }
-        return;
-    }
+    };
     crate::startup::trace("fetch.first_chunk");
-    {
-        lock(&status).duration = unsafe { musika_decoder_duration(decoder) };
-    }
+    lock(&status).duration = unsafe { musika_decoder_duration(decoder) };
+
+    let (pre_tx, pre_rx) = mpsc::channel::<Result<NextDecoder, String>>();
+    let mut pre_handle: Option<JoinHandle<()>> = None;
+    let mut next_decoder: Option<NextDecoder> = None;
+    let mut pre_started = false;
 
     let mut pcm = vec![0i16; 4096 * 2];
     let mut first_pcm = true;
     loop {
         if stop.load(Ordering::Relaxed) {
             break;
+        }
+        if !pre_started
+            && next_decoder.is_none()
+            && let Some(url) = next_url.clone()
+        {
+            let (duration, position) = {
+                let guard = lock(&status);
+                (guard.duration, guard.position)
+            };
+            if duration > 0.0 && duration - position <= 1.5 {
+                pre_started = true;
+                next_url = None;
+                let stop = Arc::clone(&stop);
+                let tx = pre_tx.clone();
+                pre_handle = Some(thread::spawn(move || {
+                    let result = open_url_decoder(&url, &stop);
+                    if stop.load(Ordering::Relaxed) {
+                        if let Ok(NextDecoder(decoder)) = result {
+                            unsafe { musika_decoder_close(decoder) };
+                        }
+                        let _ = tx.send(Err("cancelled".to_string()));
+                    } else {
+                        let _ = tx.send(result);
+                    }
+                }));
+            }
+        }
+        if next_decoder.is_none()
+            && let Ok(result) = pre_rx.try_recv()
+        {
+            next_decoder = result.ok();
         }
         let requested = {
             let mut pending = seek
@@ -368,6 +440,22 @@ fn decode_loop(
             break;
         }
         if frames == 0 {
+            if let Some(NextDecoder(next)) = next_decoder.take() {
+                unsafe { musika_decoder_close(decoder) };
+                decoder = next;
+                *position_origin
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner) = 0.0;
+                unsafe { musika_sink_reset_played(sink.0) };
+                let mut guard = lock(&status);
+                guard.position = 0.0;
+                guard.duration = unsafe { musika_decoder_duration(decoder) };
+                guard.ended = false;
+                drop(guard);
+                boundary.store(true, Ordering::Release);
+                crate::startup::trace("gapless.next");
+                continue;
+            }
             crate::startup::trace("fetch.done");
             lock(&status).ended = true;
             break;
@@ -392,6 +480,17 @@ fn decode_loop(
         guard.peak = peak as f64 / 32768.0;
     }
     unsafe { musika_decoder_close(decoder) };
+    if let Some(NextDecoder(decoder)) = next_decoder {
+        unsafe { musika_decoder_close(decoder) };
+    }
+    if let Some(handle) = pre_handle {
+        let _ = handle.join();
+    }
+    while let Ok(result) = pre_rx.try_recv() {
+        if let Ok(NextDecoder(decoder)) = result {
+            unsafe { musika_decoder_close(decoder) };
+        }
+    }
     #[cfg(target_os = "linux")]
     unsafe {
         let _ = malloc_trim(0);
@@ -513,6 +612,14 @@ impl Player {
         if self.state == State::Stopped {
             return None;
         }
+        let crossed = self.native.as_ref().is_some_and(Native::take_boundary);
+        if crossed
+            && let Some(next) = self.gapless_next.take()
+            && next < self.queue.len()
+        {
+            self.index = next;
+            self.fallback_duration = self.queue[next].duration;
+        }
         let status = self
             .native
             .as_ref()
@@ -603,6 +710,41 @@ mod tests {
         assert!(status.failed.is_none(), "sink failed: {:?}", status.failed);
         native.stop();
         let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    #[ignore = "requires a running PipeWire session"]
+    fn player_advances_into_a_predecoded_wav() {
+        let dir = std::env::temp_dir();
+        let a = dir.join(format!("musika-gapless-a-{}.wav", std::process::id()));
+        let b = dir.join(format!("musika-gapless-b-{}.wav", std::process::id()));
+        std::fs::write(&a, wav_bytes_for(96_000)).expect("write a");
+        std::fs::write(&b, wav_bytes_for(96_000)).expect("write b");
+        let track = |id: &str, path: &std::path::Path| Track {
+            id: id.to_string(),
+            title: id.to_string(),
+            artist: String::new(),
+            album: String::new(),
+            album_id: String::new(),
+            favorite: false,
+            duration: 2.0,
+            url: format!("file://{}", path.display()),
+            cover_art: String::new(),
+            cover_url: String::new(),
+        };
+        let mut player = Player::new();
+        player.load(vec![track("a", &a), track("b", &b)], 0);
+        let started = std::time::Instant::now();
+        while started.elapsed() < std::time::Duration::from_secs(4) && player.index() == 0 {
+            let _ = player.pump();
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        assert_eq!(player.index(), 1, "gapless boundary was not crossed");
+        #[cfg(test)]
+        assert_eq!(player.loads, 1, "gapless boundary reloaded the track");
+        player.stop();
+        let _ = std::fs::remove_file(a);
+        let _ = std::fs::remove_file(b);
     }
 
     #[test]

@@ -354,6 +354,12 @@ uint64_t musika_sink_played_frames(MusikaSink *sink)
     return sink ? atomic_load_explicit(&sink->played_frames, memory_order_relaxed) : 0;
 }
 
+void musika_sink_reset_played(MusikaSink *sink)
+{
+    if (sink)
+        atomic_store_explicit(&sink->played_frames, 0, memory_order_relaxed);
+}
+
 void musika_sink_flush(MusikaSink *sink)
 {
     if (!sink)

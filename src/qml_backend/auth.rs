@@ -147,16 +147,33 @@ impl Backend {
                         );
                     }
 
-                    // Finish the login inside the app (the ping). A failure
-                    // with a cached catalog just stays offline; without one it
-                    // falls back to the Login form with the account prefilled.
-                    match crate::http_client::authenticate(
-                        &credentials.server_url,
-                        &credentials.username,
-                        &credentials.password,
+                    // Without downloaded media, do not hold the UI on the
+                    // auth round-trip: enter Home with the local catalog now
+                    // and let the ping complete in the background.
+                    if !has_downloads {
+                        qtbridge::invoke_method!(
+                            invoker,
+                            "rememberAccount",
+                            credentials.server_url.clone(),
+                            credentials.username.clone()
+                        );
+                        invoker.invoke_method("login_succeeded");
+                    }
+
+                    let auth = tokio::time::timeout(
+                        std::time::Duration::from_secs(8),
+                        crate::http_client::authenticate(
+                            &credentials.server_url,
+                            &credentials.username,
+                            &credentials.password,
+                        ),
                     )
-                    .await
-                    {
+                    .await;
+                    let auth = match auth {
+                        Ok(result) => result,
+                        Err(_) => Err(anyhow::anyhow!("Authentication timed out")),
+                    };
+                    match auth {
                         Ok(info) => {
                             // Auto-login has no login form to set these: record the
                             // account before the sync so the header greets the user

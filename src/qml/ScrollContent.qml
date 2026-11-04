@@ -147,7 +147,10 @@ Item {
             root._rowBase = root.rowViewHeight * root.rowRatio;
     }
 
-    readonly property real adaptiveRowHeight: Math.max(root.minRowHeight, root.adaptiveRowFor(root.rowViewHeight))
+    // Qt's ListView content coordinate is integer-based; a fractional
+    // delegate height makes contentHeight/originY drift and clamps the top.
+    readonly property real adaptiveRowHeight: Math.max(root.minRowHeight,
+        Math.round(root.adaptiveRowFor(root.rowViewHeight)))
     readonly property real rowStride: root.adaptiveRows ? root.adaptiveRowHeight + root.rowSpacing : 0
 
     /// The header gap that pushes a short uniform list to the bottom.
@@ -198,7 +201,7 @@ Item {
     // ── The one geometry contract ────────────────────────────────────────
 
     /// Qt's content edge above the first row (negative when a header exists).
-    readonly property real minY: root.view ? root.view.originY : 0
+    readonly property real minY: root.headerHeight > 0 ? -root.headerHeight : 0
     readonly property real headerHeight: root.view && root.view.headerItem
         ? root.view.headerItem.height : 0
     readonly property real footerHeight: root.view && root.view.footerItem
@@ -629,7 +632,7 @@ Item {
             spacing: root.rowSpacing
             header: Item {
                 width: list.width
-                height: headerLoader.height + root._shortContentGap
+                height: Math.round(headerLoader.height + root._shortContentGap)
                 Loader {
                     id: headerLoader
                     width: parent.width

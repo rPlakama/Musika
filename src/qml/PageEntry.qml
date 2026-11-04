@@ -162,7 +162,10 @@ Rectangle {
 
     /// Star hitbox side in the header (five slots total). 60% larger than
     /// the old strip, matching the album-title scale.
-    readonly property real starUnit: Math.max(22, Math.min(45, root.height * 0.04))
+    // The page header grows with the available column width, not only the
+    // window height: wide layouts get the larger hero typography.
+    readonly property real headerScale: Math.max(0.9, Math.min(1.6, root.width / 1280))
+    readonly property real starUnit: Math.max(22, Math.min(60, root.height * 0.04 * root.headerScale))
 
     /// The header gap follows the cover but never eats more than 75% of
     /// the usable page height; wide pages keep room for the rows.
@@ -1140,7 +1143,7 @@ Rectangle {
                     Layout.fillWidth: true
                     text: root.pageTitle
                     color: Palette.onSurface
-                    font.pixelSize: root.height * 0.04
+                    font.pixelSize: root.height * 0.04 * root.headerScale
                     font.bold: true
                     elide: Text.ElideRight
 
@@ -1167,7 +1170,7 @@ Rectangle {
                     visible: !root.isAlbum
                     text: root.playlistSubtitle
                     color: Palette.onSurfaceVariant
-                    font.pixelSize: root.height * 0.024
+                    font.pixelSize: root.height * 0.024 * root.headerScale
                     elide: Text.ElideRight
                 }
 
@@ -1191,7 +1194,7 @@ Rectangle {
                     Layout.fillWidth: true
                     text: root.pageArtist
                     color: Palette.primary
-                    font.pixelSize: root.height * 0.024
+                    font.pixelSize: root.height * 0.024 * root.headerScale
                     elide: Text.ElideRight
 
                     ScopeRing {
@@ -1234,7 +1237,7 @@ Rectangle {
                         Layout.fillWidth: true
                         text: root.metaLine
                         color: Palette.onSurfaceVariant
-                        font.pixelSize: root.height * 0.02
+                        font.pixelSize: root.height * 0.02 * root.headerScale
                         elide: Text.ElideRight
                     }
 
@@ -1252,7 +1255,7 @@ Rectangle {
                     spacing: root.height * 0.010
 
                     ActionChip {
-                        unit: root.height * 0.06
+                        unit: root.height * 0.06 * root.headerScale
                         icon: ""
                         onClicked: {
                             root.chipScope = 0;
@@ -1272,7 +1275,7 @@ Rectangle {
                     }
 
                     ActionChip {
-                        unit: root.height * 0.06
+                        unit: root.height * 0.06 * root.headerScale
                         icon: "qrc:/app/icons/outline-shuffle.svg"
                         onClicked: {
                             root.chipScope = 1;
@@ -1284,7 +1287,7 @@ Rectangle {
 
                     ActionChip {
                         id: favoriteChip
-                        unit: root.height * 0.06
+                        unit: root.height * 0.06 * root.headerScale
                         icon: ""
                         onClicked: {
                             root.chipScope = 2;

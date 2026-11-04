@@ -155,10 +155,30 @@ Rectangle {
             parts.push(root.tracksFormat);
         return Theme.metaJoin(parts);
     }
-    /// The header metadata line: date first, then the track stats.
-    readonly property string albumMetaLine: root.isArtist
-        ? root.albumMeta
-        : Theme.metaJoin([root.albumMeta, root.tracksSummary])
+    /// Whole-hour or whole-minute runtime for the album header.
+    readonly property string tracksSpan: {
+        if (root.tracksDuration <= 0)
+            return "";
+        if (root.tracksDuration < 3600)
+            return Theme.countLabel(Math.max(1, Math.round(root.tracksDuration / 60)), "Minute");
+        return Theme.countLabel(Math.max(1, Math.round(root.tracksDuration / 3600)), "Hour");
+    }
+    readonly property string albumHeaderStats: {
+        var parts = [];
+        if (songs.count > 0)
+            parts.push(Theme.countLabel(songs.count, "Track"));
+        if (root.albumMeta.length > 0)
+            parts.push(root.albumMeta);
+        if (root.tracksSpan.length > 0)
+            parts.push(root.tracksSpan);
+        return Theme.metaJoin(parts);
+    }
+    /// Album header: count, year, runtime. Artist keeps the album count.
+    readonly property string albumMetaLine: root.isAlbum
+        ? root.albumHeaderStats
+        : root.isArtist
+            ? root.albumMeta
+            : Theme.metaJoin([root.albumMeta, root.tracksSummary])
 
     /// Star hitbox side in the header (five slots total). 60% larger than
     /// the old strip, matching the album-title scale.

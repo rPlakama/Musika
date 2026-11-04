@@ -487,6 +487,9 @@ Item {
                 ScrollContent {
                     id: queueContent
                     anchors.fill: parent
+                    types: ["queue"]
+                    limitedBy: ""
+                    activeType: "queue"
                     context: "queue"
                     rowRatio: 0.06
                     rowRefHeight: queueDrawer.height

@@ -84,6 +84,11 @@ Rectangle {
 
     // --- Body (B) ------------------------------------------------------------
     property Component rowDelegate
+    /// Removable type inserts forwarded to the shared ScrollModal.
+    property alias types: content.types
+    property alias limitedBy: content.limitedBy
+    property alias activeType: content.activeType
+    readonly property alias hasTypeScope: content.hasTypeScope
     property var model: null
     property alias reuseRows: content.reuseRows
     property var rowAccess: content.access

@@ -57,6 +57,24 @@ Item {
         return root.flags[name] === true;
     }
 
+    // ── Removable type inserts ─────────────────────────────────────────
+    // A host declares the scopes this surface may render; the array is
+    // mutable, so a page can drop or add a type without changing the
+    // scroll engine. `limitedBy` names the enclosing scope (empty = global).
+    property var types: []
+    property string limitedBy: ""
+    property string activeType: ""
+    readonly property bool hasTypeScope: root.types.length > 0
+    signal typeActivated(string type)
+
+    function setType(type) {
+        if (root.activeType === type || root.types.indexOf(type) < 0)
+            return false;
+        root.activeType = type;
+        root.typeActivated(type);
+        return true;
+    }
+
     // ── Inputs ───────────────────────────────────────────────────────────
 
     property var model: null

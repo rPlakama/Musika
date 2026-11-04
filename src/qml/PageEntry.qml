@@ -33,7 +33,9 @@ Rectangle {
 
     RowMetrics {
         id: rowMetrics
-        viewWidth: content.width
+        // Same source as Home.s MediaList: the available row viewport
+        // width and the stable body height, never the delegate size.
+        viewWidth: tracksSection.width
         rowHeight: content.adaptiveRowHeight
     }
 
@@ -1487,6 +1489,9 @@ Rectangle {
                 id: content
                 Layout.fillWidth: true
                 Layout.fillHeight: true
+                types: root.isArtist ? ["albums", "tracks"] : []
+                limitedBy: root.isArtist ? "artist" : ""
+                activeType: root.rowMode
                 model: songs
                 selectable: true
                 memoryKey: root.memoryKey
@@ -1505,7 +1510,7 @@ Rectangle {
                 // Short albums sit against the page bottom instead of floating at
                 // the top of the scroller.
                 bottomAlignShort: !root.artistAlbums
-                rowRefHeight: root.height
+                rowRefHeight: tracksSection.height
                 onRowTapped: (index, shift) => {
                     if (shift) {
                         root.clearHeaderStops();
@@ -1565,7 +1570,7 @@ Rectangle {
                             metrics: rowMetrics
                             emphasized: songRow.emphasized
                             current: songRow.currentItem
-                            showCover: root.isArtist ? root.artistAlbums : !root.isAlbum
+                            showCover: root.isArtist ? true : !root.isAlbum
                             cover: songRow.cover
                             showSubtitle: songRow.subtitle.length > 0
                             title: root.artistAlbums ? songRow.title

@@ -20,6 +20,12 @@ MediaList {
 
     property string scope: "albums"
 
+    // The four global inserts this modal offers. A page can declare a
+    // narrower set (and a `limitedBy` scope) without changing the engine.
+    types: ["albums", "songs", "artists", "playlists"]
+    limitedBy: ""
+    activeType: root.scope
+
     readonly property bool isAlbums: root.scope === "albums"
     readonly property bool isSongs: root.scope === "songs"
     readonly property bool isArtists: root.scope === "artists"

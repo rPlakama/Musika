@@ -68,13 +68,15 @@ Rectangle {
     property bool artistDownloading: false
     property int chipScope: -1
     readonly property bool isArtist: root.entryKind === "artist"
+    property string artistRowMode: "albums"
     readonly property bool isPlaylist: root.entryKind === "playlist"
     readonly property bool isRadio: root.entryKind === "radio"
     readonly property bool isAlbum: root.entryKind === "album"
     readonly property string pageId: root.isArtist ? root.artistId
         : root.isRadio ? root.radioSeedId
         : root.isPlaylist ? root.playlistId : root.albumId
-    readonly property string rowMode: root.isArtist ? "albums" : "tracks"
+    readonly property string rowMode: root.isArtist ? root.artistRowMode : "tracks"
+    readonly property bool artistAlbums: root.isArtist && root.artistRowMode === "albums"
     readonly property bool exitsToMain: root.isArtist
     readonly property string pageTitle: albumTitle
     readonly property string pageSubtitle: playlistSubtitle
@@ -227,6 +229,18 @@ Rectangle {
 
     /// VI-4: `v` toggles visual mode on the cursor row (the toolbar owns no
     /// selection).
+    function toggleRowScope() {
+        if (!root.isArtist)
+            return false;
+        root.artistRowMode = root.artistAlbums ? "tracks" : "albums";
+        songs.clear();
+        content.clearSelection();
+        content.currentIndex = -1;
+        root._loadingKey = "";
+        root.reload();
+        return true;
+    }
+
     function toggleArtistCache() {
         root.artistCacheOn = !root.artistCacheOn;
         root.artistDownloading = root.artistCacheOn;
@@ -367,17 +381,23 @@ Rectangle {
             return;
         }
         if (root.isArtist) {
-            if (root.artistId === "" || root._loadingKey === "artist:" + root.artistId)
+            var artistKey = root.artistAlbums
+                ? "artist:" + root.artistId : "artist-tracks:" + root.artistId;
+            if (root.artistId === "" || root._loadingKey === artistKey)
                 return;
-            root._loadingKey = "artist:" + root.artistId;
+            root._loadingKey = artistKey;
             root.loading = true;
             root.onNotes = false;
-            Backend.requestArtist(root.artistId);
-            Backend.requestArtistUser(root.artistId);
-            Backend.requestArtistInfo(root.artistId);
-            Backend.requestArtistCache(root.artistId);
-            root._coverTarget = 0;
-            root.scheduleCover();
+            if (root.artistAlbums) {
+                Backend.requestArtist(root.artistId);
+                Backend.requestArtistUser(root.artistId);
+                Backend.requestArtistInfo(root.artistId);
+                Backend.requestArtistCache(root.artistId);
+                root._coverTarget = 0;
+                root.scheduleCover();
+            } else {
+                Backend.requestArtistSongs(root.artistId);
+            }
             return;
         }
         if (root.isPlaylist) {
@@ -459,6 +479,7 @@ Rectangle {
         root.artistName = page.artistName ? String(page.artistName) : ""
         root.artistCover = page.artistCover ? String(page.artistCover) : ""
         root.artistMeta = ""
+        root.artistRowMode = "albums"
         root.artistAlbumCount = 0
         root.artistDuration = 0
         root.artistYear = ""
@@ -596,6 +617,34 @@ Rectangle {
             content.currentIndex = 0;
         content.restore();
         root.scheduleCover();
+    }
+
+    function applyArtistTracks(payload) {
+        var data = JSON.parse(payload);
+        if (!root.isArtist || data.artist_id !== root.artistId)
+            return;
+        root._loadingKey = "";
+        content.clearSelection();
+        songs.clear();
+        var rows = data.songs ? data.songs : [];
+        for (var i = 0; i < rows.length; i++) {
+            var row = rows[i];
+            songs.append({
+                track: row.track ? String(row.track) : "",
+                title: row.title ? String(row.title) : "",
+                subtitle: row.subtitle ? String(row.subtitle) : "",
+                duration: row.meta ? String(row.meta) : "",
+                songId: row.songId ? String(row.songId) : "",
+                albumId: row.albumId ? String(row.albumId) : "",
+                cover: row.cover ? String(row.cover) : "",
+                starred: row.starred === true,
+                playable: true
+            });
+        }
+        root.loading = false;
+        if (songs.count > 0 && (content.currentIndex < 0 || content.currentIndex >= songs.count))
+            content.currentIndex = 0;
+        content.restore();
     }
 
     function applyPlaylist(payload) {
@@ -826,9 +875,13 @@ Rectangle {
         if (index < 0 || index >= songs.count)
             return;
         if (root.isArtist) {
-            var albumRow = songs.get(index);
-            if (albumRow && albumRow.albumId)
-                root.albumActivated(albumRow.albumId, albumRow.title, albumRow.subtitle, "", "", albumRow.cover, albumRow.starred === true);
+            if (root.artistAlbums) {
+                var albumRow = songs.get(index);
+                if (albumRow && albumRow.albumId)
+                    root.albumActivated(albumRow.albumId, albumRow.title, albumRow.subtitle, "", "", albumRow.cover, albumRow.starred === true);
+            } else {
+                Backend.playArtist(root.artistId, index);
+            }
             return;
         }
         if (root.isRadio) {
@@ -1029,7 +1082,9 @@ Rectangle {
     Connections {
         target: Backend
         function onDataReady(channel, payload) {
-            if (channel === "artist") {
+            if (channel === "artist_songs") {
+                root.applyArtistTracks(payload);
+            } else if (channel === "artist") {
                 root.applyArtist(payload);
             } else if (channel === "artist_info") {
                 root.applyInfo(payload);
@@ -1435,21 +1490,21 @@ Rectangle {
                 model: songs
                 selectable: true
                 memoryKey: root.memoryKey
-                quickActionKind: root.isArtist ? "album" : "song"
-                markSongs: !root.isArtist
-                markAlbums: root.isArtist
+                quickActionKind: root.artistAlbums ? "album" : "song"
+                markSongs: !root.artistAlbums
+                markAlbums: root.artistAlbums
                 onQuickAction: (target, actions) => root.quickAction(target, actions)
                 visible: !(root.loading && songs.count === 0)
                 // ARC-UI-2 M1: the rows paint track, title and duration.
-                searchFields: root.isArtist ? ["title", "subtitle", "meta"] : ["track", "title", "subtitle", "duration"]
+                searchFields: root.artistAlbums ? ["title", "subtitle", "meta"] : ["track", "title", "subtitle", "duration"]
                 // UI-58: rows scale from the page height, not the song viewport
                 // (the header/notes reflow must not rescale every row). The
                 // precomputed extent keeps the shared glide off Qt's lazy
                 // estimate.
-                context: root.isArtist ? "library" : "album"
+                context: root.artistAlbums ? "library" : "album"
                 // Short albums sit against the page bottom instead of floating at
                 // the top of the scroller.
-                bottomAlignShort: !root.isArtist
+                bottomAlignShort: !root.artistAlbums
                 rowRefHeight: root.height
                 onRowTapped: (index, shift) => {
                     if (shift) {
@@ -1510,13 +1565,13 @@ Rectangle {
                             metrics: rowMetrics
                             emphasized: songRow.emphasized
                             current: songRow.currentItem
-                            showCover: !root.isAlbum || root.isArtist
+                            showCover: root.isArtist ? root.artistAlbums : !root.isAlbum
                             cover: songRow.cover
                             showSubtitle: songRow.subtitle.length > 0
-                            title: root.isArtist ? songRow.title
+                            title: root.artistAlbums ? songRow.title
                                 : (songRow.track.length > 0 ? songRow.track + ". " + songRow.title : songRow.title)
                             subtitle: songRow.subtitle
-                            meta: root.isArtist ? songRow.duration : songRow.duration
+                            meta: songRow.duration
                             reserveMeta: true
                             metaAlignRight: true
                             leftMargin: songRow.width * 0.02
@@ -1530,7 +1585,7 @@ Rectangle {
                             markSongId: songRow.songId
                             markAlbumId: songRow.albumId
                             markStarred: songRow.starred
-                            markRatingVisible: root.isArtist
+                            markRatingVisible: root.artistAlbums
                             searchQuery: content.searchQuery
                             searchCurrent: songRow.index === content.searchCurrentRow
                         }

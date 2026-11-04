@@ -790,6 +790,17 @@ Item {
             searchOverlay.handleAction(action);
             return;
         }
+        // On an artist page, Shift-J/K swaps the local row scope between the
+        // album wall and the artist.s tracks instead of leaving the page.
+        if ((action === "scope_next" || action === "scope_prev")
+                && !root.nowPlayingExpanded && !queueDrawer.open
+                && contentStack.depth > 1) {
+            var page = contentStack.currentItem;
+            if (page && page.isArtist === true && page.toggleRowScope) {
+                page.toggleRowScope();
+                return;
+            }
+        }
         // Scope switching (Shift-J/K) walks the unified library types.
         if (action === "scope_next" || action === "scope_prev") {
             if (nowPlayingExpanded || queueDrawer.open)

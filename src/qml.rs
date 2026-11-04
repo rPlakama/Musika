@@ -1798,6 +1798,26 @@ impl Backend {
         });
     }
 
+    /// The artist's tracks, for the Shift-J/K row-scope switch.
+    #[qslot(qml_name = "requestArtistSongs")]
+    fn request_artist_songs(&mut self, artist_id: String) {
+        let offline = self.offline;
+        self.spawn_data("artist_songs", move |dbs| async move {
+            let mut songs = crate::library::artist_songs(&dbs.library, &artist_id).await?;
+            if let Some(filter) = crate::offline::load(&dbs, offline).await? {
+                songs.retain(|song| filter.contains_song(&song.id));
+            }
+            let covers =
+                crate::covers::url_map_for(&dbs, songs.iter().map(|song| &song.cover_art)).await?;
+            let rows = crate::browse::song_rows_json(&songs, &covers)?;
+            Ok(format!(
+                "{{\"artist_id\":{},\"songs\":{}}}",
+                serde_json::to_string(&artist_id)?,
+                rows
+            ))
+        });
+    }
+
     // -----------------------------------------------------------------------
     // Artist user state + biography (ARC-42)
     // -----------------------------------------------------------------------
@@ -2135,6 +2155,27 @@ impl Backend {
                 }
                 Err(err) => {
                     eprintln!("player: could not start playback: {err:#}");
+                    raise(&invoker, "playback", format!("{err:#}"));
+                }
+            }
+        });
+    }
+
+    /// Queues all of an artist's tracks and starts at `start`.
+    #[qslot(qml_name = "playArtist")]
+    fn play_artist(&mut self, artist_id: String, start: i64) {
+        let invoker = self.get_qml_method_invoker();
+        let Some(dbs) = crate::app::dbs() else {
+            return;
+        };
+        let offline = self.offline;
+        crate::app::runtime().spawn(async move {
+            match crate::queue::quick_tracks_json(&dbs, "artist", &artist_id, offline).await {
+                Ok(json) => {
+                    qtbridge::invoke_method!(invoker, "playerLoad", json, start);
+                }
+                Err(err) => {
+                    eprintln!("player: could not start artist playback: {err:#}");
                     raise(&invoker, "playback", format!("{err:#}"));
                 }
             }

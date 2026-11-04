@@ -90,7 +90,7 @@ Musika is keyboard-first. The keymap is Vim-flavoured: bindings can be sequences
 | `Shift` + click | Extend the visual selection to the row |
 | Mouse Back / Forward | Previous / next place in the travel log |
 
-On album and artist pages, `Tab` cycles the page header stops. `?`, or Enter/click on the inline description, opens the shared full-window description reader; `j`/`k` then move through the rows (tracks for album/playlist/radio pages, albums for artist pages).
+On album and artist pages, `Tab` cycles the page header stops. `?`, or Enter/click on the inline description, opens the shared full-window description reader; `j`/`k` then move through the rows (tracks for album/playlist/radio pages, albums for artist pages). On an artist page, `Shift-J`/`Shift-K` switches between the album wall and the artist's full track list.
 
 ## Queue drawer
 

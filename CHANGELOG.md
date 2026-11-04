@@ -3,6 +3,43 @@
 All notable changes to Musika, newest first. `TASKLISTMAJOR.md` tracks the
 open work; this file is the release history.
 
+## 0.5.9 - _Squash, simplify, remake, retouch_
+
+The four entry pages become one `PageEntry`, the scroll body is rebuilt around
+a single cursor target, and the page headers now carry useful library counts
+instead of generic metadata.
+
+- Squash `AlbumEntry`, `ArtistEntry`, `PlaylistEntry` and `RadioEntry` into one
+  `PageEntry`: one row model and `ScrollContent`, one header with kind-specific
+  slots, one reload/apply funnel and one Home page component. Album notes and
+  artist biography share the new home-owned `DescriptionOverlay` reader.
+- Reduce the inline description to a three-line preview that opens the shared
+  full-window reader with `?`, Enter or a click; the full-page inline notes
+  reader is gone.
+- Scale the page header from the available width, so wide windows get a larger
+  hero title, stars, metadata, subtitle and artist chips.
+- Show album metadata as track count, year and whole-hour runtime (or minutes
+  below an hour), and artist metadata as album count, year or year span and
+  summed runtime.
+- Let `Shift-J`/`Shift-K` switch an artist page in place between its album wall
+  and complete track list, with Home routing the scope keys to the page first.
+- Unify scroll type inserts: Home declares the four global library types,
+  `PageEntry` declares Albums/Tracks limited to the artist, and the queue
+  declares Queue. Coverless rows scale their type up 1.15x, while `PageEntry`
+  rows use the queue's full-page 6% sizing.
+- Rewrite `ScrollContent` around `targetY(i) = clamp(i*stride + rowHeight/2 -
+  viewHeight/2, minY, maxY)`, with one `NumberAnimation` glide and one
+  `sync()` writer; remove the resize timers, anchors, realisation loops,
+  teleport flags and persistent scroll offsets.
+- Round uniform rows to whole pixels and derive `minY` from the header height
+  so Top and G land exactly; drive the cursor target with the pre-refactor
+  OutCubic glide feel.
+- Drive row highlights from the modal cursor instead of `ListView.currentIndex`.
+- Cache Radio page rows for playback, so Enter plays the selected row instead of
+  re-running `getSimilarSongs` and starting a different song.
+- Document the shared description overlay and artist row scope in the README
+  **Binds** page.
+
 ## 0.5.8 - _Better login, stuff and new (bind) for Radio - alt arm_
 
 Startup no longer waits for the auth round-trip, the native decoder preloads

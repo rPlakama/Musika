@@ -5,7 +5,7 @@ strip = "symbols"
 
 [package]
 name = "musika"
-version = "0.5.8"
+version = "0.5.9"
 edition = "2024"
 license = "GPL-2.0-or-later"
 

@@ -17,10 +17,57 @@
 //! Similar-song radio (ARC-RS-1): one seed row, expanded through
 //! `getSimilarSongs` into the RadioEntry page and its playback queue.
 
+use std::collections::HashMap;
+use std::sync::LazyLock;
+use std::sync::Mutex;
+
 use anyhow::{Result, anyhow};
 use serde_json::json;
 
 use crate::library::SongRow;
+
+/// The page rows are the queue order. Caching them keeps a click from
+/// re-running `getSimilarSongs` and playing a different random row.
+static RADIO_ROWS: LazyLock<Mutex<HashMap<String, Vec<SongRow>>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+
+fn cache_key(kind: &str, id: &str) -> String {
+    format!("{kind}:{id}")
+}
+
+fn remember_rows(kind: &str, id: &str, rows: &[SongRow]) {
+    let mut cache = RADIO_ROWS
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    cache.insert(cache_key(kind, id), rows.to_vec());
+}
+
+fn cached_rows(kind: &str, id: &str) -> Option<Vec<SongRow>> {
+    RADIO_ROWS
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .get(&cache_key(kind, id))
+        .cloned()
+}
+
+fn song_rows(children: &[crate::api::Child]) -> Vec<SongRow> {
+    children
+        .iter()
+        .enumerate()
+        .map(|(index, child)| SongRow {
+            id: child.id.clone(),
+            title: child.title.clone(),
+            artist: child.artist.clone(),
+            album: child.album.clone(),
+            album_id: child.album_id.clone(),
+            track: Some(index as i32 + 1),
+            duration: child.duration,
+            suffix: child.suffix.clone(),
+            cover_art: child.cover_art.clone(),
+            starred: child.starred.clone(),
+        })
+        .collect()
+}
 
 struct Seed {
     song_id: String,
@@ -109,6 +156,8 @@ pub async fn page_json(
     }
 
     let children = similar_songs(dbs, &seed).await?;
+    let rows = song_rows(&children);
+    remember_rows(seed_kind, seed_id, &rows);
     let covers = crate::covers::url_map_for(
         dbs,
         std::iter::once(&seed.cover_art).chain(children.iter().map(|child| &child.cover_art)),
@@ -161,24 +210,51 @@ pub async fn tracks_json(
     seed_id: &str,
     start: i64,
 ) -> Result<(String, i64)> {
-    let seed = resolve_seed(dbs, seed_kind, seed_id).await?;
-    let children = similar_songs(dbs, &seed).await?;
-    let songs: Vec<SongRow> = children
-        .into_iter()
-        .enumerate()
-        .map(|(index, child)| SongRow {
-            id: child.id,
-            title: child.title,
-            artist: child.artist,
-            album: child.album,
-            album_id: child.album_id,
-            track: Some(index as i32 + 1),
-            duration: child.duration,
-            suffix: child.suffix,
-            cover_art: child.cover_art,
-            starred: child.starred,
-        })
-        .collect();
+    let songs = match cached_rows(seed_kind, seed_id) {
+        Some(rows) => rows,
+        None => {
+            let seed = resolve_seed(dbs, seed_kind, seed_id).await?;
+            let children = similar_songs(dbs, &seed).await?;
+            let rows = song_rows(&children);
+            remember_rows(seed_kind, seed_id, &rows);
+            rows
+        }
+    };
     let start = start.clamp(0, songs.len().saturating_sub(1) as i64);
     Ok((crate::queue::tracks_json(dbs, songs).await?, start))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn row(id: &str) -> SongRow {
+        SongRow {
+            id: id.to_string(),
+            title: id.to_string(),
+            artist: None,
+            album: None,
+            album_id: None,
+            track: None,
+            duration: None,
+            suffix: None,
+            cover_art: None,
+            starred: None,
+        }
+    }
+
+    #[test]
+    fn cached_page_rows_keep_the_displayed_order() {
+        let rows = vec![row("b"), row("a"), row("c")];
+        remember_rows("album", "order-test", &rows);
+        let cached = cached_rows("album", "order-test").expect("cached rows");
+        assert_eq!(
+            cached
+                .iter()
+                .map(|song| song.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["b", "a", "c"]
+        );
+        assert!(cached_rows("song", "order-test").is_none());
+    }
 }

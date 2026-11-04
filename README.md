@@ -60,7 +60,7 @@ Musika is keyboard-first. The keymap is Vim-flavoured: bindings can be sequences
 | `r` | Sync the library |
 | `Shift-Enter` | Toggle the fullscreen player |
 | `Ctrl-Q` | Toggle the queue drawer |
-| `?` | Toggle the lyrics overlay in fullscreen |
+| `?` | Toggle the lyrics overlay in fullscreen, or the page description overlay on album/artist pages |
 | `[b` / `]b` | Previous / next place in the travel log |
 | `Shift-Q` | Home: close overlays, leave fullscreen and pop every page |
 | `q` | Back; at Home press it twice to quit |
@@ -90,7 +90,7 @@ Musika is keyboard-first. The keymap is Vim-flavoured: bindings can be sequences
 | `Shift` + click | Extend the visual selection to the row |
 | Mouse Back / Forward | Previous / next place in the travel log |
 
-On the album page, `Tab` cycles the cover, artist link, notes and Back chip; `j`/`k` then move through the song rows. On the artist page it cycles the title, biography, shuffle and album wall.
+On album and artist pages, `Tab` cycles the page header stops. `?`, or Enter/click on the inline description, opens the shared full-window description reader; `j`/`k` then move through the rows (tracks for album/playlist/radio pages, albums for artist pages).
 
 ## Queue drawer
 

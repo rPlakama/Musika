@@ -30,6 +30,7 @@ ScrollPanel {
         id: rowMetrics
         viewWidth: root.width
         rowHeight: root.adaptiveRowHeight
+        fontScale: root.showRowCover ? 1.0 : 1.15
     }
 
     // The wrappers hook their backend channel through these two virtual

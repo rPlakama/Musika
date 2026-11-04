@@ -37,6 +37,7 @@ Rectangle {
         // width and the stable body height, never the delegate size.
         viewWidth: tracksSection.width
         rowHeight: content.adaptiveRowHeight
+        fontScale: root.isAlbum ? 1.15 : 1.0
     }
 
     signal back

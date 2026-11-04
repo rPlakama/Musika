@@ -28,6 +28,8 @@ Item {
 
     property real viewWidth: 0
     property real rowHeight: 0
+    // Coverless rows spend the freed art column on larger type.
+    property real fontScale: 1.0
 
     readonly property FontMetrics title: titleMetrics
     readonly property FontMetrics subtitle: subtitleMetrics
@@ -39,18 +41,18 @@ Item {
     FontMetrics {
         id: titleMetrics
         font.family: Theme.fonts.body
-        font.pixelSize: Theme.rowFont("title", root.viewWidth, root.rowHeight)
+        font.pixelSize: Theme.rowFont("title", root.viewWidth, root.rowHeight) * root.fontScale
     }
 
     FontMetrics {
         id: subtitleMetrics
         font.family: Theme.fonts.body
-        font.pixelSize: Theme.rowFont("subtitle", root.viewWidth, root.rowHeight)
+        font.pixelSize: Theme.rowFont("subtitle", root.viewWidth, root.rowHeight) * root.fontScale
     }
 
     FontMetrics {
         id: metaMetrics
         font.family: Theme.fonts.body
-        font.pixelSize: Theme.rowFont("meta", root.viewWidth, root.rowHeight)
+        font.pixelSize: Theme.rowFont("meta", root.viewWidth, root.rowHeight) * root.fontScale
     }
 }

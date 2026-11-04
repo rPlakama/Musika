@@ -45,9 +45,12 @@ Item {
     property string meta: ""
 
     // Stable per-row buckets: no per-delegate Text.Fit measurement.
-    readonly property real rowTitleSize: Theme.rowFont("title", root.viewWidth, root.rowHeight)
-    readonly property real rowSubtitleSize: Theme.rowFont("subtitle", root.viewWidth, root.rowHeight)
-    readonly property real metaPixelSize: Theme.rowFont("meta", root.viewWidth, root.rowHeight)
+    // A coverless row has the art column available for text; scale the
+    // three buckets together so the hierarchy stays intact.
+    readonly property real coverlessFontScale: root.showCover ? 1.0 : 1.15
+    readonly property real rowTitleSize: Theme.rowFont("title", root.viewWidth, root.rowHeight) * root.coverlessFontScale
+    readonly property real rowSubtitleSize: Theme.rowFont("subtitle", root.viewWidth, root.rowHeight) * root.coverlessFontScale
+    readonly property real metaPixelSize: Theme.rowFont("meta", root.viewWidth, root.rowHeight) * root.coverlessFontScale
     property color titleColor: Palette.onSurface
     property color subtitleColor: Palette.onSurfaceVariant
     property color metaColor: Palette.onSurfaceVariant

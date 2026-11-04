@@ -1515,6 +1515,7 @@ Rectangle {
                 // title/author gap must not shrink every row.
                 rowRefHeight: root.height
                 rowRatio: 0.06
+                centerEdges: true
                 onRowTapped: (index, shift) => {
                     if (shift) {
                         root.clearHeaderStops();

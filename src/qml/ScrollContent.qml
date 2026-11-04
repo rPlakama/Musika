@@ -121,6 +121,14 @@ Item {
     /// Bottom-align a short uniform list instead of leaving its rows at
     /// the top of an otherwise empty viewport (album pages).
     property bool bottomAlignShort: false
+    /// Reserve half a viewport above and below uniform rows so the first and
+    /// last rows can reach the centre. Without this, scrolloff pins the edge
+    /// rows and the follow appears to stop before the bottom.
+    property bool centerEdges: false
+    readonly property real _contentTopInset: root._shortContentGap + root._edgePadding
+    readonly property real _edgePadding: root.centerEdges && root.rowStride > 0
+        && root.view && root.view.height > 0
+        ? Math.max(0, (root.view.height - root.adaptiveRowHeight) * 0.5) : 0
     /// Optional content rendered in the list header, just above the first
     /// row (a section title, for example).
     property Component headerContent: null
@@ -266,9 +274,11 @@ Item {
                 first: 0,
                 last: v.count - 1
             };
+        var top = Math.max(0, v.contentY - root._contentTopInset);
         return {
-            first: Math.max(0, Math.floor(v.contentY / stride) - overscan),
-            last: Math.min(v.count - 1, Math.ceil((v.contentY + v.height) / stride) - 1 + overscan)
+            first: Math.max(0, Math.floor(top / stride) - overscan),
+            last: Math.min(v.count - 1,
+                Math.ceil((top + v.height) / stride) - 1 + overscan)
         };
     }
     readonly property int firstVisibleIndex: root._visibleBounds.first
@@ -292,7 +302,8 @@ Item {
             return root.contentHeightHint;
         var stride = root._stride(v);
         if (stride > 0 && root.rowRatio > 0)
-            return Math.max(0, v.count * stride - root.rowSpacing) + root._shortContentGap;
+            return Math.max(0, v.count * stride - root.rowSpacing)
+                + root._shortContentGap + 2 * root._edgePadding;
         var last = v.count > 0 ? v.itemAtIndex(v.count - 1) : null;
         if (last && last.height > 0)
             return last.y + last.height;
@@ -330,22 +341,28 @@ Item {
         var rows = root._rowCount(v);
         var row = root._rowOf(index);
         var half = root.visibleRows() * 0.5;
-        if (row + 1 <= half)
-            return 0;
-        if (row >= rows - half)
-            return maxY;
+        if (!root.centerEdges) {
+            // scrolloff parity: only the middle band centres; edge rows
+            // pin the viewport.
+            if (row + 1 <= half)
+                return 0;
+            if (row >= rows - half)
+                return maxY;
+        }
         var stride = root._stride(v);
         if (stride <= 0)
             return null;
         var center;
         if (root.rowStride > 0) {
-            center = row * stride + root.adaptiveRowHeight * 0.5 - v.height * 0.5;
+            center = root._contentTopInset + row * stride
+                + root.adaptiveRowHeight * 0.5 - v.height * 0.5;
         } else {
             var item = v.itemAtIndex(index);
             if (item && item.height > 0)
                 center = item.y + item.height * 0.5 - v.height * 0.5;
             else
-                center = row * stride + (stride - root.rowSpacing) * 0.5 - v.height * 0.5;
+                center = root._contentTopInset + row * stride
+                    + (stride - root.rowSpacing) * 0.5 - v.height * 0.5;
         }
         return Math.max(0, Math.min(maxY, center));
     }
@@ -740,8 +757,10 @@ Item {
         var stride = root._stride(v);
         if (stride <= 0)
             return;
-        root._anchorRow = Math.max(0, Math.min(v.count - 1, Math.floor(v.contentY / stride)));
-        root._anchorFraction = Math.max(0, Math.min(0.999, (v.contentY - root._anchorRow * stride) / stride));
+        var top = Math.max(0, v.contentY - root._contentTopInset);
+        root._anchorRow = Math.max(0, Math.min(v.count - 1, Math.floor(top / stride)));
+        root._anchorFraction = Math.max(0,
+            Math.min(0.999, (top - root._anchorRow * stride) / stride));
     }
 
     /// A resize keeps the keyboard cursor centred when the follow owns the
@@ -764,7 +783,8 @@ Item {
             var s = root._stride(v);
             if (s > 0) {
                 var anchor = Math.max(0, Math.min(v.count - 1, root._anchorRow));
-                target = (anchor + root._anchorFraction) * s;
+                target = root._contentTopInset
+                    + (anchor + root._anchorFraction) * s;
             }
         }
         if (target !== null)
@@ -1092,12 +1112,17 @@ Item {
                 Item {
                     width: parent.width
                     height: Math.max(0, root._shortContentGap - headerLoader.height)
+                        + root._edgePadding
                 }
                 Loader {
                     id: headerLoader
                     width: parent.width
                     sourceComponent: root.headerContent
                 }
+            }
+            footer: Item {
+                width: list.width
+                height: root._edgePadding
             }
             boundsBehavior: Flickable.StopAtBounds
             highlightFollowsCurrentItem: false

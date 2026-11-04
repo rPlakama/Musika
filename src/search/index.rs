@@ -525,7 +525,7 @@ async fn rebuild_locked(pool: &SqlitePool) -> Result<()> {
     .fetch_all(pool)
     .await?;
     let albums: Vec<AlbumRow> = sqlx::query_as(
-        "SELECT id, name AS title, artist, year, song_count, cover_art, starred, rating
+        "SELECT id, name AS title, artist, year, song_count, duration, cover_art, starred, rating
          FROM albums",
     )
     .fetch_all(pool)

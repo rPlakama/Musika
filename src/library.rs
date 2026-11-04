@@ -535,6 +535,7 @@ pub struct AlbumRow {
     pub artist: Option<String>,
     pub year: Option<i32>,
     pub song_count: i64,
+    pub duration: i64,
     pub cover_art: Option<String>,
     /// Server `starred` timestamp; `Some` = favourited (UI-56).
     pub starred: Option<String>,
@@ -813,7 +814,7 @@ pub async fn artists_range(
 }
 
 const ALBUM_SELECT: &str =
-    "SELECT id, name AS title, artist, year, song_count, cover_art, starred, rating
+    "SELECT id, name AS title, artist, year, song_count, duration, cover_art, starred, rating
      FROM albums";
 
 const ARTIST_SELECT: &str = "SELECT id, name, album_count, cover_art, starred FROM artists";

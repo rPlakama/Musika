@@ -164,6 +164,7 @@ pub(crate) fn album_json(
         "artist": album.artist,
         "year": album.year,
         "song_count": count,
+        "duration": album.duration,
         "tracks": count,
         "cover": cover,
         "starred": album.starred.is_some(),
@@ -226,12 +227,13 @@ struct AlbumElement<'a> {
 
 impl Serialize for AlbumElement<'_> {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        let mut state = serializer.serialize_struct("album", 13)?;
+        let mut state = serializer.serialize_struct("album", 14)?;
         state.serialize_field("id", &self.album.id)?;
         state.serialize_field("title", &self.album.title)?;
         state.serialize_field("artist", &self.album.artist)?;
         state.serialize_field("year", &self.album.year)?;
         state.serialize_field("song_count", &self.song_count)?;
+        state.serialize_field("duration", &self.album.duration)?;
         state.serialize_field("tracks", &self.song_count)?;
         state.serialize_field("cover", self.cover)?;
         state.serialize_field("starred", &self.album.starred.is_some())?;

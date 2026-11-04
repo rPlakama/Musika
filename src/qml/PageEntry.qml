@@ -58,6 +58,9 @@ Rectangle {
     property string artistName: ""
     property string artistCover: ""
     property string artistMeta: ""
+    property int artistAlbumCount: 0
+    property int artistDuration: 0
+    property string artistYear: ""
     property string artistDescription: ""
     property int artistRating: 0
     property bool artistStarred: false
@@ -155,13 +158,26 @@ Rectangle {
             parts.push(root.tracksFormat);
         return Theme.metaJoin(parts);
     }
-    /// Whole-hour or whole-minute runtime for the album header.
-    readonly property string tracksSpan: {
-        if (root.tracksDuration <= 0)
+    /// Whole-hour or whole-minute runtime for page headers.
+    function durationSpan(seconds) {
+        var total = Number(seconds) || 0;
+        if (total <= 0)
             return "";
-        if (root.tracksDuration < 3600)
-            return Theme.countLabel(Math.max(1, Math.round(root.tracksDuration / 60)), "Minute");
-        return Theme.countLabel(Math.max(1, Math.round(root.tracksDuration / 3600)), "Hour");
+        if (total < 3600)
+            return Theme.countLabel(Math.max(1, Math.round(total / 60)), "Minute");
+        return Theme.countLabel(Math.max(1, Math.round(total / 3600)), "Hour");
+    }
+    readonly property string tracksSpan: root.durationSpan(root.tracksDuration)
+    readonly property string artistSpan: root.durationSpan(root.artistDuration)
+    readonly property string artistHeaderStats: {
+        var parts = [];
+        if (root.artistAlbumCount > 0)
+            parts.push(Theme.countLabel(root.artistAlbumCount, "album"));
+        if (root.artistYear.length > 0)
+            parts.push(root.artistYear);
+        if (root.artistSpan.length > 0)
+            parts.push(root.artistSpan);
+        return Theme.metaJoin(parts);
     }
     readonly property string albumHeaderStats: {
         var parts = [];
@@ -443,6 +459,9 @@ Rectangle {
         root.artistName = page.artistName ? String(page.artistName) : ""
         root.artistCover = page.artistCover ? String(page.artistCover) : ""
         root.artistMeta = ""
+        root.artistAlbumCount = 0
+        root.artistDuration = 0
+        root.artistYear = ""
         root.artistDescription = ""
         root.artistRating = 0
         root.artistStarred = false
@@ -529,18 +548,27 @@ Rectangle {
         root.artistName = artist.name ? String(artist.name) : root.artistName;
         if (artist.cover && artist.cover.length > 0)
             root.artistCover = String(artist.cover);
-        root.artistMeta = Theme.countLabel(artist.album_count, "album");
         root.albumTitle = root.artistName;
         root.albumCover = root.artistCover;
-        root.albumMeta = root.artistMeta;
         root.albumNotes = root.artistDescription;
         root.artistRating = root.albumRating;
         root.artistStarred = root.albumStarred;
         content.clearSelection();
         songs.clear();
         var rows = artist.albums ? artist.albums : [];
+        var firstYear = 0;
+        var lastYear = 0;
+        var totalDuration = 0;
         for (var i = 0; i < rows.length; i++) {
             var album = rows[i];
+            if (album.year) {
+                var year = Number(album.year) || 0;
+                if (year > 0 && (firstYear === 0 || year < firstYear))
+                    firstYear = year;
+                if (year > lastYear)
+                    lastYear = year;
+            }
+            totalDuration += Number(album.duration) || 0;
             var meta = [];
             if (album.year)
                 meta.push(String(album.year));
@@ -557,6 +585,12 @@ Rectangle {
                 playable: true
             });
         }
+        root.artistAlbumCount = rows.length;
+        root.artistDuration = totalDuration;
+        root.artistYear = firstYear === 0 ? ""
+            : (firstYear === lastYear ? String(firstYear) : firstYear + "–" + lastYear);
+        root.artistMeta = root.artistHeaderStats;
+        root.albumMeta = root.artistMeta;
         root.loading = false;
         if (songs.count > 0 && (content.currentIndex < 0 || content.currentIndex >= songs.count))
             content.currentIndex = 0;

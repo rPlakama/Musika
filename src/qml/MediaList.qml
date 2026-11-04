@@ -462,7 +462,7 @@ ScrollPanel {
             // Attached `ListView.isCurrentItem` only resolves on the delegate
             // root; children must read this property (a child would always
             // report false).
-            readonly property bool currentItem: ListView.isCurrentItem
+            readonly property bool currentItem: root.currentIndex === row.index
             // Mouse/keyboard parity: the hovered row expands like the cursor.
             readonly property bool emphasized: row.currentItem || row.index === root.hoveredIndex
             // VI-4: the row sits inside the visual selection range.

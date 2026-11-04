@@ -1544,10 +1544,9 @@ Rectangle {
 
                         // VI-4: a row inside the visual selection wears the cursor fill.
                         readonly property bool selectedRow: content.selected(index)
-                        // Attached `ListView.isCurrentItem` only resolves on
-                        // the delegate root; children read this instead.
-                        readonly property bool currentItem: ListView.isCurrentItem && !root.onToolbar
-                        readonly property bool emphasized: ListView.isCurrentItem || songRow.index === content.hoveredIndex
+                        // The cursor is the ScrollModal property; no ListView.currentIndex.
+                        readonly property bool currentItem: content.currentIndex === songRow.index && !root.onToolbar
+                        readonly property bool emphasized: content.currentIndex === songRow.index || songRow.index === content.hoveredIndex
 
                         width: ListView.view ? ListView.view.width : 0
                         z: emphasized ? 1 : 0

@@ -18,7 +18,7 @@ import QtQuick
 import musika
 
 // ARC-UI-1: the four fixed Alt-hold verbs, one recycled module for every
-// surface (Songs/Albums lists, ArtistEntry cards and the fullscreen queue).
+// surface (Songs/Albums lists, PageEntry cards and the fullscreen queue).
 // Hosts map their row item with `song(item)` — track rows carry `songId` and
 // `albumId` — or `album(item, cached)` — album rows/cards carry `albumId`;
 // on an album the Go to Album slot is free (Enter already opens it), so it
@@ -71,7 +71,7 @@ QtObject {
     /// east quadrant carries the container download toggle instead. `cached`
     /// comes from the caller's mark window (`Backend.cachedAlbumIds`): an
     /// album already holding its content removes it on the call (the
-    /// ArtistEntry chip's toggle); anything else fires `downloadAlbum`
+    /// PageEntry chip's toggle); anything else fires `downloadAlbum`
     /// (idempotent when a pass already covers it).
     function album(item, cached, preview) {
         var fav = item.starred === true;

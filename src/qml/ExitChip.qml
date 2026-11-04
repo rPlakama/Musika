@@ -25,7 +25,7 @@ import "Theme.js" as Theme
 //
 //     ExitChip { host: root; onClicked: root.back() }
 //
-// `highlighted` marks the focus/selection tone (AlbumEntry's toolbar state);
+// `highlighted` marks the focus/selection tone (PageEntry's toolbar state);
 // `padRatio` keeps each host's horizontal padding (default 0.04).
 Rectangle {
     id: root

@@ -43,6 +43,8 @@ Rectangle {
     signal quickAction(var target, var actions)
     /// Opens the album's owning artist page from the header name.
     signal artistActivated(string artistId, string artistName, string artistCover)
+    signal albumActivated(string albumId, string title, string artist, string year, string tracks, string cover, bool starred)
+    signal descriptionRequested()
 
     /// "album" or "playlist": the same page anatomy, different source and art.
     property string entryKind: "album"
@@ -52,6 +54,17 @@ Rectangle {
     /// ARC-RS-1: the radio page uses this shell with a similar-song source.
     property string radioSeedKind: ""
     property string radioSeedId: ""
+    property string artistId: ""
+    property string artistName: ""
+    property string artistCover: ""
+    property string artistMeta: ""
+    property string artistDescription: ""
+    property int artistRating: 0
+    property bool artistStarred: false
+    property bool artistCacheOn: false
+    property bool artistDownloading: false
+    property int chipScope: -1
+    readonly property bool isArtist: root.entryKind === "artist"
     readonly property bool isPlaylist: root.entryKind === "playlist"
     readonly property bool isRadio: root.entryKind === "radio"
     readonly property bool isAlbum: root.entryKind === "album"
@@ -73,6 +86,9 @@ Rectangle {
     /// chip) instead of falling straight to the status bar; the song rows are
     /// left alone for j/k.
     readonly property bool tabStops: true
+    readonly property bool hasDescription: root.albumNotes.length > 0
+    readonly property string descriptionTitle: root.isArtist ? root.artistName : root.albumTitle
+    readonly property string descriptionSubtitle: root.isArtist ? root.artistMeta : root.albumMeta
     property string albumCover: ""
     property string albumTitle: ""
     property string albumArtist: ""
@@ -96,6 +112,7 @@ Rectangle {
     // UI-54: per-album/per-playlist scroll memory for the songs viewport.
     readonly property string memoryKey: root.isRadio
         ? "radio:" + root.radioSeedId
+        : root.isArtist ? "artist:" + root.artistId
         : root.isPlaylist ? "playlist:" + root.playlistId : "album:" + root.albumId
     property bool _restored: false
     /// A session-restored page starts on row 0, like a scope or order reset.
@@ -124,7 +141,9 @@ Rectangle {
         return Theme.metaJoin(parts);
     }
     /// The header metadata line: date first, then the track stats.
-    readonly property string albumMetaLine: Theme.metaJoin([root.albumMeta, root.tracksSummary])
+    readonly property string albumMetaLine: root.isArtist
+        ? root.albumMeta
+        : Theme.metaJoin([root.albumMeta, root.tracksSummary])
 
     /// Star hitbox side in the header (five slots total). 60% larger than
     /// the old strip, matching the album-title scale.
@@ -133,7 +152,7 @@ Rectangle {
     /// The header gap follows the cover but never eats more than 75% of
     /// the usable page height; wide pages keep room for the rows.
     readonly property real headerCoverBottom: Math.min(
-        (root.isAlbum ? coverBackdrop.coverSide : playlistArt.coverSide) - root.width * 0.02,
+        (root.isAlbum || root.isArtist ? coverBackdrop.coverSide : playlistArt.coverSide) - root.width * 0.02,
         (root.height - root.width * 0.04) * 0.75)
 
     color: Palette.surface
@@ -154,6 +173,23 @@ Rectangle {
 
     /// VI-4: `v` toggles visual mode on the cursor row (the toolbar owns no
     /// selection).
+    function toggleArtistCache() {
+        root.artistCacheOn = !root.artistCacheOn;
+        root.artistDownloading = root.artistCacheOn;
+        Backend.downloadArtist(root.artistId, root.artistCacheOn);
+    }
+
+    function toggleArtistFavorite() {
+        root.artistStarred = !root.artistStarred;
+        root.albumStarred = root.artistStarred;
+        Backend.starArtist(root.artistId, root.artistStarred);
+    }
+
+    function shuffleArtist() {
+        if (root.artistId.length > 0)
+            Backend.shuffleArtist(root.artistId);
+    }
+
     function toggleSelection() {
         if (root.onToolbar)
             return;
@@ -185,6 +221,22 @@ Rectangle {
     // UI-60: the album cover's verbs — the same favourite + count + download
     // set the album rows use.
     function coverActions() {
+        if (root.isArtist) {
+            var artist = {
+                artistId: root.artistId,
+                starred: root.artistStarred,
+                rating: root.artistRating
+            };
+            var actions = verbs.forItem("artist", artist, false, function (level) {
+                root.artistRating = level;
+                root.albumRating = level;
+            });
+            verbs.wrapFavorite(actions, function (on) {
+                root.artistStarred = on;
+                root.albumStarred = on;
+            });
+            return actions;
+        }
         return verbs.album(root.albumItem(), root.albumCacheOn, function (level) {
             root.albumRating = level;
         });
@@ -193,6 +245,14 @@ Rectangle {
     function armCoverActions(sticky) {
         if (root.isRadio)
             return;
+        if (root.isArtist) {
+            if (root.artistId.length === 0)
+                return;
+            var artistActions = root.coverActions();
+            artistActions.sticky = sticky === true;
+            root.quickAction(favoriteChip, artistActions);
+            return;
+        }
         if (root.isPlaylist) {
             if (root.playlistId.length === 0)
                 return;
@@ -222,7 +282,7 @@ Rectangle {
     }
 
     function scheduleCover() {
-        if (root.isPlaylist || root.albumId === "")
+        if (root.isPlaylist || (root.albumId === "" && root.artistId === ""))
             return;
         coverTimer.restart();
     }
@@ -236,7 +296,10 @@ Rectangle {
         if (target === root._coverTarget)
             return;
         root._coverTarget = target;
-        Backend.requestAlbumCover(root.albumId, target);
+        if (root.isArtist)
+            Backend.requestArtistCover(root.artistId, target);
+        else
+            Backend.requestAlbumCover(root.albumId, target);
     }
 
     function reload() {
@@ -248,6 +311,21 @@ Rectangle {
             root.onNotes = false;
             root.setNotesExpanded(false);
             Backend.requestRadio(root.radioSeedKind, root.radioSeedId);
+            return;
+        }
+        if (root.isArtist) {
+            if (root.artistId === "" || root._loadingAlbumId === "artist:" + root.artistId)
+                return;
+            root._loadingAlbumId = "artist:" + root.artistId;
+            root.loading = true;
+            root.onNotes = false;
+            root.setNotesExpanded(false);
+            Backend.requestArtist(root.artistId);
+            Backend.requestArtistUser(root.artistId);
+            Backend.requestArtistInfo(root.artistId);
+            Backend.requestArtistCache(root.artistId);
+            root._coverTarget = 0;
+            root.scheduleCover();
             return;
         }
         if (root.isPlaylist) {
@@ -289,12 +367,15 @@ Rectangle {
     function open(page) {
         var nextPlaylist = page.playlistId ? String(page.playlistId) : "";
         var nextAlbum = page.albumId ? String(page.albumId) : "";
+        var nextArtist = page.artistId ? String(page.artistId) : "";
         var nextRadio = page.radioSeedId ? String(page.radioSeedId) : "";
         var nextKind = nextRadio.length > 0 ? "radio"
+            : nextArtist.length > 0 ? "artist"
             : nextPlaylist.length > 0 ? "playlist" : "album";
         if (root.entryKind === nextKind
                 && root.albumId === nextAlbum
                 && root.playlistId === nextPlaylist
+                && root.artistId === nextArtist
                 && root.radioSeedId === nextRadio) {
             if (page.focusSongId) {
                 root.focusSongId = String(page.focusSongId);
@@ -324,6 +405,22 @@ Rectangle {
         root.albumNotes = "";
         root.playlistSubtitle = page.playlistTitle ? String(page.playlistTitle) : ""
         root.playlistCollage = [];
+        root.artistId = nextArtist
+        root.artistName = page.artistName ? String(page.artistName) : ""
+        root.artistCover = page.artistCover ? String(page.artistCover) : ""
+        root.artistMeta = ""
+        root.artistDescription = ""
+        root.artistRating = 0
+        root.artistStarred = false
+        root.artistCacheOn = false
+        root.artistDownloading = false
+        root.chipScope = -1
+        if (nextKind === "artist") {
+            root.albumTitle = root.artistName
+            root.albumCover = root.artistCover
+            root.albumMeta = root.artistMeta
+            root.albumMeta = ""
+        }
         root.tracksDuration = 0;
         root.tracksFormat = "";
         root.loading = true;
@@ -344,6 +441,13 @@ Rectangle {
 
     function applyInfo(payload) {
         var info = JSON.parse(payload);
+        if (root.isArtist) {
+            if (info.id !== root.artistId)
+                return;
+            root.artistDescription = info.biography ? String(info.biography) : "";
+            root.albumNotes = root.artistDescription;
+            return;
+        }
         if (info.album_id && info.album_id !== root.albumId)
             return;
         root.albumNotes = info.notes ? info.notes : "";
@@ -401,6 +505,49 @@ Rectangle {
             return true;
         }
         return false;
+    }
+
+    function applyArtist(payload) {
+        var artist = JSON.parse(payload);
+        if (!root.isArtist || artist.id !== root.artistId)
+            return;
+        root._loadingAlbumId = "";
+        root.artistName = artist.name ? String(artist.name) : root.artistName;
+        if (artist.cover && artist.cover.length > 0)
+            root.artistCover = String(artist.cover);
+        root.artistMeta = Theme.countLabel(artist.album_count, "album");
+        root.albumTitle = root.artistName;
+        root.albumCover = root.artistCover;
+        root.albumMeta = root.artistMeta;
+        root.albumNotes = root.artistDescription;
+        root.artistRating = root.albumRating;
+        root.artistStarred = root.albumStarred;
+        content.clearSelection();
+        songs.clear();
+        var rows = artist.albums ? artist.albums : [];
+        for (var i = 0; i < rows.length; i++) {
+            var album = rows[i];
+            var meta = [];
+            if (album.year)
+                meta.push(String(album.year));
+            meta.push(Theme.countLabel(album.song_count, "song"));
+            songs.append({
+                track: "",
+                title: album.title ? String(album.title) : "",
+                subtitle: album.artist ? String(album.artist) : "",
+                duration: Theme.metaJoin(meta),
+                songId: "",
+                albumId: album.id ? String(album.id) : "",
+                cover: album.cover ? String(album.cover) : "",
+                starred: album.starred === true,
+                playable: true
+            });
+        }
+        root.loading = false;
+        if (songs.count > 0 && (content.currentIndex < 0 || content.currentIndex >= songs.count))
+            content.currentIndex = 0;
+        content.restore();
+        root.scheduleCover();
     }
 
     function applyPlaylist(payload) {
@@ -573,6 +720,7 @@ Rectangle {
     }
 
     onAlbumIdChanged: if (root._ready && !root._opening && root.isAlbum) Qt.callLater(root.reload)
+    onArtistIdChanged: if (root._ready && !root._opening && root.isArtist) Qt.callLater(root.reload)
     onPlaylistIdChanged: if (root._ready && !root._opening && root.isPlaylist) Qt.callLater(root.reload)
     onRadioSeedIdChanged: if (root._ready && !root._opening && root.isRadio) Qt.callLater(root.reload)
     onEntryKindChanged: if (root._ready && !root._opening && !root.isAlbum) Qt.callLater(root.reload)
@@ -629,6 +777,12 @@ Rectangle {
     function playRow(index) {
         if (index < 0 || index >= songs.count)
             return;
+        if (root.isArtist) {
+            var albumRow = songs.get(index);
+            if (albumRow && albumRow.albumId)
+                root.albumActivated(albumRow.albumId, albumRow.title, albumRow.subtitle, "", "", albumRow.cover, albumRow.starred === true);
+            return;
+        }
         if (root.isRadio) {
             Backend.playRadio(root.radioSeedKind, root.radioSeedId, index);
             return;
@@ -642,7 +796,64 @@ Rectangle {
         Backend.playAlbum(root.albumId, index);
     }
 
+    function handleArtistAction(action) {
+        if (action === "pane_cycle" || action === "pane_cycle_back") {
+            var state = root.onCover ? 1 : (root.onNotes ? 2 : (root.chipScope >= 0 ? 3 + root.chipScope : 0));
+            do {
+                state = (state + (action === "pane_cycle" ? 1 : 5)) % 6;
+            } while (state === 2 && root.albumNotes.length === 0)
+            root.onCover = state === 1;
+            root.onNotes = state === 2;
+            root.chipScope = state >= 3 ? state - 3 : -1;
+            root.setNotesExpanded(state === 2);
+            if (state !== 0)
+                content.clearSelection();
+            else if (songs.count > 0 && content.currentIndex < 0)
+                content.currentIndex = 0;
+            return true;
+        }
+        if (root.chipScope >= 0) {
+            if (action === "enter")
+                root.activateArtistChip();
+            else if (action === "move_up") {
+                root.chipScope = root.chipScope > 0 ? root.chipScope - 1 : 2;
+                if (root.chipScope === 2 && root.albumNotes.length > 0)
+                    root.onNotes = true;
+            } else if (action === "move_down") {
+                root.chipScope = -1;
+                root.onCover = true;
+            }
+            return true;
+        }
+        if (root.onCover || root.onNotes) {
+            if (action === "enter")
+                root.onCover ? root.armCoverActions(true) : root.setNotesExpanded(!root.notesExpanded);
+            else if (action === "move_down") {
+                root.onCover = false;
+                root.onNotes = false;
+                root.chipScope = 0;
+            } else if (action === "move_up") {
+                root.onCover = false;
+                root.onNotes = false;
+                root.chipScope = 2;
+            }
+            return true;
+        }
+        return false;
+    }
+
+    function activateArtistChip() {
+        if (root.chipScope === 0)
+            root.toggleArtistCache();
+        else if (root.chipScope === 1)
+            root.shuffleArtist();
+        else if (root.chipScope === 2)
+            root.toggleArtistFavorite();
+    }
+
     function handleAction(action) {
+        if (root.isArtist && root.handleArtistAction(action))
+            return;
         // UI-60/UI-14: Tab walks the header only: cover -> artist -> notes ->
         // Back chip (Shift+Tab reverses), leaving the song rows to j/k. Empty
         // artist/notes stops are skipped; selecting the notes expands the
@@ -724,7 +935,7 @@ Rectangle {
                     root.onToolbar = true;
                 }
             } else if (action === "enter") {
-                root.setNotesExpanded(!root.notesExpanded);
+                root.descriptionRequested();
             }
             return;
         }
@@ -783,7 +994,30 @@ Rectangle {
     Connections {
         target: Backend
         function onDataReady(channel, payload) {
-            if (channel === "radio") {
+            if (channel === "artist") {
+                root.applyArtist(payload);
+            } else if (channel === "artist_info") {
+                root.applyInfo(payload);
+            } else if (channel === "artist_user") {
+                var user = JSON.parse(payload);
+                if (user.id === root.artistId) {
+                    root.artistStarred = user.starred === true;
+                    root.albumStarred = root.artistStarred;
+                    root.artistRating = Number(user.rating) || 0;
+                    root.albumRating = root.artistRating;
+                }
+            } else if (channel === "artist_cache") {
+                var artistCache = JSON.parse(payload);
+                if (artistCache.id === root.artistId) {
+                    root.artistCacheOn = artistCache.on === true;
+                    root.artistDownloading = artistCache.active === true;
+                }
+            } else if (channel === "artist_cover") {
+                var artistArt = JSON.parse(payload);
+                if (artistArt.artist_id === root.artistId && artistArt.cover
+                        && Number(artistArt.size) === root._coverTarget)
+                    root.albumCover = artistArt.cover;
+            } else if (channel === "radio") {
                 root.applyRadio(payload);
             } else if (channel === "playlist") {
                 root.applyPlaylist(payload);
@@ -820,13 +1054,23 @@ Rectangle {
         function onLibrary_changed() {
             root.reload();
         }
+        function onAlbum_order_changed() {
+            if (root.isArtist)
+                root.reload();
+        }
+        function onRatingChanged(kind, id, rating) {
+            if (kind === "artist" && id === root.artistId) {
+                root.artistRating = rating;
+                root.albumRating = rating;
+            }
+        }
     }
 
     // Ambience (D-5): the album art itself, painted sharp with no wash
     CoverBackdrop {
         id: coverBackdrop
         anchors.fill: parent
-        visible: root.isAlbum
+        visible: root.isAlbum || root.isArtist
         source: root.albumCover
         // Leave the bottom quarter for the rows; the square never grows
         // behind them.
@@ -838,7 +1082,7 @@ Rectangle {
     PlaylistCollage {
         id: playlistArt
         anchors.fill: parent
-        visible: !root.isAlbum
+        visible: !(root.isAlbum || root.isArtist)
         sources: root.playlistCollage
         maxSide: (root.height - root.width * 0.04) * 0.75
     }
@@ -950,13 +1194,16 @@ Rectangle {
                 }
 
                 StarRating {
-                    visible: root.isAlbum
+                    visible: root.isAlbum || root.isArtist
                     Layout.alignment: Qt.AlignLeft
                     unit: root.starUnit
                     rating: root.albumRating
                     onPicked: level => {
                         root.albumRating = level;
-                        Backend.rateAlbum(root.albumId, level);
+                        if (root.isArtist)
+                            Backend.rateArtist(root.artistId, level);
+                        else
+                            Backend.rateAlbum(root.albumId, level);
                     }
                 }
 
@@ -990,10 +1237,10 @@ Rectangle {
                     Layout.fillWidth: true
                     spacing: root.height * 0.008
 
-                    // ARC-I-2/UI-60: the album's favourite leads the header
+                    // ARC-I-2/UI-60: the album.s favourite leads the header
                     // meta (the star row above owns the rating now).
                     Item {
-                        visible: root.isAlbum && root.albumStarred
+                        visible: (root.isAlbum || root.isArtist) && root.albumStarred
                         Layout.alignment: Qt.AlignVCenter
                         Layout.preferredWidth: root.height * 0.016
                         Layout.preferredHeight: width
@@ -1018,6 +1265,63 @@ Rectangle {
                         Layout.alignment: Qt.AlignVCenter
                         count: root.selectionCount
                         pixelSize: root.height * 0.02
+                    }
+                }
+
+                Row {
+                    visible: root.isArtist
+                    Layout.alignment: Qt.AlignLeft
+                    spacing: root.height * 0.010
+
+                    ActionChip {
+                        unit: root.height * 0.06
+                        icon: ""
+                        onClicked: {
+                            root.chipScope = 0;
+                            root.clearHeaderStops(false);
+                            root.toggleArtistCache();
+                        }
+
+                        DownloadButton {
+                            anchors.centerIn: parent
+                            base: parent.height * 0.42
+                            fetching: root.artistDownloading
+                            done: root.artistCacheOn
+                            showIdle: true
+                        }
+
+                        ScopeRing { shown: root.isArtist && root.chipScope === 0 }
+                    }
+
+                    ActionChip {
+                        unit: root.height * 0.06
+                        icon: "qrc:/app/icons/outline-shuffle.svg"
+                        onClicked: {
+                            root.chipScope = 1;
+                            root.clearHeaderStops(false);
+                            root.shuffleArtist();
+                        }
+                        ScopeRing { shown: root.isArtist && root.chipScope === 1 }
+                    }
+
+                    ActionChip {
+                        id: favoriteChip
+                        unit: root.height * 0.06
+                        icon: ""
+                        onClicked: {
+                            root.chipScope = 2;
+                            root.clearHeaderStops(false);
+                            root.toggleArtistFavorite();
+                        }
+                        FavoriteButton {
+                            anchors.fill: parent
+                            variant: "chip"
+                            unit: parent.height * 0.42
+                            starred: root.artistStarred
+                            rating: root.artistRating
+                            showCount: false
+                        }
+                        ScopeRing { shown: root.isArtist && root.chipScope === 2 }
                     }
                 }
             }
@@ -1047,7 +1351,7 @@ Rectangle {
                 anchors.left: parent.left
                 anchors.right: parent.right
                 height: root.albumNotes.length > 0 ? Math.min(parent.height, root.height * 0.325) : 0
-                visible: root.isAlbum && root.albumNotes.length > 0
+                visible: (root.isAlbum || root.isArtist) && root.albumNotes.length > 0
                 clip: true
 
                 Flickable {
@@ -1085,8 +1389,7 @@ Rectangle {
                     enabled: root.albumNotes.length > 0
                     onTapped: {
                         root.clearHeaderStops(false);
-                        root.onNotes = true;
-                        root.setNotesExpanded(!root.notesExpanded);
+                        root.descriptionRequested();
                     }
                 }
             }
@@ -1107,19 +1410,21 @@ Rectangle {
                 model: songs
                 selectable: true
                 memoryKey: root.memoryKey
-                quickActionKind: "song"
+                quickActionKind: root.isArtist ? "album" : "song"
+                markSongs: !root.isArtist
+                markAlbums: root.isArtist
                 onQuickAction: (target, actions) => root.quickAction(target, actions)
                 visible: !(root.loading && songs.count === 0)
                 // ARC-UI-2 M1: the rows paint track, title and duration.
-                searchFields: ["track", "title", "subtitle", "duration"]
+                searchFields: root.isArtist ? ["title", "subtitle", "meta"] : ["track", "title", "subtitle", "duration"]
                 // UI-58: rows scale from the page height, not the song viewport
                 // (the header/notes reflow must not rescale every row). The
                 // precomputed extent keeps the shared glide off Qt's lazy
                 // estimate.
-                context: "album"
+                context: root.isArtist ? "library" : "album"
                 // Short albums sit against the page bottom instead of floating at
                 // the top of the scroller.
-                bottomAlignShort: true
+                bottomAlignShort: !root.isArtist
                 rowRefHeight: root.height
                 onRowTapped: (index, shift) => {
                     if (shift) {
@@ -1172,7 +1477,7 @@ Rectangle {
                             selected: songRow.selectedRow
                         }
 
-                        // The shared list row: AlbumEntry is the no-cover context.
+                        // The shared list row: PageEntry is the no-cover context.
                         RowBody {
                             anchors.fill: parent
                             viewWidth: songRow.width
@@ -1180,12 +1485,13 @@ Rectangle {
                             metrics: rowMetrics
                             emphasized: songRow.emphasized
                             current: songRow.currentItem
-                            showCover: !root.isAlbum
+                            showCover: !root.isAlbum || root.isArtist
                             cover: songRow.cover
                             showSubtitle: songRow.subtitle.length > 0
-                            title: songRow.track.length > 0 ? songRow.track + ". " + songRow.title : songRow.title
+                            title: root.isArtist ? songRow.title
+                                : (songRow.track.length > 0 ? songRow.track + ". " + songRow.title : songRow.title)
                             subtitle: songRow.subtitle
-                            meta: songRow.duration
+                            meta: root.isArtist ? songRow.duration : songRow.duration
                             reserveMeta: true
                             metaAlignRight: true
                             leftMargin: songRow.width * 0.02
@@ -1199,7 +1505,7 @@ Rectangle {
                             markSongId: songRow.songId
                             markAlbumId: songRow.albumId
                             markStarred: songRow.starred
-                            markRatingVisible: false
+                            markRatingVisible: root.isArtist
                             searchQuery: content.searchQuery
                             searchCurrent: songRow.index === content.searchCurrentRow
                         }

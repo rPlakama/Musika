@@ -19,7 +19,7 @@ import musika
 import "Theme.js" as Theme
 
 // UI-60: the five-star rating array, shared by the album covers and the
-// ArtistEntry strip. Hover previews the level incrementally up to the
+// PageEntry strip. Hover previews the level incrementally up to the
 // pointer; clicking a level sets it, clicking the lit top clears it to 0.
 // The host owns the backend call and optimistic state.
 Row {

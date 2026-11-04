@@ -61,7 +61,7 @@ Rectangle {
     // title shrinks toward the headline floor (18 px, never body-text weight)
     // as the window narrows and the band follows it, handing the reclaimed
     // height back to the list. `widthScale` is 1 at `compact` and above,
-    // tapering to 0.7 at the `narrow` breakpoint ArtistEntry uses; it is
+    // tapering to 0.7 at the `narrow` breakpoint PageEntry uses; it is
     // continuous, so resizing — or crossing the breakpoint — never jumps.
     readonly property real widthScale: Theme.widthScale(root.width)
     readonly property real titlePixelSize: Theme.rampFontSize("headline", root.height, root.width)

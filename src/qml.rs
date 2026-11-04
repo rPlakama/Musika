@@ -1603,7 +1603,7 @@ impl Backend {
         });
     }
 
-    /// ARC-RS-1: opens RadioEntry for one seed row (album). The page then
+    /// ARC-RS-1: opens PageEntry for one seed row (album). The page then
     /// asks for its rows through `requestRadio`.
     #[qslot(qml_name = "startRadio")]
     fn start_radio(&mut self, seed_kind: String, seed_id: String) {
@@ -1616,7 +1616,7 @@ impl Backend {
         emit(&invoker, "open_radio", payload);
     }
 
-    /// ARC-RS-1: the RadioEntry page payload (`getSimilarSongs`).
+    /// ARC-RS-1: the PageEntry page payload (`getSimilarSongs`).
     #[qslot(qml_name = "requestRadio")]
     fn request_radio(&mut self, seed_kind: String, seed_id: String) {
         let invoker = self.get_qml_method_invoker();
@@ -1854,7 +1854,7 @@ impl Backend {
     /// artist-kind rule exists anymore: an album whose `artist_id` disagrees
     /// with its songs' `artist_id` (server metadata) is still covered by its
     /// own album rule, which the old artist rule could never reach. Emits
-    /// `artist_cache` for the ArtistEntry toggle.
+    /// `artist_cache` for the PageEntry toggle.
     #[qslot(qml_name = "downloadArtist")]
     fn download_artist(&mut self, artist_id: String, on: bool) {
         self.download_artist_impl(artist_id, on);
@@ -2297,7 +2297,7 @@ impl Backend {
     }
 
     /// Navigation-only song jump: resolve the song's album page and emit
-    /// `open_album` with the song id, so Home opens AlbumEntry and parks the
+    /// `open_album` with the song id, so Home opens PageEntry and parks the
     /// cursor on that row. No queue and no playback.
     #[qslot(qml_name = "openSongAlbum")]
     fn open_song_album(&mut self, song_id: String) {
@@ -2925,7 +2925,7 @@ impl Backend {
     }
 
     /// The Alt overlay's Download verb under a visual selection (VI-4):
-    /// a toggle like the ArtistEntry chip — a selection whose targets all
+    /// a toggle like the PageEntry chip — a selection whose targets all
     /// hold their content is removed, anything missing downloads (songs
     /// explicitly; albums/artists as rule containers) through the shared
     /// fetch pass with the per-id row feedback.

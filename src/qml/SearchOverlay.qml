@@ -621,7 +621,7 @@ Item {
         // container tones for contrast.
         tint: Palette.surface
         backdrop: root.backdrop
-        // The close fade can uncover a freshly pushed AlbumEntry; do not keep
+        // The close fade can uncover a freshly pushed PageEntry; do not keep
         // re-blurring that changing page for the length of the fade.
         paused: !root.opened
         radius: Theme.radius

@@ -22,7 +22,7 @@ import "Theme.js" as Theme
 // layouts keep the same state story everywhere:
 //
 //   variant: "chip"  — the star sits centred in an ActionChip and the count
-//                      is the corner badge (fullscreen keybar, ArtistEntry).
+//                      is the corner badge (fullscreen keybar, PageEntry).
 //   variant: "row"   — the heart and the count are two symbols in one Row
 //                      (the shared list/album marks).
 //

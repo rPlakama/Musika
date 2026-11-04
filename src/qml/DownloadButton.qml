@@ -19,7 +19,7 @@ import musika
 import "Theme.js" as Theme
 
 // ARC-UI-6: the one download-state visual, reused wherever a download
-// function exists (`RowMarks`, ArtistEntry's chip, the fullscreen keybar
+// function exists (`RowMarks`, PageEntry's chip, the fullscreen keybar
 // chip). Three states, all optional:
 //
 //   idle    — the outline glyph (`showIdle`) when neither of the below

@@ -120,6 +120,7 @@ Item {
         if (currentSegment !== index)
             root._resetSegmentOnShow = true;
         root.entryHistory = [];
+        descriptionOverlay.close();
         currentSegment = index;
         while (contentStack.depth > 1)
             contentStack.pop();
@@ -249,6 +250,10 @@ Item {
             searchOverlay.close();
             closed = true;
         }
+        if (descriptionOverlay.shown) {
+            descriptionOverlay.close();
+            closed = true;
+        }
         if (quickActions.armed) {
             quickActions.cancel();
             closed = true;
@@ -288,9 +293,9 @@ Item {
             } else if (entry.kind === "artist") {
                 root.openEntry("artist", entry.page, true, false);
             } else if (entry.kind === "playlist") {
-                contentStack.push(playlistEntryComponent, entry.page, StackView.Immediate);
+                root.openEntry("playlist", entry.page, true, false);
             } else if (entry.kind === "radio") {
-                contentStack.push(radioEntryComponent, entry.page, StackView.Immediate);
+                root.openEntry("radio", entry.page, true, false);
             }
         }
         nowPlayingExpanded = place.fullscreen === true;
@@ -327,7 +332,7 @@ Item {
     // Returning from an artist entry lands on Home in the same scope it was
     // entered from (Albums, Songs or Artists), with that scope's cursor and
     // scroll state intact.
-    function leaveArtistEntry() {
+    function leavePageEntry() {
         showSegment(root.currentSegment);
     }
 
@@ -375,6 +380,7 @@ Item {
 
     function openEntry(kind, page, instant, back) {
         var key = root.entryKey(kind, page);
+        page.entryKind = kind;
         var current = contentStack.currentItem;
         var currentKind = root.currentEntryKind();
         if (currentKind && root.entryKey(currentKind, current) === key) {
@@ -384,10 +390,9 @@ Item {
         }
         if (!back)
             root.entryHistory = root.entryHistory.concat([{ kind: kind, page: page }]);
-        var component = kind === "artist" ? artistEntryComponent : albumEntryComponent;
+        var component = pageEntryComponent;
         if (currentKind) {
-            var sameComponent = (currentKind === "artist") === (kind === "artist");
-            if (sameComponent && current.open) {
+            if (current.open) {
                 current.open(page);
                 return;
             }
@@ -439,10 +444,7 @@ Item {
             playlistId: playlistId,
             playlistTitle: title ? title : ""
         };
-        if (instant)
-            contentStack.push(playlistEntryComponent, page, StackView.Immediate);
-        else
-            contentStack.push(playlistEntryComponent, page);
+        root.openEntry("playlist", page, instant === true, false);
     }
 
     /// ARC-RS-1: one seed row opens the similar-song page; the backend
@@ -452,10 +454,7 @@ Item {
             radioSeedKind: seedKind ? seedKind : "album",
             radioSeedId: seedId
         };
-        if (instant)
-            contentStack.push(radioEntryComponent, page, StackView.Immediate);
-        else
-            contentStack.push(radioEntryComponent, page);
+        root.openEntry("radio", page, instant === true, false);
     }
 
     function openArtist(artistId, artistName, artistCover, instant) {
@@ -613,7 +612,7 @@ Item {
     // status bar's Sync → Wipe scope, then back to the list — the controls
     // stay reachable without leaving region 1 for the top bar. Shift+Tab
     // walks the same circle backwards (list → wipe → sync → chip → list).
-    // Surfaces with their own Tab stops (ArtistEntry's chips, the fullscreen
+    // Surfaces with their own Tab stops (PageEntry's chips, the fullscreen
     // player's panes) keep them.
     function tabWalk(action) {
         var back = action === "pane_cycle_back";
@@ -624,8 +623,8 @@ Item {
         var listy = view && view.hasHeaderChip !== undefined;
 
         if (activeRegion === 1 && !listy) {
-            // Surfaces with their own Tab stops keep them (ArtistEntry's
-            // chips, AlbumEntry's cover/back cycle); a plain page steps
+            // Surfaces with their own Tab stops keep them (PageEntry's
+            // chips, PageEntry's cover/back cycle); a plain page steps
             // straight into the status bar.
             if (view && (view.chipScope !== undefined || view.tabStops === true)) {
                 host.handleAction(action);
@@ -674,6 +673,23 @@ Item {
     // Actions dispatched from the global key handler, scoped to the active
     // region: movement only ever affects the region the cursor is in.
     function handleAction(action) {
+        if (descriptionOverlay.shown) {
+            if (action === "back" || action === "cancel") {
+                descriptionOverlay.close();
+                return;
+            }
+            if (descriptionOverlay.handleAction(action))
+                return;
+        }
+        if (action === "lyrics_overlay" && !root.nowPlayingExpanded
+                && contentStack.depth > 1) {
+            var page = contentStack.currentItem;
+            if (page && page.hasDescription === true) {
+                descriptionOverlay.toggle(page.descriptionTitle,
+                    page.descriptionSubtitle, page.albumNotes);
+                return;
+            }
+        }
         // Navigation-only song jump (search song hits, IPC): open the album
         // page and park the cursor, no queue/playback.
         if (action.indexOf("open_song_album ") === 0) {
@@ -917,7 +933,7 @@ Item {
             }
             // P-8: an artist entry is a detour — back lands on Main.
             if (contentStack.currentItem && contentStack.currentItem.exitsToMain)
-                root.leaveArtistEntry();
+                root.leavePageEntry();
             else if (contentStack.depth > 1)
                 contentStack.pop();
             return;
@@ -966,7 +982,7 @@ Item {
             if (activeRegion === 1) {
                 var top = contentStack.currentItem;
                 if (top && top.onToolbar !== undefined && top.onToolbar) {
-                    // AlbumEntry: row 0's `k` lands on the toolbar first; only
+                    // PageEntry: row 0's `k` lands on the toolbar first; only
                     // after that is the up edge the status region.
                     activeRegion = 2;
                     return;
@@ -1033,6 +1049,7 @@ Item {
                         Backend.resetKeyInput();
                         if (contentStack.depth === 1 && !root._bootstrapPending) {
                             root.entryHistory = [];
+                            descriptionOverlay.close();
                             root.activateSegment(root.currentSegment);
                         }
                     }
@@ -1132,39 +1149,12 @@ Item {
                     }
 
                     Component {
-                        id: artistEntryComponent
-                        ArtistEntry {
+                        id: pageEntryComponent
+                        PageEntry {
                             onBack: root.backEntry()
-                            onAlbumActivated: (albumId, title, artist, year, tracks, cover, starred) => root.openAlbum(albumId, title, artist, year, tracks, cover, starred)
-                            onQuickAction: (target, actions) => root.armQuickActions(target, actions)
-                        }
-                    }
-
-                    Component {
-                        id: albumEntryComponent
-                        AlbumEntry {
-                            onBack: root.backEntry()
-                            // The header artist name is a Tab stop; it opens
-                            // the album's owning artist page.
                             onArtistActivated: (artistId, artistName, artistCover) => root.openArtist(artistId, artistName, artistCover)
-                            // ARC-I-2: the page arms the shared Alt overlay on
-                            // its song rows.
-                            onQuickAction: (target, actions) => root.armQuickActions(target, actions)
-                        }
-                    }
-
-                    Component {
-                        id: playlistEntryComponent
-                        PlaylistEntry {
-                            onBack: contentStack.pop()
-                            onQuickAction: (target, actions) => root.armQuickActions(target, actions)
-                        }
-                    }
-
-                    Component {
-                        id: radioEntryComponent
-                        RadioEntry {
-                            onBack: root.backEntry()
+                            onAlbumActivated: (albumId, title, artist, year, tracks, cover, starred) => root.openAlbum(albumId, title, artist, year, tracks, cover, starred)
+                            onDescriptionRequested: descriptionOverlay.toggle(contentStack.currentItem.descriptionTitle, contentStack.currentItem.descriptionSubtitle, contentStack.currentItem.albumNotes)
                             onQuickAction: (target, actions) => root.armQuickActions(target, actions)
                         }
                     }
@@ -1226,6 +1216,10 @@ Item {
     // view's cursor item through `armQuickActions`; h/j/k/l aim and the Alt
     // release fires. Acrylic tiles over the shell, below the toast so errors
     // stay readable mid-gesture.
+    DescriptionOverlay {
+        id: descriptionOverlay
+    }
+
     AltActionsOverlay {
         id: quickActions
         anchors.fill: parent

@@ -16,34 +16,28 @@
 
 import QtQuick
 import QtQuick.Layouts
-import QtQuick.Window
 import musika
 import "ScrollProfiles.js" as ScrollProfiles
 import "Theme.js" as Theme
 
 // The one scroll surface (the "ScrollModal"), list-only.
 //
-// The follow keeps the Neovim `scrolloff=999` feel: the cursor row stays
-// centred, and the first/last screenful pins to the content edge. The
-// content extent and target are solved from the row unit (count × stride),
-// never from delegates that may still carry the previous geometry. The
-// realised tail overrides the extent for variable-height rows.
+// One behaviour: Neovim `scrolloff=999`. The cursor row is centred whenever
+// the row-unit target can stay inside the content; near the first and last
+// rows the target clamps to the content edge, so the edge rows touch the
+// viewport and never leave a gap.
 //
-// Hosts never write `contentY` or call `positionViewAtIndex` themselves.
+// The view is a pure function of the cursor:
+//
+//   centre(i) = i * stride + rowHeight / 2 - viewHeight / 2
+//   targetY(i) = clamp(centre(i), minY, maxY)
+//
+// Uniform rows are solved from count * stride only. Delegate positions,
+// contentHeight and timers are never consulted for them. Variable-height
+// hosts (lyrics) keep a measured item.y fallback, because their rows cannot
+// use the closed form.
 Item {
     id: root
-
-    property var _win: Window.window
-
-    Connections {
-        target: root._win
-        function onActiveChanged() {
-            if (root._win && root._win.active && root._resizeWhileInactive) {
-                root._resizeWhileInactive = false;
-                root._scheduleResizeRecenter();
-            }
-        }
-    }
 
     // ── Context profile ──────────────────────────────────────────────────
 
@@ -59,8 +53,8 @@ Item {
 
     // ── Removable type inserts ─────────────────────────────────────────
     // A host declares the scopes this surface may render; the array is
-    // mutable, so a page can drop or add a type without changing the
-    // scroll engine. `limitedBy` names the enclosing scope (empty = global).
+    // mutable, so a page can drop or add a type without changing the scroll
+    // engine. `limitedBy` names the enclosing scope (empty = global).
     property var types: []
     property string limitedBy: ""
     property string activeType: ""
@@ -91,54 +85,30 @@ Item {
     /// own their heights, e.g. lyrics).
     property real rowRatio: root.profile.rowRatio !== undefined ? root.profile.rowRatio : 0
     /// The host's stable sizing reference (panel body room, page height…),
-    /// never the body's own height (that would feed the row unit back into
-    /// the layout).
+    /// never the body's own height when the host can provide one.
     property real rowRefHeight: 0
-    // Cached reference, not a live binding: a resize that changes the row unit
-    // must settle through this stable value instead of feeding the body height
-    // back into the row size.
-    property real _rowRefHeight: root.height
-    readonly property real rowViewHeight: root._rowRefHeight
+    readonly property real rowViewHeight: root.rowRefHeight > 0 ? root.rowRefHeight : root.height
     property real rowHeightScale: root.profile.rowHeightScale !== undefined ? root.profile.rowHeightScale : 1.0
     property real rowSpacing: 0
-    /// Extra rows kept alive above and below the viewport, so a continuous
-    /// scroll never has to create a delegate at the edge.
+    /// Extra rows kept alive above and below the viewport.
     property int renderOverscanRows: 10
     readonly property real renderOverscan: {
-        // Use the declared row unit, never a delegate measurement: the
-        // measured-height path for variable rows depends on cacheBuffer and
-        // made cacheBuffer -> delegate -> height -> overscan a binding loop.
         var stride = root.rowStride > 0 ? root.rowStride : root.rowViewHeight;
         return stride > 0 ? stride * root.renderOverscanRows : 0;
     }
-    // The Theme.adaptiveRow baseline floor is the real guard; this only stops
-    // pathological 1 px rows in a tiny transient pane.
     property real minRowHeight: 18
-    /// Kept for host compatibility; the extent is Qt's own now.
-    property real contentHeightHint: 0
     /// Animate rows whose index changed after a model move (search results).
     property bool animateDisplacement: false
-    /// Bottom-align a short uniform list instead of leaving its rows at
-    /// the top of an otherwise empty viewport (album pages).
+    /// Keep a short uniform list against the bottom edge by growing the
+    /// native header. No special target math is needed.
     property bool bottomAlignShort: false
-    /// Reserve half a viewport above and below uniform rows so the first and
-    /// last rows can reach the centre. Without this, scrolloff pins the edge
-    /// rows and the follow appears to stop before the bottom.
-    property bool centerEdges: false
-    readonly property real _contentTopInset: root._shortContentGap + root._edgePadding
-    readonly property real _edgePadding: root.centerEdges && root.rowStride > 0
-        && root.view && root.view.height > 0
-        ? Math.max(0, (root.view.height - root.adaptiveRowHeight) * 0.5) : 0
-    /// Optional content rendered in the list header, just above the first
-    /// row (a section title, for example).
+    /// Optional content rendered in the list header, above the first row.
     property Component headerContent: null
 
     /// Follow duration (ms); 0 snaps. `reduceMotion` also snaps.
     property int followMs: Theme.motion.scroll
-    /// One-shot duration for the next glide (0 = `followMs`).
-    property int glideOverrideMs: 0
-    /// Kept for host compatibility; the follow is always centred now.
-    property bool unlimitedScrolloff: false
+    /// Debug-only: log the follow residual after a glide finishes.
+    property bool debugFollow: false
 
     // ── Search / memory / selection inputs ───────────────────────────────
 
@@ -152,22 +122,14 @@ Item {
 
     // ── Row marks / Alt verbs ────────────────────────────────────────────
 
-    /// ARC-UI-1: which recycled Alt-hold verb set this scroll body arms
-    /// ("song"/"album"/"artist"); "" disables the overlay.
     property string quickActionKind: ""
-    /// The id role a selection batch resolves to.
     readonly property string quickActionField: root.quickActionKind === "album" ? "albumId" : (root.quickActionKind === "artist" ? "artistId" : "songId")
-    /// The download-window row kinds this surface renders.
     property bool markSongs: true
     property bool markAlbums: false
-    /// ARC-UI-1: relayed from the body to the host (Home routes it to the
-    /// shared overlay).
     signal quickAction(var target, var actions)
 
     // ── Row metric ───────────────────────────────────────────────────────
 
-    /// A list with a uniform row unit (variable-height lists such as lyrics
-    /// have none).
     readonly property bool adaptiveRows: root.rowRatio > 0
 
     function adaptiveRowFor(viewHeight) {
@@ -176,9 +138,8 @@ Item {
         return Theme.adaptiveRow(viewHeight, root.rowRatio, root._rowBase) * root.rowHeightScale;
     }
 
-    /// Captured once from the first stable reference. The baseline keeps the
-    /// adaptive floor steady across later height changes instead of letting
-    /// the row unit chase every intermediate viewport size.
+    /// Captured once from the first stable reference. It is a metric, not
+    /// interactive state; resize never recaptures it.
     property real _rowBase: 0
 
     function captureRowBase() {
@@ -189,10 +150,7 @@ Item {
     readonly property real adaptiveRowHeight: Math.max(root.minRowHeight, root.adaptiveRowFor(root.rowViewHeight))
     readonly property real rowStride: root.adaptiveRows ? root.adaptiveRowHeight + root.rowSpacing : 0
 
-    /// Native ListView header that fills the shortfall when a uniform list
-    /// does not fill the viewport, pushing its rows to the bottom. The gap
-    /// must come from row math (not contentHeight), or the header would feed
-    /// its own height back into the calculation.
+    /// The header gap that pushes a short uniform list to the bottom.
     readonly property real _shortContentGap: {
         var v = root.view;
         if (!root.bottomAlignShort || !v || v.count === 0 || v.height <= 0)
@@ -207,13 +165,17 @@ Item {
 
     property int currentIndex: -1
     /// Hosts that own the follow (lyrics) can update the highlight without
-    /// recentering on every cursor change.
+    /// recentering on every cursor change. Explicit follow functions still
+    /// work.
     property bool followCursor: true
-    onCurrentIndexChanged: root._cursorMoved()
+    onCurrentIndexChanged: {
+        if (root.followCursor)
+            root.sync(true);
+        if (root.memoryKey)
+            root.remember();
+    }
     signal itemActivated(int index)
-    /// Row under a pointer, -1 outside the data rows.
     property int hoveredIndex: -1
-    /// Pointer tap on a row; hosts apply their own click semantics.
     signal rowTapped(int index, bool shift)
 
     readonly property var view: list
@@ -233,401 +195,166 @@ Item {
             rowHover.point.position.y);
     }
 
-    // ── Geometry helpers ─────────────────────────────────────────────────
+    // ── The one geometry contract ────────────────────────────────────────
 
-    function _stride(v) {
-        if (root.rowStride > 0)
-            return root.rowStride;
-        // Variable-height rows (lyrics) are measured, not derived.
-        var i = root.currentIndex >= 0 ? root.currentIndex : 0;
-        var item = v ? v.itemAtIndex(i) : null;
-        if (item && item.height > 0)
-            return item.height + root.rowSpacing;
-        return 0;
-    }
+    /// Qt's content edge above the first row (negative when a header exists).
+    readonly property real minY: root.view ? root.view.originY : 0
+    readonly property real headerHeight: root.view && root.view.headerItem
+        ? root.view.headerItem.height : 0
+    readonly property real footerHeight: root.view && root.view.footerItem
+        ? root.view.footerItem.height : 0
 
-    /// Full rows in the viewport.
-    function visibleRows() {
+    /// The furthest contentY that still keeps the last row at the viewport
+    /// bottom. Uniform rows use the closed form; variable rows keep Qt's
+    /// measured extent.
+    readonly property real maxY: {
         var v = root.view;
-        var stride = root._stride(v);
-        if (!v || stride <= 0 || v.height <= 0)
-            return 1;
-        return Math.max(1, Math.floor(v.height / stride + 1e-6));
+        if (!v || root.rowStride <= 0)
+            return v ? Math.max(root.minY, v.contentHeight - v.height) : root.minY;
+        var extent = v.count * root.rowStride - root.rowSpacing;
+        return Math.max(root.minY, extent + root.footerHeight - v.height);
     }
 
-    readonly property int visibleRowCount: root.visibleRows()
-
-    /// First and last *item* indices in the rendered band (viewport plus
-    /// overscan), used for marks and mark requests. Solved from the row unit,
-    /// so a reflow does not make the mark window chase transient delegates.
-    readonly property var _visibleBounds: {
+    /// The row-unit target. `null` only for an unmeasurable variable row.
+    function targetY(index) {
         var v = root.view;
-        if (!v || v.count === 0 || v.height <= 0)
-            return {
-                first: -1,
-                last: -1
-            };
-        var overscan = root.renderOverscanRows;
-        var stride = root._stride(v);
-        if (stride <= 0)
-            return {
-                first: 0,
-                last: v.count - 1
-            };
-        var top = Math.max(0, v.contentY - root._contentTopInset);
-        return {
-            first: Math.max(0, Math.floor(top / stride) - overscan),
-            last: Math.min(v.count - 1,
-                Math.ceil((top + v.height) / stride) - 1 + overscan)
-        };
-    }
-    readonly property int firstVisibleIndex: root._visibleBounds.first
-    readonly property int lastVisibleIndex: root._visibleBounds.last
-
-    function _rowOf(index) {
-        return index;
-    }
-
-    function _rowCount(v) {
-        return v.count;
-    }
-
-    /// The content extent from the row unit, never from delegates that may
-    /// still carry the previous geometry. Variable-height rows (lyrics)
-    /// consult the realised tail. `bottomAlignShort` adds its header gap.
-    function _extent(v) {
-        if (!v)
-            return 0;
-        if (root.contentHeightHint > 0)
-            return root.contentHeightHint;
-        var stride = root._stride(v);
-        if (stride > 0 && root.rowRatio > 0)
-            return Math.max(0, v.count * stride - root.rowSpacing)
-                + root._shortContentGap + 2 * root._edgePadding;
-        var last = v.count > 0 ? v.itemAtIndex(v.count - 1) : null;
-        if (last && last.height > 0)
-            return last.y + last.height;
-        return v.contentHeight;
-    }
-
-    function _maxY(v) {
-        if (!v)
-            return 0;
-        var maxY = Math.max(0, root._extent(v) - v.height);
-        // Uniform rows have an exact row-unit extent. A realised tail can
-        // still carry the previous resize's y/height for a frame, so trusting
-        // it here clamps the bottom short and leaves the cursor outside the
-        // viewport after a height change. Only variable-height rows (lyrics)
-        // need the measured tail as the authority.
-        if (root.rowStride > 0)
-            return maxY;
-        var last = v.count > 0 ? v.itemAtIndex(v.count - 1) : null;
-        if (last && last.height > 0) {
-            var tail = last.y + last.height - v.height;
-            if (tail >= 0)
-                maxY = Math.min(maxY, tail);
-        }
-        return maxY;
-    }
-
-    /// The centred target from the row unit: pin the first/last screenful,
-    /// centre only in the middle band (Neovim `scrolloff=999`). This never
-    /// reads a delegate mid-reflow, so a height change cannot chase stale
-    /// item positions.
-    function _target(v, index) {
         if (!v || index < 0 || index >= v.count)
-            return null;
-        var maxY = root._maxY(v);
-        var rows = root._rowCount(v);
-        var row = root._rowOf(index);
-        var half = root.visibleRows() * 0.5;
-        if (!root.centerEdges) {
-            // scrolloff parity: only the middle band centres; edge rows
-            // pin the viewport.
-            if (row + 1 <= half)
-                return 0;
-            if (row >= rows - half)
-                return maxY;
-        }
-        var stride = root._stride(v);
-        if (stride <= 0)
-            return null;
-        var center;
+            return root.minY;
         if (root.rowStride > 0) {
-            center = root._contentTopInset + row * stride
-                + root.adaptiveRowHeight * 0.5 - v.height * 0.5;
-        } else {
-            var item = v.itemAtIndex(index);
-            if (item && item.height > 0)
-                center = item.y + item.height * 0.5 - v.height * 0.5;
-            else
-                center = root._contentTopInset + row * stride
-                    + (stride - root.rowSpacing) * 0.5 - v.height * 0.5;
+            var center = index * root.rowStride + root.adaptiveRowHeight * 0.5
+                - v.height * 0.5;
+            return Math.max(root.minY, Math.min(root.maxY, center));
         }
-        return Math.max(0, Math.min(maxY, center));
-    }
-
-    function _clampY(v) {
-        if (!v)
-            return;
-        var maxY = root._maxY(v);
-        if (v.contentY < 0 || v.contentY > maxY)
-            v.contentY = Math.max(0, Math.min(maxY, v.contentY));
-    }
-
-    /// Bring an unrealised row into view without Qt's async Contain/Center
-    /// offsets: anchor it at the top, then let the follow centre it.
-    function _reveal(v, index) {
-        if (!v || index < 0 || index >= v.count)
-            return;
-        v.positionViewAtIndex(index, ListView.Beginning);
-        root._clampY(v);
-    }
-
-    /// The one follow: native target, short contentY glide.
-    function _follow(v, index, instant) {
-        if (!v || v.count === 0 || index < 0 || index >= v.count || root._landing)
-            return;
+        // Variable-height rows cannot use the closed form. This is the
+        // measured fallback for the lyrics pane; it is intentionally the
+        // only place that reads a delegate.
         var item = v.itemAtIndex(index);
-        if (!item) {
-            // A row that never realises (zero-height view, a bad delegate)
-            // must not spin the callLater loop forever.
-            if (root._revealTries >= 4) {
-                root._clampY(v);
-                return;
-            }
-            root._revealTries++;
-            root._reveal(v, index);
-            Qt.callLater(function () {
-                if (root.currentIndex === index && root.view)
-                    root._follow(root.view, index, instant);
-            });
-            return;
-        }
-        root._revealTries = 0;
-        root._manualScroll = false;
-        var target = root._target(v, index);
-        if (target === null)
-            return;
-        var override = root.glideOverrideMs;
-        root.glideOverrideMs = 0;
-        glide.stop();
-        if (instant || Theme.reduceMotion || root.followMs <= 0 || Math.abs(target - v.contentY) < 0.5) {
-            v.contentY = target;
-            root._settle();
-            return;
-        }
-        glide.from = v.contentY;
-        glide.to = target;
-        glide.duration = override > 0 ? override : root.followMs;
-        glide.start();
+        if (!item || item.height <= 0)
+            return root.minY;
+        var measured = item.y + item.height * 0.5 - v.height * 0.5;
+        return Math.max(root.minY, Math.min(root.maxY, measured));
     }
 
-    function _settle() {
+    /// The only writer of contentY. Pure and idempotent: calling it again, or
+    /// after any model/layout change, converges on targetY(currentIndex).
+    /// `forceY` is used only by resetTop, which intentionally leaves the
+    /// cursor alone.
+    function sync(animated, forceY) {
         var v = root.view;
         if (!v)
             return;
-        // Safety net for a row unit that disagrees with real geometry: never
-        // leave the cursor fully outside the viewport.
-        var item = root.currentIndex >= 0 ? v.itemAtIndex(root.currentIndex) : null;
-        if (item && item.height > 0) {
-            var y = v.contentY;
-            if (item.y < y - 0.5)
-                y = item.y;
-            else if (item.y + item.height > y + v.height + 0.5)
-                y = item.y + item.height - v.height;
-            if (Math.abs(y - v.contentY) > 1)
-                v.contentY = y;
+        var y = forceY !== undefined ? forceY : root.targetY(root.currentIndex);
+        if (animated === true && !Theme.reduceMotion && root.followMs > 0
+                && Math.abs(y - v.contentY) <= 2 * v.height) {
+            glide.duration = root._oneShotMs > 0 ? root._oneShotMs : root.followMs;
+            glide.to = y;
+            if (!glide.running)
+                glide.start();
+        } else {
+            glide.stop();
+            root._oneShotMs = 0;
+            v.contentY = y;
         }
-        root._clampY(v);
-        if (root.memoryKey)
-            root._scheduleRemember();
-    }
-
-    /// Explicit follow for hosts that turned `followCursor` off.
-    function followIndex(index, instant) {
-        if (root.currentIndex < 0 || !root.view)
-            return;
-        root._manualScroll = false;
-        root._follow(root.view, index, instant === true);
+        root.updateVisibleBounds();
     }
 
     function stopGlide() {
         glide.stop();
-        root.glideOverrideMs = 0;
+        root._oneShotMs = 0;
     }
 
-    /// Re-run the follow for the current cursor over `duration` ms.
-    function recenter(duration) {
-        if (root.currentIndex < 0 || !root.view)
-            return;
-        root._manualScroll = false;
-        root.glideOverrideMs = Math.max(0, duration);
-        root._follow(root.view, root.currentIndex, false);
-    }
-
-    /// Snap the cursor to its native centred position now.
-    function recenterNow() {
-        if (root.currentIndex < 0 || !root.view)
-            return;
-        root._manualScroll = false;
-        root.glideOverrideMs = 0;
-        root._follow(root.view, root.currentIndex, true);
-    }
-
-    function _cursorMoved() {
-        var teleport = root._teleportMove;
-        root._teleportMove = false;
-        if (root._landing)
-            return;
-        root._manualScroll = false;
-        var v = root.view;
-        if (!v)
-            return;
-        if (root.currentIndex < 0) {
-            if (v.currentIndex !== -1)
-                v.currentIndex = -1;
-            return;
-        }
-        if (v.count === 0)
-            return;
-        var index = Math.min(v.count - 1, root.currentIndex);
-        if (index !== root.currentIndex) {
+    function followIndex(index, instant) {
+        if (index >= 0)
             root.currentIndex = index;
-            return;
-        }
-        if (v.currentIndex !== index)
-            v.currentIndex = index;
-        if (!root.followCursor) {
-            root._settle();
-            return;
-        }
-        root._follow(v, index, teleport);
+        root.sync(instant !== true);
     }
 
-    /// Instant landing (semantic jumps: gg/G, search, restores, reset).
+    function recenter(duration) {
+        root._oneShotMs = Math.max(0, duration === undefined ? 0 : duration);
+        root.sync(true);
+    }
+
+    function recenterNow() {
+        root._oneShotMs = 0;
+        root.sync(false);
+    }
+
     function land(index) {
-        root._land(index, true);
-    }
-
-    function _land(index, withSettle) {
         if (index < 0)
             return;
-        root._manualScroll = false;
-        var v = root.view;
-        if (v && v.count > 0)
-            index = Math.max(0, Math.min(index, v.count - 1));
+        if (root.count > 0)
+            index = Math.max(0, Math.min(index, root.count - 1));
         glide.stop();
-        root._modelReset = false;
-        root._landing = true;
-        root._revealTries = 0;
         root.currentIndex = index;
-        var unrealised = v && v.count > 0 && !v.itemAtIndex(index);
-        if (v && v.count > 0) {
-            v.currentIndex = index;
-            if (unrealised)
-                root._reveal(v, index);
-            var target = root._target(v, index);
-            if (target !== null)
-                v.contentY = target;
-            root._clampY(v);
-        }
-        root._landing = false;
-        Qt.callLater(function () {
-            var w = root.view;
-            if (!w || w.count === 0 || root.currentIndex !== index)
-                return;
-            if (withSettle && unrealised) {
-                // The anchor only got the row on screen; centre it now that
-                // it exists (a memory restore owns its own offset).
-                root._follow(w, index, true);
-            } else if (withSettle) {
-                root._settle();
-            }
-        });
+        root.sync(false);
     }
 
-    /// A surface returning to screen calls this: land on the cursor.
     function landCursor() {
         if (root.currentIndex >= 0)
             root.land(root.currentIndex);
     }
 
-    /// The host-facing jump: force a follow even when the index already
-    /// matches (a manual scroll may have moved the viewport).
     function goto(index) {
         var i = index === undefined ? root.currentIndex : index;
         if (i < 0)
             return;
         if (root.count > 0)
             i = Math.max(0, Math.min(i, root.count - 1));
-        root._manualScroll = false;
-        root._pendingFollow = i;
         root.currentIndex = i;
-        var v = root.view;
-        if (!v || v.count === 0)
-            return;
-        if (!v.itemAtIndex(i)) {
-            root._land(i, false);
-            return;
-        }
-        root._pendingFollow = -1;
-        root._follow(v, i, false);
-    }
-
-    property int _pendingFollow: -1
-    property bool _countRepairScheduled: false
-    property bool _modelReset: false
-
-    function _scheduleCountRepair() {
-        if (root._countRepairScheduled)
-            return;
-        root._countRepairScheduled = true;
-        countRepairTimer.restart();
-    }
-
-    function _repairCount() {
-        root._countRepairScheduled = false;
-        var v = root.view;
-        if (!v || v.count === 0 || root.resetPending)
-            return;
-        if (root._landing) {
-            root._scheduleCountRepair();
-            return;
-        }
-        var rebuilt = root._modelReset;
-        root._modelReset = false;
-        if (rebuilt && root.currentIndex >= 0)
-            root._land(root.currentIndex, false);
-        else if (root.currentIndex < 0) {
-            if (scroll.savedIndex(root.memoryKey) < 0)
-                root._land(0, false);
-        } else if (root.currentIndex > v.count - 1)
-            root._land(v.count - 1, false);
-        else if (v.currentIndex !== root.currentIndex)
-            root._land(root.currentIndex, false);
-        if (root.memoryKey)
-            root.remember();
-        if (root._pendingFollow >= v.count)
-            root._pendingFollow = -1;
-        if (root._pendingFollow >= 0 && root._pendingFollow === root.currentIndex && v.count > root._pendingFollow) {
-            var i = root._pendingFollow;
-            root._pendingFollow = -1;
-            Qt.callLater(function () {
-                if (root.currentIndex === i && root.view && root.view.count > 0)
-                    root._follow(root.view, i, false);
-            });
-        }
+        root.sync(false);
     }
 
     /// Top the viewport without touching the cursor (a fresh payload).
     function resetTop() {
-        glide.stop();
-        if (root.view)
-            root.view.positionViewAtBeginning();
+        root.stopGlide();
+        root.sync(false, root.minY);
     }
 
-    /// `gg`/`G`: instant landing. A count turns it into a line jump.
+    // ── Visible band ─────────────────────────────────────────────────────
+
+    function visibleRows() {
+        var v = root.view;
+        var stride = root.rowStride;
+        if (!v || stride <= 0 || v.height <= 0)
+            return 1;
+        return Math.max(1, Math.floor(v.height / stride + 1e-6));
+    }
+
+    readonly property int visibleRowCount: root.visibleRows()
+    property int firstVisibleIndex: -1
+    property int lastVisibleIndex: -1
+
+    /// Int-only publication: no object is allocated per scroll frame, and
+    /// the properties only change when the band actually moves.
+    function updateVisibleBounds() {
+        var v = root.view;
+        if (!v || v.count === 0 || v.height <= 0) {
+            if (root.firstVisibleIndex !== -1)
+                root.firstVisibleIndex = -1;
+            if (root.lastVisibleIndex !== -1)
+                root.lastVisibleIndex = -1;
+            return;
+        }
+        var first = 0;
+        var last = v.count - 1;
+        if (root.rowStride > 0) {
+            var top = Math.max(0, v.contentY - root.minY - root.headerHeight);
+            first = Math.max(0, Math.floor(top / root.rowStride));
+            last = Math.min(v.count - 1,
+                Math.ceil((top + v.height) / root.rowStride) - 1);
+        }
+        first = Math.max(0, first - root.renderOverscanRows);
+        last = Math.min(v.count - 1, last + root.renderOverscanRows);
+        if (first !== root.firstVisibleIndex)
+            root.firstVisibleIndex = first;
+        if (last !== root.lastVisibleIndex)
+            root.lastVisibleIndex = last;
+        if (rowHover.hovered)
+            root.refreshHovered();
+    }
+
+    // ── Movement API ─────────────────────────────────────────────────────
+
     function edgeJump(last, count) {
         if (root.count === 0)
             return;
@@ -639,7 +366,6 @@ Item {
         root.land(last ? root.count - 1 : 0);
     }
 
-    /// Shared cursor step: a plain ±1 row (or `count` rows), clamped.
     function moveStep(action, count) {
         if (root.count === 0)
             return false;
@@ -666,22 +392,18 @@ Item {
         }
         if (target === root.currentIndex)
             return false;
-        // VI-7: a big count is a teleport, not a long scroll animation.
-        root._teleportMove = n > root.teleportThreshold;
         root.currentIndex = target;
         return true;
     }
 
-    /// `Ctrl-D`/`Ctrl-U`: move by `fraction` of the viewport, in rows.
     function pageJump(down, fraction) {
         if (root.count === 0 || !root.view)
             return false;
-        var rowH = root.adaptiveRowHeight;
-        if (rowH <= 0)
-            rowH = root._stride(root.view);
+        var rowH = root.rowStride > 0 ? root.rowStride : root.adaptiveRowHeight;
         if (rowH <= 0)
             return false;
-        var rows = Math.max(1, Math.floor(root.view.height * (fraction === undefined ? 0.5 : fraction) / rowH));
+        var rows = Math.max(1,
+            Math.floor(root.view.height * (fraction === undefined ? 0.5 : fraction) / rowH));
         return root.moveStep(down ? "move_down" : "move_up", rows);
     }
 
@@ -692,220 +414,46 @@ Item {
 
     // ── Memory (UI-54) ───────────────────────────────────────────────────
 
+    /// Only the cursor is semantic; contentY is derived by sync().
+    function remember(scope) {
+        if (!root.memoryKey || !root.view || root.currentIndex < 0)
+            return;
+        scroll.remember(root.memoryKey, root.view,
+            scope === undefined ? root.memoryScope : scope, "list",
+            root.currentIndex);
+    }
+
     function restore() {
         var index = scroll.savedIndex(root.memoryKey);
         if (index < 0)
             return false;
         if (root.count > 0)
             index = Math.max(0, Math.min(index, root.count - 1));
-        root._land(index, false);
-        var recalled = scroll.recall(root.memoryKey, root.view);
-        return recalled.ok || root.count === 0;
+        root.currentIndex = index;
+        root.sync(false);
+        return true;
     }
 
-    function remember(scope) {
-        if (root.memoryKey)
-            scroll.remember(root.memoryKey, root.view, scope === undefined ? root.memoryScope : scope, "list", root.currentIndex);
-    }
-
-    property bool _rememberScheduled: false
-    function _scheduleRemember() {
-        if (!root.memoryKey || root._rememberScheduled)
-            return;
-        root._rememberScheduled = true;
-        rememberTimer.restart();
-    }
-    function _flushRemember() {
-        root._rememberScheduled = false;
-        if (root.memoryKey)
-            root.remember();
-    }
-    Component.onDestruction: root._flushRemember()
-
-    // ── Resize ───────────────────────────────────────────────────────────
-
-    property bool _manualScroll: false
-    property bool _landing: false
-    property int _revealTries: 0
-    /// A numeric move above `teleportThreshold` lands natively instead of
-    /// gliding through every intermediate row.
-    property bool _teleportMove: false
-    /// The row count above which a numeric move teleports (`15` = 16+).
-    property int teleportThreshold: 15
-    property bool _resizeScheduled: false
-    property bool _resizing: false
-    property bool _resizeApplyPending: false
-    /// A content-height update arrived while the resize pass owned the
-    /// viewport. Apply one more pass after the layout has settled.
-    property bool _resizeDirty: false
-    /// Height/width changes force the cursor row back to the viewport centre.
-    property bool _resizeCenterCursor: false
-    /// A height change while the window is inactive can land before Qt has
-    /// laid the view out; finish the repair once the window is active again.
-    property bool _resizeWhileInactive: false
-    /// The visual top row while the user (not the cursor) owns the viewport.
-    /// A resize restores this row instead of yanking the view back to the
-    /// keyboard cursor.
-    property int _anchorRow: 0
-    property real _anchorFraction: 0
-
-    /// Remember the visual top row when the user owns the viewport.
-    function _captureAnchor() {
-        var v = root.view;
-        if (!v || v.count === 0)
-            return;
-        var stride = root._stride(v);
-        if (stride <= 0)
-            return;
-        var top = Math.max(0, v.contentY - root._contentTopInset);
-        root._anchorRow = Math.max(0, Math.min(v.count - 1, Math.floor(top / stride)));
-        root._anchorFraction = Math.max(0,
-            Math.min(0.999, (top - root._anchorRow * stride) / stride));
-    }
-
-    /// A resize keeps the keyboard cursor centred when the follow owns the
-    /// view; after a manual scroll it keeps the visual top row instead. This
-    /// writes contentY directly: native positioning during the relayout is
-    /// what left the viewport one layout behind.
-    function _applyResizeAnchor() {
-        if (root._landing)
-            return;
-        var v = root.view;
-        if (!v || v.count === 0 || v.height <= 0)
-            return;
-        var target = null;
-        if (root._resizeCenterCursor && root.currentIndex >= 0
-                && root.currentIndex < v.count)
-            target = root._target(v, root.currentIndex);
-        else if (!root._manualScroll && root.currentIndex >= 0 && root.currentIndex < v.count)
-            target = root._target(v, root.currentIndex);
-        if (target === null) {
-            var s = root._stride(v);
-            if (s > 0) {
-                var anchor = Math.max(0, Math.min(v.count - 1, root._anchorRow));
-                target = root._contentTopInset
-                    + (anchor + root._anchorFraction) * s;
-            }
-        }
-        if (target !== null)
-            v.contentY = Math.max(0, Math.min(root._maxY(v), target));
-        root._clampY(v);
-        root._ensureCursorVisible(v);
-    }
-
-    /// A manual scroll can own the top anchor while the resize leaves the
-    /// keyboard cursor outside the viewport. If that happened, put the cursor
-    /// back on its centred/pinned row; keep the manual anchor when the cursor
-    /// is still visible.
-    function _ensureCursorVisible(v) {
-        if (!v || root.currentIndex < 0 || root.currentIndex >= v.count)
-            return;
-        var item = v.itemAtIndex(root.currentIndex);
-        if (item && item.height > 0
-                && item.y >= v.contentY - 0.5
-                && item.y + item.height <= v.contentY + v.height + 0.5)
-            return;
-        var target = root._target(v, root.currentIndex);
-        if (target !== null)
-            v.contentY = Math.max(0, Math.min(root._maxY(v), target));
-    }
-
-    /// One deferred pass per resize batch, off the compositor event. Wait a
-    /// frame and then 100 ms for the row unit to settle; snapping on every
-    /// intermediate height event is what broke the scroll during an
-    /// application-window resize.
-    function _scheduleResizeRecenter(centerCursor) {
-        if (!root.view)
-            return;
-        // Capture the user's visual top before the row unit changes. A
-        // resize must not yank a manual scroll back to the keyboard cursor.
-        if (root._manualScroll)
-            root._captureAnchor();
-        if (root._manualScroll) {
-            root._resizeCenterCursor = false;
-        } else if (centerCursor === true) {
-            root._resizeCenterCursor = true;
-        }
+    function resetView() {
+        root.resetPending = true;
         root.stopGlide();
-        root._resizing = true;
-        if (Window.window && !Window.window.active)
-            root._resizeWhileInactive = true;
-        if (!root._resizeApplyPending) {
-            root._resizeApplyPending = true;
-            Qt.callLater(root._applyPendingResize);
-        }
-        root._resizeScheduled = true;
-        resizeTimer.restart();
+        root.currentIndex = -1;
+        root.sync(false, root.minY);
+        if (root.memoryKey)
+            scroll.remember(root.memoryKey, root.view, root.memoryScope, "list", -1);
     }
 
-    function _applyPendingResize() {
-        root._resizeApplyPending = false;
-        root._applyResizeAnchor();
+    function resetViewNow() {
+        if (root.count === 0)
+            return;
+        root.land(0);
     }
 
-    function _resizeSettle() {
-        root._resizeScheduled = false;
-        root._applyResizeAnchor();
-        root._resizing = false;
-        if (root._resizeDirty) {
-            root._resizeDirty = false;
-            root._resizeApplyPending = true;
-            Qt.callLater(root._applyPendingResize);
-        }
-        if (root._resizeCenterCursor)
-            recenterTimer.restart();
-    }
-
-    // Timers, not Qt.callLater: a Loader can destroy this ScrollContent
-    // between scheduling and delivery, and a destroyed object must not try to
-    // evaluate a queued function in its dead context.
-    Timer {
-        id: resizeTimer
-        interval: 100
-        repeat: false
-        onTriggered: root._resizeSettle()
-    }
-    // One frame after the resize settles, re-apply the centre against the
-    // final row geometry. The first pass can run before Qt has laid out the
-    // new viewport, which left the cursor a row or two off centre.
-    Timer {
-        id: recenterTimer
-        interval: 16
-        repeat: false
-        onTriggered: {
-            root._applyResizeAnchor();
-            root._resizeCenterCursor = false;
-        }
-    }
-    Timer {
-        id: countRepairTimer
-        interval: 0
-        repeat: false
-        onTriggered: root._repairCount()
-    }
-    Timer {
-        id: rememberTimer
-        interval: 0
-        repeat: false
-        onTriggered: root._flushRemember()
-    }
-
+    Component.onDestruction: root.remember()
     Component.onCompleted: {
-        root._rowRefHeight = root.rowRefHeight > 0 ? root.rowRefHeight : root.height;
         root.captureRowBase();
+        root.sync(false);
     }
-    onRowRefHeightChanged: {
-        root._rowRefHeight = root.rowRefHeight > 0 ? root.rowRefHeight : root.height;
-        root.captureRowBase();
-    }
-    onWidthChanged: root._scheduleResizeRecenter(true)
-    onHeightChanged: {
-        if (root.rowRefHeight <= 0)
-            root._rowRefHeight = root.height;
-        root.captureRowBase();
-        root._scheduleResizeRecenter(true);
-    }
-    onAdaptiveRowHeightChanged: root._scheduleResizeRecenter()
 
     // ── Selection (VI-4 / ARC-I-4) ───────────────────────────────────────
 
@@ -924,8 +472,6 @@ Item {
         }
     }
 
-    // The recycled Alt verb sets and the one download-mark window. Both are
-    // cursor/selection concerns, so the body owns them once for every host.
     QuickActions {
         id: quickVerbs
     }
@@ -944,9 +490,6 @@ Item {
         markWindow.request(force === true);
     }
 
-    /// ARC-UI-1: arm the Alt overlay on the cursor row (or the selection's
-    /// batch verbs). The host routes the emitted actions to the shared
-    /// overlay; the optimistic heart write keeps the rows in step.
     function armQuickActions() {
         if (root.quickActionKind === "" || root.count === 0 || root.currentIndex < 0)
             return;
@@ -967,15 +510,11 @@ Item {
         if (!actions)
             return;
 
-        // ARC-I-4: the heart tracks the verb immediately — the cursor row or
-        // the whole selected range is written in place, no reload.
         quickVerbs.wrapFavorite(actions, function (on) {
             rowState.markStarred(on);
         });
 
         var row = root.view ? root.view.itemAtIndex(root.currentIndex) : null;
-        // A cursor restored past the realised window may not have a delegate
-        // yet; anchor on the viewport so the Alt arm still opens.
         if (!row)
             row = root.view;
         if (row)
@@ -1039,45 +578,26 @@ Item {
         root.land(row);
     }
 
-    // ── Reset (UI-10) ────────────────────────────────────────────────────
-
-    function resetView() {
-        root.resetPending = true;
-        glide.stop();
-        root._pendingFollow = -1;
-        root._manualScroll = false;
-        root.currentIndex = -1;
-        if (root.view) {
-            root.view.currentIndex = -1;
-            root.view.positionViewAtBeginning();
-        }
-        if (root.memoryKey)
-            scroll.remember(root.memoryKey, root.view, root.memoryScope, "list", 0);
-    }
-
-    function resetViewNow() {
-        if (root.count === 0)
-            return;
-        root.land(0);
-        if (root.memoryKey)
-            scroll.remember(root.memoryKey, root.view, root.memoryScope, "list", 0);
-    }
-
-    // ── The views ────────────────────────────────────────────────────────
-
-    Layout.fillWidth: true
-    Layout.fillHeight: true
+    // ── View ─────────────────────────────────────────────────────────────
 
     ScrollMemory {
         id: scroll
     }
 
-    NumberAnimation {
+    /// The single animation. It is retargeted, never restarted per keypress.
+    SmoothedAnimation {
         id: glide
         target: root.view
         property: "contentY"
+        duration: root.followMs
+        reversingMode: SmoothedAnimation.Sync
         easing.type: Easing.OutCubic
-        onFinished: root._settle()
+        onFinished: {
+            if (root.debugFollow && root.view)
+                console.log("ScrollContent follow residual",
+                    Math.abs(root.targetY(root.currentIndex) - root.view.contentY));
+            root._oneShotMs = 0;
+        }
     }
 
     Transition {
@@ -1107,22 +627,14 @@ Item {
             reuseItems: root.reuseRows && !root.animateDisplacement
             delegate: root.rowDelegate
             spacing: root.rowSpacing
-            header: Column {
+            header: Item {
                 width: list.width
-                Item {
-                    width: parent.width
-                    height: Math.max(0, root._shortContentGap - headerLoader.height)
-                        + root._edgePadding
-                }
+                height: headerLoader.height + root._shortContentGap
                 Loader {
                     id: headerLoader
                     width: parent.width
                     sourceComponent: root.headerContent
                 }
-            }
-            footer: Item {
-                width: list.width
-                height: root._edgePadding
             }
             boundsBehavior: Flickable.StopAtBounds
             highlightFollowsCurrentItem: false
@@ -1152,47 +664,49 @@ Item {
         }
     }
 
+    property int _oneShotMs: 0
+
+    // ── Derived-geometry triggers ────────────────────────────────────────
+
+    onHeightChanged: {
+        root.captureRowBase();
+        root.sync(false);
+    }
+    onRowRefHeightChanged: {
+        root.captureRowBase();
+        root.sync(false);
+    }
+    onRowRatioChanged: root.sync(false)
+    onRowSpacingChanged: root.sync(false)
+    onRowStrideChanged: root.sync(false)
+    onAdaptiveRowHeightChanged: root.sync(false)
+    onMinYChanged: root.sync(false)
+    onMaxYChanged: root.sync(false)
+    onHeaderHeightChanged: root.sync(false)
+    onFooterHeightChanged: root.sync(false)
+    onVisibleChanged: {
+        if (root.visible)
+            root.sync(false);
+    }
+
     Connections {
         target: root.view
-        function onContentYChanged() {
-            root.refreshHovered();
-            if (root._manualScroll && !glide.running && !root._landing)
-                root._captureAnchor();
-            if (root.memoryKey && !glide.running)
-                root._scheduleRemember();
-        }
         function onMovementStarted() {
             root.stopGlide();
-            root._manualScroll = true;
-            root._resizeCenterCursor = false;
         }
-        function onContentHeightChanged() {
-            // The resize pass owns the viewport until it settles; do not
-            // fight it from intermediate contentHeight updates, but remember
-            // that the final geometry moved so one more clamp runs afterwards.
-            if (root._landing)
-                return;
-            if (root._resizing || root._resizeApplyPending) {
-                root._resizeDirty = true;
-                return;
-            }
-            if (!glide.running)
-                root._clampY(target);
-        }
-        function onCurrentIndexChanged() {
-            if (target.count === 0)
-                return;
-            if (root.currentIndex >= 0 && target.currentIndex !== root.currentIndex)
-                target.currentIndex = root.currentIndex;
-            if (root.memoryKey)
-                root.remember();
+        function onContentYChanged() {
+            root.updateVisibleBounds();
         }
         function onCountChanged() {
             if (target.count === 0) {
-                root._modelReset = true;
-                return;
+                if (root.currentIndex !== -1)
+                    root.currentIndex = -1;
+            } else if (root.currentIndex >= target.count) {
+                root.currentIndex = target.count - 1;
+            } else if (root.currentIndex < 0 && root.followCursor) {
+                root.currentIndex = 0;
             }
-            root._scheduleCountRepair();
+            root.sync(false);
         }
     }
 }

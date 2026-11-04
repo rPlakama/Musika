@@ -249,10 +249,11 @@ Item {
         var y = forceY !== undefined ? forceY : root.targetY(root.currentIndex);
         if (animated === true && !Theme.reduceMotion && root.followMs > 0
                 && Math.abs(y - v.contentY) <= 2 * v.height) {
-            glide.duration = root._oneShotMs > 0 ? root._oneShotMs : root.followMs;
+            glide.stop();
+            glide.from = v.contentY;
             glide.to = y;
-            if (!glide.running)
-                glide.start();
+            glide.duration = root._oneShotMs > 0 ? root._oneShotMs : root.followMs;
+            glide.start();
         } else {
             glide.stop();
             root._oneShotMs = 0;
@@ -587,13 +588,13 @@ Item {
         id: scroll
     }
 
-    /// The single animation. It is retargeted, never restarted per keypress.
-    SmoothedAnimation {
+    /// The single animation: one short OutCubic glide from the live position
+    /// to the new target on each cursor move, matching the pre-refactor feel.
+    NumberAnimation {
         id: glide
         target: root.view
         property: "contentY"
         duration: root.followMs
-        reversingMode: SmoothedAnimation.Sync
         easing.type: Easing.OutCubic
         onFinished: {
             if (root.debugFollow && root.view)

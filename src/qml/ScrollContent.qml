@@ -303,9 +303,13 @@ Item {
         if (!v)
             return 0;
         var maxY = Math.max(0, root._extent(v) - v.height);
-        // The row-unit extent can disagree with the realised tail (spacing,
-        // header gap, rounding); once the last row exists, its bottom is the
-        // authority, so the final row stays glued to the viewport edge.
+        // Uniform rows have an exact row-unit extent. A realised tail can
+        // still carry the previous resize's y/height for a frame, so trusting
+        // it here clamps the bottom short and leaves the cursor outside the
+        // viewport after a height change. Only variable-height rows (lyrics)
+        // need the measured tail as the authority.
+        if (root.rowStride > 0)
+            return maxY;
         var last = v.count > 0 ? v.itemAtIndex(v.count - 1) : null;
         if (last && last.height > 0) {
             var tail = last.y + last.height - v.height;
@@ -714,6 +718,9 @@ Item {
     property bool _resizeScheduled: false
     property bool _resizing: false
     property bool _resizeApplyPending: false
+    /// A content-height update arrived while the resize pass owned the
+    /// viewport. Apply one more pass after the layout has settled.
+    property bool _resizeDirty: false
     /// Height/width changes force the cursor row back to the viewport centre.
     property bool _resizeCenterCursor: false
     /// A height change while the window is inactive can land before Qt has
@@ -762,6 +769,7 @@ Item {
         }
         if (target !== null)
             v.contentY = Math.max(0, Math.min(root._maxY(v), target));
+        root._clampY(v);
         root._ensureCursorVisible(v);
     }
 
@@ -789,8 +797,15 @@ Item {
     function _scheduleResizeRecenter(centerCursor) {
         if (!root.view)
             return;
-        if (centerCursor === true)
+        // Capture the user's visual top before the row unit changes. A
+        // resize must not yank a manual scroll back to the keyboard cursor.
+        if (root._manualScroll)
+            root._captureAnchor();
+        if (root._manualScroll) {
+            root._resizeCenterCursor = false;
+        } else if (centerCursor === true) {
             root._resizeCenterCursor = true;
+        }
         root.stopGlide();
         root._resizing = true;
         if (Window.window && !Window.window.active)
@@ -812,6 +827,11 @@ Item {
         root._resizeScheduled = false;
         root._applyResizeAnchor();
         root._resizing = false;
+        if (root._resizeDirty) {
+            root._resizeDirty = false;
+            root._resizeApplyPending = true;
+            Qt.callLater(root._applyPendingResize);
+        }
         if (root._resizeCenterCursor)
             recenterTimer.restart();
     }
@@ -1119,13 +1139,18 @@ Item {
         function onMovementStarted() {
             root.stopGlide();
             root._manualScroll = true;
+            root._resizeCenterCursor = false;
         }
         function onContentHeightChanged() {
-            // The resize pass owns the viewport until its 100 ms settle; do
-            // not fight it from intermediate contentHeight updates. While a
-            // glide runs the target absorbs the shift.
-            if (root._landing || root._resizing || root._resizeApplyPending)
+            // The resize pass owns the viewport until it settles; do not
+            // fight it from intermediate contentHeight updates, but remember
+            // that the final geometry moved so one more clamp runs afterwards.
+            if (root._landing)
                 return;
+            if (root._resizing || root._resizeApplyPending) {
+                root._resizeDirty = true;
+                return;
+            }
             if (!glide.running)
                 root._clampY(target);
         }

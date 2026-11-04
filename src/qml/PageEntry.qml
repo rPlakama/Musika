@@ -68,6 +68,22 @@ Rectangle {
     readonly property bool isPlaylist: root.entryKind === "playlist"
     readonly property bool isRadio: root.entryKind === "radio"
     readonly property bool isAlbum: root.entryKind === "album"
+    readonly property string pageId: root.isArtist ? root.artistId
+        : root.isRadio ? root.radioSeedId
+        : root.isPlaylist ? root.playlistId : root.albumId
+    readonly property string rowMode: root.isArtist ? "albums" : "tracks"
+    readonly property bool exitsToMain: root.isArtist
+    readonly property string pageTitle: albumTitle
+    readonly property string pageSubtitle: playlistSubtitle
+    readonly property string pageArtist: albumArtist
+    readonly property string pageMeta: albumMeta
+    readonly property string pageCover: albumCover
+    readonly property bool pageStarred: albumStarred
+    readonly property int pageRating: albumRating
+    readonly property bool pageCacheOn: albumCacheOn
+    readonly property bool pageDownloading: artistDownloading
+    readonly property string pageDescription: albumNotes
+    readonly property string metaLine: root.albumMetaLine
     /// Distinct album-origin covers for the playlist collage.
     property var playlistCollage: []
     /// Search-hit song to park the cursor on once the rows land.
@@ -86,7 +102,7 @@ Rectangle {
     /// chip) instead of falling straight to the status bar; the song rows are
     /// left alone for j/k.
     readonly property bool tabStops: true
-    readonly property bool hasDescription: root.albumNotes.length > 0
+    readonly property bool hasDescription: root.pageDescription.length > 0
     readonly property string descriptionTitle: root.isArtist ? root.artistName : root.albumTitle
     readonly property string descriptionSubtitle: root.isArtist ? root.artistMeta : root.albumMeta
     property string albumCover: ""
@@ -106,7 +122,6 @@ Rectangle {
     property string albumNotes: ""
     /// UI-14: one line by default; the Tab-selected description expands it
     /// into a scrollable reader (no line cap, no cut).
-    property bool notesExpanded: false
     // UI-22: true while the album's songs are in flight.
     property bool loading: false
     // UI-54: per-album/per-playlist scroll memory for the songs viewport.
@@ -121,7 +136,7 @@ Rectangle {
     property int _coverTarget: 0
     // Album whose rows request is in flight; avoids reload storms from
     // duplicate open paths and library-changed notifications.
-    property string _loadingAlbumId: ""
+    property string _loadingKey: ""
     property bool _opening: false
     property bool _ready: false
 
@@ -304,22 +319,20 @@ Rectangle {
 
     function reload() {
         if (root.isRadio) {
-            if (root.radioSeedId === "" || root._loadingAlbumId === "radio:" + root.radioSeedId)
+            if (root.radioSeedId === "" || root._loadingKey === "radio:" + root.radioSeedId)
                 return;
-            root._loadingAlbumId = "radio:" + root.radioSeedId;
+            root._loadingKey = "radio:" + root.radioSeedId;
             root.loading = true;
             root.onNotes = false;
-            root.setNotesExpanded(false);
             Backend.requestRadio(root.radioSeedKind, root.radioSeedId);
             return;
         }
         if (root.isArtist) {
-            if (root.artistId === "" || root._loadingAlbumId === "artist:" + root.artistId)
+            if (root.artistId === "" || root._loadingKey === "artist:" + root.artistId)
                 return;
-            root._loadingAlbumId = "artist:" + root.artistId;
+            root._loadingKey = "artist:" + root.artistId;
             root.loading = true;
             root.onNotes = false;
-            root.setNotesExpanded(false);
             Backend.requestArtist(root.artistId);
             Backend.requestArtistUser(root.artistId);
             Backend.requestArtistInfo(root.artistId);
@@ -329,12 +342,11 @@ Rectangle {
             return;
         }
         if (root.isPlaylist) {
-            if (root.playlistId === "" || root._loadingAlbumId === root.playlistId)
+            if (root.playlistId === "" || root._loadingKey === "playlist:" + root.playlistId)
                 return;
-            root._loadingAlbumId = root.playlistId;
+            root._loadingKey = "playlist:" + root.playlistId;
             root.loading = true;
             root.onNotes = false;
-            root.setNotesExpanded(false);
             Backend.requestPlaylist(root.playlistId);
             return;
         }
@@ -343,12 +355,11 @@ Rectangle {
         // One request per album at a time. Startup can deliver a restored
         // page and a library-changed notification in the same turn; the
         // second must not bump the first payload away.
-        if (root._loadingAlbumId === root.albumId)
+        if (root._loadingKey === "album:" + root.albumId)
             return;
-        root._loadingAlbumId = root.albumId;
+        root._loadingKey = "album:" + root.albumId;
         root.loading = true;
         root.onNotes = false;
-        root.setNotesExpanded(false);
         Backend.requestAlbumSongs(root.albumId);
         Backend.requestAlbumInfo(root.albumId);
 
@@ -386,7 +397,7 @@ Rectangle {
         }
 
         root._opening = true;
-        root._loadingAlbumId = "";
+        root._loadingKey = "";
         songs.clear();
         content.clearSelection();
         content.currentIndex = -1;
@@ -433,7 +444,6 @@ Rectangle {
         root.onArtist = false;
         root.onNotes = false;
         root.onToolbar = false;
-        root.setNotesExpanded(false);
         root._opening = false;
         root.reload()
         return true;
@@ -453,7 +463,6 @@ Rectangle {
         root.albumNotes = info.notes ? info.notes : "";
         if (root.albumNotes.length === 0) {
             root.onNotes = false;
-            root.setNotesExpanded(false);
         }
     }
 
@@ -464,31 +473,13 @@ Rectangle {
         Backend.requestAlbumArtist(root.albumId);
     }
 
-    /// UI-14: expand/collapse the notes reader. The expanded block is a
-    /// Flickable capped to the header's share of the pane; short notes show
-    /// whole, long ones scroll without eliding.
-    function setNotesExpanded(expanded) {
-        root.notesExpanded = expanded === true;
-        if (notesView)
-            notesView.contentY = 0;
-    }
-
     /// Clear every header Tab stop so the rows regain focus; the notes
     /// reader collapses too unless a caller is about to toggle it.
-    function clearHeaderStops(collapseNotes) {
+    function clearHeaderStops() {
         root.onCover = false;
         root.onArtist = false;
         root.onNotes = false;
         root.onToolbar = false;
-        if (collapseNotes !== false)
-            root.setNotesExpanded(false);
-    }
-
-    function scrollNotes(delta) {
-        if (!root.notesExpanded || !notesView)
-            return;
-        var max = Math.max(0, notesView.contentHeight - notesView.height);
-        notesView.contentY = Math.max(0, Math.min(max, notesView.contentY + delta));
     }
 
     /// Park the cursor on the song a search hit asked for, once its row
@@ -511,7 +502,7 @@ Rectangle {
         var artist = JSON.parse(payload);
         if (!root.isArtist || artist.id !== root.artistId)
             return;
-        root._loadingAlbumId = "";
+        root._loadingKey = "";
         root.artistName = artist.name ? String(artist.name) : root.artistName;
         if (artist.cover && artist.cover.length > 0)
             root.artistCover = String(artist.cover);
@@ -554,7 +545,7 @@ Rectangle {
         var data = JSON.parse(payload);
         if (data.playlist_id !== root.playlistId)
             return;
-        root._loadingAlbumId = "";
+        root._loadingKey = "";
         root.albumTitle = data.name ? data.name : "";
         root.playlistSubtitle = data.subtitle ? data.subtitle : "";
         root.albumMeta = data.meta ? data.meta : "";
@@ -590,7 +581,7 @@ Rectangle {
         var data = JSON.parse(payload);
         if (data.seed_id !== root.radioSeedId || data.seed_kind !== root.radioSeedKind)
             return;
-        root._loadingAlbumId = "";
+        root._loadingKey = "";
         root.albumTitle = data.title ? String(data.title) : "";
         root.playlistSubtitle = data.subtitle ? String(data.subtitle) : "";
         root.albumMeta = data.meta ? String(data.meta) : "";
@@ -630,7 +621,7 @@ Rectangle {
         // VI-4: a reload invalidates the selected range.
         content.clearSelection();
         songs.clear();
-        root._loadingAlbumId = "";
+        root._loadingKey = "";
         // Tracks-header stats: total runtime + the most common file suffix.
         var total = 0;
         var formats = {};
@@ -805,7 +796,6 @@ Rectangle {
             root.onCover = state === 1;
             root.onNotes = state === 2;
             root.chipScope = state >= 3 ? state - 3 : -1;
-            root.setNotesExpanded(state === 2);
             if (state !== 0)
                 content.clearSelection();
             else if (songs.count > 0 && content.currentIndex < 0)
@@ -827,7 +817,7 @@ Rectangle {
         }
         if (root.onCover || root.onNotes) {
             if (action === "enter")
-                root.onCover ? root.armCoverActions(true) : root.setNotesExpanded(!root.notesExpanded);
+                root.onCover ? root.armCoverActions(true) : root.descriptionRequested();
             else if (action === "move_down") {
                 root.onCover = false;
                 root.onNotes = false;
@@ -867,7 +857,6 @@ Rectangle {
             root.onArtist = state === 2;
             root.onNotes = state === 3;
             root.onToolbar = state === 4;
-            root.setNotesExpanded(state === 3);
             if (state !== 0)
                 content.clearSelection();
             else if (songs.count > 0 && content.currentIndex < 0)
@@ -884,10 +873,6 @@ Rectangle {
             return;
         }
         if (action === "page_up" || action === "page_down") {
-            if (root.onNotes && root.notesExpanded) {
-                root.scrollNotes(action === "page_up" ? -notesView.height * 0.9 : notesView.height * 0.9);
-                return;
-            }
             if (songs.count === 0)
                 return;
             root.clearHeaderStops();
@@ -918,22 +903,15 @@ Rectangle {
         }
 
         if (root.onNotes) {
-            // UI-14: an expanded reader owns j/k and page keys for scrolling;
-            // Enter collapses it. When collapsed, up/down leave the stop.
-            if (action === "move_up" || action === "move_down") {
-                if (root.notesExpanded) {
-                    var line = Math.max(12, notesText.font.pixelSize * notesText.lineHeight);
-                    root.scrollNotes(action === "move_up" ? -line : line);
-                } else if (action === "move_up") {
-                    root.onNotes = false;
-                    if (root.albumArtist.length > 0)
-                        root.onArtist = true;
-                    else
-                        root.onCover = true;
-                } else {
-                    root.onNotes = false;
-                    root.onToolbar = true;
-                }
+            if (action === "move_up") {
+                root.onNotes = false;
+                if (root.pageArtist.length > 0)
+                    root.onArtist = true;
+                else
+                    root.onCover = true;
+            } else if (action === "move_down") {
+                root.onNotes = false;
+                root.onToolbar = true;
             } else if (action === "enter") {
                 root.descriptionRequested();
             }
@@ -1160,7 +1138,7 @@ Rectangle {
                 FadeText {
                     id: coverBox
                     Layout.fillWidth: true
-                    text: root.albumTitle
+                    text: root.pageTitle
                     color: Palette.onSurface
                     font.pixelSize: root.height * 0.04
                     font.bold: true
@@ -1211,7 +1189,7 @@ Rectangle {
                     id: artistLink
                     visible: root.isAlbum
                     Layout.fillWidth: true
-                    text: root.albumArtist
+                    text: root.pageArtist
                     color: Palette.primary
                     font.pixelSize: root.height * 0.024
                     elide: Text.ElideRight
@@ -1240,7 +1218,7 @@ Rectangle {
                     // ARC-I-2/UI-60: the album.s favourite leads the header
                     // meta (the star row above owns the rating now).
                     Item {
-                        visible: (root.isAlbum || root.isArtist) && root.albumStarred
+                        visible: (root.isAlbum || root.isArtist) && root.pageStarred
                         Layout.alignment: Qt.AlignVCenter
                         Layout.preferredWidth: root.height * 0.016
                         Layout.preferredHeight: width
@@ -1254,7 +1232,7 @@ Rectangle {
 
                     FadeText {
                         Layout.fillWidth: true
-                        text: root.albumMetaLine
+                        text: root.metaLine
                         color: Palette.onSurfaceVariant
                         font.pixelSize: root.height * 0.02
                         elide: Text.ElideRight
@@ -1354,26 +1332,16 @@ Rectangle {
                 visible: (root.isAlbum || root.isArtist) && root.albumNotes.length > 0
                 clip: true
 
-                Flickable {
-                    id: notesView
+                FadeText {
+                    id: notesText
                     anchors.fill: parent
-                    contentWidth: width
-                    contentHeight: notesText.implicitHeight
-                    boundsBehavior: Flickable.StopAtBounds
-                    interactive: contentHeight > height
-                    clip: true
-
-                    FadeText {
-                        id: notesText
-                        width: notesView.width
-                        text: root.albumNotes
-                        color: Palette.onSurfaceVariant
-                        font.pixelSize: root.height * 0.02
-                        lineHeight: 1.25
-                        wrapMode: Text.WordWrap
-                        maximumLineCount: 0
-                        elide: Text.ElideNone
-                    }
+                    text: root.pageDescription
+                    color: Palette.onSurfaceVariant
+                    font.pixelSize: root.height * 0.02
+                    lineHeight: 1.25
+                    wrapMode: Text.WordWrap
+                    maximumLineCount: 3
+                    elide: Text.ElideRight
                 }
 
                 ScopeRing {

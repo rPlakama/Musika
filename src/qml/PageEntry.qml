@@ -1511,7 +1511,10 @@ Rectangle {
                 // Short albums sit against the page bottom instead of floating at
                 // the top of the scroller.
                 bottomAlignShort: !root.artistAlbums
-                rowRefHeight: tracksSection.height
+                // Scale from the full page, like the queue drawer: the header
+                // title/author gap must not shrink every row.
+                rowRefHeight: root.height
+                rowRatio: 0.06
                 onRowTapped: (index, shift) => {
                     if (shift) {
                         root.clearHeaderStops();

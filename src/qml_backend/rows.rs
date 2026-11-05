@@ -30,17 +30,49 @@ pub(crate) async fn count(
     surface: &str,
     key: &str,
     _order: &str,
-    _offline: bool,
+    offline: bool,
 ) -> anyhow::Result<usize> {
-    match surface {
+    let count = match surface {
         "albums" => {
             let artist = (!key.is_empty()).then_some(key);
-            crate::library::album_count(&dbs.library, artist).await
+            crate::library::album_count(&dbs.library, artist).await?
         }
-        "artists" => crate::library::artist_count(&dbs.library).await,
-        "songs" => crate::library::song_count(&dbs.library).await,
+        "artists" => crate::library::artist_count(&dbs.library).await?,
+        "songs" => crate::library::song_count(&dbs.library).await?,
         other => bail!("unknown row surface: {other}"),
+    };
+    // Offline: the window reader below retains too, so the count must match
+    // the filtered set or the virtual list overruns.
+    if offline
+        && let Some(filter) = crate::offline::load(dbs, true).await?
+    {
+        let windowed = match surface {
+            "albums" => {
+                let artist = (!key.is_empty()).then_some(key);
+                let albums = crate::library::albums(&dbs.library, artist, _order).await?;
+                albums
+                    .iter()
+                    .filter(|a| filter.contains_album(&a.id))
+                    .count()
+            }
+            "artists" => {
+                let artists = crate::library::artists(&dbs.library, _order).await?;
+                artists
+                    .iter()
+                    .filter(|a| filter.contains_artist(&a.id))
+                    .count()
+            }
+            _ => {
+                let songs = crate::library::all_songs(&dbs.library, _order).await?;
+                songs
+                    .iter()
+                    .filter(|s| filter.contains_song(&s.id))
+                    .count()
+            }
+        };
+        return Ok(windowed.min(count));
     }
+    Ok(count)
 }
 
 pub(crate) async fn window(
@@ -54,11 +86,21 @@ pub(crate) async fn window(
 ) -> anyhow::Result<String> {
     let start = start as i64;
     let count = count.max(1) as i64;
+    // ARC-RS-4.11: offline filters the window in-memory instead of ignoring
+    // it — the full-scope fallback used to materialise the whole list.
+    let offline_filter = if offline {
+        crate::offline::load(dbs, true).await?
+    } else {
+        None
+    };
     let rows: Vec<Value> = match surface {
         "albums" => {
             let artist = (!key.is_empty()).then_some(key);
-            let albums =
+            let mut albums =
                 crate::library::albums_range(&dbs.library, artist, order, start, count).await?;
+            if let Some(f) = &offline_filter {
+                albums.retain(|a| f.contains_album(&a.id));
+            }
             let covers =
                 crate::covers::url_map_for(dbs, albums.iter().map(|album| &album.cover_art))
                     .await?;
@@ -68,7 +110,10 @@ pub(crate) async fn window(
                 .collect()
         }
         "artists" => {
-            let artists = crate::library::artists_range(&dbs.library, order, start, count).await?;
+            let mut artists = crate::library::artists_range(&dbs.library, order, start, count).await?;
+            if let Some(f) = &offline_filter {
+                artists.retain(|a| f.contains_artist(&a.id));
+            }
             let covers =
                 crate::covers::url_map_for(dbs, artists.iter().map(|artist| &artist.cover_art))
                     .await?;
@@ -93,7 +138,10 @@ pub(crate) async fn window(
                 .collect()
         }
         "songs" => {
-            let songs = crate::library::songs_range(&dbs.library, start, count, order).await?;
+            let mut songs = crate::library::songs_range(&dbs.library, start, count, order).await?;
+            if let Some(f) = &offline_filter {
+                songs.retain(|s| f.contains_song(&s.id));
+            }
             let covers =
                 crate::covers::url_map_for(dbs, songs.iter().map(|song| &song.cover_art)).await?;
             songs
@@ -117,7 +165,6 @@ pub(crate) async fn window(
         other => bail!("unknown row surface: {other}"),
     };
 
-    let _ = offline;
     Ok(serde_json::to_string(&json!({
         "start": start,
         "rows": rows,

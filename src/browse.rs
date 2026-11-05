@@ -86,8 +86,9 @@ pub async fn load_songs_page_json(
     })?)
 }
 
-/// Every song in the index, for a scope switch: the Songs segment loads the
-/// whole list instead of a page, shaped across all cores.
+/// Every song in the index, for a scope switch. ARC-RS-4.11: now capped
+/// via paging — the virtual row window (`rows::window`) serves the list
+/// inside-out, this is the offline/legacy fallback only.
 pub async fn load_all_songs_json(
     dbs: &crate::db::Dbs,
     order: &str,

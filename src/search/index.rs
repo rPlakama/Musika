@@ -321,39 +321,17 @@ fn match_indexed<T>(
     matcher: &mut Matcher,
     limit: usize,
 ) -> Vec<Arc<T>> {
-    use std::collections::BinaryHeap;
-    use std::cmp::Reverse;
-    if limit == 0 || items.is_empty() {
-        return Vec::new();
-    }
     let mut buf = Vec::new();
-    // ARC-RS-4.7: top-K heap instead of full sort+truncate. Ordering:
-    // score desc, haystack asc (same as sort below), so min-heap holds
-    // the *worst* of the current top-K at its root.
-    let mut heap: BinaryHeap<Reverse<(u32, std::cmp::Reverse<String>, usize)>> =
-        BinaryHeap::with_capacity(limit.min(items.len()));
+    let mut heap = std::collections::BinaryHeap::new();
     for (idx, item) in items.iter().enumerate() {
         let haystack = Utf32Str::new(&item.haystack, &mut buf);
         if let Some(score) = pattern.score(haystack, matcher) {
-            let key = Reverse((score, std::cmp::Reverse(item.haystack.clone()), idx));
-            if heap.len() < limit {
-                heap.push(key);
-            } else if let Some(&(worst_score, ref worst_hay, _)) = heap.peek().map(|r| &r.0) {
-                let better = score > worst_score
-                    || (score == worst_score
-                        && item.haystack < worst_hay.0);
-                if better {
-                    heap.pop();
-                    heap.push(key);
-                }
-            }
+            heap.push(std::cmp::Reverse((score, &item.haystack, idx)));
         }
     }
-    let mut out: Vec<(u32, String, usize)> = heap
-        .into_iter()
-        .map(|Reverse((s, Reverse(h), i))| (s, h, i))
-        .collect();
-    out.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.cmp(&b.1)));
+    let mut out: Vec<(u32, &String, usize)> = heap.into_iter().map(|r| r.0).collect();
+    out.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.cmp(b.1)));
+    out.truncate(limit);
     out.into_iter().map(|(_, _, i)| Arc::clone(&items[i].row)).collect()
 }
 

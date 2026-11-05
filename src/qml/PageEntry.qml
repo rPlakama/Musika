@@ -522,6 +522,9 @@ Rectangle {
                 return;
             root.artistDescription = info.biography ? String(info.biography) : "";
             root.albumNotes = root.artistDescription;
+            if (root.albumNotes.length === 0) {
+                root.onNotes = false;
+            }
             return;
         }
         if (info.album_id && info.album_id !== root.albumId)
@@ -530,6 +533,51 @@ Rectangle {
         if (root.albumNotes.length === 0) {
             root.onNotes = false;
         }
+    }
+
+    /// ARC-RS-3.6: unified state/cache/cover appliers (album + artist share).
+    function applyState(payload) {
+        var state = JSON.parse(payload);
+        if (root.isArtist) {
+            if (state.id === root.artistId) {
+                root.artistStarred = state.starred === true;
+                root.albumStarred = root.artistStarred;
+                root.artistRating = Number(state.rating) || 0;
+                root.albumRating = root.artistRating;
+            }
+            return;
+        }
+        if (state.id === root.albumId) {
+            root.albumStarred = state.starred === true;
+            root.albumRating = Number(state.rating) || 0;
+        }
+    }
+
+    function applyCache(payload) {
+        var cache = JSON.parse(payload);
+        if (root.isArtist) {
+            if (cache.id === root.artistId) {
+                root.artistCacheOn = cache.on === true;
+                root.artistDownloading = cache.active === true;
+            }
+            return;
+        }
+        if (cache.id === root.albumId)
+            root.albumCacheOn = cache.on === true;
+    }
+
+    function applyCover(payload) {
+        var art = JSON.parse(payload);
+        // Name/size gating is per-channel; both shapes carry cover+size.
+        if (!art.cover || Number(art.size) !== root._coverTarget)
+            return;
+        if (root.isArtist) {
+            if (art.artist_id === root.artistId)
+                root.albumCover = art.cover;
+            return;
+        }
+        if (art.album_id === root.albumId && !coverBackdrop.ready)
+            root.albumCover = art.cover;
     }
 
     /// Resolve the album's owning artist and let Home push its page.
@@ -957,10 +1005,11 @@ Rectangle {
     function handleAction(action) {
         if (root.isArtist && root.handleArtistAction(action))
             return;
-        // UI-60/UI-14: Tab walks the header only: cover -> artist -> notes ->
-        // Back chip (Shift+Tab reverses), leaving the song rows to j/k. Empty
-        // artist/notes stops are skipped; selecting the notes expands the
-        // reader.
+        // ARC-RS-3.7: header stops derived from kind. Album:
+        // title/cover -> artist -> description -> back.
+        // Artist: title -> description -> cache -> shuffle -> favourite.
+        // Playlist/radio: title/cover -> description -> back.
+        // Empty artist/description slots are skipped in both cycles.
         if (action === "pane_cycle" || action === "pane_cycle_back") {
             var state = root.onCover ? 1 : (root.onArtist ? 2 : (root.onNotes ? 3 : (root.onToolbar ? 4 : 0)));
             do {
@@ -1092,24 +1141,11 @@ Rectangle {
             } else if (channel === "artist_info") {
                 root.applyInfo(payload);
             } else if (channel === "artist_user") {
-                var user = JSON.parse(payload);
-                if (user.id === root.artistId) {
-                    root.artistStarred = user.starred === true;
-                    root.albumStarred = root.artistStarred;
-                    root.artistRating = Number(user.rating) || 0;
-                    root.albumRating = root.artistRating;
-                }
+                root.applyState(payload);
             } else if (channel === "artist_cache") {
-                var artistCache = JSON.parse(payload);
-                if (artistCache.id === root.artistId) {
-                    root.artistCacheOn = artistCache.on === true;
-                    root.artistDownloading = artistCache.active === true;
-                }
+                root.applyCache(payload);
             } else if (channel === "artist_cover") {
-                var artistArt = JSON.parse(payload);
-                if (artistArt.artist_id === root.artistId && artistArt.cover
-                        && Number(artistArt.size) === root._coverTarget)
-                    root.albumCover = artistArt.cover;
+                root.applyCover(payload);
             } else if (channel === "radio") {
                 root.applyRadio(payload);
             } else if (channel === "playlist") {
@@ -1119,29 +1155,15 @@ Rectangle {
             else if (channel === "album_info")
                 root.applyInfo(payload);
             else if (channel === "album_cover") {
-                var art = JSON.parse(payload);
-                // A slower request for an older width bucket must not replace
-                // the copy requested for the current cover box. Never swap a
-                // display copy in after the original has painted: the second
-                // decode blanks the cover (and on session return the first
-                // cover is already up by the time this cached copy arrives).
-                // The copy is still cached for the next open.
-                if (art.album_id === root.albumId && art.cover && Number(art.size) === root._coverTarget && !coverBackdrop.ready)
-                    root.albumCover = art.cover;
+                root.applyCover(payload);
             } else if (channel === "album_artist") {
                 var link = JSON.parse(payload);
                 if (link.album_id === root.albumId && link.artist_id)
                     root.artistActivated(link.artist_id, root.albumArtist, root.albumCover);
             } else if (channel === "album_state") {
-                var state = JSON.parse(payload);
-                if (state.id === root.albumId) {
-                    root.albumStarred = state.starred === true;
-                    root.albumRating = Number(state.rating) || 0;
-                }
+                root.applyState(payload);
             } else if (channel === "album_cache") {
-                var cache = JSON.parse(payload);
-                if (cache.id === root.albumId)
-                    root.albumCacheOn = cache.on === true;
+                root.applyCache(payload);
             }
         }
         function onLibrary_changed() {

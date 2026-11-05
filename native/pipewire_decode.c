@@ -314,6 +314,129 @@ fail:
     return NULL;
 }
 
+/* ARC-RS-4.2 streaming AVIO: read via callback, 64 KB avio ring only. */
+static MusikaDecoder *decoder_open_stream(int (*read_cb)(void *, uint8_t *, int),
+                                          void *opaque,
+                                          int (*interrupt)(void *),
+                                          char *err, size_t err_len)
+{
+    if (err && err_len)
+        err[0] = '\0';
+    if (!read_cb)
+        return NULL;
+    avformat_network_init();
+    MusikaDecoder *d = calloc(1, sizeof(*d));
+    if (!d) {
+        set_error(err, err_len, "decoder allocation failed");
+        return NULL;
+    }
+    d->stream_index = -1;
+    int ret;
+    if (interrupt) {
+        d->format = avformat_alloc_context();
+        if (!d->format) {
+            set_error(err, err_len, "format allocation failed");
+            goto fail;
+        }
+        d->format->interrupt_callback.callback = interrupt;
+        d->format->interrupt_callback.opaque = opaque;
+    }
+    d->avio_buffer = av_malloc(65536);
+    if (!d->avio_buffer) {
+        set_error(err, err_len, "io buffer allocation failed");
+        goto fail;
+    }
+    d->avio = avio_alloc_context(d->avio_buffer, 65536, 0, opaque, read_cb, NULL, NULL);
+    if (!d->avio) {
+        set_error(err, err_len, "io context allocation failed");
+        goto fail;
+    }
+    if (!d->format) {
+        d->format = avformat_alloc_context();
+        if (!d->format) {
+            set_error(err, err_len, "format allocation failed");
+            goto fail;
+        }
+    }
+    d->format->pb = d->avio;
+    d->format->flags |= AVFMT_FLAG_CUSTOM_IO;
+    ret = avformat_open_input(&d->format, NULL, NULL, NULL);
+    if (ret < 0) {
+        set_error(err, err_len, "cannot open input: %s", av_err2str(ret));
+        goto fail;
+    }
+    ret = avformat_find_stream_info(d->format, NULL);
+    if (ret < 0) {
+        set_error(err, err_len, "cannot read stream info: %s", av_err2str(ret));
+        goto fail;
+    }
+    {
+        const AVCodec *codec = NULL;
+        ret = av_find_best_stream(d->format, AVMEDIA_TYPE_AUDIO, -1, -1, &codec, 0);
+        if (ret < 0 || !codec) {
+            set_error(err, err_len, "no audio stream: %s", av_err2str(ret));
+            goto fail;
+        }
+        d->stream_index = ret;
+        AVStream *stream = d->format->streams[d->stream_index];
+        d->codec = avcodec_alloc_context3(codec);
+        if (!d->codec) {
+            set_error(err, err_len, "codec allocation failed");
+            goto fail;
+        }
+        ret = avcodec_parameters_to_context(d->codec, stream->codecpar);
+        if (ret < 0) {
+            set_error(err, err_len, "codec parameters: %s", av_err2str(ret));
+            goto fail;
+        }
+        ret = avcodec_open2(d->codec, codec, NULL);
+        if (ret < 0) {
+            set_error(err, err_len, "cannot open codec: %s", av_err2str(ret));
+            goto fail;
+        }
+        if (d->codec->ch_layout.nb_channels == 0) {
+            av_channel_layout_default(&d->codec->ch_layout, MUSIKA_CHANNELS);
+        }
+        AVChannelLayout out_layout;
+        av_channel_layout_default(&out_layout, MUSIKA_CHANNELS);
+        ret = swr_alloc_set_opts2(&d->swr, &out_layout, AV_SAMPLE_FMT_S16, MUSIKA_RATE,
+                                  &d->codec->ch_layout, d->codec->sample_fmt,
+                                  d->codec->sample_rate, 0, NULL);
+        av_channel_layout_uninit(&out_layout);
+        if (ret < 0 || !d->swr) {
+            set_error(err, err_len, "resampler allocation failed");
+            goto fail;
+        }
+        ret = swr_init(d->swr);
+        if (ret < 0) {
+            set_error(err, err_len, "cannot initialise resampler: %s", av_err2str(ret));
+            goto fail;
+        }
+        d->packet = av_packet_alloc();
+        d->frame = av_frame_alloc();
+        if (!d->packet || !d->frame) {
+            set_error(err, err_len, "packet/frame allocation failed");
+            goto fail;
+        }
+        if (d->format->duration > 0)
+            d->duration = (double)d->format->duration / AV_TIME_BASE;
+        else if (stream->duration > 0)
+            d->duration = (double)stream->duration * av_q2d(stream->time_base);
+    }
+    return d;
+
+fail:
+    musika_decoder_close(d);
+    return NULL;
+}
+
+MusikaDecoder *musika_decoder_open_stream(int (*read_cb)(void *, uint8_t *, int),
+                                          void *opaque, int (*interrupt)(void *),
+                                          char *err, size_t err_len)
+{
+    return decoder_open_stream(read_cb, opaque, interrupt, err, err_len);
+}
+
 MusikaDecoder *musika_decoder_open(const char *url, const unsigned char *buffer, size_t buffer_len,
                                    char *err, size_t err_len)
 {

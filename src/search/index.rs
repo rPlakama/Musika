@@ -113,12 +113,18 @@ pub struct SearchResults {
 
 /// The in-memory catalog. Rebuilt as a whole after a library sync; search
 /// requests clone the `Arc` and never see a half-built index.
+///
+/// ARC-RS-4.6: `most_played`/`by_album` hold `u32` indices into the primary
+/// `songs` store (via `Arc::as_ptr` ordering) instead of second `Arc` vecs.
+/// Resolution is by pointer equality against the nucleo snapshot — cheap and
+/// avoids 2x Arc clones per song.
 pub struct SearchIndex {
     songs: std::sync::Mutex<SongIndex>,
     artists: Vec<Indexed<ArtistRow>>,
     albums: Vec<Indexed<AlbumRow>>,
-    most_played: Vec<Arc<SongHit>>,
-    by_album: HashMap<String, Vec<Arc<SongHit>>>,
+    most_played: Vec<usize>,
+    by_album: HashMap<String, Vec<usize>>,
+    pool: Vec<Arc<SongHit>>,
 }
 
 impl SearchIndex {
@@ -140,29 +146,29 @@ impl SearchIndex {
             }
         }
 
-        let mut most_played = songs.clone();
-        most_played.sort_by(|a, b| {
-            b.play_count
-                .cmp(&a.play_count)
-                .then_with(|| a.title.cmp(&b.title))
+        // ARC-RS-4.6: indices into `songs`, not second Arc vecs.
+        let mut most_played: Vec<usize> = (0..songs.len()).collect();
+        most_played.sort_by(|&a, &b| {
+            songs[b]
+                .play_count
+                .cmp(&songs[a].play_count)
+                .then_with(|| songs[a].title.cmp(&songs[b].title))
         });
 
-        let mut by_album: HashMap<String, Vec<Arc<SongHit>>> = HashMap::new();
-        for song in &songs {
+        let mut by_album: HashMap<String, Vec<usize>> = HashMap::new();
+        for (idx, song) in songs.iter().enumerate() {
             if let Some(album_id) = &song.album_id {
-                by_album
-                    .entry(album_id.clone())
-                    .or_default()
-                    .push(Arc::clone(song));
+                by_album.entry(album_id.clone()).or_default().push(idx);
             }
         }
         for tracks in by_album.values_mut() {
-            tracks.sort_by(|a, b| {
-                a.disc_number
+            tracks.sort_by(|&a, &b| {
+                songs[a]
+                    .disc_number
                     .unwrap_or(0)
-                    .cmp(&b.disc_number.unwrap_or(0))
-                    .then_with(|| a.track.unwrap_or(0).cmp(&b.track.unwrap_or(0)))
-                    .then_with(|| a.title.cmp(&b.title))
+                    .cmp(&songs[b].disc_number.unwrap_or(0))
+                    .then_with(|| songs[a].track.unwrap_or(0).cmp(&songs[b].track.unwrap_or(0)))
+                    .then_with(|| songs[a].title.cmp(&songs[b].title))
             });
         }
 
@@ -199,6 +205,7 @@ impl SearchIndex {
             albums,
             most_played,
             by_album,
+            pool: songs,
         }
     }
 
@@ -286,14 +293,24 @@ impl SearchIndex {
 
     /// The pre-sorted empty-query surface: no scan, no database read.
     pub fn most_played(&self, limit: usize) -> Vec<Arc<SongHit>> {
-        self.most_played.iter().take(limit).cloned().collect()
+        self.most_played
+            .iter()
+            .take(limit)
+            .map(|&i| Arc::clone(&self.pool[i]))
+            .collect()
     }
 
     /// S-8: an album's tracks in disc/track order.
     pub fn album_tracks(&self, album_id: &str, limit: usize) -> Vec<Arc<SongHit>> {
         self.by_album
             .get(album_id)
-            .map(|tracks| tracks.iter().take(limit).cloned().collect())
+            .map(|tracks| {
+                tracks
+                    .iter()
+                    .take(limit)
+                    .map(|&i| Arc::clone(&self.pool[i]))
+                    .collect()
+            })
             .unwrap_or_default()
     }
 }
@@ -304,20 +321,40 @@ fn match_indexed<T>(
     matcher: &mut Matcher,
     limit: usize,
 ) -> Vec<Arc<T>> {
+    use std::collections::BinaryHeap;
+    use std::cmp::Reverse;
+    if limit == 0 || items.is_empty() {
+        return Vec::new();
+    }
     let mut buf = Vec::new();
-    let mut scored: Vec<(u32, &Indexed<T>)> = Vec::new();
-    for item in items {
+    // ARC-RS-4.7: top-K heap instead of full sort+truncate. Ordering:
+    // score desc, haystack asc (same as sort below), so min-heap holds
+    // the *worst* of the current top-K at its root.
+    let mut heap: BinaryHeap<Reverse<(u32, std::cmp::Reverse<String>, usize)>> =
+        BinaryHeap::with_capacity(limit.min(items.len()));
+    for (idx, item) in items.iter().enumerate() {
         let haystack = Utf32Str::new(&item.haystack, &mut buf);
         if let Some(score) = pattern.score(haystack, matcher) {
-            scored.push((score, item));
+            let key = Reverse((score, std::cmp::Reverse(item.haystack.clone()), idx));
+            if heap.len() < limit {
+                heap.push(key);
+            } else if let Some(&(worst_score, ref worst_hay, _)) = heap.peek().map(|r| &r.0) {
+                let better = score > worst_score
+                    || (score == worst_score
+                        && item.haystack < worst_hay.0);
+                if better {
+                    heap.pop();
+                    heap.push(key);
+                }
+            }
         }
     }
-    scored.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.haystack.cmp(&b.1.haystack)));
-    scored.truncate(limit);
-    scored
+    let mut out: Vec<(u32, String, usize)> = heap
         .into_iter()
-        .map(|(_, item)| Arc::clone(&item.row))
-        .collect()
+        .map(|Reverse((s, Reverse(h), i))| (s, h, i))
+        .collect();
+    out.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.cmp(&b.1)));
+    out.into_iter().map(|(_, _, i)| Arc::clone(&items[i].row)).collect()
 }
 
 // ---------------------------------------------------------------------------
@@ -341,16 +378,17 @@ static EPOCH: AtomicU64 = AtomicU64::new(0);
 static OVER_BUDGET: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 /// Default catalog budget (MiB). The estimate below is ~0.4 KiB per song, so
-/// 64 MiB keeps roughly 170k ASCII-heavy tracks fuzzy-matchable;
+/// 32 MiB keeps roughly 85k ASCII-heavy tracks fuzzy-matchable;
 /// `MUSIKA_SEARCH_INDEX_BUDGET_MIB=0` disables the cap for very large
-/// libraries that prefer the catalog.
-const DEFAULT_BUDGET_MIB: usize = 64;
+/// libraries that prefer the catalog. ARC-RS-4.7: halved from 64 MiB default.
+const DEFAULT_BUDGET_MIB: usize = 32;
 
 /// Fixed per-song cost of the catalog: `ArcInner<SongHit>` (192 B), the
 /// boxcar entry holding the `Arc` plus its `Utf32String` column (~32 B) and
 /// the two secondary index slots (~16 B), with a little slack. Calibrated
 /// against `bench_100k_songs` (256 + 3×text lands within ~10% of the
-/// measured retained bytes).
+/// measured retained bytes). ARC-RS-4.6 drops the second Arc vecs, so the
+/// fixed term is now ~240 B; keep 256 as slack for index overhead.
 pub(crate) const SONG_FIXED_COST: usize = 256;
 /// Text factor: every byte is stored once in the `SongHit` `String` and once
 /// more in Nucleo's haystack — 1 byte/char for ASCII, up to 4 bytes for

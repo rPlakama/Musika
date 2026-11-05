@@ -56,8 +56,8 @@ pub fn write_atomic(dir: &Path, file: &str, bytes: &[u8]) -> Result<PathBuf> {
 
 /// Decodes a QML payload, falling back to the type default and a debug log.
 pub(crate) fn parse_or_default<T: serde::de::DeserializeOwned + Default>(text: &str) -> T {
-    serde_json::from_str(text).unwrap_or_else(|err| {
-        crate::debug_log!("payload: could not decode: {err}");
+    serde_json::from_str(text).unwrap_or_else(|_err| {
+        crate::debug_log!("payload: could not decode: {_err}");
         T::default()
     })
 }

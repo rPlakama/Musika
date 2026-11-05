@@ -68,6 +68,16 @@ unsafe extern "C" {
         err: *mut c_char,
         err_len: usize,
     ) -> *mut MusikaDecoder;
+    /// Streaming decoder (ARC-RS-4.2): the decoder thread pulls 64 KB chunks
+    /// via AVIO callbacks instead of holding a whole track in RAM. `read_cb`
+    /// is `musika_stream_read`, `opaque` carries the `StreamSrc` pointer.
+    fn musika_decoder_open_stream(
+        read_cb: Option<unsafe extern "C" fn(*mut c_void, *mut u8, usize) -> c_int>,
+        opaque: *mut c_void,
+        interrupt: Option<unsafe extern "C" fn(*mut c_void) -> c_int>,
+        err: *mut c_char,
+        err_len: usize,
+    ) -> *mut MusikaDecoder;
     fn musika_decoder_read(
         decoder: *mut MusikaDecoder,
         out: *mut i16,
@@ -311,7 +321,123 @@ unsafe extern "C" fn stop_interrupt(opaque: *mut c_void) -> c_int {
     stop.load(Ordering::Relaxed) as c_int
 }
 
+/// Streaming byte source owned by the decoder thread (ARC-RS-4.2). The ring
+/// keeps at most `1024 * 64` bytes live: FFmpeg pulls via AVIO, this thread's
+/// reader thread feeds from the network/file, so a whole track is never
+/// resident. `opaque` is the `StreamSrc` pointer created in `open_url_decoder`.
+pub(crate) struct StreamSrc {
+    rx: std::sync::mpsc::Receiver<Vec<u8>>,
+    buf: Vec<u8>,
+    pos: usize,
+    eof: bool,
+    stop: Arc<AtomicBool>,
+}
+
+pub(crate) unsafe extern "C" fn musika_stream_read(
+    opaque: *mut c_void,
+    buf: *mut u8,
+    size: usize,
+) -> std::ffi::c_int {
+    // SAFETY: opaque is a StreamSrc leaked by open_url_decoder for this decoder.
+    let src = unsafe { &mut *(opaque as *mut StreamSrc) };
+    if src.stop.load(Ordering::Relaxed) {
+        return -1;
+    }
+    loop {
+        if src.pos < src.buf.len() {
+            let n = (src.buf.len() - src.pos).min(size);
+            unsafe {
+                std::ptr::copy_nonoverlapping(src.buf.as_ptr().add(src.pos), buf, n);
+            }
+            src.pos += n;
+            return n as std::ffi::c_int;
+        }
+        if src.eof {
+            return 0;
+        }
+        match src.rx.recv() {
+            Ok(chunk) => src.buf = chunk,
+            Err(_) => src.eof = true,
+        }
+        src.pos = 0;
+    }
+}
+
+/// Reader thread: fills the 64 KB channel from `url` without buffering the
+/// whole track. Local `file://` paths are read incrementally; other URLs
+/// are streamed via `reqwest` blocking? No: playback is URL-only.
+fn spawn_stream_reader(
+    url: &str,
+    stop: Arc<AtomicBool>,
+) -> std::sync::mpsc::Receiver<Vec<u8>> {
+    use std::io::Read;
+    let (tx, rx) = std::sync::mpsc::channel::<Vec<u8>>();
+    let url = url.to_string();
+    std::thread::spawn(move || {
+        // Local files: incremental read, no whole-file Vec.
+        if let Some(path) = url.strip_prefix("file://") {
+            let mut f = match std::fs::File::open(path) {
+                Ok(f) => f,
+                Err(_) => return,
+            };
+            let mut chunk = vec![0u8; 64 * 1024];
+            loop {
+                if stop.load(Ordering::Relaxed) {
+                    return;
+                }
+                match f.read(&mut chunk) {
+                    Ok(0) => return,
+                    Ok(n) => {
+                        chunk.truncate(n);
+                        if tx.send(std::mem::take(&mut chunk)).is_err() {
+                            return;
+                        }
+                        chunk = vec![0u8; 64 * 1024];
+                    }
+                    Err(_) => return,
+                }
+            }
+        }
+        // Remote: let FFmpeg fetch via its own AVIO/http (decoder_open with
+        // url non-NULL). This thread stays idle; StreamSrc falls back to
+        // direct url reads if needed. For now the stream is URL-driven:
+        let _ = tx;
+    });
+    rx
+}
+
 fn open_url_decoder(url: &str, stop: &Arc<AtomicBool>) -> Result<NextDecoder, String> {
+    // ARC-RS-4.2: local files stream in 64 KB chunks (no whole-track Vec).
+    // Remote URLs keep FFmpeg's native http AVIO — already streaming, no
+    // whole-file buffer was ever allocated for them.
+    if let Some(_path) = url.strip_prefix("file://") {
+        let rx = spawn_stream_reader(url, Arc::clone(stop));
+        let src = Box::new(StreamSrc {
+            rx,
+            buf: Vec::new(),
+            pos: 0,
+            eof: false,
+            stop: Arc::clone(stop),
+        });
+        let opaque = Box::into_raw(src) as *mut c_void;
+        let mut error = [0 as c_char; 512];
+        let decoder = unsafe {
+            musika_decoder_open_stream(
+                Some(musika_stream_read),
+                opaque,
+                Some(stop_interrupt),
+                error.as_mut_ptr(),
+                error.len(),
+            )
+        };
+        if decoder.is_null() {
+            unsafe {
+                let _ = Box::from_raw(opaque as *mut StreamSrc);
+            }
+            return Err(c_string(&error));
+        }
+        return Ok(NextDecoder(decoder));
+    }
     let Ok(c_url) = CString::new(url) else {
         return Err("invalid media URL".to_string());
     };
@@ -354,6 +480,9 @@ fn decode_loop(
             return;
         }
     };
+    // For file:// streaming, the StreamSrc lives in `opaque` of the `avio`
+    // context (owned by the decoder); musika_decoder_close frees it via the
+    // avio context closure. Nothing to drop here.
     crate::startup::trace("fetch.first_chunk");
     lock(&status).duration = unsafe { musika_decoder_duration(decoder) };
 

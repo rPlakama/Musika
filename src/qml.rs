@@ -2486,9 +2486,9 @@ impl Backend {
     }
 
     #[qslot(qml_name = "noteIdle")]
-    fn note_idle(&mut self, idle: bool) {
+    fn note_idle(&mut self, _idle: bool) {
         #[cfg(debug_assertions)]
-        crate::debug_info::idle(idle);
+        crate::debug_info::idle(_idle);
     }
 
     #[qslot(qml_name = "debugBuild")]

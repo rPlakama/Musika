@@ -446,30 +446,53 @@ pub(crate) fn ensure_complete(failed: &[String], total: usize) -> Result<()> {
     );
 }
 
+/// Chunked fetch: processes `ids` in `FETCH_CONCURRENCY` batches,
+/// flattening each batch into `out` instead of retaining the whole
+/// `Vec<(id, Result<T>)>` (ARC-RS-4.8). Only one batch of `T` + `out`
+/// is live at a time; peak is `batch + out` not `2x catalog`.
+async fn fetch_chunked<T, F, Fut>(
+    client: &Arc<SubsonicClient>,
+    ids: &[String],
+    fetch: F,
+) -> Result<Vec<T>>
+where
+    T: Send + 'static,
+    F: Fn(Arc<SubsonicClient>, String) -> Fut + Clone + Send + 'static,
+    Fut: std::future::Future<Output = Result<T>> + Send + 'static,
+{
+    let mut out = Vec::with_capacity(ids.len());
+    for chunk in ids.chunks(crate::consts::FETCH_CONCURRENCY) {
+        let results = crate::fanout::map_bounded(chunk.to_vec(), {
+            let fetch = fetch.clone();
+            let client = Arc::clone(client);
+            move |id| {
+                let fetch = fetch.clone();
+                let client = Arc::clone(&client);
+                async move { fetch(client, id).await }
+            }
+        })
+        .await;
+        let mut failed: Vec<String> = Vec::new();
+        for (id, result) in results {
+            match result {
+                Ok(value) => out.push(value),
+                Err(err) => {
+                    eprintln!("index: fetch failed for {id}: {err:#}");
+                    failed.push(id);
+                }
+            }
+        }
+        ensure_complete(&failed, ids.len())?;
+    }
+    Ok(out)
+}
+
 async fn fetch_artists(
     client: &Arc<SubsonicClient>,
     ids: &[String],
 ) -> Result<Vec<ArtistWithAlbumsID3>> {
     let client = Arc::clone(client);
-    let results = crate::fanout::map_bounded(ids.to_vec(), move |id| {
-        let client = Arc::clone(&client);
-        async move { client.get_artist(&id).await }
-    })
-    .await;
-
-    let mut out = Vec::new();
-    let mut failed: Vec<String> = Vec::new();
-    for (id, result) in results {
-        match result {
-            Ok(artist) => out.push(artist),
-            Err(err) => {
-                eprintln!("index: failed to fetch artist {id}: {err:#}");
-                failed.push(id);
-            }
-        }
-    }
-    ensure_complete(&failed, ids.len())?;
-    Ok(out)
+    fetch_chunked(&client, ids, move |c, id| async move { c.get_artist(&id).await }).await
 }
 
 async fn fetch_albums(
@@ -477,23 +500,5 @@ async fn fetch_albums(
     ids: &[String],
 ) -> Result<Vec<AlbumWithSongsID3>> {
     let client = Arc::clone(client);
-    let results = crate::fanout::map_bounded(ids.to_vec(), move |id| {
-        let client = Arc::clone(&client);
-        async move { client.get_album(&id).await }
-    })
-    .await;
-
-    let mut out = Vec::new();
-    let mut failed: Vec<String> = Vec::new();
-    for (id, result) in results {
-        match result {
-            Ok(album) => out.push(album),
-            Err(err) => {
-                eprintln!("index: failed to fetch album {id}: {err:#}");
-                failed.push(id);
-            }
-        }
-    }
-    ensure_complete(&failed, ids.len())?;
-    Ok(out)
+    fetch_chunked(&client, ids, move |c, id| async move { c.get_album(&id).await }).await
 }

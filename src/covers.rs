@@ -592,6 +592,24 @@ pub(crate) fn thumb_name(file: &str) -> String {
 }
 
 pub(crate) fn build_thumb(source: &Path) -> Result<Vec<u8>> {
+    let reader = image::ImageReader::open(source)
+        .with_context(|| format!("failed to open cover {}", source.display()))?
+        .with_guessed_format()
+        .with_context(|| format!("failed to sniff cover {}", source.display()))?;
+
+    // ARC-RS-4.10: probe dimensions first, avoid full decode for large art.
+    // A 6000x6000 cover decodes to ~144 MB RGBA; thumbnail() samples the
+    // 320px output instead of running Lanczos3 over the whole source.
+    let (width, height) = reader
+        .into_dimensions()
+        .with_context(|| format!("failed to probe cover {}", source.display()))?;
+
+    // Small art is already cheap to decode; copy it rather than re-encode.
+    if width <= THUMB_EDGE && height <= THUMB_EDGE {
+        return std::fs::read(source)
+            .with_context(|| format!("failed to read cover {}", source.display()));
+    }
+
     let image = image::ImageReader::open(source)
         .with_context(|| format!("failed to open cover {}", source.display()))?
         .with_guessed_format()
@@ -599,17 +617,7 @@ pub(crate) fn build_thumb(source: &Path) -> Result<Vec<u8>> {
         .decode()
         .with_context(|| format!("failed to decode cover {}", source.display()))?;
 
-    // Small art is already cheap to decode; copy it rather than re-encode.
-    if image.width() <= THUMB_EDGE && image.height() <= THUMB_EDGE {
-        return std::fs::read(source)
-            .with_context(|| format!("failed to read cover {}", source.display()));
-    }
-
-    let thumb = image.resize(
-        THUMB_EDGE,
-        THUMB_EDGE,
-        image::imageops::FilterType::Lanczos3,
-    );
+    let thumb = image.thumbnail(THUMB_EDGE, THUMB_EDGE);
     let mut bytes = Vec::new();
     image::codecs::jpeg::JpegEncoder::new_with_quality(&mut bytes, THUMB_QUALITY)
         .encode_image(&thumb.to_rgb8())

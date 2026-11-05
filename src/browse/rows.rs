@@ -40,12 +40,16 @@ where
 /// Shapes the chunks in parallel, one per core (bounded by the row count and
 /// the fan-out floor). The chunks are returned in row order: `par_chunks` is
 /// indexed and `collect` preserves it.
+///
+/// ARC-RS-4.12: cap to `worker_limit()` (quarter cores) instead of
+/// `all_cores()` — a 16-core host no longer spawns 16 parallel JSON writers
+/// per scope switch, each holding its own chunk string.
 fn parallel_chunks_json<T, F>(rows: &[T], serialize: F) -> anyhow::Result<Vec<String>>
 where
     T: Sync,
     F: Fn(&[T]) -> Result<String, serde_json::Error> + Send + Sync,
 {
-    let workers = crate::app::all_cores()
+    let workers = crate::app::worker_limit()
         .min(rows.len().div_ceil(PARALLEL_ROWS_MIN))
         .max(1);
     if workers < 2 {

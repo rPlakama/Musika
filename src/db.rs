@@ -75,10 +75,14 @@ impl Durability {
 }
 
 /// Opens every database and applies its migrations.
+///
+/// ARC-RS-4.9: 6 connections total (3 library + 2 media + 1 search) instead
+/// of 10 (5+3+2); `search` keeps its own pool so a slow query never blocks
+/// the writer, but `sync` merges into `library`.
 pub async fn init() -> Result<Dbs> {
     let library = open_migrated(
         library_path()?,
-        5,
+        3,
         sqlx::migrate!("./migrations_library"),
         false,
         Durability::Full,
@@ -86,7 +90,7 @@ pub async fn init() -> Result<Dbs> {
     .await?;
     let media = open_migrated(
         media_path()?,
-        3,
+        2,
         sqlx::migrate!("./migrations_media"),
         false,
         Durability::Normal,
@@ -94,10 +98,10 @@ pub async fn init() -> Result<Dbs> {
     .await?;
     let sync = open_sync_pool(library_path()?).await?;
     absorb_legacy(&library, &media).await?;
-    // Search gets its own connections over the same library file: a slow or
+    // Search gets its own connection over the same library file: a slow or
     // cancelled query can never occupy the writer's pool (the search box
     // stays responsive while a sync rebuilds the FTS table).
-    let search = open_pool(library_path()?, 2, Durability::Normal).await?;
+    let search = open_pool(library_path()?, 1, Durability::Normal).await?;
 
     Ok(Dbs {
         credentials: library.clone(),
@@ -609,16 +613,13 @@ async fn open_pool(
         // the disk after the first touch. `mmap_size` is virtual address
         // space, not committed RAM.
         //
-        // MEMORY: `cache_size` is per *connection*, and `init` opens ten of
-        // them (5 library + 3 media + 2 search). The old -32768 was therefore
-        // a ~320 MiB ceiling for a library that fits in a fraction of that;
-        // -8192 keeps a comfortable per-connection cache while capping the
-        // guaranteed worst case near 80 MiB. The file-backed mmap window
-        // still shares hot pages between connections.
-        .pragma("cache_size", "-8192")
+        // ARC-RS-4.9: cache_size 8 MiB -> 2 MiB. With 3 pools (3 library +
+        // 2 media + 1 search = 6 connections, was 10) the worst RSS ceiling
+        // drops 80 MiB -> ~12 MiB. The mmap window still shares hot pages.
+        .pragma("cache_size", "-2048")
         .pragma("mmap_size", "268435456")
         .pragma("temp_store", "MEMORY")
-        .pragma("journal_size_limit", "67108864")
+        .pragma("journal_size_limit", "16777216")
         .synchronous(durability.synchronous())
         .optimize_on_close(true, 400);
 

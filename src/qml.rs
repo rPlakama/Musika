@@ -288,9 +288,6 @@ pub struct Backend {
     position: f64,
     duration: f64,
     volume: f64,
-    /// Playback envelope published for the fluid backdrop (0..1).
-    audio_level: f64,
-    audio_peak: f64,
     muted: bool,
     queue_index: i64,
     /// The queue rows' player revision at the last publish (QUEUEROWSTUDY
@@ -479,16 +476,6 @@ impl Backend {
     qproperty!("position", Member = position, Notify = position_changed);
     qproperty!("duration", Member = duration, Notify = duration_changed);
     qproperty!("volume", Member = volume, Notify = volume_changed);
-    qproperty!(
-        "audioLevel",
-        Member = audio_level,
-        Notify = audio_level_changed
-    );
-    qproperty!(
-        "audioPeak",
-        Member = audio_peak,
-        Notify = audio_peak_changed
-    );
     qproperty!("muted", Member = muted, Notify = muted_changed);
     qproperty!(
         "queueIndex",
@@ -695,10 +682,6 @@ impl Backend {
     fn duration_changed(&mut self);
     #[qsignal]
     fn volume_changed(&mut self);
-    #[qsignal]
-    fn audio_level_changed(&mut self);
-    #[qsignal]
-    fn audio_peak_changed(&mut self);
     #[qsignal]
     fn muted_changed(&mut self);
     #[qsignal]
@@ -1450,12 +1433,6 @@ impl Backend {
         self.data_ready(channel, payload);
     }
 
-    /// Reports an error to the UI (`kind` is e.g. "sync" / "playback").
-    #[qslot(qml_name = "raiseError")]
-    fn raise_error(&mut self, kind: String, message: String) {
-        self.error_raised(kind, message);
-    }
-
     /// Runs a command received from the IPC socket. Forwarded to the UI as the
     /// same `commandIssued` stream the keybinds produce.
     #[qslot(qml_name = "handleCommand")]
@@ -1734,16 +1711,6 @@ impl Backend {
             self.artist_order = next;
             self.artist_order_changed();
         }
-    }
-
-    #[qslot(qml_name = "requestSongsPage")]
-    fn request_songs_page(&mut self, offset: i64, limit: i64) {
-        let order = crate::library::effective_order(&crate::library::ORDERS, &self.song_order, 0)
-            .to_string();
-        let offline = self.offline;
-        self.spawn_data("songs_page", move |dbs| async move {
-            load_songs_page_json(&dbs, offset, limit, &order, offline).await
-        });
     }
 
     /// The scope-switch Songs load: the whole segment, not a page. The rows
@@ -2061,21 +2028,6 @@ impl Backend {
     #[qslot(qml_name = "scrollFlush")]
     fn scroll_flush(&mut self) {
         let payload = crate::scroll_memory::serialize();
-        self.write_scroll_memory(payload);
-    }
-
-    /// ARC-UI-7.5: the persisted scroll store (compatibility read).
-    #[qslot(qml_name = "scrollMemory")]
-    fn scroll_memory(&self) -> String {
-        let Ok(path) = crate::db::scroll_path() else {
-            return String::new();
-        };
-        std::fs::read_to_string(path).unwrap_or_default()
-    }
-
-    /// ARC-UI-7.5: atomic write of the scroll store from the QML debounce.
-    #[qslot(qml_name = "saveScrollMemory")]
-    fn save_scroll_memory(&mut self, payload: String) {
         self.write_scroll_memory(payload);
     }
 
@@ -3349,27 +3301,6 @@ impl Backend {
         }
         self.sync_player();
         self.maybe_save_position();
-    }
-
-    /// Publishes the player state to the QML properties.
-    /// UI-facing audio envelope pump: the fullscreen backdrop polls this at
-    /// ~25 Hz while it is visible.
-    #[qslot(qml_name = "audioTick")]
-    fn audio_tick(&mut self) {
-        let mut level = self.player.audio_level();
-        let mut peak = self.player.audio_peak();
-        if self.player.state() != State::Playing {
-            level *= 0.82;
-            peak *= 0.82;
-        }
-        if (self.audio_level - level).abs() > 0.002 {
-            self.audio_level = level;
-            self.audio_level_changed();
-        }
-        if (self.audio_peak - peak).abs() > 0.002 {
-            self.audio_peak = peak;
-            self.audio_peak_changed();
-        }
     }
 
     fn mpris_snapshot(&self) -> crate::mpris::Snapshot {

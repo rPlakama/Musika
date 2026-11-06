@@ -225,14 +225,11 @@ pub struct Playlists {
     pub playlist: Vec<PlaylistID3>,
 }
 
-/// `getPlaylist`: the element plus its ordered entries. Consumed by the
-/// playlist page (ARC-44 M2) — the list half only needs `PlaylistID3`.
-#[allow(dead_code)]
+/// `getPlaylist`: the ordered entries of one playlist. Consumed by the
+/// playlist page (ARC-44 M2); the list half only needs `PlaylistID3`.
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct PlaylistWithSongs {
-    #[serde(flatten)]
-    pub playlist: PlaylistID3,
     #[serde(deserialize_with = "one_or_many")]
     pub entry: Vec<Child>,
 }
@@ -410,9 +407,7 @@ impl SubsonicClient {
     }
 
     /// `getPlaylist` — the playlist plus its ordered `entry[]`. Duplicates
-    /// and positions are preserved; full Child metadata feeds the page
-    /// (ARC-44 M2, hence the allowance).
-    #[allow(dead_code)]
+    /// and positions are preserved; full Child metadata feeds the page.
     pub async fn get_playlist(&self, id: &str) -> Result<PlaylistWithSongs> {
         let params = query(&[("id", Some(id.to_string()))]);
         self.get_key("getPlaylist", &params, "playlist").await

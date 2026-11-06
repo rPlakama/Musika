@@ -125,20 +125,6 @@ pub struct CoverScheme {
     pub roles: BTreeMap<String, String>,
 }
 
-impl CoverScheme {
-    /// Payload used by the cache and the `colors` dataReady channel.
-    pub fn to_json(&self) -> String {
-        serde_json::json!({
-            "scheme": self.scheme,
-            "seed": self.seed,
-            "colorfulness": self.colorfulness,
-            "role_hash": self.role_hash,
-            "roles": self.roles,
-        })
-        .to_string()
-    }
-}
-
 /// Returns the scheme for a cached cover, generating and storing it when the
 /// row is missing or stale. `None` when the cover itself is not cached (no art
 /// → static palette).

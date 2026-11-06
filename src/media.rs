@@ -158,42 +158,6 @@ pub fn temp_path(kind: &str) -> Result<PathBuf> {
     )))
 }
 
-/// Writes a fetched blob (atomic rename) and records it. Returns the final
-/// path. A previous blob for the same song is replaced, never orphaned.
-///
-/// Kept for callers that already hold the bytes (tests and the future
-/// playback prefetch); the download path uses [`temp_path`] +
-/// [`store_streamed`] so a whole song is never resident.
-#[allow(clippy::too_many_arguments)]
-pub async fn store(
-    pool: &SqlitePool,
-    song_id: &str,
-    bytes: &[u8],
-    kind: &str,
-    quality: &str,
-    fingerprint: &str,
-    extension: &str,
-    rule_id: Option<&str>,
-) -> Result<PathBuf> {
-    let temp = temp_path(kind)?;
-    if let Err(err) = std::fs::write(&temp, bytes) {
-        let _ = std::fs::remove_file(&temp);
-        return Err(err).with_context(|| format!("failed to write {}", temp.display()));
-    }
-    store_streamed(
-        pool,
-        song_id,
-        &temp,
-        bytes.len() as i64,
-        kind,
-        quality,
-        fingerprint,
-        extension,
-        rule_id,
-    )
-    .await
-}
-
 /// Adopts an already-streamed temporary blob: renames it to the canonical
 /// name and records the row. The source must live in the same tier directory
 /// (see [`temp_path`]).
@@ -301,16 +265,6 @@ pub async fn cached_path(pool: &SqlitePool, song_id: &str) -> Result<Option<Path
     };
     let path = tier_dir(&row.kind)?.join(&row.file);
     Ok(path.is_file().then_some(path))
-}
-
-/// Marks a blob as recently used (CACHE-3's LRU input).
-pub async fn touch(pool: &SqlitePool, song_id: &str) -> Result<()> {
-    sqlx::query("UPDATE media SET last_used = ?2 WHERE song_id = ?1")
-        .bind(song_id)
-        .bind(crate::consts::now_secs().to_string())
-        .execute(pool)
-        .await?;
-    Ok(())
 }
 
 /// One auto-download container rule (CACHE-5).
@@ -469,23 +423,6 @@ pub async fn prune_uncovered(dbs: &crate::db::Dbs) -> Result<usize> {
         removed += 1;
     }
     Ok(removed)
-}
-
-/// Used bytes per tier: `(config, cache)` (CACHE-7's accounting).
-pub async fn used_bytes(pool: &SqlitePool) -> Result<(i64, i64)> {
-    let rows: Vec<(String, i64)> =
-        sqlx::query_as("SELECT kind, COALESCE(SUM(size), 0) FROM media GROUP BY kind")
-            .fetch_all(pool)
-            .await?;
-    let mut config = 0;
-    let mut cache = 0;
-    for (kind, size) in rows {
-        match tier_for(&kind) {
-            Tier::Config => config += size,
-            Tier::Cache => cache += size,
-        }
-    }
-    Ok((config, cache))
 }
 
 fn remove_blob(row: &Stored) {

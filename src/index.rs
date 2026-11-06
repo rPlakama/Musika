@@ -39,7 +39,6 @@ use crate::http_client::SubsonicClient;
 
 /// Outcome of a [`sync_library`] run.
 #[derive(Debug, Default, Clone)]
-#[allow(dead_code)]
 pub struct SyncReport {
     /// `false` when the server reported no changes and nothing was fetched.
     pub updated: bool,
@@ -53,6 +52,7 @@ pub struct SyncReport {
     /// Lyrics fetched by the bounded sync backfill.
     pub lyrics: usize,
     /// ARC-44: server playlists refreshed by this run.
+    #[cfg_attr(not(debug_assertions), allow(dead_code))]
     pub playlists: usize,
 }
 

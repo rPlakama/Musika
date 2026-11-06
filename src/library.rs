@@ -182,15 +182,6 @@ pub async fn set_song_starred(pool: &SqlitePool, id: &str, on: bool) -> Result<(
     Ok(())
 }
 
-/// Song ids carrying a favourite flag — the queue payload's heart truth
-/// (the in-memory player track's flag goes stale after `altFavorite`).
-pub async fn starred_song_ids(pool: &SqlitePool) -> Result<Vec<String>> {
-    let ids = sqlx::query_scalar("SELECT id FROM songs WHERE starred IS NOT NULL")
-        .fetch_all(pool)
-        .await?;
-    Ok(ids)
-}
-
 /// The album's favourite flag (the fullscreen keybar heart).
 pub async fn album_starred(pool: &SqlitePool, id: &str) -> Result<bool> {
     let starred: Option<String> = sqlx::query_scalar("SELECT starred FROM albums WHERE id = ?1")
@@ -257,17 +248,9 @@ pub async fn album_song_ids(pool: &SqlitePool, album_id: &str) -> Result<Vec<Str
     Ok(ids)
 }
 
-/// The current `coverArt` id of many albums in one query (queue refresh).
-pub async fn album_covers(
-    pool: &SqlitePool,
-    album_ids: &[String],
-) -> Result<std::collections::HashMap<String, String>> {
-    let refs: Vec<&str> = album_ids.iter().map(String::as_str).collect();
-    album_covers_refs(pool, &refs).await
-}
-
-/// Borrowed twin of [`album_covers`] for callers that already hold `&str`
-/// ids (a queue snapshot), avoiding one `String` clone per album.
+/// The current `coverArt` id of many albums in one query, for callers that
+/// already hold `&str` ids (a queue snapshot), avoiding one `String` clone per
+/// album.
 pub async fn album_covers_refs(
     pool: &SqlitePool,
     album_ids: &[&str],
@@ -369,16 +352,6 @@ pub async fn existing_song_ids(
         existing.extend(found);
     }
     Ok(existing)
-}
-
-/// Returns the columns needed to rebuild the FTS index.
-pub async fn song_search_rows(pool: &SqlitePool) -> Result<Vec<SongSearchRow>> {
-    let rows = sqlx::query_as::<_, SongSearchRow>(
-        "SELECT id, title, artist, album, duration, play_count FROM songs",
-    )
-    .fetch_all(pool)
-    .await?;
-    Ok(rows)
 }
 
 /// CACHE-9: from the downloaded song ids, the album id -> downloaded-track
@@ -737,35 +710,6 @@ pub async fn artist_albums(
         .fetch_all(pool)
         .await?;
     Ok(rows)
-}
-
-/// Number of albums owned by one artist.
-pub async fn artist_album_count(pool: &SqlitePool, artist_id: &str) -> Result<usize> {
-    let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM albums WHERE artist_id = ?1")
-        .bind(artist_id)
-        .fetch_one(pool)
-        .await?;
-    Ok(count.max(0) as usize)
-}
-
-/// A window of one artist's albums in list order.
-pub async fn artist_albums_range(
-    pool: &SqlitePool,
-    artist_id: &str,
-    order: &str,
-    offset: i64,
-    limit: i64,
-) -> Result<Vec<AlbumRow>> {
-    let sql = format!(
-        "{ALBUM_SELECT} WHERE artist_id = ?1{} LIMIT ?2 OFFSET ?3",
-        album_order(order, false)
-    );
-    Ok(sqlx::query_as::<_, AlbumRow>(sqlx::AssertSqlSafe(sql))
-        .bind(artist_id)
-        .bind(limit.max(0))
-        .bind(offset.max(0))
-        .fetch_all(pool)
-        .await?)
 }
 
 /// All artists, ordered by one of [`ARTIST_ORDERS`].

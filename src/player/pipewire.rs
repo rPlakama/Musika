@@ -658,9 +658,6 @@ impl Player {
                 if let Some(native) = self.native.as_ref() {
                     native.set_paused(value.as_bool().unwrap_or(false));
                 }
-                if let Some(paused) = value.as_bool() {
-                    self.shared().paused = paused;
-                }
             }
             "volume" => {
                 if let Some(volume) = value.as_f64()
@@ -755,10 +752,6 @@ impl Player {
             let mut shared = self.shared();
             shared.position = status.position;
             shared.duration = status.duration;
-            shared.paused = self.state == State::Paused;
-            shared.audio_level = status.level;
-            shared.audio_peak = status.peak;
-            shared.audio_at = Some(std::time::Instant::now());
         }
         if let Some(message) = status.failed {
             let title = self
@@ -807,11 +800,6 @@ impl Player {
             None => report.push_str(" native=none"),
         }
         report
-    }
-
-    pub(super) fn forget_error(&mut self) {
-        self.retries = 0;
-        self.retry_at = None;
     }
 
     fn advance_after_error(&mut self) {

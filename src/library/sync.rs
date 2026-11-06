@@ -36,11 +36,12 @@ fn snapshot_hash<T: std::hash::Hash>(value: &T) -> u64 {
 }
 
 /// Replaces all library tables in a single transaction and stores the sync
-/// bookkeeping values.
+/// bookkeeping values (legacy fixture; production uses [`apply`]).
 ///
 /// Returns the song/album/artist/cover ids that changed so the caller can
 /// refresh the derived caches (covers, lyrics, descriptions) for exactly
 /// those rows.
+#[cfg(test)]
 pub async fn replace(
     pool: &SqlitePool,
     artists: &[ArtistID3],
@@ -227,10 +228,7 @@ pub async fn replace(
 /// `starred IS NOT NULL` as "favourited" (UI-56); the exact server timestamp
 /// reconciles on the next sync. Songs and albums only — artists live in
 /// `artist_user.db` (`artist_user::set_starred`).
-pub async fn touch_last_sync(pool: &SqlitePool) -> Result<()> {
-    upsert_meta(pool, "last_sync", &crate::consts::now_secs().to_string()).await
-}
-
+#[cfg(test)]
 pub async fn last_modified(pool: &SqlitePool) -> Result<i64> {
     let value: Option<String> =
         sqlx::query_scalar("SELECT value FROM meta WHERE key = 'last_modified'")

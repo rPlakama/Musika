@@ -57,11 +57,9 @@ pub struct Dbs {
 /// user-authored playlists/status, so it stays FULL; media is a cache plus a
 /// rebuildable download ledger and can use WAL NORMAL.
 #[derive(Clone, Copy)]
-#[allow(dead_code)]
 enum Durability {
     Full,
     Normal,
-    Off,
 }
 
 impl Durability {
@@ -69,7 +67,6 @@ impl Durability {
         match self {
             Self::Full => SqliteSynchronous::Full,
             Self::Normal => SqliteSynchronous::Normal,
-            Self::Off => SqliteSynchronous::Off,
         }
     }
 }
@@ -174,16 +171,6 @@ pub async fn checkpoint_truncate(pool: &SqlitePool) -> Result<()> {
     sqlx::raw_sql("PRAGMA wal_checkpoint(TRUNCATE)")
         .execute(pool)
         .await?;
-    Ok(())
-}
-
-/// Applies both embedded migrations (shared by [`init`] and [`wipe`]).
-#[allow(dead_code)]
-pub async fn migrate(dbs: &Dbs) -> Result<()> {
-    sqlx::migrate!("./migrations_library")
-        .run(&dbs.library)
-        .await?;
-    sqlx::migrate!("./migrations_media").run(&dbs.media).await?;
     Ok(())
 }
 
@@ -372,12 +359,6 @@ pub async fn wipe_covers(dbs: &Dbs) -> Result<()> {
     Ok(())
 }
 
-async fn wipe_and_migrate(pool: &SqlitePool, migrations: sqlx::migrate::Migrator) -> Result<()> {
-    wipe_pool(pool).await?;
-    migrations.run(pool).await?;
-    Ok(())
-}
-
 fn remove_mirror() {
     if let Ok(mirror) = mirror_path() {
         let _ = std::fs::remove_file(mirror);
@@ -433,29 +414,10 @@ pub async fn wipe_files(dbs: &Dbs) -> Result<()> {
     Ok(())
 }
 
-/// Destructive recovery: every database is stripped to an empty schema and
-/// re-migrated, and the derived blobs (covers/media) and the `index.txt`
-/// mirror are removed. Credentials go too, so the caller must return to the
-/// login screen afterwards.
-#[allow(dead_code)]
-pub async fn wipe(dbs: &Dbs) -> Result<()> {
-    wipe_and_migrate(&dbs.library, sqlx::migrate!("./migrations_library")).await?;
-    wipe_and_migrate(&dbs.media, sqlx::migrate!("./migrations_media")).await?;
-    crate::search::index::clear();
-
-    for dir in [covers_dir(), media_dir(), playback_dir()]
-        .into_iter()
-        .flatten()
-    {
-        remove_dir(&dir)?;
-    }
-    remove_mirror();
-    Ok(())
-}
-
 /// Drops every user table in one database (virtual/FTS tables first, so their
 /// shadow tables fall with them; FK checks are off while DROP implicitly
 /// deletes rows).
+#[cfg(test)]
 pub(crate) async fn wipe_pool(pool: &SqlitePool) -> Result<()> {
     let mut conn = pool.acquire().await?;
     sqlx::query("PRAGMA foreign_keys = OFF")
@@ -860,11 +822,10 @@ mod sync_bench {
         let runtime = crate::app::runtime();
         let dir = std::env::temp_dir().join(format!("musika-db-bench-{}", std::process::id()));
         ensure_dir(&dir).expect("temp dir");
-        for durability in [Durability::Full, Durability::Normal, Durability::Off] {
+        for durability in [Durability::Full, Durability::Normal] {
             let path = dir.join(match durability {
                 Durability::Full => "full.db",
                 Durability::Normal => "normal.db",
-                Durability::Off => "off.db",
             });
             let _ = std::fs::remove_file(&path);
             let started = std::time::Instant::now();
@@ -915,7 +876,6 @@ impl Durability {
         match self {
             Self::Full => "FULL",
             Self::Normal => "NORMAL",
-            Self::Off => "OFF",
         }
     }
 }

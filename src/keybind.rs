@@ -301,11 +301,6 @@ impl Keymap {
         Outcome::Action(action)
     }
 
-    #[allow(dead_code)]
-    pub fn is_pending(&self) -> bool {
-        !self.pending.is_empty()
-    }
-
     /// Feeds one token; see [`Outcome`].
     ///
     /// If the tokens so far are also the exact start of a longer binding (e.g.

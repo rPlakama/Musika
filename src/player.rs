@@ -22,7 +22,6 @@
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, LazyLock, Mutex};
-use std::time::Instant;
 
 use serde_json::json;
 
@@ -129,19 +128,12 @@ impl State {
 pub(crate) struct Shared {
     pub(crate) position: f64,
     pub(crate) duration: f64,
-    pub(crate) paused: bool,
-    pub(crate) audio_level: f64,
-    pub(crate) audio_peak: f64,
-    pub(crate) audio_at: Option<std::time::Instant>,
 }
 
 impl Shared {
     fn reset(&mut self) {
         self.position = 0.0;
         self.duration = 0.0;
-        self.audio_level = 0.0;
-        self.audio_peak = 0.0;
-        self.audio_at = None;
     }
 }
 
@@ -165,8 +157,6 @@ pub struct Player {
     pub(crate) fallback_duration: f64,
     pub(crate) volume: f64,
     pub(crate) muted: bool,
-    pub(crate) retries: u32,
-    pub(crate) retry_at: Option<Instant>,
     /// Last transport/decoder error (IPC diagnostics + UI toast source).
     pub(crate) last_error: Option<String>,
     /// Row revision (QUEUEROWSTUDY QR-1): bumped by every mutation of the
@@ -197,8 +187,6 @@ impl Player {
             fallback_duration: 0.0,
             volume: crate::consts::DEFAULT_VOLUME,
             muted: false,
-            retries: 0,
-            retry_at: None,
             last_error: None,
             revision: 0,
             native: None,
@@ -308,14 +296,6 @@ impl Player {
         self.native.as_ref().is_some_and(|native| native.loading())
     }
 
-    pub(crate) fn audio_level(&self) -> f64 {
-        self.shared().audio_level
-    }
-
-    pub(crate) fn audio_peak(&self) -> f64 {
-        self.shared().audio_peak
-    }
-
     /// Replaces the queue and starts at `start`.
     pub fn load(&mut self, tracks: Vec<Track>, start: usize) {
         self.repeat = Repeat::Off;
@@ -377,9 +357,6 @@ impl Player {
         } else {
             None
         };
-        self.retries = 0;
-        self.retry_at = None;
-
         let next_url = self
             .gapless_next
             .and_then(|index| self.queue.get(index))
@@ -433,8 +410,6 @@ impl Player {
     pub fn stop(&mut self) {
         self.command(vec![json!("stop")]);
         self.shared().reset();
-        self.retries = 0;
-        self.retry_at = None;
         self.gapless_next = None;
         self.state = State::Stopped;
     }
@@ -452,7 +427,6 @@ impl Player {
         if self.queue.is_empty() || steps == 0 {
             return;
         }
-        self.forget_error();
         let mut index = self.index;
         for _ in 0..steps {
             if index + 1 < self.queue.len() {
@@ -475,7 +449,6 @@ impl Player {
         if self.queue.is_empty() || steps == 0 {
             return;
         }
-        self.forget_error();
         let index = self.index.saturating_sub(steps);
         if index != self.index {
             self.index = index;

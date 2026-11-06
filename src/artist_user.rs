@@ -138,8 +138,6 @@ pub async fn import_ratings(pool: &SqlitePool, ratings: &[(String, i64)]) -> Res
 }
 
 /// Every starred artist id, ordered for stable favourites listings.
-/// (P-2's favourites view is the consumer; exercised by the tests today.)
-#[allow(dead_code)]
 pub async fn starred_ids(pool: &SqlitePool) -> Result<Vec<String>> {
     let ids = sqlx::query_scalar(
         "SELECT artist_id FROM artist_user WHERE starred = 1 ORDER BY artist_id",

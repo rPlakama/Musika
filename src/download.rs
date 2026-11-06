@@ -107,19 +107,6 @@ pub async fn get(pool: &SqlitePool, song_id: &str) -> Result<Option<DownloadStat
     Ok(row)
 }
 
-/// The next `limit` queued songs, oldest request first (the fetcher's work
-/// list).
-pub async fn queued_ids(pool: &SqlitePool, limit: i64) -> Result<Vec<String>> {
-    let ids = sqlx::query_scalar(
-        "SELECT song_id FROM download
-         WHERE state = 'queued' ORDER BY requested_at LIMIT ?1",
-    )
-    .bind(limit)
-    .fetch_all(pool)
-    .await?;
-    Ok(ids)
-}
-
 /// Every song whose download finished (CACHE-9) — the only catalog the app
 /// offers while the server is unreachable.
 pub async fn done_ids(pool: &SqlitePool) -> Result<Vec<String>> {

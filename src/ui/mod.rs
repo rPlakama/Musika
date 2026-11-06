@@ -31,7 +31,7 @@ use gpui::{
 };
 
 use bridge::Event;
-use state::{Scope, ViewState};
+use state::{PageDescriptor, PageKind, PageState, Row, Scope, Travel, ViewState};
 
 actions!(
     musika,
@@ -47,6 +47,9 @@ actions!(
         OrderPrev,
         Refresh,
         Enter,
+        Back,
+        PrevPlace,
+        NextPlace,
     ]
 );
 
@@ -61,8 +64,9 @@ const OUTLINE: u32 = 0x49454F;
 pub fn run() {
     Application::new().run(|cx: &mut App| {
         cx.bind_keys([
-            KeyBinding::new("q", Quit, None),
-            KeyBinding::new("escape", Quit, None),
+            KeyBinding::new("q", Back, None),
+            KeyBinding::new("escape", Back, None),
+            KeyBinding::new("ctrl-q", Quit, None),
             KeyBinding::new("j", MoveDown, None),
             KeyBinding::new("k", MoveUp, None),
             KeyBinding::new("g", Top, None),
@@ -73,6 +77,8 @@ pub fn run() {
             KeyBinding::new("shift-h", OrderPrev, None),
             KeyBinding::new("r", Refresh, None),
             KeyBinding::new("enter", Enter, None),
+            KeyBinding::new("[", PrevPlace, None),
+            KeyBinding::new("]", NextPlace, None),
         ]);
         cx.on_window_closed(|cx| {
             if cx.windows().is_empty() {
@@ -111,6 +117,10 @@ struct AppRoot {
     error: Option<String>,
     generation: u64,
     scroll: UniformListScrollHandle,
+    page: Option<PageState>,
+    travel: Travel,
+    page_generation: u64,
+    page_scroll: UniformListScrollHandle,
 }
 
 impl AppRoot {
@@ -134,7 +144,7 @@ impl AppRoot {
         })
         .detach();
 
-        Self {
+        let mut app = Self {
             focus,
             bridge,
             view,
@@ -142,7 +152,17 @@ impl AppRoot {
             error: None,
             generation: 0,
             scroll: UniformListScrollHandle::new(),
+            page: None,
+            travel: Travel::default(),
+            page_generation: 0,
+            page_scroll: UniformListScrollHandle::new(),
+        };
+        if let Ok(spec) = std::env::var("MUSIKA_GPUUI_PAGE")
+            && let Some(descriptor) = parse_page_spec(&spec)
+        {
+            app.open_descriptor(descriptor);
         }
+        app
     }
 
     fn apply(&mut self, event: Event) {
@@ -178,6 +198,30 @@ impl AppRoot {
                 self.scroll
                     .scroll_to_item(self.view.cursor, ScrollStrategy::Center);
             }
+            Event::Page {
+                generation,
+                descriptor,
+                header,
+                rows,
+            } => {
+                if generation < self.page_generation {
+                    return;
+                }
+                self.page_generation = generation;
+                let page = self
+                    .page
+                    .get_or_insert_with(|| PageState::new(descriptor.clone()));
+                if page.descriptor != descriptor {
+                    *page = PageState::new(descriptor.clone());
+                }
+                page.header = header;
+                page.rows = rows;
+                page.loading = false;
+                page.error = None;
+                page.cursor = page.cursor.min(page.rows.len().saturating_sub(1));
+                self.page_scroll
+                    .scroll_to_item(page.cursor, ScrollStrategy::Center);
+            }
             Event::Error(message) => {
                 self.view.loading = false;
                 self.view.error = Some(message.clone());
@@ -211,22 +255,41 @@ impl AppRoot {
     }
 
     fn on_move_down(&mut self, _: &MoveDown, _window: &mut Window, cx: &mut Context<Self>) {
-        self.select(self.view.cursor.saturating_add(1));
+        if let Some(page) = self.page.as_mut() {
+            page.select(page.cursor.saturating_add(1));
+            self.page_scroll.scroll_to_item(page.cursor, ScrollStrategy::Center);
+        } else {
+            self.select(self.view.cursor.saturating_add(1));
+        }
         cx.notify();
     }
 
     fn on_move_up(&mut self, _: &MoveUp, _window: &mut Window, cx: &mut Context<Self>) {
-        self.select(self.view.cursor.saturating_sub(1));
+        if let Some(page) = self.page.as_mut() {
+            page.select(page.cursor.saturating_sub(1));
+            self.page_scroll.scroll_to_item(page.cursor, ScrollStrategy::Center);
+        } else {
+            self.select(self.view.cursor.saturating_sub(1));
+        }
         cx.notify();
     }
 
     fn on_top(&mut self, _: &Top, _window: &mut Window, cx: &mut Context<Self>) {
-        self.select(0);
+        if let Some(page) = self.page.as_mut() {
+            page.select(0);
+        } else {
+            self.select(0);
+        }
         cx.notify();
     }
 
     fn on_bottom(&mut self, _: &Bottom, _window: &mut Window, cx: &mut Context<Self>) {
-        self.select(self.view.rows.len().saturating_sub(1));
+        if let Some(page) = self.page.as_mut() {
+            let last = page.rows.len().saturating_sub(1);
+            page.select(last);
+        } else {
+            self.select(self.view.rows.len().saturating_sub(1));
+        }
         cx.notify();
     }
 
@@ -255,8 +318,78 @@ impl AppRoot {
         cx.notify();
     }
 
-    fn on_enter(&mut self, _: &Enter, _window: &mut Window, _cx: &mut Context<Self>) {
-        // Pages land in G1's next increment.
+    fn on_enter(&mut self, _: &Enter, _window: &mut Window, cx: &mut Context<Self>) {
+        if self.page.is_some() {
+            let row = self
+                .page
+                .as_ref()
+                .and_then(|page| page.rows.get(page.cursor))
+                .cloned();
+            if let Some(row) = row {
+                self.open_row_page(&row);
+            }
+        } else if let Some(row) = self.view.rows.get(self.view.cursor).cloned() {
+            self.open_row_page(&row);
+        }
+        cx.notify();
+    }
+
+    fn on_back(&mut self, _: &Back, window: &mut Window, cx: &mut Context<Self>) {
+        if self.page.is_some() {
+            self.back_page();
+        } else {
+            window.remove_window();
+        }
+        cx.notify();
+    }
+
+    fn on_prev_place(&mut self, _: &PrevPlace, _window: &mut Window, cx: &mut Context<Self>) {
+        self.step_travel(-1);
+        cx.notify();
+    }
+
+    fn on_next_place(&mut self, _: &NextPlace, _window: &mut Window, cx: &mut Context<Self>) {
+        self.step_travel(1);
+        cx.notify();
+    }
+
+    fn open_row_page(&mut self, row: &Row) {
+        let kind = match row.kind {
+            state::RowKind::Album => PageKind::Album,
+            state::RowKind::Artist => PageKind::Artist,
+            state::RowKind::Playlist => PageKind::Playlist,
+            state::RowKind::Song => return,
+        };
+        self.open_descriptor(PageDescriptor { kind, id: row.id.clone() });
+    }
+
+    fn open_descriptor(&mut self, descriptor: PageDescriptor) {
+        self.travel.open(descriptor.clone());
+        self.page = Some(PageState::new(descriptor.clone()));
+        self.page_generation = self.page_generation.wrapping_add(1);
+        self.bridge.load_page(descriptor);
+        self.page_scroll.scroll_to_item(0, ScrollStrategy::Top);
+    }
+
+    fn back_page(&mut self) {
+        match self.travel.back() {
+            Some(descriptor) => {
+                self.page = Some(PageState::new(descriptor.clone()));
+                self.page_generation = self.page_generation.wrapping_add(1);
+                self.bridge.load_page(descriptor);
+                self.page_scroll.scroll_to_item(0, ScrollStrategy::Top);
+            }
+            None => self.page = None,
+        }
+    }
+
+    fn step_travel(&mut self, delta: i32) {
+        if let Some(descriptor) = self.travel.step(delta) {
+            self.page = Some(PageState::new(descriptor.clone()));
+            self.page_generation = self.page_generation.wrapping_add(1);
+            self.bridge.load_page(descriptor);
+            self.page_scroll.scroll_to_item(0, ScrollStrategy::Top);
+        }
     }
 
     fn cycle_order(&mut self, next: bool) {
@@ -413,6 +546,158 @@ impl AppRoot {
         )
     }
 
+    fn page_view(&self, cx: &Context<Self>) -> impl IntoElement {
+        let Some(page) = self.page.as_ref() else {
+            return div().flex().flex_1();
+        };
+        let title = format!("{} · {}", page.descriptor.kind.label(), page.header.title);
+        let subtitle = page.header.subtitle.clone();
+        let meta = page.header.meta.clone();
+        let place = format!(
+            "{} / {} · q back · [ ] travel",
+            self.travel.position.saturating_add(1),
+            self.travel.places.len().max(1)
+        );
+
+        let hero = div()
+            .flex()
+            .items_center()
+            .gap_5()
+            .h(px(180.0))
+            .px_6()
+            .bg(rgb(SURFACE))
+            .child(
+                div()
+                    .size(px(116.0))
+                    .rounded_md()
+                    .bg(rgb(SURFACE_HIGH)),
+            )
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap_1()
+                    .min_w_0()
+                    .flex_1()
+                    .child(div().text_size(px(20.0)).child(title))
+                    .child(
+                        div()
+                            .text_size(px(13.0))
+                            .text_color(rgb(ON_VARIANT))
+                            .child(subtitle),
+                    )
+                    .child(
+                        div()
+                            .text_size(px(11.0))
+                            .text_color(rgb(ON_VARIANT))
+                            .child(meta),
+                    ),
+            )
+            .child(
+                div()
+                    .text_size(px(10.0))
+                    .text_color(rgb(ON_VARIANT))
+                    .child(place),
+            );
+
+        if page.loading && page.rows.is_empty() {
+            return div()
+                .flex()
+                .flex_col()
+                .flex_1()
+                .child(hero)
+                .child(
+                    div()
+                        .flex()
+                        .flex_1()
+                        .items_center()
+                        .justify_center()
+                        .text_size(px(15.0))
+                        .text_color(rgb(ON_VARIANT))
+                        .child("Loading…"),
+                );
+        }
+        if let Some(error) = &page.error {
+            return div()
+                .flex()
+                .flex_col()
+                .flex_1()
+                .child(hero)
+                .child(
+                    div()
+                        .flex()
+                        .flex_1()
+                        .items_center()
+                        .justify_center()
+                        .text_size(px(13.0))
+                        .text_color(rgb(ON_VARIANT))
+                        .child(error.clone()),
+                );
+        }
+
+        let count = page.rows.len();
+        let scroll = self.page_scroll.clone();
+        div()
+            .flex()
+            .flex_col()
+            .flex_1()
+            .child(hero)
+            .child(
+                uniform_list("page-rows", count, cx.processor(move |this, range: std::ops::Range<usize>, _window, cx| {
+                    let mut items = Vec::with_capacity(range.len());
+                    for index in range {
+                        let Some(page) = this.page.as_ref() else { break };
+                        let row = &page.rows[index];
+                        let title = row.title.clone();
+                        let subtitle = row.subtitle.clone();
+                        let meta = row.meta.clone();
+                        let selected = index == page.cursor;
+                        items.push(
+                            div()
+                                .id(index)
+                                .flex()
+                                .items_center()
+                                .h(px(44.0))
+                                .px_4()
+                                .gap_3()
+                                .cursor_pointer()
+                                .when(selected, |this| this.bg(rgb(SURFACE_HIGH)))
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    if let Some(page) = this.page.as_mut() {
+                                        page.select(index);
+                                    }
+                                    this.page_scroll.scroll_to_item(index, ScrollStrategy::Center);
+                                    cx.notify();
+                                }))
+                                .child(
+                                    div()
+                                        .flex()
+                                        .flex_col()
+                                        .min_w_0()
+                                        .flex_1()
+                                        .child(div().text_size(px(14.0)).child(title))
+                                        .child(
+                                            div()
+                                                .text_size(px(11.0))
+                                                .text_color(rgb(ON_VARIANT))
+                                                .child(subtitle),
+                                        ),
+                                )
+                                .child(
+                                    div()
+                                        .text_size(px(11.0))
+                                        .text_color(rgb(ON_VARIANT))
+                                        .child(meta),
+                                ),
+                        );
+                    }
+                    items
+                }))
+                .h_full()
+                .track_scroll(scroll),
+            )
+    }
+
     fn status_bar(&self) -> impl IntoElement {
         let counts = self
             .header
@@ -441,7 +726,11 @@ impl AppRoot {
 impl Render for AppRoot {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let top = self.top_bar(&*cx);
-        let list = self.list(&*cx);
+        let body = if self.page.is_some() {
+            self.page_view(&*cx).into_any_element()
+        } else {
+            self.list(&*cx).into_any_element()
+        };
         let status = self.status_bar();
         div()
             .track_focus(&self.focus)
@@ -456,6 +745,9 @@ impl Render for AppRoot {
             .on_action(cx.listener(Self::on_order_prev))
             .on_action(cx.listener(Self::on_refresh))
             .on_action(cx.listener(Self::on_enter))
+            .on_action(cx.listener(Self::on_back))
+            .on_action(cx.listener(Self::on_prev_place))
+            .on_action(cx.listener(Self::on_next_place))
             .flex()
             .flex_col()
             .size_full()
@@ -463,7 +755,21 @@ impl Render for AppRoot {
             .font_family("Overused Grotesk")
             .text_color(rgb(ON_SURFACE))
             .child(top)
-            .child(list)
+            .child(body)
             .child(status)
     }
+}
+
+fn parse_page_spec(spec: &str) -> Option<PageDescriptor> {
+    let (kind, id) = spec.split_once(':')?;
+    if id.is_empty() {
+        return None;
+    }
+    let kind = match kind {
+        "album" => PageKind::Album,
+        "artist" => PageKind::Artist,
+        "playlist" => PageKind::Playlist,
+        _ => return None,
+    };
+    Some(PageDescriptor { kind, id: id.to_string() })
 }

@@ -23,6 +23,8 @@
 
 mod anim;
 mod bridge;
+mod covers;
+mod metrics;
 mod state;
 
 use gpui::{
@@ -32,7 +34,7 @@ use gpui::{
 };
 
 use bridge::Event;
-use state::{PageDescriptor, PageKind, PageState, Row, Scope, Travel, ViewState};
+use state::{PageDescriptor, PageKind, PageState, Row, RowWindow, Scope, Travel, ViewState};
 
 actions!(
     musika,
@@ -408,6 +410,40 @@ impl AppRoot {
                     self.bridge.restore();
                 }
             }
+            Event::LibraryCount {
+                generation,
+                scope,
+                order,
+                count,
+            } => {
+                if generation < self.generation || scope != self.view.scope || order != self.view.order {
+                    return;
+                }
+                self.generation = generation;
+                self.view.rows.install_count(generation, count);
+                self.view.loading = count == 0;
+                self.view.error = None;
+                let saved = crate::scroll_memory::saved_index(scope.key());
+                if saved >= 0 {
+                    self.view.cursor = saved as usize;
+                }
+                self.view.cursor = self.view.cursor.min(count.saturating_sub(1));
+                self.ensure_library_window();
+            }
+            Event::LibraryWindow {
+                generation,
+                scope,
+                order,
+                start,
+                rows,
+            } => {
+                if generation < self.generation || scope != self.view.scope || order != self.view.order {
+                    return;
+                }
+                self.view.rows.install_window(start, rows);
+                self.view.loading = false;
+                self.view.error = None;
+            }
             Event::Library {
                 generation,
                 scope,
@@ -418,7 +454,8 @@ impl AppRoot {
                     return;
                 }
                 self.generation = generation;
-                self.view.rows = rows;
+                self.view.rows = RowWindow::full(rows);
+                self.view.rows.generation = generation;
                 self.view.loading = false;
                 self.view.error = None;
                 let saved = crate::scroll_memory::saved_index(scope.key());
@@ -593,8 +630,51 @@ impl AppRoot {
 
     fn reload(&mut self) {
         self.view.loading = true;
-        self.generation = self.generation.wrapping_add(1);
-        self.bridge.load_library(self.view.scope, self.view.order);
+        self.view.rows.clear();
+        self.generation = self.bridge.load_library(self.view.scope, self.view.order);
+    }
+
+    /// Ask the Rust row window for the band around the visible rows and the
+    /// cursor. The request is deduped by the window coverage, exactly like
+    /// QML's `ensureVirtualWindow`.
+    fn ensure_library_window(&mut self) {
+        if self.page.is_some() || self.view.scope == Scope::Playlists {
+            return;
+        }
+        let count = self.view.rows.count;
+        if count == 0 || self.view.rows.generation == 0 {
+            return;
+        }
+        let row_h = 58.0_f32;
+        let (top, viewport) = {
+            let state = self.scroll.0.borrow();
+            let top = state.base_handle.logical_scroll_top().0;
+            let viewport = state
+                .last_item_size
+                .map(|size| f32::from(size.item.height))
+                .unwrap_or(600.0);
+            (top, viewport)
+        };
+        let visible = ((viewport / row_h).ceil() as usize).max(1);
+        let overscan = 10;
+        let cursor = self.view.cursor.min(count - 1);
+        let mut first = top.saturating_sub(overscan);
+        let mut last = (top + visible + overscan).min(count - 1);
+        first = first.min(cursor);
+        last = last.max(cursor);
+        let start = first.saturating_sub(20);
+        let end = (last + 20).min(count - 1);
+        if self.view.rows.covers(start, end) {
+            return;
+        }
+        self.view.rows.set_requested(start, end);
+        self.bridge.request_library_window(
+            self.view.rows.generation,
+            self.view.scope,
+            self.view.order,
+            start,
+            end - start + 1,
+        );
     }
 
     fn set_scope(&mut self, scope: Scope) {
@@ -1623,14 +1703,6 @@ impl AppRoot {
                     let row_h = 58.0;
                     let mut items = Vec::with_capacity(range.len());
                     for index in range {
-                        let row = &this.view.rows[index];
-                        let title = row.title.clone();
-                        let subtitle = row.subtitle.clone();
-                        let meta = row.meta.clone();
-                        let starred = row.starred;
-                        let downloaded = row.downloaded;
-                        let rating = row.rating;
-                        let cover = cover_path(&row.cover_url);
                         let selected = index == this.view.cursor
                             || this.view.selection.contains(this.view.cursor, index);
                         let hovered = this.hovered_row == Some(index);
@@ -1644,6 +1716,29 @@ impl AppRoot {
                         } else {
                             0x14121800
                         };
+                        let Some(row) = this.view.rows.get(index) else {
+                            // The QML RowWindow paints a blank geometry slot
+                            // until the live window lands.
+                            items.push(
+                                div()
+                                    .id(index)
+                                    .w_full()
+                                    .flex()
+                                    .items_center()
+                                    .h(px(row_h))
+                                    .px_1()
+                                    .rounded_sm()
+                                    .bg(rgb(target)),
+                            );
+                            continue;
+                        };
+                        let title = row.title.clone();
+                        let subtitle = row.subtitle.clone();
+                        let meta = row.meta.clone();
+                        let starred = row.starred;
+                        let downloaded = row.downloaded;
+                        let rating = row.rating;
+                        let cover = cover_path(&row.cover_url);
                         let color = this
                             .row_colors
                             .entry(row.id.clone())
@@ -2758,6 +2853,7 @@ impl Render for AppRoot {
                 window.remove_window();
             }
         }
+        self.ensure_library_window();
         let top = self.top_bar(&*cx);
         let body = if self.page.is_some() {
             self.page_view(&*cx).into_any_element()

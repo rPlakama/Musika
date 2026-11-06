@@ -26,6 +26,8 @@
 // surface is exercised by tests only (same stance as `covers.rs`).
 #![allow(dead_code)]
 
+use std::collections::{HashMap, HashSet};
+
 use anyhow::Result;
 use sqlx::sqlite::SqlitePool;
 
@@ -150,6 +152,102 @@ pub async fn done_ids_of(pool: &SqlitePool, ids: &[String]) -> Result<Vec<String
 /// the loading glyph for these while the fetch runs.
 pub async fn pending_ids_of(pool: &SqlitePool, ids: &[String]) -> Result<Vec<String>> {
     ids_of(pool, ids, "state IN ('queued', 'active')").await
+}
+
+/// One mark-window read: the finished songs and albums plus the in-flight
+/// songs of the rows a surface can show, together with the deduped window
+/// that was queried (callers rewrite exactly those ids and leave the rest of
+/// the ledger alone).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct MarkWindowResult {
+    pub songs_done: Vec<String>,
+    pub albums_done: Vec<String>,
+    pub pending: Vec<String>,
+    pub queried_songs: Vec<String>,
+    pub queried_albums: Vec<String>,
+}
+
+/// First occurrence of each id: overlapping surfaces send the same row more
+/// than once, but one read must query and rewrite it once.
+fn unique_ids(ids: &[String]) -> Vec<String> {
+    let mut seen: HashSet<&str> = HashSet::with_capacity(ids.len());
+    ids.iter()
+        .filter(|id| seen.insert(id.as_str()))
+        .cloned()
+        .collect()
+}
+
+/// Assembles a read from its deduped window and the ledger verdicts. Songs
+/// and albums keep the caller's order; an album is done only when it has a
+/// non-empty tracklist whose every song is finished.
+fn assemble_window(
+    songs: &[String],
+    albums: &[String],
+    tracklists: &HashMap<String, Vec<String>>,
+    done: &HashSet<String>,
+    pending: &HashSet<String>,
+) -> MarkWindowResult {
+    let songs_done = songs
+        .iter()
+        .filter(|song| done.contains(*song))
+        .cloned()
+        .collect();
+    let albums_done = albums
+        .iter()
+        .filter(|album| {
+            tracklists
+                .get(*album)
+                .is_some_and(|ids| !ids.is_empty() && ids.iter().all(|song| done.contains(song)))
+        })
+        .cloned()
+        .collect();
+    let pending = songs
+        .iter()
+        .filter(|song| pending.contains(*song))
+        .cloned()
+        .collect();
+    MarkWindowResult {
+        songs_done,
+        albums_done,
+        pending,
+        queried_songs: songs.to_vec(),
+        queried_albums: albums.to_vec(),
+    }
+}
+
+/// Reads the download marks for one visible window (the rows a surface can
+/// show), toolkit-free so every front end shares the same read.
+///
+/// One library query for the window albums' tracklists and two concurrent
+/// ledger queries over the deduped songs plus those tracklists (album
+/// coverage needs every track). Album coverage is a whole-tracklist check; a
+/// missing or empty tracklist is never "done".
+pub async fn window_state(
+    dbs: &crate::db::Dbs,
+    songs: &[String],
+    albums: &[String],
+) -> anyhow::Result<MarkWindowResult> {
+    let queried_songs = unique_ids(songs);
+    let queried_albums = unique_ids(albums);
+    let tracklists = crate::library::album_song_ids_of(&dbs.library, &queried_albums).await?;
+    let mut all = queried_songs.clone();
+    for ids in tracklists.values() {
+        all.extend(ids.iter().cloned());
+    }
+    let all = unique_ids(&all);
+    let (done, pending) = tokio::join!(
+        done_ids_of(&dbs.download, &all),
+        pending_ids_of(&dbs.download, &all),
+    );
+    let done: HashSet<String> = done?.into_iter().collect();
+    let pending: HashSet<String> = pending?.into_iter().collect();
+    Ok(assemble_window(
+        &queried_songs,
+        &queried_albums,
+        &tracklists,
+        &done,
+        &pending,
+    ))
 }
 
 /// Per-state counts for the status UI (`CACHE-7`): queued / active / done /

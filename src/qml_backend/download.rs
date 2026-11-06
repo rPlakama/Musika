@@ -30,49 +30,25 @@ pub(super) async fn apply_window(
     generation: u64,
     invoker: qtbridge::QmlMethodInvoker,
 ) {
-    // Two batched queries, never point-by-point: one library read for every
-    // window album's tracklist, one ledger read over the window songs plus
-    // those tracklists (album coverage needs them all).
-    let tracklists = crate::library::album_song_ids_of(&dbs.library, albums)
-        .await
-        .unwrap_or_default();
-    let mut all = songs.to_vec();
-    for ids in tracklists.values() {
-        all.extend(ids.iter().cloned());
-    }
-    let (done, pending) = tokio::join!(
-        crate::download::done_ids_of(&dbs.download, &all),
-        crate::download::pending_ids_of(&dbs.download, &all),
-    );
-    let done: std::collections::HashSet<String> = done.unwrap_or_default().into_iter().collect();
-    let pending: std::collections::HashSet<String> =
-        pending.unwrap_or_default().into_iter().collect();
-    let songs_done: Vec<String> = songs
-        .iter()
-        .filter(|song| done.contains(*song))
-        .cloned()
-        .collect();
-    let albums_done: Vec<String> = albums
-        .iter()
-        .filter(|album| {
-            tracklists
-                .get(*album)
-                .is_some_and(|ids| !ids.is_empty() && ids.iter().all(|song| done.contains(song)))
-        })
-        .cloned()
-        .collect();
-    let songs_pending: Vec<String> = songs
-        .iter()
-        .filter(|song| pending.contains(*song))
-        .cloned()
-        .collect();
+    // One shared, toolkit-free read: the window albums' tracklists and the
+    // ledger verdicts over the songs plus those tracklists (two batched
+    // ledger queries, never point-by-point).
+    let state = match crate::download::window_state(dbs, songs, albums).await {
+        Ok(state) => state,
+        Err(err) => {
+            // A failed read must not rewrite the marks from an empty
+            // snapshot: the previous states stay until the next window.
+            crate::debug_log!("[musika/debug] downloads: could not read the mark window: {err:#}");
+            return;
+        }
+    };
     crate::debug_log!(
         "[musika/debug] downloads: {} of {} visible songs cached; {} of {} albums fully cached; {} in flight",
-        songs_done.len(),
-        songs.len(),
-        albums_done.len(),
-        albums.len(),
-        songs_pending.len()
+        state.songs_done.len(),
+        state.queried_songs.len(),
+        state.albums_done.len(),
+        state.queried_albums.len(),
+        state.pending.len()
     );
     // PATH-5: a newer request won while this read ran; its result lands
     // instead (a stale snapshot would flip the marks backwards).
@@ -80,13 +56,13 @@ pub(super) async fn apply_window(
         return;
     }
     let json = serde_json::json!({
-        "songs": songs_done,
-        "albums": albums_done,
-        "downloading": songs_pending,
+        "songs": state.songs_done,
+        "albums": state.albums_done,
+        "downloading": state.pending,
         // The window's queried ids: their states get rewritten, everything
         // else keeps its own (reads never clobber other surfaces).
-        "queried_songs": songs,
-        "queried_albums": albums,
+        "queried_songs": state.queried_songs,
+        "queried_albums": state.queried_albums,
     })
     .to_string();
     qtbridge::invoke_method!(invoker, "applyDownloadedIds", json);

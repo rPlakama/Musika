@@ -71,11 +71,88 @@ pub struct Row {
     pub downloaded: bool,
 }
 
+/// The QML `RowWindow` contract: a count plus only the rows inside the live
+/// window. The UI never materializes the whole library.
+#[derive(Debug, Clone, Default)]
+pub struct RowWindow {
+    pub generation: u64,
+    pub count: usize,
+    pub live_start: usize,
+    pub live: Vec<Row>,
+    /// The absolute range of the latest request, used to dedupe band changes.
+    pub requested: Option<(usize, usize)>,
+}
+
+impl RowWindow {
+    pub fn full(rows: Vec<Row>) -> Self {
+        Self {
+            generation: 0,
+            count: rows.len(),
+            live_start: 0,
+            live: rows,
+            requested: None,
+        }
+    }
+
+    pub fn clear(&mut self) {
+        self.generation = 0;
+        self.count = 0;
+        self.live_start = 0;
+        self.live.clear();
+        self.requested = None;
+    }
+
+    pub fn install_count(&mut self, generation: u64, count: usize) {
+        if generation != self.generation {
+            self.live.clear();
+            self.live_start = 0;
+            self.requested = None;
+        }
+        self.generation = generation;
+        self.count = count;
+    }
+
+    pub fn install_window(&mut self, start: usize, rows: Vec<Row>) {
+        self.live_start = start;
+        self.live = rows;
+    }
+
+    pub fn row(&self, index: usize) -> Option<&Row> {
+        if index < self.live_start {
+            return None;
+        }
+        self.live.get(index - self.live_start)
+    }
+
+    pub fn covers(&self, start: usize, end: usize) -> bool {
+        match self.requested {
+            Some((lo, hi)) => lo <= start && end <= hi,
+            None => false,
+        }
+    }
+
+    pub fn set_requested(&mut self, start: usize, end: usize) {
+        self.requested = Some((start, end));
+    }
+
+    pub fn len(&self) -> usize {
+        self.count
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.count == 0
+    }
+
+    pub fn get(&self, index: usize) -> Option<&Row> {
+        self.row(index)
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct ViewState {
     pub scope: Scope,
     pub order: usize,
-    pub rows: Vec<Row>,
+    pub rows: RowWindow,
     pub cursor: usize,
     pub scroll: f32,
     pub loading: bool,
@@ -88,7 +165,7 @@ impl Default for ViewState {
         Self {
             scope: Scope::Albums,
             order: 0,
-            rows: Vec::new(),
+            rows: RowWindow::default(),
             cursor: 0,
             scroll: 0.0,
             loading: true,
@@ -159,7 +236,7 @@ mod tests {
     #[test]
     fn cursor_is_clamped_to_rows() {
         let mut view = ViewState {
-            rows: vec![Row {
+            rows: RowWindow::full(vec![Row {
                 id: "a".into(),
                 kind: RowKind::Album,
                 title: "A".into(),
@@ -170,8 +247,8 @@ mod tests {
                 album_id: "a".into(),
                 starred: false,
                 rating: 0,
-                    downloaded: false,
-            }],
+                downloaded: false,
+            }]),
             ..ViewState::default()
         };
         view.select(99);
@@ -189,6 +266,36 @@ mod tests {
         view.order = 1;
         assert_eq!(view.order_label(), "Albums");
         assert_eq!(view.order_len(), 2);
+    }
+
+    #[test]
+    fn row_window_only_exposes_loaded_rows() {
+        let mut window = RowWindow::default();
+        window.install_count(7, 50);
+        assert_eq!(window.len(), 50);
+        assert!(window.row(0).is_none());
+        window.install_window(10, vec![Row {
+            id: "ten".into(),
+            kind: RowKind::Album,
+            title: "Ten".into(),
+            subtitle: String::new(),
+            meta: String::new(),
+            cover_url: String::new(),
+            song_id: String::new(),
+            album_id: "ten".into(),
+            starred: false,
+            rating: 0,
+            downloaded: false,
+        }]);
+        assert!(window.row(9).is_none());
+        assert_eq!(window.row(10).map(|row| row.id.as_str()), Some("ten"));
+        assert!(window.row(11).is_none());
+        assert!(!window.covers(0, 10));
+        window.set_requested(0, 30);
+        assert!(window.covers(0, 10));
+        window.install_count(8, 4);
+        assert_eq!(window.len(), 4);
+        assert!(window.row(10).is_none());
     }
 }
 

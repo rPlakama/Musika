@@ -4,7 +4,7 @@
 //! runtime and return as plain `Event`s over a tokio channel; the GPUI root
 //! task drains them and notifies its entity.
 
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use tokio::sync::mpsc::UnboundedSender;
 
@@ -18,6 +18,19 @@ pub enum Event {
         offline: bool,
     },
     AuthError(String),
+    LibraryCount {
+        generation: u64,
+        scope: super::state::Scope,
+        order: usize,
+        count: usize,
+    },
+    LibraryWindow {
+        generation: u64,
+        scope: super::state::Scope,
+        order: usize,
+        start: usize,
+        rows: Vec<super::state::Row>,
+    },
     Library {
         generation: u64,
         scope: super::state::Scope,
@@ -71,6 +84,7 @@ pub struct Bridge {
     generation: AtomicU64,
     page_generation: AtomicU64,
     search_generation: AtomicU64,
+    offline: AtomicBool,
 }
 
 impl Bridge {
@@ -80,6 +94,7 @@ impl Bridge {
             generation: AtomicU64::new(0),
             page_generation: AtomicU64::new(0),
             search_generation: AtomicU64::new(0),
+            offline: AtomicBool::new(false),
         };
         bridge.refresh_header();
         bridge
@@ -299,6 +314,7 @@ impl Bridge {
     }
 
     pub fn login(&self, server_url: String, username: String, password: String) {
+        self.set_offline(false);
         let tx = self.tx.clone();
         crate::app::runtime().spawn(async move {
             let event = match crate::auth::login(&server_url, &username, &password).await {
@@ -322,6 +338,7 @@ impl Bridge {
     }
 
     pub fn offline_login(&self, server_url: String, username: String) {
+        self.set_offline(true);
         let tx = self.tx.clone();
         crate::app::runtime().spawn(async move {
             let account = crate::auth::offline(&server_url, &username).await;
@@ -356,25 +373,145 @@ impl Bridge {
         });
     }
 
-    pub fn load_library(&self, scope: super::state::Scope, order: usize) {
+    pub fn load_library(&self, scope: super::state::Scope, order: usize) -> u64 {
         let generation = self.generation.fetch_add(1, Ordering::SeqCst) + 1;
         let tx = self.tx.clone();
+        let offline = self.offline.load(Ordering::Relaxed);
+        if scope == super::state::Scope::Playlists {
+            crate::app::runtime().spawn(async move {
+                let event = match library_rows(scope, order).await {
+                    Ok(mut rows) => {
+                        mark_downloaded(&mut rows).await;
+                        crate::debug_log!("GPUI: {} {} rows", scope.label(), rows.len());
+                        Event::Library {
+                            generation,
+                            scope,
+                            order,
+                            rows,
+                        }
+                    }
+                    Err(err) => Event::Error(format!("Library load failed: {err:#}")),
+                };
+                let _ = tx.send(event);
+            });
+            return generation;
+        }
         crate::app::runtime().spawn(async move {
-            let event = match library_rows(scope, order).await {
-                Ok(mut rows) => {
-                    mark_downloaded(&mut rows).await;
-                    crate::debug_log!("GPUI: {} {} rows", scope.label(), rows.len());
-                    Event::Library {
-                        generation,
-                        scope,
-                        order,
-                        rows,
+            let event = match crate::app::dbs() {
+                Some(dbs) => {
+                    let surface = scope.key();
+                    match crate::qml::rows::count(
+                        &dbs,
+                        surface,
+                        "",
+                        &order_name(scope, order),
+                        offline,
+                    )
+                    .await
+                    {
+                        Ok(count) => Event::LibraryCount {
+                            generation,
+                            scope,
+                            order,
+                            count,
+                        },
+                        Err(err) => Event::Error(format!("Library count failed: {err:#}")),
                     }
                 }
-                Err(err) => Event::Error(format!("Library load failed: {err:#}")),
+                None => Event::Error("databases not ready".to_string()),
             };
             let _ = tx.send(event);
         });
+        generation
+    }
+
+    pub fn request_library_window(
+        &self,
+        generation: u64,
+        scope: super::state::Scope,
+        order: usize,
+        start: usize,
+        count: usize,
+    ) {
+        let tx = self.tx.clone();
+        let offline = self.offline.load(Ordering::Relaxed);
+        crate::app::runtime().spawn(async move {
+            let Some(dbs) = crate::app::dbs() else { return };
+            let surface = scope.key();
+            match crate::qml::rows::window(
+                &dbs,
+                surface,
+                "",
+                &order_name(scope, order),
+                start,
+                count,
+                offline,
+            )
+            .await
+            {
+                Ok(value) => {
+                    let rows = value["rows"]
+                        .as_array()
+                        .map(|rows| {
+                            rows.iter()
+                                .map(|row| row_from_json(scope, row))
+                                .collect::<Vec<_>>()
+                        })
+                        .unwrap_or_default();
+                    let _ = tx.send(Event::LibraryWindow {
+                        generation,
+                        scope,
+                        order,
+                        start,
+                        rows,
+                    });
+                }
+                Err(err) => {
+                    crate::debug_log!("GPUI: row window {surface} failed: {err:#}");
+                }
+            }
+        });
+    }
+
+    pub fn set_offline(&self, offline: bool) {
+        self.offline.store(offline, Ordering::Relaxed);
+    }
+}
+
+fn order_name(scope: super::state::Scope, order: usize) -> String {
+    match scope {
+        super::state::Scope::Albums | super::state::Scope::Songs => {
+            crate::library::ORDERS[order.min(crate::library::ORDERS.len() - 1)].to_string()
+        }
+        super::state::Scope::Artists => {
+            crate::library::ARTIST_ORDERS[order.min(crate::library::ARTIST_ORDERS.len() - 1)]
+                .to_string()
+        }
+        super::state::Scope::Playlists => "Name".to_string(),
+    }
+}
+
+fn row_from_json(scope: super::state::Scope, value: &serde_json::Value) -> super::state::Row {
+    use super::state::{Row, RowKind, Scope};
+    let text = |key: &str| value[key].as_str().unwrap_or_default().to_string();
+    let kind = match scope {
+        Scope::Albums => RowKind::Album,
+        Scope::Artists => RowKind::Artist,
+        Scope::Songs => RowKind::Song,
+        Scope::Playlists => RowKind::Playlist,
+    };
+    Row {
+        id: text("id"),
+        kind,
+        title: text("title"),
+        subtitle: text("subtitle"),
+        meta: text("meta"),
+        cover_url: text("cover"),
+        song_id: text("songId"),
+        album_id: text("albumId"),
+        starred: value["starred"].as_bool().unwrap_or(false),
+        rating: value["rating"].as_i64().unwrap_or(0),
+        downloaded: false,
     }
 }
 

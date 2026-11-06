@@ -167,6 +167,8 @@ pub struct Player {
     pub(crate) muted: bool,
     pub(crate) retries: u32,
     pub(crate) retry_at: Option<Instant>,
+    /// Last transport/decoder error (IPC diagnostics + UI toast source).
+    pub(crate) last_error: Option<String>,
     /// Row revision (QUEUEROWSTUDY QR-1): bumped by every mutation of the
     /// queue's rows, so `emit_queue` can skip its O(N) clone/read/serialize
     /// when only the index moved (a skip or an advance).
@@ -197,6 +199,7 @@ impl Player {
             muted: false,
             retries: 0,
             retry_at: None,
+            last_error: None,
             revision: 0,
             native: None,
             gapless_next: None,

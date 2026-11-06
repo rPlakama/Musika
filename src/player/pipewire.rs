@@ -366,10 +366,7 @@ pub(crate) unsafe extern "C" fn musika_stream_read(
 /// Reader thread: fills the 64 KB channel from `url` without buffering the
 /// whole track. Local `file://` paths are read incrementally; other URLs
 /// are streamed via `reqwest` blocking? No: playback is URL-only.
-fn spawn_stream_reader(
-    url: &str,
-    stop: Arc<AtomicBool>,
-) -> std::sync::mpsc::Receiver<Vec<u8>> {
+fn spawn_stream_reader(url: &str, stop: Arc<AtomicBool>) -> std::sync::mpsc::Receiver<Vec<u8>> {
     use std::io::Read;
     let (tx, rx) = std::sync::mpsc::channel::<Vec<u8>>();
     let url = url.to_string();
@@ -732,6 +729,7 @@ impl Player {
             }
             Err(err) => {
                 eprintln!("player: cannot initialise PipeWire: {err}");
+                self.last_error = Some(format!("cannot initialise PipeWire: {err}"));
                 Ready::Failed
             }
         }
@@ -767,13 +765,48 @@ impl Player {
                 .current()
                 .map(|track| track.title.clone())
                 .unwrap_or_default();
+            let text = format!("{title}: {message}");
+            eprintln!("player: {text}");
+            self.last_error = Some(text.clone());
             self.advance_after_error();
-            return Some(format!("{title}: {message}"));
+            return Some(text);
         }
         if status.ended {
             self.advance_after_error();
         }
         None
+    }
+
+    /// IPC diagnostics: a one-line dump of the transport state and the last
+    /// native error. Deliberately cheap and side-effect free.
+    pub fn debug_report(&self) -> String {
+        let track = self.current();
+        let mut report = format!(
+            "state={:?} index={}/{} title={:?} url={:?} last_error={:?}",
+            self.state,
+            self.index,
+            self.queue.len(),
+            track.map(|track| track.title.as_str()),
+            track.map(|track| track.url.as_str()),
+            self.last_error,
+        );
+        match self.native.as_ref() {
+            Some(native) => {
+                let status = native.lock_status().clone();
+                report.push_str(&format!(
+                    " native=ready loading={} failed={:?} ended={} position={:.2} duration={:.2} sink_failed={} played_frames={}",
+                    status.loading,
+                    status.failed,
+                    status.ended,
+                    status.position,
+                    status.duration,
+                    unsafe { musika_sink_failed(native.sink) },
+                    unsafe { musika_sink_played_frames(native.sink) },
+                ));
+            }
+            None => report.push_str(" native=none"),
+        }
+        report
     }
 
     pub(super) fn forget_error(&mut self) {

@@ -160,8 +160,20 @@ where
     // Shallow passes re-fetch only albums whose stored hash changed (a song
     // move changes the album's count/duration/cover); a deep pass re-fetches
     // every album's songs so silent metadata edits are caught too.
-    let deep = deep || crate::library::full_sync_due(&dbs.library).await;
+    let mut deep = deep || crate::library::full_sync_due(&dbs.library).await;
     let manifest = crate::library::album_manifest(&dbs.library).await?;
+    // A server rescan/re-key (moved files) can replace most album ids at once.
+    // A shallow pass would then append the new rows next to the dead ones, so
+    // treat low manifest overlap as a full rescan and run the deep reconciler.
+    if !deep && !manifest.is_empty() {
+        let overlap = albums
+            .iter()
+            .filter(|album| manifest.contains_key(&album.id))
+            .count();
+        if overlap * 2 < manifest.len() {
+            deep = true;
+        }
+    }
     let mut fetch_ids: Vec<String> = Vec::new();
     for album in &albums {
         let changed = manifest

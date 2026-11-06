@@ -1460,6 +1460,11 @@ impl Backend {
     /// same `commandIssued` stream the keybinds produce.
     #[qslot(qml_name = "handleCommand")]
     fn handle_command(&mut self, command: String) {
+        // Playback diagnostics over the same IPC socket (debug_player).
+        if command.trim() == "debug_player" {
+            eprintln!("player-debug: {}", self.player.debug_report());
+            return;
+        }
         self.command_issued(command);
     }
 

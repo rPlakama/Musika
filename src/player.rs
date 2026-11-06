@@ -306,8 +306,18 @@ impl Player {
     /// Replaces the queue and loads `start` paused: a restored session waits
     /// for an explicit Space instead of autoplaying (P-6 S2).
     pub fn load_paused(&mut self, tracks: Vec<Track>, start: usize) {
-        self.load(tracks, start);
-        self.pause();
+        self.repeat = Repeat::Off;
+        self.queue = Arc::new(tracks);
+        self.index = start.min(self.queue.len().saturating_sub(1));
+        self.revision += 1;
+        if self.queue.is_empty() {
+            self.state = State::Stopped;
+            return;
+        }
+        match self.ensure_ready() {
+            Ready::Connected => self.rebuild(true),
+            Ready::Failed => self.state = State::Stopped,
+        }
     }
 
     /// Appends tracks to the end of the queue (ARC-43 "Add to Queue"): nothing
@@ -332,14 +342,14 @@ impl Player {
         }
         match self.ensure_ready() {
             Ready::Connected => {
-                self.rebuild();
+                self.rebuild(false);
             }
             Ready::Failed => self.state = State::Stopped,
         }
     }
 
     /// Loads the current track into the native decoder/sink.
-    fn rebuild(&mut self) {
+    fn rebuild(&mut self, paused: bool) {
         let track = self.queue[self.index].clone();
         *self.shared() = Shared {
             duration: track.duration,
@@ -361,9 +371,11 @@ impl Player {
             .map(|next| next.url.clone());
         if let Some(native) = self.native.as_mut() {
             native.load_with_next(&track.url, next_url);
-            native.set_paused(false);
+            if !paused {
+                native.set_paused(false);
+            }
         }
-        self.state = State::Playing;
+        self.state = if paused { State::Paused } else { State::Playing };
     }
 
     pub fn cycle_repeat(&mut self) -> Repeat {

@@ -25,7 +25,7 @@ pub const LIBRARY: ScrollProfile = ScrollProfile {
     follow_ms: 300.0,
 };
 pub const ALBUM: ScrollProfile = ScrollProfile {
-    row_ratio: 0.055,
+    row_ratio: 0.06,
     nominal_row_h: 36.0,
     min_row_h: 18.0,
     overscan_rows: 10,
@@ -200,7 +200,7 @@ mod tests {
     #[test]
     fn profiles_match_qml_scroll_profiles() {
         assert!((LIBRARY.row_ratio - 0.105).abs() < f32::EPSILON);
-        assert!((ALBUM.row_ratio - 0.055).abs() < f32::EPSILON);
+        assert!((ALBUM.row_ratio - 0.06).abs() < f32::EPSILON);
         assert!((QUEUE.row_ratio - 0.10).abs() < f32::EPSILON);
         assert_eq!(LIBRARY.follow_ms, 300.0);
     }

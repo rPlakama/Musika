@@ -2238,7 +2238,7 @@ impl AppRoot {
             self.lyrics_active_line = Some(active);
             self.lyrics_active_anim.target(0.0, 0.0, anim::Curve::Standard, &self.clock);
             self.lyrics_active_anim
-                .target(1.0, anim::QUICK_MS, anim::Curve::OutBack, &self.clock);
+                .target(1.0, anim::QUICK_MS, anim::Curve::Standard, &self.clock);
         }
         let stride = (self.win_h * 0.055).clamp(13.0, 22.0) * 1.55;
         let visible = 15usize;
@@ -3959,7 +3959,7 @@ impl AppRoot {
                     .absolute()
                     .left(px(page_w * 0.02))
                     .top(px(page_w * 0.02))
-                    .w(relative(0.78))
+                    .w(relative(0.56))
                     .max_w(px(page_w * 0.96))
                     .p(px(page_w * 0.02))
                     .rounded_md()
@@ -3977,7 +3977,7 @@ impl AppRoot {
                     )
                     .child(
                         div()
-                            .text_size(px(page_h * 0.04 * (page_w / 1280.0).clamp(0.9, 1.6)))
+                            .text_size(px(page_h * 0.024 * (page_w / 1280.0).clamp(0.9, 1.6)))
                             .text_color(rgb(ON_VARIANT))
                             .child("☆ ☆ ☆ ☆ ☆"),
                     )
@@ -4160,6 +4160,8 @@ impl AppRoot {
                                             rgb(0x4A4458)
                                         } else if hovered {
                                             rgb(0x2B2930)
+                                        } else if index % 2 != 0 {
+                                            rgb(0x0F0D13)
                                         } else {
                                             rgb(0x141218)
                                         })

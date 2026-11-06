@@ -1546,6 +1546,7 @@ impl AppRoot {
         let title = self.view.scope.label();
         let hint = "(Shift-J/K) cycle filter";
         let order = format!("Shift-H / Shift-L  /  {}", self.view.order_label());
+        let selection_count = self.view.selection.count(self.view.cursor);
         let header = div()
             .flex()
             .flex_none()
@@ -1568,7 +1569,19 @@ impl AppRoot {
                     .text_size(px(11.0))
                     .text_color(rgb(ON_VARIANT))
                     .child(order),
-            );
+            )
+            .when(selection_count > 0, |this| {
+                this.child(
+                    div()
+                        .px_2()
+                        .py_1()
+                        .rounded_full()
+                        .bg(rgb(PRIMARY))
+                        .text_size(px(11.0))
+                        .text_color(rgb(0x381E72))
+                        .child(selection_count.to_string()),
+                )
+            });
 
         if self.view.rows.is_empty() {
             let message = if self.view.loading {
@@ -2946,25 +2959,52 @@ fn search_scope_label(scope: usize) -> &'static str {
 }
 
 fn last_sync_text(raw: &str) -> String {
-    match raw.parse::<i64>() {
-        Ok(secs) if secs > 0 => {
-            let age = crate::consts::now_secs().saturating_sub(secs);
-            if age < 60 {
-                "Now".to_string()
-            } else if age < 3_600 {
-                format!("{}m", age / 60)
-            } else if age < 86_400 {
-                format!("{}h", age / 3600)
-            } else if age < 604_800 {
-                format!("{}d", age / 86_400)
-            } else if age < 2_592_000 {
-                format!("{}w", age / 604_800)
-            } else {
-                format!("{}y", age / 31_536_000)
-            }
-        }
-        _ => "—".to_string(),
+    let Ok(secs) = raw.parse::<i64>() else {
+        return "—".to_string();
+    };
+    if secs <= 0 {
+        return "—".to_string();
     }
+    let age = crate::consts::now_secs().saturating_sub(secs);
+    if age < 60 {
+        return "Now".to_string();
+    }
+    let hours = age as f64 / 3600.0;
+    if hours < 24.0 {
+        return local_hhmm(secs);
+    }
+    let days = hours / 24.0;
+    if days < 7.0 {
+        return local_day(secs);
+    }
+    let weeks = days / 7.0;
+    if weeks < 4.0 {
+        return format!("{}w", weeks.floor() as i64);
+    }
+    let months = days / 30.0;
+    if months < 12.0 {
+        return format!("{}mo", months.floor() as i64);
+    }
+    format!("{}y", (days / 365.0).floor() as i64)
+}
+
+fn local_tm(secs: i64) -> Option<libc::tm> {
+    let time = secs as libc::time_t;
+    let mut tm: libc::tm = unsafe { std::mem::zeroed() };
+    let ok = unsafe { libc::localtime_r(&time, &mut tm) };
+    (!ok.is_null()).then_some(tm)
+}
+
+fn local_hhmm(secs: i64) -> String {
+    local_tm(secs)
+        .map(|tm| format!("{:02}:{:02}", tm.tm_hour, tm.tm_min))
+        .unwrap_or_else(|| "—".to_string())
+}
+
+fn local_day(secs: i64) -> String {
+    local_tm(secs)
+        .map(|tm| format!("{:02}", tm.tm_mday))
+        .unwrap_or_else(|| "—".to_string())
 }
 
 fn icon(name: &str, size: f32, color: u32) -> gpui::AnyElement {

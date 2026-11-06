@@ -3744,6 +3744,7 @@ dependencies = [
  "futures-util",
  "gpui",
  "image",
+ "libc",
  "material-colors",
  "nucleo",
  "openssl",

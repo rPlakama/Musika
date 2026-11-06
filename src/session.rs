@@ -47,31 +47,67 @@ pub(crate) fn set_online(online: bool) {
     ONLINE.store(online, Ordering::Relaxed);
 }
 
+/// Installs the credentials just used to authenticate, so the first [`client`]
+/// call on any action does not re-read and decrypt them from the database.
+#[cfg(not(test))]
+pub(crate) async fn install(server_url: &str, username: &str, password: &str) {
+    let cache = CLIENT_CACHE.get_or_init(|| tokio::sync::Mutex::new(None));
+    let mut guard = cache.lock().await;
+    if let Some(cached) = guard.as_ref()
+        && cached.server_url == server_url
+        && cached.username == username
+        && cached.password == password
+    {
+        return;
+    }
+    *guard = Some(CachedClient {
+        server_url: server_url.to_string(),
+        username: username.to_string(),
+        password: password.to_string(),
+        client: SubsonicClient::new(server_url, username, password),
+    });
+}
+
+#[cfg(not(test))]
+pub(crate) async fn client(dbs: &crate::db::Dbs) -> anyhow::Result<SubsonicClient> {
+    let cache = CLIENT_CACHE.get_or_init(|| tokio::sync::Mutex::new(None));
+    if let Some(cached) = cache.lock().await.as_ref() {
+        return Ok(cached.client.clone());
+    }
+    let credentials = crate::sqlite::load_credentials(&dbs.credentials)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("no saved credentials"))?;
+    install(
+        &credentials.server_url,
+        &credentials.username,
+        &credentials.password,
+    )
+    .await;
+    let client = cache
+        .lock()
+        .await
+        .as_ref()
+        .expect("client installed above")
+        .client
+        .clone();
+    Ok(client)
+}
+
+#[cfg(test)]
+pub(crate) async fn install(_server_url: &str, _username: &str, _password: &str) {}
+
+/// Tests use independent in-memory credential DBs; bypass the process-wide
+/// cache so one test cannot leak a session into another.
+#[cfg(test)]
 pub(crate) async fn client(dbs: &crate::db::Dbs) -> anyhow::Result<SubsonicClient> {
     let credentials = crate::sqlite::load_credentials(&dbs.credentials)
         .await?
         .ok_or_else(|| anyhow::anyhow!("no saved credentials"))?;
-    let cache = CLIENT_CACHE.get_or_init(|| tokio::sync::Mutex::new(None));
-    let mut guard = cache.lock().await;
-    if let Some(cached) = guard.as_ref()
-        && cached.server_url == credentials.server_url
-        && cached.username == credentials.username
-        && cached.password == credentials.password
-    {
-        return Ok(cached.client.clone());
-    }
-    let client = SubsonicClient::new(
+    Ok(SubsonicClient::new(
         &credentials.server_url,
         &credentials.username,
         &credentials.password,
-    );
-    *guard = Some(CachedClient {
-        server_url: credentials.server_url,
-        username: credentials.username,
-        password: credentials.password,
-        client: client.clone(),
-    });
-    Ok(client)
+    ))
 }
 
 /// Drops the cached client (account switch, logout or a full wipe).

@@ -23,8 +23,6 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, LazyLock, Mutex};
 
-use serde_json::json;
-
 mod pipewire;
 
 /// The sink is created once off the Qt thread at startup; the first play
@@ -363,14 +361,8 @@ impl Player {
             .map(|next| next.url.clone());
         if let Some(native) = self.native.as_mut() {
             native.load_with_next(&track.url, next_url);
-        } else {
-            self.command(vec![
-                json!("loadfile"),
-                json!(track.url.clone()),
-                json!("replace"),
-            ]);
+            native.set_paused(false);
         }
-        self.set_property("pause", json!(false));
         self.state = State::Playing;
     }
 
@@ -395,7 +387,9 @@ impl Player {
         if self.state != State::Playing {
             return;
         }
-        self.set_property("pause", json!(true));
+        if let Some(native) = self.native.as_ref() {
+            native.set_paused(true);
+        }
         self.state = State::Paused;
     }
 
@@ -403,12 +397,16 @@ impl Player {
         if self.state != State::Paused {
             return;
         }
-        self.set_property("pause", json!(false));
+        if let Some(native) = self.native.as_ref() {
+            native.set_paused(false);
+        }
         self.state = State::Playing;
     }
 
     pub fn stop(&mut self) {
-        self.command(vec![json!("stop")]);
+        if let Some(native) = self.native.as_mut() {
+            native.stop();
+        }
         self.shared().reset();
         self.gapless_next = None;
         self.state = State::Stopped;
@@ -585,20 +583,26 @@ impl Player {
     /// Seeks to an absolute position (seconds).
     pub fn seek(&mut self, seconds: f64) {
         let seconds = seconds.max(0.0);
-        self.command(vec![json!("seek"), json!(seconds), json!("absolute")]);
+        if let Some(native) = self.native.as_ref() {
+            native.seek_to(seconds);
+        }
         self.shared().position = seconds;
     }
 
     /// Sets volume (0-100).
     pub fn set_volume(&mut self, volume: f64) {
         self.volume = volume.clamp(0.0, 100.0);
-        self.set_property("volume", json!(self.volume));
+        if let Some(native) = self.native.as_ref() {
+            native.set_volume(self.volume);
+        }
     }
 
     /// Mutes or unmutes without touching the volume value.
     pub fn set_muted(&mut self, muted: bool) {
         self.muted = muted;
-        self.set_property("mute", json!(self.muted));
+        if let Some(native) = self.native.as_ref() {
+            native.set_muted(self.muted);
+        }
     }
 
     pub fn toggle_mute(&mut self) {

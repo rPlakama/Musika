@@ -13,7 +13,6 @@
 //! libpipewire stream consumes it, and `pump` maps the native state back into
 //! the shared player snapshot used by MPRIS and QML.
 
-use serde_json::Value;
 use std::ffi::{CString, c_char, c_double, c_int, c_void};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
@@ -148,6 +147,7 @@ impl Native {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
+    #[cfg(test)]
     fn load(&mut self, url: &str) {
         self.load_with_next(url, None);
     }
@@ -229,7 +229,7 @@ impl Native {
 
     /// Explicit stop: reset the visible state now, tear the sink down on the
     /// reaper thread so a stalled decoder never blocks the caller.
-    fn stop(&mut self) {
+    pub(super) fn stop(&mut self) {
         self.stop_async();
         *self.lock_status() = Status::default();
         *self
@@ -238,7 +238,7 @@ impl Native {
             .unwrap_or_else(std::sync::PoisonError::into_inner) = 0.0;
     }
 
-    fn seek_to(&self, seconds: f64) {
+    pub(super) fn seek_to(&self, seconds: f64) {
         *self
             .position_origin
             .lock()
@@ -261,15 +261,15 @@ impl Native {
         status.loading = true;
     }
 
-    fn set_paused(&self, paused: bool) {
+    pub(super) fn set_paused(&self, paused: bool) {
         unsafe { musika_sink_set_paused(self.sink, paused as c_int) };
     }
 
-    fn set_volume(&self, volume: f64) {
+    pub(super) fn set_volume(&self, volume: f64) {
         unsafe { musika_sink_set_volume(self.sink, (volume / 100.0).clamp(0.0, 1.0) as f32) };
     }
 
-    fn set_muted(&self, muted: bool) {
+    pub(super) fn set_muted(&self, muted: bool) {
         unsafe { musika_sink_set_muted(self.sink, muted as c_int) };
     }
 
@@ -652,69 +652,6 @@ fn c_string(buffer: &[c_char]) -> String {
 }
 
 impl Player {
-    pub(super) fn set_property(&mut self, name: &str, value: Value) {
-        match name {
-            "pause" => {
-                if let Some(native) = self.native.as_ref() {
-                    native.set_paused(value.as_bool().unwrap_or(false));
-                }
-            }
-            "volume" => {
-                if let Some(volume) = value.as_f64()
-                    && let Some(native) = self.native.as_ref()
-                {
-                    native.set_volume(volume);
-                }
-            }
-            "mute" => {
-                if let Some(muted) = value.as_bool()
-                    && let Some(native) = self.native.as_ref()
-                {
-                    native.set_muted(muted);
-                }
-            }
-            _ => {}
-        }
-    }
-
-    pub(crate) fn command(&mut self, args: Vec<Value>) -> bool {
-        let Some(action) = args.first().and_then(Value::as_str) else {
-            return false;
-        };
-        match action {
-            "loadfile" => {
-                let Some(url) = args.get(1).and_then(Value::as_str) else {
-                    return false;
-                };
-                if let Some(native) = self.native.as_mut() {
-                    native.load(url);
-                    return true;
-                }
-                false
-            }
-            "stop" => {
-                if let Some(native) = self.native.as_mut() {
-                    native.stop();
-                    return true;
-                }
-                false
-            }
-            "seek" => {
-                let Some(seconds) = args.get(1).and_then(Value::as_f64) else {
-                    return false;
-                };
-                if let Some(native) = self.native.as_ref() {
-                    native.seek_to(seconds);
-                    return true;
-                }
-                false
-            }
-            // Playlist commands are owned by the shared queue driver.
-            "playlist-next" | "playlist-play-index" | "playlist-remove" => true,
-            _ => false,
-        }
-    }
-
     pub(crate) fn ensure_ready(&mut self) -> Ready {
         if self.native.is_some() {
             return Ready::Connected;

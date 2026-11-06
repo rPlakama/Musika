@@ -49,6 +49,7 @@ impl Backend {
         crate::app::runtime().spawn(async move {
             match crate::http_client::authenticate(&server_url, &username, &password).await {
                 Ok(info) => {
+                    crate::session::install(&server_url, &username, &password).await;
                     if let Some(pool) = pool.as_ref()
                         && let Err(err) = crate::sqlite::save_credentials(
                             pool,
@@ -175,6 +176,12 @@ impl Backend {
                     };
                     match auth {
                         Ok(info) => {
+                            crate::session::install(
+                                &credentials.server_url,
+                                &credentials.username,
+                                &credentials.password,
+                            )
+                            .await;
                             // Auto-login has no login form to set these: record the
                             // account before the sync so the header greets the user
                             // and the account-scoped status can restore.

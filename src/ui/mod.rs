@@ -324,7 +324,6 @@ struct AppRoot {
     search_open: bool,
     search_anim: anim::Behavior,
     clock: anim::Clock,
-    row_cover_scales: std::collections::HashMap<String, anim::Behavior>,
     hovered_row: Option<usize>,
     hovered_page: Option<usize>,
     visual_mode: bool,
@@ -416,7 +415,6 @@ impl AppRoot {
             search_open: false,
             search_anim: anim::Behavior::new(0.0),
             clock: anim::Clock::new(),
-            row_cover_scales: std::collections::HashMap::new(),
             hovered_row: None,
             hovered_page: None,
             visual_mode: false,
@@ -3000,16 +2998,7 @@ impl AppRoot {
                         let downloaded = this.marks.downloaded(&row.song_id, &row.album_id) || row.downloaded;
                         let rating = row.rating;
                         let cover = cover_path(&row.cover_url);
-                        let cover_scale = this
-                            .row_cover_scales
-                            .entry(format!("library:{}", row.id))
-                            .or_insert_with(|| anim::Behavior::new(1.0))
-                            .target(
-                                if selected { 1.20 } else { 1.0 },
-                                anim::QUICK_MS,
-                                anim::Curve::Standard,
-                                &this.clock,
-                            );
+                        let cover_scale = if selected { 1.20 } else { 1.0 };
                         items.push(
                             div()
                                 .id(index)
@@ -3629,11 +3618,7 @@ impl AppRoot {
                                 let active = index == cursor;
                                 let playing = index == this.player.index();
                                 let emphasis = if active { 1.08 } else { 1.0 };
-                                let cover_scale = this
-                                    .row_cover_scales
-                                    .entry(format!("queue:{index}"))
-                                    .or_insert_with(|| anim::Behavior::new(1.0))
-                                    .target(if active { 1.20 } else { 1.0 }, anim::QUICK_MS, anim::Curve::Standard, &this.clock);
+                                let cover_scale = if active { 1.20 } else { 1.0 };
                                 items.push(
                                     div()
                                         .id(index)
@@ -4046,7 +4031,7 @@ impl AppRoot {
                             let row_h = 36.0;
                             let mut items = Vec::with_capacity(range.len());
                             for index in range {
-                                let Some((title, subtitle, meta, selected, rating, starred, downloaded, key, cover, show_cover)) = this
+                                let Some((title, subtitle, meta, selected, rating, starred, downloaded, cover, show_cover)) = this
                                     .page
                                     .as_ref()
                                     .map(|page| {
@@ -4060,7 +4045,6 @@ impl AppRoot {
                                             row.rating,
                                             row.starred,
                                             row.downloaded,
-                                            format!("page:{}:{}", page.descriptor.id, row.id),
                                             cover_path(&row.cover_url),
                                             show_row_cover,
                                         )
@@ -4069,27 +4053,8 @@ impl AppRoot {
                                     break;
                                 };
                                 let hovered = this.hovered_page == Some(index);
-                                let emphasis = this
-                                    .row_cover_scales
-                                    .entry(format!("page-text:{key}"))
-                                    .or_insert_with(|| anim::Behavior::new(1.0))
-                                    .target(
-                                        if selected { 1.08 } else { 1.0 },
-                                        anim::QUICK_MS,
-                                        anim::Curve::Standard,
-                                        &this.clock,
-                                    );
-                                let cover_scale = show_cover.then(|| {
-                                    this.row_cover_scales
-                                        .entry(format!("page-cover:{key}"))
-                                        .or_insert_with(|| anim::Behavior::new(1.0))
-                                        .target(
-                                            if selected { 1.20 } else { 1.0 },
-                                            anim::QUICK_MS,
-                                            anim::Curve::Standard,
-                                            &this.clock,
-                                        )
-                                });
+                                let emphasis = if selected { 1.08 } else { 1.0 };
+                                let cover_scale = show_cover.then_some(if selected { 1.20 } else { 1.0 });
                                 items.push(
                                     div()
                                         .id(index)
@@ -4519,11 +4484,6 @@ impl Render for AppRoot {
         } else {
             self.list(&*cx, window).into_any_element()
         };
-        // Targets are updated while the body is built; request frames after,
-        // or a cursor move can leave the previous fill frozen on screen.
-        if self.row_cover_scales.values().any(|scale| !scale.settled(&self.clock)) {
-            window.request_animation_frame();
-        }
         let status = self.player_bar();
         div()
             .track_focus(&self.focus)

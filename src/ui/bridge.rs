@@ -83,6 +83,7 @@ pub enum Event {
     OpenPage {
         descriptor: super::state::PageDescriptor,
     },
+    Command(String),
     Restore {
         volume: f64,
         muted: bool,

@@ -381,7 +381,11 @@ impl AppRoot {
 
         crate::scroll_memory::hydrate();
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        let command_tx = tx.clone();
         let bridge = bridge::Bridge::new(tx);
+        crate::ipc::serve(crate::ipc::socket_path(), move |command| {
+            let _ = command_tx.send(Event::Command(command));
+        });
         let mut view = ViewState::default();
         bridge.load_library(view.scope, view.order);
         view.loading = true;
@@ -389,7 +393,10 @@ impl AppRoot {
         cx.spawn(async move |this, cx| {
             while let Some(event) = rx.recv().await {
                 let _ = this.update(cx, |this, cx| {
-                    this.apply(event);
+                    match event {
+                        Event::Command(command) => this.handle_command(&command, cx),
+                        event => this.apply(event),
+                    }
                     cx.notify();
                 });
             }
@@ -515,6 +522,7 @@ impl AppRoot {
 
     fn apply(&mut self, event: Event) {
         match event {
+            Event::Command(_) => {}
             Event::Header {
                 server_url,
                 username,
@@ -2707,6 +2715,48 @@ impl AppRoot {
                 self.bridge.play_radio(seed_kind, descriptor.id, index);
             }
         }
+    }
+
+    fn handle_command(&mut self, command: &str, cx: &mut Context<Self>) {
+        match command.trim() {
+            "bottom" => {
+                if self.queue_open {
+                    let last = self.player.len().saturating_sub(1);
+                    self.land_queue(last);
+                } else if let Some(page) = self.page.as_ref() {
+                    let last = page.rows.len().saturating_sub(1);
+                    self.land_page(last);
+                } else {
+                    let last = self.view.rows.len().saturating_sub(1);
+                    self.land_library(last);
+                }
+            }
+            "top" => {
+                if self.queue_open {
+                    self.land_queue(0);
+                } else if self.page.is_some() {
+                    self.land_page(0);
+                } else {
+                    self.land_library(0);
+                }
+            }
+            "scroll_up" | "scroll_down" => {
+                let down = command.trim() == "scroll_down";
+                let modal = if self.queue_open {
+                    &mut self.queue_scroll_modal
+                } else if self.page.is_some() {
+                    &mut self.page_scroll_modal
+                } else {
+                    &mut self.library_scroll
+                };
+                let current = -f32::from(modal.handle.0.borrow().base_handle.offset().y);
+                let next = current + if down { modal.row_h } else { -modal.row_h };
+                modal.on_wheel();
+                modal.set_offset_now(next.max(0.0));
+            }
+            _ => {}
+        }
+        cx.notify();
     }
 
     fn activate_row(&mut self, row: &Row) {

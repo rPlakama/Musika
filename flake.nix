@@ -60,6 +60,17 @@
           pkgs.liburing
           pkgs.sqlite
           pkgs.libglvnd
+          # GPUI display/font/Vulkan dependencies.
+          pkgs.wayland
+          pkgs.libxkbcommon
+          pkgs.libx11
+          pkgs.libxcursor
+          pkgs.libxrandr
+          pkgs.libxi
+          pkgs.libxcb
+          pkgs.fontconfig
+          pkgs.freetype
+          pkgs.vulkan-loader
         ];
 
         # The sandbox has no /etc/ssl; reqwest builds a client even in tests.
@@ -75,6 +86,21 @@
         postInstall = ''
           wrapProgram $out/bin/musika \
             --prefix XDG_DATA_DIRS : ${fontDataDirs} \
+            --prefix LD_LIBRARY_PATH : ${
+              pkgs.lib.makeLibraryPath [
+                pkgs.wayland
+                pkgs.libxkbcommon
+                pkgs.libx11
+                pkgs.libxcursor
+                pkgs.libxrandr
+                pkgs.libxi
+                pkgs.libxcb
+                pkgs.fontconfig
+                pkgs.freetype
+                pkgs.libglvnd
+                pkgs.vulkan-loader
+              ]
+            } \
             --set-default SSL_CERT_FILE ${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt
 
           # Desktop entry (PKG-1): launchers, docks, MIME data dirs.

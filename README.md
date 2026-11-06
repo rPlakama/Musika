@@ -4,7 +4,7 @@
   <img src="src/icons/musika.svg" alt="Musika" width="144">
 </p>
 
-Musika is a Keyboard driven Navidrome/Subsonic Client made with AI assistance. Written in Rust and QT. It contains many functionalities, such as _vi motions_, _cache & download system_, an indexed db based search, caching in covers, and other performance extras. Everything is thoroughly tested by me. Mostly coding is made by AI and me.
+Musika is a Keyboard driven Navidrome/Subsonic Client made with AI assistance. Written in Rust and GPUI. It contains many functionalities, such as _vi motions_, _cache & download system_, an indexed db based search, caching in covers, and other performance extras. Everything is thoroughly tested by me. Mostly coding is made by AI and me.
 
 # Features
 
@@ -17,6 +17,8 @@ Musika is a Keyboard driven Navidrome/Subsonic Client made with AI assistance. W
 4 - Playback -- a native libpipewire sink and raw FFmpeg decoder FFI drive playback: queue order, repeat, seek/volume, native MPRIS, stream-error advance, and synced lyrics (OpenSubsonic) that ride the shared scroll body. The current track is buffered in memory before decoding, so streaming seeks stay in RAM instead of reconnecting to the server.
 
 5 - Covers, lyrics and palettes are each cached in their own DB and purged on sync — nothing derived is fetched twice.
+
+6 - GPUUI -- the interface runs on GPUI, Zed's GPU-accelerated hybrid immediate/retained UI framework. The Qt/QML front end is gone; the shell, library and entry pages, search, queue, fullscreen player, lyrics, overlays, Alt actions and session restore were all ported to the GPU renderer.
 
 # Installation
 
@@ -164,7 +166,7 @@ While `Alt` is held, `Esc` is swallowed so it cannot leak into the keymap; the n
 
 ```
 nix run .       # build + launch
-nix develop     # dev shell (Rust + Qt)
+nix develop     # dev shell (Rust + GPUI toolchain)
 ```
 
 The native player links PipeWire and FFmpeg development libraries; the flake
@@ -174,14 +176,12 @@ To benchmark startup, build a release binary and trace the phases:
 
 ```
 nix develop -c cargo build --release
-MUSIKA_STARTUP_TRACE=1 MUSIKA_STARTUP_EXIT=1 ./target/release/musika
+MUSIKA_STARTUP_TRACE=1 ./target/release/musika
 ```
 
-`MUSIKA_STARTUP_TRACE=1` prints the six process-relative marks (`main`,
-`db.init`, `session.restore`, `qapp.new`, `qml.loaded`, `frontend.ready`) to
-stderr; `MUSIKA_STARTUP_EXIT=1` closes the window after the first rendered
-frame, so the whole run can be timed with `hyperfine`. Neither variable costs
-anything when unset.
+`MUSIKA_STARTUP_TRACE=1` prints process-relative marks (`main`, `db.init`,
+`app.gpuui`) plus the search-catalog and playback traces to stderr. It costs
+nothing when unset.
 
 # Contributions
 

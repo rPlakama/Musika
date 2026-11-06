@@ -2055,6 +2055,23 @@ impl AppRoot {
         )
     }
 
+    fn alt_scroll_anchor(
+        &self,
+        modal: &scroll_modal::ScrollModal,
+        index: usize,
+        count: usize,
+    ) -> (f32, f32) {
+        modal
+            .row_center(index, count)
+            .map(|(x, y)| {
+                (
+                    x.clamp(30.0, (self.win_w - 30.0).max(30.0)),
+                    y.clamp(30.0, (self.win_h - 30.0).max(30.0)),
+                )
+            })
+            .unwrap_or_else(|| self.alt_anchor_for(&modal.handle, index, modal.row_h))
+    }
+
     fn quick_kind(kind: RowKind) -> QuickKind {
         match kind {
             RowKind::Song => QuickKind::Song,
@@ -2089,6 +2106,15 @@ impl AppRoot {
     }
 
     fn search_anchor_for(&self, index: usize, row_h: f32) -> (f32, f32) {
+        if let Some(search) = self.search.as_ref() {
+            let count = search.scope_count(search.scope);
+            if let Some((x, y)) = self.search_scroll.row_center(index, count) {
+                return (
+                    x.clamp(30.0, (self.win_w - 30.0).max(30.0)),
+                    y.clamp(30.0, (self.win_h - 30.0).max(30.0)),
+                );
+            }
+        }
         let state = self.search_scroll.handle.0.borrow();
         let bounds = state.base_handle.bounds();
         let height = f32::from(bounds.size.height);
@@ -2173,7 +2199,7 @@ impl AppRoot {
             return Some((
                 menu,
                 target,
-                self.alt_anchor_for(&self.queue_scroll_modal.handle, self.queue_cursor, self.queue_scroll_modal.row_h),
+                self.alt_scroll_anchor(&self.queue_scroll_modal, self.queue_cursor, self.player.len()),
             ));
         }
         if let Some(page) = self.page.as_ref()
@@ -2186,7 +2212,7 @@ impl AppRoot {
             if let Some(hit) = self.alt_selection_target(
                 rows,
                 page.cursor.saturating_sub(lo),
-                self.alt_anchor_for(&self.page_scroll_modal.handle, page.cursor, self.page_scroll_modal.row_h),
+                self.alt_scroll_anchor(&self.page_scroll_modal, page.cursor, page.rows.len()),
             ) {
                 return Some(hit);
             }
@@ -2196,7 +2222,7 @@ impl AppRoot {
             return Some((
                 self.alt_menu_for_row(row),
                 self.alt_target_for_row(row),
-                self.alt_anchor_for(&self.page_scroll_modal.handle, page.cursor, self.page_scroll_modal.row_h),
+                self.alt_scroll_anchor(&self.page_scroll_modal, page.cursor, page.rows.len()),
             ));
         }
         if self.view.selection.active() {
@@ -2209,7 +2235,7 @@ impl AppRoot {
             if let Some(hit) = self.alt_selection_target(
                 rows,
                 self.view.cursor.saturating_sub(lo),
-                self.alt_anchor_for(&self.library_scroll.handle, self.view.cursor, self.library_scroll.row_h),
+                self.alt_scroll_anchor(&self.library_scroll, self.view.cursor, self.view.rows.count),
             ) {
                 return Some(hit);
             }
@@ -2218,7 +2244,7 @@ impl AppRoot {
         Some((
             self.alt_menu_for_row(row),
             self.alt_target_for_row(row),
-            self.alt_anchor_for(&self.library_scroll.handle, self.view.cursor, self.library_scroll.row_h),
+            self.alt_scroll_anchor(&self.library_scroll, self.view.cursor, self.view.rows.count),
         ))
     }
 

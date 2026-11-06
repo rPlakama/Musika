@@ -130,6 +130,23 @@ impl ScrollModal {
         self.row_h
     }
 
+    /// Painted centre of one row, using the same measured stride as follow.
+    pub fn row_center(&self, index: usize, count: usize) -> Option<(f32, f32)> {
+        let state = self.handle.0.borrow();
+        let bounds = state.base_handle.bounds();
+        let width = f32::from(bounds.size.width);
+        let height = f32::from(bounds.size.height);
+        if width <= 0.0 || height <= 0.0 {
+            return None;
+        }
+        let row_h = self.measured_row_h(count);
+        let offset = f32::from(state.base_handle.offset().y);
+        Some((
+            f32::from(bounds.origin.x) + width * 0.5,
+            f32::from(bounds.origin.y) + index as f32 * row_h + row_h * 0.5 + offset,
+        ))
+    }
+
     pub fn target_y(&self, count: usize, cursor: usize) -> f32 {
         let viewport = self.viewport();
         let row_h = self.measured_row_h(count);

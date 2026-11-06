@@ -3,6 +3,58 @@
 All notable changes to Musika, newest first. `TASKLISTMAJOR.md` tracks the
 open work; this file is the release history.
 
+## 0.6.0 - _Rework, rewrite. Changing, QT is dropped, gpuUI is implemented. Adjusts to the UI and various other changes._
+
+The Qt/QML front end is gone. Musika now runs on GPUI, Zed's GPU-accelerated
+hybrid immediate/retained UI framework, with the whole interface ported to the
+new renderer. The backend also gets a leaner memory profile, a reconciling
+sync, and a new cover pipeline.
+
+- Retire the QML frontend: `gpuui` is the default build and the only main path.
+  Remove `qtbridge`, `qml.rs`, `qml_backend`, the QML tree, the QML keybind and
+  palette singletons, QML lint/bench scripts and `.qmllint.ini`; strip Qt from
+  the flake and dev shell.
+- Port the UI to GPUI: window shell, account header, library scopes and rows,
+  album/artist/playlist/radio pages, fullscreen player and lyrics, queue
+  drawer, login, search overlay, `/` line search, description overlay, toasts,
+  IPC, session restore and the double-q exit flow.
+- Bring the QML look across: 72 px list header, 3 px row radius, adaptive row
+  heights, hero covers and ambience, hover/selection cover scaling, row marks,
+  text wrapping, cover fade-ins, press FX, springy lyrics overlay and a
+  cover-seeded dynamic palette.
+- Rebuild the motion layer with QML-style behaviour clocks, retarget-from-
+  current animations, colour transitions, reduce-motion gates and lyric
+  animation driving.
+- Add the Spotlight search overlay and a QML-faithful `/` in-surface search:
+  topmost routing, Songs/Albums/Artists/Playlists scopes, smartcase match
+  painting on library/page/queue/search rows, scrolling, visual selection and
+  row-anchored Alt actions.
+- Replace the separate scroll paths with one `ScrollModal` engine for library,
+  page, queue and search: virtual Rust row windows, adaptive heights, scrolloff
+  centre-follow, exact `gg`/`G` landings, stable resize anchoring, band-only
+  marks and preload/cover-path caching.
+- Keep the native player coupled to the new UI: decoder threads start paused,
+  session restore loads paused, album playback replaces the queue, the queue
+  opens on the current track, and Radio page rows are cached so Enter plays
+  the selected row.
+- Cut memory use: streaming `file://` playback in 64 KiB AVIO chunks instead
+  of a whole-track buffer, top-K search heaps with a 32 MiB default budget,
+  chunked sync that no longer retains two catalog copies, smaller SQLite pools
+  and caches, cover sampling instead of full-size decode probes, and a capped
+  rayon fan-out.
+- Make sync reconcile instead of replace: always fetch the full manifest,
+  re-fetch only changed albums, upsert songs and delete stale rows, refuse
+  suspicious empty manifests, detect server rescans that re-key album ids and
+  fall into a deep pass, with periodic deep syncs catching silent edits.
+- Harden the cover pipeline: atomic display-copy writes with truncation
+  validation, hero-safe size buckets, thumbnail fallback and backfill,
+  resize dedupe/cancellation, async hero loads and no oversized fallbacks.
+- Add IPC playback diagnostics and scroll test commands, quiet decoder/cache
+  log noise, optimise image codecs in the dev profile, and vendor a Linux
+  `xattr` shim for GPUI's `zed-async-tar` dependency.
+- Update the README for GPUI, the new build/dev shell and the current startup
+  trace marks.
+
 ## 0.5.9 - _Squash, simplify, remake, retouch_
 
 The four entry pages become one `PageEntry`, the scroll body is rebuilt around

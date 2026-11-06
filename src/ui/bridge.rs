@@ -21,6 +21,10 @@ pub enum Event {
         header: super::state::PageHeader,
         rows: Vec<super::state::Row>,
     },
+    Queue {
+        tracks: Vec<crate::player::Track>,
+        start: usize,
+    },
     Search {
         generation: u64,
         query: String,
@@ -99,6 +103,20 @@ impl Bridge {
                     }
                 }
                 Err(err) => Event::Error(format!("Page load failed: {err:#}")),
+            };
+            let _ = tx.send(event);
+        });
+    }
+
+    pub fn play_song(&self, song_id: String, order: String) {
+        let tx = self.tx.clone();
+        crate::app::runtime().spawn(async move {
+            let event = match queue_for_song(&song_id, &order).await {
+                Ok((tracks, start)) => {
+                    crate::debug_log!("GPUI: queue {} tracks start {}", tracks.len(), start);
+                    Event::Queue { tracks, start }
+                }
+                Err(err) => Event::Error(format!("Playback failed: {err:#}")),
             };
             let _ = tx.send(event);
         });
@@ -459,4 +477,14 @@ async fn search_rows(query: &str) -> anyhow::Result<Vec<super::state::Row>> {
         });
     }
     Ok(rows)
+}
+
+async fn queue_for_song(
+    song_id: &str,
+    order: &str,
+) -> anyhow::Result<(Vec<crate::player::Track>, usize)> {
+    let dbs = crate::app::dbs().ok_or_else(|| anyhow::anyhow!("databases not ready"))?;
+    let (json, start) = crate::queue::library_queue_payload(&dbs, song_id, order, false).await?;
+    let tracks = serde_json::from_str::<Vec<crate::player::Track>>(&json)?;
+    Ok((tracks, start))
 }

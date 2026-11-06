@@ -27,7 +27,7 @@ mod state;
 
 use gpui::{
     App, Application, Bounds, Context, FocusHandle, KeyBinding, Render, ScrollStrategy, Window,
-    WindowBounds, WindowOptions, actions, div, img, prelude::*, px, rgb, rgba, size, uniform_list,
+    WindowBounds, WindowOptions, actions, div, img, prelude::*, px, relative, rgb, rgba, size, uniform_list,
     UniformListScrollHandle,
 };
 
@@ -60,6 +60,14 @@ actions!(
         Search,
         SearchNext,
         SearchPrev,
+        PlayPause,
+        Mute,
+        VolumeUp,
+        VolumeDown,
+        SeekBack,
+        SeekForward,
+        NextTrack,
+        PrevTrack,
     ]
 );
 
@@ -92,8 +100,15 @@ pub fn run() {
             KeyBinding::new("shift-space f", Search, None),
             KeyBinding::new("up", MoveUp, None),
             KeyBinding::new("down", MoveDown, None),
-            KeyBinding::new("ctrl-n", SearchNext, None),
-            KeyBinding::new("ctrl-p", SearchPrev, None),
+            KeyBinding::new("space", PlayPause, None),
+            KeyBinding::new("m", Mute, None),
+            KeyBinding::new("-", VolumeDown, None),
+            KeyBinding::new("=", VolumeUp, None),
+            KeyBinding::new("+", VolumeUp, None),
+            KeyBinding::new(",", SeekBack, None),
+            KeyBinding::new(".", SeekForward, None),
+            KeyBinding::new("ctrl-n", NextTrack, None),
+            KeyBinding::new("ctrl-p", PrevTrack, None),
             KeyBinding::new("shift-v", VisualAll, None),
             KeyBinding::new("[ b", PrevPlace, None),
             KeyBinding::new("] b", NextPlace, None),
@@ -157,6 +172,8 @@ struct AppRoot {
     search_anim: anim::Behavior,
     clock: anim::Clock,
     row_colors: std::collections::HashMap<String, anim::ColorBehavior>,
+    player: crate::player::Player,
+    playback_error: Option<String>,
 }
 
 impl AppRoot {
@@ -198,7 +215,14 @@ impl AppRoot {
             search_anim: anim::Behavior::new(0.0),
             clock: anim::Clock::new(),
             row_colors: std::collections::HashMap::new(),
+            player: crate::player::Player::new(),
+            playback_error: None,
         };
+        if let Ok(song_id) = std::env::var("MUSIKA_GPUUI_PLAY")
+            && !song_id.is_empty()
+        {
+            app.bridge.play_song(song_id, "Artist".to_string());
+        }
         if let Ok(query) = std::env::var("MUSIKA_GPUUI_SEARCH")
             && !query.is_empty()
         {
@@ -280,6 +304,10 @@ impl AppRoot {
                 page.cursor = page.cursor.min(page.rows.len().saturating_sub(1));
                 self.page_scroll
                     .scroll_to_item(page.cursor, ScrollStrategy::Center);
+            }
+            Event::Queue { tracks, start } => {
+                self.player.load(tracks, start);
+                self.playback_error = None;
             }
             Event::Search {
                 generation,
@@ -401,6 +429,46 @@ impl AppRoot {
 
     fn on_refresh(&mut self, _: &Refresh, _window: &mut Window, cx: &mut Context<Self>) {
         self.reload();
+        cx.notify();
+    }
+
+    fn on_play_pause(&mut self, _: &PlayPause, _window: &mut Window, cx: &mut Context<Self>) {
+        self.player.toggle();
+        cx.notify();
+    }
+
+    fn on_mute(&mut self, _: &Mute, _window: &mut Window, cx: &mut Context<Self>) {
+        self.player.toggle_mute();
+        cx.notify();
+    }
+
+    fn on_volume_up(&mut self, _: &VolumeUp, _window: &mut Window, cx: &mut Context<Self>) {
+        self.player.set_volume((self.player.volume() + 0.05).min(1.0));
+        cx.notify();
+    }
+
+    fn on_volume_down(&mut self, _: &VolumeDown, _window: &mut Window, cx: &mut Context<Self>) {
+        self.player.set_volume((self.player.volume() - 0.05).max(0.0));
+        cx.notify();
+    }
+
+    fn on_seek_back(&mut self, _: &SeekBack, _window: &mut Window, cx: &mut Context<Self>) {
+        self.player.seek((self.player.position() - 5.0).max(0.0));
+        cx.notify();
+    }
+
+    fn on_seek_forward(&mut self, _: &SeekForward, _window: &mut Window, cx: &mut Context<Self>) {
+        self.player.seek(self.player.position() + 5.0);
+        cx.notify();
+    }
+
+    fn on_next_track(&mut self, _: &NextTrack, _window: &mut Window, cx: &mut Context<Self>) {
+        self.player.next();
+        cx.notify();
+    }
+
+    fn on_prev_track(&mut self, _: &PrevTrack, _window: &mut Window, cx: &mut Context<Self>) {
+        self.player.previous();
         cx.notify();
     }
 
@@ -554,24 +622,34 @@ impl AppRoot {
             if let Some(row) = row {
                 self.search_open = false;
                 self.search = None;
-                self.open_row_page(&row);
+                self.activate_row(&row);
             }
             cx.notify();
             return;
         }
-        if self.page.is_some() {
-            let row = self
-                .page
-                .as_ref()
-                .and_then(|page| page.rows.get(page.cursor))
-                .cloned();
-            if let Some(row) = row {
-                self.open_row_page(&row);
-            }
-        } else if let Some(row) = self.view.rows.get(self.view.cursor).cloned() {
-            self.open_row_page(&row);
+        let row = if let Some(page) = self.page.as_ref() {
+            page.rows.get(page.cursor).cloned()
+        } else {
+            self.view.rows.get(self.view.cursor).cloned()
+        };
+        if let Some(row) = row {
+            self.activate_row(&row);
         }
         cx.notify();
+    }
+
+    fn activate_row(&mut self, row: &Row) {
+        if row.song_id.is_empty() && matches!(row.kind, state::RowKind::Song) {
+            return;
+        }
+        if matches!(row.kind, state::RowKind::Song) {
+            self.bridge.play_song(
+                row.song_id.clone(),
+                self.view.order_label().to_string(),
+            );
+            return;
+        }
+        self.open_row_page(row);
     }
 
     fn on_back(&mut self, _: &Back, window: &mut Window, cx: &mut Context<Self>) {
@@ -1113,6 +1191,93 @@ impl AppRoot {
             )
     }
 
+    fn player_bar(&self) -> impl IntoElement {
+        let track = self.player.current().cloned();
+        let state = self.player.state();
+        let position = self.player.position();
+        let duration = self.player.duration();
+        let volume = self.player.volume();
+        let muted = self.player.muted();
+        let progress = if duration > 0.0 {
+            (position / duration).clamp(0.0, 1.0) as f32
+        } else {
+            0.0
+        };
+        let (title, artist, cover) = match &track {
+            Some(track) => (track.title.clone(), track.artist.clone(), cover_path(&track.cover_url)),
+            None => ("Nothing playing".to_string(), String::new(), None),
+        };
+        let state_label = match state {
+            crate::player::State::Playing => "▶",
+            crate::player::State::Paused => "⏸",
+            crate::player::State::Stopped => "■",
+        };
+        div()
+            .flex()
+            .items_center()
+            .gap_3()
+            .h(px(66.0))
+            .px_4()
+            .bg(rgb(SURFACE))
+            .child(art(cover, 44.0))
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .min_w_0()
+                    .w(px(280.0))
+                    .child(div().text_size(px(13.0)).child(title))
+                    .child(
+                        div()
+                            .text_size(px(11.0))
+                            .text_color(rgb(ON_VARIANT))
+                            .child(artist),
+                    ),
+            )
+            .child(div().flex().items_center().gap_2().child(state_label))
+            .child(
+                div()
+                    .flex()
+                    .flex_1()
+                    .flex_col()
+                    .gap_1()
+                    .child(
+                        div()
+                            .h(px(3.0))
+                            .w_full()
+                            .rounded_full()
+                            .bg(rgb(SURFACE_HIGH))
+                            .child(
+                                div()
+                                    .h_full()
+                                    .w(relative(progress))
+                                    .rounded_full()
+                                    .bg(rgb(PRIMARY)),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .text_size(px(10.0))
+                            .text_color(rgb(ON_VARIANT))
+                            .child(format!(
+                                "{} / {}",
+                                format_time(position),
+                                format_time(duration)
+                            )),
+                    ),
+            )
+            .child(
+                div()
+                    .text_size(px(11.0))
+                    .text_color(rgb(ON_VARIANT))
+                    .child(if muted {
+                        "muted".to_string()
+                    } else {
+                        format!("vol {:.0}%", volume * 100.0)
+                    }),
+            )
+    }
+
     fn status_bar(&self) -> impl IntoElement {
         let counts = self
             .header
@@ -1152,6 +1317,14 @@ impl AppRoot {
 impl Render for AppRoot {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.clock.tick();
+        if self.player.state() != crate::player::State::Stopped
+            && let Some(message) = self.player.pump()
+        {
+            self.playback_error = Some(message);
+        }
+        if self.player.state() == crate::player::State::Playing {
+            window.request_animation_frame();
+        }
         let progress = self.search_anim.target(
             if self.search_open { 1.0 } else { 0.0 },
             anim::STANDARD_MS,
@@ -1174,7 +1347,7 @@ impl Render for AppRoot {
         } else {
             self.list(&*cx).into_any_element()
         };
-        let status = self.status_bar();
+        let status = self.player_bar();
         div()
             .track_focus(&self.focus)
             .on_action(cx.listener(Self::on_quit))
@@ -1190,6 +1363,14 @@ impl Render for AppRoot {
             .on_action(cx.listener(Self::on_enter))
             .on_action(cx.listener(Self::on_visual))
             .on_action(cx.listener(Self::on_search))
+            .on_action(cx.listener(Self::on_play_pause))
+            .on_action(cx.listener(Self::on_mute))
+            .on_action(cx.listener(Self::on_volume_up))
+            .on_action(cx.listener(Self::on_volume_down))
+            .on_action(cx.listener(Self::on_seek_back))
+            .on_action(cx.listener(Self::on_seek_forward))
+            .on_action(cx.listener(Self::on_next_track))
+            .on_action(cx.listener(Self::on_prev_track))
             .on_action(cx.listener(Self::on_search_next))
             .on_action(cx.listener(Self::on_search_prev))
             .on_key_down(cx.listener(Self::on_key_down))
@@ -1252,4 +1433,9 @@ fn page_key(descriptor: &PageDescriptor) -> String {
         PageKind::Playlist => "playlist",
     };
     format!("{kind}:{}", descriptor.id)
+}
+
+fn format_time(seconds: f64) -> String {
+    let seconds = seconds.max(0.0) as u64;
+    format!("{}:{:02}", seconds / 60, seconds % 60)
 }

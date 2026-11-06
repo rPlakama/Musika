@@ -27,7 +27,7 @@ mod state;
 
 use gpui::{
     App, Application, Bounds, Context, FocusHandle, KeyBinding, Render, ScrollStrategy, Window,
-    WindowBounds, WindowOptions, actions, div, img, prelude::*, px, rgb, size, uniform_list,
+    WindowBounds, WindowOptions, actions, div, img, prelude::*, px, rgb, rgba, size, uniform_list,
     UniformListScrollHandle,
 };
 
@@ -156,6 +156,7 @@ struct AppRoot {
     search_open: bool,
     search_anim: anim::Behavior,
     clock: anim::Clock,
+    row_colors: std::collections::HashMap<String, anim::ColorBehavior>,
 }
 
 impl AppRoot {
@@ -196,6 +197,7 @@ impl AppRoot {
             search_open: false,
             search_anim: anim::Behavior::new(0.0),
             clock: anim::Clock::new(),
+            row_colors: std::collections::HashMap::new(),
         };
         if let Ok(query) = std::env::var("MUSIKA_GPUUI_SEARCH")
             && !query.is_empty()
@@ -769,6 +771,12 @@ impl AppRoot {
                     let cover = cover_path(&row.cover_url);
                     let selected = index == this.view.cursor
                         || this.view.selection.contains(this.view.cursor, index);
+                    let target = if selected { 0x2B2930FF } else { 0x2B293000 };
+                    let color = this
+                        .row_colors
+                        .entry(row.id.clone())
+                        .or_insert_with(|| anim::ColorBehavior::new(target))
+                        .target(target, anim::QUICK_MS, anim::Curve::Standard, &this.clock);
                     items.push(
                         div()
                             .id(index)
@@ -778,7 +786,7 @@ impl AppRoot {
                             .px_4()
                             .gap_3()
                             .cursor_pointer()
-                            .when(selected, |this| this.bg(rgb(SURFACE_HIGH)))
+                            .bg(rgba(color))
                             .on_click(cx.listener(move |this, _, _, cx| {
                                 this.select(index);
                                 cx.notify();
@@ -1138,6 +1146,9 @@ impl Render for AppRoot {
             self.search = None;
         }
         if self.search.is_some() && !self.search_anim.settled(&self.clock) {
+            window.request_animation_frame();
+        }
+        if self.row_colors.values().any(|color| !color.settled(&self.clock)) {
             window.request_animation_frame();
         }
         let overlay = self.search.as_ref().map(|search| self.search_overlay(search, progress));

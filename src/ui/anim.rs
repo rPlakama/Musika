@@ -185,3 +185,82 @@ mod tests {
         assert!((behavior.value(&clock) - mid).abs() < 1e-4);
     }
 }
+
+/// QML `ColorAnim` semantics: straight-alpha component-wise sRGB interpolation,
+/// retargeting from the currently painted colour.
+pub struct ColorBehavior {
+    from: u32,
+    to: u32,
+    start: f64,
+    duration: f32,
+    curve: Curve,
+}
+
+impl ColorBehavior {
+    pub fn new(color: u32) -> Self {
+        Self {
+            from: color,
+            to: color,
+            start: 0.0,
+            duration: 0.0,
+            curve: Curve::Standard,
+        }
+    }
+
+    pub fn target(&mut self, to: u32, duration: f32, curve: Curve, clock: &Clock) -> u32 {
+        if to != self.to {
+            self.from = self.value(clock);
+            self.to = to;
+            self.start = clock.now;
+            self.duration = duration.max(0.0);
+            self.curve = curve;
+        }
+        self.value(clock)
+    }
+
+    pub fn value(&self, clock: &Clock) -> u32 {
+        if REDUCE_MOTION || self.duration <= 0.0 {
+            return self.to;
+        }
+        let t = ((clock.now - self.start) / self.duration as f64) as f32;
+        lerp_srgb(self.from, self.to, self.curve.sample(t.clamp(0.0, 1.0)))
+    }
+
+    pub fn settled(&self, clock: &Clock) -> bool {
+        REDUCE_MOTION || clock.now - self.start >= self.duration as f64
+    }
+}
+
+/// Straight-alpha component-wise sRGB (Qt colour animation look).
+pub fn lerp_srgb(a: u32, b: u32, t: f32) -> u32 {
+    let t = t.clamp(0.0, 1.0);
+    let channel = |shift: u32| {
+        let av = ((a >> shift) & 0xff) as f32;
+        let bv = ((b >> shift) & 0xff) as f32;
+        (av + (bv - av) * t).round() as u32
+    };
+    (channel(24) << 24) | (channel(16) << 16) | (channel(8) << 8) | channel(0)
+}
+
+#[cfg(test)]
+mod color_tests {
+    use super::*;
+
+    #[test]
+    fn color_lerp_is_component_wise_srgb() {
+        assert_eq!(lerp_srgb(0x00000000, 0xFFFFFFFF, 0.5), 0x80808080);
+        assert_eq!(lerp_srgb(0xFF0000FF, 0x0000FFFF, 0.5), 0x800080FF);
+    }
+
+    #[test]
+    fn color_behavior_retargets_from_current() {
+        let mut clock = Clock::new();
+        clock.now = 0.0;
+        let mut color = ColorBehavior::new(0x00000000);
+        color.target(0xFFFFFFFF, 1.0, Curve::Linear, &clock);
+        clock.now = 0.5;
+        let mid = color.value(&clock);
+        color.target(0x00000000, 1.0, Curve::Linear, &clock);
+        assert_eq!(color.value(&clock), mid);
+    }
+}

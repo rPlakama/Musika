@@ -1503,7 +1503,7 @@ impl AppRoot {
             .items_center()
             .gap_3()
             .w_full()
-            .h(relative(0.08))
+            .h(px(72.0))
             .px_2()
             .child(div().text_size(px(26.0)).font_weight(gpui::FontWeight::SEMIBOLD).child(title))
             .child(
@@ -1585,7 +1585,7 @@ impl AppRoot {
                                 .items_center()
                                 .h(px(row_h))
                                 .px_1()
-                                .rounded_md()
+                                .rounded_sm()
                                 .bg(rgba(color))
                                 .cursor_pointer()
                                 .hover(|this| this.bg(rgb(SURFACE_HIGH)))
@@ -2025,7 +2025,7 @@ impl AppRoot {
                         div()
                             .text_size(px(14.0))
                             .text_color(rgb(ON_VARIANT))
-                            .child("★ ★ ★ ★ ★"),
+                            .child("☆ ☆ ☆ ☆ ☆"),
                     )
                     .child(
                         div()
@@ -2278,15 +2278,27 @@ impl AppRoot {
                                         .child(repeat_label(self.repeat)),
                                 )
                             })
+                            .child(icon(
+                                if muted { "vol-mute-svgrepo-com.svg" }
+                                else if volume <= 1.0 { "vol-zero-svgrepo-com.svg" }
+                                else if volume <= 33.0 { "vol-low-svgrepo-com.svg" }
+                                else { "vol-high-svgrepo-com.svg" },
+                                16.0,
+                                ON_VARIANT,
+                            ))
                             .child(
                                 div()
-                                    .text_size(px(11.0))
-                                    .text_color(rgb(ON_VARIANT))
-                                    .child(if muted {
-                                        "muted".to_string()
-                                    } else {
-                                        format!("vol {:.0}%", volume)
-                                    }),
+                                    .w(px(54.0))
+                                    .h(px(3.0))
+                                    .rounded_full()
+                                    .bg(rgb(SURFACE_HIGH))
+                                    .child(
+                                        div()
+                                            .h_full()
+                                            .w(relative((volume / 100.0) as f32))
+                                            .rounded_full()
+                                            .bg(rgb(PRIMARY)),
+                                    ),
                             ),
                     ),
             )

@@ -96,7 +96,19 @@ impl ScrollModal {
 
     pub fn target_y(&self, count: usize, cursor: usize) -> f32 {
         let viewport = self.viewport();
-        target_y(self.row_h, count, cursor, viewport)
+        let actual_max = f32::from(
+            self.handle
+                .0
+                .borrow()
+                .base_handle
+                .max_offset()
+                .height,
+        );
+        if actual_max > 0.0 {
+            target_y_max(self.row_h, cursor, viewport, actual_max)
+        } else {
+            target_y(self.row_h, count, cursor, viewport)
+        }
     }
 
     pub fn start(&mut self, count: usize, cursor: usize, animated: bool, now: f64) {
@@ -189,8 +201,15 @@ impl ScrollModal {
 
 pub fn target_y(row_h: f32, count: usize, cursor: usize, viewport: f32) -> f32 {
     let max = (count as f32 * row_h - viewport).max(0.0);
+    target_y_max(row_h, cursor, viewport, max)
+}
+
+/// Use the scroll handle's real max offset, not a recomputed content height.
+/// This is what keeps the cursor pinned at the last row: the centre formula
+/// clamps to the actual list end instead of an estimated end.
+pub fn target_y_max(row_h: f32, cursor: usize, viewport: f32, max: f32) -> f32 {
     let center = cursor as f32 * row_h + row_h * 0.5 - viewport * 0.5;
-    center.clamp(0.0, max)
+    center.clamp(0.0, max.max(0.0))
 }
 
 #[cfg(test)]
@@ -202,6 +221,13 @@ mod tests {
         assert_eq!(target_y(50.0, 100, 50, 500.0), 50.0 * 50.0 + 25.0 - 250.0);
         assert_eq!(target_y(50.0, 10, 0, 500.0), 0.0);
         assert_eq!(target_y(50.0, 10, 9, 500.0), 0.0);
+    }
+
+    #[test]
+    fn actual_max_keeps_bottom_pinned() {
+        // Cursor last two rows with a real max offset: both stay at the end.
+        assert_eq!(target_y_max(74.0, 569, 702.0, 41705.6), 41705.6);
+        assert_eq!(target_y_max(74.0, 568, 702.0, 41705.6), 41705.6);
     }
 
     #[test]

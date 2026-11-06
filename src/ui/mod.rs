@@ -327,6 +327,7 @@ struct AppRoot {
     hovered_row: Option<usize>,
     hovered_page: Option<usize>,
     visual_mode: bool,
+    row_scales: std::collections::HashMap<String, anim::Behavior>,
     player: crate::player::Player,
     playback_error: Option<String>,
     queue_open: bool,
@@ -418,6 +419,7 @@ impl AppRoot {
             hovered_row: None,
             hovered_page: None,
             visual_mode: false,
+            row_scales: std::collections::HashMap::new(),
             player: crate::player::Player::new(),
             playback_error: None,
             queue_open: false,
@@ -2998,7 +3000,16 @@ impl AppRoot {
                         let downloaded = this.marks.downloaded(&row.song_id, &row.album_id) || row.downloaded;
                         let rating = row.rating;
                         let cover = cover_path(&row.cover_url);
-                        let cover_scale = if selected { 1.20 } else { 1.0 };
+                        let cover_scale = this
+                            .row_scales
+                            .entry(format!("library-scale:{}", row.id))
+                            .or_insert_with(|| anim::Behavior::new(1.0))
+                            .target(
+                                if selected { 1.20 } else { 1.0 },
+                                anim::QUICK_MS,
+                                anim::Curve::Standard,
+                                &this.clock,
+                            );
                         items.push(
                             div()
                                 .id(index)
@@ -3618,7 +3629,16 @@ impl AppRoot {
                                 let active = index == cursor;
                                 let playing = index == this.player.index();
                                 let emphasis = if active { 1.08 } else { 1.0 };
-                                let cover_scale = if active { 1.20 } else { 1.0 };
+                                let cover_scale = this
+                                    .row_scales
+                                    .entry(format!("queue-scale:{index}"))
+                                    .or_insert_with(|| anim::Behavior::new(1.0))
+                                    .target(
+                                        if active { 1.20 } else { 1.0 },
+                                        anim::QUICK_MS,
+                                        anim::Curve::Standard,
+                                        &this.clock,
+                                    );
                                 items.push(
                                     div()
                                         .id(index)
@@ -4053,8 +4073,27 @@ impl AppRoot {
                                     break;
                                 };
                                 let hovered = this.hovered_page == Some(index);
-                                let emphasis = if selected { 1.08 } else { 1.0 };
-                                let cover_scale = show_cover.then_some(if selected { 1.20 } else { 1.0 });
+                                let emphasis = this
+                                    .row_scales
+                                    .entry(format!("page-text-scale:{index}"))
+                                    .or_insert_with(|| anim::Behavior::new(1.0))
+                                    .target(
+                                        if selected { 1.08 } else { 1.0 },
+                                        anim::QUICK_MS,
+                                        anim::Curve::Standard,
+                                        &this.clock,
+                                    );
+                                let cover_scale = show_cover.then(|| {
+                                    this.row_scales
+                                        .entry(format!("page-cover-scale:{index}"))
+                                        .or_insert_with(|| anim::Behavior::new(1.0))
+                                        .target(
+                                            if selected { 1.20 } else { 1.0 },
+                                            anim::QUICK_MS,
+                                            anim::Curve::Standard,
+                                            &this.clock,
+                                        )
+                                });
                                 items.push(
                                     div()
                                         .id(index)
@@ -4484,6 +4523,9 @@ impl Render for AppRoot {
         } else {
             self.list(&*cx, window).into_any_element()
         };
+        if self.row_scales.values().any(|scale| !scale.settled(&self.clock)) {
+            window.request_animation_frame();
+        }
         let status = self.player_bar();
         div()
             .track_focus(&self.focus)

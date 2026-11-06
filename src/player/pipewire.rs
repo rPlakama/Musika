@@ -149,10 +149,10 @@ impl Native {
 
     #[cfg(test)]
     fn load(&mut self, url: &str) {
-        self.load_with_next(url, None);
+        self.load_with_next(url, None, false);
     }
 
-    pub(crate) fn load_with_next(&mut self, url: &str, next_url: Option<String>) {
+    pub(crate) fn load_with_next(&mut self, url: &str, next_url: Option<String>, paused: bool) {
         crate::startup::trace("play.requested");
         // Never join the old decoder on the Qt thread: a stalled fetch can
         // take seconds. The new worker owns the reaper and joins first.
@@ -188,7 +188,7 @@ impl Native {
             if thread_stop.load(Ordering::Relaxed) {
                 return;
             }
-            reset_sink(sink, false);
+            reset_sink(sink, paused);
             let epoch = unsafe { musika_sink_epoch(sink.0) };
             decode_loop(
                 sink,

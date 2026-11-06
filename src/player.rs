@@ -370,7 +370,7 @@ impl Player {
             .and_then(|index| self.queue.get(index))
             .map(|next| next.url.clone());
         if let Some(native) = self.native.as_mut() {
-            native.load_with_next(&track.url, next_url);
+            native.load_with_next(&track.url, next_url, paused);
             native.set_paused(paused);
         }
         self.state = if paused { State::Paused } else { State::Playing };

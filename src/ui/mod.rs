@@ -258,6 +258,7 @@ struct AppRoot {
     row_colors: std::collections::HashMap<String, anim::ColorBehavior>,
     row_cover_scales: std::collections::HashMap<String, anim::Behavior>,
     hovered_row: Option<usize>,
+    hovered_page: Option<usize>,
     player: crate::player::Player,
     playback_error: Option<String>,
     queue_open: bool,
@@ -321,6 +322,7 @@ impl AppRoot {
             row_colors: std::collections::HashMap::new(),
             row_cover_scales: std::collections::HashMap::new(),
             hovered_row: None,
+            hovered_page: None,
             player: crate::player::Player::new(),
             playback_error: None,
             queue_open: false,
@@ -365,6 +367,7 @@ impl AppRoot {
             && !query.is_empty()
         {
             app.search_open = true;
+            app.hovered_row = None;
             app.search = Some(SearchState {
                 query: query.clone(),
                 rows: Vec::new(),
@@ -551,6 +554,7 @@ impl AppRoot {
                     search.query = query;
                     search.rows = rows;
                     search.scope_cursors = [0; 4];
+                    self.hovered_row = None;
                     search.loading = false;
                     crate::debug_log!(
                         "GPUI: search scopes songs={} albums={} artists={} playlists={}",
@@ -1395,6 +1399,7 @@ impl AppRoot {
             PageKind::Playlist => {}
         }
         self.remember_current();
+        self.hovered_page = None;
         self.travel.open(descriptor.clone());
         self.page = Some(PageState::new(descriptor.clone()));
         self.page_generation = self.page_generation.wrapping_add(1);
@@ -1406,6 +1411,7 @@ impl AppRoot {
         self.remember_current();
         match self.travel.back() {
             Some(descriptor) => {
+                self.hovered_page = None;
                 self.page = Some(PageState::new(descriptor.clone()));
                 self.page_generation = self.page_generation.wrapping_add(1);
                 self.bridge.load_page(descriptor);
@@ -2078,7 +2084,7 @@ impl AppRoot {
             )
     }
 
-    fn search_overlay(&self, search: &SearchState, progress: f32) -> gpui::Div {
+    fn search_overlay(&self, cx: &Context<Self>, search: &SearchState, progress: f32) -> gpui::Div {
         let query = if search.query.is_empty() {
             "Search artists, albums, songs".to_string()
         } else {
@@ -2091,14 +2097,26 @@ impl AppRoot {
             .enumerate()
             .map(|(index, row)| {
                 let selected = index == search.cursor();
+                let hovered = self.hovered_row == Some(index);
                 let cover = cover_path(&row.cover_url);
                 div()
                     .flex()
                     .items_center()
                     .gap_3()
                     .px_5()
+                    .id(("search-row", index))
                     .h(px(56.0))
+                    .cursor_pointer()
+                    .on_hover(cx.listener(move |this, hovered: &bool, _, cx| {
+                        if *hovered {
+                            this.hovered_row = Some(index);
+                        } else if this.hovered_row == Some(index) {
+                            this.hovered_row = None;
+                        }
+                        cx.notify();
+                    }))
                     .when(selected, |this| this.bg(rgb(0x4A4458)))
+                    .when(hovered && !selected, |this| this.bg(rgb(SURFACE_HIGH)))
                     .child(art(cover, 40.0))
                     .child(
                         div()
@@ -2390,7 +2408,14 @@ impl AppRoot {
                                 else {
                                     break;
                                 };
-                                let target = if selected { 0x4A4458FF } else { 0x141218FF };
+                                let hovered = this.hovered_page == Some(index);
+                                let target = if selected {
+                                    0x4A4458FF
+                                } else if hovered {
+                                    0x2B2930FF
+                                } else {
+                                    0x141218FF
+                                };
                                 let color = this
                                     .row_colors
                                     .entry(key)
@@ -2406,6 +2431,14 @@ impl AppRoot {
                                         .px_4()
                                         .cursor_pointer()
                                         .bg(rgba(color))
+                                        .on_hover(cx.listener(move |this, hovered: &bool, _, cx| {
+                                            if *hovered {
+                                                this.hovered_page = Some(index);
+                                            } else if this.hovered_page == Some(index) {
+                                                this.hovered_page = None;
+                                            }
+                                            cx.notify();
+                                        }))
                                         .on_click(cx.listener(move |this, _, _, cx| {
                                             if let Some(page) = this.page.as_mut() {
                                                 page.select(index);
@@ -2703,7 +2736,7 @@ impl Render for AppRoot {
         let toast_overlay = (!self.toasts.is_empty()).then(|| self.toast_overlay(&*cx));
         let queue_overlay = (self.queue_open || queue_progress > 0.001)
             .then(|| self.queue_overlay(&*cx, queue_progress));
-        let overlay = self.search.as_ref().map(|search| self.search_overlay(search, progress));
+        let overlay = self.search.as_ref().map(|search| self.search_overlay(&*cx, search, progress));
         let description_overlay = self.description_overlay(&*cx);
         if let Some(started) = self.exiting {
             window.request_animation_frame();

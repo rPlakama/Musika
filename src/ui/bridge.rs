@@ -122,7 +122,7 @@ pub struct Bridge {
     search_generation: Arc<AtomicU64>,
     marks_generation: AtomicU64,
     offline: AtomicBool,
-    palette_inflight: Mutex<Option<String>>,
+    palette_inflight: Arc<Mutex<Option<String>>>,
 }
 
 impl Bridge {
@@ -134,7 +134,7 @@ impl Bridge {
             search_generation: Arc::new(AtomicU64::new(0)),
             marks_generation: AtomicU64::new(0),
             offline: AtomicBool::new(false),
-            palette_inflight: Mutex::new(None),
+            palette_inflight: Arc::new(Mutex::new(None)),
         };
         bridge.refresh_header();
         bridge
@@ -770,6 +770,7 @@ impl Bridge {
             *inflight = Some(cover_art.clone());
         }
         let tx = self.tx.clone();
+        let inflight_shared = Arc::clone(&self.palette_inflight);
         crate::app::runtime().spawn(async move {
             let Some(dbs) = crate::app::dbs() else { return };
             let event = match crate::colors::fetch(&dbs, &cover_art).await {
@@ -782,6 +783,12 @@ impl Bridge {
                 },
             };
             let _ = tx.send(event);
+            let mut inflight = inflight_shared
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if inflight.as_deref() == Some(cover_art.as_str()) {
+                *inflight = None;
+            }
         });
     }
 

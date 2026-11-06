@@ -549,7 +549,7 @@ async fn search_rows(query: &str) -> anyhow::Result<Vec<super::state::Row>> {
     let Some(index) = index else {
         return Ok(Vec::new());
     };
-    let results = index.search(query, 40);
+    let results = index.search(query, 8);
     let mut rows = Vec::new();
     for album in results.albums {
         rows.push(Row {
@@ -558,7 +558,7 @@ async fn search_rows(query: &str) -> anyhow::Result<Vec<super::state::Row>> {
             title: album.title.clone(),
             subtitle: album.artist.clone().unwrap_or_default(),
             meta: format!("{} · {}", album.year.unwrap_or_default(), songs_label(album.song_count)),
-            cover_url: crate::covers::url_for(album.cover_art.as_deref(), &Default::default()),
+            cover_url: album.cover_art.clone().unwrap_or_default(),
             song_id: String::new(),
             album_id: album.id.clone(),
             starred: album.starred.is_some(),
@@ -573,7 +573,7 @@ async fn search_rows(query: &str) -> anyhow::Result<Vec<super::state::Row>> {
             title: artist.name.clone(),
             subtitle: format!("{} albums", artist.album_count),
             meta: String::new(),
-            cover_url: String::new(),
+            cover_url: artist.cover_art.clone().unwrap_or_default(),
             song_id: String::new(),
             album_id: String::new(),
             starred: artist.starred.is_some(),
@@ -581,7 +581,7 @@ async fn search_rows(query: &str) -> anyhow::Result<Vec<super::state::Row>> {
             downloaded: false,
         });
     }
-    if let Ok(playlists) = crate::playlists::search_rows(&dbs, query, 20).await {
+    if let Ok(playlists) = crate::playlists::search_rows(&dbs, query, 8).await {
         for playlist in playlists {
             rows.push(Row {
                 id: playlist["id"].as_str().unwrap_or_default().to_string(),
@@ -604,14 +604,28 @@ async fn search_rows(query: &str) -> anyhow::Result<Vec<super::state::Row>> {
             kind: RowKind::Song,
             title: song.title.clone(),
             subtitle: song.artist.clone().unwrap_or_default(),
-            meta: song.album.clone().unwrap_or_default(),
-            cover_url: String::new(),
+            meta: format!("{} plays", song.play_count),
+            cover_url: song.cover_art.clone().unwrap_or_default(),
             song_id: song.id.clone(),
             album_id: song.album_id.clone().unwrap_or_default(),
             starred: false,
             rating: 0,
             downloaded: false,
         });
+    }
+    let ids: Vec<String> = rows
+        .iter()
+        .map(|row| row.cover_url.clone())
+        .filter(|id| !id.is_empty())
+        .collect();
+    if !ids.is_empty()
+        && let Ok(covers) = crate::covers::url_map_of(&dbs, &ids).await
+    {
+        for row in &mut rows {
+            if !row.cover_url.is_empty() {
+                row.cover_url = crate::covers::url_for(Some(&row.cover_url), &covers);
+            }
+        }
     }
     Ok(rows)
 }

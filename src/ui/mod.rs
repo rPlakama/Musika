@@ -1829,7 +1829,7 @@ impl AppRoot {
 
     fn search_overlay(&self, search: &SearchState, progress: f32) -> gpui::Div {
         let query = if search.query.is_empty() {
-            "Search…".to_string()
+            "Search artists, albums, songs".to_string()
         } else {
             format!("{}▌", search.query)
         };
@@ -1840,25 +1840,35 @@ impl AppRoot {
             .enumerate()
             .map(|(index, row)| {
                 let selected = index == search.cursor();
+                let cover = cover_path(&row.cover_url);
                 div()
                     .flex()
                     .items_center()
                     .gap_3()
-                    .px_4()
-                    .py_2()
-                    .h(relative(0.112))
+                    .px_5()
+                    .h(px(56.0))
                     .when(selected, |this| this.bg(rgb(0x4A4458)))
+                    .child(art(cover, 40.0))
                     .child(
                         div()
                             .flex()
                             .flex_col()
                             .min_w_0()
                             .flex_1()
-                            .child(div().text_size(px(15.0)).child(row.title.clone()))
+                            .child(
+                                div()
+                                    .text_size(px(16.0))
+                                    .font_weight(gpui::FontWeight::SEMIBOLD)
+                                    .whitespace_nowrap()
+                                    .text_ellipsis()
+                                    .child(row.title.clone()),
+                            )
                             .child(
                                 div()
                                     .text_size(px(11.0))
                                     .text_color(rgb(ON_VARIANT))
+                                    .whitespace_nowrap()
+                                    .text_ellipsis()
                                     .child(row.subtitle.clone()),
                             ),
                     )
@@ -1878,45 +1888,51 @@ impl AppRoot {
             .flex()
             .justify_center()
             .items_center()
-            .justify_center()
+            .bg(gpui::black().opacity(0.50))
             .opacity(progress)
             .child(
                 div()
-                    .w(relative(0.714))
-                    .h(relative(0.78))
+                    .w(relative(0.69))
+                    .h(relative(0.72))
                     .rounded_md()
                     .border_1()
                     .border_color(rgb(PRIMARY))
-                    .bg(rgb(0x2B2930))
+                    .bg(rgb(0x211F26))
                     .overflow_hidden()
                     .shadow_lg()
                     .child(
                         div()
-                            .h(relative(0.066))
-                            .px_4()
+                            .h(px(86.0))
+                            .px_5()
                             .flex()
                             .items_center()
-                            .text_size(px(20.0))
-                            .text_color(if search.query.is_empty() { rgb(ON_VARIANT) } else { rgb(ON_SURFACE) })
-                            .child(query),
+                            .child(
+                                div()
+                                    .w_full()
+                                    .h(px(60.0))
+                                    .rounded_md()
+                                    .bg(rgb(0x36343B))
+                                    .px_4()
+                                    .flex()
+                                    .items_center()
+                                    .text_size(px(20.0))
+                                    .text_color(if search.query.is_empty() { rgb(ON_VARIANT) } else { rgb(ON_SURFACE) })
+                                    .child(query),
+                            ),
                     )
                     .child(
                         div()
                             .flex()
                             .items_center()
-                            .gap_1()
-                            .h(relative(0.052))
-                            .px_4()
+                            .gap_4()
+                            .h(px(52.0))
+                            .px_5()
                             .children((0..4).map(|scope| {
                                 let active = scope == search.scope;
                                 let count = search.scope_count(scope);
                                 div()
-                                    .px_2()
-                                    .py_1()
-                                    .rounded_md()
-                                    .text_size(px(11.0))
+                                    .text_size(px(14.0))
                                     .text_color(rgb(if active { PRIMARY } else { ON_VARIANT }))
-                                    .when(active, |this| this.bg(rgb(SURFACE_HIGH)))
                                     .child(format!("{} {count}", search_scope_label(scope)))
                             })),
                     )
@@ -1931,15 +1947,14 @@ impl AppRoot {
                     )
                     .child(
                         div()
-                            .px_4()
-                            .py_2()
+                            .h(px(72.0))
+                            .flex()
+                            .items_center()
+                            .justify_center()
                             .text_size(px(10.0))
                             .text_color(rgb(ON_VARIANT))
-                            .child(if search.loading {
-                                "searching…"
-                            } else {
-                                "Enter opens · type to refine · Esc closes"
-                            }),
+                            .text_center()
+                            .child("Type to filter · Ctrl-H/L or Tab scope · ↑/↓ rows ·\nEnter open/play · Esc normal mode"),
                     ),
             )
     }

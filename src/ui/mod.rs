@@ -32,6 +32,7 @@ mod state;
 use gpui::{
     App, Application, Bounds, Context, FocusHandle, KeyBinding, Render, Window,
     AssetSource, WindowBounds, WindowOptions, actions, div, img, prelude::*, px, relative, rgb, rgba, size, svg, uniform_list,
+    HighlightStyle, StyledText,
     UniformListScrollHandle,
 };
 
@@ -2837,7 +2838,7 @@ impl AppRoot {
                                                 .whitespace_normal()
                                                 .max_h(px(34.0))
                                                 .overflow_hidden()
-                                                .child(title),
+                                                .child(highlighted_text(&title, &this.line_search.query, ON_SURFACE)),
                                         )
                                         .child(
                                             div()
@@ -2846,7 +2847,7 @@ impl AppRoot {
                                                 .whitespace_normal()
                                                 .max_h(px(22.0))
                                                 .overflow_hidden()
-                                                .child(subtitle),
+                                                .child(highlighted_text(&subtitle, &this.line_search.query, ON_VARIANT)),
                                         ),
                                 )
                                 .child(
@@ -2858,7 +2859,7 @@ impl AppRoot {
                                             div()
                                                 .text_size(px(11.0 * emphasis))
                                                 .text_color(rgb(ON_VARIANT))
-                                                .child(meta),
+                                                .child(highlighted_text(&meta, &this.line_search.query, ON_VARIANT)),
                                         )
                                         .when(downloaded, |this| {
                                             this.child(icon("outline-download.svg", 13.0, PRIMARY))
@@ -4318,6 +4319,21 @@ fn cover_path(url: &str) -> Option<std::path::PathBuf> {
         .lock()
         .ok()?
         .row_path(url)
+}
+
+fn highlighted_text(text: &str, query: &str, color: u32) -> gpui::AnyElement {
+    let ranges = line_search::match_ranges(query, text);
+    if ranges.is_empty() {
+        return div().text_color(rgb(color)).child(text.to_string()).into_any_element();
+    }
+    let highlight = HighlightStyle {
+        color: Some(rgb(color).into()),
+        background_color: Some(rgb(0x4A4458).into()),
+        ..Default::default()
+    };
+    StyledText::new(text.to_string())
+        .with_highlights(ranges.into_iter().map(|range| (range, highlight)))
+        .into_any_element()
 }
 
 fn art_scaled(path: Option<std::path::PathBuf>, base: f32, scale: f32) -> gpui::AnyElement {

@@ -203,3 +203,20 @@ pub(crate) fn clear(key: &str) {
 pub(crate) fn serialize() -> String {
     store().serialize()
 }
+
+/// Writes the current store to the scroll file (shared with the QML oracle).
+pub(crate) fn persist() {
+    let Ok(path) = crate::db::scroll_path() else {
+        return;
+    };
+    if let Some(parent) = path.parent()
+        && let Err(err) = std::fs::create_dir_all(parent)
+    {
+        eprintln!("scroll: could not create {}: {err}", parent.display());
+        return;
+    }
+    let payload = serialize();
+    if let Err(err) = std::fs::write(&path, payload) {
+        eprintln!("scroll: could not write {}: {err}", path.display());
+    }
+}

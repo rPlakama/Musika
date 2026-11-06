@@ -50,6 +50,10 @@ actions!(
         Back,
         PrevPlace,
         NextPlace,
+        PageDown,
+        PageUp,
+        MoveLeft,
+        MoveRight,
     ]
 );
 
@@ -69,7 +73,7 @@ pub fn run() {
             KeyBinding::new("ctrl-q", Quit, None),
             KeyBinding::new("j", MoveDown, None),
             KeyBinding::new("k", MoveUp, None),
-            KeyBinding::new("g", Top, None),
+            KeyBinding::new("g g", Top, None),
             KeyBinding::new("shift-g", Bottom, None),
             KeyBinding::new("shift-j", ScopeNext, None),
             KeyBinding::new("shift-k", ScopePrev, None),
@@ -77,10 +81,15 @@ pub fn run() {
             KeyBinding::new("shift-h", OrderPrev, None),
             KeyBinding::new("r", Refresh, None),
             KeyBinding::new("enter", Enter, None),
-            KeyBinding::new("[", PrevPlace, None),
-            KeyBinding::new("]", NextPlace, None),
+            KeyBinding::new("[ b", PrevPlace, None),
+            KeyBinding::new("] b", NextPlace, None),
+            KeyBinding::new("ctrl-d", PageDown, None),
+            KeyBinding::new("ctrl-u", PageUp, None),
+            KeyBinding::new("pagedown", PageDown, None),
+            KeyBinding::new("pageup", PageUp, None),
         ]);
         cx.on_window_closed(|cx| {
+            crate::scroll_memory::persist();
             if cx.windows().is_empty() {
                 cx.quit();
             }
@@ -128,6 +137,7 @@ impl AppRoot {
         let focus = cx.focus_handle();
         focus.focus(window);
 
+        crate::scroll_memory::hydrate();
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
         let bridge = bridge::Bridge::new(tx);
         let mut view = ViewState::default();
@@ -194,6 +204,10 @@ impl AppRoot {
                 self.view.rows = rows;
                 self.view.loading = false;
                 self.view.error = None;
+                let saved = crate::scroll_memory::saved_index(scope.key());
+                if saved >= 0 {
+                    self.view.cursor = saved as usize;
+                }
                 self.view.cursor = self.view.cursor.min(self.view.rows.len().saturating_sub(1));
                 self.scroll
                     .scroll_to_item(self.view.cursor, ScrollStrategy::Center);
@@ -240,6 +254,7 @@ impl AppRoot {
         if scope == self.view.scope {
             return;
         }
+        self.remember_current();
         self.view.clear_for(scope);
         self.reload();
     }
@@ -248,6 +263,7 @@ impl AppRoot {
         self.view.select(index);
         self.scroll
             .scroll_to_item(self.view.cursor, ScrollStrategy::Center);
+        self.remember_current();
     }
 
     fn on_quit(&mut self, _: &Quit, window: &mut Window, _cx: &mut Context<Self>) {
@@ -318,6 +334,26 @@ impl AppRoot {
         cx.notify();
     }
 
+    fn on_page_down(&mut self, _: &PageDown, _window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(page) = self.page.as_mut() {
+            page.select(page.cursor.saturating_add(10));
+            self.page_scroll.scroll_to_item(page.cursor, ScrollStrategy::Center);
+        } else {
+            self.select(self.view.cursor.saturating_add(10));
+        }
+        cx.notify();
+    }
+
+    fn on_page_up(&mut self, _: &PageUp, _window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(page) = self.page.as_mut() {
+            page.select(page.cursor.saturating_sub(10));
+            self.page_scroll.scroll_to_item(page.cursor, ScrollStrategy::Center);
+        } else {
+            self.select(self.view.cursor.saturating_sub(10));
+        }
+        cx.notify();
+    }
+
     fn on_enter(&mut self, _: &Enter, _window: &mut Window, cx: &mut Context<Self>) {
         if self.page.is_some() {
             let row = self
@@ -364,6 +400,7 @@ impl AppRoot {
     }
 
     fn open_descriptor(&mut self, descriptor: PageDescriptor) {
+        self.remember_current();
         self.travel.open(descriptor.clone());
         self.page = Some(PageState::new(descriptor.clone()));
         self.page_generation = self.page_generation.wrapping_add(1);
@@ -372,6 +409,7 @@ impl AppRoot {
     }
 
     fn back_page(&mut self) {
+        self.remember_current();
         match self.travel.back() {
             Some(descriptor) => {
                 self.page = Some(PageState::new(descriptor.clone()));
@@ -384,6 +422,7 @@ impl AppRoot {
     }
 
     fn step_travel(&mut self, delta: i32) {
+        self.remember_current();
         if let Some(descriptor) = self.travel.step(delta) {
             self.page = Some(PageState::new(descriptor.clone()));
             self.page_generation = self.page_generation.wrapping_add(1);
@@ -403,6 +442,27 @@ impl AppRoot {
             (self.view.order + len - 1) % len
         };
         self.reload();
+    }
+
+    fn remember_current(&self) {
+        if let Some(page) = self.page.as_ref() {
+            let key = page_key(&page.descriptor);
+            crate::scroll_memory::remember(
+                &key,
+                page.cursor as i64,
+                0.0,
+                page.descriptor.kind as i64,
+                "list",
+            );
+        } else {
+            crate::scroll_memory::remember(
+                self.view.scope.key(),
+                self.view.cursor as i64,
+                0.0,
+                self.view.scope as i64,
+                "list",
+            );
+        }
     }
 
     fn top_bar(&self, cx: &Context<Self>) -> impl IntoElement {
@@ -742,6 +802,8 @@ impl Render for AppRoot {
             .on_action(cx.listener(Self::on_order_prev))
             .on_action(cx.listener(Self::on_refresh))
             .on_action(cx.listener(Self::on_enter))
+            .on_action(cx.listener(Self::on_page_down))
+            .on_action(cx.listener(Self::on_page_up))
             .on_action(cx.listener(Self::on_back))
             .on_action(cx.listener(Self::on_prev_place))
             .on_action(cx.listener(Self::on_next_place))
@@ -788,4 +850,13 @@ fn art(path: Option<std::path::PathBuf>, size: f32) -> gpui::AnyElement {
             .bg(rgb(SURFACE_HIGH))
             .into_any_element(),
     }
+}
+
+fn page_key(descriptor: &PageDescriptor) -> String {
+    let kind = match descriptor.kind {
+        PageKind::Album => "album",
+        PageKind::Artist => "artist",
+        PageKind::Playlist => "playlist",
+    };
+    format!("{kind}:{}", descriptor.id)
 }

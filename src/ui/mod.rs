@@ -1389,8 +1389,10 @@ impl AppRoot {
     }
 
     fn open_descriptor(&mut self, descriptor: PageDescriptor) {
-        if descriptor.kind == PageKind::Album {
-            self.bridge.request_notes(descriptor.id.clone());
+        match descriptor.kind {
+            PageKind::Album => self.bridge.request_notes(descriptor.id.clone()),
+            PageKind::Artist => self.bridge.request_artist_notes(descriptor.id.clone()),
+            PageKind::Playlist => {}
         }
         self.remember_current();
         self.travel.open(descriptor.clone());
@@ -2228,6 +2230,7 @@ impl AppRoot {
         let desc_title = title.clone();
         let desc_subtitle = subtitle.clone();
         let header_h = if notes.is_empty() { 220.0 } else { 320.0 };
+        let spacer_h = if notes.is_empty() { 220.0 } else { 0.0 };
 
         let header = div()
             .relative()
@@ -2357,7 +2360,7 @@ impl AppRoot {
                     .child(art(cover, 390.0)),
             )
             .child(header)
-            .child(div().h(px(220.0)))
+            .child(div().h(px(spacer_h)))
             .child(
                 div()
                     .flex_1()

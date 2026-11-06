@@ -150,7 +150,7 @@ impl Bridge {
             if let Some((notes, fetched_at)) = &cached {
                 let _ = tx.send(Event::Notes {
                     album_id: album_id.clone(),
-                    notes: notes.clone(),
+                    notes: plain_notes(notes),
                 });
                 if crate::consts::now_secs() - fetched_at < crate::consts::INFO_TTL_SECS {
                     return;
@@ -176,7 +176,58 @@ impl Bridge {
             } else {
                 fresh
             };
-            let _ = tx.send(Event::Notes { album_id, notes });
+            let _ = tx.send(Event::Notes {
+                album_id,
+                notes: plain_notes(&notes),
+            });
+        });
+    }
+
+    pub fn request_artist_notes(&self, artist_id: String) {
+        let tx = self.tx.clone();
+        crate::app::runtime().spawn(async move {
+            let Some(dbs) = crate::app::dbs() else { return };
+            let cached = crate::library::artist_info(&dbs.library, &artist_id)
+                .await
+                .ok()
+                .flatten();
+            if let Some(row) = &cached {
+                let _ = tx.send(Event::Notes {
+                    album_id: artist_id.clone(),
+                    notes: plain_notes(&row.biography),
+                });
+                if row
+                    .fetched_at
+                    .parse::<i64>()
+                    .is_ok_and(|at| crate::consts::now_secs() - at < crate::consts::INFO_TTL_SECS)
+                {
+                    return;
+                }
+            }
+            let fresh = match crate::session::client(&dbs).await {
+                Ok(client) => match client.get_artist_info2(&artist_id, Some(10), None).await {
+                    Ok(info) => info.info.biography.unwrap_or_default(),
+                    Err(_) => client
+                        .get_artist_info(&artist_id, Some(10), None)
+                        .await
+                        .ok()
+                        .and_then(|info| info.info.biography)
+                        .unwrap_or_default(),
+                },
+                Err(_) => String::new(),
+            };
+            if !fresh.is_empty() {
+                let _ = crate::library::upsert_artist_info(&dbs.library, &artist_id, &fresh, "").await;
+            }
+            let notes = if fresh.is_empty() {
+                cached.map(|row| row.biography).unwrap_or_default()
+            } else {
+                fresh
+            };
+            let _ = tx.send(Event::Notes {
+                album_id: artist_id,
+                notes: plain_notes(&notes),
+            });
         });
     }
 
@@ -694,4 +745,25 @@ fn thumbify(url: String) -> String {
         return url;
     }
     url.replacen(".jpg", ".thumb.jpg", 1)
+}
+
+fn plain_notes(raw: &str) -> String {
+    let mut out = String::with_capacity(raw.len());
+    let mut in_tag = false;
+    for ch in raw.chars() {
+        match ch {
+            '<' => in_tag = true,
+            '>' => in_tag = false,
+            _ if !in_tag => out.push(ch),
+            _ => {}
+        }
+    }
+    out.replace("&amp;", "&")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&quot;", "\"")
+        .replace("&#39;", "'")
+        .replace("&nbsp;", " ")
+        .trim()
+        .to_string()
 }

@@ -24,7 +24,9 @@
 mod anim;
 mod bridge;
 mod covers;
+mod line_search;
 mod metrics;
+mod quick_actions;
 mod state;
 
 use gpui::{
@@ -34,7 +36,8 @@ use gpui::{
 };
 
 use bridge::Event;
-use state::{PageDescriptor, PageKind, PageState, Row, RowWindow, Scope, Travel, ViewState};
+use quick_actions::{AltGesture, Direction, QuickMenu, QuickVerb};
+use state::{PageDescriptor, PageKind, PageState, Row, RowKind, RowWindow, Scope, Travel, ViewState};
 
 actions!(
     musika,
@@ -62,6 +65,10 @@ actions!(
         Search,
         SearchNext,
         SearchPrev,
+        Home,
+        InsertMode,
+        LineSearch,
+        LyricsOverlay,
         PlayPause,
         Mute,
         VolumeUp,
@@ -95,7 +102,6 @@ pub fn run() {
         .run(|cx: &mut App| {
         cx.bind_keys([
             KeyBinding::new("q", Back, None),
-            KeyBinding::new("escape", Back, None),
             KeyBinding::new("ctrl-q", QueueToggle, None),
             KeyBinding::new("d d", QueueRemove, None),
             KeyBinding::new("ctrl-shift-k", QueueUp, None),
@@ -115,7 +121,13 @@ pub fn run() {
             KeyBinding::new("r", Refresh, None),
             KeyBinding::new("enter", Enter, None),
             KeyBinding::new("v", Visual, None),
-            KeyBinding::new("/", Search, None),
+            KeyBinding::new("/", LineSearch, None),
+            KeyBinding::new("shift-q", Home, None),
+            KeyBinding::new("?", LyricsOverlay, None),
+            KeyBinding::new("shift-/", LyricsOverlay, None),
+            KeyBinding::new("i", InsertMode, None),
+            KeyBinding::new("ctrl-h", SearchScopePrev, None),
+            KeyBinding::new("ctrl-l", SearchScopeNext, None),
             KeyBinding::new("shift-space f", Search, None),
             KeyBinding::new("shift-space shift-f", Search, None),
             KeyBinding::new("up", MoveUp, None),
@@ -175,6 +187,7 @@ struct SearchState {
     scope_cursors: [usize; 4],
     generation: u64,
     loading: bool,
+    typing: bool,
 }
 
 struct LyricsState {
@@ -235,6 +248,26 @@ impl ScrollFollow {
         self.started = now;
         self.duration = duration;
         self.active = true;
+    }
+}
+
+#[derive(Clone)]
+struct AltTarget {
+    kind: RowKind,
+    id: String,
+    album_id: String,
+    song_id: String,
+    playlist_id: String,
+}
+
+impl AltTarget {
+    fn queue_kind(&self) -> &'static str {
+        match self.kind {
+            RowKind::Song => "song",
+            RowKind::Album => "album",
+            RowKind::Artist => "artist",
+            RowKind::Playlist => "playlist",
+        }
     }
 }
 
@@ -345,6 +378,18 @@ struct AppRoot {
     restored: bool,
     notes: Option<(String, String)>,
     description: Option<DescriptionState>,
+    lyrics_overlay: bool,
+    line_search: line_search::LineSearchState,
+    line_search_anim: anim::Behavior,
+    alt: AltGesture,
+    alt_menu: Option<QuickMenu>,
+    alt_target: Option<AltTarget>,
+    alt_anchor: Option<(f32, f32)>,
+    alt_spawn: anim::Behavior,
+    alt_held: bool,
+    alt_was_typing: bool,
+    win_w: f32,
+    win_h: f32,
     marks: MarksState,
     warm: std::collections::HashMap<(Scope, usize), (usize, Vec<Row>)>,
     preloaded: bool,
@@ -433,6 +478,18 @@ impl AppRoot {
             restored: false,
             notes: None,
             description: None,
+            lyrics_overlay: false,
+            line_search: line_search::LineSearchState::new(),
+            line_search_anim: anim::Behavior::new(0.0),
+            alt: AltGesture::new(),
+            alt_menu: None,
+            alt_target: None,
+            alt_anchor: None,
+            alt_spawn: anim::Behavior::new(0.0),
+            alt_held: false,
+            alt_was_typing: false,
+            win_w: 1200.0,
+            win_h: 800.0,
             marks: MarksState::default(),
             warm: std::collections::HashMap::new(),
             preloaded: false,
@@ -470,6 +527,7 @@ impl AppRoot {
                 scope_cursors: [0; 4],
                 generation: 1,
                 loading: true,
+                typing: true,
             });
             app.bridge.search(query);
         }
@@ -563,6 +621,42 @@ impl AppRoot {
             }
             Event::Notes { album_id, notes } => {
                 self.notes = Some((album_id, notes));
+            }
+            Event::RowsPatched {
+                kind,
+                id,
+                starred,
+                rating,
+            } => {
+                let patch = |row: &mut Row| {
+                    if row.id == id && row.kind == kind {
+                        if let Some(starred) = starred {
+                            row.starred = starred;
+                        }
+                        if let Some(rating) = rating {
+                            row.rating = i64::from(rating);
+                        }
+                    }
+                };
+                for row in &mut self.view.rows.live {
+                    patch(row);
+                }
+                if let Some(page) = self.page.as_mut() {
+                    for row in &mut page.rows {
+                        patch(row);
+                    }
+                }
+                if let Some(search) = self.search.as_mut() {
+                    for row in &mut search.rows {
+                        patch(row);
+                    }
+                }
+            }
+            Event::QueueAppend { tracks } => {
+                self.player.append(tracks);
+            }
+            Event::OpenPage { descriptor } => {
+                self.open_descriptor(descriptor);
             }
             Event::DisplayCover { key, path } => {
                 if let Some(path) = path {
@@ -1582,18 +1676,50 @@ impl AppRoot {
             .min(search.scope_count(next).saturating_sub(1));
     }
 
+    fn open_search(&mut self, typing: bool) {
+        self.search_open = true;
+        self.search = Some(SearchState {
+            query: String::new(),
+            rows: Vec::new(),
+            scope: 0,
+            scope_cursors: [0; 4],
+            generation: 0,
+            loading: false,
+            typing,
+        });
+    }
+
     fn on_search(&mut self, _: &Search, _window: &mut Window, cx: &mut Context<Self>) {
-        if self.search.is_none() {
+        self.open_search(true);
+        cx.notify();
+    }
+
+    fn on_insert_mode(&mut self, _: &InsertMode, _window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(search) = self.search.as_mut() {
+            search.typing = true;
             self.search_open = true;
-            self.search = Some(SearchState {
-                query: String::new(),
-                rows: Vec::new(),
-                scope: 0,
-                scope_cursors: [0; 4],
-                generation: 0,
-                loading: false,
-            });
+        } else {
+            self.open_search(true);
         }
+        cx.notify();
+    }
+
+    fn on_home(&mut self, _: &Home, _window: &mut Window, cx: &mut Context<Self>) {
+        self.line_search.close();
+        self.line_search_anim.target(0.0, anim::STANDARD_MS, anim::Curve::Accelerate, &self.clock);
+        self.alt.cancel();
+        self.alt_menu = None;
+        self.alt_target = None;
+        self.alt_spawn.target(0.0, anim::EMPHASIZED_MS, anim::Curve::Accelerate, &self.clock);
+        self.search_open = false;
+        self.search = None;
+        self.queue_open = false;
+        self.fullscreen = false;
+        self.lyrics_overlay = false;
+        self.description = None;
+        self.page = None;
+        self.travel = Travel::default();
+        self.view.selection.clear();
         cx.notify();
     }
 
@@ -1611,51 +1737,594 @@ impl AppRoot {
         cx.notify();
     }
 
+    fn alt_menu_for_row(&self, row: &Row) -> QuickMenu {
+        match row.kind {
+            RowKind::Song => QuickMenu::song_with(row.starred),
+            RowKind::Album => QuickMenu::album_with(
+                !row.album_id.is_empty() && self.marks.albums_done.contains(&row.album_id),
+                row.starred,
+                row.rating.clamp(0, 5) as u8,
+            ),
+            RowKind::Artist => QuickMenu::artist_with(row.starred, row.rating.clamp(0, 5) as u8),
+            RowKind::Playlist => QuickMenu::playlist(),
+        }
+    }
+
+    fn alt_target_for_row(&self, row: &Row) -> AltTarget {
+        AltTarget {
+            kind: row.kind,
+            id: row.id.clone(),
+            album_id: row.album_id.clone(),
+            song_id: row.song_id.clone(),
+            playlist_id: if row.kind == RowKind::Playlist {
+                row.id.clone()
+            } else {
+                String::new()
+            },
+        }
+    }
+
+    fn alt_anchor_for(
+        &self,
+        handle: &UniformListScrollHandle,
+        index: usize,
+        row_h: f32,
+    ) -> (f32, f32) {
+        let state = handle.0.borrow();
+        let bounds = state.base_handle.bounds();
+        let offset = state.base_handle.offset();
+        let x = f32::from(bounds.origin.x) + f32::from(bounds.size.width) * 0.5;
+        let y = f32::from(bounds.origin.y)
+            + index as f32 * row_h
+            + f32::from(offset.y)
+            + row_h * 0.5;
+        (
+            x.clamp(30.0, (self.win_w - 30.0).max(30.0)),
+            y.clamp(30.0, (self.win_h - 30.0).max(30.0)),
+        )
+    }
+
+    fn alt_snapshot(&self) -> Option<(QuickMenu, AltTarget, (f32, f32))> {
+        if self.fullscreen {
+            let track = self.player.current()?;
+            let menu = QuickMenu::song_with(track.favorite);
+            let target = AltTarget {
+                kind: RowKind::Song,
+                id: track.id.clone(),
+                album_id: track.album_id.clone(),
+                song_id: track.id.clone(),
+                playlist_id: String::new(),
+            };
+            return Some((menu, target, (self.win_w * 0.5, self.win_h * 0.5)));
+        }
+        if let Some(search) = self.search.as_ref().filter(|_| self.search_open) {
+            let scoped = search.scoped();
+            let row = scoped.get(search.cursor())?;
+            return Some((
+                self.alt_menu_for_row(row),
+                self.alt_target_for_row(row),
+                (self.win_w * 0.5, self.win_h * 0.5),
+            ));
+        }
+        if self.queue_open {
+            let queue = self.player.queue_snapshot();
+            let track = queue.get(self.queue_cursor)?;
+            let menu = QuickMenu::song_with(track.favorite);
+            let target = AltTarget {
+                kind: RowKind::Song,
+                id: track.id.clone(),
+                album_id: track.album_id.clone(),
+                song_id: track.id.clone(),
+                playlist_id: String::new(),
+            };
+            return Some((
+                menu,
+                target,
+                self.alt_anchor_for(&self.queue_scroll, self.queue_cursor, self.queue_row_h),
+            ));
+        }
+        if let Some(page) = self.page.as_ref() {
+            let row = page.rows.get(page.cursor)?;
+            return Some((
+                self.alt_menu_for_row(row),
+                self.alt_target_for_row(row),
+                self.alt_anchor_for(&self.page_scroll, page.cursor, self.page_row_h),
+            ));
+        }
+        let row = self.view.rows.get(self.view.cursor)?;
+        Some((
+            self.alt_menu_for_row(row),
+            self.alt_target_for_row(row),
+            self.alt_anchor_for(&self.scroll, self.view.cursor, self.library_row_h),
+        ))
+    }
+
+    fn alt_arm(&mut self) {
+        if self.login.is_some() || self.line_search.open {
+            return;
+        }
+        let Some((menu, target, anchor)) = self.alt_snapshot() else {
+            return;
+        };
+        if !self.alt.arm(&menu) {
+            return;
+        }
+        if let Some(search) = self.search.as_mut()
+            && search.typing
+        {
+            self.alt_was_typing = true;
+            search.typing = false;
+        }
+        self.alt_menu = Some(menu);
+        self.alt_target = Some(target);
+        self.alt_anchor = Some(anchor);
+        self.alt_spawn.target(1.0, anim::EMPHASIZED_MS, anim::Curve::OutBack, &self.clock);
+    }
+
+    fn alt_release(&mut self) {
+        if self.alt_was_typing {
+            if let Some(search) = self.search.as_mut() {
+                search.typing = true;
+            }
+            self.alt_was_typing = false;
+        }
+        if self.alt.armed {
+            let menu = self.alt_menu.clone();
+            if let Some(menu) = menu
+                && self.alt.release_hold()
+            {
+                if let Some(verb) = self.alt.confirm_plan(&menu) {
+                    self.dispatch_quick(verb);
+                }
+                if let Some(verb) = self.alt.commit_rating(&menu) {
+                    self.dispatch_quick(verb);
+                }
+            }
+            self.alt.cancel();
+        }
+        self.alt_spawn.target(0.0, anim::EMPHASIZED_MS, anim::Curve::Accelerate, &self.clock);
+    }
+
+    fn dispatch_quick(&mut self, verb: QuickVerb) {
+        let Some(target) = self.alt_target.clone() else { return };
+        match verb {
+            QuickVerb::AddToQueue => {
+                self.bridge.quick_queue_add(target.queue_kind().to_string(), target.id.clone());
+            }
+            QuickVerb::StartRadio => {
+                self.bridge.quick_radio(target.queue_kind().to_string(), target.id.clone());
+            }
+            QuickVerb::Favorite { on } => {
+                self.bridge
+                    .quick_favorite(target.queue_kind().to_string(), target.id.clone(), on);
+            }
+            QuickVerb::RateAlbum { level } => {
+                self.bridge.quick_rate("album".to_string(), target.id.clone(), level);
+            }
+            QuickVerb::RateArtist { level } => {
+                self.bridge.quick_rate("artist".to_string(), target.id.clone(), level);
+            }
+            QuickVerb::GoToAlbum => {
+                self.bridge.quick_go_album(target.song_id.clone());
+            }
+            QuickVerb::GoToArtist => {
+                self.bridge.quick_go_artist(target.album_id.clone());
+            }
+            QuickVerb::PlayPlaylist => {
+                self.bridge.quick_play_playlist(target.playlist_id.clone());
+            }
+            QuickVerb::Download { .. } => {
+                self.push_toast(
+                    "Download actions are not wired yet".to_string(),
+                    ToastKind::Error,
+                    None,
+                );
+            }
+        }
+    }
+
+    fn on_modifiers_changed(
+        &mut self,
+        event: &gpui::ModifiersChangedEvent,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let alt = event.modifiers.alt;
+        if alt && !self.alt_held {
+            self.alt_held = true;
+            self.alt_arm();
+        } else if !alt && self.alt_held {
+            self.alt_held = false;
+            self.alt_release();
+        }
+        cx.notify();
+    }
+
+    fn on_alt_key(&mut self, event: &gpui::KeyDownEvent, cx: &mut Context<Self>) {
+        let key = event.keystroke.key.as_str();
+        let shift = event.keystroke.modifiers.shift;
+        match key {
+            "escape" => {
+                self.alt.dismiss();
+                self.alt_menu = None;
+                self.alt_spawn.target(0.0, anim::EMPHASIZED_MS, anim::Curve::Accelerate, &self.clock);
+            }
+            "h" if shift => {
+                if let Some(menu) = self.alt_menu.clone() {
+                    self.alt.cycle(-1, &menu);
+                }
+            }
+            "l" if shift => {
+                if let Some(menu) = self.alt_menu.clone() {
+                    self.alt.cycle(1, &menu);
+                }
+            }
+            "h" | "left" => {
+                if let Some(menu) = self.alt_menu.clone() {
+                    self.alt.aim(Direction::West, &menu, false);
+                }
+            }
+            "j" | "down" => {
+                if let Some(menu) = self.alt_menu.clone() {
+                    self.alt.aim(Direction::South, &menu, false);
+                }
+            }
+            "k" | "up" => {
+                if let Some(menu) = self.alt_menu.clone() {
+                    self.alt.aim(Direction::North, &menu, false);
+                }
+            }
+            "l" | "right" => {
+                if let Some(menu) = self.alt_menu.clone() {
+                    self.alt.aim(Direction::East, &menu, false);
+                }
+            }
+            _ => {}
+        }
+        cx.notify();
+    }
+
+    fn apply_line_hit(&mut self, hit: line_search::LineHit) {
+        if self.fullscreen {
+            return;
+        }
+        if self.search.as_ref().is_some() {
+            if let Some(search) = self.search.as_mut() {
+                search.scope_cursors[search.scope] = hit.row;
+            }
+        } else if self.queue_open {
+            self.queue_cursor = hit.row.min(self.player.len().saturating_sub(1));
+            self.follow_queue(true);
+        } else if let Some(page) = self.page.as_mut() {
+            page.select(hit.row);
+            self.follow_page(true);
+        } else {
+            self.select(hit.row);
+        }
+    }
+
+    fn line_search_key(&mut self, event: &gpui::KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
+        let key = event.keystroke.key.as_str();
+        let control = event.keystroke.modifiers.control;
+        let modified = control || event.keystroke.modifiers.alt || event.keystroke.modifiers.platform;
+        match key {
+            "escape" => {
+                self.line_search.close();
+                self.line_search_anim.target(0.0, anim::STANDARD_MS, anim::Curve::Accelerate, &self.clock);
+                cx.notify();
+                return;
+            }
+            "enter" => {
+                let hit = self.line_search.current_hit();
+                if let Some(hit) = hit {
+                    self.apply_line_hit(hit);
+                    self.line_search.close();
+                    self.line_search_anim.target(0.0, anim::STANDARD_MS, anim::Curve::Accelerate, &self.clock);
+                    self.on_enter(&Enter, window, cx);
+                } else if self.line_search.query.is_empty() {
+                    self.line_search.close();
+                    self.line_search_anim.target(0.0, anim::STANDARD_MS, anim::Curve::Accelerate, &self.clock);
+                }
+                cx.notify();
+                return;
+            }
+            "tab" => {
+                self.line_search.step(1);
+                if let Some(hit) = self.line_search.current_hit() {
+                    self.apply_line_hit(hit);
+                }
+                cx.notify();
+                return;
+            }
+            "backtab" => {
+                self.line_search.step(-1);
+                if let Some(hit) = self.line_search.current_hit() {
+                    self.apply_line_hit(hit);
+                }
+                cx.notify();
+                return;
+            }
+            "up" | "ctrl-p" => {
+                self.line_search.step(-1);
+                if let Some(hit) = self.line_search.current_hit() {
+                    self.apply_line_hit(hit);
+                }
+                cx.notify();
+                return;
+            }
+            "down" | "ctrl-n" => {
+                self.line_search.step(1);
+                if let Some(hit) = self.line_search.current_hit() {
+                    self.apply_line_hit(hit);
+                }
+                cx.notify();
+                return;
+            }
+            "backspace" => {
+                self.line_search.query.pop();
+            }
+            "w" if control => {
+                line_search::delete_word_back(&mut self.line_search.query);
+            }
+            _ if !modified => {
+                if let Some(text) = event.keystroke.key_char.as_ref()
+                    && !text.chars().any(char::is_control)
+                {
+                    self.line_search.query.push_str(text);
+                } else if key == "space" {
+                    self.line_search.query.push(' ');
+                } else {
+                    return;
+                }
+            }
+            _ => return,
+        }
+        let targets = self.line_search_targets();
+        let query = self.line_search.query.clone();
+        self.line_search.set_query(&query, &targets);
+        if let Some(hit) = self.line_search.current_hit() {
+            self.apply_line_hit(hit);
+        }
+        cx.notify();
+    }
+
+    fn activate_search_result(&mut self, cx: &mut Context<Self>) {
+        let row = self
+            .search
+            .as_ref()
+            .and_then(|search| search.scoped().get(search.cursor()).cloned().cloned());
+        if let Some(row) = row {
+            self.search_open = false;
+            self.search = None;
+            self.open_row_page(&row);
+        }
+        cx.notify();
+    }
+
+    fn search_edited(&mut self) {
+        let Some(search) = self.search.as_ref() else { return };
+        let query = search.query.clone();
+        if query.is_empty() {
+            if let Some(search) = self.search.as_mut() {
+                search.rows.clear();
+                search.loading = false;
+            }
+        } else {
+            if let Some(search) = self.search.as_mut() {
+                search.generation = search.generation.wrapping_add(1);
+                search.loading = true;
+            }
+            self.bridge.search(query);
+        }
+    }
+
+    fn toggle_description(&mut self) {
+        if self.description.is_some() {
+            self.description = None;
+            return;
+        }
+        let Some(page) = self.page.as_ref() else { return };
+        let notes = self
+            .notes
+            .as_ref()
+            .filter(|(id, _)| *id == page.descriptor.id)
+            .map(|(_, notes)| notes.clone())
+            .unwrap_or_default();
+        if notes.is_empty() {
+            return;
+        }
+        self.description = Some(DescriptionState {
+            title: page.header.title.clone(),
+            subtitle: page.header.subtitle.clone(),
+            body: notes,
+        });
+    }
+
+    fn on_lyrics_overlay(&mut self, _: &LyricsOverlay, _window: &mut Window, cx: &mut Context<Self>) {
+        if self.fullscreen {
+            if self.lyrics.as_ref().is_some_and(|lyrics| !lyrics.lines.is_empty()) {
+                self.lyrics_overlay = !self.lyrics_overlay;
+            }
+        } else if self.page.as_ref().is_some_and(|page| {
+            self.notes.as_ref().is_some_and(|(id, notes)| *id == page.descriptor.id && !notes.is_empty())
+        }) {
+            self.toggle_description();
+        }
+        cx.notify();
+    }
+
+    fn line_search_targets(&self) -> Vec<line_search::LineTarget> {
+        use line_search::{LineRow, LineTarget};
+        let mut targets = Vec::new();
+        if self.fullscreen {
+            if let Some(lyrics) = self.lyrics.as_ref() {
+                targets.push(LineTarget::new(lyrics.lines.iter().map(|(_, line)| Some(LineRow::new(line.clone(), String::new(), String::new()))).collect()));
+            }
+            return targets;
+        }
+        if let Some(search) = self.search.as_ref() {
+            targets.push(LineTarget::new(search.rows.iter().map(|row| Some(LineRow::new(row.title.clone(), row.subtitle.clone(), row.meta.clone()))).collect()));
+            return targets;
+        }
+        if self.queue_open {
+            let queue = self.player.queue_snapshot();
+            targets.push(LineTarget::new(queue.iter().map(|track| Some(LineRow::new(track.title.clone(), track.artist.clone(), String::new()))).collect()));
+            return targets;
+        }
+        if let Some(page) = self.page.as_ref() {
+            targets.push(LineTarget::new(page.rows.iter().map(|row| Some(LineRow::new(row.title.clone(), row.subtitle.clone(), row.meta.clone()))).collect()));
+            return targets;
+        }
+        let rows = self.view.rows.count;
+        let mut lines = vec![None; rows];
+        for (offset, row) in self.view.rows.live.iter().enumerate() {
+            let index = self.view.rows.live_start + offset;
+            if index < rows {
+                lines[index] = Some(LineRow::new(row.title.clone(), row.subtitle.clone(), row.meta.clone()));
+            }
+        }
+        targets.push(LineTarget::new(lines));
+        targets
+    }
+
+    fn line_search_edited(&mut self) {
+        let targets = self.line_search_targets();
+        let query = self.line_search.query.clone();
+        self.line_search.set_query(&query, &targets);
+    }
+
+    fn on_line_search(&mut self, _: &LineSearch, _window: &mut Window, cx: &mut Context<Self>) {
+        self.line_search.open();
+        let targets = self.line_search_targets();
+        self.line_search.set_query("", &targets);
+        self.line_search_anim.target(1.0, anim::STANDARD_MS, anim::Curve::Decelerate, &self.clock);
+        cx.notify();
+    }
+
     fn on_key_down(&mut self, event: &gpui::KeyDownEvent, _window: &mut Window, cx: &mut Context<Self>) {
         if self.login.is_some() {
             cx.stop_propagation();
             self.login_key(event, cx);
             return;
         }
-        if self.search.is_none() || !self.search_open {
+        if self.line_search.open {
+            cx.stop_propagation();
+            self.line_search_key(event, _window, cx);
             return;
         }
+        if self.alt_held || self.alt.armed {
+            cx.stop_propagation();
+            self.on_alt_key(event, cx);
+            return;
+        }
+        if self.search.is_none() || !self.search_open {
+            if event.keystroke.key == "escape" {
+                self.on_back(&Back, _window, cx);
+            }
+            return;
+        }
+        let Some(search) = self.search.as_ref() else { return };
         cx.stop_propagation();
-        let Some(search) = self.search.as_mut() else { return };
         let key = event.keystroke.key.as_str();
-        let modified = event.keystroke.modifiers.control
+        let control = event.keystroke.modifiers.control;
+        let modified = control
             || event.keystroke.modifiers.alt
             || event.keystroke.modifiers.platform;
+        if !search.typing {
+            match key {
+                "escape" => {
+                    self.search_open = false;
+                    cx.notify();
+                }
+                "i" => {
+                    if let Some(search) = self.search.as_mut() {
+                        search.typing = true;
+                    }
+                    cx.notify();
+                }
+                "enter" => self.activate_search_result(cx),
+                "tab" | "l" | "right" => {
+                    self.on_search_scope_next(&SearchScopeNext, _window, cx);
+                }
+                "backtab" | "h" | "left" => {
+                    self.on_search_scope_prev(&SearchScopePrev, _window, cx);
+                }
+                "j" | "down" | "ctrl-n" => {
+                    if let Some(search) = self.search.as_mut() {
+                        search.move_cursor(1);
+                    }
+                    cx.notify();
+                }
+                "k" | "up" | "ctrl-p" => {
+                    if let Some(search) = self.search.as_mut() {
+                        search.move_cursor(-1);
+                    }
+                    cx.notify();
+                }
+                "g" => {
+                    if let Some(search) = self.search.as_mut() {
+                        search.scope_cursors[search.scope] = 0;
+                    }
+                    cx.notify();
+                }
+                _ => {}
+            }
+            return;
+        }
         match key {
             "escape" => {
-                self.search_open = false;
+                if let Some(search) = self.search.as_mut() {
+                    search.typing = false;
+                }
                 cx.notify();
                 return;
             }
             "enter" => {
-                let row = search.scoped().get(search.cursor()).cloned().cloned();
-                if let Some(row) = row {
-                    self.search_open = false;
-                    self.search = None;
-                    self.open_row_page(&row);
+                self.activate_search_result(cx);
+                return;
+            }
+            "tab" => {
+                self.on_search_scope_next(&SearchScopeNext, _window, cx);
+                return;
+            }
+            "backtab" => {
+                self.on_search_scope_prev(&SearchScopePrev, _window, cx);
+                return;
+            }
+            "up" | "ctrl-p" => {
+                if let Some(search) = self.search.as_mut() {
+                    search.move_cursor(-1);
+                }
+                cx.notify();
+                return;
+            }
+            "down" | "ctrl-n" => {
+                if let Some(search) = self.search.as_mut() {
+                    search.move_cursor(1);
                 }
                 cx.notify();
                 return;
             }
             "backspace" => {
-                search.query.pop();
+                if let Some(search) = self.search.as_mut() {
+                    search.query.pop();
+                }
             }
-            "up" | "ctrl-p" => {
-                search.move_cursor(-1);
-                cx.notify();
+            "w" if control => {
+                if let Some(search) = self.search.as_mut() {
+                    delete_word_back(&mut search.query);
+                }
+            }
+            "h" if control => {
+                self.on_search_scope_prev(&SearchScopePrev, _window, cx);
                 return;
             }
-            "down" | "ctrl-n" => {
-                search.move_cursor(1);
-                cx.notify();
+            "l" if control => {
+                self.on_search_scope_next(&SearchScopeNext, _window, cx);
                 return;
             }
             _ if !modified => {
+                let Some(search) = self.search.as_mut() else { return };
                 if let Some(text) = event.keystroke.key_char.as_ref()
                     && !text.chars().any(char::is_control)
                 {
@@ -1668,14 +2337,7 @@ impl AppRoot {
             }
             _ => return,
         }
-        if search.query.is_empty() {
-            search.rows.clear();
-            search.loading = false;
-        } else {
-            search.generation = search.generation.wrapping_add(1);
-            search.loading = true;
-            self.bridge.search(search.query.clone());
-        }
+        self.search_edited();
         cx.notify();
     }
 
@@ -1777,6 +2439,22 @@ impl AppRoot {
     }
 
     fn on_back(&mut self, _: &Back, _window: &mut Window, cx: &mut Context<Self>) {
+        if self.line_search.open {
+            self.line_search.close();
+            self.line_search_anim.target(0.0, anim::STANDARD_MS, anim::Curve::Accelerate, &self.clock);
+            cx.notify();
+            return;
+        }
+        if self.description.is_some() {
+            self.description = None;
+            cx.notify();
+            return;
+        }
+        if self.lyrics_overlay {
+            self.lyrics_overlay = false;
+            cx.notify();
+            return;
+        }
         if self.fullscreen || self.fullscreen_anim.value(&self.clock) > 0.01 {
             self.fullscreen = false;
             cx.notify();
@@ -2264,6 +2942,202 @@ impl AppRoot {
         .map(|overlay| overlay.into_any_element())
     }
 
+    fn alt_overlay(&self, progress: f32) -> gpui::AnyElement {
+        let (Some(menu), Some((ax, ay))) = (self.alt_menu.as_ref(), self.alt_anchor) else {
+            return div().into_any_element();
+        };
+        let side = 54.0 * (0.65 + 0.35 * progress);
+        let gap = 72.0;
+        let mut overlay = div().absolute().inset_0().size_full();
+        for direction in Direction::ALL {
+            let Some(slot) = menu.slot(direction) else { continue };
+            let aimed = self.alt.aimed == Some(direction);
+            let (cx, cy) = match direction {
+                Direction::North => (ax, ay - gap),
+                Direction::South => (ax, ay + gap),
+                Direction::West => (ax - gap, ay),
+                Direction::East => (ax + gap, ay),
+            };
+            let size = if aimed { side * 1.30 } else { side };
+            let index = self.alt.action_index[direction.index()];
+            let label = slot.active_label(index).to_string();
+            let icon_name = slot.active_icon(index).to_string();
+            let disabled = slot.disabled;
+            let bg = if disabled {
+                0x1D1B20
+            } else if aimed {
+                0x4F378B
+            } else {
+                0x2B2930
+            };
+            let fg = if disabled {
+                0x49454F
+            } else if aimed {
+                0xEADDFF
+            } else {
+                0xCAC4D0
+            };
+            let mut tile = div()
+                .absolute()
+                .left(px(cx - size * 0.5))
+                .top(px(cy - size * 0.5))
+                .w(px(size))
+                .h(px(size))
+                .rounded_md()
+                .border_1()
+                .border_color(rgb(if aimed { PRIMARY } else { OUTLINE }))
+                .bg(rgb(bg))
+                .opacity(progress)
+                .flex()
+                .items_center()
+                .justify_center();
+            if icon_name.is_empty() {
+                tile = tile.child(
+                    div()
+                        .text_size(px(16.0))
+                        .text_color(rgb(fg))
+                        .child(label),
+                );
+            } else {
+                tile = tile.child(icon(&icon_name, size * 0.46, fg));
+            }
+            if direction == Direction::South && slot.is_rating_slot() {
+                tile = tile.child(
+                    div()
+                        .absolute()
+                        .right(px(4.0))
+                        .bottom(px(3.0))
+                        .text_size(px(10.0))
+                        .text_color(rgb(PRIMARY))
+                        .child(self.alt.rating_value.to_string()),
+                );
+            }
+            overlay = overlay.child(tile);
+        }
+        overlay.into_any_element()
+    }
+
+    fn line_search_overlay(&self, progress: f32) -> gpui::Div {
+        let counter = match (self.line_search.current_hit(), self.line_search.candidates.len()) {
+            (Some(_), count) if count > 0 => {
+                format!("[{}/{}]", self.line_search.index.unwrap_or(0) + 1, count)
+            }
+            _ => String::new(),
+        };
+        div()
+            .absolute()
+            .inset_0()
+            .size_full()
+            .bg(gpui::black().opacity(0.50 * progress))
+            .child(
+                div()
+                    .absolute()
+                    .left_0()
+                    .right_0()
+                    .bottom(px(-(1.0 - progress) * 96.0))
+                    .h(relative(0.07))
+                    .bg(rgb(SURFACE))
+                    .border_t_1()
+                    .border_color(rgb(PRIMARY))
+                    .px_4()
+                    .flex()
+                    .items_center()
+                    .gap_3()
+                    .child(
+                        div()
+                            .text_size(px(16.0))
+                            .font_weight(gpui::FontWeight::BOLD)
+                            .text_color(rgb(PRIMARY))
+                            .child("/"),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .overflow_hidden()
+                            .whitespace_nowrap()
+                            .text_ellipsis()
+                            .text_size(px(16.0))
+                            .text_color(rgb(ON_SURFACE))
+                            .child(self.line_search.query.clone()),
+                    )
+                    .child(
+                        div()
+                            .text_size(px(11.0))
+                            .text_color(rgb(ON_VARIANT))
+                            .child(if counter.is_empty() {
+                                "Tab cycle · Enter jump · Esc close".to_string()
+                            } else {
+                                counter
+                            }),
+                    ),
+            )
+    }
+
+    fn lyrics_overlay_element(&self) -> gpui::AnyElement {
+        if !self.lyrics_overlay {
+            return div().into_any_element();
+        }
+        let Some(lyrics) = self.lyrics.as_ref() else {
+            return div().into_any_element();
+        };
+        let position = self.player.position();
+        let active = if lyrics.synced {
+            let ms = (position * 1000.0) as i64;
+            lyrics
+                .lines
+                .iter()
+                .rposition(|(start, _)| start.is_some_and(|start| start <= ms))
+                .unwrap_or(0)
+        } else {
+            0
+        };
+        let start = active.saturating_sub(6);
+        let end = (active + 12).min(lyrics.lines.len());
+        div()
+            .absolute()
+            .inset_0()
+            .size_full()
+            .flex()
+            .items_center()
+            .justify_center()
+            .bg(gpui::black().opacity(0.35))
+            .child(
+                div()
+                    .w(relative(0.72))
+                    .max_w(px(720.0))
+                    .h_full()
+                    .px_4()
+                    .py_3()
+                    .flex()
+                    .flex_col()
+                    .items_center()
+                    .justify_center()
+                    .gap_1()
+                    .child(
+                        div()
+                            .text_size(px(10.0))
+                            .text_color(rgb(ON_VARIANT))
+                            .child(format!("Lyrics · {} · ? closes", lyrics.source)),
+                    )
+                    .children(lyrics.lines[start..end].iter().enumerate().map(|(offset, (_, text))| {
+                        let index = start + offset;
+                        let is_active = index == active;
+                        div()
+                            .w_full()
+                            .min_w_0()
+                            .overflow_hidden()
+                            .text_size(px(if is_active { 18.0 } else { 14.0 }))
+                            .text_color(rgb(if is_active { ON_SURFACE } else { ON_VARIANT }))
+                            .text_center()
+                            .whitespace_normal()
+                            .when(is_active, |this| this.font_weight(gpui::FontWeight::SEMIBOLD))
+                            .child(text.clone())
+                    })),
+            )
+            .into_any_element()
+    }
+
     fn fullscreen_overlay(&self, progress: f32) -> gpui::Div {
         let track = self.player.current().cloned();
         let (title, artist, cover) = match &track {
@@ -2578,8 +3452,10 @@ impl AppRoot {
     fn search_overlay(&self, cx: &Context<Self>, search: &SearchState, progress: f32) -> gpui::Div {
         let query = if search.query.is_empty() {
             "Search artists, albums, songs".to_string()
-        } else {
+        } else if search.typing {
             format!("{}▌", search.query)
+        } else {
+            search.query.clone()
         };
         let results = search
             .scoped()
@@ -2659,6 +3535,7 @@ impl AppRoot {
             .opacity(progress)
             .child(
                 div()
+                    .mt(px((1.0 - progress) * 24.0))
                     .w(relative(0.69))
                     .h(relative(0.72))
                     .rounded_md()
@@ -2728,7 +3605,11 @@ impl AppRoot {
                             .text_color(rgb(ON_VARIANT))
                             .text_center()
                             .whitespace_normal()
-                            .child("Type to filter · Ctrl-H/L or Tab scope · ↑/↓ rows ·\nEnter open/play · Esc normal mode"),
+                            .child(if search.typing {
+                                "Type to filter · Ctrl-H/L or Tab scope · ↑/↓ rows ·\nEnter open/play · Esc normal mode"
+                            } else {
+                                "Shift-H/L or Tab scope · j/k rows · i type · Enter open/play · Esc close"
+                            }),
                     ),
             )
     }
@@ -3182,6 +4063,8 @@ impl AppRoot {
 impl Render for AppRoot {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.frames = self.frames.wrapping_add(1);
+        self.win_w = f32::from(window.viewport_size().width);
+        self.win_h = f32::from(window.viewport_size().height);
         if self.trace && self.frames.is_multiple_of(120) {
             crate::debug_log!("GPUI trace: frame {}", self.frames);
         }
@@ -3215,6 +4098,32 @@ impl Render for AppRoot {
         if self.search.is_some() && !self.search_anim.settled(&self.clock) {
             window.request_animation_frame();
         }
+        let line_progress = self.line_search_anim.target(
+            if self.line_search.open { 1.0 } else { 0.0 },
+            anim::STANDARD_MS,
+            if self.line_search.open { anim::Curve::Decelerate } else { anim::Curve::Accelerate },
+            &self.clock,
+        );
+        if !self.line_search_anim.settled(&self.clock) {
+            window.request_animation_frame();
+        }
+        let line_overlay = (self.line_search.open || line_progress > 0.001)
+            .then(|| self.line_search_overlay(line_progress));
+        let alt_progress = self.alt_spawn.target(
+            if self.alt.armed { 1.0 } else { 0.0 },
+            anim::EMPHASIZED_MS,
+            if self.alt.armed { anim::Curve::OutBack } else { anim::Curve::Accelerate },
+            &self.clock,
+        );
+        if !self.alt_spawn.settled(&self.clock) {
+            window.request_animation_frame();
+        }
+        if !self.alt.armed && alt_progress <= 0.001 {
+            self.alt_menu = None;
+            self.alt_target = None;
+        }
+        let alt_overlay = (self.alt.armed || alt_progress > 0.001)
+            .then(|| self.alt_overlay(alt_progress));
         let queue_progress = self.queue_anim.target(
             if self.queue_open { 1.0 } else { 0.0 },
             anim::EMPHASIZED_MS,
@@ -3327,6 +4236,10 @@ impl Render for AppRoot {
             .on_action(cx.listener(Self::on_enter))
             .on_action(cx.listener(Self::on_visual))
             .on_action(cx.listener(Self::on_search))
+            .on_action(cx.listener(Self::on_insert_mode))
+            .on_action(cx.listener(Self::on_line_search))
+            .on_action(cx.listener(Self::on_lyrics_overlay))
+            .on_action(cx.listener(Self::on_home))
             .on_action(cx.listener(Self::on_search_scope_next))
             .on_action(cx.listener(Self::on_search_scope_prev))
             .on_action(cx.listener(Self::on_play_pause))
@@ -3346,6 +4259,7 @@ impl Render for AppRoot {
             .on_action(cx.listener(Self::on_search_next))
             .on_action(cx.listener(Self::on_search_prev))
             .on_key_down(cx.listener(Self::on_key_down))
+            .on_modifiers_changed(cx.listener(Self::on_modifiers_changed))
             .on_action(cx.listener(Self::on_visual_all))
             .on_action(cx.listener(Self::on_page_down))
             .on_action(cx.listener(Self::on_page_up))
@@ -3364,7 +4278,10 @@ impl Render for AppRoot {
             .child(match queue_overlay { Some(o) => o.into_any_element(), None => div().into_any_element() })
             .child(match overlay { Some(o) => o.into_any_element(), None => div().into_any_element() })
             .child(match fullscreen_overlay { Some(o) => o.into_any_element(), None => div().into_any_element() })
+            .child(self.lyrics_overlay_element())
             .child(match description_overlay { Some(o) => o.into_any_element(), None => div().into_any_element() })
+            .child(match alt_overlay { Some(o) => o, None => div().into_any_element() })
+            .child(match line_overlay { Some(o) => o.into_any_element(), None => div().into_any_element() })
             .child(match toast_overlay { Some(o) => o.into_any_element(), None => div().into_any_element() })
             .child(match exit_overlay { Some(o) => o.into_any_element(), None => div().into_any_element() })
             .into_any_element()
@@ -3434,6 +4351,18 @@ fn page_key(descriptor: &PageDescriptor) -> String {
         PageKind::Playlist => "playlist",
     };
     format!("{kind}:{}", descriptor.id)
+}
+
+fn delete_word_back(text: &mut String) {
+    let mut end = text.len();
+    let bytes = text.as_bytes();
+    while end > 0 && bytes[end - 1].is_ascii_whitespace() {
+        end -= 1;
+    }
+    while end > 0 && !bytes[end - 1].is_ascii_whitespace() {
+        end -= 1;
+    }
+    text.truncate(end);
 }
 
 fn format_time(seconds: f64) -> String {

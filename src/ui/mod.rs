@@ -1992,14 +1992,14 @@ impl AppRoot {
             .relative()
             .flex_none()
             .w_full()
-            .h(px(520.0))
+            .h(px(220.0))
             .px(px(12.0))
             .child(
                 div()
                     .absolute()
                     .right(px(16.0))
                     .top(px(48.0))
-                    .child(art(cover, 360.0)),
+                    .child(art(cover, 380.0)),
             )
             .child(
                 div()
@@ -2080,25 +2080,16 @@ impl AppRoot {
         let count = page.rows.len();
         let scroll = self.page_scroll.clone();
         div()
-            .relative()
+            .flex()
+            .flex_col()
             .flex_1()
             .w_full()
+            .child(header)
+            .child(div().h(px(20.0)))
             .child(
                 div()
-                    .absolute()
-                    .top_0()
-                    .left_0()
-                    .right_0()
-                    .h(px(520.0))
-                    .child(header),
-            )
-            .child(
-                div()
-                    .absolute()
-                    .top(px(560.0))
-                    .left_0()
-                    .right_0()
-                    .bottom_0()
+                    .flex_1()
+                    .w_full()
                     .child(
                         uniform_list("page-rows", count, cx.processor(move |this, range: std::ops::Range<usize>, _window, cx| {
                             let row_h = 36.0;

@@ -9,6 +9,15 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use tokio::sync::mpsc::UnboundedSender;
 
 pub enum Event {
+    LoginRequired {
+        offline_available: bool,
+    },
+    LoggedIn {
+        server_url: String,
+        username: String,
+        offline: bool,
+    },
+    AuthError(String),
     Library {
         generation: u64,
         scope: super::state::Scope,
@@ -54,11 +63,11 @@ impl Bridge {
             page_generation: AtomicU64::new(0),
             search_generation: AtomicU64::new(0),
         };
-        bridge.load_header();
+        bridge.refresh_header();
         bridge
     }
 
-    fn load_header(&self) {
+    pub fn refresh_header(&self) {
         let tx = self.tx.clone();
         crate::app::runtime().spawn(async move {
             let event = match crate::app::dbs() {
@@ -74,7 +83,10 @@ impl Bridge {
                                 .unwrap_or((0, 0, 0)),
                         }
                     }
-                    Ok(None) => Event::Error("No saved account yet".to_string()),
+                    Ok(None) => {
+                        let offline_available = crate::auth::downloaded_available().await;
+                        return send_event(&tx, Event::LoginRequired { offline_available });
+                    }
                     Err(err) => Event::Error(format!("Could not read credentials: {err:#}")),
                 },
                 None => Event::Error("The library is not initialised".to_string()),
@@ -104,7 +116,7 @@ impl Bridge {
                 }
                 Err(err) => Event::Error(format!("Page load failed: {err:#}")),
             };
-            let _ = tx.send(event);
+            send_event(&tx, event);
         });
     }
 
@@ -119,6 +131,45 @@ impl Bridge {
                 Err(err) => Event::Error(format!("Playback failed: {err:#}")),
             };
             let _ = tx.send(event);
+        });
+    }
+
+    pub fn login(&self, server_url: String, username: String, password: String) {
+        let tx = self.tx.clone();
+        crate::app::runtime().spawn(async move {
+            let event = match crate::auth::login(&server_url, &username, &password).await {
+                Ok(account) => {
+                    crate::debug_log!(
+                        "GPUI: logged in as {} @ {} ({})",
+                        account.username,
+                        account.server_url,
+                        account.server_type
+                    );
+                    Event::LoggedIn {
+                        server_url: account.server_url,
+                        username: account.username,
+                        offline: false,
+                    }
+                }
+                Err(err) => Event::AuthError(format!("{err:#}")),
+            };
+            send_event(&tx, event);
+        });
+    }
+
+    pub fn offline_login(&self, server_url: String, username: String) {
+        let tx = self.tx.clone();
+        crate::app::runtime().spawn(async move {
+            let account = crate::auth::offline(&server_url, &username).await;
+            crate::debug_log!("GPUI: offline login as {} @ {}", account.username, account.server_url);
+            send_event(
+                &tx,
+                Event::LoggedIn {
+                    server_url: account.server_url,
+                    username: account.username,
+                    offline: true,
+                },
+            );
         });
     }
 
@@ -487,4 +538,8 @@ async fn queue_for_song(
     let (json, start) = crate::queue::library_queue_payload(&dbs, song_id, order, false).await?;
     let tracks = serde_json::from_str::<Vec<crate::player::Track>>(&json)?;
     Ok((tracks, start))
+}
+
+fn send_event(tx: &UnboundedSender<Event>, event: Event) {
+    let _ = tx.send(event);
 }

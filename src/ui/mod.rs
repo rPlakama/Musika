@@ -72,6 +72,7 @@ actions!(
         QueueRemove,
         QueueUp,
         QueueDown,
+        RepeatCycle,
     ]
 );
 
@@ -92,6 +93,7 @@ pub fn run() {
             KeyBinding::new("d d", QueueRemove, None),
             KeyBinding::new("ctrl-shift-k", QueueUp, None),
             KeyBinding::new("ctrl-shift-j", QueueDown, None),
+            KeyBinding::new("ctrl-r", RepeatCycle, None),
             KeyBinding::new("j", MoveDown, None),
             KeyBinding::new("k", MoveUp, None),
             KeyBinding::new("g g", Top, None),
@@ -162,6 +164,16 @@ struct SearchState {
     loading: bool,
 }
 
+struct LoginState {
+    server: String,
+    username: String,
+    password: String,
+    field: usize,
+    busy: bool,
+    error: Option<String>,
+    offline_available: bool,
+}
+
 struct AppRoot {
     focus: FocusHandle,
     bridge: bridge::Bridge,
@@ -185,6 +197,8 @@ struct AppRoot {
     queue_cursor: usize,
     queue_anim: anim::Behavior,
     queue_scroll: UniformListScrollHandle,
+    repeat: crate::player::Repeat,
+    login: Option<LoginState>,
 }
 
 impl AppRoot {
@@ -232,6 +246,8 @@ impl AppRoot {
             queue_cursor: 0,
             queue_anim: anim::Behavior::new(0.0),
             queue_scroll: UniformListScrollHandle::new(),
+            repeat: crate::player::Repeat::Off,
+            login: None,
         };
         if std::env::var_os("MUSIKA_GPUUI_QUEUE").is_some() {
             app.queue_open = true;
@@ -323,6 +339,38 @@ impl AppRoot {
                 page.cursor = page.cursor.min(page.rows.len().saturating_sub(1));
                 self.page_scroll
                     .scroll_to_item(page.cursor, ScrollStrategy::Center);
+            }
+            Event::LoginRequired { offline_available } => {
+                self.login = Some(LoginState {
+                    server: String::new(),
+                    username: String::new(),
+                    password: String::new(),
+                    field: 0,
+                    busy: false,
+                    error: None,
+                    offline_available,
+                });
+            }
+            Event::LoggedIn { server_url, username, offline } => {
+                self.login = None;
+                self.header = Some(Header {
+                    server_url: server_url.clone(),
+                    username: username.clone(),
+                    last_sync: None,
+                    counts: self.header.as_ref().map(|header| header.counts).unwrap_or((0, 0, 0)),
+                });
+                self.error = Some(if offline { "Offline mode".to_string() } else { "Logged in".to_string() });
+                self.reload();
+                if !offline {
+                    self.bridge.refresh_header();
+                }
+            }
+            Event::AuthError(message) => {
+                if let Some(login) = self.login.as_mut() {
+                    login.busy = false;
+                    login.error = Some(message.clone());
+                }
+                self.error = Some(message);
             }
             Event::Queue { tracks, start } => {
                 self.player.load(tracks, start);
@@ -463,6 +511,11 @@ impl AppRoot {
         cx.notify();
     }
 
+    fn on_repeat_cycle(&mut self, _: &RepeatCycle, _window: &mut Window, cx: &mut Context<Self>) {
+        self.repeat = self.player.cycle_repeat();
+        cx.notify();
+    }
+
     fn on_queue_toggle(&mut self, _: &QueueToggle, _window: &mut Window, cx: &mut Context<Self>) {
         self.queue_open = !self.queue_open;
         if self.queue_open {
@@ -497,6 +550,137 @@ impl AppRoot {
             self.queue_scroll.scroll_to_item(self.queue_cursor, ScrollStrategy::Center);
             cx.notify();
         }
+    }
+
+    fn login_key(&mut self, event: &gpui::KeyDownEvent, cx: &mut Context<Self>) {
+        let Some(login) = self.login.as_mut() else { return };
+        let key = event.keystroke.key.as_str();
+        let modified = event.keystroke.modifiers.control
+            || event.keystroke.modifiers.alt
+            || event.keystroke.modifiers.platform;
+        match key {
+            "tab" => login.field = (login.field + 1) % 3,
+            "backspace" => {
+                let text = match login.field {
+                    0 => &mut login.server,
+                    1 => &mut login.username,
+                    _ => &mut login.password,
+                };
+                text.pop();
+            }
+            "enter" => {
+                if login.server.trim().is_empty() || login.username.trim().is_empty() || login.password.is_empty() {
+                    login.error = Some("Server, username and password are all required.".to_string());
+                } else {
+                    login.busy = true;
+                    login.error = None;
+                    let (server, username, password) = (
+                        login.server.trim().to_string(),
+                        login.username.trim().to_string(),
+                        login.password.clone(),
+                    );
+                    self.bridge.login(server, username, password);
+                }
+            }
+            "f2" => {
+                if login.offline_available {
+                    let (server, username) = (
+                        login.server.trim().to_string(),
+                        login.username.trim().to_string(),
+                    );
+                    self.bridge.offline_login(server, username);
+                }
+            }
+            _ if !modified => {
+                if let Some(text) = event.keystroke.key_char.as_ref()
+                    && !text.chars().any(char::is_control)
+                {
+                    match login.field {
+                        0 => login.server.push_str(text),
+                        1 => login.username.push_str(text),
+                        _ => login.password.push_str(text),
+                    }
+                }
+            }
+            _ => {}
+        }
+        cx.notify();
+    }
+
+    fn login_view(&self) -> gpui::Div {
+        let login = self.login.as_ref().expect("login view");
+        let fields = [
+            ("Server", login.server.as_str(), login.field == 0),
+            ("Username", login.username.as_str(), login.field == 1),
+            ("Password", if login.password.is_empty() { "" } else { "••••••••" }, login.field == 2),
+        ];
+        div()
+            .size_full()
+            .bg(rgb(BG))
+            .text_color(rgb(ON_SURFACE))
+            .font_family("Overused Grotesk")
+            .flex()
+            .flex_col()
+            .items_center()
+            .justify_center()
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .w(px(420.0))
+                    .gap_4()
+                    .child(div().text_size(px(30.0)).text_center().child("Musika"))
+                    .child(
+                        div()
+                            .text_size(px(13.0))
+                            .text_color(rgb(ON_VARIANT))
+                            .text_center()
+                            .child("Sign in to your Subsonic server"),
+                    )
+                    .children(fields.into_iter().map(|(label, value, active)| {
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap_1()
+                            .child(
+                                div()
+                                    .text_size(px(11.0))
+                                    .text_color(rgb(ON_VARIANT))
+                                    .child(label),
+                            )
+                            .child(
+                                div()
+                                    .h(px(40.0))
+                                    .px_3()
+                                    .flex()
+                                    .items_center()
+                                    .rounded_md()
+                                    .border_1()
+                                    .border_color(rgb(if active { PRIMARY } else { OUTLINE }))
+                                    .bg(rgb(SURFACE))
+                                    .text_size(px(14.0))
+                                    .child(if value.is_empty() {
+                                        "…".to_string()
+                                    } else {
+                                        value.to_string()
+                                    }),
+                            )
+                    }))
+                    .child(
+                        div()
+                            .text_size(px(11.0))
+                            .text_color(if login.error.is_some() { rgb(0xFFB4AB) } else { rgb(ON_VARIANT) })
+                            .child(login.error.clone().unwrap_or_else(|| {
+                                if login.busy {
+                                    "Connecting…".to_string()
+                                } else if login.offline_available {
+                                    "Enter logs in · Tab moves · F2 uses downloads offline".to_string()
+                                } else {
+                                    "Enter logs in · Tab moves".to_string()
+                                }
+                            })),
+                    ),
+            )
     }
 
     fn on_play_pause(&mut self, _: &PlayPause, _window: &mut Window, cx: &mut Context<Self>) {
@@ -568,6 +752,11 @@ impl AppRoot {
     }
 
     fn on_key_down(&mut self, event: &gpui::KeyDownEvent, _window: &mut Window, cx: &mut Context<Self>) {
+        if self.login.is_some() {
+            cx.stop_propagation();
+            self.login_key(event, cx);
+            return;
+        }
         if self.search.is_none() || !self.search_open {
             return;
         }
@@ -1446,6 +1635,12 @@ impl AppRoot {
             .child(
                 div()
                     .text_size(px(11.0))
+                    .text_color(rgb(if self.repeat == crate::player::Repeat::Off { ON_VARIANT } else { PRIMARY }))
+                    .child(format!("repeat {}", repeat_label(self.repeat))),
+            )
+            .child(
+                div()
+                    .text_size(px(11.0))
                     .text_color(rgb(ON_VARIANT))
                     .child(if muted {
                         "muted".to_string()
@@ -1494,6 +1689,9 @@ impl AppRoot {
 impl Render for AppRoot {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.clock.tick();
+        if self.login.is_some() {
+            return self.login_view().into_any_element();
+        }
         if self.player.state() != crate::player::State::Stopped
             && let Some(message) = self.player.pump()
         {
@@ -1553,6 +1751,7 @@ impl Render for AppRoot {
             .on_action(cx.listener(Self::on_search))
             .on_action(cx.listener(Self::on_play_pause))
             .on_action(cx.listener(Self::on_queue_toggle))
+            .on_action(cx.listener(Self::on_repeat_cycle))
             .on_action(cx.listener(Self::on_queue_remove))
             .on_action(cx.listener(Self::on_queue_up))
             .on_action(cx.listener(Self::on_queue_down))
@@ -1583,6 +1782,7 @@ impl Render for AppRoot {
             .child(status)
             .child(div().when_some(queue_overlay, |this, queue| this.child(queue)))
             .child(div().when_some(overlay, |this, overlay| this.child(overlay)))
+            .into_any_element()
     }
 }
 
@@ -1631,4 +1831,12 @@ fn page_key(descriptor: &PageDescriptor) -> String {
 fn format_time(seconds: f64) -> String {
     let seconds = seconds.max(0.0) as u64;
     format!("{}:{:02}", seconds / 60, seconds % 60)
+}
+
+fn repeat_label(repeat: crate::player::Repeat) -> &'static str {
+    match repeat {
+        crate::player::Repeat::Off => "off",
+        crate::player::Repeat::One => "one",
+        crate::player::Repeat::All => "all",
+    }
 }

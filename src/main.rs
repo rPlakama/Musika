@@ -18,6 +18,8 @@ use qtbridge::QApp;
 
 mod api;
 mod app;
+#[cfg(feature = "gpuui")]
+mod auth;
 mod artist_user;
 mod browse;
 mod cache;

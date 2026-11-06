@@ -193,6 +193,13 @@ struct SearchState {
     typing: bool,
 }
 
+struct PendingReveal {
+    page_kind: state::PageKind,
+    page_id: String,
+    row_kind: state::RowKind,
+    row_id: String,
+}
+
 struct LyricsState {
     song_id: String,
     lines: Vec<(Option<i64>, String)>,
@@ -367,6 +374,7 @@ struct AppRoot {
     hovered_row: Option<usize>,
     hovered_page: Option<usize>,
     selected_id: Option<String>,
+    pending_page_reveal: Option<PendingReveal>,
     visual_mode: bool,
     queue_selection: state::Selection,
     last_player_index: usize,
@@ -483,6 +491,7 @@ impl AppRoot {
             hovered_row: None,
             hovered_page: None,
             selected_id: None,
+            pending_page_reveal: None,
             visual_mode: false,
             queue_selection: state::Selection::default(),
             last_player_index: 0,
@@ -711,6 +720,19 @@ impl AppRoot {
             Event::OpenPage { descriptor } => {
                 self.open_descriptor(descriptor);
             }
+            Event::OpenPageReveal {
+                descriptor,
+                row_kind,
+                row_id,
+            } => {
+                let reveal = PendingReveal {
+                    page_kind: descriptor.kind,
+                    page_id: descriptor.id.clone(),
+                    row_kind,
+                    row_id,
+                };
+                self.open_descriptor_reveal(descriptor, Some(reveal));
+            }
             Event::DisplayCover {
                 key,
                 cover_art,
@@ -815,7 +837,28 @@ impl AppRoot {
                 page.loading = false;
                 page.error = None;
                 page.cursor = page.cursor.min(page.rows.len().saturating_sub(1));
+                let reveal_index = self.pending_page_reveal.as_ref().and_then(|pending| {
+                    if page.descriptor.kind != pending.page_kind
+                        || page.descriptor.id != pending.page_id
+                    {
+                        return None;
+                    }
+                    page.rows.iter().position(|row| match pending.row_kind {
+                        state::RowKind::Song => {
+                            row.song_id == pending.row_id || row.id == pending.row_id
+                        }
+                        _ => row.id == pending.row_id,
+                    })
+                });
+                if let Some(index) = reveal_index {
+                    self.pending_page_reveal = None;
+                    page.cursor = index;
+                    page.selection.clear();
+                }
                 self.follow_page(false);
+                if let Some(index) = reveal_index {
+                    self.land_page(index);
+                }
                 self.marks.requested = None;
                 self.ensure_marks();
             }
@@ -2396,10 +2439,45 @@ impl AppRoot {
             .search
             .as_ref()
             .and_then(|search| search.scoped().get(search.cursor()).cloned().cloned());
-        if let Some(row) = row {
-            self.search_open = false;
-            self.search = None;
-            self.open_row_page(&row);
+        let Some(row) = row else {
+            cx.notify();
+            return;
+        };
+        self.search_open = false;
+        self.search = None;
+        // A chosen result is a navigation: dismiss the surfaces the search was
+        // floating over so the destination is visible.
+        self.fullscreen = false;
+        self.lyrics_overlay = false;
+        self.lyrics_overlay_wanted = false;
+        self.queue_open = false;
+        self.description = None;
+        match row.kind {
+            RowKind::Song => {
+                if row.album_id.is_empty() {
+                    self.activate_row(&row);
+                } else {
+                    let reveal = PendingReveal {
+                        page_kind: PageKind::Album,
+                        page_id: row.album_id.clone(),
+                        row_kind: RowKind::Song,
+                        row_id: row.song_id.clone(),
+                    };
+                    self.open_descriptor_reveal(
+                        PageDescriptor::new(PageKind::Album, row.album_id.clone()),
+                        Some(reveal),
+                    );
+                }
+            }
+            RowKind::Album => {
+                self.bridge.open_album_artist_reveal(row.id.clone());
+            }
+            RowKind::Artist => {
+                self.open_descriptor(PageDescriptor::new(PageKind::Artist, row.id.clone()));
+            }
+            RowKind::Playlist => {
+                self.open_descriptor(PageDescriptor::new(PageKind::Playlist, row.id.clone()));
+            }
         }
         cx.notify();
     }
@@ -3029,20 +3107,14 @@ impl AppRoot {
             self.line_search_commit(_window, cx);
             return;
         }
+        if self.search.is_some() {
+            self.activate_search_result(cx);
+            return;
+        }
         if self.queue_open {
             let index = self.queue_cursor;
             self.player.jump(index);
             self.queue_open = false;
-            cx.notify();
-            return;
-        }
-        if let Some(search) = self.search.as_ref() {
-            let row = search.scoped().get(search.scope_cursors[search.scope]).cloned().cloned();
-            if let Some(row) = row {
-                self.search_open = false;
-                self.search = None;
-                self.activate_row(&row);
-            }
             cx.notify();
             return;
         }
@@ -3268,6 +3340,7 @@ impl AppRoot {
     }
 
     fn open_descriptor(&mut self, descriptor: PageDescriptor) {
+        self.pending_page_reveal = None;
         let profile = page_profile::PageProfile::for_descriptor(&descriptor);
         if profile.notes {
             if descriptor.kind == PageKind::Artist {
@@ -3283,6 +3356,15 @@ impl AppRoot {
         self.page_generation = self.page_generation.wrapping_add(1);
         self.bridge.load_page(descriptor);
         self.follow_page(false);
+    }
+
+    fn open_descriptor_reveal(
+        &mut self,
+        descriptor: PageDescriptor,
+        reveal: Option<PendingReveal>,
+    ) {
+        self.open_descriptor(descriptor);
+        self.pending_page_reveal = reveal;
     }
 
     fn back_page(&mut self) {
@@ -5457,7 +5539,6 @@ impl Render for AppRoot {
             .child(body)
             .child(status)
             .child(match queue_overlay { Some(o) => o.into_any_element(), None => div().into_any_element() })
-            .child(match overlay { Some(o) => o.into_any_element(), None => div().into_any_element() })
             .child(match fullscreen_overlay { Some(o) => o.into_any_element(), None => div().into_any_element() })
             .child(self.lyrics_overlay_element(lyrics_overlay_progress))
             .child(match description_overlay { Some(o) => o.into_any_element(), None => div().into_any_element() })
@@ -5465,6 +5546,7 @@ impl Render for AppRoot {
             .child(match line_overlay { Some(o) => o.into_any_element(), None => div().into_any_element() })
             .child(match toast_overlay { Some(o) => o.into_any_element(), None => div().into_any_element() })
             .child(match exit_overlay { Some(o) => o.into_any_element(), None => div().into_any_element() })
+            .child(match overlay { Some(o) => o.into_any_element(), None => div().into_any_element() })
             .into_any_element()
     }
 }

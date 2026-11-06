@@ -85,6 +85,11 @@ pub enum Event {
     OpenPage {
         descriptor: super::state::PageDescriptor,
     },
+    OpenPageReveal {
+        descriptor: super::state::PageDescriptor,
+        row_kind: super::state::RowKind,
+        row_id: String,
+    },
     Command(String),
     Restore {
         volume: f64,
@@ -760,6 +765,40 @@ impl Bridge {
             };
             let _ = tx.send(Event::OpenPage {
                 descriptor: super::state::PageDescriptor::new(super::state::PageKind::Artist, artist_id),
+            });
+        });
+    }
+
+    /// Search activation: open the album's artist page and reveal the album row.
+    pub fn open_album_artist_reveal(&self, album_id: String) {
+        let tx = self.tx.clone();
+        crate::app::runtime().spawn(async move {
+            let Some(dbs) = crate::app::dbs() else { return };
+            let artist_id = crate::library::album_artist_id(&dbs.library, &album_id)
+                .await
+                .ok()
+                .flatten();
+            let (descriptor, row_kind) = match artist_id {
+                Some(artist_id) => (
+                    super::state::PageDescriptor::new(
+                        super::state::PageKind::Artist,
+                        artist_id,
+                    ),
+                    super::state::RowKind::Album,
+                ),
+                // No artist mapping: keep the album reachable.
+                None => (
+                    super::state::PageDescriptor::new(
+                        super::state::PageKind::Album,
+                        album_id.clone(),
+                    ),
+                    super::state::RowKind::Album,
+                ),
+            };
+            let _ = tx.send(Event::OpenPageReveal {
+                descriptor,
+                row_kind,
+                row_id: album_id,
             });
         });
     }

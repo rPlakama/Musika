@@ -347,6 +347,7 @@ struct AppRoot {
     description: Option<DescriptionState>,
     lyrics_overlay: bool,
     lyrics_overlay_wanted: bool,
+    lyrics_overlay_anim: anim::Behavior,
     lyrics_active_line: Option<usize>,
     lyrics_active_anim: anim::Behavior,
     lyrics_line_opacity: std::collections::HashMap<usize, anim::Behavior>,
@@ -453,6 +454,7 @@ impl AppRoot {
             description: None,
             lyrics_overlay: false,
             lyrics_overlay_wanted: false,
+            lyrics_overlay_anim: anim::Behavior::new(0.0),
             lyrics_active_line: None,
             lyrics_active_anim: anim::Behavior::new(1.0),
             lyrics_line_opacity: std::collections::HashMap::new(),
@@ -3555,8 +3557,8 @@ impl AppRoot {
             .collect()
     }
 
-    fn lyrics_overlay_element(&self) -> gpui::AnyElement {
-        if !self.lyrics_overlay {
+    fn lyrics_overlay_element(&self, progress: f32) -> gpui::AnyElement {
+        if !self.lyrics_overlay && progress <= 0.001 {
             return div().into_any_element();
         }
         let Some(lyrics) = self.lyrics.as_ref() else {
@@ -3582,10 +3584,11 @@ impl AppRoot {
             .flex()
             .items_center()
             .justify_center()
-            .bg(gpui::black().opacity(0.35))
+            .bg(gpui::black().opacity(0.35 * progress))
+            .opacity(progress.clamp(0.0, 1.0))
             .child(
                 div()
-                    .w(relative(0.72))
+                    .w(relative(0.72 * (0.84 + 0.16 * progress).clamp(0.84, 1.04)))
                     .max_w(px(720.0))
                     .h_full()
                     .px_4()
@@ -4688,6 +4691,15 @@ impl Render for AppRoot {
         if let Some(track) = self.player.current().cloned() {
             self.ensure_display_cover(&track.cover_art, 512);
         }
+        let lyrics_overlay_progress = self.lyrics_overlay_anim.target(
+            if self.lyrics_overlay { 1.0 } else { 0.0 },
+            if self.lyrics_overlay { anim::EMPHASIZED_MS } else { anim::STANDARD_MS },
+            if self.lyrics_overlay { anim::Curve::OutBack } else { anim::Curve::Accelerate },
+            &self.clock,
+        );
+        if !self.lyrics_overlay_anim.settled(&self.clock) {
+            window.request_animation_frame();
+        }
         let fullscreen_overlay = (self.fullscreen || fullscreen_progress > 0.001)
             .then(|| self.fullscreen_overlay(fullscreen_progress));
         let exit_overlay = self.exiting.map(|started| {
@@ -4827,7 +4839,7 @@ impl Render for AppRoot {
             .child(match queue_overlay { Some(o) => o.into_any_element(), None => div().into_any_element() })
             .child(match overlay { Some(o) => o.into_any_element(), None => div().into_any_element() })
             .child(match fullscreen_overlay { Some(o) => o.into_any_element(), None => div().into_any_element() })
-            .child(self.lyrics_overlay_element())
+            .child(self.lyrics_overlay_element(lyrics_overlay_progress))
             .child(match description_overlay { Some(o) => o.into_any_element(), None => div().into_any_element() })
             .child(match alt_overlay { Some(o) => o, None => div().into_any_element() })
             .child(match line_overlay { Some(o) => o.into_any_element(), None => div().into_any_element() })

@@ -299,6 +299,23 @@ impl AssetSource for Assets {
     }
 }
 
+const PAGE_HERO_PX: f32 = 720.0;
+const FULLSCREEN_HERO_PX: f32 = 720.0;
+
+struct CoverLoadTrace {
+    cover_art: String,
+    bucket: u32,
+    started: std::time::Instant,
+    thumb_logged: bool,
+}
+
+fn unix_ms() -> u128 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_millis())
+        .unwrap_or_default()
+}
+
 struct AppRoot {
     focus: FocusHandle,
     bridge: bridge::Bridge,
@@ -371,6 +388,9 @@ struct AppRoot {
     preloaded: bool,
     display_covers: std::collections::HashMap<String, std::path::PathBuf>,
     display_requested: std::collections::HashSet<String>,
+    display_retry: std::collections::HashMap<String, f64>,
+    scale_factor: f32,
+    cover_trace: Option<CoverLoadTrace>,
     trace: bool,
     frames: u64,
 }
@@ -478,6 +498,9 @@ impl AppRoot {
             preloaded: false,
             display_covers: std::collections::HashMap::new(),
             display_requested: std::collections::HashSet::new(),
+            display_retry: std::collections::HashMap::new(),
+            scale_factor: window.scale_factor(),
+            cover_trace: None,
             trace: std::env::var_os("MUSIKA_GPUUI_TRACE").is_some(),
             frames: 0,
         };
@@ -646,9 +669,39 @@ impl AppRoot {
             Event::OpenPage { descriptor } => {
                 self.open_descriptor(descriptor);
             }
-            Event::DisplayCover { key, path } => {
-                if let Some(path) = path {
-                    self.display_covers.insert(key, path);
+            Event::DisplayCover {
+                key,
+                cover_art,
+                target,
+                path,
+            } => {
+                match path {
+                    Some(path) => {
+                        self.display_retry.remove(&key);
+                        self.display_covers.insert(key, path.clone());
+                        if let Some(trace) = self.cover_trace.as_ref()
+                            && trace.cover_art == cover_art
+                            && trace.bucket == target
+                        {
+                            crate::debug_log!(
+                                "album entry: proper res loaded cover={} bucket={} path={} elapsed_ms={:.1} at={}",
+                                cover_art,
+                                target,
+                                path.display(),
+                                trace.started.elapsed().as_secs_f64() * 1000.0,
+                                unix_ms()
+                            );
+                        }
+                    }
+                    None => {
+                        self.display_requested.remove(&key);
+                        self.display_retry.insert(key, self.clock.now + 5.0);
+                        crate::debug_log!(
+                            "album entry: cover load failed cover={} bucket={} path=none",
+                            cover_art,
+                            target
+                        );
+                    }
                 }
             }
             Event::Preload {
@@ -1072,11 +1125,33 @@ impl AppRoot {
         self.bridge.request_marks(songs, albums);
     }
 
+    fn page_hero_bucket(&self) -> u32 {
+        covers::bucket_for(PAGE_HERO_PX, self.scale_factor)
+    }
+
+    fn fullscreen_hero_bucket(&self) -> u32 {
+        covers::bucket_for(FULLSCREEN_HERO_PX, self.scale_factor)
+    }
+
+    fn hero_cover(&self, url: &str, target: u32) -> Option<std::path::PathBuf> {
+        COVERS
+            .get_or_init(|| std::sync::Mutex::new(covers::CoverStore::new(768)))
+            .lock()
+            .ok()?
+            .hero_url(url, target)
+    }
+
     fn ensure_display_cover(&mut self, cover_art: &str, target: u32) {
         if cover_art.is_empty() {
             return;
         }
         let key = format!("{cover_art}:{target}");
+        if let Some(retry_at) = self.display_retry.get(&key)
+            && *retry_at > self.clock.now
+        {
+            return;
+        }
+        self.display_retry.remove(&key);
         if !self.display_requested.insert(key.clone()) {
             return;
         }
@@ -3623,8 +3698,10 @@ impl AppRoot {
             Some(track) => (
                 track.title.clone(),
                 track.artist.clone(),
-                self.display_cover(&track.cover_art, 512)
-                    .or_else(|| cover_path(&track.cover_url)),
+                self.display_cover(&track.cover_art, self.fullscreen_hero_bucket())
+                    .or_else(|| {
+                        self.hero_cover(&track.cover_url, self.fullscreen_hero_bucket())
+                    }),
             ),
             None => ("No track playing".to_string(), String::new(), None),
         };
@@ -4125,9 +4202,10 @@ impl AppRoot {
         let cover_side = page_w.min(page_h).min(max_cover).max(1.0);
         let cover_art_side = (cover_side - page_w * 0.04).max(1.0);
         let cover_bottom = cover_art_side + page_w * 0.02;
+        let hero_bucket = self.page_hero_bucket();
         let cover = self
-            .display_cover(&page.header.cover_art, cover_bucket(cover_side))
-            .or_else(|| cover_path(&page.header.cover_url));
+            .display_cover(&page.header.cover_art, hero_bucket)
+            .or_else(|| self.hero_cover(&page.header.cover_url, hero_bucket));
         let header_h = cover_bottom.max(220.0);
         let spacer_h = 0.0;
 
@@ -4586,6 +4664,7 @@ impl Render for AppRoot {
         self.frames = self.frames.wrapping_add(1);
         self.win_w = f32::from(window.viewport_size().width);
         self.win_h = f32::from(window.viewport_size().height);
+        self.scale_factor = window.scale_factor();
         self.refresh_lyrics_overlay();
         if self.trace && self.frames.is_multiple_of(120) {
             crate::debug_log!("GPUI trace: frame {}", self.frames);
@@ -4682,14 +4761,43 @@ impl Render for AppRoot {
         }
         if let Some(page) = self.page.as_ref() {
             let cover_art = page.header.cover_art.clone();
-            let page_h = (self.win_h - 120.0).max(1.0);
-            let page_w = self.win_w.max(1.0);
-            let max_cover = (page_h - page_w * 0.04) * 0.75;
-            let cover_side = page_w.min(page_h).min(max_cover).max(1.0);
-            self.ensure_display_cover(&cover_art, cover_bucket(cover_side));
+            let bucket = self.page_hero_bucket();
+            let changed = self
+                .cover_trace
+                .as_ref()
+                .map(|trace| (trace.cover_art.as_str(), trace.bucket))
+                != Some((cover_art.as_str(), bucket));
+            if changed {
+                let started = std::time::Instant::now();
+                crate::debug_log!(
+                    "album entry: init album cover load cover={} bucket={} at={}",
+                    cover_art,
+                    bucket,
+                    unix_ms()
+                );
+                self.cover_trace = Some(CoverLoadTrace {
+                    cover_art: cover_art.clone(),
+                    bucket,
+                    started,
+                    thumb_logged: false,
+                });
+            }
+            if self.display_cover(&cover_art, bucket).is_none()
+                && let Some(trace) = self.cover_trace.as_mut()
+                && !trace.thumb_logged
+            {
+                trace.thumb_logged = true;
+                crate::debug_log!(
+                    "album entry: album cover thumb shown cover={} bucket={} elapsed_ms={:.1}",
+                    cover_art,
+                    bucket,
+                    trace.started.elapsed().as_secs_f64() * 1000.0
+                );
+            }
+            self.ensure_display_cover(&cover_art, bucket);
         }
         if let Some(track) = self.player.current().cloned() {
-            self.ensure_display_cover(&track.cover_art, 512);
+            self.ensure_display_cover(&track.cover_art, self.fullscreen_hero_bucket());
         }
         let lyrics_overlay_progress = self.lyrics_overlay_anim.target(
             if self.lyrics_overlay { 1.0 } else { 0.0 },
@@ -4872,16 +4980,6 @@ fn parse_page_spec(spec: &str) -> Option<PageDescriptor> {
 
 static COVERS: std::sync::OnceLock<std::sync::Mutex<covers::CoverStore>> =
     std::sync::OnceLock::new();
-
-fn cover_bucket(logical_size: f32) -> u32 {
-    const BUCKETS: [u32; 11] = [384, 512, 640, 768, 960, 1280, 1536, 1920, 2560, 3072, 4096];
-    let px = (logical_size * 1.5).ceil() as u32;
-    BUCKETS
-        .iter()
-        .copied()
-        .find(|bucket| px <= *bucket)
-        .unwrap_or(4096)
-}
 
 fn cover_path(url: &str) -> Option<std::path::PathBuf> {
     COVERS

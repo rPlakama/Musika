@@ -263,6 +263,17 @@ impl CoverStore {
         thumb
     }
 
+    /// Resolves a hero path directly from a cover URL.
+    ///
+    /// Convenience over [`CoverStore::hero_path`] for render code that only
+    /// has the `file://` URL: it resolves the source, builds the display key
+    /// and never falls back to the original.
+    pub fn hero_url(&mut self, url: &str, edge: u32) -> Option<PathBuf> {
+        let source = file_url_to_path(url)?;
+        let key = DisplayKey::new(source, edge)?;
+        self.hero_path(&key)
+    }
+
     /// Starts a resize request for `key`, returning `true` only once.
     ///
     /// This module is std-only and does no decoding or dimension work: the
@@ -704,5 +715,17 @@ mod tests {
 
         store.clear();
         assert!(store.begin_display_request(&key));
+    }
+
+    #[test]
+    fn hero_url_never_returns_the_original() {
+        let dir = TempCoverDir::new();
+        let source = dir.file("url-hero.jpg", 600 * 1024);
+        let thumb = dir.file("url-hero.thumb.jpg", 1024);
+        let mut store = CoverStore::new(8);
+        let url = file_url(&source);
+        assert_eq!(store.hero_url(&url, 256), Some(thumb));
+        let no_thumb = dir.file("only-original.jpg", 1024);
+        assert_eq!(store.hero_url(&file_url(&no_thumb), 256), None);
     }
 }

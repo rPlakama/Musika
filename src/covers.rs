@@ -30,7 +30,6 @@
 
 #![allow(dead_code)]
 
-use image::imageops::FilterType;
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, LazyLock, Mutex, MutexGuard, PoisonError};
@@ -822,13 +821,42 @@ pub async fn get_or_create_resized_cover(
     let filename = resized_filename.clone();
     let format = image::ImageFormat::from_extension(ext.to_ascii_lowercase())?;
 
+    let started = std::time::Instant::now();
+    let source_bytes = std::fs::metadata(original_path).map(|meta| meta.len()).unwrap_or(0);
+    let source_dims = image::image_dimensions(original_path).ok();
+    crate::debug_log!(
+        "covers: resize start source={} dims={} bytes={} target={}",
+        original_path.display(),
+        source_dims
+            .map(|(width, height)| format!("{width}x{height}"))
+            .unwrap_or_else(|| "unknown".to_string()),
+        source_bytes,
+        target_size
+    );
     tokio::task::spawn_blocking(move || {
+        let decode_started = std::time::Instant::now();
         let img = image::open(&orig).ok()?;
-        // Triangle/Bilinear filter provides fast, high-quality downscaling for UI elements
-        let resized = img.resize(target_size, target_size, FilterType::Triangle);
+        let decode_ms = decode_started.elapsed().as_secs_f64() * 1000.0;
+        let resize_started = std::time::Instant::now();
+        // `thumbnail` uses the fast integer box/area downscale path; the
+        // general-purpose Triangle filter cost ~1 s at 2400 px in debug.
+        let resized = img.thumbnail(target_size, target_size);
+        let resize_ms = resize_started.elapsed().as_secs_f64() * 1000.0;
+        let encode_started = std::time::Instant::now();
         let mut bytes = std::io::Cursor::new(Vec::new());
         resized.write_to(&mut bytes, format).ok()?;
+        let encode_ms = encode_started.elapsed().as_secs_f64() * 1000.0;
         crate::cache::write_atomic(&parent, &filename, bytes.get_ref()).ok()?;
+        crate::debug_log!(
+            "covers: resize done source={} target={} decode_ms={:.1} resize_ms={:.1} encode_ms={:.1} out_bytes={} elapsed_ms={:.1}",
+            orig.display(),
+            target_size,
+            decode_ms,
+            resize_ms,
+            encode_ms,
+            bytes.get_ref().len(),
+            started.elapsed().as_secs_f64() * 1000.0
+        );
         Some(target)
     })
     .await

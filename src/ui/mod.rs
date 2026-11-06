@@ -3173,19 +3173,34 @@ impl AppRoot {
         let (Some(menu), Some((ax, ay))) = (self.alt_menu.as_ref(), self.alt_anchor) else {
             return div().into_any_element();
         };
-        let side = 54.0 * (0.65 + 0.35 * progress);
-        let gap = 72.0;
-        let mut overlay = div().absolute().inset_0().size_full();
+        let page_h = (self.win_h - 120.0).max(1.0);
+        let option_scale = (0.816
+            * ((self.win_w - 20.0) / 1280.0).min((page_h - 20.0) / 720.0))
+            .clamp(0.5, 0.816);
+        let box_side = page_h * 0.07 * option_scale;
+        let spawned = 0.72 + 0.28 * progress;
+        let box_side = box_side * spawned;
+        let frame_side = (box_side * 8.0).min(self.win_w - 20.0).min(page_h - 20.0);
+        let board_x = (ax - frame_side * 0.5).clamp(10.0, (self.win_w - frame_side - 10.0).max(10.0));
+        let board_y = (ay - frame_side * 0.5).clamp(10.0, (page_h - frame_side + 10.0).max(10.0));
+        let mut board = div()
+            .absolute()
+            .left(px(board_x))
+            .top(px(board_y))
+            .w(px(frame_side))
+            .h(px(frame_side))
+            .opacity(progress);
+        let center = (frame_side - box_side) * 0.5;
         for direction in Direction::ALL {
             let Some(slot) = menu.slot(direction) else { continue };
             let aimed = self.alt.aimed == Some(direction);
+            let size = if aimed { box_side * 1.30 } else { box_side };
             let (cx, cy) = match direction {
-                Direction::North => (ax, ay - gap),
-                Direction::South => (ax, ay + gap),
-                Direction::West => (ax - gap, ay),
-                Direction::East => (ax + gap, ay),
+                Direction::North => (center + box_side * 0.5, box_side * 0.5),
+                Direction::South => (center + box_side * 0.5, frame_side - box_side * 0.5),
+                Direction::West => (box_side * 0.5, center + box_side * 0.5),
+                Direction::East => (frame_side - box_side * 0.5, center + box_side * 0.5),
             };
-            let size = if aimed { side * 1.30 } else { side };
             let index = self.alt.action_index[direction.index()];
             let label = slot.active_label(index).to_string();
             let icon_name = slot.active_icon(index).to_string();
@@ -3204,44 +3219,65 @@ impl AppRoot {
             } else {
                 0xCAC4D0
             };
+            let opacity = if disabled {
+                0.7
+            } else if self.alt.aimed.is_some() && !aimed {
+                0.55
+            } else {
+                1.0
+            };
+            let left = cx - size * 0.5;
+            let top = cy - size * 0.5;
             let mut tile = div()
                 .absolute()
-                .left(px(cx - size * 0.5))
-                .top(px(cy - size * 0.5))
+                .left(px(left))
+                .top(px(top))
                 .w(px(size))
                 .h(px(size))
                 .rounded_md()
                 .border_1()
                 .border_color(rgb(if aimed { PRIMARY } else { OUTLINE }))
                 .bg(rgb(bg))
-                .opacity(progress)
+                .opacity(opacity)
                 .flex()
                 .items_center()
                 .justify_center();
             if icon_name.is_empty() {
                 tile = tile.child(
                     div()
-                        .text_size(px(16.0))
+                        .text_size(px((page_h * 0.018 * option_scale).max(11.0)))
                         .text_color(rgb(fg))
                         .child(label),
                 );
             } else {
-                tile = tile.child(icon(&icon_name, size * 0.46, fg));
+                tile = tile.child(icon(&icon_name, size * 0.55, fg));
             }
             if direction == Direction::South && slot.is_rating_slot() {
                 tile = tile.child(
                     div()
                         .absolute()
-                        .right(px(4.0))
-                        .bottom(px(3.0))
-                        .text_size(px(10.0))
+                        .right(px(size * 0.07))
+                        .bottom(px(size * 0.05))
+                        .text_size(px((size * 0.28).max(9.0)))
                         .text_color(rgb(PRIMARY))
                         .child(self.alt.rating_value.to_string()),
                 );
             }
-            overlay = overlay.child(tile);
+            board = board.child(tile);
         }
-        overlay.into_any_element()
+        board = board.child(
+            div()
+                .absolute()
+                .left(px(center + box_side * 0.5 - page_h * 0.013))
+                .top(px(center + box_side * 0.5 - page_h * 0.013))
+                .child(icon(
+                    "arrow-move-20-regular.svg",
+                    page_h * 0.026,
+                    PRIMARY,
+                ))
+                .opacity(if self.alt.aimed.is_none() { 1.0 } else { 0.6 }),
+        );
+        board.into_any_element()
     }
 
     fn line_search_overlay(&self, progress: f32) -> gpui::Div {
@@ -3882,8 +3918,13 @@ impl AppRoot {
         let title = page.header.title.clone();
         let subtitle = page.header.subtitle.clone();
         let meta = page.header.meta.clone();
+        let page_h = (self.win_h - 120.0).max(1.0);
+        let page_w = self.win_w.max(1.0);
+        let max_cover = (page_h - page_w * 0.04) * 0.75;
+        let cover_side = page_w.min(page_h).min(max_cover).max(1.0);
+        let cover_bottom = (cover_side - page_w * 0.02).min(max_cover);
         let cover = self
-            .display_cover(&page.header.cover_art, 512)
+            .display_cover(&page.header.cover_art, cover_bucket(cover_side))
             .or_else(|| cover_path(&page.header.cover_url));
         let notes = self
             .notes
@@ -3893,8 +3934,8 @@ impl AppRoot {
             .unwrap_or_default();
         let desc_title = title.clone();
         let desc_subtitle = subtitle.clone();
-        let header_h = if notes.is_empty() { 220.0 } else { 320.0 };
-        let spacer_h = if notes.is_empty() { 220.0 } else { 0.0 };
+        let header_h = cover_bottom.max(220.0);
+        let spacer_h = 0.0;
 
         let header = div()
             .relative()
@@ -3905,10 +3946,11 @@ impl AppRoot {
             .child(
                 div()
                     .absolute()
-                    .left(px(12.0))
-                    .top(px(18.0))
+                    .left(px(page_w * 0.02))
+                    .top(px(page_w * 0.02))
                     .w(relative(0.78))
-                    .p_3()
+                    .max_w(px(page_w * 0.96))
+                    .p(px(page_w * 0.02))
                     .rounded_md()
                     .bg(gpui::black().opacity(0.40))
                     .flex()
@@ -3916,7 +3958,7 @@ impl AppRoot {
                     .gap_1()
                     .child(
                         div()
-                            .text_size(px(30.0))
+                            .text_size(px(page_h * 0.04 * (page_w / 1280.0).clamp(0.9, 1.6)))
                             .font_weight(gpui::FontWeight::BOLD)
                             .whitespace_nowrap()
                             .text_ellipsis()
@@ -3924,19 +3966,19 @@ impl AppRoot {
                     )
                     .child(
                         div()
-                            .text_size(px(14.0))
+                            .text_size(px(page_h * 0.04 * (page_w / 1280.0).clamp(0.9, 1.6)))
                             .text_color(rgb(ON_VARIANT))
                             .child("☆ ☆ ☆ ☆ ☆"),
                     )
                     .child(
                         div()
-                            .text_size(px(16.0))
+                            .text_size(px(page_h * 0.024 * (page_w / 1280.0).clamp(0.9, 1.6)))
                             .text_color(rgb(PRIMARY))
                             .child(subtitle),
                     )
                     .child(
                         div()
-                            .text_size(px(12.0))
+                            .text_size(px(page_h * 0.02 * (page_w / 1280.0).clamp(0.9, 1.6)))
                             .text_color(rgb(ON_VARIANT))
                             .whitespace_nowrap()
                             .child(meta),
@@ -4031,14 +4073,14 @@ impl AppRoot {
             .child(
                 div()
                     .absolute()
-                    .top(px(48.0))
+                    .top_0()
                     .left_0()
                     .right_0()
-                    .h(px(420.0))
+                    .h(px(cover_side))
                     .flex()
                     .justify_center()
                     .overflow_hidden()
-                    .child(art(cover, 390.0)),
+                    .child(art(cover, cover_side)),
             )
             .child(header)
             .child(div().h(px(spacer_h)))
@@ -4455,7 +4497,11 @@ impl Render for AppRoot {
         }
         if let Some(page) = self.page.as_ref() {
             let cover_art = page.header.cover_art.clone();
-            self.ensure_display_cover(&cover_art, 512);
+            let page_h = (self.win_h - 120.0).max(1.0);
+            let page_w = self.win_w.max(1.0);
+            let max_cover = (page_h - page_w * 0.04) * 0.75;
+            let cover_side = page_w.min(page_h).min(max_cover).max(1.0);
+            self.ensure_display_cover(&cover_art, cover_bucket(cover_side));
         }
         if let Some(track) = self.player.current().cloned() {
             self.ensure_display_cover(&track.cover_art, 512);
@@ -4617,6 +4663,16 @@ fn parse_page_spec(spec: &str) -> Option<PageDescriptor> {
 
 static COVERS: std::sync::OnceLock<std::sync::Mutex<covers::CoverStore>> =
     std::sync::OnceLock::new();
+
+fn cover_bucket(logical_size: f32) -> u32 {
+    const BUCKETS: [u32; 11] = [384, 512, 640, 768, 960, 1280, 1536, 1920, 2560, 3072, 4096];
+    let px = (logical_size * 1.5).ceil() as u32;
+    BUCKETS
+        .iter()
+        .copied()
+        .find(|bucket| px <= *bucket)
+        .unwrap_or(4096)
+}
 
 fn cover_path(url: &str) -> Option<std::path::PathBuf> {
     COVERS

@@ -1288,7 +1288,7 @@ impl Backend {
 
             // The shared pipeline (ARC-8): the started state was already
             // shown synchronously above, so this only reports progress.
-            spawn_sync(finish_invoker, progress_invoker, client, false);
+            spawn_sync(finish_invoker, progress_invoker, client, false, true);
         });
     }
 

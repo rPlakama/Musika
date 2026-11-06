@@ -164,8 +164,9 @@ pub async fn most_played(pool: &SqlitePool, limit: i64) -> Result<Vec<SongSearch
     Ok(hits)
 }
 
-/// The number of indexed rows; zero after the S-9 migration recreated the
-/// table, which the sync's up-to-date branch uses to self-heal.
+/// The number of indexed rows (tests/benchmarks only; the sync no longer
+/// needs an empty-table probe).
+#[cfg(test)]
 pub async fn count(pool: &SqlitePool) -> Result<i64> {
     let count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM song_search")
         .fetch_one(pool)

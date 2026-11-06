@@ -52,7 +52,7 @@ pub(super) fn online_authenticated(
         invoker.invoke_method("login_succeeded");
     }
     crate::debug_log!("login: online mode — server available");
-    spawn_sync(sync_finish, sync_progress, client, true);
+    spawn_sync(sync_finish, sync_progress, client, true, false);
 }
 
 /// One background index sync: the single pipeline behind the manual button/
@@ -67,6 +67,7 @@ pub(super) fn spawn_sync(
     progress_invoker: QmlMethodInvoker,
     client: SubsonicClient,
     emit_started: bool,
+    deep: bool,
 ) {
     let Some(dbs) = crate::app::dbs() else {
         eprintln!("index: databases are not initialised");
@@ -90,7 +91,7 @@ pub(super) fn spawn_sync(
             );
         };
 
-        match crate::index::sync_library(&dbs, client, progress).await {
+        match crate::index::sync_library(&dbs, client, deep, progress).await {
             Ok(report) => {
                 let _ = crate::db::checkpoint_truncate(&dbs.sync).await;
                 let _ = crate::db::checkpoint_truncate(&dbs.search).await;

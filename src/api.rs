@@ -43,8 +43,12 @@ where
     #[derive(Deserialize)]
     #[serde(untagged)]
     enum OneOrMany<T> {
-        One(T),
+        // Many must be tried first: a JSON array (including `[]`) has to stay
+        // an array. Serde can deserialize a struct from a sequence, so a
+        // `One`-first definition turned `"album": []` into one default row
+        // (an empty id) — which then failed every fetch in the sync.
         Many(Vec<T>),
+        One(T),
     }
 
     Ok(match OneOrMany::deserialize(deserializer)? {

@@ -55,6 +55,19 @@ pub struct SyncChanges {
     pub songs: Vec<String>,
     /// Cover ids whose album art changed or appeared.
     pub covers: Vec<String>,
+    /// Rows removed because the server no longer lists them.
+    pub removed: usize,
+}
+
+impl SyncChanges {
+    /// True when this pass actually changed anything (the UI reload gate).
+    pub fn any(&self) -> bool {
+        !self.albums.is_empty()
+            || !self.artists.is_empty()
+            || !self.songs.is_empty()
+            || !self.covers.is_empty()
+            || self.removed > 0
+    }
 }
 
 #[derive(Debug, FromRow, PartialEq, Hash)]

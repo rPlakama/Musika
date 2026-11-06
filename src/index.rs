@@ -23,12 +23,14 @@
 //!   search.db   ← FTS5 rebuild, right after the library write
 //!   covers.db   ← cover cache, run as a secondary task after the sync returns
 //!
-//! The sync is incremental at the top level: `getIndexes` is asked for changes
-//! since the last `lastModified`, and an empty answer is a no-op.
+//! The top level always fetches the full artist/album manifest (Navidrome's
+//! `ifModifiedSince` answers are not trustworthy for library moves); only the
+//! albums whose manifest hash changed are re-fetched, and a periodic/manual
+//! deep pass re-reads every album's songs.
 
 use std::sync::Arc;
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 
 use crate::api::{AlbumID3, AlbumWithSongsID3, ArtistID3, ArtistWithAlbumsID3, Child};
 use crate::covers::CoverReport;
@@ -99,47 +101,27 @@ async fn best_effort<T>(
 pub async fn sync_library<F>(
     dbs: &Dbs,
     client: Arc<SubsonicClient>,
+    deep: bool,
     mut progress: F,
 ) -> Result<SyncReport>
 where
     F: FnMut(SyncProgress) + Send,
 {
     report(&mut progress, "Checking for changes…", 0);
+    let before = crate::library::counts(&dbs.library)
+        .await
+        .unwrap_or((0, 0, 0));
 
-    let last_modified = crate::library::last_modified(&dbs.library).await?;
-
+    // Always fetch the full artist manifest. `getIndexes(ifModifiedSince)` is
+    // not reliable for library changes: Navidrome's master may answer with a
+    // stale empty index (song moves never seen) or with only the changed
+    // artists (a destructive full replace would then wipe the rest). The
+    // manifest is cheap compared with songs and lets the reconciler below
+    // decide what to fetch.
     let indexes = client
-        .get_indexes(None, (last_modified > 0).then_some(last_modified))
+        .get_indexes(None, None)
         .await
         .context("failed to fetch the library index")?;
-
-    if indexes.index.is_empty() && indexes.shortcut.is_empty() {
-        crate::library::touch_last_sync(&dbs.library).await?;
-        report(&mut progress, "Up to date", 100);
-        // S-9: the search schema migration recreates the FTS table, so an
-        // unchanged library can still have an empty index. Rebuild it here
-        // rather than waiting for the next library change.
-        if crate::search::count(&dbs.search).await.unwrap_or(0) == 0
-            && let Err(err) = rebuild_search(dbs).await
-        {
-            eprintln!("search: could not rebuild the index: {err:#}");
-        }
-        // The library is unchanged, but the derived caches may still need
-        // topping up (first run interrupted, or entries that previously
-        // failed): the caller starts the cover pass asynchronously after this
-        // returns; the bounded lyric backfill stays in the sync.
-        let covers_due =
-            crate::library::cover_check_due(&dbs.library, crate::consts::COVER_CHECK_TTL_SECS)
-                .await
-                .unwrap_or(true);
-        let lyrics = refresh_lyrics(dbs, &client, &mut progress).await;
-        return Ok(SyncReport {
-            updated: false,
-            covers_due,
-            lyrics,
-            ..SyncReport::default()
-        });
-    }
 
     let mut artist_ids: Vec<String> = indexes
         .index
@@ -147,6 +129,7 @@ where
         .flat_map(|index| index.artist.iter())
         .chain(indexes.shortcut.iter())
         .map(|artist| artist.id.clone())
+        .filter(|id| !id.is_empty())
         .collect();
     artist_ids.sort();
     artist_ids.dedup();
@@ -156,51 +139,91 @@ where
         format!("Fetching {} artists…", artist_ids.len()),
         10,
     );
-    // ARC-25: abort before any destructive step when a fetch was skipped.
     let fetched_artists = fetch_artists(&client, &artist_ids).await?;
+    let mut artists: Vec<ArtistID3> = Vec::with_capacity(fetched_artists.len());
+    let mut albums: Vec<AlbumID3> = Vec::new();
+    for entry in fetched_artists {
+        if entry.artist.id.is_empty() {
+            continue;
+        }
+        artists.push(entry.artist);
+        for album in entry.album {
+            if !album.id.is_empty() {
+                albums.push(album);
+            }
+        }
+    }
+    // An album can be listed by more than one artist; keep one deterministic row.
+    let mut seen_albums: std::collections::HashSet<String> = std::collections::HashSet::new();
+    albums.retain(|album| seen_albums.insert(album.id.clone()));
 
-    let mut album_ids: Vec<String> = fetched_artists
-        .iter()
-        .flat_map(|artist| artist.album.iter())
-        .map(|album| album.id.clone())
-        .collect();
-    album_ids.sort();
-    album_ids.dedup();
-
-    // MEMORY: take the artist rows now, before fetching albums. The artist
-    // entries carry their album metadata; keeping that Vec alive alongside the
-    // album entries (which repeat it) and the flattened `albums` copy held the
-    // same rows in memory up to three times during a sync.
-    let artists: Vec<ArtistID3> = fetched_artists
-        .into_iter()
-        .map(|entry| entry.artist)
-        .collect();
+    // Shallow passes re-fetch only albums whose stored hash changed (a song
+    // move changes the album's count/duration/cover); a deep pass re-fetches
+    // every album's songs so silent metadata edits are caught too.
+    let deep = deep || crate::library::full_sync_due(&dbs.library).await;
+    let manifest = crate::library::album_manifest(&dbs.library).await?;
+    let mut fetch_ids: Vec<String> = Vec::new();
+    for album in &albums {
+        let changed = manifest
+            .get(&album.id)
+            .is_none_or(|seen| seen.hash != crate::library::album_hash(album));
+        if deep || changed {
+            fetch_ids.push(album.id.clone());
+        }
+    }
 
     report(
         &mut progress,
-        format!("Fetching {} albums…", album_ids.len()),
-        40,
+        format!("Fetching {} albums…", fetch_ids.len()),
+        45,
     );
-    let fetched_albums = fetch_albums(&client, &album_ids).await?;
-
-    // MEMORY: consume the album entries instead of cloning their album and
-    // song vectors into a second full copy of the catalog.
-    let mut albums: Vec<AlbumID3> = Vec::with_capacity(fetched_albums.len());
-    let mut songs: Vec<Child> = Vec::new();
+    let fetched_albums = fetch_albums(&client, &fetch_ids).await?;
+    let mut songs_by_album: std::collections::HashMap<String, Vec<Child>> =
+        std::collections::HashMap::new();
     for entry in fetched_albums {
-        albums.push(entry.album);
-        songs.extend(entry.song);
+        let album_id = entry.album.id.clone();
+        if album_id.is_empty() {
+            continue;
+        }
+        let songs: Vec<Child> = entry
+            .song
+            .into_iter()
+            .filter(|song| !song.id.is_empty())
+            .collect();
+        songs_by_album.insert(album_id, songs);
     }
 
-    // 1. library metadata
-    report(&mut progress, "Indexing library…", 65);
-    let changes =
-        crate::library::replace(&dbs.sync, &artists, &albums, &songs, indexes.last_modified)
-            .await?;
+    // Safety: an empty/partial manifest is far more likely a broken upstream
+    // answer than a library the user emptied. Never wipe a populated local
+    // library from a suspicious shallow manifest; a manual (deep) sync is the
+    // explicit override.
+    let old_artists = before.2.max(0) as usize;
+    if old_artists > 0 {
+        if artists.is_empty() && !deep {
+            bail!("server returned an empty artist index; keeping the local library");
+        }
+        if !deep && artists.len() * 2 < old_artists {
+            bail!(
+                "server returned only {}/{} artists; keeping the local library (manual refresh to force)",
+                artists.len(),
+                old_artists
+            );
+        }
+    }
 
-    // The provider date moved: any description or lyric document cached
-    // before that update is older than the provider's copy. Drop it so the
-    // next read fetches the current text instead of serving the stale cache.
+    report(&mut progress, "Indexing library…", 75);
+    let changes = crate::library::apply(
+        &dbs.sync,
+        &artists,
+        &albums,
+        &songs_by_album,
+        indexes.last_modified,
+        deep,
+    )
+    .await?;
+
+    // The provider date moved: drop cached descriptions/lyrics older than the
+    // provider copy so the next read fetches the current text.
     let provider_secs = provider_secs(indexes.last_modified);
     if provider_secs > 0 {
         best_effort(
@@ -220,8 +243,6 @@ where
         .await;
     }
 
-    // The API also changed rows that may carry a cache fetched after the
-    // provider date: drop those too, so changed rows always refetch.
     if !changes.albums.is_empty() {
         best_effort(
             "album info invalidation failed",
@@ -250,7 +271,7 @@ where
         .await;
     }
 
-    // 1b. UI-60: the server's artist `userRating` snapshots seed the local
+    // UI-60: the server's artist `userRating` snapshots seed the local
     // `artist_user` overlay (a rating made elsewhere lands here).
     let artist_ratings: Vec<(String, i64)> = indexes
         .index
@@ -262,6 +283,7 @@ where
                 .user_rating
                 .map(|rating| (artist.id.clone(), i64::from(rating)))
         })
+        .filter(|(id, _)| !id.is_empty())
         .collect();
     best_effort(
         "artist rating import failed",
@@ -279,14 +301,12 @@ where
     )
     .await;
 
-    // 4. the cover cache is no longer part of the sync proper: it is a
-    // secondary task the caller starts once this library pass has succeeded.
+    // 4. the cover cache is a secondary task the caller starts after success.
 
     // 5. lyric cache: drop entries for songs that left the library
     best_effort("lyric cache purge failed", crate::lyrics::purge(dbs)).await;
 
-    // 5b. artist biography + album notes caches: drop rows that left the
-    // library
+    // 5b. artist biography + album notes caches: drop rows that left the library
     best_effort(
         "artist info purge failed",
         crate::library::purge_stale_artist_info(&dbs.library),
@@ -300,9 +320,6 @@ where
 
     // 5c. media cache: drop blobs for vanished songs and dead rules
     best_effort("media cache purge failed", crate::media::purge(dbs)).await;
-
-    // 5c'. media cache: rule-owned blobs no longer inside a selected
-    // artist/album container (CACHE-5 coverage check)
     best_effort(
         "media coverage prune failed",
         crate::media::prune_uncovered(dbs),
@@ -330,8 +347,7 @@ where
     // 7. color cache: drop schemes whose cover vanished from covers.db
     best_effort("color cache purge failed", crate::colors::purge(dbs)).await;
 
-    // 8. ARC-44: the Subsonic playlist list rides the library sync; the
-    // contents stay lazy, and a failure here never fails the sync.
+    // 8. ARC-44: the Subsonic playlist list rides the library sync.
     let playlists = best_effort(
         "could not refresh playlists",
         crate::playlists::refresh_subsonic(dbs, &client),
@@ -339,14 +355,23 @@ where
     .await
     .unwrap_or(0);
 
-    report(&mut progress, "Done", 100);
+    let after = crate::library::counts(&dbs.library)
+        .await
+        .unwrap_or((0, 0, 0));
+    let updated = changes.any() || before != after;
+    let covers_due = updated
+        || deep
+        || crate::library::cover_check_due(&dbs.library, crate::consts::COVER_CHECK_TTL_SECS)
+            .await
+            .unwrap_or(true);
 
+    report(&mut progress, "Done", 100);
     Ok(SyncReport {
-        updated: true,
-        artists: artists.len(),
-        albums: albums.len(),
-        songs: songs.len(),
-        covers_due: true,
+        updated,
+        artists: after.2.max(0) as usize,
+        albums: after.1.max(0) as usize,
+        songs: after.0.max(0) as usize,
+        covers_due,
         forced_covers: changes.covers,
         lyrics,
         playlists,
@@ -492,7 +517,12 @@ async fn fetch_artists(
     ids: &[String],
 ) -> Result<Vec<ArtistWithAlbumsID3>> {
     let client = Arc::clone(client);
-    fetch_chunked(&client, ids, move |c, id| async move { c.get_artist(&id).await }).await
+    fetch_chunked(
+        &client,
+        ids,
+        move |c, id| async move { c.get_artist(&id).await },
+    )
+    .await
 }
 
 async fn fetch_albums(
@@ -500,5 +530,10 @@ async fn fetch_albums(
     ids: &[String],
 ) -> Result<Vec<AlbumWithSongsID3>> {
     let client = Arc::clone(client);
-    fetch_chunked(&client, ids, move |c, id| async move { c.get_album(&id).await }).await
+    fetch_chunked(
+        &client,
+        ids,
+        move |c, id| async move { c.get_album(&id).await },
+    )
+    .await
 }

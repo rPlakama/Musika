@@ -314,6 +314,8 @@ struct AppRoot {
     notes: Option<(String, String)>,
     description: Option<DescriptionState>,
     marks: MarksState,
+    warm: std::collections::HashMap<(Scope, usize), (usize, Vec<Row>)>,
+    preloaded: bool,
 }
 
 impl AppRoot {
@@ -384,6 +386,8 @@ impl AppRoot {
             notes: None,
             description: None,
             marks: MarksState::default(),
+            warm: std::collections::HashMap::new(),
+            preloaded: false,
         };
         if let Ok(message) = std::env::var("MUSIKA_GPUUI_TOAST")
             && !message.is_empty()
@@ -507,6 +511,14 @@ impl AppRoot {
             }
             Event::Notes { album_id, notes } => {
                 self.notes = Some((album_id, notes));
+            }
+            Event::Preload {
+                scope,
+                order,
+                count,
+                rows,
+            } => {
+                self.warm.insert((scope, order), (count, rows));
             }
             Event::Marks { generation, result } => {
                 self.marks.update(generation, result);
@@ -677,6 +689,11 @@ impl AppRoot {
     }
 
     fn reload(&mut self) {
+        if let Some(covers) = COVERS.get()
+            && let Ok(mut covers) = covers.lock()
+        {
+            covers.clear();
+        }
         self.view.loading = true;
         self.view.rows.clear();
         self.generation = self.bridge.load_library(self.view.scope, self.view.order);
@@ -781,8 +798,17 @@ impl AppRoot {
         }
         self.remember_current();
         self.hovered_row = None;
-        self.view.clear_for(scope);
-        self.reload();
+        let wanted = (scope, 0);
+        if let Some((count, rows)) = self.warm.remove(&wanted) {
+            self.view.clear_for(scope);
+            self.view.rows = RowWindow::full(rows);
+            self.view.rows.count = count;
+            self.view.loading = false;
+            self.generation = self.bridge.load_library(scope, 0);
+        } else {
+            self.view.clear_for(scope);
+            self.reload();
+        }
     }
 
     fn select(&mut self, index: usize) {
@@ -2952,6 +2978,23 @@ impl Render for AppRoot {
             }
         }
         self.ensure_library_window();
+        if !self.preloaded && self.view.rows.count > 0 && self.view.scope != Scope::Playlists {
+            self.preloaded = true;
+            let start_scope = self.view.scope;
+            cx.spawn(async move |this, cx| {
+                cx.background_executor()
+                    .timer(std::time::Duration::from_millis(350))
+                    .await;
+                let _ = this.update(cx, |this, _| {
+                    for scope in Scope::ALL {
+                        if scope != start_scope && scope != Scope::Playlists {
+                            this.bridge.preload_library(scope, 0);
+                        }
+                    }
+                });
+            })
+            .detach();
+        }
         let top = self.top_bar(&*cx);
         let body = if self.page.is_some() {
             self.page_view(&*cx).into_any_element()
@@ -3032,27 +3075,15 @@ fn parse_page_spec(spec: &str) -> Option<PageDescriptor> {
     Some(PageDescriptor { kind, id: id.to_string() })
 }
 
+static COVERS: std::sync::OnceLock<std::sync::Mutex<covers::CoverStore>> =
+    std::sync::OnceLock::new();
+
 fn cover_path(url: &str) -> Option<std::path::PathBuf> {
-    let clean = url.split('#').next()?;
-    if clean.is_empty() {
-        return None;
-    }
-    let path = reqwest::Url::parse(clean).ok()?.to_file_path().ok()?;
-    // GPUI will not size a multi-MB 3600 px cover in the row/hero decoders;
-    // prefer the generated 320 px thumbnail when one exists.
-    let large = path
-        .metadata()
-        .map(|meta| meta.len() > 512 * 1024)
-        .unwrap_or(false);
-    if large
-        && let Some(stem) = path.file_stem().and_then(|stem| stem.to_str())
-    {
-        let thumb = path.with_file_name(format!("{stem}.thumb.jpg"));
-        if thumb.is_file() {
-            return Some(thumb);
-        }
-    }
-    Some(path)
+    COVERS
+        .get_or_init(|| std::sync::Mutex::new(covers::CoverStore::new(768)))
+        .lock()
+        .ok()?
+        .row_path(url)
 }
 
 fn art_scaled(path: Option<std::path::PathBuf>, base: f32, scale: f32) -> gpui::AnyElement {

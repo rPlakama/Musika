@@ -1,6 +1,6 @@
 // Musika — GPUUI shell/list state (M1 first slice).
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Scope {
     Albums,
     Songs,

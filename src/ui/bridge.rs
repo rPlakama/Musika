@@ -4,6 +4,7 @@
 //! runtime and return as plain `Event`s over a tokio channel; the GPUI root
 //! task drains them and notifies its entity.
 
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use tokio::sync::mpsc::UnboundedSender;
@@ -51,6 +52,12 @@ pub enum Event {
         generation: u64,
         result: crate::download::MarkWindowResult,
     },
+    Preload {
+        scope: super::state::Scope,
+        order: usize,
+        count: usize,
+        rows: Vec<super::state::Row>,
+    },
     Restore {
         volume: f64,
         muted: bool,
@@ -87,7 +94,7 @@ pub struct Bridge {
     tx: UnboundedSender<Event>,
     generation: AtomicU64,
     page_generation: AtomicU64,
-    search_generation: AtomicU64,
+    search_generation: Arc<AtomicU64>,
     marks_generation: AtomicU64,
     offline: AtomicBool,
 }
@@ -98,7 +105,7 @@ impl Bridge {
             tx,
             generation: AtomicU64::new(0),
             page_generation: AtomicU64::new(0),
-            search_generation: AtomicU64::new(0),
+            search_generation: Arc::new(AtomicU64::new(0)),
             marks_generation: AtomicU64::new(0),
             offline: AtomicBool::new(false),
         };
@@ -361,8 +368,14 @@ impl Bridge {
 
     pub fn search(&self, query: String) {
         let generation = self.search_generation.fetch_add(1, Ordering::SeqCst) + 1;
+        let generation_counter = self.search_generation.clone();
         let tx = self.tx.clone();
         crate::app::runtime().spawn(async move {
+            // Debounce keystrokes: only the latest query runs the index search.
+            tokio::time::sleep(std::time::Duration::from_millis(120)).await;
+            if generation_counter.load(Ordering::Relaxed) != generation {
+                return;
+            }
             let event = match search_rows(&query).await {
                 Ok(rows) => {
                     crate::debug_log!("GPUI: search {:?} {} rows", query, rows.len());
@@ -474,6 +487,51 @@ impl Bridge {
                     crate::debug_log!("GPUI: row window {surface} failed: {err:#}");
                 }
             }
+        });
+    }
+
+    pub fn preload_library(&self, scope: super::state::Scope, order: usize) {
+        let tx = self.tx.clone();
+        let offline = self.offline.load(Ordering::Relaxed);
+        crate::app::runtime().spawn(async move {
+            let Some(dbs) = crate::app::dbs() else { return };
+            let Ok(count) = crate::qml::rows::count(
+                &dbs,
+                scope.key(),
+                "",
+                &order_name(scope, order),
+                offline,
+            )
+            .await
+            else {
+                return;
+            };
+            if count == 0 {
+                return;
+            }
+            let Ok(value) = crate::qml::rows::window(
+                &dbs,
+                scope.key(),
+                "",
+                &order_name(scope, order),
+                0,
+                50,
+                offline,
+            )
+            .await
+            else {
+                return;
+            };
+            let rows = value["rows"]
+                .as_array()
+                .map(|rows| rows.iter().map(|row| row_from_json(scope, row)).collect())
+                .unwrap_or_default();
+            let _ = tx.send(Event::Preload {
+                scope,
+                order,
+                count,
+                rows,
+            });
         });
     }
 
@@ -879,7 +937,7 @@ fn send_event(tx: &UnboundedSender<Event>, event: Event) {
 }
 
 fn thumbify(url: String) -> String {
-    if url.is_empty() || url.contains(".thumb.") || !url.contains(".jpg") {
+    if url.is_empty() || url.contains(".thumb.") || url.contains("#no-thumb") || !url.contains(".jpg") {
         return url;
     }
     url.replacen(".jpg", ".thumb.jpg", 1)

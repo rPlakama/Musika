@@ -2152,13 +2152,6 @@ impl AppRoot {
             .child(
                 div()
                     .absolute()
-                    .right(px(16.0))
-                    .top(px(48.0))
-                    .child(art(cover, 380.0)),
-            )
-            .child(
-                div()
-                    .absolute()
                     .left(px(12.0))
                     .top(px(18.0))
                     .w(relative(0.78))
@@ -2235,12 +2228,25 @@ impl AppRoot {
         let count = page.rows.len();
         let scroll = self.page_scroll.clone();
         div()
+            .relative()
             .flex()
             .flex_col()
             .flex_1()
             .w_full()
+            .child(
+                div()
+                    .absolute()
+                    .top(px(48.0))
+                    .left_0()
+                    .right_0()
+                    .h(px(420.0))
+                    .flex()
+                    .justify_center()
+                    .overflow_hidden()
+                    .child(art(cover, 390.0)),
+            )
             .child(header)
-            .child(div().h(px(20.0)))
+            .child(div().h(px(220.0)))
             .child(
                 div()
                     .flex_1()
@@ -2270,7 +2276,7 @@ impl AppRoot {
                                 else {
                                     break;
                                 };
-                                let target = if selected { 0x4A4458FF } else { 0x14121800 };
+                                let target = if selected { 0x4A4458FF } else { 0x141218FF };
                                 let color = this
                                     .row_colors
                                     .entry(key)

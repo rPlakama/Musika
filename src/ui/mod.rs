@@ -1646,7 +1646,7 @@ impl AppRoot {
                                         .child(
                                             div()
                                                 .text_size(px(18.0))
-                                                .font_weight(gpui::FontWeight::SEMIBOLD)
+                                                .font_weight(if selected { gpui::FontWeight::BOLD } else { gpui::FontWeight::NORMAL })
                                                 .whitespace_normal()
                                                 .max_h(px(34.0))
                                                 .overflow_hidden()
@@ -1866,6 +1866,7 @@ impl AppRoot {
                                                         .child(
                                                             div()
                                                                 .text_size(px(14.0))
+                                                                .font_weight(if active { gpui::FontWeight::BOLD } else { gpui::FontWeight::NORMAL })
                                                                 .when(playing, |this| this.text_color(rgb(PRIMARY)))
                                                                 .whitespace_nowrap()
                                                                 .text_ellipsis()
@@ -1930,7 +1931,7 @@ impl AppRoot {
                             .child(
                                 div()
                                     .text_size(px(16.0))
-                                    .font_weight(gpui::FontWeight::SEMIBOLD)
+                                    .font_weight(if selected { gpui::FontWeight::BOLD } else { gpui::FontWeight::NORMAL })
                                     .whitespace_nowrap()
                                     .text_ellipsis()
                                     .child(row.title.clone()),
@@ -2196,7 +2197,12 @@ impl AppRoot {
                                                 .flex_col()
                                                 .min_w_0()
                                                 .flex_1()
-                                                .child(div().text_size(px(15.0)).child(title))
+                                                .child(
+                                                    div()
+                                                        .text_size(px(15.0))
+                                                        .font_weight(if selected { gpui::FontWeight::BOLD } else { gpui::FontWeight::NORMAL })
+                                                        .child(title),
+                                                )
                                                 .child(
                                                     div()
                                                         .text_size(px(11.0))

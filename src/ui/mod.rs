@@ -68,6 +68,10 @@ actions!(
         SeekForward,
         NextTrack,
         PrevTrack,
+        QueueToggle,
+        QueueRemove,
+        QueueUp,
+        QueueDown,
     ]
 );
 
@@ -84,7 +88,10 @@ pub fn run() {
         cx.bind_keys([
             KeyBinding::new("q", Back, None),
             KeyBinding::new("escape", Back, None),
-            KeyBinding::new("ctrl-q", Quit, None),
+            KeyBinding::new("ctrl-q", QueueToggle, None),
+            KeyBinding::new("d d", QueueRemove, None),
+            KeyBinding::new("ctrl-shift-k", QueueUp, None),
+            KeyBinding::new("ctrl-shift-j", QueueDown, None),
             KeyBinding::new("j", MoveDown, None),
             KeyBinding::new("k", MoveUp, None),
             KeyBinding::new("g g", Top, None),
@@ -174,6 +181,10 @@ struct AppRoot {
     row_colors: std::collections::HashMap<String, anim::ColorBehavior>,
     player: crate::player::Player,
     playback_error: Option<String>,
+    queue_open: bool,
+    queue_cursor: usize,
+    queue_anim: anim::Behavior,
+    queue_scroll: UniformListScrollHandle,
 }
 
 impl AppRoot {
@@ -217,7 +228,15 @@ impl AppRoot {
             row_colors: std::collections::HashMap::new(),
             player: crate::player::Player::new(),
             playback_error: None,
+            queue_open: false,
+            queue_cursor: 0,
+            queue_anim: anim::Behavior::new(0.0),
+            queue_scroll: UniformListScrollHandle::new(),
         };
+        if std::env::var_os("MUSIKA_GPUUI_QUEUE").is_some() {
+            app.queue_open = true;
+            app.queue_cursor = app.player.index();
+        }
         if let Ok(song_id) = std::env::var("MUSIKA_GPUUI_PLAY")
             && !song_id.is_empty()
         {
@@ -364,6 +383,12 @@ impl AppRoot {
             cx.notify();
             return;
         }
+        if self.queue_open {
+            self.queue_cursor = self.queue_cursor.saturating_add(1).min(self.player.len().saturating_sub(1));
+            self.queue_scroll.scroll_to_item(self.queue_cursor, ScrollStrategy::Center);
+            cx.notify();
+            return;
+        }
         if let Some(page) = self.page.as_mut() {
             page.select(page.cursor.saturating_add(1));
             self.page_scroll.scroll_to_item(page.cursor, ScrollStrategy::Center);
@@ -376,6 +401,12 @@ impl AppRoot {
     fn on_move_up(&mut self, _: &MoveUp, _window: &mut Window, cx: &mut Context<Self>) {
         if let Some(search) = self.search.as_mut() {
             search.cursor = search.cursor.saturating_sub(1);
+            cx.notify();
+            return;
+        }
+        if self.queue_open {
+            self.queue_cursor = self.queue_cursor.saturating_sub(1);
+            self.queue_scroll.scroll_to_item(self.queue_cursor, ScrollStrategy::Center);
             cx.notify();
             return;
         }
@@ -430,6 +461,42 @@ impl AppRoot {
     fn on_refresh(&mut self, _: &Refresh, _window: &mut Window, cx: &mut Context<Self>) {
         self.reload();
         cx.notify();
+    }
+
+    fn on_queue_toggle(&mut self, _: &QueueToggle, _window: &mut Window, cx: &mut Context<Self>) {
+        self.queue_open = !self.queue_open;
+        if self.queue_open {
+            self.queue_cursor = self.player.index().min(self.player.len().saturating_sub(1));
+            self.queue_scroll.scroll_to_item(self.queue_cursor, ScrollStrategy::Center);
+        }
+        cx.notify();
+    }
+
+    fn on_queue_remove(&mut self, _: &QueueRemove, _window: &mut Window, cx: &mut Context<Self>) {
+        if self.queue_open {
+            self.player.remove(self.queue_cursor);
+            self.queue_cursor = self.queue_cursor.min(self.player.len().saturating_sub(1));
+            self.queue_scroll.scroll_to_item(self.queue_cursor, ScrollStrategy::Center);
+            cx.notify();
+        }
+    }
+
+    fn on_queue_up(&mut self, _: &QueueUp, _window: &mut Window, cx: &mut Context<Self>) {
+        if self.queue_open && self.queue_cursor > 0 {
+            self.player.move_item(self.queue_cursor, self.queue_cursor - 1);
+            self.queue_cursor -= 1;
+            self.queue_scroll.scroll_to_item(self.queue_cursor, ScrollStrategy::Center);
+            cx.notify();
+        }
+    }
+
+    fn on_queue_down(&mut self, _: &QueueDown, _window: &mut Window, cx: &mut Context<Self>) {
+        if self.queue_open && self.queue_cursor + 1 < self.player.len() {
+            self.player.move_item(self.queue_cursor, self.queue_cursor + 1);
+            self.queue_cursor += 1;
+            self.queue_scroll.scroll_to_item(self.queue_cursor, ScrollStrategy::Center);
+            cx.notify();
+        }
     }
 
     fn on_play_pause(&mut self, _: &PlayPause, _window: &mut Window, cx: &mut Context<Self>) {
@@ -617,6 +684,13 @@ impl AppRoot {
     }
 
     fn on_enter(&mut self, _: &Enter, _window: &mut Window, cx: &mut Context<Self>) {
+        if self.queue_open {
+            let index = self.queue_cursor;
+            self.player.jump(index);
+            self.queue_open = false;
+            cx.notify();
+            return;
+        }
         if let Some(search) = self.search.as_ref() {
             let row = search.rows.get(search.cursor).cloned();
             if let Some(row) = row {
@@ -653,6 +727,11 @@ impl AppRoot {
     }
 
     fn on_back(&mut self, _: &Back, window: &mut Window, cx: &mut Context<Self>) {
+        if self.queue_open || self.queue_anim.value(&self.clock) > 0.01 {
+            self.queue_open = false;
+            cx.notify();
+            return;
+        }
         if self.search.is_some() {
             self.search_open = false;
             cx.notify();
@@ -921,6 +1000,104 @@ impl AppRoot {
             .h_full()
             .track_scroll(scroll),
         )
+    }
+
+    fn queue_overlay(&self, cx: &Context<Self>, progress: f32) -> gpui::Div {
+        let queue = self.player.queue_snapshot();
+        let count = queue.len();
+        let current = self.player.index();
+        let cursor = self.queue_cursor;
+        let scroll = self.queue_scroll.clone();
+        div()
+            .absolute()
+            .top(px(52.0))
+            .bottom(px(66.0))
+            .right(px(-40.0 * (1.0 - progress)))
+            .w(px(420.0))
+            .opacity(progress)
+            .flex()
+            .flex_col()
+            .bg(rgb(SURFACE))
+            .border_l_1()
+            .border_color(rgb(OUTLINE))
+            .shadow_lg()
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .px_4()
+                    .py_3()
+                    .text_size(px(13.0))
+                    .child("Queue")
+                    .child(
+                        div()
+                            .text_size(px(10.0))
+                            .text_color(rgb(ON_VARIANT))
+                            .child(format!("{} / {}", current.saturating_add(1), count)),
+                    ),
+            )
+            .child(
+                uniform_list("queue", count, cx.processor(move |this, range: std::ops::Range<usize>, _window, cx| {
+                    let queue = this.player.queue_snapshot();
+                    let mut items = Vec::with_capacity(range.len());
+                    for index in range {
+                        let Some(track) = queue.get(index) else { break };
+                        let title = track.title.clone();
+                        let artist = track.artist.clone();
+                        let active = index == cursor;
+                        let playing = index == this.player.index();
+                        items.push(
+                            div()
+                                .id(index)
+                                .flex()
+                                .items_center()
+                                .gap_2()
+                                .h(px(40.0))
+                                .px_3()
+                                .cursor_pointer()
+                                .when(active, |this| this.bg(rgb(SURFACE_HIGH)))
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    this.queue_cursor = index;
+                                    this.player.jump(index);
+                                    cx.notify();
+                                }))
+                                .child(
+                                    div()
+                                        .w(px(16.0))
+                                        .text_size(px(10.0))
+                                        .text_color(rgb(if playing { PRIMARY } else { ON_VARIANT }))
+                                        .child(if playing { "▶" } else { "" }),
+                                )
+                                .child(
+                                    div()
+                                        .flex()
+                                        .flex_col()
+                                        .min_w_0()
+                                        .flex_1()
+                                        .child(div().text_size(px(12.0)).child(title))
+                                        .child(
+                                            div()
+                                                .text_size(px(10.0))
+                                                .text_color(rgb(ON_VARIANT))
+                                                .child(artist),
+                                        ),
+                                ),
+                        );
+                    }
+                    items
+                }))
+                .h_full()
+                .track_scroll(scroll),
+            )
+            .child(
+                div()
+                    .px_3()
+                    .py_2()
+                    .text_size(px(10.0))
+                    .text_color(rgb(ON_VARIANT))
+                    .child("Enter jumps · d d removes · Ctrl-Shift-J/K reorders · q closes"),
+            )
     }
 
     fn search_overlay(&self, search: &SearchState, progress: f32) -> gpui::Div {
@@ -1337,9 +1514,20 @@ impl Render for AppRoot {
         if self.search.is_some() && !self.search_anim.settled(&self.clock) {
             window.request_animation_frame();
         }
+        let queue_progress = self.queue_anim.target(
+            if self.queue_open { 1.0 } else { 0.0 },
+            anim::EMPHASIZED_MS,
+            if self.queue_open { anim::Curve::Decelerate } else { anim::Curve::Accelerate },
+            &self.clock,
+        );
+        if !self.queue_anim.settled(&self.clock) {
+            window.request_animation_frame();
+        }
         if self.row_colors.values().any(|color| !color.settled(&self.clock)) {
             window.request_animation_frame();
         }
+        let queue_overlay = (self.queue_open || queue_progress > 0.001)
+            .then(|| self.queue_overlay(&*cx, queue_progress));
         let overlay = self.search.as_ref().map(|search| self.search_overlay(search, progress));
         let top = self.top_bar(&*cx);
         let body = if self.page.is_some() {
@@ -1364,6 +1552,10 @@ impl Render for AppRoot {
             .on_action(cx.listener(Self::on_visual))
             .on_action(cx.listener(Self::on_search))
             .on_action(cx.listener(Self::on_play_pause))
+            .on_action(cx.listener(Self::on_queue_toggle))
+            .on_action(cx.listener(Self::on_queue_remove))
+            .on_action(cx.listener(Self::on_queue_up))
+            .on_action(cx.listener(Self::on_queue_down))
             .on_action(cx.listener(Self::on_mute))
             .on_action(cx.listener(Self::on_volume_up))
             .on_action(cx.listener(Self::on_volume_down))
@@ -1389,6 +1581,7 @@ impl Render for AppRoot {
             .child(top)
             .child(body)
             .child(status)
+            .child(div().when_some(queue_overlay, |this, queue| this.child(queue)))
             .child(div().when_some(overlay, |this, overlay| this.child(overlay)))
     }
 }

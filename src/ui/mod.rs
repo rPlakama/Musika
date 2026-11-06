@@ -181,6 +181,12 @@ struct LyricsState {
     source: String,
 }
 
+struct DescriptionState {
+    title: String,
+    subtitle: String,
+    body: String,
+}
+
 struct LoginState {
     server: String,
     username: String,
@@ -270,6 +276,8 @@ struct AppRoot {
     toasts: Vec<ToastState>,
     last_play: Option<(String, String)>,
     restored: bool,
+    notes: Option<(String, String)>,
+    description: Option<DescriptionState>,
 }
 
 impl AppRoot {
@@ -333,6 +341,8 @@ impl AppRoot {
             toasts: Vec::new(),
             last_play: None,
             restored: false,
+            notes: None,
+            description: None,
         };
         if let Ok(message) = std::env::var("MUSIKA_GPUUI_TOAST")
             && !message.is_empty()
@@ -415,6 +425,9 @@ impl AppRoot {
                 self.view.cursor = self.view.cursor.min(self.view.rows.len().saturating_sub(1));
                 self.scroll
                     .scroll_to_item(self.view.cursor, ScrollStrategy::Center);
+            }
+            Event::Notes { album_id, notes } => {
+                self.notes = Some((album_id, notes));
             }
             Event::Restore {
                 volume,
@@ -1376,6 +1389,9 @@ impl AppRoot {
     }
 
     fn open_descriptor(&mut self, descriptor: PageDescriptor) {
+        if descriptor.kind == PageKind::Album {
+            self.bridge.request_notes(descriptor.id.clone());
+        }
         self.remember_current();
         self.travel.open(descriptor.clone());
         self.page = Some(PageState::new(descriptor.clone()));
@@ -1697,6 +1713,67 @@ impl AppRoot {
                 .w_full()
                 .track_scroll(scroll),
             )
+    }
+
+    fn description_overlay(&self, cx: &Context<Self>) -> Option<gpui::AnyElement> {
+        let description = self.description.as_ref()?;
+        Some(
+            div()
+                .id("description-scrim")
+                .absolute()
+                .inset_0()
+                .size_full()
+                .flex()
+                .items_center()
+                .justify_center()
+                .bg(gpui::black().opacity(0.50))
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.description = None;
+                    cx.notify();
+                }))
+                .child(
+                    div()
+                        .w(relative(0.72))
+                        .max_w(px(720.0))
+                        .h_full()
+                        .rounded_md()
+                        .bg(gpui::black().opacity(0.72))
+                        .p_4()
+                        .flex()
+                        .flex_col()
+                        .gap_2()
+                        .child(
+                            div()
+                                .text_size(px(24.0))
+                                .font_weight(gpui::FontWeight::BOLD)
+                                .whitespace_nowrap()
+                                .text_ellipsis()
+                                .child(description.title.clone()),
+                        )
+                        .when(!description.subtitle.is_empty(), |this| {
+                            this.child(
+                                div()
+                                    .text_size(px(13.0))
+                                    .text_color(rgb(ON_VARIANT))
+                                    .whitespace_nowrap()
+                                    .text_ellipsis()
+                                    .child(description.subtitle.clone()),
+                            )
+                        })
+                        .child(
+                            div()
+                                .id("description-body")
+                                .flex_1()
+                                .w_full()
+                                .overflow_y_scroll()
+                                .text_size(px(14.0))
+                                .text_color(rgb(ON_SURFACE))
+                                .whitespace_normal()
+                                .child(description.body.clone()),
+                        ),
+                ),
+        )
+        .map(|overlay| overlay.into_any_element())
     }
 
     fn fullscreen_overlay(&self, progress: f32) -> gpui::Div {
@@ -2142,12 +2219,21 @@ impl AppRoot {
         let subtitle = page.header.subtitle.clone();
         let meta = page.header.meta.clone();
         let cover = cover_path(&page.header.cover_url);
+        let notes = self
+            .notes
+            .as_ref()
+            .filter(|(album_id, _)| *album_id == page.descriptor.id)
+            .map(|(_, notes)| notes.clone())
+            .unwrap_or_default();
+        let desc_title = title.clone();
+        let desc_subtitle = subtitle.clone();
+        let header_h = if notes.is_empty() { 220.0 } else { 320.0 };
 
         let header = div()
             .relative()
             .flex_none()
             .w_full()
-            .h(px(220.0))
+            .h(px(header_h))
             .px(px(12.0))
             .child(
                 div()
@@ -2187,7 +2273,32 @@ impl AppRoot {
                             .text_color(rgb(ON_VARIANT))
                             .whitespace_nowrap()
                             .child(meta),
-                    ),
+                    )
+                    .when(!notes.is_empty(), |this| {
+                        let title = desc_title.clone();
+                        let subtitle = desc_subtitle.clone();
+                        let body = notes.clone();
+                        this.child(
+                            div()
+                                .id("album-notes")
+                                .mt_1()
+                                .max_h(px(64.0))
+                                .overflow_hidden()
+                                .text_size(px(11.0))
+                                .text_color(rgb(ON_VARIANT))
+                                .whitespace_normal()
+                                .cursor_pointer()
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    this.description = Some(DescriptionState {
+                                        title: title.clone(),
+                                        subtitle: subtitle.clone(),
+                                        body: body.clone(),
+                                    });
+                                    cx.notify();
+                                }))
+                                .child(notes.clone()),
+                        )
+                    }),
             );
 
         if page.loading && page.rows.is_empty() {
@@ -2590,6 +2701,7 @@ impl Render for AppRoot {
         let queue_overlay = (self.queue_open || queue_progress > 0.001)
             .then(|| self.queue_overlay(&*cx, queue_progress));
         let overlay = self.search.as_ref().map(|search| self.search_overlay(search, progress));
+        let description_overlay = self.description_overlay(&*cx);
         if let Some(started) = self.exiting {
             window.request_animation_frame();
             if self.clock.now - started >= 0.200 {
@@ -2656,6 +2768,7 @@ impl Render for AppRoot {
             .child(match queue_overlay { Some(o) => o.into_any_element(), None => div().into_any_element() })
             .child(match overlay { Some(o) => o.into_any_element(), None => div().into_any_element() })
             .child(match fullscreen_overlay { Some(o) => o.into_any_element(), None => div().into_any_element() })
+            .child(match description_overlay { Some(o) => o.into_any_element(), None => div().into_any_element() })
             .child(match toast_overlay { Some(o) => o.into_any_element(), None => div().into_any_element() })
             .child(match exit_overlay { Some(o) => o.into_any_element(), None => div().into_any_element() })
             .into_any_element()

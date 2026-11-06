@@ -44,3 +44,24 @@ cc = "1"
 # fixed xattr release is available.
 [patch.crates-io]
 xattr = { path = "vendor/xattr" }
+
+# The app runs in a debug profile for development, but cover decoding/resizing
+# is CPU-bound native work where unoptimized image codecs cost seconds per
+# album. Optimise the codec stack without giving up debug info for our code.
+[profile.dev.package.image]
+opt-level = 3
+
+[profile.dev.package.zune-jpeg]
+opt-level = 3
+
+[profile.dev.package.zune-core]
+opt-level = 3
+
+[profile.dev.package.png]
+opt-level = 3
+
+[profile.dev.package.image-webp]
+opt-level = 3
+
+[profile.dev.package.gif]
+opt-level = 3

@@ -352,6 +352,9 @@ pub struct PageHeader {
     pub cover_url: String,
     /// Cover id for display-copy requests.
     pub cover_art: String,
+    /// User star count (0..=5) for the one-line page phrase.
+    pub rating: i64,
+    pub starred: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -376,6 +379,8 @@ impl PageState {
                 meta: String::new(),
                 cover_url: String::new(),
                 cover_art: String::new(),
+                rating: 0,
+                starred: false,
             },
             rows: Vec::new(),
             cursor: 0,

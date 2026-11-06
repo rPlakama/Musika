@@ -1054,6 +1054,8 @@ async fn page_data(
                 ),
                 cover_url: thumbify(crate::covers::url_for(album.cover_art.as_deref(), &covers)),
                 cover_art: album.cover_art.unwrap_or_default(),
+                rating: album.rating,
+                starred: album.starred.is_some(),
             };
             let rows = songs
                 .into_iter()
@@ -1092,6 +1094,8 @@ async fn page_data(
                 meta: String::new(),
                 cover_url: thumbify(crate::covers::url_for(artist.cover_art.as_deref(), &covers)),
                 cover_art: artist.cover_art.unwrap_or_default(),
+                rating: 0,
+                starred: artist.starred.is_some(),
             };
             let rows = albums
                 .into_iter()
@@ -1130,6 +1134,8 @@ async fn page_data(
                     .unwrap_or_default()
                     .to_string(),
                 cover_art: String::new(),
+                rating: 0,
+                starred: false,
             };
             let rows = value["songs"]
                 .as_array()
@@ -1168,6 +1174,8 @@ async fn page_data(
                     .unwrap_or_default()
                     .to_string(),
                 cover_art: String::new(),
+                rating: 0,
+                starred: false,
             };
             let rows = value["songs"]
                 .as_array()

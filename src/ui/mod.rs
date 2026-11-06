@@ -4037,88 +4037,45 @@ impl AppRoot {
         let cover = self
             .display_cover(&page.header.cover_art, cover_bucket(cover_side))
             .or_else(|| cover_path(&page.header.cover_url));
-        let notes = self
-            .notes
-            .as_ref()
-            .filter(|(album_id, _)| *album_id == page.descriptor.id)
-            .map(|(_, notes)| notes.clone())
-            .unwrap_or_default();
-        let desc_title = title.clone();
-        let desc_subtitle = subtitle.clone();
         let header_h = cover_bottom.max(220.0);
         let spacer_h = 0.0;
 
+        let stars = "★★★★★"
+            .chars()
+            .take(page.header.rating.clamp(0, 5) as usize)
+            .collect::<String>();
+        let mut phrase_parts: Vec<String> = Vec::new();
+        for part in [&title, &subtitle, &meta, &stars] {
+            if !part.is_empty() {
+                phrase_parts.push(part.clone());
+            }
+        }
+        let phrase = phrase_parts.join(" · ");
+        let phrase_size = page_h * 0.022 * (page_w / 1280.0).clamp(0.9, 1.6);
         let header = div()
             .relative()
             .flex_none()
             .w_full()
             .h(px(header_h))
-            .px(px(12.0))
             .child(
                 div()
                     .absolute()
-                    .left(px(page_w * 0.02))
-                    .top(px(page_w * 0.02))
-                    .w(relative(0.78))
-                    .max_w(px(page_w * 0.96))
-                    .p(px(page_w * 0.02))
+                    .left(px(page_w * 0.04))
+                    .right(px(page_w * 0.04))
+                    .bottom(px(page_w * 0.025))
+                    .px_3()
+                    .py_2()
                     .rounded_md()
-                    .bg(gpui::black().opacity(0.40))
-                    .flex()
-                    .flex_col()
-                    .gap_1()
+                    .bg(gpui::black().opacity(0.45))
                     .child(
                         div()
-                            .text_size(px(page_h * 0.04 * (page_w / 1280.0).clamp(0.9, 1.6)))
-                            .font_weight(gpui::FontWeight::BOLD)
+                            .text_size(px(phrase_size))
+                            .font_weight(gpui::FontWeight::SEMIBOLD)
+                            .text_color(rgb(palette::on_surface()))
                             .whitespace_nowrap()
                             .text_ellipsis()
-                            .child(title),
-                    )
-                    .child(
-                        div()
-                            .text_size(px(page_h * 0.024 * (page_w / 1280.0).clamp(0.9, 1.6)))
-                            .text_color(rgb(palette::on_surface_variant()))
-                            .child("☆ ☆ ☆ ☆ ☆"),
-                    )
-                    .child(
-                        div()
-                            .text_size(px(page_h * 0.024 * (page_w / 1280.0).clamp(0.9, 1.6)))
-                            .text_color(rgb(palette::primary()))
-                            .child(subtitle),
-                    )
-                    .child(
-                        div()
-                            .text_size(px(page_h * 0.02 * (page_w / 1280.0).clamp(0.9, 1.6)))
-                            .text_color(rgb(palette::on_surface_variant()))
-                            .whitespace_nowrap()
-                            .child(meta),
-                    )
-                    .when(!notes.is_empty(), |this| {
-                        let title = desc_title.clone();
-                        let subtitle = desc_subtitle.clone();
-                        let body = notes.clone();
-                        this.child(
-                            div()
-                                .id("album-notes")
-                                .mt_1()
-                                .max_h(px(64.0))
-                                .overflow_hidden()
-                                .text_size(px(11.0))
-                                .text_color(rgb(palette::on_surface_variant()))
-                                .whitespace_normal()
-                                .cursor_pointer()
-                                .on_click(cx.listener(move |this, _, _, cx| {
-                                    this.description = Some(DescriptionState {
-                                        title: title.clone(),
-                                        subtitle: subtitle.clone(),
-                                        body: body.clone(),
-                                    });
-                                    cx.notify();
-                                }))
-                                .child(notes.clone()),
-                        )
-                    }),
+                            .child(phrase),
+                    ),
             );
 
         if page.loading && page.rows.is_empty() {

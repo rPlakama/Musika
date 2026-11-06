@@ -150,6 +150,8 @@ impl ScrollModal {
         self.follow.active = false;
         let target = self.target_y(count, cursor);
         self.set_offset_now(target);
+        self.handle
+            .scroll_to_item_strict(cursor, gpui::ScrollStrategy::Center);
         cursor
     }
 

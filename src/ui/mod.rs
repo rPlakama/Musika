@@ -26,7 +26,7 @@ mod state;
 
 use gpui::{
     App, Application, Bounds, Context, FocusHandle, KeyBinding, Render, ScrollStrategy, Window,
-    WindowBounds, WindowOptions, actions, div, prelude::*, px, rgb, size, uniform_list,
+    WindowBounds, WindowOptions, actions, div, img, prelude::*, px, rgb, size, uniform_list,
     UniformListScrollHandle,
 };
 
@@ -486,6 +486,7 @@ impl AppRoot {
                     let subtitle = row.subtitle.clone();
                     let meta = row.meta.clone();
                     let starred = row.starred;
+                    let cover = cover_path(&row.cover_url);
                     let selected = index == this.view.cursor;
                     items.push(
                         div()
@@ -501,6 +502,7 @@ impl AppRoot {
                                 this.select(index);
                                 cx.notify();
                             }))
+                            .child(art(cover, 36.0))
                             .child(
                                 div()
                                     .flex()
@@ -566,12 +568,7 @@ impl AppRoot {
             .h(px(180.0))
             .px_6()
             .bg(rgb(SURFACE))
-            .child(
-                div()
-                    .size(px(116.0))
-                    .rounded_md()
-                    .bg(rgb(SURFACE_HIGH)),
-            )
+            .child(art(cover_path(&page.header.cover_url), 116.0))
             .child(
                 div()
                     .flex()
@@ -772,4 +769,23 @@ fn parse_page_spec(spec: &str) -> Option<PageDescriptor> {
         _ => return None,
     };
     Some(PageDescriptor { kind, id: id.to_string() })
+}
+
+fn cover_path(url: &str) -> Option<std::path::PathBuf> {
+    let clean = url.split('#').next()?;
+    if clean.is_empty() {
+        return None;
+    }
+    reqwest::Url::parse(clean).ok()?.to_file_path().ok()
+}
+
+fn art(path: Option<std::path::PathBuf>, size: f32) -> gpui::AnyElement {
+    match path {
+        Some(path) => img(path).size(px(size)).rounded_md().into_any_element(),
+        None => div()
+            .size(px(size))
+            .rounded_md()
+            .bg(rgb(SURFACE_HIGH))
+            .into_any_element(),
+    }
 }

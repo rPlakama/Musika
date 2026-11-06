@@ -21,6 +21,7 @@
 
 #include <libavcodec/avcodec.h>
 #include <libavformat/avformat.h>
+#include <libavutil/log.h>
 #include <libavutil/opt.h>
 #include <libswresample/swresample.h>
 
@@ -434,18 +435,21 @@ MusikaDecoder *musika_decoder_open_stream(int (*read_cb)(void *, uint8_t *, int)
                                           void *opaque, int (*interrupt)(void *),
                                           char *err, size_t err_len)
 {
+    av_log_set_level(AV_LOG_ERROR);
     return decoder_open_stream(read_cb, opaque, interrupt, err, err_len);
 }
 
 MusikaDecoder *musika_decoder_open(const char *url, const unsigned char *buffer, size_t buffer_len,
                                    char *err, size_t err_len)
 {
+    av_log_set_level(AV_LOG_ERROR);
     return decoder_open(url, buffer, buffer_len, NULL, NULL, err, err_len);
 }
 
 MusikaDecoder *musika_decoder_open_url(const char *url, int (*interrupt)(void *),
                                        void *opaque, char *err, size_t err_len)
 {
+    av_log_set_level(AV_LOG_ERROR);
     return decoder_open(url, NULL, 0, interrupt, opaque, err, err_len);
 }
 

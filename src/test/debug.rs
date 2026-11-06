@@ -135,26 +135,23 @@ pub(crate) fn diagnostics() -> Vec<String> {
         }
     }
 
-    match Command::new("vulkaninfo").arg("--summary").output() {
-        Ok(output) => {
-            let stdout = String::from_utf8_lossy(&output.stdout);
-            if let Some(name) = summary_field(&stdout, "deviceName") {
-                let kind = summary_field(&stdout, "deviceType")
-                    .map(device_kind)
-                    .unwrap_or("unknown GPU type");
-                let driver = summary_field(&stdout, "driverName").unwrap_or("unknown");
-                lines.push(format!(
-                    "Vulkan: Available, using {name} ({kind}; driver {driver})"
-                ));
-            } else {
-                let stderr = String::from_utf8_lossy(&output.stderr);
-                let reason = stderr.lines().next_back().unwrap_or("no diagnostics");
-                lines.push(format!("Vulkan: unavailable ({reason})"));
-            }
+    // No vulkaninfo installed: nothing useful to report (and no misleading
+    // "unknown/error"-looking line in the debug log).
+    if let Ok(output) = Command::new("vulkaninfo").arg("--summary").output() {
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        if let Some(name) = summary_field(&stdout, "deviceName") {
+            let kind = summary_field(&stdout, "deviceType")
+                .map(device_kind)
+                .unwrap_or("unknown GPU type");
+            let driver = summary_field(&stdout, "driverName").unwrap_or("unknown");
+            lines.push(format!(
+                "Vulkan: Available, using {name} ({kind}; driver {driver})"
+            ));
+        } else {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            let reason = stderr.lines().next_back().unwrap_or("no diagnostics");
+            lines.push(format!("Vulkan: unavailable ({reason})"));
         }
-        Err(err) => lines.push(format!(
-            "Vulkan: unknown (vulkaninfo not found: {err}; install vulkan-tools)"
-        )),
     }
 
     lines

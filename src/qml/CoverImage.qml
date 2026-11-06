@@ -98,9 +98,15 @@ Item {
     // target. Deriving `…_768x768.thumb.jpg` from it would point at a file
     // the cache never writes; keep the display copy as-is when the surface
     // shrinks below the thumb edge (the sourceSize still downscales it).
-    readonly property var _displayMatch: /_([0-9]+)x[0-9]+\./.exec(root.source.toString())
+    readonly property var _displayMatch: /_([0-9]+)x[0-9]+\./.exec(root.cleanSource)
     readonly property int displayEdge: root._displayMatch ? Number(root._displayMatch[1]) : 0
     readonly property bool displayCopy: root.displayEdge > 0
+    /// The cache has the full cover but not its thumbnail yet; use the full
+    /// file directly (the backend strips this marker once the thumb exists).
+    readonly property string cleanSource: root.source
+        ? root.source.toString().split("#no-thumb")[0] : ""
+    readonly property bool noThumb: root.source
+        && root.source.toString().indexOf("#no-thumb") >= 0
 
     // Decode a display copy at its own bucket, not at the live painted size:
     // resizing inside one bucket must not restart the async decode every
@@ -118,15 +124,15 @@ Item {
     }
 
     readonly property url imageSource: {
-        var text = root.source ? root.source.toString() : ""
+        var text = root.cleanSource
         if (text.length === 0 || text === "undefined")
             return ""
         if (text.indexOf("file:") !== 0)
             return root.source
-        if (root.thumbFailed || root.displayCopy)
-            return root.source
+        if (root.noThumb || root.thumbFailed || root.displayCopy)
+            return text
         var deviceEdge = Math.max(root.decodeWidth, root.decodeHeight) * Screen.devicePixelRatio
-        return deviceEdge <= root.thumbEdge ? root.thumbUrl(text) : root.source
+        return deviceEdge <= root.thumbEdge ? root.thumbUrl(text) : text
     }
 
     Image {
@@ -150,7 +156,7 @@ Item {
             if (status === Image.Ready)
                 root._hasLoaded = true;
             if (status === Image.Error && !root.thumbFailed && !root.displayCopy
-                    && root.imageSource.toString() !== root.source.toString())
+                    && root.imageSource.toString() !== root.cleanSource)
                 root.thumbFailed = true
         }
     }

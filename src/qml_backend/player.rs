@@ -100,7 +100,9 @@ impl Backend {
             "hash": revision,
         })
         .to_string();
-        crate::debug_log!("queue: published {} rows", queue.len());
+        if !queue.is_empty() {
+            crate::debug_log!("queue: published {} rows", queue.len());
+        }
         emit(&invoker, "queue", json);
     }
 

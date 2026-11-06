@@ -248,6 +248,23 @@ async fn refresh_inner(
         }
     }
 
+    // Legacy/upgraded caches can hold a raw cover without its thumbnail (the
+    // job list above only covers files changed in this pass). Backfill every
+    // referenced cached cover once per full pass, so QML never requests a
+    // .thumb.jpg that does not exist.
+    if purge_unreferenced {
+        let mut queued: HashSet<String> = thumb_jobs.iter().map(|(name, _)| name.clone()).collect();
+        for (id, row) in known.iter() {
+            if !referenced.contains(id) {
+                continue;
+            }
+            let source = dir.join(&row.file);
+            let thumb = thumb_name(&row.file);
+            if source.is_file() && !dir.join(&thumb).is_file() && queued.insert(thumb.clone()) {
+                thumb_jobs.push((thumb, source));
+            }
+        }
+    }
     let _ = ensure_thumbs(&dir, thumb_jobs).await;
     remove_orphans(pool, &dir).await?;
 
@@ -801,6 +818,43 @@ pub async fn get_or_create_resized_cover(
     .ok()?
 }
 
+/// One-shot repair for caches whose raw covers predate thumbnail generation:
+/// scans the cover index, claims the missing thumb names and generates them on
+/// the bounded blocking pool (the same path as the lazy on-demand jobs).
+pub(crate) async fn backfill_missing_thumbs(dbs: &crate::db::Dbs) -> usize {
+    let dir = match crate::db::covers_dir() {
+        Ok(dir) => dir,
+        Err(_) => return 0,
+    };
+    let rows: Vec<(String, String)> = match sqlx::query_as("SELECT id, file FROM covers")
+        .fetch_all(&dbs.covers)
+        .await
+    {
+        Ok(rows) => rows,
+        Err(err) => {
+            eprintln!("covers: thumbnail scan failed: {err:#}");
+            return 0;
+        }
+    };
+    let mut jobs: Vec<(String, std::path::PathBuf)> = Vec::new();
+    for (_id, file) in rows {
+        let source = dir.join(&file);
+        let name = thumb_name(&file);
+        if source.is_file() && !dir.join(&name).is_file() && claim_thumb(&name) {
+            jobs.push((name, source));
+        }
+    }
+    if jobs.is_empty() {
+        return 0;
+    }
+    let processed = ensure_thumbs(&dir, jobs).await;
+    let count = processed.len();
+    for name in processed {
+        release_thumb(name);
+    }
+    count
+}
+
 async fn cached_urls(pool: &SqlitePool, ids: &[String]) -> Result<HashMap<String, String>> {
     let unique = unique_ids(ids);
     if unique.is_empty() {
@@ -815,13 +869,19 @@ async fn cached_urls(pool: &SqlitePool, ids: &[String]) -> Result<HashMap<String
         let rows: Vec<(String, String)> = builder.build_query_as().fetch_all(pool).await?;
         for (id, file) in rows {
             let path = dir.join(&file);
-            if path.is_file() {
+            if path.is_file()
+                && let Ok(url) = reqwest::Url::from_file_path(&path)
+            {
                 let name = thumb_name(&file);
-                if !dir.join(&name).is_file() {
-                    thumb_jobs.push((name, path.clone()));
-                }
-                if let Ok(url) = reqwest::Url::from_file_path(&path) {
+                if dir.join(&name).is_file() {
                     map.insert(id, url.to_string());
+                } else {
+                    // Tell CoverImage this cover has no thumbnail yet: it
+                    // uses the full file directly instead of requesting a
+                    // missing .thumb.jpg (which Qt logs as an error), while
+                    // the job below writes the real thumbnail for next time.
+                    map.insert(id, format!("{url}#no-thumb"));
+                    thumb_jobs.push((name, path.clone()));
                 }
             }
         }

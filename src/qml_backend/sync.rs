@@ -116,6 +116,18 @@ pub(super) fn spawn_sync(
 
                 // Cover caching is a secondary task: the library sync is
                 // already complete, so this never holds up the finish state.
+                {
+                    let thumb_dbs = dbs.clone();
+                    crate::app::runtime().spawn(async move {
+                        let repaired =
+                            crate::covers::backfill_missing_thumbs(&thumb_dbs).await;
+                        if repaired > 0 {
+                            crate::debug_log!(
+                                "covers: backfilled {repaired} missing thumbnails"
+                            );
+                        }
+                    });
+                }
                 if report.covers_due {
                     let cover_dbs = dbs.clone();
                     let forced = report.forced_covers.clone();

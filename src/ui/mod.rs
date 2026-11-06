@@ -217,6 +217,9 @@ struct AppRoot {
     fullscreen_anim: anim::Behavior,
     lyrics: Option<LyricsState>,
     lyrics_requested: Option<String>,
+    quit_armed_at: Option<f64>,
+    exiting: Option<f64>,
+    quit_after_ms: Option<u64>,
 }
 
 impl AppRoot {
@@ -270,6 +273,11 @@ impl AppRoot {
             fullscreen_anim: anim::Behavior::new(0.0),
             lyrics: None,
             lyrics_requested: None,
+            quit_armed_at: None,
+            exiting: None,
+            quit_after_ms: std::env::var("MUSIKA_GPUUI_QUIT_MS")
+                .ok()
+                .and_then(|ms| ms.parse::<u64>().ok()),
         };
         if std::env::var_os("MUSIKA_GPUUI_FULLSCREEN").is_some() {
             app.fullscreen = true;
@@ -775,6 +783,70 @@ impl AppRoot {
             )
     }
 
+    fn flush_status(&self) {
+        let Some(header) = self.header.as_ref() else { return };
+        let Some(dbs) = crate::app::dbs() else { return };
+        let queue = self.player.queue_snapshot();
+        let queue: Vec<&str> = queue.iter().map(|track| track.id.as_str()).collect();
+        let queue = serde_json::to_string(&queue).unwrap_or_default();
+        let (page_kind, page_id) = match self.page.as_ref().map(|page| &page.descriptor) {
+            Some(descriptor) => {
+                let kind = match descriptor.kind {
+                    PageKind::Album => "album",
+                    PageKind::Artist => "artist",
+                    PageKind::Playlist => "playlist",
+                };
+                (kind.to_string(), descriptor.id.clone())
+            }
+            None => (String::new(), String::new()),
+        };
+        let current = self.player.current();
+        let status = crate::status::SessionStatus {
+            server_url: header.server_url.clone(),
+            username: header.username.clone(),
+            album_id: current.and_then(|track| (!track.album_id.is_empty()).then(|| track.album_id.clone())),
+            song_id: current.map(|track| track.id.clone()),
+            page_kind,
+            page_id,
+            queue,
+            queue_index: self.player.index() as i64,
+            position: self.player.position(),
+            volume: self.player.volume(),
+            muted: self.player.muted(),
+            updated_at: crate::consts::now_secs(),
+        };
+        crate::debug_log!("GPUI: flushing status (queue {} tracks)", self.player.len());
+        if let Err(err) = crate::app::runtime().block_on(crate::status::save(&dbs.status, &status)) {
+            eprintln!("status: could not save the session: {err:#}");
+        }
+    }
+
+    fn exit_overlay(&self, progress: f32) -> gpui::Div {
+        let letters = ["B", "y", "e", "!"];
+        div()
+            .absolute()
+            .inset_0()
+            .opacity(progress)
+            .flex()
+            .items_center()
+            .justify_center()
+            .bg(gpui::black().opacity(0.62))
+            .child(
+                div()
+                    .flex()
+                    .gap_1()
+                    .children(letters.into_iter().map(|letter| {
+                        let scale = 0.6 + 0.4 * anim::Curve::OutBack.sample(progress);
+                        div()
+                            .text_size(px(72.0 * scale))
+                            .font_weight(gpui::FontWeight::BOLD)
+                            .text_color(gpui::white())
+                            .opacity(progress)
+                            .child(letter)
+                    })),
+            )
+    }
+
     fn on_play_pause(&mut self, _: &PlayPause, _window: &mut Window, cx: &mut Context<Self>) {
         self.player.toggle();
         cx.notify();
@@ -1033,7 +1105,7 @@ impl AppRoot {
         self.open_row_page(row);
     }
 
-    fn on_back(&mut self, _: &Back, window: &mut Window, cx: &mut Context<Self>) {
+    fn on_back(&mut self, _: &Back, _window: &mut Window, cx: &mut Context<Self>) {
         if self.fullscreen || self.fullscreen_anim.value(&self.clock) > 0.01 {
             self.fullscreen = false;
             cx.notify();
@@ -1063,9 +1135,17 @@ impl AppRoot {
         }
         if self.page.is_some() {
             self.back_page();
-        } else {
-            window.remove_window();
+            cx.notify();
+            return;
         }
+        let now = self.clock.now;
+        if self.quit_armed_at.is_some_and(|at| now - at <= 0.25) {
+            self.quit_armed_at = None;
+            self.exiting = Some(now);
+            cx.notify();
+            return;
+        }
+        self.quit_armed_at = Some(now);
         cx.notify();
     }
 
@@ -1919,6 +1999,12 @@ impl AppRoot {
 impl Render for AppRoot {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.clock.tick();
+        if self.exiting.is_none()
+            && let Some(ms) = self.quit_after_ms
+            && self.clock.now * 1000.0 >= ms as f64
+        {
+            self.exiting = Some(self.clock.now);
+        }
         if self.login.is_some() {
             return self.login_view().into_any_element();
         }
@@ -1965,12 +2051,23 @@ impl Render for AppRoot {
         }
         let fullscreen_overlay = (self.fullscreen || fullscreen_progress > 0.001)
             .then(|| self.fullscreen_overlay(fullscreen_progress));
+        let exit_overlay = self.exiting.map(|started| {
+            let progress = (((self.clock.now - started) / 0.200) as f32).clamp(0.0, 1.0);
+            self.exit_overlay(progress)
+        });
         if self.row_colors.values().any(|color| !color.settled(&self.clock)) {
             window.request_animation_frame();
         }
         let queue_overlay = (self.queue_open || queue_progress > 0.001)
             .then(|| self.queue_overlay(&*cx, queue_progress));
         let overlay = self.search.as_ref().map(|search| self.search_overlay(search, progress));
+        if let Some(started) = self.exiting {
+            window.request_animation_frame();
+            if self.clock.now - started >= 0.200 {
+                self.flush_status();
+                window.remove_window();
+            }
+        }
         let top = self.top_bar(&*cx);
         let body = if self.page.is_some() {
             self.page_view(&*cx).into_any_element()
@@ -2030,6 +2127,7 @@ impl Render for AppRoot {
             .child(div().when_some(queue_overlay, |this, queue| this.child(queue)))
             .child(div().when_some(overlay, |this, overlay| this.child(overlay)))
             .child(div().when_some(fullscreen_overlay, |this, full| this.child(full)))
+            .child(div().when_some(exit_overlay, |this, overlay| this.child(overlay)))
             .into_any_element()
     }
 }

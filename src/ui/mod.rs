@@ -5625,14 +5625,29 @@ fn art_scaled(path: Option<std::path::PathBuf>, base: f32, scale: f32) -> gpui::
         .mr(px(-offset))
         .mt(px(-offset))
         .mb(px(-offset))
-        .child(art(path, size))
+        .child(art_plain(path, size))
         .into_any_element()
+}
+
+fn art_plain(path: Option<std::path::PathBuf>, size: f32) -> gpui::AnyElement {
+    match path {
+        Some(path) => img(path)
+            .size(px(size))
+            .rounded_sm()
+            .bg(rgb(palette::surface_container_highest()))
+            .into_any_element(),
+        None => div()
+            .size(px(size))
+            .rounded_md()
+            .bg(rgb(palette::surface_container_highest()))
+            .into_any_element(),
+    }
 }
 
 fn art(path: Option<std::path::PathBuf>, size: f32) -> gpui::AnyElement {
     match path {
         Some(path) => {
-            let id = gpui::SharedString::from(format!("cover-fade:{}", path.display()));
+            let id = gpui::SharedString::from(format!("cover-fade:{}:{size:.0}", path.display()));
             img(path.clone())
                 .size(px(size))
                 .rounded_sm()

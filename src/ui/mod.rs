@@ -21,6 +21,7 @@
 //! the shared bridge into an entity root with scope tabs and a virtual list.
 #![allow(dead_code)] // shared state carries page/travel fields ahead of G1 pages.
 
+mod anim;
 mod bridge;
 mod state;
 
@@ -152,6 +153,9 @@ struct AppRoot {
     page_generation: u64,
     page_scroll: UniformListScrollHandle,
     search: Option<SearchState>,
+    search_open: bool,
+    search_anim: anim::Behavior,
+    clock: anim::Clock,
 }
 
 impl AppRoot {
@@ -189,10 +193,14 @@ impl AppRoot {
             page_generation: 0,
             page_scroll: UniformListScrollHandle::new(),
             search: None,
+            search_open: false,
+            search_anim: anim::Behavior::new(0.0),
+            clock: anim::Clock::new(),
         };
         if let Ok(query) = std::env::var("MUSIKA_GPUUI_SEARCH")
             && !query.is_empty()
         {
+            app.search_open = true;
             app.search = Some(SearchState {
                 query: query.clone(),
                 rows: Vec::new(),
@@ -396,6 +404,7 @@ impl AppRoot {
 
     fn on_search(&mut self, _: &Search, _window: &mut Window, cx: &mut Context<Self>) {
         if self.search.is_none() {
+            self.search_open = true;
             self.search = Some(SearchState {
                 query: String::new(),
                 rows: Vec::new(),
@@ -422,27 +431,56 @@ impl AppRoot {
     }
 
     fn on_key_down(&mut self, event: &gpui::KeyDownEvent, _window: &mut Window, cx: &mut Context<Self>) {
-        let Some(search) = self.search.as_mut() else {
+        if self.search.is_none() || !self.search_open {
             return;
-        };
+        }
+        cx.stop_propagation();
+        let Some(search) = self.search.as_mut() else { return };
         let key = event.keystroke.key.as_str();
         let modified = event.keystroke.modifiers.control
             || event.keystroke.modifiers.alt
             || event.keystroke.modifiers.platform;
-        if key == "backspace" {
-            search.query.pop();
-        } else if key == "escape" {
-            self.search = None;
-            cx.notify();
-            return;
-        } else if !modified {
-            if let Some(text) = event.keystroke.key_char.as_ref()
-                && !text.chars().any(char::is_control)
-            {
-                search.query.push_str(text);
-            } else if key == "space" {
-                search.query.push(' ');
+        match key {
+            "escape" => {
+                self.search_open = false;
+                cx.notify();
+                return;
             }
+            "enter" => {
+                let row = search.rows.get(search.cursor).cloned();
+                if let Some(row) = row {
+                    self.search_open = false;
+                    self.search = None;
+                    self.open_row_page(&row);
+                }
+                cx.notify();
+                return;
+            }
+            "backspace" => {
+                search.query.pop();
+            }
+            "up" | "ctrl-p" => {
+                search.cursor = search.cursor.saturating_sub(1);
+                cx.notify();
+                return;
+            }
+            "down" | "ctrl-n" => {
+                search.cursor = search.cursor.saturating_add(1).min(search.rows.len().saturating_sub(1));
+                cx.notify();
+                return;
+            }
+            _ if !modified => {
+                if let Some(text) = event.keystroke.key_char.as_ref()
+                    && !text.chars().any(char::is_control)
+                {
+                    search.query.push_str(text);
+                } else if key == "space" {
+                    search.query.push(' ');
+                } else {
+                    return;
+                }
+            }
+            _ => return,
         }
         if search.query.is_empty() {
             search.rows.clear();
@@ -512,6 +550,7 @@ impl AppRoot {
         if let Some(search) = self.search.as_ref() {
             let row = search.rows.get(search.cursor).cloned();
             if let Some(row) = row {
+                self.search_open = false;
                 self.search = None;
                 self.open_row_page(&row);
             }
@@ -535,7 +574,7 @@ impl AppRoot {
 
     fn on_back(&mut self, _: &Back, window: &mut Window, cx: &mut Context<Self>) {
         if self.search.is_some() {
-            self.search = None;
+            self.search_open = false;
             cx.notify();
             return;
         }
@@ -798,7 +837,7 @@ impl AppRoot {
         )
     }
 
-    fn search_overlay(&self, search: &SearchState) -> gpui::Div {
+    fn search_overlay(&self, search: &SearchState, progress: f32) -> gpui::Div {
         let query = if search.query.is_empty() {
             "Search…".to_string()
         } else {
@@ -847,7 +886,8 @@ impl AppRoot {
             .flex()
             .justify_center()
             .items_start()
-            .pt(px(72.0))
+            .pt(px(72.0 - 8.0 * progress))
+            .opacity(progress)
             .child(
                 div()
                     .w(px(720.0))
@@ -1086,8 +1126,21 @@ impl AppRoot {
 }
 
 impl Render for AppRoot {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let overlay = self.search.as_ref().map(|search| self.search_overlay(search));
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.clock.tick();
+        let progress = self.search_anim.target(
+            if self.search_open { 1.0 } else { 0.0 },
+            anim::STANDARD_MS,
+            if self.search_open { anim::Curve::Decelerate } else { anim::Curve::Accelerate },
+            &self.clock,
+        );
+        if self.search.is_some() && !self.search_open && progress <= 0.001 {
+            self.search = None;
+        }
+        if self.search.is_some() && !self.search_anim.settled(&self.clock) {
+            window.request_animation_frame();
+        }
+        let overlay = self.search.as_ref().map(|search| self.search_overlay(search, progress));
         let top = self.top_bar(&*cx);
         let body = if self.page.is_some() {
             self.page_view(&*cx).into_any_element()

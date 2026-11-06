@@ -351,6 +351,7 @@ struct AppRoot {
     palette_cover: Option<String>,
     hovered_row: Option<usize>,
     hovered_page: Option<usize>,
+    selected_id: Option<String>,
     visual_mode: bool,
     queue_selection: state::Selection,
     last_player_index: usize,
@@ -466,6 +467,7 @@ impl AppRoot {
             palette_cover: None,
             hovered_row: None,
             hovered_page: None,
+            selected_id: None,
             visual_mode: false,
             queue_selection: state::Selection::default(),
             last_player_index: 0,
@@ -977,12 +979,18 @@ impl AppRoot {
     fn follow_page(&mut self, animated: bool) {
         self.clock.tick();
         let Some(page) = self.page.as_ref() else { return };
+        self.selected_id = page.rows.get(page.cursor).map(|row| row.id.clone());
         self.page_scroll_modal
             .start(page.rows.len(), page.cursor, animated, self.clock.now);
     }
 
     fn follow_queue(&mut self, animated: bool) {
         self.clock.tick();
+        self.selected_id = self
+            .player
+            .queue_snapshot()
+            .get(self.queue_cursor)
+            .map(|track| track.id.clone());
         self.queue_scroll_modal
             .start(self.player.len(), self.queue_cursor, animated, self.clock.now);
     }
@@ -993,6 +1001,7 @@ impl AppRoot {
             .library_scroll
             .land(self.view.rows.count, index);
         self.view.select(cursor);
+        self.selected_id = self.view.rows.get(cursor).map(|row| row.id.clone());
         self.view.rows.requested = None;
         self.ensure_library_window();
         self.remember_current();
@@ -1003,6 +1012,7 @@ impl AppRoot {
         let Some(page) = self.page.as_mut() else { return };
         let cursor = self.page_scroll_modal.land(page.rows.len(), index);
         page.select(cursor);
+        self.selected_id = page.rows.get(cursor).map(|row| row.id.clone());
         self.hovered_page = None;
     }
 
@@ -1010,6 +1020,11 @@ impl AppRoot {
         self.reset_row_scales();
         let cursor = self.queue_scroll_modal.land(self.player.len(), index);
         self.queue_cursor = cursor;
+        self.selected_id = self
+            .player
+            .queue_snapshot()
+            .get(cursor)
+            .map(|track| track.id.clone());
     }
 
     fn ensure_library_window(&mut self) {
@@ -1240,6 +1255,7 @@ impl AppRoot {
             self.view.selection.clear();
         }
         self.view.select(index);
+        self.selected_id = self.view.rows.get(index).map(|row| row.id.clone());
         self.hovered_row = None;
         self.follow_library(true);
         self.remember_current();
@@ -3482,7 +3498,9 @@ impl AppRoot {
                     let row_h = this.library_scroll.row_h;
                     let mut items = Vec::with_capacity(range.len());
                     for index in range {
-                        let selected = index == this.view.cursor
+                        let selected = this.view.rows.get(index).is_some_and(|row| {
+                            this.selected_id.as_deref() == Some(row.id.as_str())
+                        }) || index == this.view.cursor
                             || this.view.selection.contains(this.view.cursor, index);
                         let hovered = this.hovered_row == Some(index);
                         let emphasis = if selected { 1.08 } else { 1.0 };
@@ -3535,7 +3553,7 @@ impl AppRoot {
                             );
                         items.push(
                             div()
-                                .id(index)
+                                .id(gpui::ElementId::named_usize(format!("library-row:{selected}"), index))
                                 .w_full()
                                 .flex()
                                 .items_center()
@@ -3618,7 +3636,7 @@ impl AppRoot {
                     }
                     items
                 }))
-                .h_full()
+                .pt(px(8.0)).pb(px(8.0)).h_full()
                 .w_full()
                 .on_scroll_wheel(cx.listener(|this, _, _, _| {
                     this.library_scroll.on_wheel();
@@ -4251,7 +4269,9 @@ impl AppRoot {
                                 let artist = track.artist.clone();
                                 let cover = cover_path(&track.cover_url);
                                 let active = index == cursor;
-                                let selected = active
+                                let selected = this.selected_id.as_deref()
+                                    == Some(track.id.as_str())
+                                    || active
                                     || this.queue_selection.contains(cursor, index)
                                     || this.queue_selection.contains(this.queue_cursor, index);
                                 let playing = index == this.player.index();
@@ -4268,7 +4288,7 @@ impl AppRoot {
                                     );
                                 items.push(
                                     div()
-                                        .id(index)
+                                        .id(gpui::ElementId::named_usize(format!("queue-row:{selected}"), index))
                                         .flex()
                                         .items_center()
                                         .gap_2()
@@ -4321,6 +4341,8 @@ impl AppRoot {
                             }
                             items
                         }))
+                        .pt(px(8.0))
+                        .pb(px(8.0))
                         .h_full()
                         .on_scroll_wheel(cx.listener(|this, _, _, _| {
                             this.queue_scroll_modal.on_wheel();
@@ -4832,6 +4854,7 @@ impl AppRoot {
                             let row_h = this.page_scroll_modal.row_h;
                             let mut items = Vec::with_capacity(range.len());
                             for index in range {
+                                let selected_id = this.selected_id.clone();
                                 let Some((title, subtitle, meta, selected, rating, starred, downloaded, cover, show_cover)) = this
                                     .page
                                     .as_ref()
@@ -4841,7 +4864,8 @@ impl AppRoot {
                                             row.title.clone(),
                                             row.subtitle.clone(),
                                             row.meta.clone(),
-                                            index == page.cursor
+                                            selected_id.as_deref() == Some(row.id.as_str())
+                                                || index == page.cursor
                                                 || page.selection.contains(page.cursor, index),
                                             row.rating,
                                             row.starred,
@@ -4888,7 +4912,7 @@ impl AppRoot {
                                 });
                                 items.push(
                                     div()
-                                        .id(index)
+                                        .id(gpui::ElementId::named_usize(format!("page-row:{selected}"), index))
                                         .w_full()
                                         .flex()
                                         .items_center()
@@ -4968,6 +4992,8 @@ impl AppRoot {
                             }
                             items
                         }))
+                        .pt(px(8.0))
+                        .pb(px(8.0))
                         .h_full()
                         .w_full()
                         .on_scroll_wheel(cx.listener(|this, _, _, _| {
@@ -5593,15 +5619,13 @@ fn art_scaled(path: Option<std::path::PathBuf>, base: f32, scale: f32) -> gpui::
     let size = base * scale;
     let offset = (size - base) * 0.5;
     div()
-        .relative()
-        .size(px(base))
-        .child(
-            div()
-                .absolute()
-                .left(px(-offset))
-                .top(px(-offset))
-                .child(art(path, size)),
-        )
+        .w(px(size))
+        .h(px(size))
+        .ml(px(-offset))
+        .mr(px(-offset))
+        .mt(px(-offset))
+        .mb(px(-offset))
+        .child(art(path, size))
         .into_any_element()
 }
 

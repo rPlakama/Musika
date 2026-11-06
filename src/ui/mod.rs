@@ -310,6 +310,8 @@ impl AssetSource for Assets {
 }
 
 const PAGE_HERO_PX: f32 = 720.0;
+/// Row highlight colour fade: half the old 120 ms scale-up tier.
+const HIGHLIGHT_MS: f32 = anim::QUICK_MS * 0.5;
 const FULLSCREEN_HERO_PX: f32 = 720.0;
 
 struct CoverLoadTrace {
@@ -3532,13 +3534,19 @@ impl AppRoot {
                         let cover = cover_path(&row.cover_url);
                         let cover_scale = if selected { 1.20 } else { 1.0 };
                         let base_fill = if striped { palette::surface_container_lowest() } else { palette::surface() };
-                        let hover_fill = this
+                        let fill = this
                             .row_hover_colors
-                            .entry(format!("library-hover:{}", row.id))
+                            .entry(format!("library-fill:{}", row.id))
                             .or_insert_with(|| anim::ColorBehavior::new(base_fill))
                             .target(
-                                if hovered && !selected { palette::surface_container_high() } else { base_fill },
-                                anim::QUICK_MS,
+                                if selected {
+                                    palette::secondary_container()
+                                } else if hovered {
+                                    palette::surface_container_high()
+                                } else {
+                                    base_fill
+                                },
+                                HIGHLIGHT_MS,
                                 anim::Curve::Standard,
                                 &this.clock,
                             );
@@ -3551,11 +3559,7 @@ impl AppRoot {
                                 .h(px(row_h))
                                 .px_1()
                                 .rounded_sm()
-                                .bg(if selected {
-                                    rgb(palette::secondary_container())
-                                } else {
-                                    gpui::rgba(hover_fill)
-                                })
+                                .bg(rgb(fill))
                                 .cursor_pointer()
                                 .on_hover(cx.listener(move |this, hovered: &bool, _, cx| {
                                     if *hovered {
@@ -4268,6 +4272,20 @@ impl AppRoot {
                                 let playing = index == this.player.index();
                                 let emphasis = if selected { 1.08 } else { 1.0 };
                                 let cover_scale = if selected { 1.20 } else { 1.0 };
+                                let fill = this
+                                    .row_hover_colors
+                                    .entry(format!("queue-fill:{index}"))
+                                    .or_insert_with(|| anim::ColorBehavior::new(0x00000000))
+                                    .target(
+                                        if selected {
+                                            palette::secondary_container()
+                                        } else {
+                                            0x00000000
+                                        },
+                                        HIGHLIGHT_MS,
+                                        anim::Curve::Standard,
+                                        &this.clock,
+                                    );
                                 items.push(
                                     div()
                                         .id(gpui::ElementId::named_usize(if selected { "queue-row-selected" } else { "queue-row" }, index))
@@ -4277,7 +4295,7 @@ impl AppRoot {
                                         .h(px(this.queue_scroll_modal.row_h))
                                         .px_3()
                                         .cursor_pointer()
-                                        .when(selected, |this| this.bg(rgb(palette::secondary_container())))
+                                        .bg(gpui::rgba(fill))
                                         .on_click(cx.listener(move |this, _, _, cx| {
                                             if !this.visual_mode {
                                                 this.queue_selection.clear();
@@ -4871,13 +4889,19 @@ impl AppRoot {
                                         &this.clock,
                                     );
                                 let page_base = if index % 2 != 0 { palette::surface_container_lowest() } else { palette::surface() };
-                                let hover_fill = this
+                                let fill = this
                                     .row_hover_colors
-                                    .entry(format!("page-hover:{index}"))
+                                    .entry(format!("page-fill:{index}"))
                                     .or_insert_with(|| anim::ColorBehavior::new(page_base))
                                     .target(
-                                        if hovered && !selected { palette::surface_container_high() } else { page_base },
-                                        anim::QUICK_MS,
+                                        if selected {
+                                            palette::secondary_container()
+                                        } else if hovered {
+                                            palette::surface_container_high()
+                                        } else {
+                                            page_base
+                                        },
+                                        HIGHLIGHT_MS,
                                         anim::Curve::Standard,
                                         &this.clock,
                                     );
@@ -4893,11 +4917,7 @@ impl AppRoot {
                                         .px_3()
                                         .rounded_sm()
                                         .cursor_pointer()
-                                        .bg(if selected {
-                                            rgb(palette::secondary_container())
-                                        } else {
-                                            gpui::rgba(hover_fill)
-                                        })
+                                        .bg(rgb(fill))
                                         .on_hover(cx.listener(move |this, hovered: &bool, _, cx| {
                                             if *hovered {
                                                 this.hovered_page = Some(index);

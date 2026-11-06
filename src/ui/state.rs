@@ -58,6 +58,8 @@ pub enum RowKind {
 
 /// Number of search results a scope can paint; also the backend query cap.
 pub const SEARCH_VISIBLE_ROWS: usize = 5;
+/// Rows requested from the backend; the overlay scrolls beyond the visible 5.
+pub const SEARCH_FETCH_ROWS: usize = 100;
 
 #[derive(Debug, Clone)]
 pub struct Row {

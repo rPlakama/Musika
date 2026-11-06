@@ -188,6 +188,7 @@ struct SearchState {
     most_played: bool,
     scope: usize,
     scope_cursors: [usize; 4],
+    selection: state::Selection,
     generation: u64,
     loading: bool,
     typing: bool,
@@ -325,6 +326,14 @@ struct RowPaint {
     selected: bool,
     height: f32,
     cover_scale: f32,
+}
+
+struct SearchRowPaint {
+    scope: usize,
+    index: usize,
+    row_h: f32,
+    selected: bool,
+    hovered: bool,
 }
 
 const LIBRARY_ROW_FLAGS: page_profile::RowFlags = page_profile::RowFlags {
@@ -582,6 +591,7 @@ impl AppRoot {
                 most_played: false,
                 scope: 0,
                 scope_cursors: [0; 4],
+                selection: state::Selection::default(),
                 generation: 1,
                 loading: true,
                 typing: true,
@@ -968,6 +978,7 @@ impl AppRoot {
                     search.rows = rows;
                     search.most_played = most_played;
                     search.scope_cursors = [0; 4];
+                    search.selection.clear();
                     self.hovered_row = None;
                     search.loading = false;
                     self.search_loading_since = None;
@@ -995,6 +1006,7 @@ impl AppRoot {
                         }
                     }
                 }
+                self.follow_search(false);
             }
             Event::Error(message) => {
                 if let Some(search) = self.search.as_mut() {
@@ -1040,6 +1052,16 @@ impl AppRoot {
         self.selected_id = page.rows.get(page.cursor).map(|row| row.id.clone());
         self.page_scroll_modal
             .start(page.rows.len(), page.cursor, animated, self.clock.now);
+    }
+
+    fn follow_search(&mut self, animated: bool) {
+        let Some(search) = self.search.as_ref() else { return };
+        let scope = search.scope;
+        let count = search.scope_count(scope);
+        let cursor = search.cursor();
+        self.clock.tick();
+        self.search_scroll
+            .start(count, cursor, animated, self.clock.now);
     }
 
     fn follow_queue(&mut self, animated: bool) {
@@ -1160,8 +1182,24 @@ impl AppRoot {
     }
 
     fn ensure_search_metrics(&mut self, window_height: f32) {
-        let viewport = (window_height * 0.72).max(1.0);
-        let _ = self.search_scroll.ensure_metrics(viewport);
+        let measured = f32::from(
+            self.search_scroll
+                .handle
+                .0
+                .borrow()
+                .base_handle
+                .bounds()
+                .size
+                .height,
+        );
+        let viewport = if measured > 0.0 {
+            measured
+        } else {
+            (window_height * 0.72).max(1.0)
+        };
+        if self.search_scroll.ensure_metrics(viewport) {
+            self.follow_search(false);
+        }
     }
 
     fn ensure_page_metrics(&mut self) {
@@ -1897,6 +1935,8 @@ impl AppRoot {
         search.scope_cursors[next] = search
             .scope_cursors[next]
             .min(search.scope_count(next).saturating_sub(1));
+        search.selection.clear();
+        self.follow_search(false);
     }
 
     fn open_search(&mut self, typing: bool) {
@@ -1907,6 +1947,7 @@ impl AppRoot {
             most_played: false,
             scope: 0,
             scope_cursors: [0; 4],
+            selection: state::Selection::default(),
             generation: 0,
             loading: true,
             typing,
@@ -2047,6 +2088,32 @@ impl AppRoot {
         Some((QuickMenu::selection(Self::quick_kind(kind), all_starred), target, anchor))
     }
 
+    fn search_anchor_for(&self, index: usize, row_h: f32) -> (f32, f32) {
+        let state = self.search_scroll.handle.0.borrow();
+        let bounds = state.base_handle.bounds();
+        let height = f32::from(bounds.size.height);
+        let (x, y) = if height > 0.0 {
+            (
+                f32::from(bounds.origin.x) + f32::from(bounds.size.width) * 0.5,
+                f32::from(bounds.origin.y)
+                    + index as f32 * row_h
+                    + f32::from(state.base_handle.offset().y)
+                    + row_h * 0.5,
+            )
+        } else {
+            (
+                self.win_w * 0.5,
+                self.win_h * 0.14 + 16.0 + 54.0 + 12.0 + 30.0 + 12.0
+                    + index as f32 * row_h
+                    + row_h * 0.5,
+            )
+        };
+        (
+            x.clamp(30.0, (self.win_w - 30.0).max(30.0)),
+            y.clamp(30.0, (self.win_h - 30.0).max(30.0)),
+        )
+    }
+
     fn alt_snapshot(&self) -> Option<(QuickMenu, AltTarget, (f32, f32))> {
         if self.fullscreen {
             let track = self.player.current()?;
@@ -2064,13 +2131,32 @@ impl AppRoot {
         }
         if let Some(search) = self.search.as_ref().filter(|_| self.search_open) {
             let scoped = search.scoped();
-            let row = scoped.get(search.cursor())?;
+            let cursor = search.cursor();
+            let anchor = self.search_anchor_for(cursor, 56.0);
+            if search.selection.active() {
+                let anchor_index = search.selection.anchor().unwrap_or(cursor);
+                let lo = anchor_index.min(cursor);
+                let hi = anchor_index.max(cursor);
+                let rows = scoped
+                    .get(lo..=hi.min(scoped.len().saturating_sub(1)))
+                    .unwrap_or_default()
+                    .iter()
+                    .map(|row| (*row).clone())
+                    .collect::<Vec<_>>();
+                if let Some(hit) =
+                    self.alt_selection_target(rows, cursor.saturating_sub(lo), anchor)
+                {
+                    return Some(hit);
+                }
+            }
+            let row = scoped.get(cursor)?;
             return Some((
                 self.alt_menu_for_row(row),
                 self.alt_target_for_row(row),
-                (self.win_w * 0.5, self.win_h * 0.5),
+                anchor,
             ));
         }
+
         if self.queue_open {
             let queue = self.player.queue_snapshot();
             let track = queue.get(self.queue_cursor)?;
@@ -2163,6 +2249,7 @@ impl AppRoot {
         self.clock.tick();
         if self.alt_was_typing {
             if let Some(search) = self.search.as_mut() {
+                search.selection.clear();
                 search.typing = true;
             }
             self.alt_was_typing = false;
@@ -2856,39 +2943,111 @@ impl AppRoot {
         if !search.typing {
             match key {
                 "escape" => {
-                    self.search_open = false;
-                    self.search_denied_at = None;
+                    let had_selection = self
+                        .search
+                        .as_ref()
+                        .is_some_and(|search| search.selection.active());
+                    if had_selection {
+                        if let Some(search) = self.search.as_mut() {
+                            search.selection.clear();
+                        }
+                    } else {
+                        self.search_open = false;
+                        self.search_denied_at = None;
+                    }
                     cx.notify();
                 }
                 "i" => {
                     if let Some(search) = self.search.as_mut() {
+                        search.selection.clear();
                         search.typing = true;
                     }
                     cx.notify();
                 }
-                "enter" => self.activate_search_result(cx),
+                "enter" => {
+                    if let Some(search) = self.search.as_mut() {
+                        search.selection.clear();
+                    }
+                    self.activate_search_result(cx);
+                }
                 "tab" | "l" | "right" => {
                     self.on_search_scope_next(&SearchScopeNext, _window, cx);
                 }
                 "backtab" | "h" | "left" => {
                     self.on_search_scope_prev(&SearchScopePrev, _window, cx);
                 }
+                "v" | "V" => {
+                    if let Some(search) = self.search.as_mut() {
+                        let cursor = search.cursor();
+                        if key == "V" || shift {
+                            search.selection.select_all();
+                        } else if search.selection.active() {
+                            search.selection.clear();
+                        } else {
+                            search.selection.start(cursor);
+                        }
+                    }
+                    cx.notify();
+                }
                 "j" | "down" | "ctrl-n" => {
                     if let Some(search) = self.search.as_mut() {
+                        if shift {
+                            let cursor = search.cursor();
+                            search.selection.start(cursor);
+                        }
                         search.move_cursor(1);
                     }
+                    self.follow_search(true);
                     cx.notify();
                 }
                 "k" | "up" | "ctrl-p" => {
                     if let Some(search) = self.search.as_mut() {
+                        if shift {
+                            let cursor = search.cursor();
+                            search.selection.start(cursor);
+                        }
                         search.move_cursor(-1);
                     }
+                    self.follow_search(true);
+                    cx.notify();
+                }
+                "n" if control => {
+                    if let Some(search) = self.search.as_mut() {
+                        search.move_cursor(1);
+                    }
+                    self.follow_search(true);
+                    cx.notify();
+                }
+                "p" if control => {
+                    if let Some(search) = self.search.as_mut() {
+                        search.move_cursor(-1);
+                    }
+                    self.follow_search(true);
+                    cx.notify();
+                }
+                "pagedown" | "ctrl-d" => {
+                    if let Some(search) = self.search.as_mut() {
+                        for _ in 0..state::SEARCH_VISIBLE_ROWS {
+                            search.move_cursor(1);
+                        }
+                    }
+                    self.follow_search(true);
+                    cx.notify();
+                }
+                "pageup" | "ctrl-u" => {
+                    if let Some(search) = self.search.as_mut() {
+                        for _ in 0..state::SEARCH_VISIBLE_ROWS {
+                            search.move_cursor(-1);
+                        }
+                    }
+                    self.follow_search(true);
                     cx.notify();
                 }
                 "g" => {
                     if let Some(search) = self.search.as_mut() {
                         search.scope_cursors[search.scope] = 0;
                     }
+                    self.follow_search(false);
                     cx.notify();
                 }
                 "G" => {
@@ -2896,6 +3055,7 @@ impl AppRoot {
                         search.scope_cursors[search.scope] =
                             search.scope_count(search.scope).saturating_sub(1);
                     }
+                    self.follow_search(false);
                     cx.notify();
                 }
                 _ => {}
@@ -2926,6 +3086,7 @@ impl AppRoot {
                 if let Some(search) = self.search.as_mut() {
                     search.move_cursor(-1);
                 }
+                self.follow_search(true);
                 cx.notify();
                 return;
             }
@@ -2933,6 +3094,43 @@ impl AppRoot {
                 if let Some(search) = self.search.as_mut() {
                     search.move_cursor(1);
                 }
+                self.follow_search(true);
+                cx.notify();
+                return;
+            }
+            "p" if control => {
+                if let Some(search) = self.search.as_mut() {
+                    search.move_cursor(-1);
+                }
+                self.follow_search(true);
+                cx.notify();
+                return;
+            }
+            "n" if control => {
+                if let Some(search) = self.search.as_mut() {
+                    search.move_cursor(1);
+                }
+                self.follow_search(true);
+                cx.notify();
+                return;
+            }
+            "u" if control => {
+                if let Some(search) = self.search.as_mut() {
+                    for _ in 0..state::SEARCH_VISIBLE_ROWS {
+                        search.move_cursor(-1);
+                    }
+                }
+                self.follow_search(true);
+                cx.notify();
+                return;
+            }
+            "d" if control => {
+                if let Some(search) = self.search.as_mut() {
+                    for _ in 0..state::SEARCH_VISIBLE_ROWS {
+                        search.move_cursor(1);
+                    }
+                }
+                self.follow_search(true);
                 cx.notify();
                 return;
             }
@@ -4507,89 +4705,71 @@ impl AppRoot {
             .into_any_element()
     }
 
-    fn search_overlay(&self, cx: &Context<Self>, search: &SearchState, progress: f32) -> gpui::AnyElement {
-        let row_h = 56.0;
-        let field_h = 54.0;
-        let panel_w = (self.win_w * 0.60).clamp(360.0, 680.0);
-        let panel_h = field_h + 12.0 + 34.0 + 10.0 + 24.0 + row_h * state::SEARCH_VISIBLE_ROWS as f32 + 36.0 + 32.0;
-        let denied = self.search_denied_opacity();
-        let loading = self.search_loading_visible(search);
-        let query_empty = search.editor.text.is_empty();
-        let scoped = search.scoped();
-        let nothing = !loading && !query_empty && scoped.is_empty();
-
-        let results = scoped
-            .into_iter()
-            .take(state::SEARCH_VISIBLE_ROWS)
-            .enumerate()
-            .map(|(index, row)| {
-                let selected = index == search.cursor();
-                let hovered = self.hovered_row == Some(index);
-                let cover = cover_path(&row.cover_url);
-                let scope = search.scope;
+    fn search_result_row(
+        &self,
+        cx: &Context<Self>,
+        row: &Row,
+        paint: SearchRowPaint,
+    ) -> gpui::AnyElement {
+        let SearchRowPaint {
+            scope,
+            index,
+            row_h,
+            selected,
+            hovered,
+        } = paint;
+        let cover = cover_path(&row.cover_url);
+        div()
+            .id(("search-row", index))
+            .flex()
+            .items_center()
+            .gap_3()
+            .h(px(row_h))
+            .px_3()
+            .rounded_md()
+            .cursor_pointer()
+            .when(selected, |this| this.bg(rgb(palette::primary_container())))
+            .when(hovered && !selected, |this| {
+                this.bg(rgb(palette::surface_container_high()))
+            })
+            .on_hover(cx.listener(move |this, hovered: &bool, _, cx| {
+                if *hovered {
+                    this.hovered_row = Some(index);
+                } else if this.hovered_row == Some(index) {
+                    this.hovered_row = None;
+                }
+                cx.notify();
+            }))
+            .on_click(cx.listener(move |this, _, _, cx| {
+                if let Some(search) = this.search.as_mut() {
+                    search.scope = scope;
+                    search.scope_cursors[scope] = index;
+                }
+                this.activate_search_result(cx);
+            }))
+            .child(art_scaled(cover, row_h * 0.714, if selected || hovered { 1.08 } else { 1.0 }))
+            .child(
                 div()
-                    .id(("search-row", index))
                     .flex()
-                    .items_center()
-                    .gap_3()
-                    .h(px(row_h - 4.0))
-                    .mt(px(2.0))
-                    .px_3()
-                    .rounded_md()
-                    .cursor_pointer()
-                    .when(selected, |this| this.bg(rgb(palette::primary_container())))
-                    .when(hovered && !selected, |this| this.bg(rgb(palette::surface_container_high())))
-                    .on_hover(cx.listener(move |this, hovered: &bool, _, cx| {
-                        if *hovered {
-                            this.hovered_row = Some(index);
-                        } else if this.hovered_row == Some(index) {
-                            this.hovered_row = None;
-                        }
-                        cx.notify();
-                    }))
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        if let Some(search) = this.search.as_mut() {
-                            search.scope = scope;
-                            search.scope_cursors[scope] = index;
-                        }
-                        this.activate_search_result(cx);
-                    }))
-                    .child(art_scaled(cover, 40.0, if selected || hovered { 1.08 } else { 1.0 }))
+                    .flex_col()
+                    .min_w_0()
+                    .flex_1()
                     .child(
                         div()
-                            .flex()
-                            .flex_col()
-                            .min_w_0()
-                            .flex_1()
-                            .child(
-                                div()
-                                    .text_size(px(15.0))
-                                    .font_weight(if selected {
-                                        gpui::FontWeight::SEMIBOLD
-                                    } else {
-                                        gpui::FontWeight::NORMAL
-                                    })
-                                    .text_color(rgb(if selected {
-                                        palette::on_primary_container()
-                                    } else {
-                                        palette::on_surface()
-                                    }))
-                                    .whitespace_nowrap()
-                                    .text_ellipsis()
-                                    .child(row.title.clone()),
-                            )
-                            .child(
-                                div()
-                                    .text_size(px(11.0))
-                                    .text_color(rgb(if selected {
-                                        palette::on_primary_container()
-                                    } else {
-                                        palette::on_surface_variant()
-                                    }))
-                                    .whitespace_nowrap()
-                                    .text_ellipsis()
-                                    .child(row.subtitle.clone()),
-                            ),
+                            .text_size(px(15.0))
+                            .font_weight(if selected {
+                                gpui::FontWeight::SEMIBOLD
+                            } else {
+                                gpui::FontWeight::NORMAL
+                            })
+                            .text_color(rgb(if selected {
+                                palette::on_primary_container()
+                            } else {
+                                palette::on_surface()
+                            }))
+                            .whitespace_nowrap()
+                            .text_ellipsis()
+                            .child(row.title.clone()),
                     )
                     .child(
                         div()
@@ -4600,10 +4780,46 @@ impl AppRoot {
                                 palette::on_surface_variant()
                             }))
                             .whitespace_nowrap()
-                            .child(row.meta.clone()),
-                    )
-            })
-            .collect::<Vec<_>>();
+                            .text_ellipsis()
+                            .child(row.subtitle.clone()),
+                    ),
+            )
+            .child(
+                div()
+                    .text_size(px(11.0))
+                    .text_color(rgb(if selected {
+                        palette::on_primary_container()
+                    } else {
+                        palette::on_surface_variant()
+                    }))
+                    .whitespace_nowrap()
+                    .child(row.meta.clone()),
+            )
+            .into_any_element()
+    }
+
+    fn search_overlay(&self, cx: &Context<Self>, search: &SearchState, progress: f32) -> gpui::AnyElement {
+        let row_h = 56.0;
+        let field_h = 54.0;
+        let panel_w = (self.win_w * 0.60).clamp(360.0, 680.0);
+        let panel_h = field_h + 12.0 + 34.0 + 10.0 + 24.0 + row_h * state::SEARCH_VISIBLE_ROWS as f32 + 36.0 + 32.0;
+        let denied = self.search_denied_opacity();
+        let loading = self.search_loading_visible(search);
+        let query_empty = search.editor.text.is_empty();
+        let scoped = search.scoped();
+        let nothing = !loading && !query_empty && scoped.is_empty();
+        let selection_count = search.selection.count(search.cursor());
+        let footer = if selection_count > 0 {
+            format!(
+                "{} selected · Shift-J/K extend · v clear · Alt actions · ↵ open",
+                selection_count
+            )
+        } else if search.typing {
+            "Type to filter · Ctrl-N/P rows · ⇥ scope · ↵ open · esc normal".to_string()
+        } else {
+            "j/k rows · Ctrl-N/P scroll · v visual · shift-J/K extend · i type · esc close"
+                .to_string()
+        };
 
         let result_area: gpui::AnyElement = if loading {
             loading_skeleton(self.clock.now as f32, row_h, state::SEARCH_VISIBLE_ROWS)
@@ -4622,11 +4838,42 @@ impl AppRoot {
                 })
                 .into_any_element()
         } else {
-            div()
-                .flex()
-                .flex_col()
-                .children(results)
-                .into_any_element()
+            let scroll = self.search_scroll.handle.clone();
+            let scope = search.scope;
+            uniform_list(
+                "search-results",
+                search.scope_count(scope),
+                cx.processor(move |this, range: std::ops::Range<usize>, _window, cx| {
+                    let mut items = Vec::with_capacity(range.len());
+                    let Some(search) = this.search.as_ref() else {
+                        return items;
+                    };
+                    let rows = search.scoped();
+                    let cursor = search.cursor();
+                    for index in range {
+                        let Some(row) = rows.get(index) else { break };
+                        let selected = index == cursor
+                            || search.selection.contains(cursor, index);
+                        let hovered = this.hovered_row == Some(index);
+                        items.push(this.search_result_row(
+                            cx,
+                            row,
+                            SearchRowPaint {
+                                scope,
+                                index,
+                                row_h,
+                                selected,
+                                hovered,
+                            },
+                        ));
+                    }
+                    items
+                }),
+            )
+            .h(px(row_h * state::SEARCH_VISIBLE_ROWS as f32))
+            .w_full()
+            .track_scroll(scroll)
+            .into_any_element()
         };
 
         let scopes = (0..4)
@@ -4658,7 +4905,9 @@ impl AppRoot {
                             search.scope = scope;
                             search.scope_cursors[scope] =
                                 search.scope_cursors[scope].min(search.scope_count(scope).saturating_sub(1));
+                            search.selection.clear();
                         }
+                        this.follow_search(false);
                         cx.notify();
                     }))
                     .child(format!("{} {count}", search_scope_label(scope)))
@@ -4727,7 +4976,7 @@ impl AppRoot {
                             .justify_center()
                             .text_size(px(10.0))
                             .text_color(rgb(palette::on_surface_variant()))
-                            .child("↑↓ Navigate · ⇥ Scope · ↵ Open · esc Close"),
+                            .child(footer),
                     ),
             )
             .into_any_element()
@@ -5448,7 +5697,8 @@ impl Render for AppRoot {
         }
         let following = self.library_scroll.apply(self.clock.now)
             | self.page_scroll_modal.apply(self.clock.now)
-            | self.queue_scroll_modal.apply(self.clock.now);
+            | self.queue_scroll_modal.apply(self.clock.now)
+            | self.search_scroll.apply(self.clock.now);
         if following {
             window.request_animation_frame();
         }
@@ -5542,11 +5792,11 @@ impl Render for AppRoot {
             .child(match fullscreen_overlay { Some(o) => o.into_any_element(), None => div().into_any_element() })
             .child(self.lyrics_overlay_element(lyrics_overlay_progress))
             .child(match description_overlay { Some(o) => o.into_any_element(), None => div().into_any_element() })
-            .child(match alt_overlay { Some(o) => o, None => div().into_any_element() })
             .child(match line_overlay { Some(o) => o.into_any_element(), None => div().into_any_element() })
             .child(match toast_overlay { Some(o) => o.into_any_element(), None => div().into_any_element() })
             .child(match exit_overlay { Some(o) => o.into_any_element(), None => div().into_any_element() })
             .child(match overlay { Some(o) => o.into_any_element(), None => div().into_any_element() })
+            .child(match alt_overlay { Some(o) => o, None => div().into_any_element() })
             .into_any_element()
     }
 }

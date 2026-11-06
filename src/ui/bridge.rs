@@ -440,7 +440,7 @@ impl Bridge {
             if generation_counter.load(Ordering::Relaxed) != generation {
                 return;
             }
-            let event = match search_rows(&query, offline, super::state::SEARCH_VISIBLE_ROWS).await
+            let event = match search_rows(&query, offline, super::state::SEARCH_FETCH_ROWS).await
             {
                 Ok((rows, most_played)) => {
                     crate::debug_log!("GPUI: search {:?} {} rows", query, rows.len());

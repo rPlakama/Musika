@@ -58,6 +58,10 @@ pub enum Event {
         count: usize,
         rows: Vec<super::state::Row>,
     },
+    DisplayCover {
+        key: String,
+        path: Option<std::path::PathBuf>,
+    },
     Restore {
         volume: f64,
         muted: bool,
@@ -490,6 +494,26 @@ impl Bridge {
         });
     }
 
+    pub fn request_display_cover(&self, key: String, cover_art: String, target: u32) {
+        if cover_art.is_empty() || target == 0 {
+            return;
+        }
+        let tx = self.tx.clone();
+        crate::app::runtime().spawn(async move {
+            let Some(dbs) = crate::app::dbs() else { return };
+            let Some(source) = crate::covers::cached_path(&dbs.covers, &cover_art)
+                .await
+                .ok()
+                .flatten()
+            else {
+                let _ = tx.send(Event::DisplayCover { key, path: None });
+                return;
+            };
+            let path = crate::covers::get_or_create_resized_cover(&source, target).await;
+            let _ = tx.send(Event::DisplayCover { key, path });
+        });
+    }
+
     pub fn preload_library(&self, scope: super::state::Scope, order: usize) {
         let tx = self.tx.clone();
         let offline = self.offline.load(Ordering::Relaxed);
@@ -730,6 +754,7 @@ async fn page_data(
                     if album.duration > 0 { format!(" · {} Minutes", (album.duration + 59) / 60) } else { String::new() }
                 ),
                 cover_url: thumbify(crate::covers::url_for(album.cover_art.as_deref(), &covers)),
+                cover_art: album.cover_art.unwrap_or_default(),
             };
             let rows = songs
                 .into_iter()
@@ -767,6 +792,7 @@ async fn page_data(
                 subtitle: format!("{} albums", artist.album_count),
                 meta: String::new(),
                 cover_url: thumbify(crate::covers::url_for(artist.cover_art.as_deref(), &covers)),
+                cover_art: artist.cover_art.unwrap_or_default(),
             };
             let rows = albums
                 .into_iter()
@@ -803,6 +829,7 @@ async fn page_data(
                     .and_then(|cover| cover.as_str())
                     .unwrap_or_default()
                     .to_string(),
+                cover_art: String::new(),
             };
             let rows = value["songs"]
                 .as_array()

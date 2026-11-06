@@ -328,6 +328,8 @@ pub struct PageHeader {
     pub subtitle: String,
     pub meta: String,
     pub cover_url: String,
+    /// Cover id for display-copy requests.
+    pub cover_art: String,
 }
 
 #[derive(Debug, Clone)]
@@ -351,6 +353,7 @@ impl PageState {
                 subtitle: String::new(),
                 meta: String::new(),
                 cover_url: String::new(),
+                cover_art: String::new(),
             },
             rows: Vec::new(),
             cursor: 0,

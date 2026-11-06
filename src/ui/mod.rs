@@ -281,6 +281,9 @@ struct AppRoot {
     library_row_h: f32,
     library_row_ref: Option<f32>,
     library_row_ratio: f32,
+    page_row_h: f32,
+    page_row_ref: Option<f32>,
+    page_row_ratio: f32,
     page: Option<PageState>,
     travel: Travel,
     page_generation: u64,
@@ -316,6 +319,8 @@ struct AppRoot {
     marks: MarksState,
     warm: std::collections::HashMap<(Scope, usize), (usize, Vec<Row>)>,
     preloaded: bool,
+    display_covers: std::collections::HashMap<String, std::path::PathBuf>,
+    display_requested: std::collections::HashSet<String>,
     trace: bool,
     frames: u64,
 }
@@ -353,6 +358,9 @@ impl AppRoot {
             library_row_h: 58.0,
             library_row_ref: None,
             library_row_ratio: 58.0 / 600.0,
+            page_row_h: 36.0,
+            page_row_ref: None,
+            page_row_ratio: 36.0 / 600.0,
             page: None,
             travel: Travel::default(),
             page_generation: 0,
@@ -390,6 +398,8 @@ impl AppRoot {
             marks: MarksState::default(),
             warm: std::collections::HashMap::new(),
             preloaded: false,
+            display_covers: std::collections::HashMap::new(),
+            display_requested: std::collections::HashSet::new(),
             trace: std::env::var_os("MUSIKA_GPUUI_TRACE").is_some(),
             frames: 0,
         };
@@ -515,6 +525,11 @@ impl AppRoot {
             }
             Event::Notes { album_id, notes } => {
                 self.notes = Some((album_id, notes));
+            }
+            Event::DisplayCover { key, path } => {
+                if let Some(path) = path {
+                    self.display_covers.insert(key, path);
+                }
             }
             Event::Preload {
                 scope,
@@ -772,6 +787,26 @@ impl AppRoot {
         );
     }
 
+    fn ensure_page_metrics(&mut self) {
+        let measured = {
+            let state = self.page_scroll.0.borrow();
+            state
+                .last_item_size
+                .map(|size| f32::from(size.item.height))
+                .filter(|height| *height > 0.0)
+        };
+        let Some(viewport) = measured else { return };
+        let reference = *self.page_row_ref.get_or_insert(viewport);
+        self.page_row_ratio = 36.0 / reference;
+        let next = metrics::adaptive_row(viewport, self.page_row_ratio, 36.0)
+            .round()
+            .max(18.0);
+        if (next - self.page_row_h).abs() >= 0.5 {
+            self.page_row_h = next;
+            self.marks.requested = None;
+        }
+    }
+
     fn ensure_marks(&mut self) {
         if self.marks.inflight {
             self.marks.dirty = true;
@@ -798,7 +833,7 @@ impl AppRoot {
                     .unwrap_or(600.0);
                 (top, viewport)
             };
-            let visible = ((viewport / 36.0).ceil() as usize).max(1);
+            let visible = ((viewport / self.page_row_h).ceil() as usize).max(1);
             let lo = top.saturating_sub(10);
             let hi = (top + visible + 10).min(page.rows.len().saturating_sub(1));
             for row in page.rows.get(lo..=hi).unwrap_or_default() {
@@ -825,6 +860,24 @@ impl AppRoot {
             );
         }
         self.bridge.request_marks(songs, albums);
+    }
+
+    fn ensure_display_cover(&mut self, cover_art: &str, target: u32) {
+        if cover_art.is_empty() {
+            return;
+        }
+        let key = format!("{cover_art}:{target}");
+        if !self.display_requested.insert(key.clone()) {
+            return;
+        }
+        self.bridge
+            .request_display_cover(key, cover_art.to_string(), target);
+    }
+
+    fn display_cover(&self, cover_art: &str, target: u32) -> Option<std::path::PathBuf> {
+        self.display_covers
+            .get(&format!("{cover_art}:{target}"))
+            .cloned()
     }
 
     fn set_scope(&mut self, scope: Scope) {
@@ -2054,7 +2107,12 @@ impl AppRoot {
     fn fullscreen_overlay(&self, progress: f32) -> gpui::Div {
         let track = self.player.current().cloned();
         let (title, artist, cover) = match &track {
-            Some(track) => (track.title.clone(), track.artist.clone(), cover_path(&track.cover_url)),
+            Some(track) => (
+                track.title.clone(),
+                track.artist.clone(),
+                self.display_cover(&track.cover_art, 512)
+                    .or_else(|| cover_path(&track.cover_url)),
+            ),
             None => ("No track playing".to_string(), String::new(), None),
         };
         let position = self.player.position();
@@ -2505,7 +2563,9 @@ impl AppRoot {
         let title = page.header.title.clone();
         let subtitle = page.header.subtitle.clone();
         let meta = page.header.meta.clone();
-        let cover = cover_path(&page.header.cover_url);
+        let cover = self
+            .display_cover(&page.header.cover_art, 512)
+            .or_else(|| cover_path(&page.header.cover_url));
         let notes = self
             .notes
             .as_ref()
@@ -2989,6 +3049,13 @@ impl Render for AppRoot {
         if self.fullscreen {
             self.request_current_lyrics();
         }
+        if let Some(page) = self.page.as_ref() {
+            let cover_art = page.header.cover_art.clone();
+            self.ensure_display_cover(&cover_art, 512);
+        }
+        if let Some(track) = self.player.current().cloned() {
+            self.ensure_display_cover(&track.cover_art, 512);
+        }
         let fullscreen_overlay = (self.fullscreen || fullscreen_progress > 0.001)
             .then(|| self.fullscreen_overlay(fullscreen_progress));
         let exit_overlay = self.exiting.map(|started| {
@@ -3017,6 +3084,7 @@ impl Render for AppRoot {
             }
         }
         if self.page.is_some() {
+            self.ensure_page_metrics();
             self.ensure_marks();
         }
         self.ensure_library_window();

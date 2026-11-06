@@ -237,7 +237,7 @@ fn main() {
     // GPUI M0: opt-in front end on the same DB spine; Qt stays default.
     #[cfg(feature = "gpuui")]
     {
-        let _ = &dbs;
+        crate::app::set_dbs(dbs.clone());
         #[cfg(debug_assertions)]
         let _ = db_started;
         crate::ui::run();

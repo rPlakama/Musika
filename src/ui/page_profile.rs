@@ -3,6 +3,16 @@
 use crate::ui::scroll_modal::{self, ScrollProfile};
 use crate::ui::state::{PageDescriptor, PageKind, Row, RowKind};
 
+/// Shape knobs shared by every list row. A surface/model supplies the data;
+/// flags decide which cells are materialized.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RowFlags {
+    pub show_cover: bool,
+    pub show_subtitle: bool,
+    pub show_length: bool,
+    pub compact: bool,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PageSource {
     Album,
@@ -32,6 +42,7 @@ pub struct PageProfile {
     pub favorite: bool,
     pub artist_link: bool,
     pub show_row_cover: bool,
+    pub row_flags: RowFlags,
     pub empty_text: &'static str,
     pub scroll: ScrollProfile,
 }
@@ -49,6 +60,7 @@ impl PageProfile {
                 favorite: true,
                 artist_link: true,
                 show_row_cover: false,
+                row_flags: RowFlags { show_cover: false, show_subtitle: true, show_length: true, compact: true },
                 empty_text: "No tracks in this album",
                 scroll: scroll_modal::ALBUM,
             },
@@ -62,6 +74,7 @@ impl PageProfile {
                 favorite: true,
                 artist_link: false,
                 show_row_cover: true,
+                row_flags: RowFlags { show_cover: true, show_subtitle: true, show_length: true, compact: true },
                 empty_text: "No albums by this artist",
                 scroll: scroll_modal::ALBUM,
             },
@@ -75,6 +88,7 @@ impl PageProfile {
                 favorite: false,
                 artist_link: false,
                 show_row_cover: true,
+                row_flags: RowFlags { show_cover: true, show_subtitle: true, show_length: true, compact: true },
                 empty_text: "No tracks in this playlist",
                 scroll: scroll_modal::ALBUM,
             },
@@ -93,6 +107,7 @@ impl PageProfile {
                 favorite: false,
                 artist_link: false,
                 show_row_cover: true,
+                row_flags: RowFlags { show_cover: true, show_subtitle: true, show_length: true, compact: true },
                 empty_text: "No similar songs found",
                 scroll: scroll_modal::ALBUM,
             },
@@ -147,6 +162,7 @@ mod tests {
     fn profile_matrix() {
         let album = PageProfile::for_descriptor(&PageDescriptor::new(PageKind::Album, "a"));
         assert!(album.hero_cover && album.notes && album.rating && !album.show_row_cover);
+        assert!(!album.row_flags.show_cover && album.row_flags.compact);
         let artist = PageProfile::for_descriptor(&PageDescriptor::new(PageKind::Artist, "ar"));
         assert!(artist.hero_cover && artist.notes && artist.show_row_cover);
         let playlist = PageProfile::for_descriptor(&PageDescriptor::new(PageKind::Playlist, "p"));

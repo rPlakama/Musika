@@ -311,6 +311,21 @@ impl AssetSource for Assets {
 
 const PAGE_HERO_PX: f32 = 720.0;
 const FULLSCREEN_HERO_PX: f32 = 720.0;
+struct RowPaint {
+    flags: page_profile::RowFlags,
+    surface: LineSurface,
+    index: usize,
+    selected: bool,
+    height: f32,
+    cover_scale: f32,
+}
+
+const LIBRARY_ROW_FLAGS: page_profile::RowFlags = page_profile::RowFlags {
+    show_cover: true,
+    show_subtitle: true,
+    show_length: true,
+    compact: false,
+};
 
 struct CoverLoadTrace {
     cover_art: String,
@@ -3503,7 +3518,6 @@ impl AppRoot {
                         }) || index == this.view.cursor
                             || this.view.selection.contains(this.view.cursor, index);
                         let hovered = this.hovered_row == Some(index);
-                        let emphasis = if selected { 1.08 } else { 1.0 };
                         let striped = index % 2 != 0;
                                         let Some(row) = this.view.rows.get(index) else {
                             // RowWindow blank slot: a waving grey placeholder
@@ -3523,13 +3537,6 @@ impl AppRoot {
                             );
                             continue;
                         };
-                        let title = row.title.clone();
-                        let subtitle = row.subtitle.clone();
-                        let meta = row.meta.clone();
-                        let starred = row.starred;
-                        let downloaded = this.marks.downloaded(&row.song_id, &row.album_id) || row.downloaded;
-                        let rating = row.rating;
-                        let cover = cover_path(&row.cover_url);
                         let cover_scale = if selected { 1.20 } else { 1.0 };
                         let base_fill = if striped { palette::surface_container_lowest() } else { palette::surface() };
                         let hover_fill = this
@@ -3569,60 +3576,17 @@ impl AppRoot {
                                     this.select(index);
                                     cx.notify();
                                 }))
-                                .child(art_scaled(cover, row_h * 0.78, cover_scale))
-                                .child(
-                                    div()
-                                        .flex()
-                                        .flex_col()
-                                        .min_w_0()
-                                        .flex_1()
-                                        .ml_3()
-                                        .overflow_hidden()
-                                        .child(
-                                            div()
-                                                .text_size(px(18.0 * emphasis))
-                                                .font_weight(if selected { gpui::FontWeight::BOLD } else { gpui::FontWeight::NORMAL })
-                                                .whitespace_normal()
-                                                .max_h(px(34.0))
-                                                .overflow_hidden()
-                                                .child(highlighted_text(&title, this.line_search.query(), palette::on_surface(), this.line_search_current(LineSurface::Library, index))),
-                                        )
-                                        .child(
-                                            div()
-                                                .text_size(px(12.0 * emphasis))
-                                                .text_color(rgb(palette::on_surface_variant()))
-                                                .whitespace_normal()
-                                                .max_h(px(22.0))
-                                                .overflow_hidden()
-                                                .child(highlighted_text(&subtitle, this.line_search.query(), palette::on_surface_variant(), this.line_search_current(LineSurface::Library, index))),
-                                        ),
-                                )
-                                .child(
-                                    div()
-                                        .flex()
-                                        .items_center()
-                                        .gap_2()
-                                        .child(
-                                            div()
-                                                .text_size(px(11.0 * emphasis))
-                                                .text_color(rgb(palette::on_surface_variant()))
-                                                .child(highlighted_text(&meta, this.line_search.query(), palette::on_surface_variant(), this.line_search_current(LineSurface::Library, index))),
-                                        )
-                                        .when(downloaded, |this| {
-                                            this.child(icon("outline-download.svg", 13.0, palette::primary()))
-                                        })
-                                        .when(starred, |this| {
-                                            this.child(icon("baseline-favorite.svg", 12.0, 0xFFD54F))
-                                        })
-                                        .when(rating > 0, |this| {
-                                            this.child(
-                                                div()
-                                                    .text_size(px(10.0))
-                                                    .text_color(rgb(palette::primary()))
-                                                    .child(rating.to_string()),
-                                            )
-                                        }),
-                                ),
+                                .child(this.row_content(
+                                    row,
+                                    RowPaint {
+                                        flags: LIBRARY_ROW_FLAGS,
+                                        surface: LineSurface::Library,
+                                        index,
+                                        selected,
+                                        height: row_h,
+                                        cover_scale,
+                                    },
+                                )),
                         );
                     }
                     items
@@ -4685,12 +4649,104 @@ impl AppRoot {
             .into_any_element()
     }
 
+    /// One row body for every list surface. The data lives in `Row`; the
+    /// surface supplies the flags that decide which cells are materialized.
+    fn row_content(&self, row: &state::Row, paint: RowPaint) -> gpui::Div {
+        let emphasis = if paint.selected { 1.08 } else { 1.0 };
+        let current = self.line_search_current(paint.surface, paint.index);
+        let mut body = div().flex().items_center().min_w_0().flex_1();
+        if paint.flags.show_cover {
+            let cover = cover_path(&row.cover_url);
+            body = body.child(
+                div()
+                    .mr_3()
+                    .child(art_scaled(cover, paint.height * 0.78, paint.cover_scale)),
+            );
+        }
+        let mut cells = div().flex().flex_col().min_w_0().flex_1().overflow_hidden();
+        let title_size = if paint.flags.compact { 15.0 } else { 18.0 } * emphasis;
+        let title = div()
+            .text_size(px(title_size))
+            .font_weight(if paint.selected {
+                gpui::FontWeight::BOLD
+            } else {
+                gpui::FontWeight::NORMAL
+            })
+            .text_color(rgb(palette::on_surface()))
+            .overflow_hidden()
+            .child(highlighted_text(
+                &row.title,
+                self.line_search.query(),
+                palette::on_surface(),
+                current,
+            ));
+        let title = if paint.flags.compact {
+            title.whitespace_nowrap().text_ellipsis()
+        } else {
+            title.whitespace_normal().max_h(px(34.0))
+        };
+        cells = cells.child(title);
+        if paint.flags.show_subtitle && !row.subtitle.is_empty() {
+            let subtitle = div()
+                .text_size(px(if paint.flags.compact { 11.0 } else { 12.0 } * emphasis))
+                .text_color(rgb(palette::on_surface_variant()))
+                .overflow_hidden()
+                .child(highlighted_text(
+                    &row.subtitle,
+                    self.line_search.query(),
+                    palette::on_surface_variant(),
+                    current,
+                ));
+            let subtitle = if paint.flags.compact {
+                subtitle.whitespace_nowrap().text_ellipsis()
+            } else {
+                subtitle.whitespace_normal().max_h(px(22.0))
+            };
+            cells = cells.child(subtitle);
+        }
+        body = body.child(cells);
+        let downloaded = self
+            .marks
+            .downloaded(&row.song_id, &row.album_id)
+            || row.downloaded;
+        let mut trailing = div().flex().items_center().gap_2();
+        if paint.flags.show_length && !row.meta.is_empty() {
+            trailing = trailing.child(
+                div()
+                    .text_size(px(11.0 * emphasis))
+                    .text_color(rgb(palette::on_surface_variant()))
+                    .child(highlighted_text(
+                        &row.meta,
+                        self.line_search.query(),
+                        palette::on_surface_variant(),
+                        current,
+                    )),
+            );
+        }
+        if downloaded {
+            trailing = trailing.child(icon("outline-download.svg", 12.0, palette::primary()));
+        }
+        if row.starred {
+            trailing = trailing.child(icon("baseline-favorite.svg", 11.0, 0xFFD54F));
+        }
+        if row.rating > 0 {
+            trailing = trailing.child(
+                div()
+                    .text_size(px(10.0))
+                    .text_color(rgb(palette::primary()))
+                    .child(row.rating.to_string()),
+            );
+        }
+        body.child(trailing).into_element()
+    }
+
+
     fn page_view(&self, cx: &Context<Self>) -> impl IntoElement {
         let Some(page) = self.page.as_ref() else {
             return div().flex().flex_1();
         };
         let profile = page_profile::PageProfile::for_descriptor(&page.descriptor);
-        let show_row_cover = profile.show_row_cover;
+        let row_flags = profile.row_flags;
         let title = page.header.title.clone();
         let subtitle = page.header.subtitle.clone();
         let meta = page.header.meta.clone();
@@ -4837,39 +4893,18 @@ impl AppRoot {
                             let mut items = Vec::with_capacity(range.len());
                             for index in range {
                                 let selected_id = this.selected_id.clone();
-                                let Some((title, subtitle, meta, selected, rating, starred, downloaded, cover, show_cover)) = this
-                                    .page
-                                    .as_ref()
-                                    .map(|page| {
-                                        let row = &page.rows[index];
-                                        (
-                                            row.title.clone(),
-                                            row.subtitle.clone(),
-                                            row.meta.clone(),
-                                            selected_id.as_deref() == Some(row.id.as_str())
-                                                || index == page.cursor
-                                                || page.selection.contains(page.cursor, index),
-                                            row.rating,
-                                            row.starred,
-                                            row.downloaded,
-                                            cover_path(&row.cover_url),
-                                            show_row_cover,
-                                        )
+                                let Some((row, selected)) = this.page.as_ref().and_then(|page| {
+                                    page.rows.get(index).map(|row| {
+                                        let selected = selected_id.as_deref()
+                                            == Some(row.id.as_str())
+                                            || index == page.cursor
+                                            || page.selection.contains(page.cursor, index);
+                                        (row.clone(), selected)
                                     })
-                                else {
+                                }) else {
                                     break;
                                 };
                                 let hovered = this.hovered_page == Some(index);
-                                let emphasis = this
-                                    .row_scales
-                                    .entry(format!("page-text-scale:{index}"))
-                                    .or_insert_with(|| anim::Behavior::new(1.0))
-                                    .target(
-                                        if selected { 1.08 } else { 1.0 },
-                                        anim::QUICK_MS,
-                                        anim::Curve::Standard,
-                                        &this.clock,
-                                    );
                                 let page_base = if index % 2 != 0 { palette::surface_container_lowest() } else { palette::surface() };
                                 let hover_fill = this
                                     .row_hover_colors
@@ -4881,7 +4916,7 @@ impl AppRoot {
                                         anim::Curve::Standard,
                                         &this.clock,
                                     );
-                                let cover_scale = show_cover.then_some(if selected { 1.20 } else { 1.0 });
+                                let cover_scale = if selected { 1.20 } else { 1.0 };
                                 items.push(
                                     div()
                                         .id(gpui::ElementId::named_usize(if selected { "page-row-selected" } else { "page-row" }, index))
@@ -4914,52 +4949,17 @@ impl AppRoot {
                                             this.activate_page_cursor();
                                             cx.notify();
                                         }))
-                                        .child(if let Some(scale) = cover_scale {
-                                            div()
-                                                .mr_2()
-                                                .child(art_scaled(cover, row_h * 0.78, scale))
-                                                .into_any_element()
-                                        } else {
-                                            div().into_any_element()
-                                        })
-                                        .child(
-                                            div()
-                                                .flex()
-                                                .flex_col()
-                                                .min_w_0()
-                                                .flex_1()
-                                                .child(
-                                                    div()
-                                                        .text_size(px(15.0 * emphasis))
-                                                        .font_weight(if selected { gpui::FontWeight::BOLD } else { gpui::FontWeight::NORMAL })
-                                                        .whitespace_nowrap()
-                                                        .text_ellipsis()
-                                                        .child(highlighted_text(&title, this.line_search.query(), palette::on_surface(), this.line_search_current(LineSurface::Page, index))),
-                                                )
-                                                .child(
-                                                    div()
-                                                        .text_size(px(11.0 * emphasis))
-                                                        .text_color(rgb(palette::on_surface_variant()))
-                                                        .whitespace_nowrap()
-                                                        .text_ellipsis()
-                                                        .child(highlighted_text(&subtitle, this.line_search.query(), palette::on_surface_variant(), this.line_search_current(LineSurface::Page, index))),
-                                                ),
-                                        )
-                                        .child(
-                                            div()
-                                                    .text_size(px(11.0 * emphasis))
-                                                .text_color(rgb(palette::on_surface_variant()))
-                                                .child(highlighted_text(&meta, this.line_search.query(), palette::on_surface_variant(), this.line_search_current(LineSurface::Page, index))),
-                                        )
-                                        .when(downloaded, |this| {
-                                            this.child(icon("outline-download.svg", 12.0, palette::primary()))
-                                        })
-                                        .when(starred, |this| {
-                                            this.child(icon("baseline-favorite.svg", 11.0, 0xFFD54F))
-                                        })
-                                        .when(rating > 0, |this| {
-                                            this.child(div().text_size(px(10.0)).text_color(rgb(palette::primary())).child(rating.to_string()))
-                                        }),
+                                        .child(this.row_content(
+                                            &row,
+                                            RowPaint {
+                                                flags: row_flags,
+                                                surface: LineSurface::Page,
+                                                index,
+                                                selected,
+                                                height: row_h,
+                                                cover_scale,
+                                            },
+                                        )),
                                 );
                             }
                             items

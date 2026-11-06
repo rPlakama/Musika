@@ -28,6 +28,7 @@ mod line_search;
 mod metrics;
 mod quick_actions;
 mod page_profile;
+mod palette;
 mod scroll_modal;
 mod state;
 
@@ -90,14 +91,6 @@ actions!(
         ToggleFullscreen,
     ]
 );
-
-const BG: u32 = 0x141218;
-const SURFACE: u32 = 0x211F26;
-const SURFACE_HIGH: u32 = 0x2B2930;
-const ON_SURFACE: u32 = 0xE6E0E9;
-const ON_VARIANT: u32 = 0xCAC4D0;
-const PRIMARY: u32 = 0xD0BCFF;
-const OUTLINE: u32 = 0x49454F;
 
 pub fn run() {
     Application::new()
@@ -324,6 +317,8 @@ struct AppRoot {
     search_open: bool,
     search_anim: anim::Behavior,
     clock: anim::Clock,
+    palette_motion: palette::PaletteMotion,
+    palette_cover: Option<String>,
     hovered_row: Option<usize>,
     hovered_page: Option<usize>,
     visual_mode: bool,
@@ -417,6 +412,8 @@ impl AppRoot {
             search_open: false,
             search_anim: anim::Behavior::new(0.0),
             clock: anim::Clock::new(),
+            palette_motion: palette::PaletteMotion::new(palette::Palette::default()),
+            palette_cover: None,
             hovered_row: None,
             hovered_page: None,
             visual_mode: false,
@@ -772,6 +769,29 @@ impl AppRoot {
                         .target(1.0, 300.0, anim::Curve::Decelerate, &self.clock);
                 }
             }
+            Event::Palette { cover_art, roles } => {
+                let current = self
+                    .player
+                    .current()
+                    .map(|track| track.cover_art.as_str())
+                    .unwrap_or_default();
+                if current == cover_art {
+                    let next = palette::Palette::from_roles(&roles);
+                    self.clock.tick();
+                    self.palette_motion.set(next, &self.clock, true);
+                }
+            }
+            Event::PaletteReset { cover_art } => {
+                let current = self
+                    .player
+                    .current()
+                    .map(|track| track.cover_art.as_str())
+                    .unwrap_or_default();
+                if current == cover_art {
+                    self.clock.tick();
+                    self.palette_motion.reset(&self.clock);
+                }
+            }
             Event::Queue { tracks, start } => {
                 self.player.load(tracks, start);
                 self.playback_error = None;
@@ -840,7 +860,6 @@ impl AppRoot {
 
     fn follow_library(&mut self, animated: bool) {
         self.clock.tick();
-        self.refresh_lyrics_emphasis();
         self.library_scroll
             .start(self.view.rows.count, self.view.cursor, animated, self.clock.now);
     }
@@ -1195,6 +1214,24 @@ impl AppRoot {
         cx.notify();
     }
 
+    fn sync_palette(&mut self) {
+        let cover = self
+            .player
+            .current()
+            .map(|track| track.cover_art.clone())
+            .unwrap_or_default();
+        if self.palette_cover.as_deref() == Some(cover.as_str()) {
+            return;
+        }
+        if cover.is_empty() {
+            self.palette_motion.reset(&self.clock);
+            self.palette_cover = None;
+        } else {
+            self.palette_cover = Some(cover.clone());
+            self.bridge.request_colors(cover);
+        }
+    }
+
     fn request_current_lyrics(&mut self) {
         let Some(track) = self.player.current() else { return };
         let id = track.id.clone();
@@ -1313,8 +1350,8 @@ impl AppRoot {
         ];
         div()
             .size_full()
-            .bg(rgb(BG))
-            .text_color(rgb(ON_SURFACE))
+            .bg(rgb(palette::background()))
+            .text_color(rgb(palette::on_surface()))
             .font_family("Overused Grotesk Roman")
             .flex()
             .items_center()
@@ -1329,7 +1366,7 @@ impl AppRoot {
                         div()
                             .text_size(px(26.0))
                             .font_weight(gpui::FontWeight::BOLD)
-                            .text_color(rgb(PRIMARY))
+                            .text_color(rgb(palette::primary()))
                             .text_center()
                             .child("MUSIKA"),
                     )
@@ -1345,10 +1382,10 @@ impl AppRoot {
                             .max_h(px(46.0))
                             .rounded_md()
                             .border_1()
-                            .border_color(rgb(if active { PRIMARY } else { OUTLINE }))
-                            .bg(rgb(0x36343B))
+                            .border_color(rgb(if active { palette::primary() } else { palette::outline_variant() }))
+                            .bg(rgb(palette::surface_container_highest()))
                             .text_size(px(14.0))
-                            .text_color(rgb(if value.is_empty() { ON_VARIANT } else { ON_SURFACE }))
+                            .text_color(rgb(if value.is_empty() { palette::on_surface_variant() } else { palette::on_surface() }))
                             .child(if value.is_empty() {
                                 label.to_string()
                             } else {
@@ -1362,9 +1399,9 @@ impl AppRoot {
                             .items_center()
                             .justify_center()
                             .rounded_md()
-                            .bg(rgb(0x4F378B))
+                            .bg(rgb(palette::primary_container()))
                             .text_size(px(14.0))
-                            .text_color(rgb(0xEADDFF))
+                            .text_color(rgb(palette::on_primary_container()))
                             .child(if login.busy { "Logging in…" } else { "Log in" }),
                     )
                     .child(
@@ -1377,9 +1414,9 @@ impl AppRoot {
                             .items_center()
                             .justify_center()
                             .rounded_md()
-                            .when(login.error.is_some(), |this| this.border_1().border_color(rgb(0xF2B8B5)).bg(rgb(0x8C1D18)))
+                            .when(login.error.is_some(), |this| this.border_1().border_color(rgb(palette::error())).bg(rgb(palette::error_container())))
                             .text_size(px(11.0))
-                            .text_color(rgb(if login.error.is_some() { 0xF9DEDC } else { ON_VARIANT }))
+                            .text_color(rgb(if login.error.is_some() { palette::on_error_container() } else { palette::on_surface_variant() }))
                             .text_center()
                             .whitespace_normal()
                             .child(login.error.clone().unwrap_or_else(|| {
@@ -1511,8 +1548,8 @@ impl AppRoot {
                     .py_3()
                     .rounded_lg()
                     .border_1()
-                    .border_color(rgb(OUTLINE))
-                    .bg(rgb(SURFACE))
+                    .border_color(rgb(palette::outline_variant()))
+                    .bg(rgb(palette::surface_container()))
                     .opacity(opacity)
                     .flex()
                     .items_center()
@@ -1522,7 +1559,7 @@ impl AppRoot {
                             .flex()
                             .flex_1()
                             .text_size(px(12.0))
-                            .text_color(rgb(ON_SURFACE))
+                            .text_color(rgb(palette::on_surface()))
                             .whitespace_normal()
                             .child(toast.message.clone()),
                     )
@@ -1533,9 +1570,9 @@ impl AppRoot {
                                 .px_3()
                                 .py_1()
                                 .rounded_md()
-                                .bg(rgb(0x4F378B))
+                                .bg(rgb(palette::primary_container()))
                                 .text_size(px(11.0))
-                                .text_color(rgb(0xEADDFF))
+                                .text_color(rgb(palette::on_primary_container()))
                                 .cursor_pointer()
                                 .on_click(cx.listener(move |this, _, _, cx| {
                                     this.retry(retry);
@@ -2836,7 +2873,7 @@ impl AppRoot {
             .w_full()
             .h(relative(0.0648))
             .px_4()
-            .bg(rgb(0x1D1B20))
+            .bg(rgb(palette::surface_container_low()))
             .flex()
             .items_center()
             .child(
@@ -2847,7 +2884,7 @@ impl AppRoot {
                     .child(
                         div()
                             .text_size(px(19.0))
-                            .text_color(rgb(if offline { 0xEFB8C8 } else { ON_VARIANT }))
+                            .text_color(rgb(if offline { palette::tertiary() } else { palette::on_surface_variant() }))
                             .whitespace_nowrap()
                             .text_ellipsis()
                             .child(welcome),
@@ -2861,13 +2898,13 @@ impl AppRoot {
                     .child(
                         div()
                             .text_size(px(14.0))
-                            .text_color(rgb(ON_VARIANT))
+                            .text_color(rgb(palette::on_surface_variant()))
                             .whitespace_nowrap()
                             .text_ellipsis()
                             .child(report),
                     )
-                    .child(icon("reload-ui-2-svgrepo-com.svg", 18.0, ON_SURFACE))
-                    .child(icon("delete-outline.svg", 18.0, ON_SURFACE)),
+                    .child(icon("reload-ui-2-svgrepo-com.svg", 18.0, palette::on_surface()))
+                    .child(icon("delete-outline.svg", 18.0, palette::on_surface())),
             )
             .child(
                 div()
@@ -2876,7 +2913,7 @@ impl AppRoot {
                     .right_0()
                     .bottom_0()
                     .h(px(1.0))
-                    .bg(rgb(OUTLINE)),
+                    .bg(rgb(palette::outline_variant())),
             )
     }
 
@@ -2897,15 +2934,15 @@ impl AppRoot {
             .child(
                 div()
                     .text_size(px(11.0))
-                    .text_color(rgb(ON_VARIANT))
+                    .text_color(rgb(palette::on_surface_variant()))
                     .child(hint),
             )
             .child(div().flex_1())
-            .child(icon("outline-shuffle.svg", 14.0, ON_VARIANT))
+            .child(icon("outline-shuffle.svg", 14.0, palette::on_surface_variant()))
             .child(
                 div()
                     .text_size(px(11.0))
-                    .text_color(rgb(ON_VARIANT))
+                    .text_color(rgb(palette::on_surface_variant()))
                     .child(order),
             )
             .when(selection_count > 0, |this| {
@@ -2914,9 +2951,9 @@ impl AppRoot {
                         .px_2()
                         .py_1()
                         .rounded_full()
-                        .bg(rgb(PRIMARY))
+                        .bg(rgb(palette::primary()))
                         .text_size(px(11.0))
-                        .text_color(rgb(0x381E72))
+                        .text_color(rgb(palette::on_primary()))
                         .child(selection_count.to_string()),
                 )
             });
@@ -2954,7 +2991,7 @@ impl AppRoot {
                         .items_center()
                         .justify_center()
                         .text_size(px(15.0))
-                        .text_color(rgb(ON_VARIANT))
+                        .text_color(rgb(palette::on_surface_variant()))
                         .child(message),
                 );
         }
@@ -2991,7 +3028,7 @@ impl AppRoot {
                                     .h(px(row_h))
                                     .px_1()
                                     .rounded_sm()
-                                    .bg(rgb(if selected { 0x4A4458 } else { 0x141218 }))
+                                    .bg(rgb(if selected { palette::secondary_container() } else { palette::surface() }))
                                     .child(row_placeholder(index, row_h, this.clock.now as f32)),
                             );
                             continue;
@@ -3013,13 +3050,13 @@ impl AppRoot {
                                 anim::Curve::Standard,
                                 &this.clock,
                             );
-                        let base_fill = if striped { 0x0F0D13 } else { 0x141218 };
+                        let base_fill = if striped { palette::surface_container_lowest() } else { palette::surface() };
                         let hover_fill = this
                             .row_hover_colors
                             .entry(format!("library-hover:{}", row.id))
                             .or_insert_with(|| anim::ColorBehavior::new(base_fill))
                             .target(
-                                if hovered && !selected { 0x2B2930 } else { base_fill },
+                                if hovered && !selected { palette::surface_container_high() } else { base_fill },
                                 anim::QUICK_MS,
                                 anim::Curve::Standard,
                                 &this.clock,
@@ -3034,7 +3071,7 @@ impl AppRoot {
                                 .px_1()
                                 .rounded_sm()
                                 .bg(if selected {
-                                    rgb(0x4A4458)
+                                    rgb(palette::secondary_container())
                                 } else {
                                     gpui::rgba(hover_fill)
                                 })
@@ -3067,16 +3104,16 @@ impl AppRoot {
                                                 .whitespace_normal()
                                                 .max_h(px(34.0))
                                                 .overflow_hidden()
-                                                .child(highlighted_text(&title, &this.line_search.query, ON_SURFACE)),
+                                                .child(highlighted_text(&title, &this.line_search.query, palette::on_surface())),
                                         )
                                         .child(
                                             div()
                                                 .text_size(px(12.0 * emphasis))
-                                                .text_color(rgb(ON_VARIANT))
+                                                .text_color(rgb(palette::on_surface_variant()))
                                                 .whitespace_normal()
                                                 .max_h(px(22.0))
                                                 .overflow_hidden()
-                                                .child(highlighted_text(&subtitle, &this.line_search.query, ON_VARIANT)),
+                                                .child(highlighted_text(&subtitle, &this.line_search.query, palette::on_surface_variant())),
                                         ),
                                 )
                                 .child(
@@ -3087,11 +3124,11 @@ impl AppRoot {
                                         .child(
                                             div()
                                                 .text_size(px(11.0 * emphasis))
-                                                .text_color(rgb(ON_VARIANT))
-                                                .child(highlighted_text(&meta, &this.line_search.query, ON_VARIANT)),
+                                                .text_color(rgb(palette::on_surface_variant()))
+                                                .child(highlighted_text(&meta, &this.line_search.query, palette::on_surface_variant())),
                                         )
                                         .when(downloaded, |this| {
-                                            this.child(icon("outline-download.svg", 13.0, PRIMARY))
+                                            this.child(icon("outline-download.svg", 13.0, palette::primary()))
                                         })
                                         .when(starred, |this| {
                                             this.child(icon("baseline-favorite.svg", 12.0, 0xFFD54F))
@@ -3100,7 +3137,7 @@ impl AppRoot {
                                             this.child(
                                                 div()
                                                     .text_size(px(10.0))
-                                                    .text_color(rgb(PRIMARY))
+                                                    .text_color(rgb(palette::primary()))
                                                     .child(rating.to_string()),
                                             )
                                         }),
@@ -3157,7 +3194,7 @@ impl AppRoot {
                             this.child(
                                 div()
                                     .text_size(px(13.0))
-                                    .text_color(rgb(ON_VARIANT))
+                                    .text_color(rgb(palette::on_surface_variant()))
                                     .whitespace_nowrap()
                                     .text_ellipsis()
                                     .child(description.subtitle.clone()),
@@ -3170,7 +3207,7 @@ impl AppRoot {
                                 .w_full()
                                 .overflow_y_scroll()
                                 .text_size(px(14.0))
-                                .text_color(rgb(ON_SURFACE))
+                                .text_color(rgb(palette::on_surface()))
                                 .whitespace_normal()
                                 .child(description.body.clone()),
                         ),
@@ -3216,18 +3253,18 @@ impl AppRoot {
             let icon_name = slot.active_icon(index).to_string();
             let disabled = slot.disabled;
             let bg = if disabled {
-                0x1D1B20
+                palette::surface_container_low()
             } else if aimed {
-                0x4F378B
+                palette::primary_container()
             } else {
-                0x2B2930
+                palette::surface_container_high()
             };
             let fg = if disabled {
-                0x49454F
+                palette::outline_variant()
             } else if aimed {
-                0xEADDFF
+                palette::on_primary_container()
             } else {
-                0xCAC4D0
+                palette::on_surface_variant()
             };
             let opacity = if disabled {
                 0.7
@@ -3246,7 +3283,7 @@ impl AppRoot {
                 .h(px(size))
                 .rounded_md()
                 .border_1()
-                .border_color(rgb(if aimed { PRIMARY } else { OUTLINE }))
+                .border_color(rgb(if aimed { palette::primary() } else { palette::outline_variant() }))
                 .bg(rgb(bg))
                 .opacity(opacity)
                 .flex()
@@ -3269,7 +3306,7 @@ impl AppRoot {
                         .right(px(size * 0.07))
                         .bottom(px(size * 0.05))
                         .text_size(px((size * 0.28).max(9.0)))
-                        .text_color(rgb(PRIMARY))
+                        .text_color(rgb(palette::primary()))
                         .child(self.alt.rating_value.to_string()),
                 );
             }
@@ -3283,7 +3320,7 @@ impl AppRoot {
                 .child(icon(
                     "arrow-move-20-regular.svg",
                     page_h * 0.026,
-                    PRIMARY,
+                    palette::primary(),
                 ))
                 .opacity(if self.alt.aimed.is_none() { 1.0 } else { 0.6 }),
         );
@@ -3309,9 +3346,9 @@ impl AppRoot {
                     .right_0()
                     .bottom(px(-(1.0 - progress) * 96.0))
                     .h(relative(0.07))
-                    .bg(rgb(SURFACE))
+                    .bg(rgb(palette::surface_container()))
                     .border_t_1()
-                    .border_color(rgb(PRIMARY))
+                    .border_color(rgb(palette::primary()))
                     .px_4()
                     .flex()
                     .items_center()
@@ -3320,7 +3357,7 @@ impl AppRoot {
                         div()
                             .text_size(px(16.0))
                             .font_weight(gpui::FontWeight::BOLD)
-                            .text_color(rgb(PRIMARY))
+                            .text_color(rgb(palette::primary()))
                             .child("/"),
                     )
                     .child(
@@ -3331,13 +3368,13 @@ impl AppRoot {
                             .whitespace_nowrap()
                             .text_ellipsis()
                             .text_size(px(16.0))
-                            .text_color(rgb(ON_SURFACE))
+                            .text_color(rgb(palette::on_surface()))
                             .child(self.line_search.query.clone()),
                     )
                     .child(
                         div()
                             .text_size(px(11.0))
-                            .text_color(rgb(ON_VARIANT))
+                            .text_color(rgb(palette::on_surface_variant()))
                             .child(if counter.is_empty() {
                                 "Tab cycle · Enter jump · Esc close".to_string()
                             } else {
@@ -3392,7 +3429,7 @@ impl AppRoot {
                     .child(
                         div()
                             .text_size(px(10.0))
-                            .text_color(rgb(ON_VARIANT))
+                            .text_color(rgb(palette::on_surface_variant()))
                             .child(format!("Lyrics · {} · ? closes", lyrics.source)),
                     )
                     .children(lyrics.lines[start..end].iter().enumerate().map(|(offset, (_, text))| {
@@ -3407,7 +3444,7 @@ impl AppRoot {
                             .min_w_0()
                             .overflow_hidden()
                             .text_size(px(if is_active { active_size } else { base }))
-                            .text_color(rgb(if is_active { ON_SURFACE } else { ON_VARIANT }))
+                            .text_color(rgb(if is_active { palette::on_surface() } else { palette::on_surface_variant() }))
                             .text_center()
                             .whitespace_normal()
                             .opacity(
@@ -3479,7 +3516,7 @@ impl AppRoot {
             .inset_0()
             .size_full()
             .opacity(progress)
-            .bg(rgb(BG))
+            .bg(rgb(palette::background()))
             .flex()
             .flex_col()
             .p(px(16.0))
@@ -3523,7 +3560,7 @@ impl AppRoot {
                             .child(
                                 div()
                                     .text_size(px(10.0))
-                                    .text_color(rgb(ON_VARIANT))
+                                    .text_color(rgb(palette::on_surface_variant()))
                                     .child(lyrics_label),
                             )
                             .children(visible.into_iter().map(|(index, text)| {
@@ -3533,7 +3570,7 @@ impl AppRoot {
                                     .min_w_0()
                                     .overflow_hidden()
                                     .text_size(px(if is_active { lyric_active } else { lyric_base }))
-                                    .text_color(rgb(if is_active { ON_SURFACE } else { ON_VARIANT }))
+                                    .text_color(rgb(if is_active { palette::on_surface() } else { palette::on_surface_variant() }))
                                     .text_center()
                                     .whitespace_normal()
                                     .opacity(
@@ -3566,7 +3603,7 @@ impl AppRoot {
                         div()
                             .w_full()
                             .text_size(px(13.0))
-                            .text_color(rgb(ON_VARIANT))
+                            .text_color(rgb(palette::on_surface_variant()))
                             .whitespace_nowrap()
                             .text_ellipsis()
                             .child(artist),
@@ -3579,7 +3616,7 @@ impl AppRoot {
                             .child(
                                 div()
                                     .text_size(px(10.0))
-                                    .text_color(rgb(ON_VARIANT))
+                                    .text_color(rgb(palette::on_surface_variant()))
                                     .child(format_time(position)),
                             )
                             .child(
@@ -3588,19 +3625,19 @@ impl AppRoot {
                                     .flex_1()
                                     .h(px(4.0))
                                     .rounded_full()
-                                    .bg(rgb(SURFACE_HIGH))
+                                    .bg(rgb(palette::surface_container_high()))
                                     .child(
                                         div()
                                             .h_full()
                                             .w(relative(progress_ratio))
                                             .rounded_full()
-                                            .bg(rgb(PRIMARY)),
+                                            .bg(rgb(palette::primary())),
                                     ),
                             )
                             .child(
                                 div()
                                     .text_size(px(10.0))
-                                    .text_color(rgb(ON_VARIANT))
+                                    .text_color(rgb(palette::on_surface_variant()))
                                     .child(format_time(duration)),
                             ),
                     )
@@ -3610,7 +3647,7 @@ impl AppRoot {
                             .items_center()
                             .justify_center()
                             .gap_5()
-                            .child(transport_button("skip-previous-solid-svgrepo-com.svg", 22.0, ON_SURFACE, self.transport_scale(0)))
+                            .child(transport_button("skip-previous-solid-svgrepo-com.svg", 22.0, palette::on_surface(), self.transport_scale(0)))
                             .child(transport_button(
                                 if self.player.state() == crate::player::State::Playing {
                                     "pause-svgrepo-com.svg"
@@ -3618,15 +3655,15 @@ impl AppRoot {
                                     "play-1001-svgrepo-com.svg"
                                 },
                                 28.0,
-                                ON_SURFACE,
+                                palette::on_surface(),
                                 self.transport_scale(1),
                             ))
-                            .child(transport_button("skip-next-circle-solid-svgrepo-com.svg", 22.0, ON_SURFACE, self.transport_scale(2))),
+                            .child(transport_button("skip-next-circle-solid-svgrepo-com.svg", 22.0, palette::on_surface(), self.transport_scale(2))),
                     )
                     .child(
                         div()
                             .text_size(px(10.0))
-                            .text_color(rgb(ON_VARIANT))
+                            .text_color(rgb(palette::on_surface_variant()))
                             .text_center()
                             .child("Shift-Enter or q closes · Space play/pause · Ctrl-Q queue"),
                     ),
@@ -3652,9 +3689,9 @@ impl AppRoot {
                     .w(relative(0.36))
                     .flex()
                     .flex_col()
-                    .bg(rgb(SURFACE))
+                    .bg(rgb(palette::surface_container()))
                     .border_l_1()
-                    .border_color(rgb(OUTLINE))
+                    .border_color(rgb(palette::outline_variant()))
                     .shadow_lg()
                     .child(
                         div()
@@ -3668,11 +3705,11 @@ impl AppRoot {
                             .child(
                                 div()
                                     .text_size(px(11.0))
-                                    .text_color(rgb(ON_VARIANT))
+                                    .text_color(rgb(palette::on_surface_variant()))
                                     .child(format!("{} / {}", current.saturating_add(1), count)),
                             ),
                     )
-                    .child(div().h(px(1.0)).bg(rgb(OUTLINE)))
+                    .child(div().h(px(1.0)).bg(rgb(palette::outline_variant())))
                     .child(
                         uniform_list("queue", count, cx.processor(move |this, range: std::ops::Range<usize>, _window, cx| {
                             let queue = this.player.queue_snapshot();
@@ -3704,7 +3741,7 @@ impl AppRoot {
                                         .h(px(this.queue_scroll_modal.row_h))
                                         .px_3()
                                         .cursor_pointer()
-                                        .when(active, |this| this.bg(rgb(0x4A4458)))
+                                        .when(active, |this| this.bg(rgb(palette::secondary_container())))
                                         .on_click(cx.listener(move |this, _, _, cx| {
                                             this.queue_cursor = index;
                                             this.player.jump(index);
@@ -3726,21 +3763,21 @@ impl AppRoot {
                                                             div()
                                                                 .text_size(px(14.0 * emphasis))
                                                                 .font_weight(if active { gpui::FontWeight::BOLD } else { gpui::FontWeight::NORMAL })
-                                                                .when(playing, |this| this.text_color(rgb(PRIMARY)))
+                                                                .when(playing, |this| this.text_color(rgb(palette::primary())))
                                                                 .whitespace_normal()
                                                                 .max_h(px(20.0))
                                                                 .overflow_hidden()
-                                                                .child(highlighted_text(&title, &this.line_search.query, ON_SURFACE)),
+                                                                .child(highlighted_text(&title, &this.line_search.query, palette::on_surface())),
                                                         ),
                                                 )
                                                 .child(
                                                     div()
                                                         .text_size(px(10.0 * emphasis))
-                                                        .text_color(rgb(ON_VARIANT))
+                                                        .text_color(rgb(palette::on_surface_variant()))
                                                         .whitespace_normal()
                                                         .max_h(px(16.0))
                                                         .overflow_hidden()
-                                                        .child(highlighted_text(&artist, &this.line_search.query, ON_VARIANT)),
+                                                        .child(highlighted_text(&artist, &this.line_search.query, palette::on_surface_variant())),
                                                 ),
                                         ),
                                 );
@@ -3758,7 +3795,7 @@ impl AppRoot {
                             .px_3()
                             .py_2()
                             .text_size(px(10.0))
-                            .text_color(rgb(ON_VARIANT))
+                            .text_color(rgb(palette::on_surface_variant()))
                             .child("Enter jumps · d d removes · Ctrl-Shift-J/K reorders · q closes"),
                     ),
             )
@@ -3798,8 +3835,8 @@ impl AppRoot {
                         }
                         cx.notify();
                     }))
-                    .when(selected, |this| this.bg(rgb(0x4A4458)))
-                    .when(hovered && !selected, |this| this.bg(rgb(SURFACE_HIGH)))
+                    .when(selected, |this| this.bg(rgb(palette::secondary_container())))
+                    .when(hovered && !selected, |this| this.bg(rgb(palette::surface_container_high())))
                     .child(art_scaled(
                         cover,
                         self.search_scroll.row_h * 0.714,
@@ -3818,22 +3855,22 @@ impl AppRoot {
                                     .whitespace_normal()
                                     .max_h(px(22.0))
                                     .overflow_hidden()
-                                    .child(highlighted_text(&row.title, &self.line_search.query, ON_SURFACE)),
+                                    .child(highlighted_text(&row.title, &self.line_search.query, palette::on_surface())),
                             )
                             .child(
                                 div()
                                     .text_size(px(11.0 * emphasis))
-                                    .text_color(rgb(ON_VARIANT))
+                                    .text_color(rgb(palette::on_surface_variant()))
                                     .whitespace_normal()
                                     .max_h(px(18.0))
                                     .overflow_hidden()
-                                    .child(highlighted_text(&row.subtitle, &self.line_search.query, ON_VARIANT)),
+                                    .child(highlighted_text(&row.subtitle, &self.line_search.query, palette::on_surface_variant())),
                             ),
                     )
                     .child(
                         div()
                             .text_size(px(11.0))
-                            .text_color(rgb(ON_VARIANT))
+                            .text_color(rgb(palette::on_surface_variant()))
                             .child(row.meta.clone()),
                     )
             })
@@ -3855,8 +3892,8 @@ impl AppRoot {
                     .h(relative(0.72))
                     .rounded_md()
                     .border_1()
-                    .border_color(rgb(PRIMARY))
-                    .bg(rgb(0x211F26))
+                    .border_color(rgb(palette::primary()))
+                    .bg(rgb(palette::surface_container()))
                     .overflow_hidden()
                     .shadow_lg()
                     .child(
@@ -3870,7 +3907,7 @@ impl AppRoot {
                                     .w_full()
                                     .h(px(60.0))
                                     .rounded_md()
-                                    .bg(rgb(0x36343B))
+                                    .bg(rgb(palette::surface_container_highest()))
                                     .px_4()
                                     .flex()
                                     .items_center()
@@ -3879,7 +3916,7 @@ impl AppRoot {
                                     .whitespace_normal()
                                     .max_h(px(44.0))
                                     .text_size(px(16.0))
-                                    .text_color(if search.query.is_empty() { rgb(ON_VARIANT) } else { rgb(ON_SURFACE) })
+                                    .text_color(if search.query.is_empty() { rgb(palette::on_surface_variant()) } else { rgb(palette::on_surface()) })
                                     .child(query),
                             ),
                     )
@@ -3895,11 +3932,11 @@ impl AppRoot {
                                 let count = search.scope_count(scope);
                                 div()
                                     .text_size(px(14.0))
-                                    .text_color(rgb(if active { PRIMARY } else { ON_VARIANT }))
+                                    .text_color(rgb(if active { palette::primary() } else { palette::on_surface_variant() }))
                                     .child(format!("{} {count}", search_scope_label(scope)))
                             })),
                     )
-                    .child(div().h(px(1.0)).bg(rgb(OUTLINE)))
+                    .child(div().h(px(1.0)).bg(rgb(palette::outline_variant())))
                     .child(
                         div()
                             .flex()
@@ -3917,7 +3954,7 @@ impl AppRoot {
                             .items_center()
                             .justify_center()
                             .text_size(px(10.0))
-                            .text_color(rgb(ON_VARIANT))
+                            .text_color(rgb(palette::on_surface_variant()))
                             .text_center()
                             .whitespace_normal()
                             .child(if search.typing {
@@ -3987,19 +4024,19 @@ impl AppRoot {
                     .child(
                         div()
                             .text_size(px(page_h * 0.024 * (page_w / 1280.0).clamp(0.9, 1.6)))
-                            .text_color(rgb(ON_VARIANT))
+                            .text_color(rgb(palette::on_surface_variant()))
                             .child("☆ ☆ ☆ ☆ ☆"),
                     )
                     .child(
                         div()
                             .text_size(px(page_h * 0.024 * (page_w / 1280.0).clamp(0.9, 1.6)))
-                            .text_color(rgb(PRIMARY))
+                            .text_color(rgb(palette::primary()))
                             .child(subtitle),
                     )
                     .child(
                         div()
                             .text_size(px(page_h * 0.02 * (page_w / 1280.0).clamp(0.9, 1.6)))
-                            .text_color(rgb(ON_VARIANT))
+                            .text_color(rgb(palette::on_surface_variant()))
                             .whitespace_nowrap()
                             .child(meta),
                     )
@@ -4014,7 +4051,7 @@ impl AppRoot {
                                 .max_h(px(64.0))
                                 .overflow_hidden()
                                 .text_size(px(11.0))
-                                .text_color(rgb(ON_VARIANT))
+                                .text_color(rgb(palette::on_surface_variant()))
                                 .whitespace_normal()
                                 .cursor_pointer()
                                 .on_click(cx.listener(move |this, _, _, cx| {
@@ -4043,7 +4080,7 @@ impl AppRoot {
                         .items_center()
                         .justify_center()
                         .text_size(px(15.0))
-                        .text_color(rgb(ON_VARIANT))
+                        .text_color(rgb(palette::on_surface_variant()))
                         .child("Loading…"),
                 );
         }
@@ -4060,7 +4097,7 @@ impl AppRoot {
                         .items_center()
                         .justify_center()
                         .text_size(px(13.0))
-                        .text_color(rgb(ON_VARIANT))
+                        .text_color(rgb(palette::on_surface_variant()))
                         .child(error.clone()),
                 );
         }
@@ -4079,7 +4116,7 @@ impl AppRoot {
                         .items_center()
                         .justify_center()
                         .text_size(px(15.0))
-                        .text_color(rgb(ON_VARIANT))
+                        .text_color(rgb(palette::on_surface_variant()))
                         .child(profile.empty_text),
                 );
         }
@@ -4145,13 +4182,13 @@ impl AppRoot {
                                         anim::Curve::Standard,
                                         &this.clock,
                                     );
-                                let page_base = if index % 2 != 0 { 0x0F0D13 } else { 0x141218 };
+                                let page_base = if index % 2 != 0 { palette::surface_container_lowest() } else { palette::surface() };
                                 let hover_fill = this
                                     .row_hover_colors
                                     .entry(format!("page-hover:{index}"))
                                     .or_insert_with(|| anim::ColorBehavior::new(page_base))
                                     .target(
-                                        if hovered && !selected { 0x2B2930 } else { page_base },
+                                        if hovered && !selected { palette::surface_container_high() } else { page_base },
                                         anim::QUICK_MS,
                                         anim::Curve::Standard,
                                         &this.clock,
@@ -4177,7 +4214,7 @@ impl AppRoot {
                                         .px_4()
                                         .cursor_pointer()
                                         .bg(if selected {
-                                            rgb(0x4A4458)
+                                            rgb(palette::secondary_container())
                                         } else {
                                             gpui::rgba(hover_fill)
                                         })
@@ -4217,12 +4254,12 @@ impl AppRoot {
                                                         .font_weight(if selected { gpui::FontWeight::BOLD } else { gpui::FontWeight::NORMAL })
                                                         .whitespace_nowrap()
                                                         .text_ellipsis()
-                                                        .child(highlighted_text(&title, &this.line_search.query, ON_SURFACE)),
+                                                        .child(highlighted_text(&title, &this.line_search.query, palette::on_surface())),
                                                 )
                                                 .child(
                                                     div()
                                                         .text_size(px(11.0 * emphasis))
-                                                        .text_color(rgb(ON_VARIANT))
+                                                        .text_color(rgb(palette::on_surface_variant()))
                                                         .whitespace_nowrap()
                                                         .text_ellipsis()
                                                         .child(subtitle),
@@ -4231,17 +4268,17 @@ impl AppRoot {
                                         .child(
                                             div()
                                                     .text_size(px(11.0 * emphasis))
-                                                .text_color(rgb(ON_VARIANT))
-                                                .child(highlighted_text(&meta, &this.line_search.query, ON_VARIANT)),
+                                                .text_color(rgb(palette::on_surface_variant()))
+                                                .child(highlighted_text(&meta, &this.line_search.query, palette::on_surface_variant())),
                                         )
                                         .when(downloaded, |this| {
-                                            this.child(icon("outline-download.svg", 12.0, PRIMARY))
+                                            this.child(icon("outline-download.svg", 12.0, palette::primary()))
                                         })
                                         .when(starred, |this| {
                                             this.child(icon("baseline-favorite.svg", 11.0, 0xFFD54F))
                                         })
                                         .when(rating > 0, |this| {
-                                            this.child(div().text_size(px(10.0)).text_color(rgb(PRIMARY)).child(rating.to_string()))
+                                            this.child(div().text_size(px(10.0)).text_color(rgb(palette::primary())).child(rating.to_string()))
                                         }),
                                 );
                             }
@@ -4277,7 +4314,7 @@ impl AppRoot {
             .relative()
             .w_full()
             .h(relative(0.0828))
-            .bg(rgb(SURFACE))
+            .bg(rgb(palette::surface_container()))
             .child(
                 div()
                     .absolute()
@@ -4285,8 +4322,8 @@ impl AppRoot {
                     .left_0()
                     .right_0()
                     .h(px(3.0))
-                    .bg(rgb(SURFACE_HIGH))
-                    .child(div().h_full().w(relative(progress)).bg(rgb(PRIMARY))),
+                    .bg(rgb(palette::surface_container_high()))
+                    .child(div().h_full().w(relative(progress)).bg(rgb(palette::primary()))),
             )
             .child(
                 div()
@@ -4322,7 +4359,7 @@ impl AppRoot {
                                     .child(
                                         div()
                                             .text_size(px(12.0))
-                                            .text_color(rgb(ON_VARIANT))
+                                            .text_color(rgb(palette::on_surface_variant()))
                                             .whitespace_nowrap()
                                             .text_ellipsis()
                                             .child(artist),
@@ -4337,7 +4374,7 @@ impl AppRoot {
                             .items_center()
                             .justify_center()
                             .gap_5()
-                            .child(transport_button("skip-previous-solid-svgrepo-com.svg", 20.0, ON_SURFACE, self.transport_scale(0)))
+                            .child(transport_button("skip-previous-solid-svgrepo-com.svg", 20.0, palette::on_surface(), self.transport_scale(0)))
                             .child(transport_button(
                                 if state == crate::player::State::Playing {
                                     "pause-svgrepo-com.svg"
@@ -4345,10 +4382,10 @@ impl AppRoot {
                                     "play-1001-svgrepo-com.svg"
                                 },
                                 24.0,
-                                ON_SURFACE,
+                                palette::on_surface(),
                                 self.transport_scale(1),
                             ))
-                            .child(transport_button("skip-next-circle-solid-svgrepo-com.svg", 20.0, ON_SURFACE, self.transport_scale(2))),
+                            .child(transport_button("skip-next-circle-solid-svgrepo-com.svg", 20.0, palette::on_surface(), self.transport_scale(2))),
                     )
                     .child(
                         div()
@@ -4361,7 +4398,7 @@ impl AppRoot {
                             .child(
                                 div()
                                     .text_size(px(11.0))
-                                    .text_color(rgb(ON_VARIANT))
+                                    .text_color(rgb(palette::on_surface_variant()))
                                     .child(format!(
                                         "{} / {}",
                                         format_time(position),
@@ -4372,7 +4409,7 @@ impl AppRoot {
                                 this.child(
                                     div()
                                         .text_size(px(10.0))
-                                        .text_color(rgb(PRIMARY))
+                                        .text_color(rgb(palette::primary()))
                                         .child(repeat_label(self.repeat)),
                                 )
                             })
@@ -4382,20 +4419,20 @@ impl AppRoot {
                                 else if volume <= 33.0 { "vol-low-svgrepo-com.svg" }
                                 else { "vol-high-svgrepo-com.svg" },
                                 16.0,
-                                ON_VARIANT,
+                                palette::on_surface_variant(),
                             ))
                             .child(
                                 div()
                                     .w(px(54.0))
                                     .h(px(3.0))
                                     .rounded_full()
-                                    .bg(rgb(SURFACE_HIGH))
+                                    .bg(rgb(palette::surface_container_high()))
                                     .child(
                                         div()
                                             .h_full()
                                             .w(relative((volume / 100.0) as f32))
                                             .rounded_full()
-                                            .bg(rgb(PRIMARY)),
+                                            .bg(rgb(palette::primary())),
                                     ),
                             ),
                     ),
@@ -4413,9 +4450,9 @@ impl AppRoot {
             .items_center()
             .justify_center()
             .h(px(66.0))
-            .bg(rgb(SURFACE))
+            .bg(rgb(palette::surface_container()))
             .text_size(px(11.0))
-            .text_color(rgb(ON_VARIANT))
+            .text_color(rgb(palette::on_surface_variant()))
             .child({
                 let visual = if let Some(page) = self.page.as_ref() {
                     page.selection.count(page.cursor)
@@ -4448,6 +4485,12 @@ impl Render for AppRoot {
             crate::debug_log!("GPUI trace: frame {}", self.frames);
         }
         self.clock.tick();
+        palette::publish(self.palette_motion.value(&self.clock));
+        if !self.palette_motion.settled(&self.clock) {
+            window.request_animation_frame();
+        }
+        self.sync_palette();
+        self.refresh_lyrics_emphasis();
         if self.exiting.is_none()
             && let Some(ms) = self.quit_after_ms
             && self.clock.now * 1000.0 >= ms as f64
@@ -4665,9 +4708,9 @@ impl Render for AppRoot {
             .flex()
             .flex_col()
             .size_full()
-            .bg(rgb(BG))
+            .bg(rgb(palette::background()))
             .font_family("Overused Grotesk Roman")
-            .text_color(rgb(ON_SURFACE))
+            .text_color(rgb(palette::on_surface()))
             .child(top)
             .child(body)
             .child(status)
@@ -4743,7 +4786,7 @@ fn highlighted_text(text: &str, query: &str, color: u32) -> gpui::AnyElement {
     }
     let highlight = HighlightStyle {
         color: Some(rgb(color).into()),
-        background_color: Some(rgb(0x4A4458).into()),
+        background_color: Some(rgb(palette::secondary_container()).into()),
         ..Default::default()
     };
     StyledText::new(text.to_string())
@@ -4832,7 +4875,7 @@ fn art(path: Option<std::path::PathBuf>, size: f32) -> gpui::AnyElement {
             img(path.clone())
                 .size(px(size))
                 .rounded_sm()
-                .bg(rgb(0x36343B))
+                .bg(rgb(palette::surface_container_highest()))
                 .with_animation(
                     id,
                     Animation::new(std::time::Duration::from_millis(120)),
@@ -4843,7 +4886,7 @@ fn art(path: Option<std::path::PathBuf>, size: f32) -> gpui::AnyElement {
         None => div()
             .size(px(size))
             .rounded_md()
-            .bg(rgb(0x36343B))
+            .bg(rgb(palette::surface_container_highest()))
             .into_any_element(),
     }
 }

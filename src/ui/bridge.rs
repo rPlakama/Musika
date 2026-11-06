@@ -4,7 +4,8 @@
 //! runtime and return as plain `Event`s over a tokio channel; the GPUI root
 //! task drains them and notifies its entity.
 
-use std::sync::Arc;
+use std::collections::BTreeMap;
+use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use tokio::sync::mpsc::UnboundedSender;
@@ -72,6 +73,13 @@ pub enum Event {
         tracks: Vec<crate::player::Track>,
     },
     DownloadSettled,
+    Palette {
+        cover_art: String,
+        roles: BTreeMap<String, String>,
+    },
+    PaletteReset {
+        cover_art: String,
+    },
     OpenPage {
         descriptor: super::state::PageDescriptor,
     },
@@ -114,6 +122,7 @@ pub struct Bridge {
     search_generation: Arc<AtomicU64>,
     marks_generation: AtomicU64,
     offline: AtomicBool,
+    palette_inflight: Mutex<Option<String>>,
 }
 
 impl Bridge {
@@ -125,6 +134,7 @@ impl Bridge {
             search_generation: Arc::new(AtomicU64::new(0)),
             marks_generation: AtomicU64::new(0),
             offline: AtomicBool::new(false),
+            palette_inflight: Mutex::new(None),
         };
         bridge.refresh_header();
         bridge
@@ -742,6 +752,36 @@ impl Bridge {
                     let _ = tx.send(Event::Error(format!("Could not play the playlist: {err:#}")));
                 }
             }
+        });
+    }
+
+    pub fn request_colors(&self, cover_art: String) {
+        if cover_art.is_empty() {
+            return;
+        }
+        {
+            let mut inflight = self
+                .palette_inflight
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if inflight.as_deref() == Some(cover_art.as_str()) {
+                return;
+            }
+            *inflight = Some(cover_art.clone());
+        }
+        let tx = self.tx.clone();
+        crate::app::runtime().spawn(async move {
+            let Some(dbs) = crate::app::dbs() else { return };
+            let event = match crate::colors::fetch(&dbs, &cover_art).await {
+                Ok(Some(scheme)) => Event::Palette {
+                    cover_art: cover_art.clone(),
+                    roles: scheme.roles,
+                },
+                _ => Event::PaletteReset {
+                    cover_art: cover_art.clone(),
+                },
+            };
+            let _ = tx.send(event);
         });
     }
 

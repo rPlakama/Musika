@@ -3530,16 +3530,7 @@ impl AppRoot {
                         let downloaded = this.marks.downloaded(&row.song_id, &row.album_id) || row.downloaded;
                         let rating = row.rating;
                         let cover = cover_path(&row.cover_url);
-                        let cover_scale = this
-                            .row_scales
-                            .entry(format!("library-scale:{}", row.id))
-                            .or_insert_with(|| anim::Behavior::new(1.0))
-                            .target(
-                                if selected { 1.20 } else { 1.0 },
-                                anim::QUICK_MS,
-                                anim::Curve::Standard,
-                                &this.clock,
-                            );
+                        let cover_scale = if selected { 1.20 } else { 1.0 };
                         let base_fill = if striped { palette::surface_container_lowest() } else { palette::surface() };
                         let hover_fill = this
                             .row_hover_colors
@@ -4276,16 +4267,7 @@ impl AppRoot {
                                     || this.queue_selection.contains(this.queue_cursor, index);
                                 let playing = index == this.player.index();
                                 let emphasis = if selected { 1.08 } else { 1.0 };
-                                let cover_scale = this
-                                    .row_scales
-                                    .entry(format!("queue-scale:{index}"))
-                                    .or_insert_with(|| anim::Behavior::new(1.0))
-                                    .target(
-                                        if selected { 1.20 } else { 1.0 },
-                                        anim::QUICK_MS,
-                                        anim::Curve::Standard,
-                                        &this.clock,
-                                    );
+                                let cover_scale = if selected { 1.20 } else { 1.0 };
                                 items.push(
                                     div()
                                         .id(gpui::ElementId::named_usize(if selected { "queue-row-selected" } else { "queue-row" }, index))
@@ -4899,17 +4881,7 @@ impl AppRoot {
                                         anim::Curve::Standard,
                                         &this.clock,
                                     );
-                                let cover_scale = show_cover.then(|| {
-                                    this.row_scales
-                                        .entry(format!("page-cover-scale:{index}"))
-                                        .or_insert_with(|| anim::Behavior::new(1.0))
-                                        .target(
-                                            if selected { 1.20 } else { 1.0 },
-                                            anim::QUICK_MS,
-                                            anim::Curve::Standard,
-                                            &this.clock,
-                                        )
-                                });
+                                let cover_scale = show_cover.then_some(if selected { 1.20 } else { 1.0 });
                                 items.push(
                                     div()
                                         .id(gpui::ElementId::named_usize(if selected { "page-row-selected" } else { "page-row" }, index))

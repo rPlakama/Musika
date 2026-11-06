@@ -1694,9 +1694,15 @@ impl AppRoot {
         let track = self.player.current().cloned();
         let (title, artist, cover) = match &track {
             Some(track) => (track.title.clone(), track.artist.clone(), cover_path(&track.cover_url)),
-            None => ("Nothing playing".to_string(), String::new(), None),
+            None => ("No track playing".to_string(), String::new(), None),
         };
         let position = self.player.position();
+        let duration = self.player.duration();
+        let progress_ratio = if duration > 0.0 {
+            (position / duration).clamp(0.0, 1.0) as f32
+        } else {
+            0.0
+        };
         let lyrics = self.lyrics.as_ref();
         let lines = lyrics.map(|lyrics| lyrics.lines.clone()).unwrap_or_default();
         let active = lyrics
@@ -1708,14 +1714,14 @@ impl AppRoot {
                     .rposition(|(start, _)| start.is_some_and(|start| start <= ms))
             })
             .unwrap_or(0);
-        let start = active.saturating_sub(4);
-        let end = (active + 8).min(lines.len());
-        let visible: Vec<(usize, Option<i64>, String)> = lines
+        let start = active.saturating_sub(5);
+        let end = (active + 10).min(lines.len());
+        let visible: Vec<(usize, String)> = lines
             .iter()
             .enumerate()
             .skip(start)
             .take(end.saturating_sub(start))
-            .map(|(index, (start, text))| (index, *start, text.clone()))
+            .map(|(index, (_, text))| (index, text.clone()))
             .collect();
         let lyrics_label = match lyrics {
             Some(lyrics) if lyrics.lines.is_empty() => "No lyrics".to_string(),
@@ -1725,58 +1731,142 @@ impl AppRoot {
         div()
             .absolute()
             .inset_0()
+            .size_full()
             .opacity(progress)
             .bg(rgb(BG))
             .flex()
             .flex_col()
-            .items_center()
-            .justify_center()
-            .gap_6()
-            .child(art(cover, 140.0))
+            .p(px(16.0))
+            .gap_3()
             .child(
                 div()
                     .flex()
-                    .flex_col()
-                    .items_center()
-                    .gap_1()
-                    .child(div().text_size(px(24.0)).child(title))
+                    .flex_row()
+                    .flex_1()
+                    .w_full()
+                    .gap_3()
                     .child(
                         div()
-                            .text_size(px(13.0))
-                            .text_color(rgb(ON_VARIANT))
-                            .child(artist),
+                            .flex()
+                            .flex_none()
+                            .w(relative(0.50))
+                            .h_full()
+                            .items_center()
+                            .justify_center()
+                            .overflow_hidden()
+                            .child(art(cover, 300.0)),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .flex_none()
+                            .w(relative(0.50))
+                            .h_full()
+                            .min_w_0()
+                            .overflow_hidden()
+                            .flex_col()
+                            .items_center()
+                            .justify_center()
+                            .gap_1()
+                            .child(
+                                div()
+                                    .text_size(px(10.0))
+                                    .text_color(rgb(ON_VARIANT))
+                                    .child(lyrics_label),
+                            )
+                            .children(visible.into_iter().map(|(index, text)| {
+                                let is_active = index == active;
+                                div()
+                                    .w_full()
+                                    .min_w_0()
+                                    .overflow_hidden()
+                                    .text_size(px(if is_active { 18.0 } else { 14.0 }))
+                                    .text_color(rgb(if is_active { ON_SURFACE } else { ON_VARIANT }))
+                                    .text_center()
+                                    .whitespace_normal()
+                                    .when(is_active, |this| this.font_weight(gpui::FontWeight::SEMIBOLD))
+                                    .child(text)
+                            })),
                     ),
             )
             .child(
                 div()
                     .flex()
                     .flex_col()
-                    .items_center()
-                    .w(px(560.0))
-                    .gap_1()
+                    .w_full()
+                    .gap_2()
+                    .child(
+                        div()
+                            .w_full()
+                            .text_size(px(24.0))
+                            .font_weight(gpui::FontWeight::BOLD)
+                            .whitespace_nowrap()
+                            .text_ellipsis()
+                            .child(title),
+                    )
+                    .child(
+                        div()
+                            .w_full()
+                            .text_size(px(13.0))
+                            .text_color(rgb(ON_VARIANT))
+                            .whitespace_nowrap()
+                            .text_ellipsis()
+                            .child(artist),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap_3()
+                            .child(
+                                div()
+                                    .text_size(px(10.0))
+                                    .text_color(rgb(ON_VARIANT))
+                                    .child(format_time(position)),
+                            )
+                            .child(
+                                div()
+                                    .flex()
+                                    .flex_1()
+                                    .h(px(4.0))
+                                    .rounded_full()
+                                    .bg(rgb(SURFACE_HIGH))
+                                    .child(
+                                        div()
+                                            .h_full()
+                                            .w(relative(progress_ratio))
+                                            .rounded_full()
+                                            .bg(rgb(PRIMARY)),
+                                    ),
+                            )
+                            .child(
+                                div()
+                                    .text_size(px(10.0))
+                                    .text_color(rgb(ON_VARIANT))
+                                    .child(format_time(duration)),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .gap_5()
+                            .child(icon("skip-previous-solid-svgrepo-com.svg", 22.0, ON_SURFACE))
+                            .child(if self.player.state() == crate::player::State::Playing {
+                                icon("pause-svgrepo-com.svg", 28.0, ON_SURFACE)
+                            } else {
+                                icon("play-1001-svgrepo-com.svg", 28.0, ON_SURFACE)
+                            })
+                            .child(icon("skip-next-circle-solid-svgrepo-com.svg", 22.0, ON_SURFACE)),
+                    )
                     .child(
                         div()
                             .text_size(px(10.0))
                             .text_color(rgb(ON_VARIANT))
-                            .child(lyrics_label),
-                    )
-                    .children(visible.into_iter().map(|(index, _, text)| {
-                        let is_active = index == active;
-                        div()
-                            .w(px(560.0))
-                            .text_size(px(if is_active { 18.0 } else { 14.0 }))
-                            .text_color(rgb(if is_active { ON_SURFACE } else { ON_VARIANT }))
                             .text_center()
-                            .whitespace_normal()
-                            .when(is_active, |this| this.font_weight(gpui::FontWeight::SEMIBOLD))
-                            .child(text)
-                    })),
-            )
-            .child(
-                div()
-                    .text_size(px(10.0))
-                    .text_color(rgb(ON_VARIANT))
-                    .child("Shift-Enter or q closes · Space play/pause · Ctrl-Q queue"),
+                            .child("Shift-Enter or q closes · Space play/pause · Ctrl-Q queue"),
+                    ),
             )
     }
 

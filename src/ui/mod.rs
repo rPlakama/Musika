@@ -197,9 +197,17 @@ enum RetryAction {
     Playback,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ToastKind {
+    Error,
+    Sync,
+    Notice,
+}
+
 #[derive(Debug, Clone)]
 struct ToastState {
     message: String,
+    kind: ToastKind,
     retry: Option<RetryAction>,
     created_at: f64,
 }
@@ -242,6 +250,7 @@ struct AppRoot {
     search_anim: anim::Behavior,
     clock: anim::Clock,
     row_colors: std::collections::HashMap<String, anim::ColorBehavior>,
+    row_cover_scales: std::collections::HashMap<String, anim::Behavior>,
     player: crate::player::Player,
     playback_error: Option<String>,
     queue_open: bool,
@@ -301,6 +310,7 @@ impl AppRoot {
             search_anim: anim::Behavior::new(0.0),
             clock: anim::Clock::new(),
             row_colors: std::collections::HashMap::new(),
+            row_cover_scales: std::collections::HashMap::new(),
             player: crate::player::Player::new(),
             playback_error: None,
             queue_open: false,
@@ -325,7 +335,7 @@ impl AppRoot {
         if let Ok(message) = std::env::var("MUSIKA_GPUUI_TOAST")
             && !message.is_empty()
         {
-            app.push_toast(message, None);
+            app.push_toast(message, ToastKind::Error, None);
         }
         if std::env::var_os("MUSIKA_GPUUI_FULLSCREEN").is_some() {
             app.fullscreen = true;
@@ -549,14 +559,15 @@ impl AppRoot {
                 self.view.loading = false;
                 self.view.error = Some(message.clone());
                 self.error = Some(message.clone());
-                let retry = if message.to_lowercase().contains("playback") {
-                    self.last_play.as_ref().map(|_| RetryAction::Playback)
-                } else if message.to_lowercase().contains("library") || message.to_lowercase().contains("search") {
-                    Some(RetryAction::ReloadLibrary)
+                let lower = message.to_lowercase();
+                let (kind, retry) = if lower.contains("playback") {
+                    (ToastKind::Error, self.last_play.as_ref().map(|_| RetryAction::Playback))
+                } else if lower.contains("library") || lower.contains("search") || lower.contains("sync") {
+                    (ToastKind::Sync, Some(RetryAction::ReloadLibrary))
                 } else {
-                    None
+                    (ToastKind::Error, None)
                 };
-                self.push_toast(message, retry);
+                self.push_toast(message, kind, retry);
             }
         }
     }
@@ -949,12 +960,13 @@ impl AppRoot {
             )
     }
 
-    fn push_toast(&mut self, message: String, retry: Option<RetryAction>) {
+    fn push_toast(&mut self, message: String, kind: ToastKind, retry: Option<RetryAction>) {
         if self.toasts.iter().any(|toast| toast.message == message) {
             return;
         }
         self.toasts.push(ToastState {
             message,
+            kind,
             retry,
             created_at: self.clock.now,
         });
@@ -1023,8 +1035,9 @@ impl AppRoot {
                                 .px_3()
                                 .py_1()
                                 .rounded_md()
-                                .bg(rgb(SURFACE_HIGH))
+                                .bg(rgb(0x4F378B))
                                 .text_size(px(11.0))
+                                .text_color(rgb(0xEADDFF))
                                 .cursor_pointer()
                                 .on_click(cx.listener(move |this, _, _, cx| {
                                     this.retry(retry);
@@ -1799,6 +1812,11 @@ impl AppRoot {
                                 let cover = cover_path(&track.cover_url);
                                 let active = index == cursor;
                                 let playing = index == this.player.index();
+                                let cover_scale = this
+                                    .row_cover_scales
+                                    .entry(format!("queue:{index}"))
+                                    .or_insert_with(|| anim::Behavior::new(1.0))
+                                    .target(if active { 1.20 } else { 1.0 }, anim::QUICK_MS, anim::Curve::Standard, &this.clock);
                                 items.push(
                                     div()
                                         .id(index)
@@ -1814,7 +1832,7 @@ impl AppRoot {
                                             this.player.jump(index);
                                             cx.notify();
                                         }))
-                                        .child(art(cover, 40.0))
+                                        .child(art_scaled(cover, 40.0, cover_scale))
                                         .child(
                                             div()
                                                 .flex()
@@ -2417,7 +2435,9 @@ impl Render for AppRoot {
             let progress = (((self.clock.now - started) / 0.200) as f32).clamp(0.0, 1.0);
             self.exit_overlay(progress)
         });
-        if self.row_colors.values().any(|color| !color.settled(&self.clock)) {
+        if self.row_colors.values().any(|color| !color.settled(&self.clock))
+            || self.row_cover_scales.values().any(|scale| !scale.settled(&self.clock))
+        {
             window.request_animation_frame();
         }
         self.toasts.retain(|toast| self.clock.now - toast.created_at < 6.320);
@@ -2535,6 +2555,22 @@ fn cover_path(url: &str) -> Option<std::path::PathBuf> {
         }
     }
     Some(path)
+}
+
+fn art_scaled(path: Option<std::path::PathBuf>, base: f32, scale: f32) -> gpui::AnyElement {
+    let size = base * scale;
+    let offset = (size - base) * 0.5;
+    div()
+        .relative()
+        .size(px(base))
+        .child(
+            div()
+                .absolute()
+                .left(px(-offset))
+                .top(px(-offset))
+                .child(art(path, size)),
+        )
+        .into_any_element()
 }
 
 fn art(path: Option<std::path::PathBuf>, size: f32) -> gpui::AnyElement {

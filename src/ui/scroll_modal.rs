@@ -4,6 +4,8 @@
 //! model, a row delegate and profile variables. GPUI used to carry a copy of
 //! target/follow/metrics per surface. This module is that one engine.
 
+use std::ops::Range;
+
 use gpui::{UniformListScrollHandle, point, px};
 
 use crate::ui::metrics;
@@ -92,6 +94,14 @@ impl ScrollModal {
 
     fn viewport(&self) -> f32 {
         self.viewport_height()
+    }
+
+    /// The absolute row band currently painted by the list. QML
+    /// `SearchContract.rows()` uses exactly this band: rows outside it are
+    /// holes, so `/` can never jump to a row the eye cannot see.
+    pub fn visible_range(&self, count: usize) -> Range<usize> {
+        let offset = -f32::from(self.handle.0.borrow().base_handle.offset().y);
+        visible_index_range(offset, self.viewport_height(), self.row_h, count)
     }
 
     pub fn target_y(&self, count: usize, cursor: usize) -> f32 {
@@ -199,6 +209,28 @@ impl ScrollModal {
     }
 }
 
+/// Row range visible at `offset` for a fixed-height list. A zero viewport
+/// means layout is not ready yet: return the whole model (QML's first-open
+/// fallback) so the first `/` is not starved to zero candidates.
+pub fn visible_index_range(
+    offset: f32,
+    viewport: f32,
+    row_h: f32,
+    count: usize,
+) -> Range<usize> {
+    if count == 0 || row_h <= 0.0 {
+        return 0..0;
+    }
+    if viewport <= 0.0 {
+        return 0..count;
+    }
+    let first = (offset.max(0.0) / row_h).floor() as usize;
+    let last = ((offset.max(0.0) + viewport) / row_h).ceil() as usize;
+    let first = first.min(count.saturating_sub(1));
+    let last = last.max(first + 1).min(count);
+    first..last
+}
+
 pub fn target_y(row_h: f32, count: usize, cursor: usize, viewport: f32) -> f32 {
     let max = (count as f32 * row_h - viewport).max(0.0);
     target_y_max(row_h, cursor, viewport, max)
@@ -221,6 +253,15 @@ mod tests {
         assert_eq!(target_y(50.0, 100, 50, 500.0), 50.0 * 50.0 + 25.0 - 250.0);
         assert_eq!(target_y(50.0, 10, 0, 500.0), 0.0);
         assert_eq!(target_y(50.0, 10, 9, 500.0), 0.0);
+    }
+
+    #[test]
+    fn visible_range_tracks_top_middle_and_bottom() {
+        assert_eq!(visible_index_range(0.0, 500.0, 50.0, 100), 0..10);
+        assert_eq!(visible_index_range(250.0, 500.0, 50.0, 100), 5..15);
+        assert_eq!(visible_index_range(4750.0, 500.0, 50.0, 100), 95..100);
+        assert_eq!(visible_index_range(0.0, 0.0, 50.0, 100), 0..100);
+        assert_eq!(visible_index_range(10.0, 500.0, 50.0, 0), 0..0);
     }
 
     #[test]

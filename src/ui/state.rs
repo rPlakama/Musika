@@ -63,6 +63,8 @@ pub struct Row {
     pub title: String,
     pub subtitle: String,
     pub meta: String,
+    /// Album track number/module text, searchable by `/` but not painted.
+    pub track: String,
     pub cover_url: String,
     pub song_id: String,
     pub album_id: String,
@@ -237,6 +239,7 @@ mod tests {
     fn cursor_is_clamped_to_rows() {
         let mut view = ViewState {
             rows: RowWindow::full(vec![Row {
+                track: String::new(),
                 id: "a".into(),
                 kind: RowKind::Album,
                 title: "A".into(),
@@ -275,6 +278,7 @@ mod tests {
         assert_eq!(window.len(), 50);
         assert!(window.row(0).is_none());
         window.install_window(10, vec![Row {
+            track: String::new(),
             id: "ten".into(),
             kind: RowKind::Album,
             title: "Ten".into(),
@@ -490,6 +494,7 @@ mod page_kind_tests {
         page.select(4);
         assert_eq!(page.cursor, 0);
         page.rows = vec![Row {
+            track: String::new(),
             id: "s".into(),
             kind: RowKind::Song,
             title: "S".into(),

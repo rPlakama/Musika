@@ -983,6 +983,7 @@ fn row_from_json(scope: super::state::Scope, value: &serde_json::Value) -> super
         Scope::Playlists => RowKind::Playlist,
     };
     Row {
+        track: String::new(),
         id: text("id"),
         kind,
         title: text("title"),
@@ -1015,6 +1016,7 @@ async fn library_rows(
             Ok(albums
                 .into_iter()
                 .map(|album| Row {
+                    track: String::new(),
                     id: album.id.clone(),
                     kind: RowKind::Album,
                     title: album.title,
@@ -1044,6 +1046,7 @@ async fn library_rows(
             Ok(artists
                 .into_iter()
                 .map(|artist| Row {
+                    track: String::new(),
                     id: artist.id,
                     kind: RowKind::Artist,
                     title: artist.name,
@@ -1069,6 +1072,7 @@ async fn library_rows(
             Ok(songs
                 .into_iter()
                 .map(|song| Row {
+                    track: String::new(),
                     id: song.id.clone(),
                     kind: RowKind::Song,
                     title: song.title,
@@ -1089,6 +1093,7 @@ async fn library_rows(
             Ok(values
                 .into_iter()
                 .map(|value| Row {
+                    track: String::new(),
                     id: value["id"].as_str().unwrap_or_default().to_string(),
                     kind: RowKind::Playlist,
                     title: value["name"].as_str().unwrap_or_default().to_string(),
@@ -1142,6 +1147,7 @@ async fn page_data(
             let rows = songs
                 .into_iter()
                 .map(|song| Row {
+                    track: song.track.map(|track| track.to_string()).unwrap_or_default(),
                     id: song.id.clone(),
                     kind: RowKind::Song,
                     title: song.title,
@@ -1182,6 +1188,7 @@ async fn page_data(
             let rows = albums
                 .into_iter()
                 .map(|album| Row {
+                    track: String::new(),
                     id: album.id.clone(),
                     kind: RowKind::Album,
                     title: album.title,
@@ -1225,6 +1232,7 @@ async fn page_data(
                     songs
                         .iter()
                         .map(|song| Row {
+                            track: String::new(),
                             id: song["songId"].as_str().unwrap_or_default().to_string(),
                             kind: RowKind::Song,
                             title: song["title"].as_str().unwrap_or_default().to_string(),
@@ -1265,6 +1273,7 @@ async fn page_data(
                     songs
                         .iter()
                         .map(|song| Row {
+                            track: String::new(),
                             id: song["songId"].as_str().unwrap_or_default().to_string(),
                             kind: RowKind::Song,
                             title: song["title"].as_str().unwrap_or_default().to_string(),
@@ -1300,6 +1309,7 @@ async fn search_rows(query: &str) -> anyhow::Result<Vec<super::state::Row>> {
     let mut rows = Vec::new();
     for album in results.albums {
         rows.push(Row {
+            track: String::new(),
             id: album.id.clone(),
             kind: RowKind::Album,
             title: album.title.clone(),
@@ -1315,6 +1325,7 @@ async fn search_rows(query: &str) -> anyhow::Result<Vec<super::state::Row>> {
     }
     for artist in results.artists {
         rows.push(Row {
+            track: String::new(),
             id: artist.id.clone(),
             kind: RowKind::Artist,
             title: artist.name.clone(),
@@ -1331,6 +1342,7 @@ async fn search_rows(query: &str) -> anyhow::Result<Vec<super::state::Row>> {
     if let Ok(playlists) = crate::playlists::search_rows(&dbs, query, 8).await {
         for playlist in playlists {
             rows.push(Row {
+                track: String::new(),
                 id: playlist["id"].as_str().unwrap_or_default().to_string(),
                 kind: RowKind::Playlist,
                 title: playlist["name"].as_str().unwrap_or_default().to_string(),
@@ -1347,6 +1359,7 @@ async fn search_rows(query: &str) -> anyhow::Result<Vec<super::state::Row>> {
     }
     for song in results.songs {
         rows.push(Row {
+            track: String::new(),
             id: song.id.clone(),
             kind: RowKind::Song,
             title: song.title.clone(),

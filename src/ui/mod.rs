@@ -97,50 +97,50 @@ pub fn run() {
         .with_assets(Assets)
         .run(|cx: &mut App| {
         cx.bind_keys([
-            KeyBinding::new("q", Back, None),
-            KeyBinding::new("ctrl-q", QueueToggle, None),
-            KeyBinding::new("d d", QueueRemove, None),
-            KeyBinding::new("ctrl-shift-k", QueueUp, None),
-            KeyBinding::new("ctrl-shift-j", QueueDown, None),
-            KeyBinding::new("ctrl-r", RepeatCycle, None),
-            KeyBinding::new("tab", SearchScopeNext, None),
-            KeyBinding::new("shift-tab", SearchScopePrev, None),
-            KeyBinding::new("shift-enter", ToggleFullscreen, None),
-            KeyBinding::new("j", MoveDown, None),
-            KeyBinding::new("k", MoveUp, None),
-            KeyBinding::new("g g", Top, None),
-            KeyBinding::new("shift-g", Bottom, None),
-            KeyBinding::new("shift-j", ScopeNext, None),
-            KeyBinding::new("shift-k", ScopePrev, None),
-            KeyBinding::new("shift-l", OrderNext, None),
-            KeyBinding::new("shift-h", OrderPrev, None),
-            KeyBinding::new("r", Refresh, None),
-            KeyBinding::new("enter", Enter, None),
-            KeyBinding::new("v", Visual, None),
-            KeyBinding::new("shift-q", Home, None),
-            KeyBinding::new("i", InsertMode, None),
-            KeyBinding::new("ctrl-h", SearchScopePrev, None),
-            KeyBinding::new("ctrl-l", SearchScopeNext, None),
-            KeyBinding::new("shift-space f", Search, None),
-            KeyBinding::new("shift-space shift-f", Search, None),
-            KeyBinding::new("up", MoveUp, None),
-            KeyBinding::new("down", MoveDown, None),
-            KeyBinding::new("space", PlayPause, None),
-            KeyBinding::new("m", Mute, None),
-            KeyBinding::new("-", VolumeDown, None),
-            KeyBinding::new("=", VolumeUp, None),
-            KeyBinding::new("+", VolumeUp, None),
-            KeyBinding::new(",", SeekBack, None),
-            KeyBinding::new(".", SeekForward, None),
-            KeyBinding::new("ctrl-n", NextTrack, None),
-            KeyBinding::new("ctrl-p", PrevTrack, None),
-            KeyBinding::new("shift-v", VisualAll, None),
-            KeyBinding::new("[ b", PrevPlace, None),
-            KeyBinding::new("] b", NextPlace, None),
-            KeyBinding::new("ctrl-d", PageDown, None),
-            KeyBinding::new("ctrl-u", PageUp, None),
-            KeyBinding::new("pagedown", PageDown, None),
-            KeyBinding::new("pageup", PageUp, None),
+            KeyBinding::new("q", Back, Some("main")),
+            KeyBinding::new("ctrl-q", QueueToggle, Some("main")),
+            KeyBinding::new("d d", QueueRemove, Some("main")),
+            KeyBinding::new("ctrl-shift-k", QueueUp, Some("main")),
+            KeyBinding::new("ctrl-shift-j", QueueDown, Some("main")),
+            KeyBinding::new("ctrl-r", RepeatCycle, Some("main")),
+            KeyBinding::new("tab", SearchScopeNext, Some("main")),
+            KeyBinding::new("shift-tab", SearchScopePrev, Some("main")),
+            KeyBinding::new("shift-enter", ToggleFullscreen, Some("main")),
+            KeyBinding::new("j", MoveDown, Some("main")),
+            KeyBinding::new("k", MoveUp, Some("main")),
+            KeyBinding::new("g g", Top, Some("main")),
+            KeyBinding::new("shift-g", Bottom, Some("main")),
+            KeyBinding::new("shift-j", ScopeNext, Some("main")),
+            KeyBinding::new("shift-k", ScopePrev, Some("main")),
+            KeyBinding::new("shift-l", OrderNext, Some("main")),
+            KeyBinding::new("shift-h", OrderPrev, Some("main")),
+            KeyBinding::new("r", Refresh, Some("main")),
+            KeyBinding::new("enter", Enter, Some("main")),
+            KeyBinding::new("v", Visual, Some("main")),
+            KeyBinding::new("shift-q", Home, Some("main")),
+            KeyBinding::new("i", InsertMode, Some("main")),
+            KeyBinding::new("ctrl-h", SearchScopePrev, Some("main")),
+            KeyBinding::new("ctrl-l", SearchScopeNext, Some("main")),
+            KeyBinding::new("shift-space f", Search, Some("main")),
+            KeyBinding::new("shift-space shift-f", Search, Some("main")),
+            KeyBinding::new("up", MoveUp, Some("main")),
+            KeyBinding::new("down", MoveDown, Some("main")),
+            KeyBinding::new("space", PlayPause, Some("main")),
+            KeyBinding::new("m", Mute, Some("main")),
+            KeyBinding::new("-", VolumeDown, Some("main")),
+            KeyBinding::new("=", VolumeUp, Some("main")),
+            KeyBinding::new("+", VolumeUp, Some("main")),
+            KeyBinding::new(",", SeekBack, Some("main")),
+            KeyBinding::new(".", SeekForward, Some("main")),
+            KeyBinding::new("ctrl-n", NextTrack, Some("main")),
+            KeyBinding::new("ctrl-p", PrevTrack, Some("main")),
+            KeyBinding::new("shift-v", VisualAll, Some("main")),
+            KeyBinding::new("[ b", PrevPlace, Some("main")),
+            KeyBinding::new("] b", NextPlace, Some("main")),
+            KeyBinding::new("ctrl-d", PageDown, Some("main")),
+            KeyBinding::new("ctrl-u", PageUp, Some("main")),
+            KeyBinding::new("pagedown", PageDown, Some("main")),
+            KeyBinding::new("pageup", PageUp, Some("main")),
         ]);
         cx.on_window_closed(|cx| {
             crate::scroll_memory::persist();
@@ -171,6 +171,15 @@ struct Header {
     server_type: String,
     last_sync: Option<String>,
     counts: (i64, i64, i64),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LineSurface {
+    Search,
+    Queue,
+    Page,
+    Library,
+    Lyrics,
 }
 
 struct SearchState {
@@ -374,6 +383,10 @@ struct AppRoot {
     transport_press: [Option<f64>; 3],
     line_search: line_search::LineSearchState,
     line_search_anim: anim::Behavior,
+    line_search_snapshot: Vec<line_search::LineTarget>,
+    line_search_surfaces: Vec<LineSurface>,
+    line_search_denied_at: Option<f64>,
+    line_search_denied_query: String,
     alt: AltGesture,
     alt_menu: Option<QuickMenu>,
     alt_target: Option<AltTarget>,
@@ -484,6 +497,10 @@ impl AppRoot {
             transport_press: [None; 3],
             line_search: line_search::LineSearchState::new(),
             line_search_anim: anim::Behavior::new(0.0),
+            line_search_snapshot: Vec::new(),
+            line_search_surfaces: Vec::new(),
+            line_search_denied_at: None,
+            line_search_denied_query: String::new(),
             alt: AltGesture::new(),
             alt_menu: None,
             alt_target: None,
@@ -1736,6 +1753,11 @@ impl AppRoot {
     }
 
     fn on_search_scope_next(&mut self, _: &SearchScopeNext, _window: &mut Window, cx: &mut Context<Self>) {
+        if self.line_search.open {
+            self.line_search_step(1);
+            cx.notify();
+            return;
+        }
         if self.search.is_some() {
             self.move_search_scope(1);
             cx.notify();
@@ -1743,6 +1765,11 @@ impl AppRoot {
     }
 
     fn on_search_scope_prev(&mut self, _: &SearchScopePrev, _window: &mut Window, cx: &mut Context<Self>) {
+        if self.line_search.open {
+            self.line_search_step(-1);
+            cx.notify();
+            return;
+        }
         if self.search.is_some() {
             self.move_search_scope(-1);
             cx.notify();
@@ -1789,8 +1816,7 @@ impl AppRoot {
     }
 
     fn on_home(&mut self, _: &Home, _window: &mut Window, cx: &mut Context<Self>) {
-        self.line_search.close();
-        self.line_search_anim.target(0.0, anim::STANDARD_MS, anim::Curve::Accelerate, &self.clock);
+        self.close_line_search();
         self.alt.cancel();
         self.alt_menu = None;
         self.alt_target = None;
@@ -2173,108 +2199,123 @@ impl AppRoot {
     }
 
     fn apply_line_hit(&mut self, hit: line_search::LineHit) {
-        if self.fullscreen {
+        let Some(surface) = self.line_search_surfaces.get(hit.target).copied() else {
             return;
-        }
-        if self.search.as_ref().is_some() {
-            if let Some(search) = self.search.as_mut() {
-                search.scope_cursors[search.scope] = hit.row;
+        };
+        match surface {
+            LineSurface::Search => {
+                if let Some(search) = self.search.as_mut() {
+                    search.scope_cursors[search.scope] = hit.row;
+                }
             }
-        } else if self.queue_open {
-            self.queue_cursor = hit.row.min(self.player.len().saturating_sub(1));
-            self.follow_queue(true);
-        } else if let Some(page) = self.page.as_mut() {
-            page.select(hit.row);
-            self.follow_page(true);
-        } else {
-            self.select(hit.row);
+            LineSurface::Queue => {
+                self.queue_cursor = hit.row.min(self.player.len().saturating_sub(1));
+                self.follow_queue(true);
+            }
+            LineSurface::Page => {
+                if let Some(page) = self.page.as_mut() {
+                    page.select(hit.row);
+                }
+                self.follow_page(true);
+            }
+            LineSurface::Library => {
+                self.select(hit.row);
+            }
+            LineSurface::Lyrics => {
+                self.lyrics_window_start = hit.row.saturating_sub(2);
+            }
         }
+    }
+
+    fn line_search_step(&mut self, delta: isize) {
+        self.line_search.step(delta);
+        if let Some(hit) = self.line_search.current_hit() {
+            self.apply_line_hit(hit);
+        }
+    }
+
+    fn line_search_commit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(hit) = self.line_search.current_hit() {
+            self.apply_line_hit(hit);
+            self.close_line_search();
+            self.on_enter(&Enter, window, cx);
+        } else if self.line_search.query().is_empty() {
+            self.close_line_search();
+        } else {
+            self.flash_line_search_denied();
+            window.request_animation_frame();
+        }
+        cx.notify();
     }
 
     fn line_search_key(&mut self, event: &gpui::KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
         let key = event.keystroke.key.as_str();
         let control = event.keystroke.modifiers.control;
+        let shift = event.keystroke.modifiers.shift;
         let modified = control || event.keystroke.modifiers.alt || event.keystroke.modifiers.platform;
         match key {
             "escape" => {
-                self.line_search.close();
-                self.line_search_anim.target(0.0, anim::STANDARD_MS, anim::Curve::Accelerate, &self.clock);
+                self.close_line_search();
                 cx.notify();
                 return;
             }
             "enter" => {
-                let hit = self.line_search.current_hit();
-                if let Some(hit) = hit {
-                    self.apply_line_hit(hit);
-                    self.line_search.close();
-                    self.line_search_anim.target(0.0, anim::STANDARD_MS, anim::Curve::Accelerate, &self.clock);
-                    self.on_enter(&Enter, window, cx);
-                } else if self.line_search.query.is_empty() {
-                    self.line_search.close();
-                    self.line_search_anim.target(0.0, anim::STANDARD_MS, anim::Curve::Accelerate, &self.clock);
-                }
-                cx.notify();
+                self.line_search_commit(window, cx);
                 return;
             }
             "tab" => {
-                self.line_search.step(1);
-                if let Some(hit) = self.line_search.current_hit() {
-                    self.apply_line_hit(hit);
-                }
+                self.line_search_step(1);
                 cx.notify();
                 return;
             }
             "backtab" => {
-                self.line_search.step(-1);
-                if let Some(hit) = self.line_search.current_hit() {
-                    self.apply_line_hit(hit);
-                }
+                self.line_search_step(-1);
                 cx.notify();
                 return;
             }
-            "up" | "ctrl-p" => {
-                self.line_search.step(-1);
-                if let Some(hit) = self.line_search.current_hit() {
-                    self.apply_line_hit(hit);
+            "left" => self.line_search.editor_mut().move_left(shift),
+            "right" => self.line_search.editor_mut().move_right(shift),
+            "home" => self.line_search.editor_mut().home(shift),
+            "end" => self.line_search.editor_mut().end(shift),
+            "backspace" => self.line_search.editor_mut().backspace(),
+            "delete" => self.line_search.editor_mut().delete_forward(),
+            "a" if control => self.line_search.editor_mut().select_all(),
+            "w" if control => self.line_search.editor_mut().delete_word_back(),
+            "c" if control => {
+                if let Some(text) = self.line_search.editor.selected_text() {
+                    let text = text.to_string();
+                    cx.write_to_clipboard(gpui::ClipboardItem::new_string(text));
                 }
-                cx.notify();
-                return;
             }
-            "down" | "ctrl-n" => {
-                self.line_search.step(1);
-                if let Some(hit) = self.line_search.current_hit() {
-                    self.apply_line_hit(hit);
+            "x" if control => {
+                if let Some(text) = self.line_search.editor.selected_text() {
+                    let text = text.to_string();
+                    cx.write_to_clipboard(gpui::ClipboardItem::new_string(text));
+                    self.line_search.editor_mut().replace_selection("");
                 }
-                cx.notify();
-                return;
             }
-            "backspace" => {
-                self.line_search.query.pop();
-            }
-            "w" if control => {
-                line_search::delete_word_back(&mut self.line_search.query);
+            "v" if control => {
+                if let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) {
+                    self.line_search.editor_mut().insert(&text);
+                }
             }
             _ if !modified => {
                 if let Some(text) = event.keystroke.key_char.as_ref()
                     && !text.chars().any(char::is_control)
                 {
-                    self.line_search.query.push_str(text);
+                    self.line_search.editor_mut().insert(text);
                 } else if key == "space" {
-                    self.line_search.query.push(' ');
+                    self.line_search.editor_mut().insert(" ");
                 } else {
                     return;
                 }
             }
             _ => return,
         }
-        let targets = self.line_search_targets();
-        let query = self.line_search.query.clone();
-        self.line_search.set_query(&query, &targets);
-        if let Some(hit) = self.line_search.current_hit() {
-            self.apply_line_hit(hit);
-        }
+        self.refresh_line_search();
         cx.notify();
     }
+
 
     fn activate_search_result(&mut self, cx: &mut Context<Self>) {
         let row = self
@@ -2460,51 +2501,163 @@ impl AppRoot {
         cx.notify();
     }
 
-    fn line_search_targets(&self) -> Vec<line_search::LineTarget> {
+    fn clear_line_search_selection(&mut self) {
+        self.visual_mode = false;
+        self.queue_selection.clear();
+        self.view.selection.clear();
+        if let Some(page) = self.page.as_mut() {
+            page.selection.clear();
+        }
+    }
+
+    fn line_search_targets(&self) -> (Vec<line_search::LineTarget>, Vec<LineSurface>) {
         use line_search::{LineRow, LineTarget};
         let mut targets = Vec::new();
-        if self.fullscreen {
-            if let Some(lyrics) = self.lyrics.as_ref() {
-                targets.push(LineTarget::new(lyrics.lines.iter().map(|(_, line)| Some(LineRow::new(line.clone(), String::new(), String::new()))).collect()));
+        let mut surfaces = Vec::new();
+
+        if self.search_open
+            && let Some(search) = self.search.as_ref()
+        {
+            let rows = search.scoped();
+            let visible = 12usize;
+            let mut lines = vec![None; rows.len()];
+            for (index, row) in rows.iter().take(visible).enumerate() {
+                lines[index] = Some(LineRow::new(row.title.clone(), row.subtitle.clone(), row.meta.clone()));
             }
-            return targets;
+            targets.push(LineTarget::new(lines));
+            surfaces.push(LineSurface::Search);
+            return (targets, surfaces);
         }
-        if let Some(search) = self.search.as_ref() {
-            targets.push(LineTarget::new(search.rows.iter().map(|row| Some(LineRow::new(row.title.clone(), row.subtitle.clone(), row.meta.clone()))).collect()));
-            return targets;
-        }
+
         if self.queue_open {
             let queue = self.player.queue_snapshot();
-            targets.push(LineTarget::new(queue.iter().map(|track| Some(LineRow::new(track.title.clone(), track.artist.clone(), String::new()))).collect()));
-            return targets;
+            let range = self.queue_scroll_modal.visible_range(queue.len());
+            let mut lines = vec![None; queue.len()];
+            for (index, track) in queue.iter().enumerate() {
+                if range.contains(&index) {
+                    let duration = crate::browse::rows::format_duration(Some(track.duration as i32));
+                    lines[index] = Some(
+                        LineRow::with_extra(track.title.clone(), track.artist.clone(), "", vec![duration])
+                            .with_search_fields([0, 1, 3]),
+                    );
+                }
+            }
+            targets.push(LineTarget::new(lines));
+            surfaces.push(LineSurface::Queue);
+            return (targets, surfaces);
         }
+
+        if self.fullscreen {
+            if let Some(lyrics) = self.lyrics.as_ref() {
+                let count = lyrics.lines.len();
+                let visible = 15usize;
+                let start = self.lyrics_window_start.min(count);
+                let end = (start + visible).min(count);
+                let mut lines = vec![None; count];
+                for (index, (_, text)) in lyrics.lines.iter().enumerate() {
+                    if (start..end).contains(&index) {
+                        lines[index] = Some(LineRow::new(text.clone(), "", "").with_search_fields([0]));
+                    }
+                }
+                targets.push(LineTarget::new(lines));
+                surfaces.push(LineSurface::Lyrics);
+            }
+            return (targets, surfaces);
+        }
+
         if let Some(page) = self.page.as_ref() {
-            targets.push(LineTarget::new(page.rows.iter().map(|row| Some(LineRow::new(row.title.clone(), row.subtitle.clone(), row.meta.clone()))).collect()));
-            return targets;
+            let range = self.page_scroll_modal.visible_range(page.rows.len());
+            let artist = matches!(page.descriptor.kind, state::PageKind::Artist);
+            let mut lines = vec![None; page.rows.len()];
+            for (index, row) in page.rows.iter().enumerate() {
+                if !range.contains(&index) {
+                    continue;
+                }
+                let line = if artist {
+                    LineRow::new(row.title.clone(), row.subtitle.clone(), row.meta.clone())
+                } else {
+                    LineRow::with_extra(
+                        row.title.clone(),
+                        row.subtitle.clone(),
+                        row.meta.clone(),
+                        vec![row.track.clone()],
+                    )
+                    .with_search_fields([0, 1, 2, 3])
+                };
+                lines[index] = Some(line);
+            }
+            targets.push(LineTarget::new(lines));
+            surfaces.push(LineSurface::Page);
+            return (targets, surfaces);
         }
-        let rows = self.view.rows.count;
-        let mut lines = vec![None; rows];
+
+        let count = self.view.rows.count;
+        let range = self.library_scroll.visible_range(count);
+        let mut lines = vec![None; count];
         for (offset, row) in self.view.rows.live.iter().enumerate() {
             let index = self.view.rows.live_start + offset;
-            if index < rows {
-                lines[index] = Some(LineRow::new(row.title.clone(), row.subtitle.clone(), row.meta.clone()));
+            if index < count && range.contains(&index) {
+                lines[index] = Some(
+                    LineRow::new(row.title.clone(), row.subtitle.clone(), row.meta.clone())
+                        .with_search_fields([0]),
+                );
             }
         }
         targets.push(LineTarget::new(lines));
-        targets
+        surfaces.push(LineSurface::Library);
+        (targets, surfaces)
     }
 
-    fn line_search_edited(&mut self) {
-        let targets = self.line_search_targets();
-        let query = self.line_search.query.clone();
-        self.line_search.set_query(&query, &targets);
+    fn line_search_current(&self, surface: LineSurface, row: usize) -> bool {
+        self.line_search.current_hit().is_some_and(|hit| {
+            self.line_search_surfaces.get(hit.target) == Some(&surface) && hit.row == row
+        })
+    }
+
+    fn flash_line_search_denied(&mut self) {
+        if self.line_search.query().is_empty() {
+            return;
+        }
+        self.line_search_denied_at = Some(self.clock.now);
+        self.line_search_denied_query = self.line_search.query().to_string();
+    }
+
+    fn refresh_line_search(&mut self) {
+        let query = self.line_search.query().to_string();
+        self.line_search.refresh(&self.line_search_snapshot);
+        if let Some(hit) = self.line_search.current_hit() {
+            self.apply_line_hit(hit);
+        }
+        if query.is_empty() {
+            self.line_search_denied_query.clear();
+        } else if self.line_search.candidates.is_empty()
+            && query != self.line_search_denied_query
+        {
+            self.flash_line_search_denied();
+        }
+    }
+
+    fn close_line_search(&mut self) {
+        self.line_search.close();
+        self.line_search_snapshot.clear();
+        self.line_search_surfaces.clear();
+        self.line_search_denied_at = None;
+        self.line_search_denied_query.clear();
+        self.line_search_anim
+            .target(0.0, anim::STANDARD_MS, anim::Curve::Accelerate, &self.clock);
     }
 
     fn on_line_search(&mut self, _: &LineSearch, _window: &mut Window, cx: &mut Context<Self>) {
+        self.clear_line_search_selection();
         self.line_search.open();
-        let targets = self.line_search_targets();
-        self.line_search.set_query("", &targets);
-        self.line_search_anim.target(1.0, anim::STANDARD_MS, anim::Curve::Decelerate, &self.clock);
+        let (targets, surfaces) = self.line_search_targets();
+        self.line_search_snapshot = targets;
+        self.line_search_surfaces = surfaces;
+        self.line_search.set_query("", &self.line_search_snapshot);
+        self.line_search_denied_at = None;
+        self.line_search_denied_query.clear();
+        self.line_search_anim
+            .target(1.0, anim::STANDARD_MS, anim::Curve::Decelerate, &self.clock);
         cx.notify();
     }
 
@@ -2733,6 +2886,10 @@ impl AppRoot {
     }
 
     fn on_enter(&mut self, _: &Enter, _window: &mut Window, cx: &mut Context<Self>) {
+        if self.line_search.open {
+            self.line_search_commit(_window, cx);
+            return;
+        }
         if self.queue_open {
             let index = self.queue_cursor;
             self.player.jump(index);
@@ -2887,8 +3044,7 @@ impl AppRoot {
 
     fn on_back(&mut self, _: &Back, _window: &mut Window, cx: &mut Context<Self>) {
         if self.line_search.open {
-            self.line_search.close();
-            self.line_search_anim.target(0.0, anim::STANDARD_MS, anim::Curve::Accelerate, &self.clock);
+            self.close_line_search();
             cx.notify();
             return;
         }
@@ -3312,7 +3468,7 @@ impl AppRoot {
                                                 .whitespace_normal()
                                                 .max_h(px(34.0))
                                                 .overflow_hidden()
-                                                .child(highlighted_text(&title, &this.line_search.query, palette::on_surface())),
+                                                .child(highlighted_text(&title, this.line_search.query(), palette::on_surface(), this.line_search_current(LineSurface::Library, index))),
                                         )
                                         .child(
                                             div()
@@ -3321,7 +3477,7 @@ impl AppRoot {
                                                 .whitespace_normal()
                                                 .max_h(px(22.0))
                                                 .overflow_hidden()
-                                                .child(highlighted_text(&subtitle, &this.line_search.query, palette::on_surface_variant())),
+                                                .child(highlighted_text(&subtitle, this.line_search.query(), palette::on_surface_variant(), this.line_search_current(LineSurface::Library, index))),
                                         ),
                                 )
                                 .child(
@@ -3333,7 +3489,7 @@ impl AppRoot {
                                             div()
                                                 .text_size(px(11.0 * emphasis))
                                                 .text_color(rgb(palette::on_surface_variant()))
-                                                .child(highlighted_text(&meta, &this.line_search.query, palette::on_surface_variant())),
+                                                .child(highlighted_text(&meta, this.line_search.query(), palette::on_surface_variant(), this.line_search_current(LineSurface::Library, index))),
                                         )
                                         .when(downloaded, |this| {
                                             this.child(icon("outline-download.svg", 13.0, palette::primary()))
@@ -3535,6 +3691,60 @@ impl AppRoot {
         board.into_any_element()
     }
 
+    fn line_search_denied_opacity(&self) -> f32 {
+        let Some(started) = self.line_search_denied_at else {
+            return 0.0;
+        };
+        let elapsed = ((self.clock.now - started) as f32).max(0.0);
+        if elapsed < 0.03 {
+            elapsed / 0.03
+        } else {
+            (1.0 - (elapsed - 0.03) / 0.12).clamp(0.0, 1.0)
+        }
+    }
+
+    fn line_search_field(&self, bar_h: f32) -> gpui::AnyElement {
+        let editor = &self.line_search.editor;
+        let text_size = px(bar_h * 0.36);
+        if editor.text.is_empty() {
+            return div()
+                .flex_1()
+                .min_w_0()
+                .text_size(text_size)
+                .text_color(rgb(palette::on_surface_variant()))
+                .child("Search this surface")
+                .into_any_element();
+        }
+        if let Some(range) = editor.selection() {
+            let highlight = HighlightStyle {
+                color: Some(rgb(palette::on_primary_container()).into()),
+                background_color: Some(rgb(palette::primary_container()).into()),
+                ..Default::default()
+            };
+            return StyledText::new(editor.text.clone())
+                .with_highlights([(range, highlight)])
+                .into_any_element();
+        }
+        let cursor = editor.cursor.min(editor.text.len());
+        let (before, after) = editor.text.split_at(cursor);
+        div()
+            .flex_1()
+            .min_w_0()
+            .flex()
+            .items_center()
+            .text_size(text_size)
+            .text_color(rgb(palette::on_surface()))
+            .child(before.to_string())
+            .child(
+                div()
+                    .w(px(2.0))
+                    .h(px(bar_h * 0.46))
+                    .bg(rgb(palette::primary())),
+            )
+            .child(after.to_string())
+            .into_any_element()
+    }
+
     fn line_search_overlay(&self, progress: f32) -> gpui::Div {
         let counter = match (self.line_search.current_hit(), self.line_search.candidates.len()) {
             (Some(_), count) if count > 0 => {
@@ -3542,6 +3752,8 @@ impl AppRoot {
             }
             _ => String::new(),
         };
+        let bar_h = (self.win_h * 0.07).max(32.0);
+        let denied = self.line_search_denied_opacity();
         div()
             .absolute()
             .inset_0()
@@ -3552,42 +3764,38 @@ impl AppRoot {
                     .absolute()
                     .left_0()
                     .right_0()
-                    .bottom(px(-(1.0 - progress) * 96.0))
-                    .h(relative(0.07))
-                    .bg(rgb(palette::surface_container()))
-                    .border_t_1()
-                    .border_color(rgb(palette::primary()))
-                    .px_4()
+                    .bottom(px(-(1.0 - progress) * bar_h))
+                    .h(px(bar_h))
+                    .rounded_md()
+                    .bg(rgb(palette::surface()))
+                    .px(px(self.win_w * 0.04))
                     .flex()
                     .items_center()
-                    .gap_3()
+                    .gap(px(bar_h * 0.012))
                     .child(
                         div()
-                            .text_size(px(16.0))
+                            .text_size(px(bar_h * 0.42))
                             .font_weight(gpui::FontWeight::BOLD)
                             .text_color(rgb(palette::primary()))
                             .child("/"),
                     )
+                    .child(self.line_search_field(bar_h))
                     .child(
                         div()
-                            .flex_1()
-                            .min_w_0()
-                            .overflow_hidden()
-                            .whitespace_nowrap()
-                            .text_ellipsis()
-                            .text_size(px(16.0))
-                            .text_color(rgb(palette::on_surface()))
-                            .child(self.line_search.query.clone()),
+                            .text_size(px(bar_h * 0.30))
+                            .text_color(rgb(palette::on_surface_variant()))
+                            .child(counter),
                     )
                     .child(
                         div()
-                            .text_size(px(11.0))
-                            .text_color(rgb(palette::on_surface_variant()))
-                            .child(if counter.is_empty() {
-                                "Tab cycle · Enter jump · Esc close".to_string()
-                            } else {
-                                counter
-                            }),
+                            .absolute()
+                            .left_0()
+                            .right_0()
+                            .bottom_0()
+                            .h(px(2.0))
+                            .rounded_full()
+                            .bg(rgb(palette::error()))
+                            .opacity(denied),
                     ),
             )
     }
@@ -3988,7 +4196,7 @@ impl AppRoot {
                                                                 .whitespace_normal()
                                                                 .max_h(px(20.0))
                                                                 .overflow_hidden()
-                                                                .child(highlighted_text(&title, &this.line_search.query, palette::on_surface())),
+                                                                .child(highlighted_text(&title, this.line_search.query(), palette::on_surface(), this.line_search_current(LineSurface::Queue, index))),
                                                         ),
                                                 )
                                                 .child(
@@ -3998,7 +4206,7 @@ impl AppRoot {
                                                         .whitespace_normal()
                                                         .max_h(px(16.0))
                                                         .overflow_hidden()
-                                                        .child(highlighted_text(&artist, &this.line_search.query, palette::on_surface_variant())),
+                                                        .child(highlighted_text(&artist, this.line_search.query(), palette::on_surface_variant(), this.line_search_current(LineSurface::Queue, index))),
                                                 ),
                                         ),
                                 );
@@ -4076,7 +4284,7 @@ impl AppRoot {
                                     .whitespace_normal()
                                     .max_h(px(22.0))
                                     .overflow_hidden()
-                                    .child(highlighted_text(&row.title, &self.line_search.query, palette::on_surface())),
+                                    .child(highlighted_text(&row.title, self.line_search.query(), palette::on_surface(), self.line_search_current(LineSurface::Search, index))),
                             )
                             .child(
                                 div()
@@ -4085,14 +4293,14 @@ impl AppRoot {
                                     .whitespace_normal()
                                     .max_h(px(18.0))
                                     .overflow_hidden()
-                                    .child(highlighted_text(&row.subtitle, &self.line_search.query, palette::on_surface_variant())),
+                                    .child(highlighted_text(&row.subtitle, self.line_search.query(), palette::on_surface_variant(), self.line_search_current(LineSurface::Search, index))),
                             ),
                     )
                     .child(
                         div()
                             .text_size(px(11.0))
                             .text_color(rgb(palette::on_surface_variant()))
-                            .child(row.meta.clone()),
+                            .child(highlighted_text(&row.meta, self.line_search.query(), palette::on_surface_variant(), self.line_search_current(LineSurface::Search, index))),
                     )
             })
             .collect::<Vec<_>>();
@@ -4438,7 +4646,7 @@ impl AppRoot {
                                                         .font_weight(if selected { gpui::FontWeight::BOLD } else { gpui::FontWeight::NORMAL })
                                                         .whitespace_nowrap()
                                                         .text_ellipsis()
-                                                        .child(highlighted_text(&title, &this.line_search.query, palette::on_surface())),
+                                                        .child(highlighted_text(&title, this.line_search.query(), palette::on_surface(), this.line_search_current(LineSurface::Page, index))),
                                                 )
                                                 .child(
                                                     div()
@@ -4446,14 +4654,14 @@ impl AppRoot {
                                                         .text_color(rgb(palette::on_surface_variant()))
                                                         .whitespace_nowrap()
                                                         .text_ellipsis()
-                                                        .child(subtitle),
+                                                        .child(highlighted_text(&subtitle, this.line_search.query(), palette::on_surface_variant(), this.line_search_current(LineSurface::Page, index))),
                                                 ),
                                         )
                                         .child(
                                             div()
                                                     .text_size(px(11.0 * emphasis))
                                                 .text_color(rgb(palette::on_surface_variant()))
-                                                .child(highlighted_text(&meta, &this.line_search.query, palette::on_surface_variant())),
+                                                .child(highlighted_text(&meta, this.line_search.query(), palette::on_surface_variant(), this.line_search_current(LineSurface::Page, index))),
                                         )
                                         .when(downloaded, |this| {
                                             this.child(icon("outline-download.svg", 12.0, palette::primary()))
@@ -4718,7 +4926,7 @@ impl Render for AppRoot {
             if self.line_search.open { anim::Curve::Decelerate } else { anim::Curve::Accelerate },
             &self.clock,
         );
-        if !self.line_search_anim.settled(&self.clock) {
+        if !self.line_search_anim.settled(&self.clock) || self.line_search_denied_opacity() > 0.0 {
             window.request_animation_frame();
         }
         let line_overlay = (self.line_search.open || line_progress > 0.001)
@@ -4892,6 +5100,7 @@ impl Render for AppRoot {
         let status = self.player_bar();
         div()
             .track_focus(&self.focus)
+            .key_context(if self.line_search.open { "line-search" } else { "main" })
             .on_action(cx.listener(Self::on_quit))
             .on_action(cx.listener(Self::on_move_down))
             .on_action(cx.listener(Self::on_move_up))
@@ -4999,14 +5208,19 @@ fn transport_button(icon_name: &str, base: f32, color: u32, scale: f32) -> gpui:
         .into_any_element()
 }
 
-fn highlighted_text(text: &str, query: &str, color: u32) -> gpui::AnyElement {
+fn highlighted_text(text: &str, query: &str, color: u32, current: bool) -> gpui::AnyElement {
     let ranges = line_search::match_ranges(query, text);
     if ranges.is_empty() {
         return div().text_color(rgb(color)).child(text.to_string()).into_any_element();
     }
+    let (foreground, background) = if current {
+        (palette::on_primary(), palette::primary())
+    } else {
+        (palette::on_primary_container(), palette::primary_container())
+    };
     let highlight = HighlightStyle {
-        color: Some(rgb(color).into()),
-        background_color: Some(rgb(palette::secondary_container()).into()),
+        color: Some(rgb(foreground).into()),
+        background_color: Some(rgb(background).into()),
         ..Default::default()
     };
     StyledText::new(text.to_string())

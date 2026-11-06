@@ -128,6 +128,7 @@ mod tests {
 
     fn row(kind: RowKind) -> Row {
         Row {
+            track: String::new(),
             id: "r".into(),
             kind,
             title: String::new(),

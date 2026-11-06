@@ -32,8 +32,8 @@
 //! for widgets that paint title/subtitle/meta separately.
 //!
 //! The model has no window, focus or target-snapshot ownership. The caller
-//! collects a fresh `&[LineTarget]` whenever the visible band changes and
-//! calls [`LineSearchState::set_query`] (or [`LineSearchState::refresh`]).
+//! snapshots `&[LineTarget]` once when `/` opens and reuses it for every query
+//! edit, exactly like QML `LineSearch.open()` captures the visible row buffer.
 
 use std::ops::Range;
 
@@ -42,12 +42,32 @@ use std::ops::Range;
 /// single-line bar from spanning two cells.
 pub const CELL_SEPARATOR: char = '\n';
 
-/// The rendered cells of one visible row.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+/// The rendered cells of one visible row plus search-only extras.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LineRow {
     pub title: String,
     pub subtitle: String,
     pub meta: String,
+    /// Search-only cells that are not painted as title/subtitle/meta (album
+    /// track number, queue duration, …).
+    pub extra: Vec<String>,
+    /// Cell indices that participate in candidate matching. Indices 0..=2 map
+    /// to title/subtitle/meta; indices >=3 map to `extra`. QML's
+    /// `SearchContract.fields` selects these per surface; painting still uses
+    /// all three rendered cells.
+    pub search_fields: Vec<usize>,
+}
+
+impl Default for LineRow {
+    fn default() -> Self {
+        Self {
+            title: String::new(),
+            subtitle: String::new(),
+            meta: String::new(),
+            extra: Vec::new(),
+            search_fields: vec![0, 1, 2],
+        }
+    }
 }
 
 impl LineRow {
@@ -60,7 +80,37 @@ impl LineRow {
             title: title.into(),
             subtitle: subtitle.into(),
             meta: meta.into(),
+            extra: Vec::new(),
+            search_fields: vec![0, 1, 2],
         }
+    }
+
+    /// Adds search-only cells after the painted three.
+    pub fn with_extra(
+        title: impl Into<String>,
+        subtitle: impl Into<String>,
+        meta: impl Into<String>,
+        extra: Vec<String>,
+    ) -> Self {
+        let mut search_fields = vec![0, 1, 2];
+        search_fields.extend((0..extra.len()).map(|index| index + 3));
+        Self {
+            title: title.into(),
+            subtitle: subtitle.into(),
+            meta: meta.into(),
+            extra,
+            search_fields,
+        }
+    }
+
+    /// Restricts candidate matching to the given cells (QML per-surface
+    /// `searchFields`). Out-of-range indices are ignored.
+    pub fn with_search_fields(mut self, fields: impl IntoIterator<Item = usize>) -> Self {
+        self.search_fields = fields
+            .into_iter()
+            .filter(|index| *index < 3 + self.extra.len())
+            .collect();
+        self
     }
 
     /// The three cells, in render order.
@@ -68,32 +118,45 @@ impl LineRow {
         [&self.title, &self.subtitle, &self.meta]
     }
 
+    fn cell(&self, index: usize) -> Option<&str> {
+        match index {
+            0 => Some(&self.title),
+            1 => Some(&self.subtitle),
+            2 => Some(&self.meta),
+            _ => self.extra.get(index - 3).map(String::as_str),
+        }
+    }
+
     /// The cells joined by [`CELL_SEPARATOR`] — the stable text a highlight
     /// layout can run over. Use [`Self::cell_ranges`] when each cell is painted
     /// as its own text element.
     pub fn search_text(&self) -> String {
-        let mut text =
-            String::with_capacity(self.title.len() + self.subtitle.len() + self.meta.len() + 2);
-        text.push_str(&self.title);
-        text.push(CELL_SEPARATOR);
-        text.push_str(&self.subtitle);
-        text.push(CELL_SEPARATOR);
-        text.push_str(&self.meta);
+        let mut text = String::new();
+        for (index, cell) in self.cells().iter().enumerate() {
+            if index > 0 {
+                text.push(CELL_SEPARATOR);
+            }
+            text.push_str(cell);
+        }
+        for cell in &self.extra {
+            text.push(CELL_SEPARATOR);
+            text.push_str(cell);
+        }
         text
     }
 
-    /// Whether any cell contains the query under the smartcase rule. This is
-    /// `SearchMatch.candidates`: cells are independent, so a query never
-    /// matches across the title/subtitle/meta boundary.
+    /// Whether any selected search field contains the query under smartcase.
+    /// This is `SearchMatch.candidates`; cells are independent, so a query
+    /// never matches across a cell boundary.
     pub fn matches(&self, query: &str) -> bool {
         !query.is_empty()
-            && self
-                .cells()
-                .iter()
-                .any(|cell| !match_ranges(query, cell).is_empty())
+            && self.search_fields.iter().any(|index| {
+                self.cell(*index)
+                    .is_some_and(|cell| !match_ranges(query, cell).is_empty())
+            })
     }
 
-    /// Highlight ranges per cell, in `[title, subtitle, meta]` order.
+    /// Highlight ranges per painted cell, in `[title, subtitle, meta]` order.
     pub fn cell_ranges(&self, query: &str) -> [Vec<Range<usize>>; 3] {
         [
             match_ranges(query, &self.title),
@@ -135,13 +198,168 @@ pub struct LineHit {
     pub row: usize,
 }
 
+/// Editable command-line text with a caret and selection.
+///
+/// Positions are byte offsets kept on `char` boundaries. `anchor` is where a
+/// selection started; `cursor` is the moving end. When they are equal there is
+/// no selection.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct LineEditor {
+    pub text: String,
+    pub cursor: usize,
+    pub anchor: usize,
+}
+
+impl LineEditor {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn set_text(&mut self, text: &str) {
+        self.text.clear();
+        self.text.push_str(text);
+        self.cursor = self.text.len();
+        self.anchor = self.cursor;
+    }
+
+    pub fn clear(&mut self) {
+        self.text.clear();
+        self.cursor = 0;
+        self.anchor = 0;
+    }
+
+    pub fn selection(&self) -> Option<Range<usize>> {
+        if self.cursor == self.anchor {
+            None
+        } else {
+            Some(self.anchor.min(self.cursor)..self.anchor.max(self.cursor))
+        }
+    }
+
+    pub fn selected_text(&self) -> Option<&str> {
+        self.selection().map(|range| &self.text[range])
+    }
+
+    fn clamp_boundary(&self, mut index: usize) -> usize {
+        index = index.min(self.text.len());
+        while index > 0 && !self.text.is_char_boundary(index) {
+            index -= 1;
+        }
+        index
+    }
+
+    pub fn set_cursor(&mut self, index: usize, extend: bool) {
+        self.cursor = self.clamp_boundary(index);
+        if !extend {
+            self.anchor = self.cursor;
+        }
+    }
+
+    fn remove_selection(&mut self) -> bool {
+        let Some(range) = self.selection() else {
+            return false;
+        };
+        self.text.replace_range(range.clone(), "");
+        self.cursor = range.start;
+        self.anchor = range.start;
+        true
+    }
+
+    pub fn insert(&mut self, text: &str) {
+        self.remove_selection();
+        self.text.insert_str(self.cursor, text);
+        self.cursor += text.len();
+        self.anchor = self.cursor;
+    }
+
+    pub fn replace_selection(&mut self, text: &str) {
+        self.remove_selection();
+        self.insert(text);
+    }
+
+    pub fn backspace(&mut self) {
+        if self.remove_selection() {
+            return;
+        }
+        if let Some((index, _)) = self.text[..self.cursor].char_indices().next_back() {
+            self.text.replace_range(index..self.cursor, "");
+            self.cursor = index;
+            self.anchor = index;
+        }
+    }
+
+    pub fn delete_forward(&mut self) {
+        if self.remove_selection() {
+            return;
+        }
+        if let Some(ch) = self.text[self.cursor..].chars().next() {
+            self.text
+                .replace_range(self.cursor..self.cursor + ch.len_utf8(), "");
+        }
+    }
+
+    pub fn move_left(&mut self, extend: bool) {
+        let index = self.text[..self.cursor]
+            .char_indices()
+            .next_back()
+            .map_or(0, |(index, _)| index);
+        self.set_cursor(index, extend);
+    }
+
+    pub fn move_right(&mut self, extend: bool) {
+        let index = self.text[self.cursor..]
+            .chars()
+            .next()
+            .map_or(self.text.len(), |ch| self.cursor + ch.len_utf8());
+        self.set_cursor(index, extend);
+    }
+
+    pub fn home(&mut self, extend: bool) {
+        self.set_cursor(0, extend);
+    }
+
+    pub fn end(&mut self, extend: bool) {
+        self.set_cursor(self.text.len(), extend);
+    }
+
+    pub fn select_all(&mut self) {
+        self.anchor = 0;
+        self.cursor = self.text.len();
+    }
+
+    pub fn delete_word_back(&mut self) {
+        if self.remove_selection() {
+            return;
+        }
+        let mut start = self.cursor;
+        while let Some((index, ch)) = self.text[..start].char_indices().next_back() {
+            if ch.is_whitespace() {
+                start = index;
+            } else {
+                break;
+            }
+        }
+        while let Some((index, ch)) = self.text[..start].char_indices().next_back() {
+            if ch.is_whitespace() {
+                break;
+            }
+            start = index;
+        }
+        if start < self.cursor {
+            self.text.replace_range(start..self.cursor, "");
+            self.cursor = start;
+            self.anchor = start;
+        }
+    }
+}
+
 /// The `/` command-line session. `target` tracks the target that owns the
 /// currently previewed candidate (0 when there is none), for callers that
 /// publish the preview to one surface at a time.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct LineSearchState {
     pub open: bool,
-    pub query: String,
+    pub editor: LineEditor,
     pub candidates: Vec<LineHit>,
     pub index: Option<usize>,
     pub target: usize,
@@ -150,6 +368,14 @@ pub struct LineSearchState {
 impl LineSearchState {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    pub fn query(&self) -> &str {
+        &self.editor.text
+    }
+
+    pub fn editor_mut(&mut self) -> &mut LineEditor {
+        &mut self.editor
     }
 
     /// Open a fresh command line: clear the previous query, ring and preview
@@ -174,7 +400,7 @@ impl LineSearchState {
     }
 
     fn clear_session(&mut self) {
-        self.query.clear();
+        self.editor.clear();
         self.candidates.clear();
         self.index = None;
         self.target = 0;
@@ -183,15 +409,14 @@ impl LineSearchState {
     /// Replace the query, rediscover candidates over the current visible
     /// targets, and preview the first hit. An empty query matches nothing.
     pub fn set_query(&mut self, query: &str, targets: &[LineTarget]) {
-        self.query.clear();
-        self.query.push_str(query);
+        self.editor.set_text(query);
         self.refresh(targets);
     }
 
     /// Rediscover candidates for the existing query (for example when the
     /// visible band or the target list changed) and preview the first hit.
     pub fn refresh(&mut self, targets: &[LineTarget]) {
-        self.candidates = find_candidates(targets, &self.query);
+        self.candidates = find_candidates(targets, &self.editor.text);
         self.index = if self.candidates.is_empty() {
             None
         } else {
@@ -523,7 +748,7 @@ mod tests {
 
         state.close();
         assert!(!state.open);
-        assert!(state.query.is_empty());
+        assert!(state.query().is_empty());
         assert!(state.candidates.is_empty());
         assert_eq!(state.index, None);
         assert_eq!(state.target, 0);
@@ -533,7 +758,7 @@ mod tests {
         state.set_query("hit", &targets);
         state.open();
         assert!(state.open);
-        assert!(state.query.is_empty());
+        assert!(state.query().is_empty());
         assert!(state.candidates.is_empty());
         assert_eq!(state.index, None);
         assert_eq!(state.target, 0);
@@ -541,7 +766,7 @@ mod tests {
         state.set_query("hit", &targets);
         state.reset();
         assert!(!state.open);
-        assert!(state.query.is_empty());
+        assert!(state.query().is_empty());
         assert!(state.candidates.is_empty());
         assert_eq!(state.index, None);
         assert_eq!(state.target, 0);
@@ -560,4 +785,41 @@ mod tests {
         assert!(!line.matches("ALPHA"));
         assert!(!line.matches(""));
     }
+
+    #[test]
+    fn search_fields_control_matching_not_painted_cells() {
+        let row = LineRow::new("visible title", "hidden subtitle", "")
+            .with_search_fields([0]);
+        assert!(row.matches("visible"));
+        assert!(!row.matches("hidden"));
+        assert_eq!(row.cells(), ["visible title", "hidden subtitle", ""]);
+
+        let album = LineRow::with_extra("Song", "Artist", "3:20", vec!["7".to_string()])
+            .with_search_fields([0, 1, 3]);
+        assert!(album.matches("song"));
+        assert!(album.matches("7"));
+        assert!(!album.matches("3:20"));
+    }
+
+    #[test]
+    fn editor_selection_and_word_delete_respect_char_boundaries() {
+        let mut editor = LineEditor::new();
+        editor.insert("héllo wörld");
+        assert_eq!(editor.cursor, editor.text.len());
+        editor.delete_word_back();
+        assert_eq!(editor.text, "héllo ");
+        editor.select_all();
+        assert_eq!(editor.selected_text(), Some("héllo "));
+        editor.insert("x");
+        assert_eq!(editor.text, "x");
+        assert_eq!(editor.cursor, 1);
+
+        editor.set_text("abc");
+        editor.home(false);
+        editor.move_right(true);
+        assert_eq!(editor.selection(), Some(0..1));
+        editor.insert("Z");
+        assert_eq!(editor.text, "Zbc");
+    }
+
 }

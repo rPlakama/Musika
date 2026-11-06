@@ -3015,7 +3015,7 @@ impl AppRoot {
             )
     }
 
-    fn list(&self, cx: &Context<Self>) -> impl IntoElement {
+    fn list(&self, cx: &Context<Self>, window: &mut Window) -> impl IntoElement {
         let title = self.view.scope.label();
         let hint = "(Shift-J/K) cycle filter";
         let order = format!("Shift-H / Shift-L  /  {}", self.view.order_label());
@@ -3057,9 +3057,21 @@ impl AppRoot {
             });
 
         if self.view.rows.is_empty() {
-            let message = if self.view.loading {
-                "Loading…".to_string()
-            } else if let Some(error) = &self.error {
+            if self.view.loading {
+                window.request_animation_frame();
+                return div()
+                    .flex()
+                    .flex_col()
+                    .flex_1()
+                    .px(px(12.0))
+                    .child(header)
+                    .child(loading_skeleton(
+                        self.clock.now as f32,
+                        self.library_row_h,
+                        8,
+                    ));
+            }
+            let message = if let Some(error) = &self.error {
                 error.clone()
             } else {
                 "Nothing here".to_string()
@@ -3111,8 +3123,9 @@ impl AppRoot {
                             0x14121800
                         };
                         let Some(row) = this.view.rows.get(index) else {
-                            // The QML RowWindow paints a blank geometry slot
+                            // RowWindow blank slot: a waving grey placeholder
                             // until the live window lands.
+                            _window.request_animation_frame();
                             items.push(
                                 div()
                                     .id(index)
@@ -3122,7 +3135,8 @@ impl AppRoot {
                                     .h(px(row_h))
                                     .px_1()
                                     .rounded_sm()
-                                    .bg(rgb(target)),
+                                    .bg(rgb(target))
+                                    .child(row_placeholder(index, row_h, this.clock.now as f32)),
                             );
                             continue;
                         };
@@ -4657,7 +4671,7 @@ impl Render for AppRoot {
         let body = if self.page.is_some() {
             self.page_view(&*cx).into_any_element()
         } else {
-            self.list(&*cx).into_any_element()
+            self.list(&*cx, window).into_any_element()
         };
         let status = self.player_bar();
         div()
@@ -4784,6 +4798,64 @@ fn highlighted_text(text: &str, query: &str, color: u32) -> gpui::AnyElement {
         .into_any_element()
 }
 
+fn row_wave_color(now: f32, index: usize, base: u32, peak: u32) -> u32 {
+    let phase = (now * 2.6 + index as f32 * 0.22).sin() * 0.5 + 0.5;
+    let mix = |_channel: u32, shift: u32| -> u32 {
+        let a = (base >> shift) & 0xFF;
+        let b = (peak >> shift) & 0xFF;
+        (a as f32 + (b as f32 - a as f32) * phase) as u32
+    };
+    (mix(0, 16) << 16) | (mix(0, 8) << 8) | mix(0, 0)
+}
+
+fn row_placeholder(index: usize, row_h: f32, now: f32) -> gpui::AnyElement {
+    let cover_color = row_wave_color(now, index, 0x26232B, 0x4A4554);
+    let bar_color = row_wave_color(now, index + 3, 0x2B2833, 0x514B5C);
+    div()
+        .w_full()
+        .h(px(row_h))
+        .flex()
+        .items_center()
+        .px_1()
+        .child(
+            div()
+                .size(px(row_h * 0.78))
+                .rounded_sm()
+                .bg(rgb(cover_color)),
+        )
+        .child(
+            div()
+                .flex()
+                .flex_col()
+                .flex_1()
+                .ml_3()
+                .gap_2()
+                .child(
+                    div()
+                        .w(relative(0.44))
+                        .h(px((row_h * 0.18).max(6.0)))
+                        .rounded_sm()
+                        .bg(rgb(bar_color)),
+                )
+                .child(
+                    div()
+                        .w(relative(0.26))
+                        .h(px((row_h * 0.12).max(4.0)))
+                        .rounded_sm()
+                        .bg(rgb(row_wave_color(now, index + 7, 0x24212A, 0x453F50))),
+                ),
+        )
+        .into_any_element()
+}
+
+fn loading_skeleton(now: f32, row_h: f32, count: usize) -> gpui::AnyElement {
+    div()
+        .w_full()
+        .flex()
+        .flex_col()
+        .children((0..count).map(|index| row_placeholder(index, row_h, now)))
+        .into_any_element()
+}
 fn art_scaled(path: Option<std::path::PathBuf>, base: f32, scale: f32) -> gpui::AnyElement {
     let size = base * scale;
     let offset = (size - base) * 0.5;

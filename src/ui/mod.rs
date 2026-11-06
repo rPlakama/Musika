@@ -117,6 +117,7 @@ pub fn run() {
             KeyBinding::new("v", Visual, None),
             KeyBinding::new("/", Search, None),
             KeyBinding::new("shift-space f", Search, None),
+            KeyBinding::new("shift-space shift-f", Search, None),
             KeyBinding::new("up", MoveUp, None),
             KeyBinding::new("down", MoveDown, None),
             KeyBinding::new("space", PlayPause, None),
@@ -758,31 +759,23 @@ impl AppRoot {
         self.generation = self.bridge.load_library(self.view.scope, self.view.order);
     }
 
-    fn scroll_target(handle: &UniformListScrollHandle, row_h: f32, _count: usize, cursor: usize) -> f32 {
-        let (viewport, content) = {
-            let state = handle.0.borrow();
-            let viewport = state
-                .last_item_size
-                .map(|size| f32::from(size.item.height))
-                .unwrap_or(0.0);
-            (viewport, f32::from(state.base_handle.max_offset().height))
-        };
-        if viewport <= 0.0 {
-            return 0.0;
-        }
-        let center = cursor as f32 * row_h + row_h * 0.5 - viewport * 0.5;
-        center.clamp(0.0, content.max(0.0))
-    }
-
-    fn start_follow(follow: &mut ScrollFollow, handle: &UniformListScrollHandle, target: f32, now: f64, animated: bool) {
-        let current = -f32::from(handle.0.borrow().base_handle.offset().y);
+    fn scroll_target(handle: &UniformListScrollHandle, row_h: f32, count: usize, cursor: usize) -> f32 {
         let viewport = handle
             .0
             .borrow()
             .last_item_size
             .map(|size| f32::from(size.item.height))
-            .unwrap_or(0.0);
-        let duration = if animated && viewport > 0.0 && (target - current).abs() <= viewport * 2.0 {
+            .filter(|height| *height > 0.0)
+            .unwrap_or(600.0);
+        let max = (count as f32 * row_h - viewport).max(0.0);
+        let center = cursor as f32 * row_h + row_h * 0.5 - viewport * 0.5;
+        center.clamp(0.0, max)
+    }
+
+    fn start_follow(follow: &mut ScrollFollow, handle: &UniformListScrollHandle, target: f32, now: f64, animated: bool) {
+        let current = -f32::from(handle.0.borrow().base_handle.offset().y);
+        let moved = (target - current).abs() > 0.5;
+        let duration = if animated && moved {
             0.300
         } else {
             0.0
@@ -1317,6 +1310,10 @@ impl AppRoot {
                             .px_3()
                             .flex()
                             .items_center()
+                            .min_w_0()
+                            .overflow_hidden()
+                            .whitespace_normal()
+                            .max_h(px(46.0))
                             .rounded_md()
                             .border_1()
                             .border_color(rgb(if active { PRIMARY } else { OUTLINE }))
@@ -2077,6 +2074,7 @@ impl AppRoot {
                         let selected = index == this.view.cursor
                             || this.view.selection.contains(this.view.cursor, index);
                         let hovered = this.hovered_row == Some(index);
+                        let emphasis = if selected || hovered { 1.08 } else { 1.0 };
                         let striped = index % 2 != 0;
                         let target = if selected {
                             0x4A4458FF
@@ -2149,7 +2147,7 @@ impl AppRoot {
                                         .overflow_hidden()
                                         .child(
                                             div()
-                                                .text_size(px(18.0))
+                                                .text_size(px(18.0 * emphasis))
                                                 .font_weight(if selected { gpui::FontWeight::BOLD } else { gpui::FontWeight::NORMAL })
                                                 .whitespace_normal()
                                                 .max_h(px(34.0))
@@ -2158,7 +2156,7 @@ impl AppRoot {
                                         )
                                         .child(
                                             div()
-                                                .text_size(px(12.0))
+                                                .text_size(px(12.0 * emphasis))
                                                 .text_color(rgb(ON_VARIANT))
                                                 .whitespace_normal()
                                                 .max_h(px(22.0))
@@ -2173,7 +2171,7 @@ impl AppRoot {
                                         .gap_2()
                                         .child(
                                             div()
-                                                .text_size(px(11.0))
+                                                .text_size(px(11.0 * emphasis))
                                                 .text_color(rgb(ON_VARIANT))
                                                 .child(meta),
                                         )
@@ -2502,6 +2500,7 @@ impl AppRoot {
                                 let cover = cover_path(&track.cover_url);
                                 let active = index == cursor;
                                 let playing = index == this.player.index();
+                                let emphasis = if active { 1.08 } else { 1.0 };
                                 let cover_scale = this
                                     .row_cover_scales
                                     .entry(format!("queue:{index}"))
@@ -2536,20 +2535,22 @@ impl AppRoot {
                                                         .gap_1()
                                                         .child(
                                                             div()
-                                                                .text_size(px(14.0))
+                                                                .text_size(px(14.0 * emphasis))
                                                                 .font_weight(if active { gpui::FontWeight::BOLD } else { gpui::FontWeight::NORMAL })
                                                                 .when(playing, |this| this.text_color(rgb(PRIMARY)))
-                                                                .whitespace_nowrap()
-                                                                .text_ellipsis()
+                                                                .whitespace_normal()
+                                                                .max_h(px(20.0))
+                                                                .overflow_hidden()
                                                                 .child(title),
                                                         ),
                                                 )
                                                 .child(
                                                     div()
-                                                        .text_size(px(10.0))
+                                                        .text_size(px(10.0 * emphasis))
                                                         .text_color(rgb(ON_VARIANT))
-                                                        .whitespace_nowrap()
-                                                        .text_ellipsis()
+                                                        .whitespace_normal()
+                                                        .max_h(px(16.0))
+                                                        .overflow_hidden()
                                                         .child(artist),
                                                 ),
                                         ),
@@ -2588,6 +2589,7 @@ impl AppRoot {
             .map(|(index, row)| {
                 let selected = index == search.cursor();
                 let hovered = self.hovered_row == Some(index);
+                let emphasis = if selected || hovered { 1.08 } else { 1.0 };
                 let cover = cover_path(&row.cover_url);
                 div()
                     .flex()
@@ -2607,7 +2609,11 @@ impl AppRoot {
                     }))
                     .when(selected, |this| this.bg(rgb(0x4A4458)))
                     .when(hovered && !selected, |this| this.bg(rgb(SURFACE_HIGH)))
-                    .child(art(cover, self.search_row_h * 0.714))
+                    .child(art_scaled(
+                        cover,
+                        self.search_row_h * 0.714,
+                        if selected || hovered { 1.20 } else { 1.0 },
+                    ))
                     .child(
                         div()
                             .flex()
@@ -2616,18 +2622,20 @@ impl AppRoot {
                             .flex_1()
                             .child(
                                 div()
-                                    .text_size(px(16.0))
+                                    .text_size(px(16.0 * emphasis))
                                     .font_weight(if selected { gpui::FontWeight::BOLD } else { gpui::FontWeight::NORMAL })
-                                    .whitespace_nowrap()
-                                    .text_ellipsis()
+                                    .whitespace_normal()
+                                    .max_h(px(22.0))
+                                    .overflow_hidden()
                                     .child(row.title.clone()),
                             )
                             .child(
                                 div()
-                                    .text_size(px(11.0))
+                                    .text_size(px(11.0 * emphasis))
                                     .text_color(rgb(ON_VARIANT))
-                                    .whitespace_nowrap()
-                                    .text_ellipsis()
+                                    .whitespace_normal()
+                                    .max_h(px(18.0))
+                                    .overflow_hidden()
                                     .child(row.subtitle.clone()),
                             ),
                     )
@@ -2674,7 +2682,11 @@ impl AppRoot {
                                     .px_4()
                                     .flex()
                                     .items_center()
-                                    .text_size(px(20.0))
+                                    .min_w_0()
+                                    .overflow_hidden()
+                                    .whitespace_normal()
+                                    .max_h(px(44.0))
+                                    .text_size(px(16.0))
                                     .text_color(if search.query.is_empty() { rgb(ON_VARIANT) } else { rgb(ON_SURFACE) })
                                     .child(query),
                             ),
@@ -2908,6 +2920,7 @@ impl AppRoot {
                                 } else {
                                     0x141218FF
                                 };
+                                let emphasis = if selected || hovered { 1.08 } else { 1.0 };
                                 let color = this
                                     .row_colors
                                     .entry(key)
@@ -2946,20 +2959,24 @@ impl AppRoot {
                                                 .flex_1()
                                                 .child(
                                                     div()
-                                                        .text_size(px(15.0))
+                                                        .text_size(px(15.0 * emphasis))
                                                         .font_weight(if selected { gpui::FontWeight::BOLD } else { gpui::FontWeight::NORMAL })
+                                                        .whitespace_nowrap()
+                                                        .text_ellipsis()
                                                         .child(title),
                                                 )
                                                 .child(
                                                     div()
-                                                        .text_size(px(11.0))
+                                                        .text_size(px(11.0 * emphasis))
                                                         .text_color(rgb(ON_VARIANT))
+                                                        .whitespace_nowrap()
+                                                        .text_ellipsis()
                                                         .child(subtitle),
                                                 ),
                                         )
                                         .child(
                                             div()
-                                                .text_size(px(11.0))
+                                                    .text_size(px(11.0 * emphasis))
                                                 .text_color(rgb(ON_VARIANT))
                                                 .child(meta),
                                         )
@@ -3031,6 +3048,8 @@ impl AppRoot {
                             .gap_3()
                             .flex_1()
                             .min_w_0()
+                            .max_w(relative(0.46))
+                            .overflow_hidden()
                             .child(art(cover, 44.0))
                             .child(
                                 div()
@@ -3395,11 +3414,15 @@ fn art_scaled(path: Option<std::path::PathBuf>, base: f32, scale: f32) -> gpui::
 
 fn art(path: Option<std::path::PathBuf>, size: f32) -> gpui::AnyElement {
     match path {
-        Some(path) => img(path).size(px(size)).rounded_sm().into_any_element(),
+        Some(path) => img(path)
+            .size(px(size))
+            .rounded_sm()
+            .bg(rgb(0x36343B))
+            .into_any_element(),
         None => div()
             .size(px(size))
             .rounded_md()
-            .bg(rgb(SURFACE_HIGH))
+            .bg(rgb(0x36343B))
             .into_any_element(),
     }
 }

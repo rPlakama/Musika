@@ -54,6 +54,8 @@ actions!(
         PageUp,
         MoveLeft,
         MoveRight,
+        Visual,
+        VisualAll,
     ]
 );
 
@@ -81,6 +83,8 @@ pub fn run() {
             KeyBinding::new("shift-h", OrderPrev, None),
             KeyBinding::new("r", Refresh, None),
             KeyBinding::new("enter", Enter, None),
+            KeyBinding::new("v", Visual, None),
+            KeyBinding::new("shift-v", VisualAll, None),
             KeyBinding::new("[ b", PrevPlace, None),
             KeyBinding::new("] b", NextPlace, None),
             KeyBinding::new("ctrl-d", PageDown, None),
@@ -354,6 +358,39 @@ impl AppRoot {
         cx.notify();
     }
 
+    fn on_visual(&mut self, _: &Visual, _window: &mut Window, cx: &mut Context<Self>) {
+        let (active, cursor) = if let Some(page) = self.page.as_ref() {
+            (page.selection.active(), page.cursor)
+        } else {
+            (self.view.selection.active(), self.view.cursor)
+        };
+        if active {
+            if let Some(page) = self.page.as_mut() {
+                page.selection.clear();
+            } else {
+                self.view.selection.clear();
+            }
+        } else if let Some(page) = self.page.as_mut() {
+            page.selection.start(cursor);
+        } else {
+            self.view.selection.start(cursor);
+        }
+        cx.notify();
+    }
+
+    fn on_visual_all(&mut self, _: &VisualAll, _window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(page) = self.page.as_mut() {
+            page.selection.select_all();
+            let last = page.rows.len().saturating_sub(1);
+            page.select(last);
+        } else {
+            self.view.selection.select_all();
+            let last = self.view.rows.len().saturating_sub(1);
+            self.select(last);
+        }
+        cx.notify();
+    }
+
     fn on_enter(&mut self, _: &Enter, _window: &mut Window, cx: &mut Context<Self>) {
         if self.page.is_some() {
             let row = self
@@ -371,6 +408,18 @@ impl AppRoot {
     }
 
     fn on_back(&mut self, _: &Back, window: &mut Window, cx: &mut Context<Self>) {
+        if self.page.as_ref().is_some_and(|page| page.selection.active()) {
+            if let Some(page) = self.page.as_mut() {
+                page.selection.clear();
+            }
+            cx.notify();
+            return;
+        }
+        if self.view.selection.active() && self.page.is_none() {
+            self.view.selection.clear();
+            cx.notify();
+            return;
+        }
         if self.page.is_some() {
             self.back_page();
         } else {
@@ -547,7 +596,8 @@ impl AppRoot {
                     let meta = row.meta.clone();
                     let starred = row.starred;
                     let cover = cover_path(&row.cover_url);
-                    let selected = index == this.view.cursor;
+                    let selected = index == this.view.cursor
+                        || this.view.selection.contains(this.view.cursor, index);
                     items.push(
                         div()
                             .id(index)
@@ -708,7 +758,8 @@ impl AppRoot {
                         let title = row.title.clone();
                         let subtitle = row.subtitle.clone();
                         let meta = row.meta.clone();
-                        let selected = index == page.cursor;
+                        let selected = index == page.cursor
+                            || page.selection.contains(page.cursor, index);
                         items.push(
                             div()
                                 .id(index)
@@ -769,14 +820,25 @@ impl AppRoot {
             .bg(rgb(SURFACE))
             .text_size(px(11.0))
             .text_color(rgb(ON_VARIANT))
-            .child(format!(
-                "{} · {} · {} artists / {} albums / {} songs",
-                self.view.scope.label(),
-                self.view.order_label(),
-                counts.0,
-                counts.1,
-                counts.2
-            ))
+            .child({
+                let visual = if let Some(page) = self.page.as_ref() {
+                    page.selection.count(page.cursor)
+                } else {
+                    self.view.selection.count(self.view.cursor)
+                };
+                if visual > 0 {
+                    format!("VISUAL {visual} · {} · {} · {}/{}", self.view.scope.label(), self.view.order_label(), counts.0, counts.1)
+                } else {
+                    format!(
+                        "{} · {} · {} artists / {} albums / {} songs",
+                        self.view.scope.label(),
+                        self.view.order_label(),
+                        counts.0,
+                        counts.1,
+                        counts.2
+                    )
+                }
+            })
     }
 }
 
@@ -802,6 +864,8 @@ impl Render for AppRoot {
             .on_action(cx.listener(Self::on_order_prev))
             .on_action(cx.listener(Self::on_refresh))
             .on_action(cx.listener(Self::on_enter))
+            .on_action(cx.listener(Self::on_visual))
+            .on_action(cx.listener(Self::on_visual_all))
             .on_action(cx.listener(Self::on_page_down))
             .on_action(cx.listener(Self::on_page_up))
             .on_action(cx.listener(Self::on_back))

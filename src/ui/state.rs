@@ -79,6 +79,7 @@ pub struct ViewState {
     pub scroll: f32,
     pub loading: bool,
     pub error: Option<String>,
+    pub selection: Selection,
 }
 
 impl Default for ViewState {
@@ -91,6 +92,7 @@ impl Default for ViewState {
             scroll: 0.0,
             loading: true,
             error: None,
+            selection: Selection::default(),
         }
     }
 }
@@ -117,6 +119,7 @@ impl ViewState {
     }
 
     pub fn clear_for(&mut self, scope: Scope) {
+        self.selection.clear();
         self.scope = scope;
         self.order = 0;
         self.rows.clear();
@@ -227,6 +230,7 @@ pub struct PageState {
     pub scroll: f32,
     pub loading: bool,
     pub error: Option<String>,
+    pub selection: Selection,
 }
 
 impl PageState {
@@ -244,6 +248,7 @@ impl PageState {
             scroll: 0.0,
             loading: true,
             error: None,
+            selection: Selection::default(),
         }
     }
 
@@ -346,5 +351,70 @@ mod page_kind_tests {
         }];
         page.select(9);
         assert_eq!(page.cursor, 0);
+    }
+}
+
+/// Visual selection over the live virtual window. The cursor is owned by the
+/// view; this remembers only the anchor. (G2: range ids outside the window come
+/// from a backend query in G2's next slice.)
+#[derive(Debug, Clone, Copy, Default)]
+pub struct Selection {
+    anchor: Option<usize>,
+}
+
+impl Selection {
+    pub fn active(&self) -> bool {
+        self.anchor.is_some()
+    }
+
+    pub fn anchor(&self) -> Option<usize> {
+        self.anchor
+    }
+
+    pub fn start(&mut self, cursor: usize) {
+        if self.anchor.is_none() {
+            self.anchor = Some(cursor);
+        }
+    }
+
+    pub fn clear(&mut self) {
+        self.anchor = None;
+    }
+
+    pub fn select_all(&mut self) {
+        self.anchor = Some(0);
+    }
+
+    pub fn contains(&self, cursor: usize, index: usize) -> bool {
+        let Some(anchor) = self.anchor else {
+            return false;
+        };
+        let lo = anchor.min(cursor);
+        let hi = anchor.max(cursor);
+        index >= lo && index <= hi
+    }
+
+    pub fn count(&self, cursor: usize) -> usize {
+        self.anchor
+            .map(|anchor| anchor.abs_diff(cursor) + 1)
+            .unwrap_or(0)
+    }
+}
+
+#[cfg(test)]
+mod selection_tests {
+    use super::*;
+
+    #[test]
+    fn visual_range_tracks_both_cursor_directions() {
+        let mut selection = Selection::default();
+        selection.start(5);
+        assert!(selection.contains(8, 6));
+        assert!(selection.contains(8, 8));
+        assert!(!selection.contains(8, 9));
+        assert!(selection.contains(2, 3));
+        assert_eq!(selection.count(8), 4);
+        selection.clear();
+        assert!(!selection.active());
     }
 }

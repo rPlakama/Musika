@@ -920,6 +920,7 @@ impl AppRoot {
     }
 
     fn follow_library(&mut self, animated: bool) {
+        self.clock.tick();
         let target = Self::scroll_target(
             &self.scroll,
             self.library_row_h,
@@ -930,12 +931,14 @@ impl AppRoot {
     }
 
     fn follow_page(&mut self, animated: bool) {
+        self.clock.tick();
         let Some(page) = self.page.as_ref() else { return };
         let target = Self::scroll_target(&self.page_scroll, self.page_row_h, page.rows.len(), page.cursor);
         Self::start_follow(&mut self.page_follow, &self.page_scroll, target, self.clock.now, animated);
     }
 
     fn follow_queue(&mut self, animated: bool) {
+        self.clock.tick();
         let target = Self::scroll_target(
             &self.queue_scroll,
             self.queue_row_h,
@@ -1931,6 +1934,7 @@ impl AppRoot {
     }
 
     fn alt_arm(&mut self) {
+        self.clock.tick();
         if self.login.is_some() || self.line_search.open {
             return;
         }
@@ -1953,6 +1957,7 @@ impl AppRoot {
     }
 
     fn alt_release(&mut self) {
+        self.clock.tick();
         if self.alt_was_typing {
             if let Some(search) = self.search.as_mut() {
                 search.typing = true;
@@ -2261,6 +2266,7 @@ impl AppRoot {
     }
 
     fn press_transport(&mut self, index: usize) {
+        self.clock.tick();
         if let Some(slot) = self.transport_press.get_mut(index) {
             *slot = Some(self.clock.now);
         }
@@ -3419,9 +3425,9 @@ impl AppRoot {
                     .child(
                         div()
                             .flex()
-                            .flex_none()
-                            .w(if lyrics_inline { relative(0.50) } else { relative(1.0) })
+                            .flex_1()
                             .h_full()
+                            .min_w_0()
                             .items_center()
                             .justify_center()
                             .overflow_hidden()
@@ -3430,8 +3436,8 @@ impl AppRoot {
                     .child(
                         div()
                             .flex()
-                            .flex_none()
-                            .w(if lyrics_inline { relative(0.50) } else { relative(0.0) })
+                            .when(lyrics_inline, |this| this.flex_1())
+                            .when(!lyrics_inline, |this| this.hidden())
                             .h_full()
                             .opacity(if lyrics_inline && !self.lyrics_overlay { 1.0 } else { 0.0 })
                             .min_w_0()

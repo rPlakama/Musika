@@ -4022,7 +4022,8 @@ impl AppRoot {
         let page_w = self.win_w.max(1.0);
         let max_cover = (page_h - page_w * 0.04) * 0.75;
         let cover_side = page_w.min(page_h).min(max_cover).max(1.0);
-        let cover_bottom = (cover_side - page_w * 0.02).min(max_cover);
+        let cover_art_side = (cover_side - page_w * 0.04).max(1.0);
+        let cover_bottom = cover_art_side + page_w * 0.02;
         let cover = self
             .display_cover(&page.header.cover_art, cover_bucket(cover_side))
             .or_else(|| cover_path(&page.header.cover_url));
@@ -4048,7 +4049,7 @@ impl AppRoot {
                     .absolute()
                     .left(px(page_w * 0.02))
                     .top(px(page_w * 0.02))
-                    .w(relative(0.56))
+                    .w(relative(0.78))
                     .max_w(px(page_w * 0.96))
                     .p(px(page_w * 0.02))
                     .rounded_md()
@@ -4173,14 +4174,14 @@ impl AppRoot {
             .child(
                 div()
                     .absolute()
-                    .top_0()
-                    .left_0()
-                    .right_0()
-                    .h(px(cover_side))
+                    .top(px(page_w * 0.02))
+                    .left(px(page_w * 0.02))
+                    .right(px(page_w * 0.02))
+                    .h(px(cover_art_side))
                     .flex()
                     .justify_center()
                     .overflow_hidden()
-                    .child(art(cover, cover_side)),
+                    .child(art(cover, cover_art_side)),
             )
             .child(header)
             .child(div().h(px(spacer_h)))
@@ -4188,9 +4189,11 @@ impl AppRoot {
                 div()
                     .flex_1()
                     .w_full()
+                    .px(px(page_w * 0.02))
+                    .pt(px(page_w * 0.02))
                     .child(
                         uniform_list("page-rows", count, cx.processor(move |this, range: std::ops::Range<usize>, _window, cx| {
-                            let row_h = 36.0;
+                            let row_h = this.page_scroll_modal.row_h;
                             let mut items = Vec::with_capacity(range.len());
                             for index in range {
                                 let Some((title, subtitle, meta, selected, rating, starred, downloaded, cover, show_cover)) = this

@@ -2740,6 +2740,31 @@ impl AppRoot {
                     self.land_library(0);
                 }
             }
+            "move_up" | "move_down" => {
+                let down = command.trim() == "move_down";
+                if self.queue_open {
+                    self.queue_cursor = if down {
+                        (self.queue_cursor + 1).min(self.player.len().saturating_sub(1))
+                    } else {
+                        self.queue_cursor.saturating_sub(1)
+                    };
+                    self.follow_queue(true);
+                } else if let Some(page) = self.page.as_mut() {
+                    page.select(if down {
+                        page.cursor.saturating_add(1)
+                    } else {
+                        page.cursor.saturating_sub(1)
+                    });
+                    self.follow_page(true);
+                } else {
+                    let cursor = if down {
+                        self.view.cursor.saturating_add(1).min(self.view.rows.len().saturating_sub(1))
+                    } else {
+                        self.view.cursor.saturating_sub(1)
+                    };
+                    self.select(cursor);
+                }
+            }
             "scroll_up" | "scroll_down" => {
                 let down = command.trim() == "scroll_down";
                 let modal = if self.queue_open {

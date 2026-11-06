@@ -38,7 +38,7 @@
 //! databases or the image decoder, so the path policy stays unit-testable.
 
 use std::borrow::Borrow;
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::ffi::OsString;
 use std::hash::Hash;
 use std::path::{Path, PathBuf};
@@ -50,6 +50,38 @@ use std::path::{Path, PathBuf};
 /// list is rejected by [`DisplayKey::new`] instead of naming a file that no
 /// producer would ever write.
 pub const DISPLAY_BUCKETS: [u32; 4] = [256, 512, 768, 1024];
+
+/// Chooses the smallest display bucket that covers `logical_px` at
+/// `scale_factor`.
+///
+/// The caller must pass a fixed hero size, not a measured layout size: a
+/// measured size can change between frames and make the bucket flip, which
+/// would thrash the display cache and the bridge's resize jobs. A non-finite,
+/// negative or zero input falls back to the smallest bucket so a broken layout
+/// value can never select the original file.
+pub fn bucket_for(logical_px: f32, scale_factor: f32) -> u32 {
+    let smallest = DISPLAY_BUCKETS[0];
+    if !logical_px.is_finite()
+        || !scale_factor.is_finite()
+        || logical_px <= 0.0
+        || scale_factor <= 0.0
+    {
+        return smallest;
+    }
+    let need = (logical_px * scale_factor).ceil();
+    DISPLAY_BUCKETS
+        .iter()
+        .copied()
+        .find(|bucket| *bucket as f32 >= need)
+        .unwrap_or_else(|| *DISPLAY_BUCKETS.last().expect("display buckets are non-empty"))
+}
+
+/// The 320 px thumbnail path for `source`, mirroring `covers::thumb_name`
+/// (keep the two in sync). Exposed for hero/display callers; the file is not
+/// probed here.
+pub fn thumb_for(source: &Path) -> Option<PathBuf> {
+    thumb_path(source)
+}
 
 /// The cache key for a display copy: the source path and the target long
 /// edge together identify one generated file.
@@ -112,6 +144,10 @@ impl DisplayKey {
 pub struct CoverStore {
     rows: BoundedFifo<String, Option<PathBuf>>,
     displays: BoundedFifo<DisplayKey, Option<PathBuf>>,
+    /// Cached hero fallback probes (thumbnail-or-nothing, never the original).
+    heroes: BoundedFifo<DisplayKey, Option<PathBuf>>,
+    /// Display keys whose resize is currently in flight in the bridge.
+    pending: HashSet<DisplayKey>,
 }
 
 impl CoverStore {
@@ -121,6 +157,8 @@ impl CoverStore {
         Self {
             rows: BoundedFifo::new(max_entries),
             displays: BoundedFifo::new(max_entries),
+            heroes: BoundedFifo::new(max_entries),
+            pending: HashSet::new(),
         }
     }
 
@@ -133,6 +171,8 @@ impl CoverStore {
     pub fn clear(&mut self) {
         self.rows.clear();
         self.displays.clear();
+        self.heroes.clear();
+        self.pending.clear();
     }
 
     /// Number of cached row resolutions (successes and failures).
@@ -162,7 +202,11 @@ impl CoverStore {
     /// not re-checked.
     ///
     /// The answer is cached for the URL (fragment ignored), including `None`,
-    /// so repeated frames perform no filesystem access. A thumbnail that
+    /// so repeated frames perform no filesystem access. Falling back to the
+    /// original is intentional for list rows but expensive for a full-size
+    /// hero; use [`CoverStore::hero_path`] on those surfaces.
+    ///
+    /// A thumbnail that
     /// lands after a cached miss needs [`CoverStore::clear`], which the
     /// bridge should call when a cover sync completes. A cached success also
     /// keeps pointing at its file if the file disappears; that is the point
@@ -197,6 +241,48 @@ impl CoverStore {
         resolved
     }
 
+    /// Resolves the file a hero/display surface should paint.
+    ///
+    /// It prefers the generated display copy, then the 320 px thumbnail, and
+    /// otherwise returns `None`. It deliberately never falls back to the
+    /// original: a 4000 px cover is tens of MB of decoded RGBA and must not be
+    /// uploaded or downscaled inside a frame.
+    ///
+    /// Both the display probe and the thumbnail probe are cached per key, so
+    /// a missing bucket does not `stat` on every frame. The original is never
+    /// a candidate here.
+    pub fn hero_path(&mut self, key: &DisplayKey) -> Option<PathBuf> {
+        if let Some(display) = self.display_path(key) {
+            return Some(display);
+        }
+        if let Some(cached) = self.heroes.get(key) {
+            return cached.clone();
+        }
+        let thumb = thumb_for(key.source()).filter(|path| path.is_file());
+        self.heroes.insert(key.clone(), thumb.clone());
+        thumb
+    }
+
+    /// Starts a resize request for `key`, returning `true` only once.
+    ///
+    /// This module is std-only and does no decoding or dimension work: the
+    /// bridge still owns "is the source already smaller than this bucket?",
+    /// the blocking resize and the resulting [`CoverStore::insert_display`].
+    /// This method only de-duplicates in-flight keys and skips a key whose
+    /// display copy is already resolved.
+    pub fn begin_display_request(&mut self, key: &DisplayKey) -> bool {
+        if self.pending.contains(key) || self.displays.get(key).is_some_and(|path| path.is_some()) {
+            return false;
+        }
+        self.pending.insert(key.clone());
+        true
+    }
+
+    /// Number of display resizes currently in flight (diagnostics).
+    pub fn pending_len(&self) -> usize {
+        self.pending.len()
+    }
+
     /// Publishes a resolved display copy (for example the path returned by
     /// `covers::get_or_create_resized_cover`), replacing a cached miss.
     ///
@@ -205,6 +291,7 @@ impl CoverStore {
     pub fn insert_display(&mut self, key: &DisplayKey, path: impl AsRef<Path>) {
         self.displays
             .insert(key.clone(), Some(path.as_ref().to_path_buf()));
+        self.pending.remove(key);
     }
 }
 
@@ -545,5 +632,72 @@ mod tests {
 
         let mut store = CoverStore::new(4);
         assert_eq!(store.row_path(&url), Some(path));
+    }
+
+    #[test]
+    fn bucket_for_respects_boundaries_scale_and_bad_input() {
+        assert_eq!(bucket_for(256.0, 1.0), 256);
+        assert_eq!(bucket_for(257.0, 1.0), 512);
+        assert_eq!(bucket_for(1024.0, 1.0), 1024);
+        assert_eq!(bucket_for(5000.0, 1.0), 1024);
+        assert_eq!(bucket_for(200.0, 1.5), 512);
+        assert_eq!(bucket_for(256.0, 2.0), 512);
+        assert_eq!(bucket_for(1.0, 2.0), 256);
+        assert_eq!(bucket_for(f32::NAN, 1.0), 256);
+        assert_eq!(bucket_for(256.0, f32::NAN), 256);
+        assert_eq!(bucket_for(-10.0, 1.0), 256);
+        assert_eq!(bucket_for(256.0, 0.0), 256);
+        assert_eq!(bucket_for(0.0, 1.0), 256);
+    }
+
+    #[test]
+    fn hero_path_prefers_bucket_then_thumb_and_never_original() {
+        let dir = TempCoverDir::new();
+        let source = dir.file("hero.jpg", 600 * 1024);
+        let key = DisplayKey::new(&source, 512).expect("512 bucket");
+        let mut store = CoverStore::new(8);
+
+        // No bucket, no thumb: the hero must not fall back to the original.
+        assert_eq!(store.hero_path(&key), None);
+
+        // A thumbnail appears: the cached miss still wins until clear().
+        let thumb = dir.file("hero.thumb.jpg", 2048);
+        assert_eq!(store.hero_path(&key), None);
+        store.clear();
+        assert_eq!(store.hero_path(&key), Some(thumb.clone()));
+
+        // A published display copy wins over the thumbnail.
+        let bucket = dir.file("hero_512x512.jpg", 4096);
+        store.insert_display(&key, &bucket);
+        assert_eq!(store.hero_path(&key), Some(bucket));
+    }
+
+    #[test]
+    fn hero_path_uses_bucket_copy_when_present() {
+        let dir = TempCoverDir::new();
+        let source = dir.file("raw.jpg", 1024);
+        let copy = dir.file("raw_256x256.jpg", 4096);
+        let key = DisplayKey::new(&source, 256).expect("256 bucket");
+        let mut store = CoverStore::new(8);
+        assert_eq!(store.hero_path(&key), Some(copy));
+    }
+
+    #[test]
+    fn begin_display_request_dedupes_until_resolved_or_cleared() {
+        let dir = TempCoverDir::new();
+        let source = dir.file("pending.jpg", 1024);
+        let key = DisplayKey::new(&source, 256).expect("256 bucket");
+        let mut store = CoverStore::new(8);
+        assert!(store.begin_display_request(&key));
+        assert!(!store.begin_display_request(&key));
+        assert_eq!(store.pending_len(), 1);
+
+        let copy = dir.file("pending_256x256.jpg", 2048);
+        store.insert_display(&key, &copy);
+        assert_eq!(store.pending_len(), 0);
+        assert!(!store.begin_display_request(&key));
+
+        store.clear();
+        assert!(store.begin_display_request(&key));
     }
 }

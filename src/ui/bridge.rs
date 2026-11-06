@@ -47,6 +47,10 @@ pub enum Event {
         album_id: String,
         notes: String,
     },
+    Marks {
+        generation: u64,
+        result: crate::download::MarkWindowResult,
+    },
     Restore {
         volume: f64,
         muted: bool,
@@ -84,6 +88,7 @@ pub struct Bridge {
     generation: AtomicU64,
     page_generation: AtomicU64,
     search_generation: AtomicU64,
+    marks_generation: AtomicU64,
     offline: AtomicBool,
 }
 
@@ -94,6 +99,7 @@ impl Bridge {
             generation: AtomicU64::new(0),
             page_generation: AtomicU64::new(0),
             search_generation: AtomicU64::new(0),
+            marks_generation: AtomicU64::new(0),
             offline: AtomicBool::new(false),
         };
         bridge.refresh_header();
@@ -134,8 +140,7 @@ impl Bridge {
         let tx = self.tx.clone();
         crate::app::runtime().spawn(async move {
             let event = match page_data(&descriptor).await {
-                Ok((header, mut rows)) => {
-                    mark_downloaded(&mut rows).await;
+                Ok((header, rows)) => {
                     crate::debug_log!(
                         "GPUI: {} page {} rows",
                         descriptor.kind.label(),
@@ -380,8 +385,7 @@ impl Bridge {
         if scope == super::state::Scope::Playlists {
             crate::app::runtime().spawn(async move {
                 let event = match library_rows(scope, order).await {
-                    Ok(mut rows) => {
-                        mark_downloaded(&mut rows).await;
+                    Ok(rows) => {
                         crate::debug_log!("GPUI: {} {} rows", scope.label(), rows.len());
                         Event::Library {
                             generation,
@@ -468,6 +472,22 @@ impl Bridge {
                 }
                 Err(err) => {
                     crate::debug_log!("GPUI: row window {surface} failed: {err:#}");
+                }
+            }
+        });
+    }
+
+    pub fn request_marks(&self, songs: Vec<String>, albums: Vec<String>) {
+        let generation = self.marks_generation.fetch_add(1, Ordering::SeqCst) + 1;
+        let tx = self.tx.clone();
+        crate::app::runtime().spawn(async move {
+            let Some(dbs) = crate::app::dbs() else { return };
+            match crate::download::window_state(&dbs, &songs, &albums).await {
+                Ok(result) => {
+                    let _ = tx.send(Event::Marks { generation, result });
+                }
+                Err(err) => {
+                    crate::debug_log!("GPUI: mark window failed: {err:#}");
                 }
             }
         });
@@ -621,25 +641,6 @@ async fn library_rows(
                 })
                 .collect())
         }
-    }
-}
-
-async fn mark_downloaded(rows: &mut [super::state::Row]) {
-    let Some(dbs) = crate::app::dbs() else { return };
-    let ids: Vec<String> = rows
-        .iter()
-        .filter(|row| !row.song_id.is_empty())
-        .map(|row| row.song_id.clone())
-        .collect();
-    if ids.is_empty() {
-        return;
-    }
-    let Ok(done) = crate::download::done_ids_of(&dbs.download, &ids).await else {
-        return;
-    };
-    let done: std::collections::HashSet<String> = done.into_iter().collect();
-    for row in rows {
-        row.downloaded = done.contains(&row.song_id);
     }
 }
 

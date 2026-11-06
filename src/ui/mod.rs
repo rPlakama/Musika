@@ -189,6 +189,35 @@ struct DescriptionState {
     body: String,
 }
 
+#[derive(Default)]
+struct MarksState {
+    generation: u64,
+    songs_done: std::collections::HashSet<String>,
+    albums_done: std::collections::HashSet<String>,
+    pending: std::collections::HashSet<String>,
+    requested: Option<(Vec<String>, Vec<String>)>,
+    inflight: bool,
+    dirty: bool,
+}
+
+impl MarksState {
+    fn update(&mut self, generation: u64, result: crate::download::MarkWindowResult) {
+        if generation < self.generation {
+            return;
+        }
+        self.generation = generation;
+        self.songs_done = result.songs_done.into_iter().collect();
+        self.albums_done = result.albums_done.into_iter().collect();
+        self.pending = result.pending.into_iter().collect();
+        self.inflight = false;
+    }
+
+    fn downloaded(&self, song_id: &str, album_id: &str) -> bool {
+        (!song_id.is_empty() && self.songs_done.contains(song_id))
+            || (!album_id.is_empty() && self.albums_done.contains(album_id))
+    }
+}
+
 struct LoginState {
     server: String,
     username: String,
@@ -249,6 +278,9 @@ struct AppRoot {
     error: Option<String>,
     generation: u64,
     scroll: UniformListScrollHandle,
+    library_row_h: f32,
+    library_row_ref: Option<f32>,
+    library_row_ratio: f32,
     page: Option<PageState>,
     travel: Travel,
     page_generation: u64,
@@ -281,6 +313,7 @@ struct AppRoot {
     restored: bool,
     notes: Option<(String, String)>,
     description: Option<DescriptionState>,
+    marks: MarksState,
 }
 
 impl AppRoot {
@@ -313,6 +346,9 @@ impl AppRoot {
             error: None,
             generation: 0,
             scroll: UniformListScrollHandle::new(),
+            library_row_h: 58.0,
+            library_row_ref: None,
+            library_row_ratio: 58.0 / 600.0,
             page: None,
             travel: Travel::default(),
             page_generation: 0,
@@ -347,6 +383,7 @@ impl AppRoot {
             restored: false,
             notes: None,
             description: None,
+            marks: MarksState::default(),
         };
         if let Ok(message) = std::env::var("MUSIKA_GPUUI_TOAST")
             && !message.is_empty()
@@ -443,6 +480,7 @@ impl AppRoot {
                 self.view.rows.install_window(start, rows);
                 self.view.loading = false;
                 self.view.error = None;
+                self.ensure_marks();
             }
             Event::Library {
                 generation,
@@ -457,6 +495,7 @@ impl AppRoot {
                 self.view.rows = RowWindow::full(rows);
                 self.view.rows.generation = generation;
                 self.view.loading = false;
+                self.ensure_marks();
                 self.view.error = None;
                 let saved = crate::scroll_memory::saved_index(scope.key());
                 if saved >= 0 {
@@ -468,6 +507,13 @@ impl AppRoot {
             }
             Event::Notes { album_id, notes } => {
                 self.notes = Some((album_id, notes));
+            }
+            Event::Marks { generation, result } => {
+                self.marks.update(generation, result);
+                if self.marks.dirty {
+                    self.marks.dirty = false;
+                    self.ensure_marks();
+                }
             }
             Event::Restore {
                 volume,
@@ -522,6 +568,8 @@ impl AppRoot {
                 page.cursor = page.cursor.min(page.rows.len().saturating_sub(1));
                 self.page_scroll
                     .scroll_to_item(page.cursor, ScrollStrategy::Center);
+                self.marks.requested = None;
+                self.ensure_marks();
             }
             Event::LoginRequired { offline_available } => {
                 self.login = Some(LoginState {
@@ -645,16 +693,28 @@ impl AppRoot {
         if count == 0 || self.view.rows.generation == 0 {
             return;
         }
-        let row_h = 58.0_f32;
-        let (top, viewport) = {
+        let (top, measured) = {
             let state = self.scroll.0.borrow();
             let top = state.base_handle.logical_scroll_top().0;
-            let viewport = state
+            let measured = state
                 .last_item_size
                 .map(|size| f32::from(size.item.height))
-                .unwrap_or(600.0);
-            (top, viewport)
+                .filter(|height| *height > 0.0);
+            (top, measured)
         };
+        if let Some(viewport) = measured {
+            let reference = *self.library_row_ref.get_or_insert(viewport);
+            self.library_row_ratio = 58.0 / reference;
+            let next = metrics::adaptive_row(viewport, self.library_row_ratio, 58.0)
+                .round()
+                .max(18.0);
+            if (next - self.library_row_h).abs() >= 0.5 {
+                self.library_row_h = next;
+                self.view.rows.requested = None;
+            }
+        }
+        let viewport = measured.unwrap_or(600.0);
+        let row_h = self.library_row_h;
         let visible = ((viewport / row_h).ceil() as usize).max(1);
         let overscan = 10;
         let cursor = self.view.cursor.min(count - 1);
@@ -675,6 +735,44 @@ impl AppRoot {
             start,
             end - start + 1,
         );
+    }
+
+    fn ensure_marks(&mut self) {
+        if self.marks.inflight {
+            self.marks.dirty = true;
+            return;
+        }
+        let mut songs = Vec::new();
+        let mut albums = Vec::new();
+        let mut seen = std::collections::HashSet::new();
+        let mut push = |row: &Row, songs: &mut Vec<String>, albums: &mut Vec<String>| {
+            if !row.song_id.is_empty() && seen.insert(format!("s:{}", row.song_id)) {
+                songs.push(row.song_id.clone());
+            }
+            if !row.album_id.is_empty() && seen.insert(format!("a:{}", row.album_id)) {
+                albums.push(row.album_id.clone());
+            }
+        };
+        if let Some(page) = self.page.as_ref() {
+            let lo = page.cursor.saturating_sub(24);
+            let hi = (page.cursor + 24).min(page.rows.len().saturating_sub(1));
+            for row in page.rows.get(lo..=hi).unwrap_or_default() {
+                push(row, &mut songs, &mut albums);
+            }
+        } else {
+            for row in &self.view.rows.live {
+                push(row, &mut songs, &mut albums);
+            }
+        }
+        if songs.is_empty() && albums.is_empty() {
+            return;
+        }
+        if self.marks.requested.as_ref() == Some(&(songs.clone(), albums.clone())) {
+            return;
+        }
+        self.marks.requested = Some((songs.clone(), albums.clone()));
+        self.marks.inflight = true;
+        self.bridge.request_marks(songs, albums);
     }
 
     fn set_scope(&mut self, scope: Scope) {
@@ -1700,7 +1798,7 @@ impl AppRoot {
             .child(header)
             .child(
                 uniform_list("library", count, cx.processor(move |this, range: std::ops::Range<usize>, _window, cx| {
-                    let row_h = 58.0;
+                    let row_h = this.library_row_h;
                     let mut items = Vec::with_capacity(range.len());
                     for index in range {
                         let selected = index == this.view.cursor
@@ -1736,7 +1834,7 @@ impl AppRoot {
                         let subtitle = row.subtitle.clone();
                         let meta = row.meta.clone();
                         let starred = row.starred;
-                        let downloaded = row.downloaded;
+                        let downloaded = this.marks.downloaded(&row.song_id, &row.album_id) || row.downloaded;
                         let rating = row.rating;
                         let cover = cover_path(&row.cover_url);
                         let color = this

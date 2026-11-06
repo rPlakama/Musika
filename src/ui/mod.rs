@@ -27,6 +27,7 @@ mod covers;
 mod line_search;
 mod metrics;
 mod quick_actions;
+mod page_profile;
 mod scroll_modal;
 mod state;
 
@@ -2570,31 +2571,49 @@ impl AppRoot {
             cx.notify();
             return;
         }
-        if let Some(page) = self.page.as_ref()
-            && page.descriptor.kind == PageKind::Radio
-        {
-            let seed_kind = page
-                .descriptor
-                .radio_seed_kind
-                .clone()
-                .unwrap_or_else(|| "album".to_string());
-            let seed_id = page.descriptor.id.clone();
-            let start = page.cursor;
-            if page.rows.get(start).is_some() {
-                self.bridge.play_radio(seed_kind, seed_id, start);
-            }
-            cx.notify();
-            return;
-        }
-        let row = if let Some(page) = self.page.as_ref() {
-            page.rows.get(page.cursor).cloned()
+        if self.page.is_some() {
+            self.activate_page_cursor();
         } else {
-            self.view.rows.get(self.view.cursor).cloned()
-        };
-        if let Some(row) = row {
-            self.activate_row(&row);
+            let row = self.view.rows.get(self.view.cursor).cloned();
+            if let Some(row) = row {
+                self.activate_row(&row);
+            }
         }
         cx.notify();
+    }
+
+    fn activate_page_cursor(&mut self) {
+        let Some(page) = self.page.as_ref() else { return };
+        let Some(row) = page.rows.get(page.cursor) else { return };
+        let profile = page_profile::PageProfile::for_descriptor(&page.descriptor);
+        let action = profile.row_action(row);
+        let index = page.cursor;
+        let descriptor = page.descriptor.clone();
+        let song_id = row.song_id.clone();
+        let album_id = row.album_id.clone();
+        match action {
+            page_profile::PageAction::OpenAlbum => {
+                if !album_id.is_empty() {
+                    self.open_descriptor(PageDescriptor::new(PageKind::Album, album_id));
+                }
+            }
+            page_profile::PageAction::PlayAlbum | page_profile::PageAction::PlayArtist => {
+                if !song_id.is_empty() {
+                    self.last_play = Some((song_id.clone(), self.view.order_label().to_string()));
+                    self.bridge.play_song(song_id, self.view.order_label().to_string());
+                }
+            }
+            page_profile::PageAction::PlayPlaylist => {
+                self.bridge.quick_play_playlist(descriptor.id);
+            }
+            page_profile::PageAction::PlayRadio => {
+                let seed_kind = descriptor
+                    .radio_seed_kind
+                    .clone()
+                    .unwrap_or_else(|| "album".to_string());
+                self.bridge.play_radio(seed_kind, descriptor.id, index);
+            }
+        }
     }
 
     fn activate_row(&mut self, row: &Row) {
@@ -2694,10 +2713,13 @@ impl AppRoot {
     }
 
     fn open_descriptor(&mut self, descriptor: PageDescriptor) {
-        match descriptor.kind {
-            PageKind::Album => self.bridge.request_notes(descriptor.id.clone()),
-            PageKind::Artist => self.bridge.request_artist_notes(descriptor.id.clone()),
-            PageKind::Playlist | PageKind::Radio => {}
+        let profile = page_profile::PageProfile::for_descriptor(&descriptor);
+        if profile.notes {
+            if descriptor.kind == PageKind::Artist {
+                self.bridge.request_artist_notes(descriptor.id.clone());
+            } else {
+                self.bridge.request_notes(descriptor.id.clone());
+            }
         }
         self.remember_current();
         self.hovered_page = None;
@@ -3844,6 +3866,8 @@ impl AppRoot {
         let Some(page) = self.page.as_ref() else {
             return div().flex().flex_1();
         };
+        let profile = page_profile::PageProfile::for_descriptor(&page.descriptor);
+        let show_row_cover = profile.show_row_cover;
         let title = page.header.title.clone();
         let subtitle = page.header.subtitle.clone();
         let meta = page.header.meta.clone();
@@ -3969,7 +3993,7 @@ impl AppRoot {
         }
 
         let count = page.rows.len();
-        if count == 0 && page.descriptor.kind == PageKind::Radio {
+        if count == 0 {
             return div()
                 .flex()
                 .flex_col()
@@ -3983,7 +4007,7 @@ impl AppRoot {
                         .justify_center()
                         .text_size(px(15.0))
                         .text_color(rgb(ON_VARIANT))
-                        .child("No similar songs found"),
+                        .child(profile.empty_text),
                 );
         }
         let scroll = self.page_scroll_modal.handle.clone();
@@ -4032,7 +4056,7 @@ impl AppRoot {
                                             row.downloaded,
                                             format!("page:{}:{}", page.descriptor.id, row.id),
                                             cover_path(&row.cover_url),
-                                            matches!(page.descriptor.kind, PageKind::Artist | PageKind::Playlist),
+                                            show_row_cover,
                                         )
                                     })
                                 else {
@@ -4095,17 +4119,7 @@ impl AppRoot {
                                                 page.select(index);
                                             }
                                             this.follow_page(true);
-                                            if let Some(page) = this.page.as_ref()
-                                                && page.descriptor.kind == PageKind::Radio
-                                            {
-                                                let seed_kind = page
-                                                    .descriptor
-                                                    .radio_seed_kind
-                                                    .clone()
-                                                    .unwrap_or_else(|| "album".to_string());
-                                                let seed_id = page.descriptor.id.clone();
-                                                this.bridge.play_radio(seed_kind, seed_id, index);
-                                            }
+                                            this.activate_page_cursor();
                                             cx.notify();
                                         }))
                                         .child(if let Some(scale) = cover_scale {

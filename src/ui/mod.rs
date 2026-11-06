@@ -27,6 +27,7 @@ mod covers;
 mod line_search;
 mod metrics;
 mod quick_actions;
+mod scroll_modal;
 mod state;
 
 use gpui::{
@@ -230,25 +231,6 @@ impl MarksState {
     }
 }
 
-#[derive(Default, Clone, Copy)]
-struct ScrollFollow {
-    from: f32,
-    to: f32,
-    started: f64,
-    duration: f32,
-    active: bool,
-}
-
-impl ScrollFollow {
-    fn start(&mut self, from: f32, to: f32, now: f64, duration: f32) {
-        self.from = from;
-        self.to = to;
-        self.started = now;
-        self.duration = duration;
-        self.active = true;
-    }
-}
-
 #[derive(Clone)]
 struct AltTarget {
     kind: RowKind,
@@ -330,26 +312,13 @@ struct AppRoot {
     header: Option<Header>,
     error: Option<String>,
     generation: u64,
-    scroll: UniformListScrollHandle,
-    library_row_h: f32,
-    library_row_ref: Option<f32>,
-    library_row_ratio: f32,
-    library_follow: ScrollFollow,
-    page_follow: ScrollFollow,
-    queue_follow: ScrollFollow,
-    page_row_h: f32,
-    page_row_ref: Option<f32>,
-    page_row_ratio: f32,
-    queue_row_h: f32,
-    queue_row_ref: Option<f32>,
-    queue_row_ratio: f32,
-    search_row_h: f32,
-    search_row_ref: Option<f32>,
-    search_row_ratio: f32,
+    library_scroll: scroll_modal::ScrollModal,
+    page_scroll_modal: scroll_modal::ScrollModal,
+    queue_scroll_modal: scroll_modal::ScrollModal,
+    search_scroll: scroll_modal::ScrollModal,
     page: Option<PageState>,
     travel: Travel,
     page_generation: u64,
-    page_scroll: UniformListScrollHandle,
     search: Option<SearchState>,
     search_open: bool,
     search_anim: anim::Behavior,
@@ -363,7 +332,6 @@ struct AppRoot {
     queue_open: bool,
     queue_cursor: usize,
     queue_anim: anim::Behavior,
-    queue_scroll: UniformListScrollHandle,
     repeat: crate::player::Repeat,
     login: Option<LoginState>,
     fullscreen: bool,
@@ -436,26 +404,13 @@ impl AppRoot {
             header: None,
             error: None,
             generation: 0,
-            scroll: UniformListScrollHandle::new(),
-            library_row_h: 58.0,
-            library_row_ref: None,
-            library_row_ratio: 58.0 / 600.0,
-            library_follow: ScrollFollow::default(),
-            page_follow: ScrollFollow::default(),
-            queue_follow: ScrollFollow::default(),
-            page_row_h: 36.0,
-            page_row_ref: None,
-            page_row_ratio: 36.0 / 600.0,
-            queue_row_h: 56.0,
-            queue_row_ref: None,
-            queue_row_ratio: 56.0 / 600.0,
-            search_row_h: 56.0,
-            search_row_ref: None,
-            search_row_ratio: 56.0 / 600.0,
+            library_scroll: scroll_modal::ScrollModal::new(scroll_modal::LIBRARY),
+            page_scroll_modal: scroll_modal::ScrollModal::new(scroll_modal::ALBUM),
+            queue_scroll_modal: scroll_modal::ScrollModal::new(scroll_modal::QUEUE),
+            search_scroll: scroll_modal::ScrollModal::new(scroll_modal::SEARCH),
             page: None,
             travel: Travel::default(),
             page_generation: 0,
-            page_scroll: UniformListScrollHandle::new(),
             search: None,
             search_open: false,
             search_anim: anim::Behavior::new(0.0),
@@ -469,7 +424,6 @@ impl AppRoot {
             queue_open: false,
             queue_cursor: 0,
             queue_anim: anim::Behavior::new(0.0),
-            queue_scroll: UniformListScrollHandle::new(),
             repeat: crate::player::Repeat::Off,
             login: None,
             fullscreen: false,
@@ -881,108 +835,30 @@ impl AppRoot {
         self.generation = self.bridge.load_library(self.view.scope, self.view.order);
     }
 
-    fn scroll_target(handle: &UniformListScrollHandle, row_h: f32, count: usize, cursor: usize) -> f32 {
-        let viewport = handle
-            .0
-            .borrow()
-            .last_item_size
-            .map(|size| f32::from(size.item.height))
-            .filter(|height| *height > 0.0)
-            .unwrap_or(600.0);
-        let max = (count as f32 * row_h - viewport).max(0.0);
-        let center = cursor as f32 * row_h + row_h * 0.5 - viewport * 0.5;
-        center.clamp(0.0, max)
-    }
-
-    fn start_follow(follow: &mut ScrollFollow, handle: &UniformListScrollHandle, target: f32, now: f64, animated: bool) {
-        let current = -f32::from(handle.0.borrow().base_handle.offset().y);
-        let moved = (target - current).abs() > 0.5;
-        let duration = if animated && moved {
-            0.300
-        } else {
-            0.0
-        };
-        if trace_scroll() {
-            crate::debug_log!("GPUI trace: follow from {current:.1} to {target:.1} duration {duration:.2}");
-        }
-        follow.start(current, target, now, duration);
-    }
-
-    fn apply_follow(follow: &mut ScrollFollow, handle: &UniformListScrollHandle, now: f64) -> bool {
-        if !follow.active {
-            return false;
-        }
-        let y = if follow.duration <= 0.0 {
-            follow.active = false;
-            follow.to
-        } else {
-            let progress = (((now - follow.started) / follow.duration as f64) as f32).clamp(0.0, 1.0);
-            let eased = 1.0 - (1.0 - progress).powi(3);
-            let y = follow.from + (follow.to - follow.from) * eased;
-            if progress >= 1.0 {
-                follow.active = false;
-            }
-            y
-        };
-        handle
-            .0
-            .borrow()
-            .base_handle
-            .set_offset(gpui::point(px(0.0), px(-y)));
-        if trace_scroll() {
-            crate::debug_log!("GPUI trace: follow apply y {y:.1} active {}", follow.active);
-        }
-        follow.active
-    }
-
     fn follow_library(&mut self, animated: bool) {
         self.clock.tick();
-        let target = Self::scroll_target(
-            &self.scroll,
-            self.library_row_h,
-            self.view.rows.count,
-            self.view.cursor,
-        );
-        Self::start_follow(&mut self.library_follow, &self.scroll, target, self.clock.now, animated);
+        self.library_scroll
+            .start(self.view.rows.count, self.view.cursor, animated, self.clock.now);
     }
 
     fn follow_page(&mut self, animated: bool) {
         self.clock.tick();
         let Some(page) = self.page.as_ref() else { return };
-        let target = Self::scroll_target(&self.page_scroll, self.page_row_h, page.rows.len(), page.cursor);
-        Self::start_follow(&mut self.page_follow, &self.page_scroll, target, self.clock.now, animated);
+        self.page_scroll_modal
+            .start(page.rows.len(), page.cursor, animated, self.clock.now);
     }
 
     fn follow_queue(&mut self, animated: bool) {
         self.clock.tick();
-        let target = Self::scroll_target(
-            &self.queue_scroll,
-            self.queue_row_h,
-            self.player.len(),
-            self.queue_cursor,
-        );
-        Self::start_follow(&mut self.queue_follow, &self.queue_scroll, target, self.clock.now, animated);
-    }
-
-    fn set_offset_now(handle: &UniformListScrollHandle, target: f32) {
-        handle
-            .0
-            .borrow()
-            .base_handle
-            .set_offset(gpui::point(px(0.0), px(-target)));
+        self.queue_scroll_modal
+            .start(self.player.len(), self.queue_cursor, animated, self.clock.now);
     }
 
     fn land_library(&mut self, index: usize) {
-        let index = index.min(self.view.rows.len().saturating_sub(1));
-        self.view.select(index);
-        self.library_follow.active = false;
-        let target = Self::scroll_target(
-            &self.scroll,
-            self.library_row_h,
-            self.view.rows.count,
-            index,
-        );
-        Self::set_offset_now(&self.scroll, target);
+        let cursor = self
+            .library_scroll
+            .land(self.view.rows.count, index);
+        self.view.select(cursor);
         self.view.rows.requested = None;
         self.ensure_library_window();
         self.remember_current();
@@ -990,34 +866,16 @@ impl AppRoot {
 
     fn land_page(&mut self, index: usize) {
         let Some(page) = self.page.as_mut() else { return };
-        let index = index.min(page.rows.len().saturating_sub(1));
-        page.select(index);
-        self.page_follow.active = false;
-        let target = Self::scroll_target(
-            &self.page_scroll,
-            self.page_row_h,
-            page.rows.len(),
-            index,
-        );
-        Self::set_offset_now(&self.page_scroll, target);
+        let cursor = self.page_scroll_modal.land(page.rows.len(), index);
+        page.select(cursor);
+        self.hovered_page = None;
     }
 
     fn land_queue(&mut self, index: usize) {
-        let index = index.min(self.player.len().saturating_sub(1));
-        self.queue_cursor = index;
-        self.queue_follow.active = false;
-        let target = Self::scroll_target(
-            &self.queue_scroll,
-            self.queue_row_h,
-            self.player.len(),
-            index,
-        );
-        Self::set_offset_now(&self.queue_scroll, target);
+        let cursor = self.queue_scroll_modal.land(self.player.len(), index);
+        self.queue_cursor = cursor;
     }
 
-    /// Ask the Rust row window for the band around the visible rows and the
-    /// cursor. The request is deduped by the window coverage, exactly like
-    /// QML's `ensureVirtualWindow`.
     fn ensure_library_window(&mut self) {
         if self.page.is_some() || self.view.scope == Scope::Playlists {
             return;
@@ -1027,7 +885,7 @@ impl AppRoot {
             return;
         }
         let (top, measured) = {
-            let state = self.scroll.0.borrow();
+            let state = self.library_scroll.handle.0.borrow();
             let top = state.base_handle.logical_scroll_top().0;
             let measured = state
                 .last_item_size
@@ -1035,20 +893,14 @@ impl AppRoot {
                 .filter(|height| *height > 0.0);
             (top, measured)
         };
-        if let Some(viewport) = measured {
-            let reference = *self.library_row_ref.get_or_insert(viewport);
-            self.library_row_ratio = 58.0 / reference;
-            let next = metrics::adaptive_row(viewport, self.library_row_ratio, 58.0)
-                .round()
-                .max(18.0);
-            if (next - self.library_row_h).abs() >= 0.5 {
-                self.library_row_h = next;
-                self.view.rows.requested = None;
-                self.follow_library(false);
-            }
+        if let Some(viewport) = measured
+            && self.library_scroll.ensure_metrics(viewport)
+        {
+            self.view.rows.requested = None;
+            self.follow_library(false);
         }
         let viewport = measured.unwrap_or(600.0);
-        let row_h = self.library_row_h;
+        let row_h = self.library_scroll.row_h;
         let visible = ((viewport / row_h).ceil() as usize).max(1);
         let overscan = 10;
         let cursor = self.view.cursor.min(count - 1);
@@ -1083,59 +935,33 @@ impl AppRoot {
 
     fn ensure_queue_metrics(&mut self) {
         let measured = {
-            let state = self.queue_scroll.0.borrow();
+            let state = self.queue_scroll_modal.handle.0.borrow();
             state
                 .last_item_size
                 .map(|size| f32::from(size.item.height))
                 .filter(|height| *height > 0.0)
         };
         let Some(viewport) = measured else { return };
-        let reference = *self.queue_row_ref.get_or_insert(viewport);
-        self.queue_row_ratio = 56.0 / reference;
-        let next = metrics::adaptive_row(viewport, self.queue_row_ratio, 56.0)
-            .round()
-            .max(18.0);
-        if (next - self.queue_row_h).abs() >= 0.5 {
-            self.queue_row_h = next;
+        if self.queue_scroll_modal.ensure_metrics(viewport) {
             self.follow_queue(false);
         }
     }
 
     fn ensure_search_metrics(&mut self, window_height: f32) {
-        let reference = match self.search_row_ref {
-            Some(reference) => reference,
-            None => {
-                let reference = (window_height * 0.72).max(1.0);
-                self.search_row_ref = Some(reference);
-                reference
-            }
-        };
-        self.search_row_ratio = 56.0 / reference;
-        self.search_row_h = metrics::adaptive_row(
-            window_height * 0.72,
-            self.search_row_ratio,
-            56.0,
-        )
-        .round()
-        .max(18.0);
+        let viewport = (window_height * 0.72).max(1.0);
+        let _ = self.search_scroll.ensure_metrics(viewport);
     }
 
     fn ensure_page_metrics(&mut self) {
         let measured = {
-            let state = self.page_scroll.0.borrow();
+            let state = self.page_scroll_modal.handle.0.borrow();
             state
                 .last_item_size
                 .map(|size| f32::from(size.item.height))
                 .filter(|height| *height > 0.0)
         };
         let Some(viewport) = measured else { return };
-        let reference = *self.page_row_ref.get_or_insert(viewport);
-        self.page_row_ratio = 36.0 / reference;
-        let next = metrics::adaptive_row(viewport, self.page_row_ratio, 36.0)
-            .round()
-            .max(18.0);
-        if (next - self.page_row_h).abs() >= 0.5 {
-            self.page_row_h = next;
+        if self.page_scroll_modal.ensure_metrics(viewport) {
             self.marks.requested = None;
             self.follow_page(false);
         }
@@ -1159,7 +985,7 @@ impl AppRoot {
         };
         if let Some(page) = self.page.as_ref() {
             let (top, viewport) = {
-                let state = self.page_scroll.0.borrow();
+                let state = self.page_scroll_modal.handle.0.borrow();
                 let top = state.base_handle.logical_scroll_top().0;
                 let viewport = state
                     .last_item_size
@@ -1167,7 +993,7 @@ impl AppRoot {
                     .unwrap_or(600.0);
                 (top, viewport)
             };
-            let visible = ((viewport / self.page_row_h).ceil() as usize).max(1);
+            let visible = ((viewport / self.page_scroll_modal.row_h).ceil() as usize).max(1);
             let lo = top.saturating_sub(10);
             let hi = (top + visible + 10).min(page.rows.len().saturating_sub(1));
             for row in page.rows.get(lo..=hi).unwrap_or_default() {
@@ -1257,6 +1083,7 @@ impl AppRoot {
         }
         if let Some(page) = self.page.as_mut() {
             page.select(page.cursor.saturating_add(1));
+            self.hovered_page = None;
             self.follow_page(true);
         } else {
             self.select(self.view.cursor.saturating_add(1));
@@ -1278,6 +1105,7 @@ impl AppRoot {
         }
         if let Some(page) = self.page.as_mut() {
             page.select(page.cursor.saturating_sub(1));
+            self.hovered_page = None;
             self.follow_page(true);
         } else {
             self.select(self.view.cursor.saturating_sub(1));
@@ -1957,7 +1785,7 @@ impl AppRoot {
             return Some((
                 menu,
                 target,
-                self.alt_anchor_for(&self.queue_scroll, self.queue_cursor, self.queue_row_h),
+                self.alt_anchor_for(&self.queue_scroll_modal.handle, self.queue_cursor, self.queue_scroll_modal.row_h),
             ));
         }
         if let Some(page) = self.page.as_ref()
@@ -1970,7 +1798,7 @@ impl AppRoot {
             if let Some(hit) = self.alt_selection_target(
                 rows,
                 page.cursor.saturating_sub(lo),
-                self.alt_anchor_for(&self.page_scroll, page.cursor, self.page_row_h),
+                self.alt_anchor_for(&self.page_scroll_modal.handle, page.cursor, self.page_scroll_modal.row_h),
             ) {
                 return Some(hit);
             }
@@ -1980,7 +1808,7 @@ impl AppRoot {
             return Some((
                 self.alt_menu_for_row(row),
                 self.alt_target_for_row(row),
-                self.alt_anchor_for(&self.page_scroll, page.cursor, self.page_row_h),
+                self.alt_anchor_for(&self.page_scroll_modal.handle, page.cursor, self.page_scroll_modal.row_h),
             ));
         }
         if self.view.selection.active() {
@@ -1993,7 +1821,7 @@ impl AppRoot {
             if let Some(hit) = self.alt_selection_target(
                 rows,
                 self.view.cursor.saturating_sub(lo),
-                self.alt_anchor_for(&self.scroll, self.view.cursor, self.library_row_h),
+                self.alt_anchor_for(&self.library_scroll.handle, self.view.cursor, self.library_scroll.row_h),
             ) {
                 return Some(hit);
             }
@@ -2002,7 +1830,7 @@ impl AppRoot {
         Some((
             self.alt_menu_for_row(row),
             self.alt_target_for_row(row),
-            self.alt_anchor_for(&self.scroll, self.view.cursor, self.library_row_h),
+            self.alt_anchor_for(&self.library_scroll.handle, self.view.cursor, self.library_scroll.row_h),
         ))
     }
 
@@ -3067,7 +2895,7 @@ impl AppRoot {
                     .child(header)
                     .child(loading_skeleton(
                         self.clock.now as f32,
-                        self.library_row_h,
+                        self.library_scroll.row_h,
                         8,
                     ));
             }
@@ -3095,7 +2923,7 @@ impl AppRoot {
         }
 
         let count = self.view.rows.len();
-        let scroll = self.scroll.clone();
+        let scroll = self.library_scroll.handle.clone();
         div()
             .flex()
             .flex_col()
@@ -3105,7 +2933,7 @@ impl AppRoot {
             .child(header)
             .child(
                 uniform_list("library", count, cx.processor(move |this, range: std::ops::Range<usize>, _window, cx| {
-                    let row_h = this.library_row_h;
+                    let row_h = this.library_scroll.row_h;
                     let mut items = Vec::with_capacity(range.len());
                     for index in range {
                         let selected = index == this.view.cursor
@@ -3246,7 +3074,7 @@ impl AppRoot {
                 .h_full()
                 .w_full()
                 .on_scroll_wheel(cx.listener(|this, _, _, _| {
-                    this.library_follow.active = false;
+                    this.library_scroll.follow.active = false;
                 }))
                 .track_scroll(scroll),
             )
@@ -3725,7 +3553,7 @@ impl AppRoot {
         let count = self.player.len();
         let current = self.player.index();
         let cursor = self.queue_cursor;
-        let scroll = self.queue_scroll.clone();
+        let scroll = self.queue_scroll_modal.handle.clone();
         div()
             .absolute()
             .inset_0()
@@ -3784,7 +3612,7 @@ impl AppRoot {
                                         .flex()
                                         .items_center()
                                         .gap_2()
-                                        .h(px(this.queue_row_h))
+                                        .h(px(this.queue_scroll_modal.row_h))
                                         .px_3()
                                         .cursor_pointer()
                                         .when(active, |this| this.bg(rgb(0x4A4458)))
@@ -3793,7 +3621,7 @@ impl AppRoot {
                                             this.player.jump(index);
                                             cx.notify();
                                         }))
-                                        .child(art_scaled(cover, this.queue_row_h * 0.714, cover_scale))
+                                        .child(art_scaled(cover, this.queue_scroll_modal.row_h * 0.714, cover_scale))
                                         .child(
                                             div()
                                                 .flex()
@@ -3832,7 +3660,7 @@ impl AppRoot {
                         }))
                         .h_full()
                         .on_scroll_wheel(cx.listener(|this, _, _, _| {
-                            this.queue_follow.active = false;
+                            this.queue_scroll_modal.follow.active = false;
                         }))
                         .track_scroll(scroll),
                     )
@@ -3871,7 +3699,7 @@ impl AppRoot {
                     .gap_3()
                     .px_5()
                     .id(("search-row", index))
-                    .h(px(self.search_row_h))
+                    .h(px(self.search_scroll.row_h))
                     .cursor_pointer()
                     .on_hover(cx.listener(move |this, hovered: &bool, _, cx| {
                         if *hovered {
@@ -3885,7 +3713,7 @@ impl AppRoot {
                     .when(hovered && !selected, |this| this.bg(rgb(SURFACE_HIGH)))
                     .child(art_scaled(
                         cover,
-                        self.search_row_h * 0.714,
+                        self.search_scroll.row_h * 0.714,
                         if selected || hovered { 1.20 } else { 1.0 },
                     ))
                     .child(
@@ -4158,7 +3986,7 @@ impl AppRoot {
                         .child("No similar songs found"),
                 );
         }
-        let scroll = self.page_scroll.clone();
+        let scroll = self.page_scroll_modal.handle.clone();
         div()
             .relative()
             .flex()
@@ -4218,7 +4046,16 @@ impl AppRoot {
                                 } else {
                                     0x141218FF
                                 };
-                                let emphasis = if selected || hovered { 1.08 } else { 1.0 };
+                                let emphasis = this
+                                    .row_cover_scales
+                                    .entry(format!("page-text:{key}"))
+                                    .or_insert_with(|| anim::Behavior::new(1.0))
+                                    .target(
+                                        if selected || hovered { 1.08 } else { 1.0 },
+                                        anim::QUICK_MS,
+                                        anim::Curve::Standard,
+                                        &this.clock,
+                                    );
                                 let cover_scale = show_cover.then(|| {
                                     this.row_cover_scales
                                         .entry(format!("page-cover:{key}"))
@@ -4324,7 +4161,7 @@ impl AppRoot {
                         .h_full()
                         .w_full()
                         .on_scroll_wheel(cx.listener(|this, _, _, _| {
-                            this.page_follow.active = false;
+                            this.page_scroll_modal.follow.active = false;
                         }))
                         .track_scroll(scroll),
                     ),
@@ -4661,9 +4498,9 @@ impl Render for AppRoot {
             })
             .detach();
         }
-        let following = Self::apply_follow(&mut self.library_follow, &self.scroll, self.clock.now)
-            | Self::apply_follow(&mut self.page_follow, &self.page_scroll, self.clock.now)
-            | Self::apply_follow(&mut self.queue_follow, &self.queue_scroll, self.clock.now);
+        let following = self.library_scroll.apply(self.clock.now)
+            | self.page_scroll_modal.apply(self.clock.now)
+            | self.queue_scroll_modal.apply(self.clock.now);
         if following {
             window.request_animation_frame();
         }

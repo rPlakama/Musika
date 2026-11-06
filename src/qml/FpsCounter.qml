@@ -15,7 +15,6 @@
 // along with this program; if not, see <https://www.gnu.org/licenses/>.
 
 import QtQuick
-import musika
 
 // Debug-only frame-time overlay. `FrameAnimation` gives the interval between
 // rendered frames; keep the last ~10 s and show the instantaneous, top,
@@ -56,31 +55,31 @@ Item {
         spacing: 1
 
         AppText {
-            text: "Current: " + format(root.currentFps, 1) + " FPS"
+            text: "Current: " + root.format(root.currentFps, 1) + " FPS"
             color: "white"; font.pixelSize: 11; font.family: "monospace"
         }
         AppText {
-            text: "Top: " + format(root.topFps, 1) + " FPS"
+            text: "Top: " + root.format(root.topFps, 1) + " FPS"
             color: "white"; font.pixelSize: 11; font.family: "monospace"
         }
         AppText {
-            text: "Min: " + format(root.minFps, 1) + " FPS"
+            text: "Min: " + root.format(root.minFps, 1) + " FPS"
             color: "white"; font.pixelSize: 11; font.family: "monospace"
         }
         AppText {
-            text: "Low 1%: " + format(root.lowOnePercentFps, 1) + " FPS"
+            text: "Low 1%: " + root.format(root.lowOnePercentFps, 1) + " FPS"
             color: "white"; font.pixelSize: 11; font.family: "monospace"
         }
         AppText {
-            text: "Average: " + format(root.averageFps, 1) + " FPS"
+            text: "Average: " + root.format(root.averageFps, 1) + " FPS"
             color: "white"; font.pixelSize: 11; font.family: "monospace"
         }
         AppText {
-            text: "AverageMS: " + format(root.averageMs, 2) + " ms"
+            text: "AverageMS: " + root.format(root.averageMs, 2) + " ms"
             color: "white"; font.pixelSize: 11; font.family: "monospace"
         }
         AppText {
-            text: "Delay: " + format(root.delayMs, 2) + " ms"
+            text: "Delay: " + root.format(root.delayMs, 2) + " ms"
             color: "white"; font.pixelSize: 11; font.family: "monospace"
         }
     }
@@ -106,7 +105,7 @@ Item {
     }
 
     // Trim trailing zeros: 60.0 FPS -> 60 FPS, 16.70 ms -> 16.7 ms.
-    function format(value, digits) {
+    function format(value: real, digits: int): string {
         return Number(value).toFixed(digits)
             .replace(/\.0+$/, "")
             .replace(/(\.\d*?)0+$/, "$1");

@@ -14,8 +14,9 @@
 // You should have received a copy of the GNU General Public License
 // along with this program; if not, see <https://www.gnu.org/licenses/>.
 
+pragma ComponentBehavior: Bound
+
 import QtQuick
-import musika
 import "Theme.js" as Theme
 
 // Elegant shutdown: fade the scrim in, spawn the white "Bye!" letters with a

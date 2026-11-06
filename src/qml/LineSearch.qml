@@ -15,7 +15,6 @@
 // along with this program; if not, see <https://www.gnu.org/licenses/>.
 
 import QtQuick
-import QtQuick.Controls
 import QtQuick.Layouts
 import musika
 import "Theme.js" as Theme

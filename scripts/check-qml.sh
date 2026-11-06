@@ -23,8 +23,12 @@
 # `qmlformat` only parses; it cannot know whether a type exists. `qmllint`
 # resolves the QtQuick modules, so a typo like `Alpha` (not a QtQuick.Particles
 # type) fails here instead of at `cargo run`'s engine load. The `musika` module
-# is registered from Rust at runtime, so linting cannot see its types:
-# `Palette` members and `Backend` accesses are expected noise.
+# is registered from Rust at runtime, so its type information is generated for
+# tooling into `scripts/lint/musika` (see `scripts/gen-musika-qmltypes.sh`):
+# `Palette` is fully typed so a misspelled role fails here; `Backend` is a
+# declared singleton without members, so its dynamic surface stays filtered
+# below like `QQuickItem`/`QObject`. `.qmllint.ini` records the project's
+# warning levels (notably `UnusedImports=warning`).
 set -eu
 
 cd "$(dirname "$0")/.."
@@ -48,19 +52,18 @@ export QML2_IMPORT_PATH
 log=$(mktemp)
 trap 'rm -f "$log"' EXIT
 
-# `-E` reads QML2_IMPORT_PATH (QtQuick, QtQuick.Particles, …).
-"$qmllint_bin" -E src/qml/*.qml >"$log" 2>&1 || true
+# `-E` reads QML2_IMPORT_PATH (QtQuick, QtQuick.Particles, …); `-I` adds the
+# checked-in lint-only `musika` module so Palette/Backend resolve.
+"$qmllint_bin" -E -I "$PWD/scripts/lint" src/qml/*.qml >"$log" 2>&1 || true
 
-# The runtime `musika` module and its derived noise are expected; any other
-# import/type/syntax problem is a real, engine-time failure. The filtered
-# `missing-property` cases are the runtime-registered Palette roles and the
-# dynamic surface methods QML reaches through `Item` — a typo on a real
-# component still fails.
+# The remaining filtered `missing-property` cases are dynamic surfaces: the
+# Backend singleton's large slot/property set (not mirrored in the lint
+# qmltypes) and the dynamic methods QML reaches through `Item`. Palette roles
+# are fully typed now, and every delegate-heavy file carries
+# `ComponentBehavior: Bound`, so unqualified access is a hard failure again.
 problems=$(grep -E '^(Warning|Error):' "$log" \
-    | grep -vE 'Failed to import musika|Warnings occurred while importing module "musika"|\[unqualified\]' \
-    | grep -vE 'not found on type "(QQuickPalette|QQuickItem|QObject)"' \
-    | grep -vE 'RowModel was not found' \
-    | grep -E '\[(import|syntax|compiler|unresolved-type|missing-type|missing-property)\]|^Error:' || true)
+    | grep -vE 'not found on type "(QQuickBackend|QQuickItem|QObject)"' \
+    | grep -E '\[(import|syntax|compiler|unresolved-type|missing-type|missing-property|incompatible-type|unused-imports)\]|^Error:' || true)
 
 if [ -n "$problems" ]; then
     echo "$problems" >&2

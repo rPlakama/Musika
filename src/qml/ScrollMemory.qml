@@ -32,7 +32,7 @@ QtObject {
     id: root
 
     property bool _hydrated: false
-    property var persistTimer: Timer {
+    property Timer persistTimer: Timer {
         interval: 500
         repeat: false
         onTriggered: root.flush()

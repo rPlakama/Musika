@@ -135,7 +135,7 @@ Item {
     component FormField: TextField {
         id: field
 
-        property real formHeight: 0
+        required property real formHeight
 
         implicitHeight: field.formHeight * 0.049
         placeholderTextColor: Palette.onSurfaceVariant

@@ -7,7 +7,6 @@
 // (at your option) any later version.
 
 import QtQuick
-import musika
 
 // Album/artist/fullscreen ambience: soft radial pools behind the sharp
 // artwork. `showCover` lets the fullscreen split own its own cover pane.

@@ -14,6 +14,8 @@
 // You should have received a copy of the GNU General Public License
 // along with this program; if not, see <https://www.gnu.org/licenses/>.
 
+pragma ComponentBehavior: Bound
+
 import QtQuick
 import QtQuick.Layouts
 import musika
@@ -549,9 +551,9 @@ Item {
                             }
 
                             RowHighlight {
-                                current: index === root.queueCursor
-                                hovered: index === queueContent.hoveredIndex
-                                selected: queueContent.selected(index)
+                                current: row.index === root.queueCursor
+                                hovered: row.index === queueContent.hoveredIndex
+                                selected: queueContent.selected(row.index)
                                 overflow: queueContent.bleed
                             }
 
@@ -561,13 +563,13 @@ Item {
                                 rowHeight: row.height
                                 metrics: rowMetrics
                                 emphasized: row.emphasized
-                                current: index === root.queueCursor
+                                current: row.index === root.queueCursor
                                 showCover: false
                                 showSubtitle: row.subtitle.length > 0
                                 title: row.title
                                 subtitle: row.subtitle
                                 meta: row.duration
-                                titleColor: index === root.queueCursor ? Palette.onSecondaryContainer : Palette.onSurface
+                                titleColor: row.index === root.queueCursor ? Palette.onSecondaryContainer : Palette.onSurface
                                 reserveMeta: true
                                 metaAlignRight: true
                                 leftMargin: row.width * 0.01
@@ -581,7 +583,7 @@ Item {
                                 markSongId: row.songId
                                 markStarred: row.starred
                                 searchQuery: queueContent.searchQuery
-                                searchCurrent: index === queueContent.searchCurrentRow
+                                searchCurrent: row.index === queueContent.searchCurrentRow
                             }
                         }
                     }

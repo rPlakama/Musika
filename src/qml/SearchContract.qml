@@ -27,11 +27,11 @@ import QtQuick
 QtObject {
     id: root
 
-    property var model: null
-    property var view: null
+    required property var model
+    required property var view
     /// The model roles to read, in paint order (the selectable-text
     /// contract); cells for absent roles come back empty.
-    property var fields: ["title"]
+    property list<string> fields: ["title"]
 
     /// Sparse array indexed by absolute row: visible rows carry their cell
     /// strings; off-band rows are holes. `length` is the model count, so

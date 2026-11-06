@@ -18,7 +18,6 @@ import QtQuick
 import QtQuick.Effects
 import QtQuick.VectorImage
 import musika
-import "Theme.js" as Theme
 
 // Reusable recolourable SVG icon (roadmap D-6). Assets keep baked white fills
 // (VectorImage cannot tint; re-bake with `scripts/bake-icons-white.sh`);

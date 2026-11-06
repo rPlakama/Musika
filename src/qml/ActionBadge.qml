@@ -15,7 +15,6 @@
 // along with this program; if not, see <https://www.gnu.org/licenses/>.
 
 import QtQuick
-import musika
 import "Theme.js" as Theme
 
 // Transient action feedback in the lower-right corner. The first action shows

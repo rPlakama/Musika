@@ -16,7 +16,6 @@
 
 import QtQuick
 import QtQuick.Window
-import "Theme.js" as Theme
 
 // Cover/artist art with a fade-in once decoded (POLISHAUDIT §3). Drop-in for
 // the inline `Image { visible: status === Image.Ready }` blocks: the caller

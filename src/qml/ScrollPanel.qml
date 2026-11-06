@@ -152,7 +152,7 @@ Rectangle {
 
     /// `V`: the cursor moves here (the panel owns it), the anchor widens.
     function selectAll() {
-        if (!selectable || count === 0)
+        if (!selectable || root.count === 0)
             return;
         currentIndex = count - 1;
         content.selectAllRows();
@@ -296,7 +296,7 @@ Rectangle {
             root.yankRows(action === "yank_row");
             return;
         }
-        if (count === 0)
+        if (root.count === 0)
             return;
         // VI-7: the count register rides the movement (`3j`, `10l`, `5G`).
         var steps = Math.max(1, Backend.keyCount);
@@ -405,7 +405,7 @@ Rectangle {
     
             FadeText {
                 anchors.centerIn: parent
-                visible: !root.loading && count === 0 && root.emptyText.length > 0
+                visible: !root.loading && root.count === 0 && root.emptyText.length > 0
                 text: root.emptyText
                 color: Palette.onSurfaceVariant
                 font.pixelSize: Theme.fontSize("body", root.height)
@@ -415,7 +415,7 @@ Rectangle {
             // UI-22/UI-38: the shared wait state while the first payload lands.
             SkeletonList {
                 anchors.fill: parent
-                visible: root.loading && count === 0
+                visible: root.loading && root.count === 0
             }
         }
     }

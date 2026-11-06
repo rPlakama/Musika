@@ -15,7 +15,6 @@
 // along with this program; if not, see <https://www.gnu.org/licenses/>.
 
 import QtQuick
-import musika
 import "Theme.js" as Theme
 
 // Text that fades in when it is created. Drop-in replacement for `Text`.

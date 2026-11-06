@@ -16,7 +16,6 @@
 
 import QtQuick
 import QtQuick.Layouts
-import QtQuick.VectorImage
 import musika
 import "Theme.js" as Theme
 

@@ -14,6 +14,8 @@
 // You should have received a copy of the GNU General Public License
 // along with this program; if not, see <https://www.gnu.org/licenses/>.
 
+pragma ComponentBehavior: Bound
+
 import QtQuick
 import QtQuick.Layouts
 import QtQuick.Effects
@@ -1342,7 +1344,7 @@ Rectangle {
 
                     TapHandler {
                         onTapped: {
-                            root.clearHeaderStops(false);
+                            root.clearHeaderStops();
                             root.onArtist = true;
                             root.activateArtist();
                         }
@@ -1393,7 +1395,7 @@ Rectangle {
                         icon: ""
                         onClicked: {
                             root.chipScope = 0;
-                            root.clearHeaderStops(false);
+                            root.clearHeaderStops();
                             root.toggleArtistCache();
                         }
 
@@ -1413,7 +1415,7 @@ Rectangle {
                         icon: "qrc:/app/icons/outline-shuffle.svg"
                         onClicked: {
                             root.chipScope = 1;
-                            root.clearHeaderStops(false);
+                            root.clearHeaderStops();
                             root.shuffleArtist();
                         }
                         ScopeRing { shown: root.isArtist && root.chipScope === 1 }
@@ -1425,7 +1427,7 @@ Rectangle {
                         icon: ""
                         onClicked: {
                             root.chipScope = 2;
-                            root.clearHeaderStops(false);
+                            root.clearHeaderStops();
                             root.toggleArtistFavorite();
                         }
                         FavoriteButton {
@@ -1493,7 +1495,7 @@ Rectangle {
                 TapHandler {
                     enabled: root.albumNotes.length > 0
                     onTapped: {
-                        root.clearHeaderStops(false);
+                        root.clearHeaderStops();
                         root.descriptionRequested();
                     }
                 }

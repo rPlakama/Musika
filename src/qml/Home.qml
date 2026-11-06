@@ -14,10 +14,11 @@
 // You should have received a copy of the GNU General Public License
 // along with this program; if not, see <https://www.gnu.org/licenses/>.
 
+pragma ComponentBehavior: Bound
+
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
-import QtQuick.Effects
 import musika
 import "Theme.js" as Theme
 
@@ -1202,7 +1203,7 @@ Item {
         Behavior on opacity { Anim { duration: Theme.motion.emphasized; easing.bezierCurve: root.nowPlayingExpanded ? Theme.ease.decelerate : Theme.ease.accelerate } }
     }
 
-    readonly property Item nowPlaying: nowPlayingLoader.item
+    readonly property NowPlaying nowPlaying: nowPlayingLoader.item as NowPlaying
 
     /// VI-8a: the row yank/paste verbs are gated on the queue drawer — when
     /// it is closed the row verbs are inert (the status of the row clipboard
@@ -1219,7 +1220,7 @@ Item {
     QueueDrawer {
         id: queueDrawer
         anchors.fill: parent
-        backdrop: (root.nowPlayingExpanded && nowPlaying) ? nowPlaying : shell
+        backdrop: (root.nowPlayingExpanded && root.nowPlaying) ? root.nowPlaying : shell
         onQuickAction: (target, actions) => root.armQuickActions(target, actions)
     }
 
@@ -1237,7 +1238,7 @@ Item {
         // ARC-I: while the search is open its column arms the same overlay,
         // which must paint above the search panel (search z = zOverlay).
         z: searchOverlay.opened ? Theme.zOverlay + 1 : Theme.zRegion + 1
-        backdrop: (root.nowPlayingExpanded && nowPlaying) ? nowPlaying : (searchOverlay.opened ? searchOverlay : (queueDrawer.open ? queueDrawer : shell))
+        backdrop: (root.nowPlayingExpanded && root.nowPlaying) ? root.nowPlaying : (searchOverlay.opened ? searchOverlay : (queueDrawer.open ? queueDrawer : shell))
         // UI-60 "bright": the rating step's stars outlive the tile collapse.
         onRatingStepped: (x, y) => ratingBurst.burstAt(x, y)
     }
@@ -1258,7 +1259,7 @@ Item {
         maxHeight: root.height - root.playH - root.height * 0.06
         z: Theme.zToast
         // UI-55: blur whatever the toast actually floats over.
-        backdrop: (root.nowPlayingExpanded && nowPlaying) ? nowPlaying : shell
+        backdrop: (root.nowPlayingExpanded && root.nowPlaying) ? root.nowPlaying : shell
         onRetry: {
             if (toast.kind === "sync")
                 Backend.syncLibrary();
@@ -1276,7 +1277,7 @@ Item {
         anchors.bottomMargin: root.playH + root.height * 0.02
         maxHeight: root.height - root.playH - root.height * 0.06
         z: Theme.zToast - 1
-        backdrop: (root.nowPlayingExpanded && nowPlaying) ? nowPlaying : shell
+        backdrop: (root.nowPlayingExpanded && root.nowPlaying) ? root.nowPlaying : shell
     }
 
     ActionBadge {
@@ -1321,7 +1322,7 @@ Item {
         id: searchOverlay
         anchors.fill: parent
         // UI-55: blur the shell, or the fullscreen player when it is up.
-        backdrop: (root.nowPlayingExpanded && nowPlaying) ? nowPlaying : shell
+        backdrop: (root.nowPlayingExpanded && root.nowPlaying) ? root.nowPlaying : shell
 
         // ARC-I: the active column arms the shared Alt overlay.
         onQuickAction: (target, actions) => root.armQuickActions(target, actions)
@@ -1379,7 +1380,7 @@ Item {
         // Album/artist activation keeps its navigation; the album-page IPC
         // flow below clears the flag again when it pushes the album page.
         function onPlaybackStarted() {
-            nowPlayingExpanded = true;
+            root.nowPlayingExpanded = true;
         }
         // P-6 S2: restored session. The queue loads paused (no autoplay, no
         // fullscreen) and the remembered album page reopens; both are pumped

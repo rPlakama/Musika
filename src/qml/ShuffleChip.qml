@@ -16,7 +16,6 @@
 
 import QtQuick
 import musika
-import "Theme.js" as Theme
 
 // The reusable shuffle toggle (VI-7's sibling): a press Fisher–Yates
 // shuffles the tab's whole source into the playback queue in one load

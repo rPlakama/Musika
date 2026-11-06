@@ -14,8 +14,9 @@
 // You should have received a copy of the GNU General Public License
 // along with this program; if not, see <https://www.gnu.org/licenses/>.
 
+pragma ComponentBehavior: Bound
+
 import QtQuick
-import QtQuick.Controls
 import QtQuick.Layouts
 import musika
 import "Theme.js" as Theme
@@ -45,7 +46,7 @@ Item {
     // UI-49: last query that already got the denied cue, so one response (or
     // one Enter) lights it once and holding a zero query never strobes.
     property string _zeroQuery: ""
-    readonly property var scopeTitles: ["Songs", "Albums", "Artists", "Playlists"]
+    readonly property list<string> scopeTitles: ["Songs", "Albums", "Artists", "Playlists"]
     /// The panel's stable height (chrome, row sizing and the panel itself).
     readonly property real panelRefHeight: root.height * 0.78
     /// Only fetch the rows the list can actually paint. Before the layout has

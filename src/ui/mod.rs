@@ -862,6 +862,9 @@ impl AppRoot {
                     .child(
                         div()
                             .min_h(px(52.0))
+                            .w_full()
+                            .px_2()
+                            .py_2()
                             .flex()
                             .items_center()
                             .justify_center()
@@ -870,6 +873,7 @@ impl AppRoot {
                             .text_size(px(11.0))
                             .text_color(rgb(if login.error.is_some() { 0xF9DEDC } else { ON_VARIANT }))
                             .text_center()
+                            .whitespace_normal()
                             .child(login.error.clone().unwrap_or_else(|| {
                                 if login.offline_available {
                                     "Tab moves · Enter logs in · F2 offline".to_string()
@@ -1009,6 +1013,7 @@ impl AppRoot {
                             .flex_1()
                             .text_size(px(12.0))
                             .text_color(rgb(ON_SURFACE))
+                            .whitespace_normal()
                             .child(toast.message.clone()),
                     )
                     .when_some(retry, |this, retry| {
@@ -1465,6 +1470,8 @@ impl AppRoot {
                         div()
                             .text_size(px(19.0))
                             .text_color(rgb(if offline { 0xEFB8C8 } else { ON_VARIANT }))
+                            .whitespace_nowrap()
+                            .text_ellipsis()
                             .child(welcome),
                     ),
             )
@@ -1475,8 +1482,10 @@ impl AppRoot {
                     .gap_3()
                     .child(
                         div()
-                            .text_size(px(16.0))
+                            .text_size(px(14.0))
                             .text_color(rgb(ON_VARIANT))
+                            .whitespace_nowrap()
+                            .text_ellipsis()
                             .child(report),
                     )
                     .child(icon("reload-ui-2-svgrepo-com.svg", 18.0, ON_SURFACE))
@@ -1601,20 +1610,23 @@ impl AppRoot {
                                         .min_w_0()
                                         .flex_1()
                                         .ml_3()
+                                        .overflow_hidden()
                                         .child(
                                             div()
                                                 .text_size(px(18.0))
                                                 .font_weight(gpui::FontWeight::SEMIBOLD)
-                                                .whitespace_nowrap()
-                                                .text_ellipsis()
+                                                .whitespace_normal()
+                                                .max_h(px(34.0))
+                                                .overflow_hidden()
                                                 .child(title),
                                         )
                                         .child(
                                             div()
                                                 .text_size(px(12.0))
                                                 .text_color(rgb(ON_VARIANT))
-                                                .whitespace_nowrap()
-                                                .text_ellipsis()
+                                                .whitespace_normal()
+                                                .max_h(px(22.0))
+                                                .overflow_hidden()
                                                 .child(subtitle),
                                         ),
                                 )
@@ -1719,8 +1731,11 @@ impl AppRoot {
                     .children(visible.into_iter().map(|(index, _, text)| {
                         let is_active = index == active;
                         div()
+                            .w(px(560.0))
                             .text_size(px(if is_active { 18.0 } else { 14.0 }))
                             .text_color(rgb(if is_active { ON_SURFACE } else { ON_VARIANT }))
+                            .text_center()
+                            .whitespace_normal()
                             .when(is_active, |this| this.font_weight(gpui::FontWeight::SEMIBOLD))
                             .child(text)
                     })),
@@ -1968,12 +1983,15 @@ impl AppRoot {
                     .child(
                         div()
                             .h(px(72.0))
+                            .w_full()
+                            .px_4()
                             .flex()
                             .items_center()
                             .justify_center()
                             .text_size(px(10.0))
                             .text_color(rgb(ON_VARIANT))
                             .text_center()
+                            .whitespace_normal()
                             .child("Type to filter · Ctrl-H/L or Tab scope · ↑/↓ rows ·\nEnter open/play · Esc normal mode"),
                     ),
             )
@@ -2501,7 +2519,22 @@ fn cover_path(url: &str) -> Option<std::path::PathBuf> {
     if clean.is_empty() {
         return None;
     }
-    reqwest::Url::parse(clean).ok()?.to_file_path().ok()
+    let path = reqwest::Url::parse(clean).ok()?.to_file_path().ok()?;
+    // GPUI will not size a multi-MB 3600 px cover in the row/hero decoders;
+    // prefer the generated 320 px thumbnail when one exists.
+    let large = path
+        .metadata()
+        .map(|meta| meta.len() > 512 * 1024)
+        .unwrap_or(false);
+    if large
+        && let Some(stem) = path.file_stem().and_then(|stem| stem.to_str())
+    {
+        let thumb = path.with_file_name(format!("{stem}.thumb.jpg"));
+        if thumb.is_file() {
+            return Some(thumb);
+        }
+    }
+    Some(path)
 }
 
 fn art(path: Option<std::path::PathBuf>, size: f32) -> gpui::AnyElement {

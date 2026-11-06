@@ -57,6 +57,8 @@ mod session;
 mod sqlite;
 mod startup;
 mod status;
+#[cfg(feature = "gpuui")]
+mod ui;
 
 #[cfg(test)]
 mod test;
@@ -183,6 +185,7 @@ fn load_dotenv() {
     }
 }
 
+#[cfg_attr(feature = "gpuui", allow(unreachable_code))]
 fn main() {
     // Keep glibc from creating a new arena per decoder thread. Each arena
     // retains its whole-track download buffer pages after the thread exits,
@@ -230,6 +233,16 @@ fn main() {
         }
     };
     crate::startup::trace("db.init");
+
+    // GPUI M0: opt-in front end on the same DB spine; Qt stays default.
+    #[cfg(feature = "gpuui")]
+    {
+        let _ = &dbs;
+        #[cfg(debug_assertions)]
+        let _ = db_started;
+        crate::ui::run();
+        return;
+    }
     #[cfg(debug_assertions)]
     crate::debug_info::report("db.init", db_started);
 

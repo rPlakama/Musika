@@ -184,7 +184,26 @@
           clippy
           vulkan-tools # vulkaninfo for test::benchmark::vulkan_probe
           qt
+          # GPUI (Zed) display/font/Vulkan runtime dependencies.
+          wayland
+          wayland-protocols
+          libxkbcommon
+          libx11
+          libxcursor
+          libxrandr
+          libxi
+          libxcb
+          fontconfig
+          freetype
+          vulkan-loader
         ];
+
+        LD_LIBRARY_PATH = pkgs.lib.makeLibraryPath (
+          with pkgs; [
+            wayland libxkbcommon libx11 libxcursor libxrandr libxi libxcb
+            fontconfig freetype libglvnd vulkan-loader
+          ]
+        );
 
         QMAKE = "${qmakeFixed}/bin/qmake";
         QT_VERSION_MAJOR = "6";

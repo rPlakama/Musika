@@ -1062,6 +1062,7 @@ impl AppRoot {
 
     fn select(&mut self, index: usize) {
         self.view.select(index);
+        self.hovered_row = None;
         self.follow_library(true);
         self.remember_current();
     }
@@ -2961,7 +2962,7 @@ impl AppRoot {
                         let selected = index == this.view.cursor
                             || this.view.selection.contains(this.view.cursor, index);
                         let hovered = this.hovered_row == Some(index);
-                        let emphasis = if selected || hovered { 1.08 } else { 1.0 };
+                        let emphasis = if selected { 1.08 } else { 1.0 };
                         let striped = index % 2 != 0;
                         let target = if selected {
                             0x4A4458FF
@@ -3002,7 +3003,7 @@ impl AppRoot {
                             .entry(format!("library:{}", row.id))
                             .or_insert_with(|| anim::Behavior::new(1.0))
                             .target(
-                                if selected || hovered { 1.20 } else { 1.0 },
+                                if selected { 1.20 } else { 1.0 },
                                 anim::QUICK_MS,
                                 anim::Curve::Standard,
                                 &this.clock,
@@ -3021,7 +3022,7 @@ impl AppRoot {
                                 .h(px(row_h))
                                 .px_1()
                                 .rounded_sm()
-                                .bg(rgba(color))
+                                .bg(if selected { rgb(0x4A4458) } else { rgba(color) })
                                 .cursor_pointer()
                                 .on_hover(cx.listener(move |this, hovered: &bool, _, cx| {
                                     if *hovered {
@@ -4075,7 +4076,7 @@ impl AppRoot {
                                     .entry(format!("page-text:{key}"))
                                     .or_insert_with(|| anim::Behavior::new(1.0))
                                     .target(
-                                        if selected || hovered { 1.08 } else { 1.0 },
+                                        if selected { 1.08 } else { 1.0 },
                                         anim::QUICK_MS,
                                         anim::Curve::Standard,
                                         &this.clock,
@@ -4085,7 +4086,7 @@ impl AppRoot {
                                         .entry(format!("page-cover:{key}"))
                                         .or_insert_with(|| anim::Behavior::new(1.0))
                                         .target(
-                                            if selected || hovered { 1.20 } else { 1.0 },
+                                            if selected { 1.20 } else { 1.0 },
                                             anim::QUICK_MS,
                                             anim::Curve::Standard,
                                             &this.clock,
@@ -4105,7 +4106,7 @@ impl AppRoot {
                                         .h(px(row_h))
                                         .px_4()
                                         .cursor_pointer()
-                                        .bg(rgba(color))
+                                        .bg(if selected { rgb(0x4A4458) } else { rgba(color) })
                                         .on_hover(cx.listener(move |this, hovered: &bool, _, cx| {
                                             if *hovered {
                                                 this.hovered_page = Some(index);

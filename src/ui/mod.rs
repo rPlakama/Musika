@@ -122,10 +122,7 @@ pub fn run() {
             KeyBinding::new("r", Refresh, None),
             KeyBinding::new("enter", Enter, None),
             KeyBinding::new("v", Visual, None),
-            KeyBinding::new("/", LineSearch, None),
             KeyBinding::new("shift-q", Home, None),
-            KeyBinding::new("?", LyricsOverlay, None),
-            KeyBinding::new("shift-/", LyricsOverlay, None),
             KeyBinding::new("i", InsertMode, None),
             KeyBinding::new("ctrl-h", SearchScopePrev, None),
             KeyBinding::new("ctrl-l", SearchScopeNext, None),
@@ -380,6 +377,7 @@ struct AppRoot {
     notes: Option<(String, String)>,
     description: Option<DescriptionState>,
     lyrics_overlay: bool,
+    lyrics_overlay_wanted: bool,
     line_search: line_search::LineSearchState,
     line_search_anim: anim::Behavior,
     alt: AltGesture,
@@ -480,6 +478,7 @@ impl AppRoot {
             notes: None,
             description: None,
             lyrics_overlay: false,
+            lyrics_overlay_wanted: false,
             line_search: line_search::LineSearchState::new(),
             line_search_anim: anim::Behavior::new(0.0),
             alt: AltGesture::new(),
@@ -1727,6 +1726,7 @@ impl AppRoot {
         self.queue_open = false;
         self.fullscreen = false;
         self.lyrics_overlay = false;
+        self.lyrics_overlay_wanted = false;
         self.description = None;
         self.page = None;
         self.travel = Travel::default();
@@ -2148,10 +2148,39 @@ impl AppRoot {
         });
     }
 
+    fn lyrics_inline(&self) -> bool {
+        let inline_width = (self.win_w * 0.95 - self.win_w * 0.012) / 2.0;
+        self.lyrics.as_ref().is_some_and(|lyrics| !lyrics.lines.is_empty()) && inline_width >= 300.0
+    }
+
+    fn refresh_lyrics_overlay(&mut self) {
+        if !self.fullscreen {
+            self.lyrics_overlay = false;
+            self.lyrics_overlay_wanted = false;
+            return;
+        }
+        let has_lyrics = self
+            .lyrics
+            .as_ref()
+            .is_some_and(|lyrics| !lyrics.lines.is_empty());
+        let inline = self.lyrics_inline();
+        if !has_lyrics {
+            self.lyrics_overlay = false;
+            self.lyrics_overlay_wanted = false;
+            return;
+        }
+        if self.lyrics_overlay_wanted && !inline {
+            self.lyrics_overlay = true;
+        } else if inline {
+            self.lyrics_overlay = false;
+        }
+    }
+
     fn on_lyrics_overlay(&mut self, _: &LyricsOverlay, _window: &mut Window, cx: &mut Context<Self>) {
         if self.fullscreen {
             if self.lyrics.as_ref().is_some_and(|lyrics| !lyrics.lines.is_empty()) {
-                self.lyrics_overlay = !self.lyrics_overlay;
+                self.lyrics_overlay_wanted = !self.lyrics_overlay_wanted;
+                self.refresh_lyrics_overlay();
             }
         } else if self.page.as_ref().is_some_and(|page| {
             self.notes.as_ref().is_some_and(|(id, notes)| *id == page.descriptor.id && !notes.is_empty())
@@ -2226,7 +2255,17 @@ impl AppRoot {
             return;
         }
         if self.search.is_none() || !self.search_open {
-            if event.keystroke.key == "escape" {
+            let key = event.keystroke.key.as_str();
+            if key == "/" || key == "?" || key == "slash" {
+                cx.stop_propagation();
+                if event.keystroke.modifiers.shift || key == "?" {
+                    self.on_lyrics_overlay(&LyricsOverlay, _window, cx);
+                } else {
+                    self.on_line_search(&LineSearch, _window, cx);
+                }
+                return;
+            }
+            if key == "escape" {
                 self.on_back(&Back, _window, cx);
             }
             return;
@@ -2460,6 +2499,7 @@ impl AppRoot {
         }
         if self.lyrics_overlay {
             self.lyrics_overlay = false;
+            self.lyrics_overlay_wanted = false;
             cx.notify();
             return;
         }
@@ -4073,6 +4113,7 @@ impl Render for AppRoot {
         self.frames = self.frames.wrapping_add(1);
         self.win_w = f32::from(window.viewport_size().width);
         self.win_h = f32::from(window.viewport_size().height);
+        self.refresh_lyrics_overlay();
         if self.trace && self.frames.is_multiple_of(120) {
             crate::debug_log!("GPUI trace: frame {}", self.frames);
         }

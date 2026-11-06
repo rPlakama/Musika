@@ -55,6 +55,7 @@ pub enum Event {
     Header {
         server_url: String,
         username: String,
+        server_type: String,
         last_sync: Option<String>,
         counts: (i64, i64, i64),
     },
@@ -90,6 +91,7 @@ impl Bridge {
                         Event::Header {
                             server_url: credentials.server_url,
                             username: credentials.username,
+                            server_type: credentials.server_type,
                             last_sync: status.as_ref().and_then(|status| status.last_sync.clone()),
                             counts: status
                                 .map(|status| (status.artists, status.albums, status.songs))
@@ -301,12 +303,12 @@ async fn library_rows(
                     id: album.id.clone(),
                     kind: RowKind::Album,
                     title: album.title,
-                    subtitle: album.artist.unwrap_or_default(),
-                    meta: format!(
-                        "{} · {}",
-                        songs_label(album.song_count),
-                        crate::browse::rows::format_duration(Some(album.duration as i32))
+                    subtitle: format!(
+                        "{}{}",
+                        album.artist.unwrap_or_default(),
+                        album.year.map(|year| format!(" · {year}")).unwrap_or_default()
                     ),
+                    meta: if album.song_count == 1 { "1 track".to_string() } else { format!("{} tracks", album.song_count) },
                     cover_url: crate::covers::url_for(album.cover_art.as_deref(), &covers),
                     song_id: String::new(),
                     album_id: album.id,
@@ -430,11 +432,12 @@ async fn page_data(
                 title: album.title,
                 subtitle: album.artist.unwrap_or_default(),
                 meta: format!(
-                    "{} · {}",
-                    songs_label(album.song_count),
-                    crate::browse::rows::format_duration(Some(album.duration as i32))
+                    "{} Tracks{}{}",
+                    album.song_count,
+                    album.year.map(|year| format!(" · {year}")).unwrap_or_default(),
+                    if album.duration > 0 { format!(" · {} Minutes", (album.duration + 59) / 60) } else { String::new() }
                 ),
-                cover_url: crate::covers::url_for(album.cover_art.as_deref(), &covers),
+                cover_url: thumbify(crate::covers::url_for(album.cover_art.as_deref(), &covers)),
             };
             let rows = songs
                 .into_iter()
@@ -471,7 +474,7 @@ async fn page_data(
                 title: artist.name,
                 subtitle: format!("{} albums", artist.album_count),
                 meta: String::new(),
-                cover_url: crate::covers::url_for(artist.cover_art.as_deref(), &covers),
+                cover_url: thumbify(crate::covers::url_for(artist.cover_art.as_deref(), &covers)),
             };
             let rows = albums
                 .into_iter()
@@ -485,7 +488,7 @@ async fn page_data(
                         songs_label(album.song_count),
                         crate::browse::rows::format_duration(Some(album.duration as i32))
                     ),
-                    cover_url: crate::covers::url_for(album.cover_art.as_deref(), &covers),
+                    cover_url: thumbify(crate::covers::url_for(album.cover_art.as_deref(), &covers)),
                     song_id: String::new(),
                     album_id: album.id,
                     starred: album.starred.is_some(),
@@ -625,4 +628,11 @@ async fn queue_for_song(
 
 fn send_event(tx: &UnboundedSender<Event>, event: Event) {
     let _ = tx.send(event);
+}
+
+fn thumbify(url: String) -> String {
+    if url.is_empty() || url.contains(".thumb.") || !url.contains(".jpg") {
+        return url;
+    }
+    url.replacen(".jpg", ".thumb.jpg", 1)
 }

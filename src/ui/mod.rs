@@ -27,7 +27,7 @@ mod state;
 
 use gpui::{
     App, Application, Bounds, Context, FocusHandle, KeyBinding, Render, ScrollStrategy, Window,
-    WindowBounds, WindowOptions, actions, div, img, prelude::*, px, relative, rgb, rgba, size, uniform_list,
+    AssetSource, WindowBounds, WindowOptions, actions, div, img, prelude::*, px, relative, rgb, rgba, size, svg, uniform_list,
     UniformListScrollHandle,
 };
 
@@ -88,7 +88,9 @@ const PRIMARY: u32 = 0xD0BCFF;
 const OUTLINE: u32 = 0x49454F;
 
 pub fn run() {
-    Application::new().run(|cx: &mut App| {
+    Application::new()
+        .with_assets(Assets)
+        .run(|cx: &mut App| {
         cx.bind_keys([
             KeyBinding::new("q", Back, None),
             KeyBinding::new("escape", Back, None),
@@ -158,6 +160,7 @@ pub fn run() {
 struct Header {
     server_url: String,
     username: String,
+    server_type: String,
     last_sync: Option<String>,
     counts: (i64, i64, i64),
 }
@@ -199,6 +202,27 @@ struct ToastState {
     message: String,
     retry: Option<RetryAction>,
     created_at: f64,
+}
+
+struct Assets;
+
+impl AssetSource for Assets {
+    fn load(&self, path: &str) -> anyhow::Result<Option<std::borrow::Cow<'static, [u8]>>> {
+        std::fs::read(path)
+            .map(Into::into)
+            .map_err(Into::into)
+            .map(Some)
+    }
+
+    fn list(&self, path: &str) -> anyhow::Result<Vec<gpui::SharedString>> {
+        Ok(std::fs::read_dir(path)?
+            .filter_map(|entry| {
+                Some(gpui::SharedString::from(
+                    entry.ok()?.path().to_string_lossy().into_owned(),
+                ))
+            })
+            .collect())
+    }
 }
 
 struct AppRoot {
@@ -342,12 +366,14 @@ impl AppRoot {
             Event::Header {
                 server_url,
                 username,
+                server_type,
                 last_sync,
                 counts,
             } => {
                 self.header = Some(Header {
                     server_url,
                     username,
+                    server_type,
                     last_sync,
                     counts,
                 });
@@ -423,6 +449,7 @@ impl AppRoot {
                 if page.descriptor != descriptor {
                     *page = PageState::new(descriptor.clone());
                 }
+                crate::debug_log!("GPUI: page cover={:?} title={}", header.cover_url, header.title);
                 page.header = header;
                 page.rows = rows;
                 page.loading = false;
@@ -447,6 +474,7 @@ impl AppRoot {
                 self.header = Some(Header {
                     server_url: server_url.clone(),
                     username: username.clone(),
+                    server_type: String::new(),
                     last_sync: None,
                     counts: self.header.as_ref().map(|header| header.counts).unwrap_or((0, 0, 0)),
                 });
@@ -1009,12 +1037,12 @@ impl AppRoot {
     }
 
     fn on_volume_up(&mut self, _: &VolumeUp, _window: &mut Window, cx: &mut Context<Self>) {
-        self.player.set_volume((self.player.volume() + 0.05).min(1.0));
+        self.player.set_volume((self.player.volume() + 5.0).min(100.0));
         cx.notify();
     }
 
     fn on_volume_down(&mut self, _: &VolumeDown, _window: &mut Window, cx: &mut Context<Self>) {
-        self.player.set_volume((self.player.volume() - 0.05).max(0.0));
+        self.player.set_volume((self.player.volume() - 5.0).max(0.0));
         cx.notify();
     }
 
@@ -1387,58 +1415,106 @@ impl AppRoot {
         }
     }
 
-    fn top_bar(&self, cx: &Context<Self>) -> impl IntoElement {
-        let account = self
-            .header
-            .as_ref()
-            .map(|header| {
-                format!(
-                    "{} · {}",
-                    header.username, header.server_url
-                )
-            })
-            .unwrap_or_else(|| "loading account…".to_string());
-
+    fn top_bar(&self, _cx: &Context<Self>) -> impl IntoElement {
+        let (welcome, offline) = match self.header.as_ref() {
+            Some(header) => (
+                format!("Welcome, {}", header.username),
+                false,
+            ),
+            None => ("Welcome".to_string(), false),
+        };
+        let report = match self.header.as_ref() {
+            Some(header) => {
+                let sync = header
+                    .last_sync
+                    .as_deref()
+                    .map(last_sync_text)
+                    .unwrap_or_else(|| "—".to_string());
+                let provider = if header.server_type.is_empty() {
+                    String::new()
+                } else {
+                    let mut name = header.server_type.clone();
+                    if let Some(first) = name.get_mut(0..1) {
+                        first.make_ascii_uppercase();
+                    }
+                    format!(", {name}")
+                };
+                format!("Last Sync: {sync}{provider}")
+            }
+            None => String::new(),
+        };
         div()
+            .relative()
+            .w_full()
+            .h(relative(0.0648))
+            .px_4()
+            .bg(rgb(0x1D1B20))
             .flex()
             .items_center()
-            .h(px(52.0))
-            .px_5()
-            .bg(rgb(SURFACE))
-            .child(div().text_size(px(18.0)).child("Musika"))
             .child(
                 div()
                     .flex()
                     .flex_1()
-                    .justify_center()
-                    .gap_1()
-                    .children(Scope::ALL.into_iter().enumerate().map(|(index, scope)| {
-                        let active = scope == self.view.scope;
+                    .items_center()
+                    .child(
                         div()
-                            .id(("scope", index))
-                            .px_3()
-                            .py_1()
-                            .rounded_md()
-                            .cursor_pointer()
-                            .text_size(px(13.0))
-                            .text_color(rgb(if active { PRIMARY } else { ON_VARIANT }))
-                            .when(active, |this| this.bg(rgb(SURFACE_HIGH)))
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                this.set_scope(scope);
-                                cx.notify();
-                            }))
-                            .child(scope.label())
-                    })),
+                            .text_size(px(19.0))
+                            .text_color(rgb(if offline { 0xEFB8C8 } else { ON_VARIANT }))
+                            .child(welcome),
+                    ),
             )
             .child(
                 div()
-                    .text_size(px(12.0))
-                    .text_color(rgb(ON_VARIANT))
-                    .child(account),
+                    .flex()
+                    .items_center()
+                    .gap_3()
+                    .child(
+                        div()
+                            .text_size(px(16.0))
+                            .text_color(rgb(ON_VARIANT))
+                            .child(report),
+                    )
+                    .child(icon("reload-ui-2-svgrepo-com.svg", 18.0, ON_SURFACE))
+                    .child(icon("delete-outline.svg", 18.0, ON_SURFACE)),
+            )
+            .child(
+                div()
+                    .absolute()
+                    .left_0()
+                    .right_0()
+                    .bottom_0()
+                    .h(px(1.0))
+                    .bg(rgb(OUTLINE)),
             )
     }
 
     fn list(&self, cx: &Context<Self>) -> impl IntoElement {
+        let title = self.view.scope.label();
+        let hint = "(Shift-J/K) cycle filter";
+        let order = format!("Shift-H / Shift-L  /  {}", self.view.order_label());
+        let header = div()
+            .flex()
+            .items_center()
+            .gap_3()
+            .w_full()
+            .h(relative(0.08))
+            .px_2()
+            .child(div().text_size(px(26.0)).font_weight(gpui::FontWeight::SEMIBOLD).child(title))
+            .child(
+                div()
+                    .text_size(px(11.0))
+                    .text_color(rgb(ON_VARIANT))
+                    .child(hint),
+            )
+            .child(div().flex_1())
+            .child(icon("outline-shuffle.svg", 14.0, ON_VARIANT))
+            .child(
+                div()
+                    .text_size(px(11.0))
+                    .text_color(rgb(ON_VARIANT))
+                    .child(order),
+            );
+
         if self.view.rows.is_empty() {
             let message = if self.view.loading {
                 "Loading…".to_string()
@@ -1449,101 +1525,119 @@ impl AppRoot {
             };
             return div()
                 .flex()
+                .flex_col()
                 .flex_1()
-                .items_center()
-                .justify_center()
-                .text_size(px(15.0))
-                .text_color(rgb(ON_VARIANT))
-                .child(message);
+                .px(px(12.0))
+                .child(header)
+                .child(
+                    div()
+                        .flex()
+                        .flex_1()
+                        .items_center()
+                        .justify_center()
+                        .text_size(px(15.0))
+                        .text_color(rgb(ON_VARIANT))
+                        .child(message),
+                );
         }
 
         let count = self.view.rows.len();
         let scroll = self.scroll.clone();
-        div().flex().flex_1().child(
-            uniform_list("library", count, cx.processor(move |this, range: std::ops::Range<usize>, _window, cx| {
-                let mut items = Vec::with_capacity(range.len());
-                for index in range {
-                    let row = &this.view.rows[index];
-                    let title = row.title.clone();
-                    let subtitle = row.subtitle.clone();
-                    let meta = row.meta.clone();
-                    let starred = row.starred;
-                    let downloaded = row.downloaded;
-                    let cover = cover_path(&row.cover_url);
-                    let selected = index == this.view.cursor
-                        || this.view.selection.contains(this.view.cursor, index);
-                    let target = if selected { 0x2B2930FF } else { 0x2B293000 };
-                    let color = this
-                        .row_colors
-                        .entry(row.id.clone())
-                        .or_insert_with(|| anim::ColorBehavior::new(target))
-                        .target(target, anim::QUICK_MS, anim::Curve::Standard, &this.clock);
-                    items.push(
-                        div()
-                            .id(index)
-                            .flex()
-                            .items_center()
-                            .h(px(48.0))
-                            .px_4()
-                            .gap_3()
-                            .cursor_pointer()
-                            .bg(rgba(color))
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                this.select(index);
-                                cx.notify();
-                            }))
-                            .child(art(cover, 36.0))
-                            .child(
-                                div()
-                                    .flex()
-                                    .flex_col()
-                                    .min_w_0()
-                                    .flex_1()
-                                    .child(
-                                        div()
-                                            .text_size(px(14.0))
-                                            .whitespace_nowrap()
-                                            .overflow_hidden()
-                                            .child(title),
-                                    )
-                                    .child(
-                                        div()
-                                            .text_size(px(11.0))
-                                            .text_color(rgb(ON_VARIANT))
-                                            .whitespace_nowrap()
-                                            .overflow_hidden()
-                                            .child(subtitle),
-                                    ),
-                            )
-                            .child(
-                                div()
-                                    .text_size(px(11.0))
-                                    .text_color(rgb(ON_VARIANT))
-                                    .child(meta),
-                            )
-                            .when(starred, |this| {
-                                this.child(
+        div()
+            .flex()
+            .flex_col()
+            .flex_1()
+            .w_full()
+            .px(px(12.0))
+            .child(header)
+            .child(
+                uniform_list("library", count, cx.processor(move |this, range: std::ops::Range<usize>, _window, cx| {
+                    let row_h = 58.0;
+                    let mut items = Vec::with_capacity(range.len());
+                    for index in range {
+                        let row = &this.view.rows[index];
+                        let title = row.title.clone();
+                        let subtitle = row.subtitle.clone();
+                        let meta = row.meta.clone();
+                        let starred = row.starred;
+                        let downloaded = row.downloaded;
+                        let cover = cover_path(&row.cover_url);
+                        let selected = index == this.view.cursor
+                            || this.view.selection.contains(this.view.cursor, index);
+                        let striped = index % 2 != 0;
+                        let target = if selected { 0x4A4458FF } else if striped { 0x0F0D13FF } else { 0x14121800 };
+                        let color = this
+                            .row_colors
+                            .entry(row.id.clone())
+                            .or_insert_with(|| anim::ColorBehavior::new(target))
+                            .target(target, anim::QUICK_MS, anim::Curve::Standard, &this.clock);
+                        items.push(
+                            div()
+                                .id(index)
+                                .w_full()
+                                .flex()
+                                .items_center()
+                                .h(px(row_h))
+                                .px_1()
+                                .rounded_md()
+                                .bg(rgba(color))
+                                .cursor_pointer()
+                                .hover(|this| this.bg(rgb(SURFACE_HIGH)))
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    this.select(index);
+                                    cx.notify();
+                                }))
+                                .child(art(cover, row_h * 0.78))
+                                .child(
                                     div()
-                                        .text_size(px(12.0))
-                                        .text_color(rgb(0xFFD54F))
-                                        .child("★"),
+                                        .flex()
+                                        .flex_col()
+                                        .min_w_0()
+                                        .flex_1()
+                                        .ml_3()
+                                        .child(
+                                            div()
+                                                .text_size(px(18.0))
+                                                .font_weight(gpui::FontWeight::SEMIBOLD)
+                                                .whitespace_nowrap()
+                                                .overflow_hidden()
+                                                .child(title),
+                                        )
+                                        .child(
+                                            div()
+                                                .text_size(px(12.0))
+                                                .text_color(rgb(ON_VARIANT))
+                                                .whitespace_nowrap()
+                                                .overflow_hidden()
+                                                .child(subtitle),
+                                        ),
                                 )
-                            })
-                            .when(downloaded, |this| {
-                                this.child(
+                                .child(
                                     div()
-                                        .text_size(px(11.0))
-                                        .text_color(rgb(PRIMARY))
-                                        .child("↓"),
-                                )
-                            }),
-                    );
-                }
-                items
-            }))
-            .h_full()
-            .track_scroll(scroll),
-        )
+                                        .flex()
+                                        .items_center()
+                                        .gap_2()
+                                        .child(
+                                            div()
+                                                .text_size(px(11.0))
+                                                .text_color(rgb(ON_VARIANT))
+                                                .child(meta),
+                                        )
+                                        .when(starred, |this| {
+                                            this.child(div().text_size(px(12.0)).text_color(rgb(0xFFD54F)).child("★"))
+                                        })
+                                        .when(downloaded, |this| {
+                                            this.child(div().text_size(px(11.0)).text_color(rgb(PRIMARY)).child("↓"))
+                                        }),
+                                ),
+                        );
+                    }
+                    items
+                }))
+                .h_full()
+                .w_full()
+                .track_scroll(scroll),
+            )
     }
 
     fn fullscreen_overlay(&self, progress: f32) -> gpui::Div {
@@ -1731,6 +1825,7 @@ impl AppRoot {
             )
     }
 
+
     fn search_overlay(&self, search: &SearchState, progress: f32) -> gpui::Div {
         let query = if search.query.is_empty() {
             "Search…".to_string()
@@ -1850,49 +1945,60 @@ impl AppRoot {
         let Some(page) = self.page.as_ref() else {
             return div().flex().flex_1();
         };
-        let title = format!("{} · {}", page.descriptor.kind.label(), page.header.title);
+        let title = page.header.title.clone();
         let subtitle = page.header.subtitle.clone();
         let meta = page.header.meta.clone();
-        let place = format!(
-            "{} / {} · q back · [ ] travel",
-            self.travel.position.saturating_add(1),
-            self.travel.places.len().max(1)
-        );
+        let cover = cover_path(&page.header.cover_url);
 
-        let hero = div()
+        let header = div()
             .flex()
-            .items_center()
-            .gap_5()
-            .h(px(180.0))
-            .px_6()
-            .bg(rgb(SURFACE))
-            .child(art(cover_path(&page.header.cover_url), 116.0))
+            .w_full()
+            .h(px(520.0))
+            .px(px(12.0))
+            .gap_3()
             .child(
                 div()
                     .flex()
                     .flex_col()
-                    .gap_1()
-                    .min_w_0()
                     .flex_1()
-                    .child(div().text_size(px(20.0)).child(title))
+                    .min_w_0()
+                    .overflow_hidden()
+                    .pt_3()
+                    .gap_1()
                     .child(
                         div()
-                            .text_size(px(13.0))
+                            .text_size(px(30.0))
+                            .font_weight(gpui::FontWeight::BOLD)
+                            .whitespace_nowrap()
+                            .overflow_hidden()
+                            .child(title),
+                    )
+                    .child(
+                        div()
+                            .text_size(px(14.0))
                             .text_color(rgb(ON_VARIANT))
+                            .child("★ ★ ★ ★ ★"),
+                    )
+                    .child(
+                        div()
+                            .text_size(px(16.0))
+                            .text_color(rgb(PRIMARY))
                             .child(subtitle),
                     )
                     .child(
                         div()
-                            .text_size(px(11.0))
+                            .text_size(px(12.0))
                             .text_color(rgb(ON_VARIANT))
+                            .whitespace_nowrap()
                             .child(meta),
                     ),
             )
             .child(
                 div()
-                    .text_size(px(10.0))
-                    .text_color(rgb(ON_VARIANT))
-                    .child(place),
+                    .flex_none()
+                    .w(px(360.0))
+                    .h(px(360.0))
+                    .child(art(cover, 360.0)),
             );
 
         if page.loading && page.rows.is_empty() {
@@ -1900,7 +2006,7 @@ impl AppRoot {
                 .flex()
                 .flex_col()
                 .flex_1()
-                .child(hero)
+                .child(header)
                 .child(
                     div()
                         .flex()
@@ -1917,7 +2023,7 @@ impl AppRoot {
                 .flex()
                 .flex_col()
                 .flex_1()
-                .child(hero)
+                .child(header)
                 .child(
                     div()
                         .flex()
@@ -1936,12 +2042,13 @@ impl AppRoot {
             .flex()
             .flex_col()
             .flex_1()
-            .child(hero)
+            .child(header)
             .child(
                 uniform_list("page-rows", count, cx.processor(move |this, range: std::ops::Range<usize>, _window, cx| {
+                    let row_h = 36.0;
                     let mut items = Vec::with_capacity(range.len());
                     for index in range {
-                        let Some((title, subtitle, meta, downloaded, selected, key)) = this
+                        let Some((title, subtitle, meta, selected, key)) = this
                             .page
                             .as_ref()
                             .map(|page| {
@@ -1950,7 +2057,6 @@ impl AppRoot {
                                     row.title.clone(),
                                     row.subtitle.clone(),
                                     row.meta.clone(),
-                                    row.downloaded,
                                     index == page.cursor
                                         || page.selection.contains(page.cursor, index),
                                     format!("page:{}:{}", page.descriptor.id, row.id),
@@ -1959,7 +2065,7 @@ impl AppRoot {
                         else {
                             break;
                         };
-                        let target = if selected { 0x2B2930FF } else { 0x2B293000 };
+                        let target = if selected { 0x4A4458FF } else { 0x14121800 };
                         let color = this
                             .row_colors
                             .entry(key)
@@ -1968,11 +2074,11 @@ impl AppRoot {
                         items.push(
                             div()
                                 .id(index)
+                                .w_full()
                                 .flex()
                                 .items_center()
-                                .h(px(44.0))
+                                .h(px(row_h))
                                 .px_4()
-                                .gap_3()
                                 .cursor_pointer()
                                 .bg(rgba(color))
                                 .on_click(cx.listener(move |this, _, _, cx| {
@@ -1988,10 +2094,10 @@ impl AppRoot {
                                         .flex_col()
                                         .min_w_0()
                                         .flex_1()
-                                        .child(div().text_size(px(14.0)).child(title))
+                                        .child(div().text_size(px(15.0)).child(title))
                                         .child(
                                             div()
-                                                .text_size(px(11.0))
+                                                .text_size(px(10.0))
                                                 .text_color(rgb(ON_VARIANT))
                                                 .child(subtitle),
                                         ),
@@ -2001,20 +2107,13 @@ impl AppRoot {
                                         .text_size(px(11.0))
                                         .text_color(rgb(ON_VARIANT))
                                         .child(meta),
-                                )
-                                .when(downloaded, |this| {
-                                    this.child(
-                                        div()
-                                            .text_size(px(11.0))
-                                            .text_color(rgb(PRIMARY))
-                                            .child("↓"),
-                                    )
-                                }),
+                                ),
                         );
                     }
                     items
                 }))
                 .h_full()
+                .w_full()
                 .track_scroll(scroll),
             )
     }
@@ -2035,80 +2134,108 @@ impl AppRoot {
             Some(track) => (track.title.clone(), track.artist.clone(), cover_path(&track.cover_url)),
             None => ("Nothing playing".to_string(), String::new(), None),
         };
-        let state_label = match state {
-            crate::player::State::Playing => "▶",
-            crate::player::State::Paused => "⏸",
-            crate::player::State::Stopped => "■",
-        };
         div()
-            .flex()
-            .items_center()
-            .gap_3()
-            .h(px(66.0))
-            .px_4()
+            .relative()
+            .w_full()
+            .h(relative(0.0828))
             .bg(rgb(SURFACE))
-            .child(art(cover, 44.0))
             .child(
                 div()
-                    .flex()
-                    .flex_col()
-                    .min_w_0()
-                    .w(px(280.0))
-                    .child(div().text_size(px(13.0)).child(title))
-                    .child(
-                        div()
-                            .text_size(px(11.0))
-                            .text_color(rgb(ON_VARIANT))
-                            .child(artist),
-                    ),
+                    .absolute()
+                    .top_0()
+                    .left_0()
+                    .right_0()
+                    .h(px(3.0))
+                    .bg(rgb(SURFACE_HIGH))
+                    .child(div().h_full().w(relative(progress)).bg(rgb(PRIMARY))),
             )
-            .child(div().flex().items_center().gap_2().child(state_label))
             .child(
                 div()
                     .flex()
-                    .flex_1()
-                    .flex_col()
-                    .gap_1()
+                    .size_full()
+                    .px_3()
+                    .gap_3()
+                    .items_center()
                     .child(
                         div()
-                            .h(px(3.0))
-                            .w_full()
-                            .rounded_full()
-                            .bg(rgb(SURFACE_HIGH))
+                            .flex()
+                            .items_center()
+                            .gap_3()
+                            .w(relative(0.40))
+                            .child(art(cover, 44.0))
                             .child(
                                 div()
-                                    .h_full()
-                                    .w(relative(progress))
-                                    .rounded_full()
-                                    .bg(rgb(PRIMARY)),
+                                    .flex()
+                                    .flex_col()
+                                    .min_w_0()
+                                    .flex_1()
+                                    .child(
+                                        div()
+                                            .text_size(px(15.0))
+                                            .font_weight(gpui::FontWeight::MEDIUM)
+                                            .whitespace_nowrap()
+                                            .overflow_hidden()
+                                            .child(title),
+                                    )
+                                    .child(
+                                        div()
+                                            .text_size(px(12.0))
+                                            .text_color(rgb(ON_VARIANT))
+                                            .whitespace_nowrap()
+                                            .overflow_hidden()
+                                            .child(artist),
+                                    ),
                             ),
                     )
                     .child(
                         div()
-                            .text_size(px(10.0))
-                            .text_color(rgb(ON_VARIANT))
-                            .child(format!(
-                                "{} / {}",
-                                format_time(position),
-                                format_time(duration)
-                            )),
+                            .flex()
+                            .flex_1()
+                            .items_center()
+                            .justify_center()
+                            .gap_5()
+                            .child(icon("skip-previous-solid-svgrepo-com.svg", 20.0, ON_SURFACE))
+                            .child(if state == crate::player::State::Playing {
+                                icon("pause-svgrepo-com.svg", 24.0, ON_SURFACE)
+                            } else {
+                                icon("play-1001-svgrepo-com.svg", 24.0, ON_SURFACE)
+                            })
+                            .child(icon("skip-next-circle-solid-svgrepo-com.svg", 20.0, ON_SURFACE)),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap_3()
+                            .child(
+                                div()
+                                    .text_size(px(11.0))
+                                    .text_color(rgb(ON_VARIANT))
+                                    .child(format!(
+                                        "{} / {}",
+                                        format_time(position),
+                                        format_time(duration)
+                                    )),
+                            )
+                            .when(self.repeat != crate::player::Repeat::Off, |this| {
+                                this.child(
+                                    div()
+                                        .text_size(px(10.0))
+                                        .text_color(rgb(PRIMARY))
+                                        .child(repeat_label(self.repeat)),
+                                )
+                            })
+                            .child(
+                                div()
+                                    .text_size(px(11.0))
+                                    .text_color(rgb(ON_VARIANT))
+                                    .child(if muted {
+                                        "muted".to_string()
+                                    } else {
+                                        format!("vol {:.0}%", volume)
+                                    }),
+                            ),
                     ),
-            )
-            .child(
-                div()
-                    .text_size(px(11.0))
-                    .text_color(rgb(if self.repeat == crate::player::Repeat::Off { ON_VARIANT } else { PRIMARY }))
-                    .child(format!("repeat {}", repeat_label(self.repeat))),
-            )
-            .child(
-                div()
-                    .text_size(px(11.0))
-                    .text_color(rgb(ON_VARIANT))
-                    .child(if muted {
-                        "muted".to_string()
-                    } else {
-                        format!("vol {:.0}%", volume * 100.0)
-                    }),
             )
     }
 
@@ -2391,4 +2518,35 @@ fn search_scope_label(scope: usize) -> &'static str {
         2 => "Artists",
         _ => "Playlists",
     }
+}
+
+fn last_sync_text(raw: &str) -> String {
+    match raw.parse::<i64>() {
+        Ok(secs) if secs > 0 => {
+            let age = crate::consts::now_secs().saturating_sub(secs);
+            if age < 60 {
+                "Now".to_string()
+            } else if age < 3_600 {
+                format!("{}m", age / 60)
+            } else if age < 86_400 {
+                format!("{}h", age / 3600)
+            } else if age < 604_800 {
+                format!("{}d", age / 86_400)
+            } else if age < 2_592_000 {
+                format!("{}w", age / 604_800)
+            } else {
+                format!("{}y", age / 31_536_000)
+            }
+        }
+        _ => "—".to_string(),
+    }
+}
+
+fn icon(name: &str, size: f32, color: u32) -> gpui::AnyElement {
+    let path = format!("{}/src/icons/{}", env!("CARGO_MANIFEST_DIR"), name);
+    svg()
+        .path(path)
+        .size(px(size))
+        .text_color(rgb(color))
+        .into_any_element()
 }

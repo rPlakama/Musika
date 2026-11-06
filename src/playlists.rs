@@ -478,6 +478,40 @@ struct PlaylistListRow {
     owner: Option<String>,
 }
 
+/// One playlist row for the list and the search channel (same schema; the
+/// search copy used to omit `source`).
+fn playlist_row(row: &PlaylistListRow) -> serde_json::Value {
+    let origin = if row.source == "m3u" {
+        "M3U".to_string()
+    } else if let Some(owner) = row.owner.as_ref().filter(|owner| !owner.is_empty()) {
+        owner.clone()
+    } else {
+        "Playlist".to_string()
+    };
+    serde_json::json!({
+        "id": row.id,
+        "source": row.source,
+        "name": row.name,
+        "song_count": row.song_count,
+        "duration": row.duration,
+        "owner": row.owner,
+        "title": row.name,
+        "subtitle": format!("{origin} · {} song{}", row.song_count,
+            if row.song_count == 1 { "" } else { "s" }),
+        "meta": if row.duration > 0 {
+            crate::browse::rows::format_duration(Some(row.duration as i32))
+        } else {
+            String::new()
+        },
+        "playlistId": row.id,
+        "songId": "",
+        "albumId": "",
+        "cover": "",
+        "starred": false,
+        "rating": 0,
+    })
+}
+
 /// The segment payload: every playlist, m3u and (later) Subsonic, as the
 /// list rows the QML maps.
 pub async fn list_json(dbs: &Dbs) -> Result<String> {
@@ -489,43 +523,7 @@ pub async fn list_json(dbs: &Dbs) -> Result<String> {
     )
     .fetch_all(&dbs.playlist)
     .await?;
-    let rows: Vec<serde_json::Value> = rows
-        .into_iter()
-        .map(|row| {
-            let id = row.id;
-            let name = row.name;
-            let owner = row.owner;
-            let origin = if row.source == "m3u" {
-                "M3U".to_string()
-            } else if let Some(owner) = owner.as_ref().filter(|owner| !owner.is_empty()) {
-                owner.clone()
-            } else {
-                "Playlist".to_string()
-            };
-            serde_json::json!({
-                "id": id.clone(),
-                "source": row.source,
-                "name": name.clone(),
-                "song_count": row.song_count,
-                "duration": row.duration,
-                "owner": owner,
-                "title": name,
-                "subtitle": format!("{origin} · {} song{}", row.song_count,
-                    if row.song_count == 1 { "" } else { "s" }),
-                "meta": if row.duration > 0 {
-                    crate::browse::rows::format_duration(Some(row.duration as i32))
-                } else {
-                    String::new()
-                },
-                "playlistId": id,
-                "songId": "",
-                "albumId": "",
-                "cover": "",
-                "starred": false,
-                "rating": 0,
-            })
-        })
-        .collect();
+    let rows: Vec<serde_json::Value> = rows.iter().map(playlist_row).collect();
     Ok(serde_json::to_string(&rows)?)
 }
 
@@ -730,37 +728,5 @@ pub async fn search_rows(dbs: &Dbs, query: &str, limit: i64) -> Result<Vec<serde
     .bind(limit.max(1))
     .fetch_all(&dbs.playlist)
     .await?;
-    Ok(rows
-        .into_iter()
-        .map(|row| {
-            let origin = if row.source == "m3u" {
-                "M3U".to_string()
-            } else if let Some(owner) = row.owner.as_ref().filter(|owner| !owner.is_empty()) {
-                owner.clone()
-            } else {
-                "Playlist".to_string()
-            };
-            serde_json::json!({
-                "id": row.id,
-                "name": row.name,
-                "song_count": row.song_count,
-                "duration": row.duration,
-                "owner": row.owner,
-                "title": row.name,
-                "subtitle": format!("{origin} · {} song{}", row.song_count,
-                    if row.song_count == 1 { "" } else { "s" }),
-                "meta": if row.duration > 0 {
-                    crate::browse::rows::format_duration(Some(row.duration as i32))
-                } else {
-                    String::new()
-                },
-                "playlistId": row.id,
-                "songId": "",
-                "albumId": "",
-                "cover": "",
-                "starred": false,
-                "rating": 0,
-            })
-        })
-        .collect())
+    Ok(rows.iter().map(playlist_row).collect())
 }

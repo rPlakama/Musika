@@ -6138,8 +6138,18 @@ fn local_day(secs: i64) -> String {
         .unwrap_or_else(|| "—".to_string())
 }
 
+fn asset_root() -> &'static str {
+    static ROOT: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    ROOT.get_or_init(|| {
+        std::env::var("MUSIKA_ASSET_DIR")
+            .ok()
+            .filter(|path| !path.is_empty())
+            .unwrap_or_else(|| format!("{}/src", env!("CARGO_MANIFEST_DIR")))
+    })
+}
+
 fn icon(name: &str, size: f32, color: u32) -> gpui::AnyElement {
-    let path = format!("{}/src/icons/{}", env!("CARGO_MANIFEST_DIR"), name);
+    let path = format!("{}/icons/{}", asset_root(), name);
     svg()
         .path(path)
         .size(px(size))

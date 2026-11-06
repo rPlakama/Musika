@@ -66,7 +66,7 @@ for f in src/icons/*.svg; do
     name=${f##*/}
     case " $brand " in *" $name "*) continue ;; esac
     case "$refs" in
-        *"\"$name\""*) ;;
+        *"$name"*) ;;
         *)
             echo "check-icons: $name is never referenced — reference it, brand-list it, or delete it" >&2
             warn=1

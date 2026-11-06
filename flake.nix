@@ -46,6 +46,12 @@
 
         cargoLock.lockFile = ./Cargo.lock;
 
+        # Packaging is the release profile only. Tests run in the dev shell/CI;
+        # skipping the test-profile rebuild keeps nix builds fast.
+        doCheck = false;
+        CARGO_PROFILE_RELEASE_LTO = "thin";
+        CARGO_PROFILE_RELEASE_CODEGEN_UNITS = "4";
+
         nativeBuildInputs = [
           pkgs.pkg-config
           pkgs.makeWrapper
@@ -101,7 +107,13 @@
                 pkgs.vulkan-loader
               ]
             } \
-            --set-default SSL_CERT_FILE ${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt
+            --set-default SSL_CERT_FILE ${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt \
+            --set-default MUSIKA_ASSET_DIR $out/share/musika
+
+          # Runtime SVG assets: icons resolve through MUSIKA_ASSET_DIR/icons,
+          # not through the build directory.
+          install -d $out/share/musika/icons
+          install -m644 src/icons/*.svg $out/share/musika/icons/
 
           # Desktop entry (PKG-1): launchers, docks, MIME data dirs.
           install -Dm644 musika.desktop $out/share/applications/musika.desktop

@@ -25,5 +25,9 @@ macro_rules! debug_log {
     ($($arg:tt)*) => {{
         #[cfg(debug_assertions)]
         eprintln!($($arg)*);
+        // Keep release builds warning-free without printing the diagnostic:
+        // format_args! still marks every captured value as used.
+        #[cfg(not(debug_assertions))]
+        let _ = format_args!($($arg)*);
     }};
 }

@@ -213,9 +213,36 @@ Item {
     /// the content height `listH` sets (a binding loop).
     readonly property real _rowSizingHeight: root.rowRefHeight > 0
         ? root.rowRefHeight : root.height
+    property real _rowSizingBase: 0
     /// The model owns the adaptive row; this column only snaps its viewport
-    /// to full rows so the footer never slices one in half.
-    readonly property real rowH: content.adaptiveRowFor(root._rowSizingHeight)
+    /// to full rows so the footer never slices one in half. Imperative, not a
+    /// binding through `content.adaptiveRowFor`: that function reads
+    /// `content._rowBase`, and the resulting rowH → listH → content-height
+    /// feedback made Qt report a rowH binding loop in the search overlay.
+    property real rowH: 0
+    function updateRowH() {
+        if (content.rowRatio <= 0) {
+            if (root.rowH !== 0)
+                root.rowH = 0;
+            return;
+        }
+        var reference = root._rowSizingHeight;
+        if (root._rowSizingBase <= 0 && reference > 0)
+            root._rowSizingBase = reference * content.rowRatio;
+        var nominal = reference * content.rowRatio;
+        var floor = root._rowSizingBase > 0 ? 0.82 * root._rowSizingBase : 0;
+        var next = Math.max(nominal, floor) * content.rowHeightScale;
+        if (root.rowH !== next)
+            root.rowH = next;
+    }
+    onHeightChanged: root.updateRowH()
+    onRowRefHeightChanged: root.updateRowH()
+    Component.onCompleted: root.updateRowH()
+    Connections {
+        target: content
+        function onRowRatioChanged() { root.updateRowH() }
+        function onRowHeightScaleChanged() { root.updateRowH() }
+    }
     readonly property real listH: root.rowH > 0
         ? Math.max(root.rowH,
             ScrollProfiles.snapBody(root.height - root.headerH, root.rowH, 0))

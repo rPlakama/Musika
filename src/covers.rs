@@ -796,22 +796,39 @@ pub async fn get_or_create_resized_cover(
 
     // Create a sub-file name such as cover_id_300x300.jpg
     let resized_filename = format!("{stem}_{target_size}x{target_size}.{ext}");
-    let resized_path = original_path.parent()?.join(resized_filename);
+    let resized_path = original_path.parent()?.join(&resized_filename);
 
-    // If thumbnail exists, return immediately
+    // A display copy is shared by every surface at this bucket. Validate a
+    // pre-existing file before reusing it: a crash/short write used to leave
+    // a truncated JPEG that QML then reported as "Unsupported image format".
     if resized_path.exists() {
-        return Some(resized_path);
+        if image::ImageReader::open(&resized_path)
+            .ok()
+            .and_then(|reader| reader.with_guessed_format().ok())
+            .and_then(|reader| reader.into_dimensions().ok())
+            .is_some()
+        {
+            return Some(resized_path);
+        }
+        let _ = std::fs::remove_file(&resized_path);
     }
 
-    // Offload image decoding and scaling to a blocking thread pool
+    // Offload image decoding and scaling to a blocking thread pool. Encode to
+    // bytes first and publish with the atomic cache writer: readers must never
+    // see a half-written display copy.
     let orig = original_path.to_path_buf();
     let target = resized_path.clone();
+    let parent = resized_path.parent()?.to_path_buf();
+    let filename = resized_filename.clone();
+    let format = image::ImageFormat::from_extension(ext.to_ascii_lowercase())?;
 
     tokio::task::spawn_blocking(move || {
         let img = image::open(&orig).ok()?;
         // Triangle/Bilinear filter provides fast, high-quality downscaling for UI elements
         let resized = img.resize(target_size, target_size, FilterType::Triangle);
-        resized.save(&target).ok()?;
+        let mut bytes = std::io::Cursor::new(Vec::new());
+        resized.write_to(&mut bytes, format).ok()?;
+        crate::cache::write_atomic(&parent, &filename, bytes.get_ref()).ok()?;
         Some(target)
     })
     .await

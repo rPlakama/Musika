@@ -686,7 +686,6 @@ Item {
     onRowStrideChanged: root.sync(false)
     onAdaptiveRowHeightChanged: root.sync(false)
     onMinYChanged: root.sync(false)
-    onMaxYChanged: root.sync(false)
     onHeaderHeightChanged: root.sync(false)
     onFooterHeightChanged: root.sync(false)
     onVisibleChanged: {

@@ -322,6 +322,8 @@ struct AppRoot {
     hovered_row: Option<usize>,
     hovered_page: Option<usize>,
     visual_mode: bool,
+    queue_selection: state::Selection,
+    last_player_index: usize,
     row_scales: std::collections::HashMap<String, anim::Behavior>,
     row_hover_colors: std::collections::HashMap<String, anim::ColorBehavior>,
     player: crate::player::Player,
@@ -417,6 +419,8 @@ impl AppRoot {
             hovered_row: None,
             hovered_page: None,
             visual_mode: false,
+            queue_selection: state::Selection::default(),
+            last_player_index: 0,
             row_scales: std::collections::HashMap::new(),
             row_hover_colors: std::collections::HashMap::new(),
             player: crate::player::Player::new(),
@@ -1618,12 +1622,20 @@ impl AppRoot {
     fn on_next_track(&mut self, _: &NextTrack, _window: &mut Window, cx: &mut Context<Self>) {
         self.press_transport(2);
         self.player.next();
+        if self.queue_open {
+            self.queue_cursor = self.player.index();
+            self.follow_queue(true);
+        }
         cx.notify();
     }
 
     fn on_prev_track(&mut self, _: &PrevTrack, _window: &mut Window, cx: &mut Context<Self>) {
         self.press_transport(0);
         self.player.previous();
+        if self.queue_open {
+            self.queue_cursor = self.player.index();
+            self.follow_queue(true);
+        }
         cx.notify();
     }
 
@@ -2571,6 +2583,18 @@ impl AppRoot {
     }
 
     fn on_visual(&mut self, _: &Visual, _window: &mut Window, cx: &mut Context<Self>) {
+        if self.queue_open {
+            let active = self.queue_selection.active();
+            self.visual_mode = !active;
+            if active {
+                self.queue_selection.clear();
+            } else {
+                self.queue_selection.start(self.queue_cursor);
+            }
+            self.hovered_row = None;
+            cx.notify();
+            return;
+        }
         let (active, cursor) = if let Some(page) = self.page.as_ref() {
             (page.selection.active(), page.cursor)
         } else {
@@ -2593,6 +2617,13 @@ impl AppRoot {
 
     fn on_visual_all(&mut self, _: &VisualAll, _window: &mut Window, cx: &mut Context<Self>) {
         self.visual_mode = true;
+        if self.queue_open {
+            self.queue_selection.select_all();
+            self.queue_cursor = self.player.len().saturating_sub(1);
+            self.follow_queue(false);
+            cx.notify();
+            return;
+        }
         if let Some(page) = self.page.as_mut() {
             page.selection.select_all();
             let last = page.rows.len().saturating_sub(1);
@@ -2703,6 +2734,12 @@ impl AppRoot {
         }
         if self.fullscreen || self.fullscreen_anim.value(&self.clock) > 0.01 {
             self.fullscreen = false;
+            cx.notify();
+            return;
+        }
+        if self.queue_open && self.queue_selection.active() {
+            self.queue_selection.clear();
+            self.visual_mode = false;
             cx.notify();
             return;
         }
@@ -3423,7 +3460,7 @@ impl AppRoot {
                     .flex_col()
                     .items_center()
                     .justify_center()
-                    .gap_1()
+                    .gap(px(12.0))
                     .opacity(self.lyrics_track_fade.value(&self.clock))
                     .mt(px(self.lyrics_shift.value(&self.clock)))
                     .child(
@@ -3555,7 +3592,7 @@ impl AppRoot {
                             .flex_col()
                             .items_center()
                             .justify_center()
-                            .gap_1()
+                            .gap(px((lyric_base * 0.5).max(8.0)))
                             .mt(px(self.lyrics_shift.value(&self.clock)))
                             .child(
                                 div()
@@ -3720,14 +3757,17 @@ impl AppRoot {
                                 let artist = track.artist.clone();
                                 let cover = cover_path(&track.cover_url);
                                 let active = index == cursor;
+                                let selected = active
+                                    || this.queue_selection.contains(cursor, index)
+                                    || this.queue_selection.contains(this.queue_cursor, index);
                                 let playing = index == this.player.index();
-                                let emphasis = if active { 1.08 } else { 1.0 };
+                                let emphasis = if selected { 1.08 } else { 1.0 };
                                 let cover_scale = this
                                     .row_scales
                                     .entry(format!("queue-scale:{index}"))
                                     .or_insert_with(|| anim::Behavior::new(1.0))
                                     .target(
-                                        if active { 1.20 } else { 1.0 },
+                                        if selected { 1.20 } else { 1.0 },
                                         anim::QUICK_MS,
                                         anim::Curve::Standard,
                                         &this.clock,
@@ -3741,8 +3781,11 @@ impl AppRoot {
                                         .h(px(this.queue_scroll_modal.row_h))
                                         .px_3()
                                         .cursor_pointer()
-                                        .when(active, |this| this.bg(rgb(palette::secondary_container())))
+                                        .when(selected, |this| this.bg(rgb(palette::secondary_container())))
                                         .on_click(cx.listener(move |this, _, _, cx| {
+                                            if !this.visual_mode {
+                                                this.queue_selection.clear();
+                                            }
                                             this.queue_cursor = index;
                                             this.player.jump(index);
                                             cx.notify();
@@ -4490,6 +4533,14 @@ impl Render for AppRoot {
             window.request_animation_frame();
         }
         self.sync_palette();
+        let playback_index = self.player.index();
+        if playback_index != self.last_player_index {
+            self.last_player_index = playback_index;
+            if self.queue_open {
+                self.queue_cursor = playback_index.min(self.player.len().saturating_sub(1));
+                self.follow_queue(true);
+            }
+        }
         self.refresh_lyrics_emphasis();
         if self.exiting.is_none()
             && let Some(ms) = self.quit_after_ms

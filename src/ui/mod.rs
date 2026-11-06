@@ -988,6 +988,7 @@ impl AppRoot {
     }
 
     fn land_library(&mut self, index: usize) {
+        self.reset_row_scales();
         let cursor = self
             .library_scroll
             .land(self.view.rows.count, index);
@@ -998,6 +999,7 @@ impl AppRoot {
     }
 
     fn land_page(&mut self, index: usize) {
+        self.reset_row_scales();
         let Some(page) = self.page.as_mut() else { return };
         let cursor = self.page_scroll_modal.land(page.rows.len(), index);
         page.select(cursor);
@@ -1005,6 +1007,7 @@ impl AppRoot {
     }
 
     fn land_queue(&mut self, index: usize) {
+        self.reset_row_scales();
         let cursor = self.queue_scroll_modal.land(self.player.len(), index);
         self.queue_cursor = cursor;
     }
@@ -1224,7 +1227,15 @@ impl AppRoot {
         }
     }
 
+    fn reset_row_scales(&mut self) {
+        self.clock.tick();
+        for scale in self.row_scales.values_mut() {
+            scale.target(1.0, 0.0, anim::Curve::Standard, &self.clock);
+        }
+    }
+
     fn select(&mut self, index: usize) {
+        self.reset_row_scales();
         if !self.visual_mode {
             self.view.selection.clear();
         }
@@ -1245,11 +1256,13 @@ impl AppRoot {
             return;
         }
         if self.queue_open {
+            self.reset_row_scales();
             self.queue_cursor = self.queue_cursor.saturating_add(1).min(self.player.len().saturating_sub(1));
             self.follow_queue(true);
             cx.notify();
             return;
         }
+        self.reset_row_scales();
         if let Some(page) = self.page.as_mut() {
             if !self.visual_mode {
                 page.selection.clear();
@@ -1270,11 +1283,13 @@ impl AppRoot {
             return;
         }
         if self.queue_open {
+            self.reset_row_scales();
             self.queue_cursor = self.queue_cursor.saturating_sub(1);
             self.follow_queue(true);
             cx.notify();
             return;
         }
+        self.reset_row_scales();
         if let Some(page) = self.page.as_mut() {
             if !self.visual_mode {
                 page.selection.clear();

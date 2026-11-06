@@ -75,6 +75,7 @@ actions!(
         RepeatCycle,
         SearchScopeNext,
         SearchScopePrev,
+        ToggleFullscreen,
     ]
 );
 
@@ -98,6 +99,7 @@ pub fn run() {
             KeyBinding::new("ctrl-r", RepeatCycle, None),
             KeyBinding::new("tab", SearchScopeNext, None),
             KeyBinding::new("shift-tab", SearchScopePrev, None),
+            KeyBinding::new("shift-enter", ToggleFullscreen, None),
             KeyBinding::new("j", MoveDown, None),
             KeyBinding::new("k", MoveUp, None),
             KeyBinding::new("g g", Top, None),
@@ -169,6 +171,13 @@ struct SearchState {
     loading: bool,
 }
 
+struct LyricsState {
+    song_id: String,
+    lines: Vec<(Option<i64>, String)>,
+    synced: bool,
+    source: String,
+}
+
 struct LoginState {
     server: String,
     username: String,
@@ -204,6 +213,10 @@ struct AppRoot {
     queue_scroll: UniformListScrollHandle,
     repeat: crate::player::Repeat,
     login: Option<LoginState>,
+    fullscreen: bool,
+    fullscreen_anim: anim::Behavior,
+    lyrics: Option<LyricsState>,
+    lyrics_requested: Option<String>,
 }
 
 impl AppRoot {
@@ -253,7 +266,14 @@ impl AppRoot {
             queue_scroll: UniformListScrollHandle::new(),
             repeat: crate::player::Repeat::Off,
             login: None,
+            fullscreen: false,
+            fullscreen_anim: anim::Behavior::new(0.0),
+            lyrics: None,
+            lyrics_requested: None,
         };
+        if std::env::var_os("MUSIKA_GPUUI_FULLSCREEN").is_some() {
+            app.fullscreen = true;
+        }
         if std::env::var_os("MUSIKA_GPUUI_QUEUE").is_some() {
             app.queue_open = true;
             app.queue_cursor = app.player.index();
@@ -378,9 +398,28 @@ impl AppRoot {
                 }
                 self.error = Some(message);
             }
+            Event::Lyrics { song_id, document } => {
+                crate::debug_log!(
+                    "GPUI: lyrics {} lines synced={} source={}",
+                    song_id,
+                    document.lines.len(),
+                    document.source
+                );
+                self.lyrics = Some(LyricsState {
+                    song_id,
+                    synced: document.synced,
+                    source: document.source,
+                    lines: document
+                        .lines
+                        .into_iter()
+                        .map(|line| (line.start_ms, line.value))
+                        .collect(),
+                });
+            }
             Event::Queue { tracks, start } => {
                 self.player.load(tracks, start);
                 self.playback_error = None;
+                self.request_current_lyrics();
             }
             Event::Search {
                 generation,
@@ -541,6 +580,27 @@ impl AppRoot {
     fn on_refresh(&mut self, _: &Refresh, _window: &mut Window, cx: &mut Context<Self>) {
         self.reload();
         cx.notify();
+    }
+
+    fn on_toggle_fullscreen(&mut self, _: &ToggleFullscreen, _window: &mut Window, cx: &mut Context<Self>) {
+        self.fullscreen = !self.fullscreen;
+        if self.fullscreen {
+            self.request_current_lyrics();
+        }
+        cx.notify();
+    }
+
+    fn request_current_lyrics(&mut self) {
+        let Some(track) = self.player.current() else { return };
+        let id = track.id.clone();
+        if self.lyrics.as_ref().is_some_and(|lyrics| lyrics.song_id == id) {
+            return;
+        }
+        if self.lyrics_requested.as_deref() == Some(id.as_str()) {
+            return;
+        }
+        self.lyrics_requested = Some(id.clone());
+        self.bridge.request_lyrics(id);
     }
 
     fn on_repeat_cycle(&mut self, _: &RepeatCycle, _window: &mut Window, cx: &mut Context<Self>) {
@@ -974,6 +1034,11 @@ impl AppRoot {
     }
 
     fn on_back(&mut self, _: &Back, window: &mut Window, cx: &mut Context<Self>) {
+        if self.fullscreen || self.fullscreen_anim.value(&self.clock) > 0.01 {
+            self.fullscreen = false;
+            cx.notify();
+            return;
+        }
         if self.queue_open || self.queue_anim.value(&self.clock) > 0.01 {
             self.queue_open = false;
             cx.notify();
@@ -1247,6 +1312,93 @@ impl AppRoot {
             .h_full()
             .track_scroll(scroll),
         )
+    }
+
+    fn fullscreen_overlay(&self, progress: f32) -> gpui::Div {
+        let track = self.player.current().cloned();
+        let (title, artist, cover) = match &track {
+            Some(track) => (track.title.clone(), track.artist.clone(), cover_path(&track.cover_url)),
+            None => ("Nothing playing".to_string(), String::new(), None),
+        };
+        let position = self.player.position();
+        let lyrics = self.lyrics.as_ref();
+        let lines = lyrics.map(|lyrics| lyrics.lines.clone()).unwrap_or_default();
+        let active = lyrics
+            .filter(|lyrics| lyrics.synced)
+            .and_then(|_| {
+                let ms = (position * 1000.0) as i64;
+                lines
+                    .iter()
+                    .rposition(|(start, _)| start.is_some_and(|start| start <= ms))
+            })
+            .unwrap_or(0);
+        let start = active.saturating_sub(4);
+        let end = (active + 8).min(lines.len());
+        let visible: Vec<(usize, Option<i64>, String)> = lines
+            .iter()
+            .enumerate()
+            .skip(start)
+            .take(end.saturating_sub(start))
+            .map(|(index, (start, text))| (index, *start, text.clone()))
+            .collect();
+        let lyrics_label = match lyrics {
+            Some(lyrics) if lyrics.lines.is_empty() => "No lyrics".to_string(),
+            Some(lyrics) => format!("Lyrics · {}", lyrics.source),
+            None => "Loading lyrics…".to_string(),
+        };
+        div()
+            .absolute()
+            .inset_0()
+            .opacity(progress)
+            .bg(rgb(BG))
+            .flex()
+            .flex_col()
+            .items_center()
+            .justify_center()
+            .gap_6()
+            .child(art(cover, 140.0))
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .items_center()
+                    .gap_1()
+                    .child(div().text_size(px(24.0)).child(title))
+                    .child(
+                        div()
+                            .text_size(px(13.0))
+                            .text_color(rgb(ON_VARIANT))
+                            .child(artist),
+                    ),
+            )
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .items_center()
+                    .w(px(560.0))
+                    .gap_1()
+                    .child(
+                        div()
+                            .text_size(px(10.0))
+                            .text_color(rgb(ON_VARIANT))
+                            .child(lyrics_label),
+                    )
+                    .children(visible.into_iter().map(|(index, _, text)| {
+                        let is_active = index == active;
+                        div()
+                            .text_size(px(if is_active { 18.0 } else { 14.0 }))
+                            .text_color(rgb(if is_active { ON_SURFACE } else { ON_VARIANT }))
+                            .when(is_active, |this| this.font_weight(gpui::FontWeight::SEMIBOLD))
+                            .child(text)
+                    })),
+            )
+            .child(
+                div()
+                    .text_size(px(10.0))
+                    .text_color(rgb(ON_VARIANT))
+                    .child("Shift-Enter or q closes · Space play/pause · Ctrl-Q queue"),
+            )
     }
 
     fn queue_overlay(&self, cx: &Context<Self>, progress: f32) -> gpui::Div {
@@ -1799,6 +1951,20 @@ impl Render for AppRoot {
         if !self.queue_anim.settled(&self.clock) {
             window.request_animation_frame();
         }
+        let fullscreen_progress = self.fullscreen_anim.target(
+            if self.fullscreen { 1.0 } else { 0.0 },
+            anim::EMPHASIZED_MS,
+            if self.fullscreen { anim::Curve::Decelerate } else { anim::Curve::Accelerate },
+            &self.clock,
+        );
+        if !self.fullscreen_anim.settled(&self.clock) {
+            window.request_animation_frame();
+        }
+        if self.fullscreen {
+            self.request_current_lyrics();
+        }
+        let fullscreen_overlay = (self.fullscreen || fullscreen_progress > 0.001)
+            .then(|| self.fullscreen_overlay(fullscreen_progress));
         if self.row_colors.values().any(|color| !color.settled(&self.clock)) {
             window.request_animation_frame();
         }
@@ -1832,6 +1998,7 @@ impl Render for AppRoot {
             .on_action(cx.listener(Self::on_play_pause))
             .on_action(cx.listener(Self::on_queue_toggle))
             .on_action(cx.listener(Self::on_repeat_cycle))
+            .on_action(cx.listener(Self::on_toggle_fullscreen))
             .on_action(cx.listener(Self::on_queue_remove))
             .on_action(cx.listener(Self::on_queue_up))
             .on_action(cx.listener(Self::on_queue_down))
@@ -1862,6 +2029,7 @@ impl Render for AppRoot {
             .child(status)
             .child(div().when_some(queue_overlay, |this, queue| this.child(queue)))
             .child(div().when_some(overlay, |this, overlay| this.child(overlay)))
+            .child(div().when_some(fullscreen_overlay, |this, full| this.child(full)))
             .into_any_element()
     }
 }

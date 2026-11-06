@@ -30,6 +30,10 @@ pub enum Event {
         header: super::state::PageHeader,
         rows: Vec<super::state::Row>,
     },
+    Lyrics {
+        song_id: String,
+        document: crate::lyrics::Document,
+    },
     Queue {
         tracks: Vec<crate::player::Track>,
         start: usize,
@@ -117,6 +121,23 @@ impl Bridge {
                 Err(err) => Event::Error(format!("Page load failed: {err:#}")),
             };
             send_event(&tx, event);
+        });
+    }
+
+    pub fn request_lyrics(&self, song_id: String) {
+        crate::debug_log!("GPUI: lyrics request {song_id}");
+        let tx = self.tx.clone();
+        crate::app::runtime().spawn(async move {
+            let Some(dbs) = crate::app::dbs() else { return };
+            let client = crate::session::client(&dbs).await.ok();
+            let document = match crate::lyrics::fetch(&dbs, client.as_ref(), &song_id).await {
+                Ok(document) => document,
+                Err(err) => {
+                    crate::debug_log!("GPUI: lyrics fetch failed for {song_id}: {err:#}");
+                    crate::lyrics::Document::missing(&song_id)
+                }
+            };
+            let _ = tx.send(Event::Lyrics { song_id, document });
         });
     }
 

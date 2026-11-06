@@ -16,7 +16,7 @@
 
 //! GPUI front end (G1: real library data).
 //!
-//! Target is [GPUI](https://gpui.rs). The 64-file QML abstraction spec lives in
+//! Target is [GPUI](https://gpui.rs). The 64-file legacy UI abstraction spec lives in
 //! `docs/mds/gpuui/`; `09-gpui-retarget.md` maps it onto GPUI. This slice wires
 //! the shared bridge into an entity root with scope tabs and a virtual list.
 #![allow(dead_code)] // shared state carries page/travel fields ahead of G1 pages.

@@ -1,6 +1,6 @@
 //! One scroll engine for every list surface.
 //!
-//! QML has a single `ScrollContent` plus `ScrollProfiles`; hosts only supply a
+//! legacy UI has a single `ScrollContent` plus `ScrollProfiles`; hosts only supply a
 //! model, a row delegate and profile variables. GPUI used to carry a copy of
 //! target/follow/metrics per surface. This module is that one engine.
 
@@ -96,7 +96,7 @@ impl ScrollModal {
         self.viewport_height()
     }
 
-    /// The absolute row band currently painted by the list. QML
+    /// The absolute row band currently painted by the list. legacy UI
     /// `SearchContract.rows()` uses exactly this band: rows outside it are
     /// holes, so `/` can never jump to a row the eye cannot see.
     pub fn visible_range(&self, count: usize) -> Range<usize> {
@@ -162,7 +162,7 @@ impl ScrollModal {
             .set_offset(point(px(0.0), px(-target)));
     }
 
-    /// Set the cursor and pin the viewport instantly (QML `land()`).
+    /// Set the cursor and pin the viewport instantly (legacy UI `land()`).
     pub fn land(&mut self, count: usize, cursor: usize) -> usize {
         let cursor = if count == 0 {
             0
@@ -177,7 +177,7 @@ impl ScrollModal {
         cursor
     }
 
-    /// Capture the first stable viewport once, then use the QML profile ratio.
+    /// Capture the first stable viewport once, then use the legacy UI profile ratio.
     /// Returns true when the row height changed.
     pub fn ensure_metrics(&mut self, viewport: f32) -> bool {
         self.ensure_metrics_ref(viewport)
@@ -210,7 +210,7 @@ impl ScrollModal {
 }
 
 /// Row range visible at `offset` for a fixed-height list. A zero viewport
-/// means layout is not ready yet: return the whole model (QML's first-open
+/// means layout is not ready yet: return the whole model (legacy UI's first-open
 /// fallback) so the first `/` is not starved to zero candidates.
 pub fn visible_index_range(
     offset: f32,
@@ -272,7 +272,7 @@ mod tests {
     }
 
     #[test]
-    fn profiles_match_qml_scroll_profiles() {
+    fn profiles_match_legacy_scroll_profiles() {
         assert!((LIBRARY.row_ratio - 0.105).abs() < f32::EPSILON);
         assert!((ALBUM.row_ratio - 0.06).abs() < f32::EPSILON);
         assert!((QUEUE.row_ratio - 0.10).abs() < f32::EPSILON);

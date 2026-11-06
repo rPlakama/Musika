@@ -11,7 +11,7 @@
 //! The queue stays owned by [`super::Player`]; this module is the transport:
 //! a decoder thread turns the current track into S16 stereo PCM, a raw
 //! libpipewire stream consumes it, and `pump` maps the native state back into
-//! the shared player snapshot used by MPRIS and QML.
+//! the shared player snapshot used by MPRIS and legacy UI.
 
 use std::ffi::{CString, c_char, c_double, c_int, c_void};
 use std::sync::atomic::{AtomicBool, Ordering};

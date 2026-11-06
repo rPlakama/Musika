@@ -72,7 +72,7 @@ impl SubsonicClient {
     /// parameters and any extra `params`.
     ///
     /// Useful for endpoints that return something other than JSON, such as
-    /// `stream` or `getCoverArt`, whose URLs can be handed straight to QML.
+    /// `stream` or `getCoverArt`, whose URLs can be handed straight to legacy UI.
     pub fn endpoint_url(&self, method: &str, params: &[(&str, String)]) -> Result<Url> {
         self.resource_url(&format!("{method}.view"), params)
     }

@@ -76,7 +76,7 @@ pub struct Row {
     pub downloaded: bool,
 }
 
-/// The QML `RowWindow` contract: a count plus only the rows inside the live
+/// The legacy UI `RowWindow` contract: a count plus only the rows inside the live
 /// window. The UI never materializes the whole library.
 #[derive(Debug, Clone, Default)]
 pub struct RowWindow {
@@ -407,7 +407,7 @@ impl PageState {
     }
 }
 
-/// Travel log: the QML shell keeps the last 32 places. M1 keeps descriptors
+/// Travel log: the legacy UI shell keeps the last 32 places. M1 keeps descriptors
 /// (page content is reloaded on travel instead of cached).
 #[derive(Default)]
 pub struct Travel {

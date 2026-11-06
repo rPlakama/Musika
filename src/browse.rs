@@ -17,7 +17,7 @@
 //! Off-thread list/search loaders for the Qt bridge: `library.db` /
 //! `search.db` rows -> JSON payloads with resolved `file://` cover URLs.
 //!
-//! Split out of `qml.rs` (ARC-17); playback queues live in [`crate::queue`].
+//! Split out of `legacy.rs` (ARC-17); playback queues live in [`crate::queue`].
 
 pub(crate) mod rows;
 mod search;

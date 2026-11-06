@@ -1,4 +1,4 @@
-//! Dynamic Material palette, mirroring QML's `Palette` singleton.
+//! Dynamic Material palette, mirroring legacy UI's `Palette` singleton.
 //!
 //! The renderer reads the painted palette through the module accessors
 //! (`surface()`, `primary()`, …). `PaletteMotion` owns the cover-to-cover

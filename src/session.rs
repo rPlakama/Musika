@@ -17,7 +17,7 @@
 //! The live server session: online flag + one credential-keyed client.
 //!
 //! Kept out of the Qt bridge so cache and payload modules can use the client
-//! without depending on `qml`.
+//! without depending on `legacy`.
 
 #[cfg(not(test))]
 use std::sync::OnceLock;

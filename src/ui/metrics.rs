@@ -14,15 +14,15 @@
 // You should have received a copy of the GNU General Public License
 // along with this program; if not, see <https://www.gnu.org/licenses/>.
 
-//! Pure layout metrics ported from the QML front end.
+//! Pure layout metrics ported from the legacy UI front end.
 //!
 //! Every formula here mirrors `the retired reference UI`, ``
-//! and the row-metric block of `src/qml/ScrollContent.qml`/`SearchColumn.qml`.
+//! and the row-metric block of `src/legacy/ScrollContent.legacy`/`SearchColumn.legacy`.
 //! Nothing in this module touches GPUI: it is plain `f32` geometry so the
 //! port's type ramp and row sizing can be tested without a window. Font sizes
 //! are logical pixels; callers convert them with `gpui::px(...)`.
 //!
-//! The QML side is the source of truth; when a fraction changes there, change
+//! The legacy UI side is the source of truth; when a fraction changes there, change
 //! it here in the same commit.
 
 /// `Theme.breakpoints.narrow`: below this width the chrome type ramp starts
@@ -37,8 +37,8 @@ pub const MIN_ROW_HEIGHT: f32 = 18.0;
 /// A row may lose at most 18% of its captured baseline (UI-58).
 pub const BASELINE_FLOOR: f32 = 0.82;
 
-/// `Theme.clamp`: the QML order `Math.max(min, Math.min(max, value))`, kept
-/// exactly so NaN and inverted bounds behave like the QML source.
+/// `Theme.clamp`: the legacy UI order `Math.max(min, Math.min(max, value))`, kept
+/// exactly so NaN and inverted bounds behave like the legacy UI source.
 #[inline]
 pub fn clamp(value: f32, min: f32, max: f32) -> f32 {
     if value.is_nan() || min.is_nan() || max.is_nan() {
@@ -61,7 +61,7 @@ pub fn width_scale(width: f32) -> f32 {
 /// reference height with the role's pixel clamps (R7).
 ///
 /// Roles match `Theme.type`: `display`, `headline`, `title`, `body`, `label`,
-/// `mono`. An unknown role falls back to the QML behaviour, `reference * 0.02`
+/// `mono`. An unknown role falls back to the legacy UI behaviour, `reference * 0.02`
 /// with no clamp.
 pub fn font_size(role: &str, reference_height: f32) -> f32 {
     let (fraction, min, max) = match role {
@@ -82,7 +82,7 @@ pub fn font_size(role: &str, reference_height: f32) -> f32 {
 /// list size (UI-58).
 ///
 /// Roles: `title` (.28h/.05w, 10..24), `subtitle` (.20h/.032w, 9..17),
-/// `meta` (.20h/.028w, 9..15). An unknown role mirrors QML:
+/// `meta` (.20h/.028w, 9..15). An unknown role mirrors legacy UI:
 /// `clamp(height * 0.20, 9, 18)`.
 pub fn row_font(role: &str, view_width: f32, row_height: f32) -> f32 {
     let (height_fraction, width_fraction, min, max) = match role {
@@ -105,7 +105,7 @@ pub fn row_font(role: &str, view_width: f32, row_height: f32) -> f32 {
 /// "not captured yet", which disables the floor).
 ///
 /// Degenerate, non-positive viewports return the nominal value untouched,
-/// exactly like the QML helper.
+/// exactly like the legacy UI helper.
 #[inline]
 pub fn adaptive_row(view_height: f32, ratio: f32, baseline: f32) -> f32 {
     let nominal = view_height * ratio;
@@ -144,7 +144,7 @@ impl ScrollProfile {
         row_ratio: 0.055,
         row_height_scale: 1.0,
     };
-    /// Page tracklists use the denser 6% step (`PageEntry.qml`).
+    /// Page tracklists use the denser 6% step (`PageEntry.legacy`).
     pub const PAGE_TRACKLIST: Self = Self {
         row_ratio: 0.06,
         row_height_scale: 1.0,
@@ -237,7 +237,7 @@ mod tests {
     }
 
     #[test]
-    fn clamp_keeps_the_qml_order() {
+    fn clamp_keeps_the_legacy_order() {
         assert_eq!(clamp(5.0, 0.0, 10.0), 5.0);
         assert_eq!(clamp(-3.0, 0.0, 10.0), 0.0);
         assert_eq!(clamp(13.0, 0.0, 10.0), 10.0);
@@ -282,7 +282,7 @@ mod tests {
         assert_close(font_size("label", 1000.0), 14.0);
         assert_close(font_size("label", 200.0), 10.0);
         assert_close(font_size("mono", 500.0), 10.0);
-        // Unknown role keeps the QML fallback (unclamped 0.02).
+        // Unknown role keeps the legacy UI fallback (unclamped 0.02).
         assert_close(font_size("unknown", 400.0), 8.0);
     }
 
@@ -316,7 +316,7 @@ mod tests {
         assert_close(adaptive_row(300.0, 0.105, 100.0), 82.0);
         // No baseline captured yet: pure nominal.
         assert_close(adaptive_row(500.0, 0.105, 0.0), 52.5);
-        // Degenerate viewport returns the nominal untouched (QML parity).
+        // Degenerate viewport returns the nominal untouched (legacy UI parity).
         assert_close(adaptive_row(0.0, 0.105, 100.0), 0.0);
     }
 
@@ -366,7 +366,7 @@ mod tests {
     }
 
     #[test]
-    fn scroll_profiles_match_the_qml_table() {
+    fn scroll_profiles_match_the_legacy_table() {
         assert_close(ScrollProfile::LIBRARY.row_ratio, 0.105);
         assert_close(ScrollProfile::LIBRARY.row_height_scale, 1.0);
 

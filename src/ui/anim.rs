@@ -1,8 +1,8 @@
-// Musika — GPUI animation primitives (behaviour parity, QML Anim/ColorAnim).
+// Musika — GPUI animation primitives (behaviour parity, legacy UI Anim/ColorAnim).
 //!
 //! The GPUI element tree is retained; these are our logical behaviour clocks,
 //! keyed by stable ids so scrolled/recycled rows keep their state. Durations and
-//! curves come from the QML `Theme.js` tokens.
+//! curves come from the legacy UI `Theme.js` tokens.
 
 use std::time::Instant;
 
@@ -21,7 +21,7 @@ pub enum Curve {
     Accelerate,
     /// Qt-clamped `[0.34,1.56,0.64,1]` (Theme.js bounce).
     Bounce,
-    /// QML `Easing.OutBack` with overshoot 1.7 (PopFx).
+    /// legacy UI `Easing.OutBack` with overshoot 1.7 (PopFx).
     OutBack,
 }
 
@@ -74,7 +74,7 @@ impl Default for Clock {
     }
 }
 
-/// QML `Behavior on <prop> { Anim {} }`: first call snaps to target; a target
+/// legacy UI `Behavior on <prop> { Anim {} }`: first call snaps to target; a target
 /// change restarts from the currently painted value.
 pub struct Behavior {
     from: f32,
@@ -186,7 +186,7 @@ mod tests {
     }
 }
 
-/// QML `ColorAnim` semantics: straight-alpha component-wise sRGB interpolation,
+/// legacy UI `ColorAnim` semantics: straight-alpha component-wise sRGB interpolation,
 /// retargeting from the currently painted colour.
 pub struct ColorBehavior {
     from: u32,

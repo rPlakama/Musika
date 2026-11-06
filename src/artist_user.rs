@@ -147,7 +147,7 @@ pub async fn starred_ids(pool: &SqlitePool) -> Result<Vec<String>> {
     Ok(ids)
 }
 
-/// The QML `artist_user` payload for one artist (defaults when unknown).
+/// The legacy UI `artist_user` payload for one artist (defaults when unknown).
 pub async fn payload(pool: &SqlitePool, artist_id: &str) -> String {
     let (starred, rating) = match get(pool, artist_id).await {
         Ok(Some(row)) => (row.starred, row.rating),

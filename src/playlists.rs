@@ -513,7 +513,7 @@ fn playlist_row(row: &PlaylistListRow) -> serde_json::Value {
 }
 
 /// The segment payload: every playlist, m3u and (later) Subsonic, as the
-/// list rows the QML maps.
+/// list rows the legacy UI maps.
 pub async fn list_json(dbs: &Dbs) -> Result<String> {
     let rows: Vec<PlaylistListRow> = sqlx::query_as(
         "SELECT id, source, name, song_count, duration, owner

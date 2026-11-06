@@ -249,7 +249,7 @@ async fn refresh_inner(
 
     // Legacy/upgraded caches can hold a raw cover without its thumbnail (the
     // job list above only covers files changed in this pass). Backfill every
-    // referenced cached cover once per full pass, so QML never requests a
+    // referenced cached cover once per full pass, so legacy UI never requests a
     // .thumb.jpg that does not exist.
     if purge_unreferenced {
         let mut queued: HashSet<String> = thumb_jobs.iter().map(|(name, _)| name.clone()).collect();
@@ -597,7 +597,7 @@ pub(crate) fn is_raw_file(name: &str) -> bool {
     name.starts_with(RAW_PREFIX)
 }
 
-/// Derives the thumbnail file name from a cover file name. `CoverImage.qml`
+/// Derives the thumbnail file name from a cover file name. `CoverImage.legacy`
 /// computes the same name from the resolved URL, so keep the two in sync.
 pub(crate) fn thumb_name(file: &str) -> String {
     let stem = Path::new(file)
@@ -643,7 +643,7 @@ pub(crate) fn build_thumb(source: &Path) -> Result<Vec<u8>> {
 
 pub(crate) fn write_thumb(source: &Path, dir: &Path, name: &str) -> Result<()> {
     let bytes = build_thumb(source).or_else(|err| {
-        // A blob the decoder rejects still needs a file QML can request; the
+        // A blob the decoder rejects still needs a file legacy UI can request; the
         // copy surfaces the same failure as the full-size path.
         eprintln!(
             "covers: thumbnail fallback for {}: {err:#}",
@@ -799,7 +799,7 @@ pub async fn get_or_create_resized_cover(
 
     // A display copy is shared by every surface at this bucket. Validate a
     // pre-existing file before reusing it: a crash/short write used to leave
-    // a truncated JPEG that QML then reported as "Unsupported image format".
+    // a truncated JPEG that legacy UI then reported as "Unsupported image format".
     if resized_path.exists() {
         if image::ImageReader::open(&resized_path)
             .ok()

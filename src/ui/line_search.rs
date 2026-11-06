@@ -16,7 +16,7 @@
 
 //! The `/` in-surface command line, as a pure model (no GPUI types).
 //!
-//! This mirrors `LineSearch.qml` + `SearchMatch.js`: the whole window is one
+//! This mirrors `LineSearch.legacy` + `SearchMatch.js`: the whole window is one
 //! search buffer, made of the surfaces' visible rows in window order. Rows are
 //! sparse — a surface only contributes the rows that are actually on screen —
 //! and each target keeps its own row indices, so a hit is a
@@ -33,7 +33,7 @@
 //!
 //! The model has no window, focus or target-snapshot ownership. The caller
 //! snapshots `&[LineTarget]` once when `/` opens and reuses it for every query
-//! edit, exactly like QML `LineSearch.open()` captures the visible row buffer.
+//! edit, exactly like legacy UI `LineSearch.open()` captures the visible row buffer.
 
 use std::ops::Range;
 
@@ -52,7 +52,7 @@ pub struct LineRow {
     /// track number, queue duration, …).
     pub extra: Vec<String>,
     /// Cell indices that participate in candidate matching. Indices 0..=2 map
-    /// to title/subtitle/meta; indices >=3 map to `extra`. QML's
+    /// to title/subtitle/meta; indices >=3 map to `extra`. legacy UI's
     /// `SearchContract.fields` selects these per surface; painting still uses
     /// all three rendered cells.
     pub search_fields: Vec<usize>,
@@ -103,7 +103,7 @@ impl LineRow {
         }
     }
 
-    /// Restricts candidate matching to the given cells (QML per-surface
+    /// Restricts candidate matching to the given cells (legacy UI per-surface
     /// `searchFields`). Out-of-range indices are ignored.
     pub fn with_search_fields(mut self, fields: impl IntoIterator<Item = usize>) -> Self {
         self.search_fields = fields
@@ -385,7 +385,7 @@ impl LineSearchState {
     }
 
     /// Open a fresh command line: clear the previous query, ring and preview
-    /// (QML `LineSearch.open` assigns `opened = true` and empties the field).
+    /// (legacy UI `LineSearch.open` assigns `opened = true` and empties the field).
     pub fn open(&mut self) {
         self.clear_session();
         self.open = true;
@@ -604,7 +604,7 @@ mod tests {
         assert_eq!(match_ranges("Hello", "Hello hello"), vec![0..5]);
         assert_eq!(match_ranges("hEllo", "hello"), Vec::<Range<usize>>::new());
         assert!(match_ranges("A", "a").is_empty());
-        // Non-ASCII uppercase does not trip the QML `[A-Z]` test.
+        // Non-ASCII uppercase does not trip the legacy UI `[A-Z]` test.
         assert_eq!(match_ranges("É", "é"), vec![0..2]);
         assert_eq!(match_ranges("é", "É"), vec![0..2]);
     }
@@ -713,7 +713,7 @@ mod tests {
     }
 
     #[test]
-    fn delete_word_back_matches_the_qml_editor() {
+    fn delete_word_back_matches_the_legacy_editor() {
         let mut text = String::from("hello world  ");
         delete_word_back(&mut text);
         assert_eq!(text, "hello ");

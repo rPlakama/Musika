@@ -100,7 +100,7 @@ impl Document {
         }
     }
 
-    /// The payload sent to QML over the `lyrics` dataReady channel.
+    /// The payload sent to legacy UI over the `lyrics` dataReady channel.
     pub fn to_json(&self) -> String {
         let lines: Vec<serde_json::Value> = self
             .lines

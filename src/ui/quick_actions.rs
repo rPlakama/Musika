@@ -16,7 +16,7 @@
 
 //! Pure model for the Alt-hold quick actions (ARC-UI-1 / ARC-RS-2 / UI-60).
 //!
-//! This mirrors two QML files without any Qt/GPUI dependency:
+//! This mirrors two legacy UI files without any Qt/GPUI dependency:
 //!
 //! - `the retired action tables`: the verb tables (`song`, `album`, `artist`,
 //!   `playlist`, `forSelection`) and the open quadrants.
@@ -31,7 +31,7 @@
 //! unit-tested (or driven by the IPC `quick_aim`/`quick_cycle` hooks) without
 //! a window.
 //!
-//! The QML 180 ms rating debounce is a host timer. This model only carries the
+//! The legacy UI 180 ms rating debounce is a host timer. This model only carries the
 //! flags that timer needs: [`AltGesture::rating_dirty`] (a level is not on the
 //! server yet) and [`AltGesture::rating_touched`] (a step happened during this
 //! hold, so the release must not also toggle the favourite underneath it).
@@ -57,7 +57,7 @@ pub enum QuickVerb {
 }
 
 impl QuickVerb {
-    /// The QML tile label for this verb (favourite/download depend on `on`).
+    /// The legacy UI tile label for this verb (favourite/download depend on `on`).
     pub fn label(self) -> &'static str {
         match self {
             QuickVerb::AddToQueue => "Add to Queue",
@@ -74,7 +74,7 @@ impl QuickVerb {
         }
     }
 
-    /// The bare SVG file name under `src/icons/` (QML `qrc:/app/icons/<name>`).
+    /// The bare SVG file name under `src/icons/` (legacy UI `qrc:/app/icons/<name>`).
     pub fn icon(self) -> &'static str {
         match self {
             QuickVerb::AddToQueue => "baseline-playlist-add.svg",
@@ -168,7 +168,7 @@ pub struct QuickSlot {
     pub rating: u8,
     /// Target state of the favourite slot (`true` = this verb stars it).
     pub favorite: bool,
-    /// QML `typeof slot.rate === "function"`: `Some(Album)`/`Some(Artist)`
+    /// legacy UI `typeof slot.rate === "function"`: `Some(Album)`/`Some(Artist)`
     /// makes Shift-H/L step the rating instead of cycling verbs. This extra
     /// flag is needed because `rating == 0` is a real "unrated" value and
     /// cannot mean "no rating support".
@@ -176,12 +176,12 @@ pub struct QuickSlot {
 }
 
 impl QuickSlot {
-    /// True when Shift-H/L over this tile steps the rating (QML `rate`).
+    /// True when Shift-H/L over this tile steps the rating (legacy UI `rate`).
     pub fn is_rating_slot(&self) -> bool {
         self.rating_target.is_some()
     }
 
-    /// The action at `index`, wrapped like QML `activeSlot` (negative indexes
+    /// The action at `index`, wrapped like legacy UI `activeSlot` (negative indexes
     /// are never stored, so a plain modulo is enough).
     pub fn active_verb(&self, index: usize) -> Option<QuickVerb> {
         if self.actions.is_empty() {
@@ -209,7 +209,7 @@ impl QuickSlot {
     }
 }
 
-/// The four tiles armed around the current item. `None` is QML's open slot
+/// The four tiles armed around the current item. `None` is legacy UI's open slot
 /// (drawn as "—" and never aimable).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct QuickMenu {
@@ -220,7 +220,7 @@ pub struct QuickMenu {
 }
 
 impl QuickMenu {
-    /// Track row (QML `QuickActions.song`). The heart starts unstarred; use
+    /// Track row (legacy UI `QuickActions.song`). The heart starts unstarred; use
     /// [`QuickMenu::song_with`] for a row that is already favourited.
     pub fn song() -> Self {
         Self::song_with(false)
@@ -241,7 +241,7 @@ impl QuickMenu {
         }
     }
 
-    /// Album row/card (QML `QuickActions.album`). The heart starts unstarred
+    /// Album row/card (legacy UI `QuickActions.album`). The heart starts unstarred
     /// and unrated; use [`QuickMenu::album_with`] for the row's real state.
     pub fn album(cached: bool) -> Self {
         Self::album_with(cached, false, 0)
@@ -252,7 +252,7 @@ impl QuickMenu {
     /// `cached` is `Backend.cachedAlbumIds`' answer: an album already holding
     /// its content gets the container's "Remove Download" verb. Go to Album is
     /// free because Enter already opens the album page, so the east quadrant
-    /// carries the download toggle instead (QML).
+    /// carries the download toggle instead (legacy UI).
     pub fn album_with(cached: bool, starred: bool, rating: u8) -> Self {
         Self {
             north: Some(multi_slot(vec![
@@ -270,7 +270,7 @@ impl QuickMenu {
         }
     }
 
-    /// Artist hit (QML `QuickActions.artist`). The artist page is the row's
+    /// Artist hit (legacy UI `QuickActions.artist`). The artist page is the row's
     /// Enter already, so both jumps stay open ("—").
     pub fn artist() -> Self {
         Self::artist_with(false, 0)
@@ -290,7 +290,7 @@ impl QuickMenu {
         }
     }
 
-    /// Playlist row/page (QML `QuickActions.playlist`). Playlists have no
+    /// Playlist row/page (legacy UI `QuickActions.playlist`). Playlists have no
     /// server star/rating in the Subsonic API, so only Play and Add to Queue
     /// are offered and both jumps are open.
     pub fn playlist() -> Self {
@@ -302,7 +302,7 @@ impl QuickMenu {
         }
     }
 
-    /// Visual selection range (QML `QuickActions.forSelection`). `kind` is the
+    /// Visual selection range (legacy UI `QuickActions.forSelection`). `kind` is the
     /// row kind behind the range; the verb table is identical for every kind
     /// (the host carries the kind/ids alongside the menu). `all_starred`
     /// means every row is already favourited: the heart unstars, otherwise it
@@ -317,7 +317,7 @@ impl QuickMenu {
             north: Some(single_slot(QuickVerb::AddToQueue)),
             south: Some(single_slot(QuickVerb::Favorite { on: !all_starred })),
             west: Some(west),
-            // QML always labels this "Download" and leaves the per-row toggle
+            // legacy UI always labels this "Download" and leaves the per-row toggle
             // to `downloadSelection`, so there is no cached flag to encode.
             east: Some(single_slot(QuickVerb::Download { on: true })),
         }
@@ -350,13 +350,13 @@ impl QuickMenu {
         }
     }
 
-    /// QML `isOpen`: an open quadrant has no tile and cannot be aimed.
+    /// legacy UI `isOpen`: an open quadrant has no tile and cannot be aimed.
     pub fn is_open(&self, direction: Direction) -> bool {
         self.slot(direction).is_none()
     }
 
-    /// QML `isDisabled`: a disabled tile is drawn gray and cannot be aimed.
-    /// (The QML check also looks at the active multi-action entry; this model's
+    /// legacy UI `isDisabled`: a disabled tile is drawn gray and cannot be aimed.
+    /// (The legacy UI check also looks at the active multi-action entry; this model's
     /// verbs carry no individual disabled flag, only the slot does.)
     pub fn is_disabled(&self, direction: Direction) -> bool {
         self.slot(direction).is_some_and(|slot| slot.disabled)
@@ -450,12 +450,12 @@ impl AltGesture {
         gesture
     }
 
-    /// QML `arm(item, cfg)`: reset the gesture and seed the rating from the
+    /// legacy UI `arm(item, cfg)`: reset the gesture and seed the rating from the
     /// favourite slot. `sticky` is preserved (construct the gesture with
     /// [`AltGesture::with_sticky`]) because it is board configuration rather
     /// than per-arm state.
     ///
-    /// Returns `false` while the hold is dismissed, mirroring QML's
+    /// Returns `false` while the hold is dismissed, mirroring legacy UI's
     /// `if (!available || dismissed || !item || !cfg) return;`.
     pub fn arm(&mut self, menu: &QuickMenu) -> bool {
         if self.dismissed {
@@ -474,7 +474,7 @@ impl AltGesture {
         true
     }
 
-    /// QML `aim(direction)`: h/j/k/l (or arrows).
+    /// legacy UI `aim(direction)`: h/j/k/l (or arrows).
     ///
     /// Aiming toward the quadrant opposite the current one first steps back to
     /// neutral (`north + j = neutral`, `j` again = south). A press toward an
@@ -501,12 +501,12 @@ impl AltGesture {
         next == Some(direction)
     }
 
-    /// Shift-H/L over the aimed tile (QML `cycle(delta)`).
+    /// Shift-H/L over the aimed tile (legacy UI `cycle(delta)`).
     ///
     /// A rating slot (the album/artist favourite) steps its level by `delta`,
     /// clamped to 0..=5; a slot with more than one action rotates its active
     /// verb; a single-action slot is a no-op. Returns `true` when something
-    /// changed (QML bounces the aimed tile then).
+    /// changed (legacy UI bounces the aimed tile then).
     pub fn cycle(&mut self, delta: i32, menu: &QuickMenu) -> bool {
         if !self.armed {
             return false;
@@ -518,7 +518,7 @@ impl AltGesture {
             return false;
         };
 
-        // QML checks the base slot's `rate` function before anything else;
+        // legacy UI checks the base slot's `rate` function before anything else;
         // `adjustRating` only accepts the south tile, so a rating flag on any
         // other quadrant would still consume the press without cycling.
         if slot.rating_target.is_some() {
@@ -581,7 +581,7 @@ impl AltGesture {
     /// without ending the gesture. The host invokes the returned verb, then
     /// calls [`AltGesture::cancel`].
     ///
-    /// QML `confirm()` semantics:
+    /// legacy UI `confirm()` semantics:
     /// - a rating step on the south tile owns the release: return the pending
     ///   `RateAlbum`/`RateArtist` commit (consuming `rating_dirty`) and do
     ///   **not** also star/unstar — if the level is already clean this is
@@ -591,7 +591,7 @@ impl AltGesture {
     ///
     /// A rating that is dirty while the aim moved to another quadrant is not
     /// consumed here; the caller flushes it with
-    /// [`AltGesture::commit_rating`] when it runs the plan, exactly like QML's
+    /// [`AltGesture::commit_rating`] when it runs the plan, exactly like legacy UI's
     /// `commitRating()` next to `slot.invoke()`.
     pub fn confirm_plan(&mut self, menu: &QuickMenu) -> Option<QuickVerb> {
         if !self.armed {
@@ -628,9 +628,9 @@ impl AltGesture {
         Some(verb)
     }
 
-    /// QML `cancel()`: leave the board, clear the transient rating and sticky
+    /// legacy UI `cancel()`: leave the board, clear the transient rating and sticky
     /// state. The action indexes are left alone; [`AltGesture::arm`] resets
-    /// them on the next hold (as QML does).
+    /// them on the next hold (as legacy UI does).
     pub fn cancel(&mut self) {
         self.armed = false;
         self.aimed = None;
@@ -653,7 +653,7 @@ impl AltGesture {
         self.dismissed = false;
     }
 
-    /// The Alt release edge: QML clears `dismissed` first, then confirms only a
+    /// The Alt release edge: legacy UI clears `dismissed` first, then confirms only a
     /// non-sticky board. Returns `true` when the host should confirm now
     /// (`armed && !sticky`); a sticky board stays armed for Enter.
     ///
@@ -710,7 +710,7 @@ mod tests {
     }
 
     #[test]
-    fn song_quadrants_match_qml() {
+    fn song_quadrants_match_legacy() {
         let menu = QuickMenu::song();
         for direction in Direction::ALL {
             assert!(!menu.is_open(direction), "{direction:?} is live on a song");
@@ -908,7 +908,7 @@ mod tests {
     }
 
     #[test]
-    fn verb_labels_and_icons_are_qml_file_names() {
+    fn verb_labels_and_icons_are_legacy_file_names() {
         let cases = [
             (
                 QuickVerb::AddToQueue,
@@ -961,7 +961,7 @@ mod tests {
         for (verb, label, icon) in cases {
             assert_eq!(verb.label(), label, "{verb:?} label");
             assert_eq!(verb.icon(), icon, "{verb:?} icon");
-            // QML uses qrc:/app/icons/<file>; the model only keeps the file.
+            // legacy UI uses qrc:/app/icons/<file>; the model only keeps the file.
             assert!(!verb.icon().contains("qrc:"), "{verb:?} icon is bare");
         }
 

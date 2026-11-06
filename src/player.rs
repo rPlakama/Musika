@@ -18,7 +18,7 @@
 //!
 //! The queue is owned here; [`pipewire`] owns the libpipewire sink, the
 //! FFmpeg decoder thread and the native clock. [`Player::pump`] mirrors that
-//! transport state into the shared snapshot used by QML and MPRIS.
+//! transport state into the shared snapshot used by legacy UI and MPRIS.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, LazyLock, Mutex};
@@ -121,7 +121,7 @@ impl State {
     }
 }
 
-/// Snapshot of native transport state, read by QML and MPRIS.
+/// Snapshot of native transport state, read by legacy UI and MPRIS.
 #[derive(Debug, Default)]
 pub(crate) struct Shared {
     pub(crate) position: f64,

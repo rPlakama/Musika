@@ -8,7 +8,7 @@
 
 //! UI-54 scroll memory, owned by Rust.
 //!
-//! The QML surfaces only ask for an entry or remember one; TTL pruning, the
+//! The legacy UI surfaces only ask for an entry or remember one; TTL pruning, the
 //! entry cap, startup-row-zero policy and the persisted JSON shape live here.
 
 use std::collections::HashMap;
@@ -204,7 +204,7 @@ pub(crate) fn serialize() -> String {
     store().serialize()
 }
 
-/// Writes the current store to the scroll file (shared with the QML oracle).
+/// Writes the current store to the scroll file (shared with the legacy UI oracle).
 pub(crate) fn persist() {
     let Ok(path) = crate::db::scroll_path() else {
         return;

@@ -33,7 +33,7 @@ mod state;
 
 use gpui::{
     App, Application, Bounds, Context, FocusHandle, KeyBinding, Render, Window,
-    AssetSource, WindowBounds, WindowOptions, actions, div, img, prelude::*, px, relative, rgb, rgba, size, svg, uniform_list,
+    AssetSource, WindowBounds, WindowOptions, actions, div, img, prelude::*, px, relative, rgb, size, svg, uniform_list,
     HighlightStyle, StyledText,
     UniformListScrollHandle,
 };
@@ -324,10 +324,10 @@ struct AppRoot {
     search_open: bool,
     search_anim: anim::Behavior,
     clock: anim::Clock,
-    row_colors: std::collections::HashMap<String, anim::ColorBehavior>,
     row_cover_scales: std::collections::HashMap<String, anim::Behavior>,
     hovered_row: Option<usize>,
     hovered_page: Option<usize>,
+    visual_mode: bool,
     player: crate::player::Player,
     playback_error: Option<String>,
     queue_open: bool,
@@ -416,10 +416,10 @@ impl AppRoot {
             search_open: false,
             search_anim: anim::Behavior::new(0.0),
             clock: anim::Clock::new(),
-            row_colors: std::collections::HashMap::new(),
             row_cover_scales: std::collections::HashMap::new(),
             hovered_row: None,
             hovered_page: None,
+            visual_mode: false,
             player: crate::player::Player::new(),
             playback_error: None,
             queue_open: false,
@@ -1061,6 +1061,9 @@ impl AppRoot {
     }
 
     fn select(&mut self, index: usize) {
+        if !self.visual_mode {
+            self.view.selection.clear();
+        }
         self.view.select(index);
         self.hovered_row = None;
         self.follow_library(true);
@@ -1084,6 +1087,9 @@ impl AppRoot {
             return;
         }
         if let Some(page) = self.page.as_mut() {
+            if !self.visual_mode {
+                page.selection.clear();
+            }
             page.select(page.cursor.saturating_add(1));
             self.hovered_page = None;
             self.follow_page(true);
@@ -1106,6 +1112,9 @@ impl AppRoot {
             return;
         }
         if let Some(page) = self.page.as_mut() {
+            if !self.visual_mode {
+                page.selection.clear();
+            }
             page.select(page.cursor.saturating_sub(1));
             self.hovered_page = None;
             self.follow_page(true);
@@ -2527,6 +2536,7 @@ impl AppRoot {
         } else {
             (self.view.selection.active(), self.view.cursor)
         };
+        self.visual_mode = !active;
         if active {
             if let Some(page) = self.page.as_mut() {
                 page.selection.clear();
@@ -2542,6 +2552,7 @@ impl AppRoot {
     }
 
     fn on_visual_all(&mut self, _: &VisualAll, _window: &mut Window, cx: &mut Context<Self>) {
+        self.visual_mode = true;
         if let Some(page) = self.page.as_mut() {
             page.selection.select_all();
             let last = page.rows.len().saturating_sub(1);
@@ -2964,16 +2975,7 @@ impl AppRoot {
                         let hovered = this.hovered_row == Some(index);
                         let emphasis = if selected { 1.08 } else { 1.0 };
                         let striped = index % 2 != 0;
-                        let target = if selected {
-                            0x4A4458FF
-                        } else if hovered {
-                            0x2B2930FF
-                        } else if striped {
-                            0x0F0D13FF
-                        } else {
-                            0x14121800
-                        };
-                        let Some(row) = this.view.rows.get(index) else {
+                                        let Some(row) = this.view.rows.get(index) else {
                             // RowWindow blank slot: a waving grey placeholder
                             // until the live window lands.
                             _window.request_animation_frame();
@@ -2986,7 +2988,7 @@ impl AppRoot {
                                     .h(px(row_h))
                                     .px_1()
                                     .rounded_sm()
-                                    .bg(rgb(target))
+                                    .bg(rgb(if selected { 0x4A4458 } else { 0x141218 }))
                                     .child(row_placeholder(index, row_h, this.clock.now as f32)),
                             );
                             continue;
@@ -3008,11 +3010,6 @@ impl AppRoot {
                                 anim::Curve::Standard,
                                 &this.clock,
                             );
-                        let color = this
-                            .row_colors
-                            .entry(row.id.clone())
-                            .or_insert_with(|| anim::ColorBehavior::new(target))
-                            .target(target, anim::QUICK_MS, anim::Curve::Standard, &this.clock);
                         items.push(
                             div()
                                 .id(index)
@@ -3022,7 +3019,15 @@ impl AppRoot {
                                 .h(px(row_h))
                                 .px_1()
                                 .rounded_sm()
-                                .bg(if selected { rgb(0x4A4458) } else { rgba(color) })
+                                .bg(if selected {
+                                    rgb(0x4A4458)
+                                } else if hovered {
+                                    rgb(0x2B2930)
+                                } else if striped {
+                                    rgb(0x0F0D13)
+                                } else {
+                                    rgb(0x141218)
+                                })
                                 .cursor_pointer()
                                 .on_hover(cx.listener(move |this, hovered: &bool, _, cx| {
                                     if *hovered {
@@ -4064,13 +4069,6 @@ impl AppRoot {
                                     break;
                                 };
                                 let hovered = this.hovered_page == Some(index);
-                                let target = if selected {
-                                    0x4A4458FF
-                                } else if hovered {
-                                    0x2B2930FF
-                                } else {
-                                    0x141218FF
-                                };
                                 let emphasis = this
                                     .row_cover_scales
                                     .entry(format!("page-text:{key}"))
@@ -4092,11 +4090,6 @@ impl AppRoot {
                                             &this.clock,
                                         )
                                 });
-                                let color = this
-                                    .row_colors
-                                    .entry(key)
-                                    .or_insert_with(|| anim::ColorBehavior::new(target))
-                                    .target(target, anim::QUICK_MS, anim::Curve::Standard, &this.clock);
                                 items.push(
                                     div()
                                         .id(index)
@@ -4106,7 +4099,13 @@ impl AppRoot {
                                         .h(px(row_h))
                                         .px_4()
                                         .cursor_pointer()
-                                        .bg(if selected { rgb(0x4A4458) } else { rgba(color) })
+                                        .bg(if selected {
+                                            rgb(0x4A4458)
+                                        } else if hovered {
+                                            rgb(0x2B2930)
+                                        } else {
+                                            rgb(0x141218)
+                                        })
                                         .on_hover(cx.listener(move |this, hovered: &bool, _, cx| {
                                             if *hovered {
                                                 this.hovered_page = Some(index);
@@ -4522,9 +4521,7 @@ impl Render for AppRoot {
         };
         // Targets are updated while the body is built; request frames after,
         // or a cursor move can leave the previous fill frozen on screen.
-        if self.row_colors.values().any(|color| !color.settled(&self.clock))
-            || self.row_cover_scales.values().any(|scale| !scale.settled(&self.clock))
-        {
+        if self.row_cover_scales.values().any(|scale| !scale.settled(&self.clock)) {
             window.request_animation_frame();
         }
         let status = self.player_bar();

@@ -4463,11 +4463,6 @@ impl Render for AppRoot {
             let progress = (((self.clock.now - started) / 0.200) as f32).clamp(0.0, 1.0);
             self.exit_overlay(progress)
         });
-        if self.row_colors.values().any(|color| !color.settled(&self.clock))
-            || self.row_cover_scales.values().any(|scale| !scale.settled(&self.clock))
-        {
-            window.request_animation_frame();
-        }
         self.toasts.retain(|toast| self.clock.now - toast.created_at < 6.320);
         if self.toasts.iter().any(|toast| self.clock.now - toast.created_at < 6.320) {
             window.request_animation_frame();
@@ -4525,6 +4520,13 @@ impl Render for AppRoot {
         } else {
             self.list(&*cx, window).into_any_element()
         };
+        // Targets are updated while the body is built; request frames after,
+        // or a cursor move can leave the previous fill frozen on screen.
+        if self.row_colors.values().any(|color| !color.settled(&self.clock))
+            || self.row_cover_scales.values().any(|scale| !scale.settled(&self.clock))
+        {
+            window.request_animation_frame();
+        }
         let status = self.player_bar();
         div()
             .track_focus(&self.focus)

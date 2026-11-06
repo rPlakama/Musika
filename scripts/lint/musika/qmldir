@@ -1,3 +1,0 @@
-module musika
-typeinfo plugins.qmltypes
-depends QtQuick

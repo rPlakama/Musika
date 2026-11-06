@@ -1,3 +1,7 @@
+// Transitional: the QML frontend has been retired, but the shared backend
+// modules it used are still compiled until they are extracted/removed.
+#![allow(dead_code)]
+
 // Musika — a keyboard-driven music player.
 // Copyright (C) 2026 rPlakama <rPlakama@proton.me>
 //
@@ -13,8 +17,6 @@
 //
 // You should have received a copy of the GNU General Public License
 // along with this program; if not, see <https://www.gnu.org/licenses/>.
-
-use qtbridge::QApp;
 
 mod api;
 mod app;
@@ -219,14 +221,6 @@ fn main() {
 
     load_dotenv();
 
-    if std::env::var("QSG_RHI_BACKEND").is_err() {
-        unsafe {
-            std::env::set_var("QSG_RHI_BACKEND", "vulkan");
-        }
-    }
-
-    #[cfg(debug_assertions)]
-    let db_started = std::time::Instant::now();
     let dbs = match crate::app::runtime().block_on(db::init()) {
         Ok(dbs) => dbs,
         Err(err) => {
@@ -236,112 +230,9 @@ fn main() {
     };
     crate::startup::trace("db.init");
 
-    // GPUI M0: opt-in front end on the same DB spine; Qt stays default.
-    #[cfg(feature = "gpuui")]
-    {
-        crate::app::set_dbs(dbs.clone());
-        #[cfg(debug_assertions)]
-        let _ = db_started;
-        crate::ui::run();
-        return;
-    }
-    #[cfg(debug_assertions)]
-    crate::debug_info::report("db.init", db_started);
-
-    // The login screen must not flash for an account already in the DB.
-    // Read it before QML loads; the async startup ping still owns the
-    // online/offline state and the failure fallback.
-    let credentials = crate::app::runtime()
-        .block_on(crate::sqlite::load_credentials(&dbs.credentials))
-        .ok()
-        .flatten();
-    let has_stored_auth = credentials.is_some();
-    crate::qml::set_bootstrap_has_auth(has_stored_auth);
-
-    // If the saved session points at an album or artist, build its row now so
-    // Home can push that page before its first frame instead of flashing the
-    // library. Old rows without page_kind fall back to album_id.
-    let initial_target = credentials.as_ref().and_then(|credentials| {
-        let status = crate::app::runtime()
-            .block_on(crate::status::load(&dbs.status))
-            .ok()
-            .flatten()?;
-        if status.server_url != credentials.server_url || status.username != credentials.username {
-            return None;
-        }
-        let (kind, id) = if !status.page_kind.is_empty() && !status.page_id.is_empty() {
-            (status.page_kind.clone(), status.page_id.clone())
-        } else {
-            (
-                "album".to_string(),
-                status.album_id.clone().filter(|id| !id.is_empty())?,
-            )
-        };
-        let page = match kind.as_str() {
-            "album" => {
-                let album = crate::app::runtime()
-                    .block_on(crate::library::album(&dbs.library, &id))
-                    .ok()
-                    .flatten()?;
-                let cover_ids: Vec<String> = album.cover_art.clone().into_iter().collect();
-                let covers = crate::app::runtime()
-                    .block_on(crate::covers::url_map_of(&dbs, &cover_ids))
-                    .unwrap_or_default();
-                crate::browse::album_json(&album, &covers, None)
-            }
-            "playlist" => {
-                let name = crate::app::runtime()
-                    .block_on(crate::playlists::name(&dbs, &id))
-                    .ok()
-                    .flatten()?;
-                serde_json::json!({ "playlistId": id, "playlistTitle": name })
-            }
-            "artist" => {
-                let artist = crate::app::runtime()
-                    .block_on(crate::library::artist(&dbs.library, &id))
-                    .ok()
-                    .flatten()?;
-                let cover_ids: Vec<String> = artist.cover_art.clone().into_iter().collect();
-                let covers = crate::app::runtime()
-                    .block_on(crate::covers::url_map_of(&dbs, &cover_ids))
-                    .unwrap_or_default();
-                let user_starred = crate::app::runtime()
-                    .block_on(crate::artist_user::starred_ids(&dbs.artist_user))
-                    .unwrap_or_default();
-                let starred = artist.starred.is_some() || user_starred.contains(&artist.id);
-                let rating = crate::app::runtime()
-                    .block_on(crate::artist_user::ratings(&dbs.artist_user))
-                    .ok()
-                    .and_then(|ratings| ratings.get(&artist.id).copied())
-                    .unwrap_or(0);
-                crate::browse::artist_json(&artist, &covers, None, starred, rating)
-            }
-            _ => return None,
-        };
-        Some(serde_json::json!({ "kind": kind, "page": page }).to_string())
-    });
-    crate::qml::set_bootstrap_target(initial_target);
+    // GPUI is the only front end. QML/Qt startup has been retired; the
+    // remaining qml_backend modules are shared data/action backends.
     crate::app::set_dbs(dbs);
-    crate::startup::trace("session.restore");
-
-    let mut app = QApp::new();
-    crate::startup::trace("qapp.new");
-    qtbridge::include_bytes_qml!("qml", "app");
-    qtbridge::include_bytes_qml!("icons", "app");
-    crate::mpris::init();
-
-    app.application_name("musika")
-        .register::<qml::Backend>()
-        .register::<palette::Palette>()
-        .load_qml_from_file("qrc:/app/qml/Main.qml");
-    crate::startup::trace("qml.loaded");
-    #[cfg(debug_assertions)]
-    {
-        crate::debug_info::since_start("qml.loaded");
-        // `vulkaninfo` is a synchronous subprocess; keep it out of the
-        // startup measurement (and off the main thread) while the event loop
-        // starts.
-        std::thread::spawn(crate::debug_info::print_diagnostics);
-    }
-    app.run();
+    crate::startup::trace("app.gpuui");
+    crate::ui::run();
 }

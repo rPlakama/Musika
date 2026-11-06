@@ -31,7 +31,7 @@ libc = { version = "0.2", optional = true }
 gpui = { version = "0.2.2", optional = true, default-features = false, features = ["wayland", "x11", "font-kit"] }
 
 [features]
-default = []
+default = ["gpuui"]
 io-uring = []
 # GPUI port (gpui.rs): opt-in front end on the same backend.
 gpuui = ["dep:gpui", "dep:libc"]

@@ -316,6 +316,8 @@ struct AppRoot {
     marks: MarksState,
     warm: std::collections::HashMap<(Scope, usize), (usize, Vec<Row>)>,
     preloaded: bool,
+    trace: bool,
+    frames: u64,
 }
 
 impl AppRoot {
@@ -388,6 +390,8 @@ impl AppRoot {
             marks: MarksState::default(),
             warm: std::collections::HashMap::new(),
             preloaded: false,
+            trace: std::env::var_os("MUSIKA_GPUUI_TRACE").is_some(),
+            frames: 0,
         };
         if let Ok(message) = std::env::var("MUSIKA_GPUUI_TOAST")
             && !message.is_empty()
@@ -518,6 +522,9 @@ impl AppRoot {
                 count,
                 rows,
             } => {
+                if self.trace {
+                    crate::debug_log!("GPUI trace: preload {} order {} count {}", scope.label(), order, count);
+                }
                 self.warm.insert((scope, order), (count, rows));
             }
             Event::Marks { generation, result } => {
@@ -696,6 +703,7 @@ impl AppRoot {
         }
         self.view.loading = true;
         self.view.rows.clear();
+        self.marks.requested = None;
         self.generation = self.bridge.load_library(self.view.scope, self.view.order);
     }
 
@@ -745,6 +753,16 @@ impl AppRoot {
             return;
         }
         self.view.rows.set_requested(start, end);
+        if self.trace {
+            crate::debug_log!(
+                "GPUI trace: row window {}..{} cursor {} count {} row_h {:.1}",
+                start,
+                end,
+                self.view.cursor,
+                count,
+                row_h
+            );
+        }
         self.bridge.request_library_window(
             self.view.rows.generation,
             self.view.scope,
@@ -771,8 +789,18 @@ impl AppRoot {
             }
         };
         if let Some(page) = self.page.as_ref() {
-            let lo = page.cursor.saturating_sub(24);
-            let hi = (page.cursor + 24).min(page.rows.len().saturating_sub(1));
+            let (top, viewport) = {
+                let state = self.page_scroll.0.borrow();
+                let top = state.base_handle.logical_scroll_top().0;
+                let viewport = state
+                    .last_item_size
+                    .map(|size| f32::from(size.item.height))
+                    .unwrap_or(600.0);
+                (top, viewport)
+            };
+            let visible = ((viewport / 36.0).ceil() as usize).max(1);
+            let lo = top.saturating_sub(10);
+            let hi = (top + visible + 10).min(page.rows.len().saturating_sub(1));
             for row in page.rows.get(lo..=hi).unwrap_or_default() {
                 push(row, &mut songs, &mut albums);
             }
@@ -789,6 +817,13 @@ impl AppRoot {
         }
         self.marks.requested = Some((songs.clone(), albums.clone()));
         self.marks.inflight = true;
+        if self.trace {
+            crate::debug_log!(
+                "GPUI trace: marks window {} songs, {} albums",
+                songs.len(),
+                albums.len()
+            );
+        }
         self.bridge.request_marks(songs, albums);
     }
 
@@ -2899,6 +2934,10 @@ impl AppRoot {
 
 impl Render for AppRoot {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.frames = self.frames.wrapping_add(1);
+        if self.trace && self.frames.is_multiple_of(120) {
+            crate::debug_log!("GPUI trace: frame {}", self.frames);
+        }
         self.clock.tick();
         if self.exiting.is_none()
             && let Some(ms) = self.quit_after_ms
@@ -2976,6 +3015,9 @@ impl Render for AppRoot {
                 self.flush_status();
                 window.remove_window();
             }
+        }
+        if self.page.is_some() {
+            self.ensure_marks();
         }
         self.ensure_library_window();
         if !self.preloaded && self.view.rows.count > 0 && self.view.scope != Scope::Playlists {

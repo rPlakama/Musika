@@ -251,6 +251,7 @@ struct AppRoot {
     clock: anim::Clock,
     row_colors: std::collections::HashMap<String, anim::ColorBehavior>,
     row_cover_scales: std::collections::HashMap<String, anim::Behavior>,
+    hovered_row: Option<usize>,
     player: crate::player::Player,
     playback_error: Option<String>,
     queue_open: bool,
@@ -311,6 +312,7 @@ impl AppRoot {
             clock: anim::Clock::new(),
             row_colors: std::collections::HashMap::new(),
             row_cover_scales: std::collections::HashMap::new(),
+            hovered_row: None,
             player: crate::player::Player::new(),
             playback_error: None,
             queue_open: false,
@@ -583,6 +585,7 @@ impl AppRoot {
             return;
         }
         self.remember_current();
+        self.hovered_row = None;
         self.view.clear_for(scope);
         self.reload();
     }
@@ -1592,8 +1595,17 @@ impl AppRoot {
                         let cover = cover_path(&row.cover_url);
                         let selected = index == this.view.cursor
                             || this.view.selection.contains(this.view.cursor, index);
+                        let hovered = this.hovered_row == Some(index);
                         let striped = index % 2 != 0;
-                        let target = if selected { 0x4A4458FF } else if striped { 0x0F0D13FF } else { 0x14121800 };
+                        let target = if selected {
+                            0x4A4458FF
+                        } else if hovered {
+                            0x2B2930FF
+                        } else if striped {
+                            0x0F0D13FF
+                        } else {
+                            0x14121800
+                        };
                         let color = this
                             .row_colors
                             .entry(row.id.clone())
@@ -1610,7 +1622,14 @@ impl AppRoot {
                                 .rounded_sm()
                                 .bg(rgba(color))
                                 .cursor_pointer()
-                                .hover(|this| this.bg(rgb(SURFACE_HIGH)))
+                                .on_hover(cx.listener(move |this, hovered: &bool, _, cx| {
+                                    if *hovered {
+                                        this.hovered_row = Some(index);
+                                    } else if this.hovered_row == Some(index) {
+                                        this.hovered_row = None;
+                                    }
+                                    cx.notify();
+                                }))
                                 .on_click(cx.listener(move |this, _, _, cx| {
                                     this.select(index);
                                     cx.notify();

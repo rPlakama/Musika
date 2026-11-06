@@ -838,6 +838,7 @@ impl AppRoot {
 
     fn follow_library(&mut self, animated: bool) {
         self.clock.tick();
+        self.refresh_lyrics_emphasis();
         self.library_scroll
             .start(self.view.rows.count, self.view.cursor, animated, self.clock.now);
     }
@@ -3388,14 +3389,24 @@ impl AppRoot {
                     .children(lyrics.lines[start..end].iter().enumerate().map(|(offset, (_, text))| {
                         let index = start + offset;
                         let is_active = index == active;
+                        let base = (self.win_h * 0.055).clamp(13.0, 22.0);
+                        let active_size = (base
+                            * (1.0 + 0.12 * self.lyrics_active_anim.value(&self.clock)))
+                            .min(24.5);
                         div()
                             .w_full()
                             .min_w_0()
                             .overflow_hidden()
-                            .text_size(px(if is_active { 18.0 } else { 14.0 }))
+                            .text_size(px(if is_active { active_size } else { base }))
                             .text_color(rgb(if is_active { ON_SURFACE } else { ON_VARIANT }))
                             .text_center()
                             .whitespace_normal()
+                            .opacity(
+                                self.lyrics_line_opacity
+                                    .get(&index)
+                                    .map(|anim| anim.value(&self.clock))
+                                    .unwrap_or(1.0),
+                            )
                             .when(is_active, |this| this.font_weight(gpui::FontWeight::SEMIBOLD))
                             .child(text.clone())
                     })),
@@ -4570,6 +4581,16 @@ impl Render for AppRoot {
             self.list(&*cx, window).into_any_element()
         };
         if self.row_scales.values().any(|scale| !scale.settled(&self.clock)) {
+            window.request_animation_frame();
+        }
+        if !self.lyrics_active_anim.settled(&self.clock)
+            || !self.lyrics_shift.settled(&self.clock)
+            || !self.lyrics_track_fade.settled(&self.clock)
+            || self
+                .lyrics_line_opacity
+                .values()
+                .any(|value| !value.settled(&self.clock))
+        {
             window.request_animation_frame();
         }
         let status = self.player_bar();

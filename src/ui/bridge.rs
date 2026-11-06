@@ -107,6 +107,7 @@ pub enum Event {
         generation: u64,
         query: String,
         rows: Vec<super::state::Row>,
+        most_played: bool,
     },
     Header {
         server_url: String,
@@ -427,19 +428,22 @@ impl Bridge {
         let generation = self.search_generation.fetch_add(1, Ordering::SeqCst) + 1;
         let generation_counter = self.search_generation.clone();
         let tx = self.tx.clone();
+        let offline = self.offline.load(Ordering::Relaxed);
         crate::app::runtime().spawn(async move {
             // Debounce keystrokes: only the latest query runs the index search.
             tokio::time::sleep(std::time::Duration::from_millis(120)).await;
             if generation_counter.load(Ordering::Relaxed) != generation {
                 return;
             }
-            let event = match search_rows(&query).await {
-                Ok(rows) => {
+            let event = match search_rows(&query, offline, super::state::SEARCH_VISIBLE_ROWS).await
+            {
+                Ok((rows, most_played)) => {
                     crate::debug_log!("GPUI: search {:?} {} rows", query, rows.len());
                     Event::Search {
                         generation,
                         query,
                         rows,
+                        most_played,
                     }
                 }
                 Err(err) => Event::Error(format!("Search failed: {err:#}")),
@@ -1294,61 +1298,109 @@ async fn page_data(
     }
 }
 
-async fn search_rows(query: &str) -> anyhow::Result<Vec<super::state::Row>> {
+async fn search_rows(
+    query: &str,
+    offline: bool,
+    limit: usize,
+) -> anyhow::Result<(Vec<super::state::Row>, bool)> {
     use super::state::{Row, RowKind};
-    let query = query.trim();
-    if query.is_empty() {
-        return Ok(Vec::new());
-    }
+
     let dbs = crate::app::dbs().ok_or_else(|| anyhow::anyhow!("databases not ready"))?;
-    let index = crate::search::index::ensure(&dbs.library).await?;
-    let Some(index) = index else {
-        return Ok(Vec::new());
+    let json = crate::browse::search_json(&dbs, query, offline, limit.max(1)).await?;
+    let value: serde_json::Value = serde_json::from_str(&json)?;
+    let most_played = value["most_played"].as_bool().unwrap_or(false);
+    let text = |row: &serde_json::Value, key: &str| {
+        row[key].as_str().unwrap_or_default().to_string()
     };
-    let results = index.search(query, 8);
     let mut rows = Vec::new();
-    for album in results.albums {
-        rows.push(Row {
-            track: String::new(),
-            id: album.id.clone(),
-            kind: RowKind::Album,
-            title: album.title.clone(),
-            subtitle: album.artist.clone().unwrap_or_default(),
-            meta: format!("{} · {}", album.year.unwrap_or_default(), songs_label(album.song_count)),
-            cover_url: album.cover_art.clone().unwrap_or_default(),
-            song_id: String::new(),
-            album_id: album.id.clone(),
-            starred: album.starred.is_some(),
-            rating: album.rating,
-            downloaded: false,
-        });
-    }
-    for artist in results.artists {
-        rows.push(Row {
-            track: String::new(),
-            id: artist.id.clone(),
-            kind: RowKind::Artist,
-            title: artist.name.clone(),
-            subtitle: format!("{} albums", artist.album_count),
-            meta: String::new(),
-            cover_url: artist.cover_art.clone().unwrap_or_default(),
-            song_id: String::new(),
-            album_id: String::new(),
-            starred: artist.starred.is_some(),
-            rating: 0,
-            downloaded: false,
-        });
-    }
-    if let Ok(playlists) = crate::playlists::search_rows(&dbs, query, 8).await {
-        for playlist in playlists {
+
+    if let Some(artists) = value["artists"].as_array() {
+        for artist in artists.iter().take(limit) {
             rows.push(Row {
                 track: String::new(),
-                id: playlist["id"].as_str().unwrap_or_default().to_string(),
+                id: text(artist, "id"),
+                kind: RowKind::Artist,
+                title: text(artist, "name"),
+                subtitle: text(artist, "meta"),
+                meta: String::new(),
+                cover_url: text(artist, "cover"),
+                song_id: String::new(),
+                album_id: String::new(),
+                starred: artist["starred"].as_bool().unwrap_or(false),
+                rating: artist["rating"].as_i64().unwrap_or(0),
+                downloaded: false,
+            });
+        }
+    }
+    if let Some(albums) = value["albums"].as_array() {
+        for album in albums.iter().take(limit) {
+            let year = album["year"].as_i64().unwrap_or(0);
+            let meta = text(album, "meta");
+            let meta = if year > 0 {
+                format!("{year} · {meta}")
+            } else {
+                meta
+            };
+            rows.push(Row {
+                track: String::new(),
+                id: text(album, "id"),
+                kind: RowKind::Album,
+                title: text(album, "title"),
+                subtitle: text(album, "artist"),
+                meta,
+                cover_url: text(album, "cover"),
+                song_id: String::new(),
+                album_id: text(album, "id"),
+                starred: album["starred"].as_bool().unwrap_or(false),
+                rating: album["rating"].as_i64().unwrap_or(0),
+                downloaded: false,
+            });
+        }
+    }
+    if let Some(songs) = value["songs"].as_array() {
+        for song in songs.iter().take(limit) {
+            let plays = song["play_count"].as_i64().unwrap_or(0);
+            rows.push(Row {
+                track: song["track"]
+                    .as_i64()
+                    .map(|track| track.to_string())
+                    .unwrap_or_default(),
+                id: text(song, "id"),
+                kind: RowKind::Song,
+                title: text(song, "title"),
+                subtitle: text(song, "subtitle"),
+                meta: if most_played {
+                    if plays == 1 {
+                        "1 play".to_string()
+                    } else {
+                        format!("{plays} plays")
+                    }
+                } else {
+                    text(song, "meta")
+                },
+                cover_url: text(song, "cover"),
+                song_id: text(song, "songId"),
+                album_id: text(song, "albumId"),
+                starred: song["starred"].as_bool().unwrap_or(false),
+                rating: song["rating"].as_i64().unwrap_or(0),
+                downloaded: false,
+            });
+        }
+    }
+    if let Some(playlists) = value["playlists"].as_array() {
+        for playlist in playlists.iter().take(limit) {
+            rows.push(Row {
+                track: String::new(),
+                id: text(playlist, "id"),
                 kind: RowKind::Playlist,
-                title: playlist["name"].as_str().unwrap_or_default().to_string(),
-                subtitle: playlist["subtitle"].as_str().unwrap_or_default().to_string(),
-                meta: playlist["meta"].as_str().unwrap_or_default().to_string(),
-                cover_url: String::new(),
+                title: playlist["name"]
+                    .as_str()
+                    .or_else(|| playlist["title"].as_str())
+                    .unwrap_or_default()
+                    .to_string(),
+                subtitle: text(playlist, "subtitle"),
+                meta: text(playlist, "meta"),
+                cover_url: text(playlist, "cover"),
                 song_id: String::new(),
                 album_id: String::new(),
                 starred: false,
@@ -1357,37 +1409,7 @@ async fn search_rows(query: &str) -> anyhow::Result<Vec<super::state::Row>> {
             });
         }
     }
-    for song in results.songs {
-        rows.push(Row {
-            track: String::new(),
-            id: song.id.clone(),
-            kind: RowKind::Song,
-            title: song.title.clone(),
-            subtitle: song.artist.clone().unwrap_or_default(),
-            meta: format!("{} plays", song.play_count),
-            cover_url: song.cover_art.clone().unwrap_or_default(),
-            song_id: song.id.clone(),
-            album_id: song.album_id.clone().unwrap_or_default(),
-            starred: false,
-            rating: 0,
-            downloaded: false,
-        });
-    }
-    let ids: Vec<String> = rows
-        .iter()
-        .map(|row| row.cover_url.clone())
-        .filter(|id| !id.is_empty())
-        .collect();
-    if !ids.is_empty()
-        && let Ok(covers) = crate::covers::url_map_of(&dbs, &ids).await
-    {
-        for row in &mut rows {
-            if !row.cover_url.is_empty() {
-                row.cover_url = crate::covers::url_for(Some(&row.cover_url), &covers);
-            }
-        }
-    }
-    Ok(rows)
+    Ok((rows, most_played))
 }
 
 async fn queue_for_song(

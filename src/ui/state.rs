@@ -56,6 +56,9 @@ pub enum RowKind {
     Playlist,
 }
 
+/// Number of search results a scope can paint; also the backend query cap.
+pub const SEARCH_VISIBLE_ROWS: usize = 5;
+
 #[derive(Debug, Clone)]
 pub struct Row {
     pub id: String,

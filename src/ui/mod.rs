@@ -183,8 +183,9 @@ enum LineSurface {
 }
 
 struct SearchState {
-    query: String,
+    editor: line_search::LineEditor,
     rows: Vec<Row>,
+    most_played: bool,
     scope: usize,
     scope_cursors: [usize; 4],
     generation: u64,
@@ -341,6 +342,9 @@ struct AppRoot {
     page_generation: u64,
     search: Option<SearchState>,
     search_open: bool,
+    search_loading_since: Option<f64>,
+    search_denied_at: Option<f64>,
+    search_denied_query: String,
     search_anim: anim::Behavior,
     clock: anim::Clock,
     palette_motion: palette::PaletteMotion,
@@ -453,6 +457,9 @@ impl AppRoot {
             page_generation: 0,
             search: None,
             search_open: false,
+            search_loading_since: None,
+            search_denied_at: None,
+            search_denied_query: String::new(),
             search_anim: anim::Behavior::new(0.0),
             clock: anim::Clock::new(),
             palette_motion: palette::PaletteMotion::new(palette::Palette::default()),
@@ -544,8 +551,9 @@ impl AppRoot {
             app.search_open = true;
             app.hovered_row = None;
             app.search = Some(SearchState {
-                query: query.clone(),
+                editor: line_search::LineEditor::from_text(&query),
                 rows: Vec::new(),
+                most_played: false,
                 scope: 0,
                 scope_cursors: [0; 4],
                 generation: 1,
@@ -888,16 +896,28 @@ impl AppRoot {
                 generation,
                 query,
                 rows,
+                most_played,
             } => {
                 if let Some(search) = self.search.as_mut()
                     && generation >= search.generation
                 {
+                    if search.editor.text != query {
+                        return;
+                    }
                     search.generation = generation;
-                    search.query = query;
                     search.rows = rows;
+                    search.most_played = most_played;
                     search.scope_cursors = [0; 4];
                     self.hovered_row = None;
                     search.loading = false;
+                    self.search_loading_since = None;
+                    if !most_played
+                        && !search.editor.text.is_empty()
+                        && search.rows.is_empty()
+                    {
+                        self.search_denied_at = Some(self.clock.now);
+                        self.search_denied_query = search.editor.text.clone();
+                    }
                     crate::debug_log!(
                         "GPUI: search scopes songs={} albums={} artists={} playlists={}",
                         search.scope_count(0),
@@ -917,6 +937,9 @@ impl AppRoot {
                 }
             }
             Event::Error(message) => {
+                if let Some(search) = self.search.as_mut() {
+                    search.loading = false;
+                }
                 self.view.loading = false;
                 self.view.error = Some(message.clone());
                 self.error = Some(message.clone());
@@ -1790,14 +1813,19 @@ impl AppRoot {
     fn open_search(&mut self, typing: bool) {
         self.search_open = true;
         self.search = Some(SearchState {
-            query: String::new(),
+            editor: line_search::LineEditor::new(),
             rows: Vec::new(),
+            most_played: false,
             scope: 0,
             scope_cursors: [0; 4],
             generation: 0,
-            loading: false,
+            loading: true,
             typing,
         });
+        self.clock.tick();
+        self.search_loading_since = Some(self.clock.now);
+        self.search_denied_at = None;
+        self.bridge.search(String::new());
     }
 
     fn on_search(&mut self, _: &Search, _window: &mut Window, cx: &mut Context<Self>) {
@@ -2332,19 +2360,19 @@ impl AppRoot {
 
     fn search_edited(&mut self) {
         let Some(search) = self.search.as_ref() else { return };
-        let query = search.query.clone();
-        if query.is_empty() {
-            if let Some(search) = self.search.as_mut() {
+        let query = search.editor.text.clone();
+        let empty = query.is_empty();
+        if let Some(search) = self.search.as_mut() {
+            search.loading = true;
+            if empty {
                 search.rows.clear();
-                search.loading = false;
+                search.most_played = true;
             }
-        } else {
-            if let Some(search) = self.search.as_mut() {
-                search.generation = search.generation.wrapping_add(1);
-                search.loading = true;
-            }
-            self.bridge.search(query);
         }
+        self.clock.tick();
+        self.search_loading_since = Some(self.clock.now);
+        self.search_denied_at = None;
+        self.bridge.search(query);
     }
 
     fn toggle_description(&mut self) {
@@ -2697,6 +2725,7 @@ impl AppRoot {
         cx.stop_propagation();
         let key = event.keystroke.key.as_str();
         let control = event.keystroke.modifiers.control;
+        let shift = event.keystroke.modifiers.shift;
         let modified = control
             || event.keystroke.modifiers.alt
             || event.keystroke.modifiers.platform;
@@ -2704,6 +2733,7 @@ impl AppRoot {
             match key {
                 "escape" => {
                     self.search_open = false;
+                    self.search_denied_at = None;
                     cx.notify();
                 }
                 "i" => {
@@ -2734,6 +2764,13 @@ impl AppRoot {
                 "g" => {
                     if let Some(search) = self.search.as_mut() {
                         search.scope_cursors[search.scope] = 0;
+                    }
+                    cx.notify();
+                }
+                "G" => {
+                    if let Some(search) = self.search.as_mut() {
+                        search.scope_cursors[search.scope] =
+                            search.scope_count(search.scope).saturating_sub(1);
                     }
                     cx.notify();
                 }
@@ -2775,14 +2812,70 @@ impl AppRoot {
                 cx.notify();
                 return;
             }
+            "left" => {
+                if let Some(search) = self.search.as_mut() {
+                    search.editor.move_left(shift);
+                }
+            }
+            "right" => {
+                if let Some(search) = self.search.as_mut() {
+                    search.editor.move_right(shift);
+                }
+            }
+            "home" => {
+                if let Some(search) = self.search.as_mut() {
+                    search.editor.home(shift);
+                }
+            }
+            "end" => {
+                if let Some(search) = self.search.as_mut() {
+                    search.editor.end(shift);
+                }
+            }
             "backspace" => {
                 if let Some(search) = self.search.as_mut() {
-                    search.query.pop();
+                    search.editor.backspace();
+                }
+            }
+            "delete" => {
+                if let Some(search) = self.search.as_mut() {
+                    search.editor.delete_forward();
+                }
+            }
+            "a" if control => {
+                if let Some(search) = self.search.as_mut() {
+                    search.editor.select_all();
                 }
             }
             "w" if control => {
                 if let Some(search) = self.search.as_mut() {
-                    delete_word_back(&mut search.query);
+                    search.editor.delete_word_back();
+                }
+            }
+            "c" if control => {
+                if let Some(search) = self.search.as_ref()
+                    && let Some(text) = search.editor.selected_text()
+                {
+                    let text = text.to_string();
+                    cx.write_to_clipboard(gpui::ClipboardItem::new_string(text));
+                }
+            }
+            "x" if control => {
+                let cut = self.search.as_ref().and_then(|search| {
+                    search.editor.selected_text().map(str::to_string)
+                });
+                if let Some(text) = cut {
+                    cx.write_to_clipboard(gpui::ClipboardItem::new_string(text));
+                    if let Some(search) = self.search.as_mut() {
+                        search.editor.replace_selection("");
+                    }
+                }
+            }
+            "v" if control => {
+                if let Some(text) = cx.read_from_clipboard().and_then(|item| item.text())
+                    && let Some(search) = self.search.as_mut()
+                {
+                    search.editor.insert(&text);
                 }
             }
             "h" if control => {
@@ -2798,9 +2891,9 @@ impl AppRoot {
                 if let Some(text) = event.keystroke.key_char.as_ref()
                     && !text.chars().any(char::is_control)
                 {
-                    search.query.push_str(text);
+                    search.editor.insert(text);
                 } else if key == "space" {
-                    search.query.push(' ');
+                    search.editor.insert(" ");
                 } else {
                     return;
                 }
@@ -4230,32 +4323,155 @@ impl AppRoot {
             )
     }
 
-    fn search_overlay(&self, cx: &Context<Self>, search: &SearchState, progress: f32) -> gpui::Div {
-        let query = if search.query.is_empty() {
-            "Search artists, albums, songs".to_string()
-        } else if search.typing {
-            format!("{}▌", search.query)
-        } else {
-            search.query.clone()
+    fn search_denied_opacity(&self) -> f32 {
+        let Some(started) = self.search_denied_at else {
+            return 0.0;
         };
-        let results = search
-            .scoped()
+        let elapsed = ((self.clock.now - started) as f32).max(0.0);
+        if elapsed < 0.03 {
+            elapsed / 0.03
+        } else {
+            (1.0 - (elapsed - 0.03) / 0.12).clamp(0.0, 1.0)
+        }
+    }
+
+    fn search_loading_visible(&self, search: &SearchState) -> bool {
+        search.loading
+            && self
+                .search_loading_since
+                .is_some_and(|started| self.clock.now - started >= 0.06)
+    }
+
+    fn search_field(&self, search: &SearchState, height: f32, denied: f32) -> gpui::AnyElement {
+        let editor = &search.editor;
+        let text_size = px(height * 0.32);
+        let field = div()
+            .h(px(height))
+            .w_full()
+            .rounded_md()
+            .border_1()
+            .border_color(rgb(if denied > 0.0 {
+                palette::error()
+            } else if search.typing {
+                palette::primary()
+            } else {
+                palette::outline_variant()
+            }))
+            .bg(rgb(palette::surface_container_highest()))
+            .px_4()
+            .flex()
+            .items_center()
+            .gap_3()
+            .min_w_0()
+            .overflow_hidden()
+            .child(icon(
+                "search-right-1505-svgrepo-com.svg",
+                height * 0.40,
+                if search.typing {
+                    palette::primary()
+                } else {
+                    palette::on_surface_variant()
+                },
+            ));
+        if editor.text.is_empty() {
+            return field
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .text_size(text_size)
+                        .text_color(rgb(palette::on_surface_variant()))
+                        .child("Search artists, albums, songs"),
+                )
+                .into_any_element();
+        }
+        if let Some(range) = editor.selection() {
+            let highlight = HighlightStyle {
+                color: Some(rgb(palette::on_primary_container()).into()),
+                background_color: Some(rgb(palette::primary_container()).into()),
+                ..Default::default()
+            };
+            return field
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .text_size(text_size)
+                        .text_color(rgb(palette::on_surface()))
+                        .child(
+                            StyledText::new(editor.text.clone())
+                                .with_highlights([(range, highlight)]),
+                        ),
+                )
+                .into_any_element();
+        }
+        if !search.typing {
+            return field
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .text_size(text_size)
+                        .text_color(rgb(palette::on_surface()))
+                        .child(editor.text.clone()),
+                )
+                .into_any_element();
+        }
+        let cursor = editor.cursor.min(editor.text.len());
+        let (before, after) = editor.text.split_at(cursor);
+        field
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .flex()
+                    .items_center()
+                    .text_size(text_size)
+                    .text_color(rgb(palette::on_surface()))
+                    .child(before.to_string())
+                    .child(
+                        div()
+                            .w(px(2.0))
+                            .h(px(height * 0.42))
+                            .bg(rgb(palette::primary())),
+                    )
+                    .child(after.to_string()),
+            )
+            .into_any_element()
+    }
+
+    fn search_overlay(&self, cx: &Context<Self>, search: &SearchState, progress: f32) -> gpui::AnyElement {
+        let row_h = 56.0;
+        let field_h = 54.0;
+        let panel_w = (self.win_w * 0.60).clamp(360.0, 680.0);
+        let panel_h = field_h + 12.0 + 34.0 + 10.0 + 24.0 + row_h * state::SEARCH_VISIBLE_ROWS as f32 + 36.0 + 32.0;
+        let denied = self.search_denied_opacity();
+        let loading = self.search_loading_visible(search);
+        let query_empty = search.editor.text.is_empty();
+        let scoped = search.scoped();
+        let nothing = !loading && !query_empty && scoped.is_empty();
+
+        let results = scoped
             .into_iter()
-            .take(12)
+            .take(state::SEARCH_VISIBLE_ROWS)
             .enumerate()
             .map(|(index, row)| {
                 let selected = index == search.cursor();
                 let hovered = self.hovered_row == Some(index);
-                let emphasis = if selected || hovered { 1.08 } else { 1.0 };
                 let cover = cover_path(&row.cover_url);
+                let scope = search.scope;
                 div()
+                    .id(("search-row", index))
                     .flex()
                     .items_center()
                     .gap_3()
-                    .px_5()
-                    .id(("search-row", index))
-                    .h(px(self.search_scroll.row_h))
+                    .h(px(row_h - 4.0))
+                    .mt(px(2.0))
+                    .px_3()
+                    .rounded_md()
                     .cursor_pointer()
+                    .when(selected, |this| this.bg(rgb(palette::primary_container())))
+                    .when(hovered && !selected, |this| this.bg(rgb(palette::surface_container_high())))
                     .on_hover(cx.listener(move |this, hovered: &bool, _, cx| {
                         if *hovered {
                             this.hovered_row = Some(index);
@@ -4264,13 +4480,14 @@ impl AppRoot {
                         }
                         cx.notify();
                     }))
-                    .when(selected, |this| this.bg(rgb(palette::secondary_container())))
-                    .when(hovered && !selected, |this| this.bg(rgb(palette::surface_container_high())))
-                    .child(art_scaled(
-                        cover,
-                        self.search_scroll.row_h * 0.714,
-                        if selected || hovered { 1.20 } else { 1.0 },
-                    ))
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        if let Some(search) = this.search.as_mut() {
+                            search.scope = scope;
+                            search.scope_cursors[scope] = index;
+                        }
+                        this.activate_search_result(cx);
+                    }))
+                    .child(art_scaled(cover, 40.0, if selected || hovered { 1.08 } else { 1.0 }))
                     .child(
                         div()
                             .flex()
@@ -4279,120 +4496,174 @@ impl AppRoot {
                             .flex_1()
                             .child(
                                 div()
-                                    .text_size(px(16.0 * emphasis))
-                                    .font_weight(if selected { gpui::FontWeight::BOLD } else { gpui::FontWeight::NORMAL })
-                                    .whitespace_normal()
-                                    .max_h(px(22.0))
-                                    .overflow_hidden()
-                                    .child(highlighted_text(&row.title, self.line_search.query(), palette::on_surface(), self.line_search_current(LineSurface::Search, index))),
+                                    .text_size(px(15.0))
+                                    .font_weight(if selected {
+                                        gpui::FontWeight::SEMIBOLD
+                                    } else {
+                                        gpui::FontWeight::NORMAL
+                                    })
+                                    .text_color(rgb(if selected {
+                                        palette::on_primary_container()
+                                    } else {
+                                        palette::on_surface()
+                                    }))
+                                    .whitespace_nowrap()
+                                    .text_ellipsis()
+                                    .child(row.title.clone()),
                             )
                             .child(
                                 div()
-                                    .text_size(px(11.0 * emphasis))
-                                    .text_color(rgb(palette::on_surface_variant()))
-                                    .whitespace_normal()
-                                    .max_h(px(18.0))
-                                    .overflow_hidden()
-                                    .child(highlighted_text(&row.subtitle, self.line_search.query(), palette::on_surface_variant(), self.line_search_current(LineSurface::Search, index))),
+                                    .text_size(px(11.0))
+                                    .text_color(rgb(if selected {
+                                        palette::on_primary_container()
+                                    } else {
+                                        palette::on_surface_variant()
+                                    }))
+                                    .whitespace_nowrap()
+                                    .text_ellipsis()
+                                    .child(row.subtitle.clone()),
                             ),
                     )
                     .child(
                         div()
                             .text_size(px(11.0))
-                            .text_color(rgb(palette::on_surface_variant()))
-                            .child(highlighted_text(&row.meta, self.line_search.query(), palette::on_surface_variant(), self.line_search_current(LineSurface::Search, index))),
+                            .text_color(rgb(if selected {
+                                palette::on_primary_container()
+                            } else {
+                                palette::on_surface_variant()
+                            }))
+                            .whitespace_nowrap()
+                            .child(row.meta.clone()),
                     )
             })
             .collect::<Vec<_>>();
 
+        let result_area: gpui::AnyElement = if loading {
+            loading_skeleton(self.clock.now as f32, row_h, state::SEARCH_VISIBLE_ROWS)
+        } else if nothing {
+            div()
+                .h_full()
+                .flex()
+                .items_center()
+                .justify_center()
+                .text_size(px(14.0))
+                .text_color(rgb(palette::on_surface_variant()))
+                .child(if query_empty {
+                    "Nothing played yet"
+                } else {
+                    "No Results"
+                })
+                .into_any_element()
+        } else {
+            div()
+                .flex()
+                .flex_col()
+                .children(results)
+                .into_any_element()
+        };
+
+        let scopes = (0..4)
+            .map(|scope| {
+                let active = scope == search.scope;
+                let count = search.scope_count(scope);
+                div()
+                    .id(("search-scope", scope))
+                    .h(px(28.0))
+                    .px_3()
+                    .rounded_full()
+                    .cursor_pointer()
+                    .flex()
+                    .items_center()
+                    .text_size(px(11.0))
+                    .bg(rgb(if active {
+                        palette::primary()
+                    } else {
+                        palette::surface_container_high()
+                    }))
+                    .text_color(rgb(if active {
+                        palette::on_primary()
+                    } else {
+                        palette::on_surface_variant()
+                    }))
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        if let Some(search) = this.search.as_mut() {
+                            search.scope_cursors[search.scope] = search.cursor();
+                            search.scope = scope;
+                            search.scope_cursors[scope] =
+                                search.scope_cursors[scope].min(search.scope_count(scope).saturating_sub(1));
+                        }
+                        cx.notify();
+                    }))
+                    .child(format!("{} {count}", search_scope_label(scope)))
+            })
+            .collect::<Vec<_>>();
+
         div()
+            .id("search-backdrop")
             .absolute()
             .inset_0()
             .size_full()
             .flex()
             .justify_center()
-            .items_center()
-            .bg(gpui::black().opacity(0.50))
+            .bg(gpui::black().opacity(0.50 * progress))
             .opacity(progress)
+            .on_click(cx.listener(|this, _, _, cx| {
+                this.search_open = false;
+                cx.notify();
+            }))
             .child(
                 div()
-                    .mt(px((1.0 - progress) * 24.0))
-                    .w(relative(0.69))
-                    .h(relative(0.72))
-                    .rounded_md()
+                    .id("search-panel")
+                    .absolute()
+                    .top(px(self.win_h * 0.14))
+                    .w(px(panel_w))
+                    .h(px(panel_h))
+                    .rounded_lg()
                     .border_1()
-                    .border_color(rgb(palette::primary()))
+                    .border_color(rgb(palette::outline_variant()))
                     .bg(rgb(palette::surface_container()))
-                    .overflow_hidden()
                     .shadow_lg()
+                    .p_4()
+                    .flex()
+                    .flex_col()
+                    .gap_3()
+                    .on_click(cx.listener(|_, _, _, cx| cx.stop_propagation()))
+                    .child(self.search_field(search, field_h, denied))
                     .child(
                         div()
-                            .h(px(86.0))
-                            .px_5()
+                            .h(px(30.0))
                             .flex()
                             .items_center()
-                            .child(
-                                div()
-                                    .w_full()
-                                    .h(px(60.0))
-                                    .rounded_md()
-                                    .bg(rgb(palette::surface_container_highest()))
-                                    .px_4()
-                                    .flex()
-                                    .items_center()
-                                    .min_w_0()
-                                    .overflow_hidden()
-                                    .whitespace_normal()
-                                    .max_h(px(44.0))
-                                    .text_size(px(16.0))
-                                    .text_color(if search.query.is_empty() { rgb(palette::on_surface_variant()) } else { rgb(palette::on_surface()) })
-                                    .child(query),
-                            ),
+                            .justify_center()
+                            .gap_2()
+                            .children(scopes),
                     )
+                    .when(query_empty, |this| {
+                        this.child(
+                            div()
+                                .h(px(22.0))
+                                .px_1()
+                                .flex()
+                                .items_center()
+                                .text_size(px(11.0))
+                                .font_weight(gpui::FontWeight::SEMIBOLD)
+                                .text_color(rgb(palette::on_surface_variant()))
+                                .child("Most Played"),
+                        )
+                    })
+                    .child(div().flex_1().min_h_0().overflow_hidden().child(result_area))
                     .child(
                         div()
-                            .flex()
-                            .items_center()
-                            .gap_4()
-                            .h(px(52.0))
-                            .px_5()
-                            .children((0..4).map(|scope| {
-                                let active = scope == search.scope;
-                                let count = search.scope_count(scope);
-                                div()
-                                    .text_size(px(14.0))
-                                    .text_color(rgb(if active { palette::primary() } else { palette::on_surface_variant() }))
-                                    .child(format!("{} {count}", search_scope_label(scope)))
-                            })),
-                    )
-                    .child(div().h(px(1.0)).bg(rgb(palette::outline_variant())))
-                    .child(
-                        div()
-                            .flex()
-                            .flex_col()
-                            .flex_1()
-                            .overflow_hidden()
-                            .children(results),
-                    )
-                    .child(
-                        div()
-                            .h(px(72.0))
-                            .w_full()
-                            .px_4()
+                            .h(px(24.0))
                             .flex()
                             .items_center()
                             .justify_center()
                             .text_size(px(10.0))
                             .text_color(rgb(palette::on_surface_variant()))
-                            .text_center()
-                            .whitespace_normal()
-                            .child(if search.typing {
-                                "Type to filter · Ctrl-H/L or Tab scope · ↑/↓ rows ·\nEnter open/play · Esc normal mode"
-                            } else {
-                                "Shift-H/L or Tab scope · j/k rows · i type · Enter open/play · Esc close"
-                            }),
+                            .child("↑↓ Navigate · ⇥ Scope · ↵ Open · esc Close"),
                     ),
             )
+            .into_any_element()
     }
 
     fn page_view(&self, cx: &Context<Self>) -> impl IntoElement {
@@ -4414,20 +4685,15 @@ impl AppRoot {
         let cover = self
             .display_cover(&page.header.cover_art, hero_bucket)
             .or_else(|| self.hero_cover(&page.header.cover_url, hero_bucket));
-        let header_h = cover_bottom.max(220.0);
+        let header_h = cover_bottom.max(240.0);
         let spacer_h = 0.0;
 
         let stars = "★★★★★"
             .chars()
             .take(page.header.rating.clamp(0, 5) as usize)
             .collect::<String>();
-        let mut phrase_parts: Vec<String> = Vec::new();
-        for part in [&title, &subtitle, &meta, &stars] {
-            if !part.is_empty() {
-                phrase_parts.push(part.clone());
-            }
-        }
-        let phrase = phrase_parts.join(" · ");
+        let (primary_phrase, secondary_phrase) =
+            page_header_phrases(&title, &subtitle, &meta, &stars);
         let phrase_size = page_h * 0.022 * (page_w / 1280.0).clamp(0.9, 1.6);
         let header = div()
             .relative()
@@ -4444,6 +4710,9 @@ impl AppRoot {
                     .py_2()
                     .rounded_md()
                     .bg(gpui::black().opacity(0.45))
+                    .flex()
+                    .flex_col()
+                    .gap_1()
                     .child(
                         div()
                             .text_size(px(phrase_size))
@@ -4451,7 +4720,15 @@ impl AppRoot {
                             .text_color(rgb(palette::on_surface()))
                             .whitespace_nowrap()
                             .text_ellipsis()
-                            .child(phrase),
+                            .child(primary_phrase),
+                    )
+                    .child(
+                        div()
+                            .text_size(px(phrase_size * 0.72))
+                            .text_color(rgb(palette::on_surface_variant()))
+                            .whitespace_nowrap()
+                            .text_ellipsis()
+                            .child(secondary_phrase),
                     ),
             );
 
@@ -4920,6 +5197,11 @@ impl Render for AppRoot {
         if self.search.is_some() && !self.search_anim.settled(&self.clock) {
             window.request_animation_frame();
         }
+        if self.search.as_ref().is_some_and(|search| search.loading)
+            || self.search_denied_opacity() > 0.0
+        {
+            window.request_animation_frame();
+        }
         let line_progress = self.line_search_anim.target(
             if self.line_search.open { 1.0 } else { 0.0 },
             anim::STANDARD_MS,
@@ -5045,7 +5327,7 @@ impl Render for AppRoot {
         if self.queue_open {
             self.ensure_queue_metrics();
         }
-        if self.search.as_ref().is_some_and(|search| !search.query.is_empty()) {
+        if self.search.as_ref().is_some_and(|search| !search.editor.text.is_empty()) {
             let height = f32::from(window.viewport_size().height);
             self.ensure_search_metrics(height);
         }
@@ -5100,7 +5382,13 @@ impl Render for AppRoot {
         let status = self.player_bar();
         div()
             .track_focus(&self.focus)
-            .key_context(if self.line_search.open { "line-search" } else { "main" })
+            .key_context(if self.line_search.open {
+                "line-search"
+            } else if self.search.is_some() && self.search_open {
+                "search"
+            } else {
+                "main"
+            })
             .on_action(cx.listener(Self::on_quit))
             .on_action(cx.listener(Self::on_move_down))
             .on_action(cx.listener(Self::on_move_up))
@@ -5469,4 +5757,55 @@ fn icon(name: &str, size: f32, color: u32) -> gpui::AnyElement {
         .size(px(size))
         .text_color(rgb(color))
         .into_any_element()
+}
+
+fn join_phrase(parts: &[&str]) -> String {
+    parts
+        .iter()
+        .filter(|part| !part.is_empty())
+        .copied()
+        .collect::<Vec<_>>()
+        .join(" · ")
+}
+
+/// The PageEntry header's two phrases: identity (title/artist or playlist
+/// subtitle) and the metadata/rating line.
+fn page_header_phrases(
+    title: &str,
+    subtitle: &str,
+    meta: &str,
+    stars: &str,
+) -> (String, String) {
+    (
+        join_phrase(&[title, subtitle]),
+        join_phrase(&[meta, stars]),
+    )
+}
+
+#[cfg(test)]
+mod page_header_phrase_tests {
+    use super::page_header_phrases;
+
+    #[test]
+    fn splits_identity_and_metadata() {
+        assert_eq!(
+            page_header_phrases("Album", "Artist", "2024 · 10 tracks", "★★★"),
+            (
+                "Album · Artist".to_string(),
+                "2024 · 10 tracks · ★★★".to_string()
+            )
+        );
+    }
+
+    #[test]
+    fn hides_empty_phrases() {
+        assert_eq!(
+            page_header_phrases("Artist", "", "", "★★★★★"),
+            ("Artist".to_string(), "★★★★★".to_string())
+        );
+        assert_eq!(
+            page_header_phrases("Playlist", "", "12 tracks", ""),
+            ("Playlist".to_string(), "12 tracks".to_string())
+        );
+    }
 }

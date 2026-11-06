@@ -215,6 +215,12 @@ impl LineEditor {
         Self::default()
     }
 
+    pub fn from_text(text: &str) -> Self {
+        let mut editor = Self::new();
+        editor.set_text(text);
+        editor
+    }
+
     pub fn set_text(&mut self, text: &str) {
         self.text.clear();
         self.text.push_str(text);

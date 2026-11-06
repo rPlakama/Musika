@@ -240,7 +240,7 @@ pub(super) async fn rule_off(dbs: &crate::db::Dbs, rule_id: &str) {
 }
 
 /// Drops an album container: its rule, marks and blobs.
-pub(super) async fn album_container_off(dbs: &crate::db::Dbs, album_id: &str) {
+pub(crate) async fn album_container_off(dbs: &crate::db::Dbs, album_id: &str) {
     match crate::media::rule_for(&dbs.media, "album", album_id).await {
         Ok(Some(rule)) => rule_off(dbs, &rule.id).await,
         Ok(None) => {}

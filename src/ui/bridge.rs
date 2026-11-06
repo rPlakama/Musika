@@ -589,15 +589,30 @@ impl Bridge {
     }
 
     pub fn quick_download(&self, kind: String, id: String, on: bool) {
-        if !on {
-            let _ = self.tx.send(Event::Error(
-                "Removing downloads is not wired yet".to_string(),
-            ));
-            return;
-        }
         let tx = self.tx.clone();
         crate::app::runtime().spawn(async move {
             let Some(dbs) = crate::app::dbs() else { return };
+            if !on {
+                let result = if kind == "album" {
+                    crate::qml::download::album_container_off(&dbs, &id).await;
+                    Ok(())
+                } else if kind == "song" {
+                    let unmark = crate::download::unmark(&dbs.download, &id).await;
+                    let media = crate::media::remove_songs_media(&dbs.media, std::slice::from_ref(&id)).await;
+                    match (unmark, media) {
+                        (Err(err), _) | (_, Err(err)) => Err(err),
+                        _ => Ok(()),
+                    }
+                } else {
+                    Ok(())
+                };
+                if let Err(err) = result {
+                    let _ = tx.send(Event::Error(format!("Could not remove download: {err:#}")));
+                } else {
+                    let _ = tx.send(Event::DownloadSettled);
+                }
+                return;
+            }
             let songs = if kind == "song" {
                 vec![id.clone()]
             } else if kind == "album" {

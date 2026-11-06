@@ -19,13 +19,16 @@ use tokio::task::JoinSet;
 
 use crate::consts::FETCH_CONCURRENCY;
 
-pub async fn map_bounded<T, F, Fut>(ids: Vec<String>, f: F) -> Vec<(String, Result<T>)>
+/// Calls `on_result` for each id in bounded chunks (one
+/// `FETCH_CONCURRENCY` window live at a time), so callers can fold results
+/// without materialising the whole set.
+pub async fn for_each_bounded<T, F, Fut, G>(ids: &[String], f: F, mut on_result: G)
 where
     T: Send + 'static,
     F: Fn(String) -> Fut + Clone + Send + 'static,
     Fut: std::future::Future<Output = Result<T>> + Send + 'static,
+    G: FnMut(String, Result<T>),
 {
-    let mut results = Vec::with_capacity(ids.len());
     for chunk in ids.chunks(FETCH_CONCURRENCY) {
         let mut set = JoinSet::new();
         for id in chunk {
@@ -38,13 +41,23 @@ where
         }
         while let Some(joined) = set.join_next().await {
             match joined {
-                Ok(pair) => results.push(pair),
-                Err(err) => results.push((
+                Ok((id, result)) => on_result(id, result),
+                Err(err) => on_result(
                     "<task>".to_string(),
                     Err(anyhow::anyhow!("fetch task failed: {err}")),
-                )),
+                ),
             }
         }
     }
+}
+
+pub async fn map_bounded<T, F, Fut>(ids: Vec<String>, f: F) -> Vec<(String, Result<T>)>
+where
+    T: Send + 'static,
+    F: Fn(String) -> Fut + Clone + Send + 'static,
+    Fut: std::future::Future<Output = Result<T>> + Send + 'static,
+{
+    let mut results = Vec::with_capacity(ids.len());
+    for_each_bounded(&ids, f, |id, result| results.push((id, result))).await;
     results
 }

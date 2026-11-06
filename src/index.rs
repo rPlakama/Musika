@@ -498,8 +498,10 @@ where
     Fut: std::future::Future<Output = Result<T>> + Send + 'static,
 {
     let mut out = Vec::with_capacity(ids.len());
-    for chunk in ids.chunks(crate::consts::FETCH_CONCURRENCY) {
-        let results = crate::fanout::map_bounded(chunk.to_vec(), {
+    let mut failed: Vec<String> = Vec::new();
+    crate::fanout::for_each_bounded(
+        ids,
+        {
             let fetch = fetch.clone();
             let client = Arc::clone(client);
             move |id| {
@@ -507,20 +509,17 @@ where
                 let client = Arc::clone(&client);
                 async move { fetch(client, id).await }
             }
-        })
-        .await;
-        let mut failed: Vec<String> = Vec::new();
-        for (id, result) in results {
-            match result {
-                Ok(value) => out.push(value),
-                Err(err) => {
-                    eprintln!("index: fetch failed for {id}: {err:#}");
-                    failed.push(id);
-                }
+        },
+        |id, result| match result {
+            Ok(value) => out.push(value),
+            Err(err) => {
+                eprintln!("index: fetch failed for {id}: {err:#}");
+                failed.push(id);
             }
-        }
-        ensure_complete(&failed, ids.len())?;
-    }
+        },
+    )
+    .await;
+    ensure_complete(&failed, ids.len())?;
     Ok(out)
 }
 

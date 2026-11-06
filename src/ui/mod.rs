@@ -3562,7 +3562,7 @@ impl AppRoot {
                                                                 .whitespace_normal()
                                                                 .max_h(px(20.0))
                                                                 .overflow_hidden()
-                                                                .child(title),
+                                                                .child(highlighted_text(&title, &this.line_search.query, ON_SURFACE)),
                                                         ),
                                                 )
                                                 .child(
@@ -3572,7 +3572,7 @@ impl AppRoot {
                                                         .whitespace_normal()
                                                         .max_h(px(16.0))
                                                         .overflow_hidden()
-                                                        .child(artist),
+                                                        .child(highlighted_text(&artist, &this.line_search.query, ON_VARIANT)),
                                                 ),
                                         ),
                                 );
@@ -3650,7 +3650,7 @@ impl AppRoot {
                                     .whitespace_normal()
                                     .max_h(px(22.0))
                                     .overflow_hidden()
-                                    .child(row.title.clone()),
+                                    .child(highlighted_text(&row.title, &self.line_search.query, ON_SURFACE)),
                             )
                             .child(
                                 div()
@@ -3659,7 +3659,7 @@ impl AppRoot {
                                     .whitespace_normal()
                                     .max_h(px(18.0))
                                     .overflow_hidden()
-                                    .child(row.subtitle.clone()),
+                                    .child(highlighted_text(&row.subtitle, &self.line_search.query, ON_VARIANT)),
                             ),
                     )
                     .child(
@@ -3991,7 +3991,7 @@ impl AppRoot {
                                                         .font_weight(if selected { gpui::FontWeight::BOLD } else { gpui::FontWeight::NORMAL })
                                                         .whitespace_nowrap()
                                                         .text_ellipsis()
-                                                        .child(title),
+                                                        .child(highlighted_text(&title, &this.line_search.query, ON_SURFACE)),
                                                 )
                                                 .child(
                                                     div()
@@ -4006,7 +4006,7 @@ impl AppRoot {
                                             div()
                                                     .text_size(px(11.0 * emphasis))
                                                 .text_color(rgb(ON_VARIANT))
-                                                .child(meta),
+                                                .child(highlighted_text(&meta, &this.line_search.query, ON_VARIANT)),
                                         )
                                         .when(downloaded, |this| {
                                             this.child(icon("outline-download.svg", 12.0, PRIMARY))

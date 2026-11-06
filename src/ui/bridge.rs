@@ -162,8 +162,9 @@ impl Bridge {
     pub fn load_page(&self, descriptor: super::state::PageDescriptor) {
         let generation = self.page_generation.fetch_add(1, Ordering::SeqCst) + 1;
         let tx = self.tx.clone();
+        let offline = self.offline.load(Ordering::Relaxed);
         crate::app::runtime().spawn(async move {
-            let event = match page_data(&descriptor).await {
+            let event = match page_data(&descriptor, offline).await {
                 Ok((header, rows)) => {
                     crate::debug_log!(
                         "GPUI: {} page {} rows",
@@ -666,10 +667,14 @@ impl Bridge {
     }
 
     pub fn quick_radio(&self, kind: String, id: String) {
+        self.play_radio(kind, id, 0);
+    }
+
+    pub fn play_radio(&self, kind: String, id: String, start_index: usize) {
         let tx = self.tx.clone();
         crate::app::runtime().spawn(async move {
             let Some(dbs) = crate::app::dbs() else { return };
-            match crate::radio::tracks_json(&dbs, &kind, &id, 0).await {
+            match crate::radio::tracks_json(&dbs, &kind, &id, start_index as i64).await {
                 Ok((json, start)) => match serde_json::from_str::<Vec<crate::player::Track>>(&json) {
                     Ok(tracks) => {
                         let _ = tx.send(Event::Queue {
@@ -697,10 +702,7 @@ impl Bridge {
             };
             let Some(album_id) = song.album_id else { return };
             let _ = tx.send(Event::OpenPage {
-                descriptor: super::state::PageDescriptor {
-                    kind: super::state::PageKind::Album,
-                    id: album_id,
-                },
+                descriptor: super::state::PageDescriptor::new(super::state::PageKind::Album, album_id),
             });
         });
     }
@@ -714,10 +716,7 @@ impl Bridge {
                 return;
             };
             let _ = tx.send(Event::OpenPage {
-                descriptor: super::state::PageDescriptor {
-                    kind: super::state::PageKind::Artist,
-                    id: artist_id,
-                },
+                descriptor: super::state::PageDescriptor::new(super::state::PageKind::Artist, artist_id),
             });
         });
     }
@@ -984,6 +983,7 @@ fn songs_label(count: i64) -> String {
 
 async fn page_data(
     descriptor: &super::state::PageDescriptor,
+    offline: bool,
 ) -> anyhow::Result<(super::state::PageHeader, Vec<super::state::Row>)> {
     use super::state::{PageHeader, PageKind, Row, RowKind};
     let dbs = crate::app::dbs().ok_or_else(|| anyhow::anyhow!("databases not ready"))?;
@@ -1033,7 +1033,7 @@ async fn page_data(
             let artist = crate::library::artist(&dbs.library, &descriptor.id)
                 .await?
                 .ok_or_else(|| anyhow::anyhow!("artist not found"))?;
-            let albums = crate::library::albums(&dbs.library, Some(&descriptor.id), "Name").await?;
+            let albums = crate::library::artist_albums(&dbs.library, &descriptor.id, "Name").await?;
             let covers = crate::covers::url_map_for(
                 &dbs,
                 albums.iter().map(|album| &album.cover_art),
@@ -1066,6 +1066,45 @@ async fn page_data(
                     downloaded: false,
                 })
                 .collect();
+            Ok((header, rows))
+        }
+        PageKind::Radio => {
+            let seed_kind = descriptor.radio_seed_kind.as_deref().unwrap_or("album");
+            let raw = crate::radio::page_json(&dbs, seed_kind, &descriptor.id, offline).await?;
+            let value: serde_json::Value = serde_json::from_str(&raw)?;
+            let header = PageHeader {
+                title: value["title"].as_str().unwrap_or_default().to_string(),
+                subtitle: value["subtitle"].as_str().unwrap_or_default().to_string(),
+                meta: value["meta"].as_str().unwrap_or_default().to_string(),
+                cover_url: value["collage"]
+                    .as_array()
+                    .and_then(|collage| collage.first())
+                    .and_then(|cover| cover.as_str())
+                    .unwrap_or_default()
+                    .to_string(),
+                cover_art: String::new(),
+            };
+            let rows = value["songs"]
+                .as_array()
+                .map(|songs| {
+                    songs
+                        .iter()
+                        .map(|song| Row {
+                            id: song["songId"].as_str().unwrap_or_default().to_string(),
+                            kind: RowKind::Song,
+                            title: song["title"].as_str().unwrap_or_default().to_string(),
+                            subtitle: song["subtitle"].as_str().unwrap_or_default().to_string(),
+                            meta: song["duration"].as_str().unwrap_or_default().to_string(),
+                            cover_url: song["cover"].as_str().unwrap_or_default().to_string(),
+                            song_id: song["songId"].as_str().unwrap_or_default().to_string(),
+                            album_id: song["albumId"].as_str().unwrap_or_default().to_string(),
+                            starred: song["starred"].as_bool().unwrap_or(false),
+                            rating: 0,
+                            downloaded: false,
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
             Ok((header, rows))
         }
         PageKind::Playlist => {

@@ -382,6 +382,10 @@ struct AppRoot {
     lyrics_overlay_wanted: bool,
     lyrics_active_line: Option<usize>,
     lyrics_active_anim: anim::Behavior,
+    lyrics_line_opacity: std::collections::HashMap<usize, anim::Behavior>,
+    lyrics_window_start: usize,
+    lyrics_shift: anim::Behavior,
+    lyrics_track_fade: anim::Behavior,
     transport_press: [Option<f64>; 3],
     line_search: line_search::LineSearchState,
     line_search_anim: anim::Behavior,
@@ -486,6 +490,10 @@ impl AppRoot {
             lyrics_overlay_wanted: false,
             lyrics_active_line: None,
             lyrics_active_anim: anim::Behavior::new(1.0),
+            lyrics_line_opacity: std::collections::HashMap::new(),
+            lyrics_window_start: 0,
+            lyrics_shift: anim::Behavior::new(0.0),
+            lyrics_track_fade: anim::Behavior::new(1.0),
             transport_press: [None; 3],
             line_search: line_search::LineSearchState::new(),
             line_search_anim: anim::Behavior::new(0.0),
@@ -718,7 +726,7 @@ impl AppRoot {
                         _ => None,
                     };
                     if let Some(kind) = kind {
-                        self.open_descriptor(PageDescriptor { kind, id: page_id });
+                        self.open_descriptor(PageDescriptor::new(kind, page_id));
                     }
                 }
             }
@@ -788,6 +796,7 @@ impl AppRoot {
                     document.lines.len(),
                     document.source
                 );
+                let new_song = self.lyrics.as_ref().map(|lyrics| lyrics.song_id.clone()) != Some(song_id.clone());
                 self.lyrics = Some(LyricsState {
                     song_id,
                     synced: document.synced,
@@ -798,6 +807,13 @@ impl AppRoot {
                         .map(|line| (line.start_ms, line.value))
                         .collect(),
                 });
+                if new_song {
+                    self.lyrics_window_start = 0;
+                    self.lyrics_line_opacity.clear();
+                    self.lyrics_track_fade.target(0.0, 0.0, anim::Curve::Standard, &self.clock);
+                    self.lyrics_track_fade
+                        .target(1.0, 300.0, anim::Curve::Decelerate, &self.clock);
+                }
             }
             Event::Queue { tracks, start } => {
                 self.player.load(tracks, start);
@@ -946,6 +962,57 @@ impl AppRoot {
             self.queue_cursor,
         );
         Self::start_follow(&mut self.queue_follow, &self.queue_scroll, target, self.clock.now, animated);
+    }
+
+    fn set_offset_now(handle: &UniformListScrollHandle, target: f32) {
+        handle
+            .0
+            .borrow()
+            .base_handle
+            .set_offset(gpui::point(px(0.0), px(-target)));
+    }
+
+    fn land_library(&mut self, index: usize) {
+        let index = index.min(self.view.rows.len().saturating_sub(1));
+        self.view.select(index);
+        self.library_follow.active = false;
+        let target = Self::scroll_target(
+            &self.scroll,
+            self.library_row_h,
+            self.view.rows.count,
+            index,
+        );
+        Self::set_offset_now(&self.scroll, target);
+        self.view.rows.requested = None;
+        self.ensure_library_window();
+        self.remember_current();
+    }
+
+    fn land_page(&mut self, index: usize) {
+        let Some(page) = self.page.as_mut() else { return };
+        let index = index.min(page.rows.len().saturating_sub(1));
+        page.select(index);
+        self.page_follow.active = false;
+        let target = Self::scroll_target(
+            &self.page_scroll,
+            self.page_row_h,
+            page.rows.len(),
+            index,
+        );
+        Self::set_offset_now(&self.page_scroll, target);
+    }
+
+    fn land_queue(&mut self, index: usize) {
+        let index = index.min(self.player.len().saturating_sub(1));
+        self.queue_cursor = index;
+        self.queue_follow.active = false;
+        let target = Self::scroll_target(
+            &self.queue_scroll,
+            self.queue_row_h,
+            self.player.len(),
+            index,
+        );
+        Self::set_offset_now(&self.queue_scroll, target);
     }
 
     /// Ask the Rust row window for the band around the visible rows and the
@@ -1219,21 +1286,26 @@ impl AppRoot {
     }
 
     fn on_top(&mut self, _: &Top, _window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(page) = self.page.as_mut() {
-            page.select(0);
-            self.follow_page(false);
+        if self.queue_open {
+            self.land_queue(0);
+        } else if self.page.is_some() {
+            self.land_page(0);
         } else {
-            self.select(0);
+            self.land_library(0);
         }
         cx.notify();
     }
 
     fn on_bottom(&mut self, _: &Bottom, _window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(page) = self.page.as_mut() {
+        if self.queue_open {
+            let last = self.player.len().saturating_sub(1);
+            self.land_queue(last);
+        } else if let Some(page) = self.page.as_ref() {
             let last = page.rows.len().saturating_sub(1);
-            page.select(last);
+            self.land_page(last);
         } else {
-            self.select(self.view.rows.len().saturating_sub(1));
+            let last = self.view.rows.len().saturating_sub(1);
+            self.land_library(last);
         }
         cx.notify();
     }
@@ -1491,6 +1563,7 @@ impl AppRoot {
                     PageKind::Album => "album",
                     PageKind::Artist => "artist",
                     PageKind::Playlist => "playlist",
+                    PageKind::Radio => "radio",
                 };
                 (kind.to_string(), descriptor.id.clone())
             }
@@ -2015,7 +2088,15 @@ impl AppRoot {
                 self.bridge.quick_queue_add(target.queue_kind().to_string(), target.id.clone());
             }
             QuickVerb::StartRadio => {
-                self.bridge.quick_radio(target.queue_kind().to_string(), target.id.clone());
+                let seed_id = if !target.song_id.is_empty() {
+                    target.song_id.clone()
+                } else {
+                    target.id.clone()
+                };
+                self.open_descriptor(PageDescriptor::radio(
+                    target.queue_kind().to_string(),
+                    seed_id,
+                ));
             }
             QuickVerb::Favorite { on } => {
                 self.bridge
@@ -2319,7 +2400,45 @@ impl AppRoot {
             self.lyrics_active_anim
                 .target(1.0, anim::QUICK_MS, anim::Curve::OutBack, &self.clock);
         }
+        let stride = (self.win_h * 0.055).clamp(13.0, 22.0) * 1.55;
+        let visible = 15usize;
+        let old_start = self.lyrics_window_start;
+        let mut start = old_start.min(lyrics.lines.len().saturating_sub(1));
+        if active < start + 2 {
+            start = active.saturating_sub(2);
+        } else if active + visible > start + visible.saturating_sub(2) && active + 2 >= start + visible {
+            start = (active + 2).saturating_sub(visible);
+        }
+        if start != old_start {
+            self.lyrics_window_start = start;
+            self.lyrics_shift.target(
+                (old_start as f32 - start as f32) * stride,
+                0.0,
+                anim::Curve::Standard,
+                &self.clock,
+            );
+            self.lyrics_shift
+                .target(0.0, 300.0, anim::Curve::Decelerate, &self.clock);
+        } else {
+            self.lyrics_shift.target(0.0, 0.0, anim::Curve::Standard, &self.clock);
+        }
+        for (index, _) in lyrics.lines.iter().enumerate() {
+            let target = if !lyrics.synced {
+                0.8
+            } else {
+                match index.abs_diff(active) {
+                    0 => 1.0,
+                    1 => 0.8,
+                    _ => 0.5,
+                }
+            };
+            self.lyrics_line_opacity
+                .entry(index)
+                .or_insert_with(|| anim::Behavior::new(target))
+                .target(target, anim::QUICK_MS, anim::Curve::Standard, &self.clock);
+        }
     }
+
 
     fn refresh_lyrics_overlay(&mut self) {
         if !self.fullscreen {
@@ -2337,11 +2456,7 @@ impl AppRoot {
             self.lyrics_overlay_wanted = false;
             return;
         }
-        if self.lyrics_overlay_wanted && !inline {
-            self.lyrics_overlay = true;
-        } else if inline {
-            self.lyrics_overlay = false;
-        }
+        self.lyrics_overlay = self.lyrics_overlay_wanted && !inline;
     }
 
     fn on_lyrics_overlay(&mut self, _: &LyricsOverlay, _window: &mut Window, cx: &mut Context<Self>) {
@@ -2627,6 +2742,22 @@ impl AppRoot {
             cx.notify();
             return;
         }
+        if let Some(page) = self.page.as_ref()
+            && page.descriptor.kind == PageKind::Radio
+        {
+            let seed_kind = page
+                .descriptor
+                .radio_seed_kind
+                .clone()
+                .unwrap_or_else(|| "album".to_string());
+            let seed_id = page.descriptor.id.clone();
+            let start = page.cursor;
+            if page.rows.get(start).is_some() {
+                self.bridge.play_radio(seed_kind, seed_id, start);
+            }
+            cx.notify();
+            return;
+        }
         let row = if let Some(page) = self.page.as_ref() {
             page.rows.get(page.cursor).cloned()
         } else {
@@ -2731,14 +2862,14 @@ impl AppRoot {
             state::RowKind::Playlist => PageKind::Playlist,
             state::RowKind::Song => return,
         };
-        self.open_descriptor(PageDescriptor { kind, id: row.id.clone() });
+        self.open_descriptor(PageDescriptor::new(kind, row.id.clone()));
     }
 
     fn open_descriptor(&mut self, descriptor: PageDescriptor) {
         match descriptor.kind {
             PageKind::Album => self.bridge.request_notes(descriptor.id.clone()),
             PageKind::Artist => self.bridge.request_artist_notes(descriptor.id.clone()),
-            PageKind::Playlist => {}
+            PageKind::Playlist | PageKind::Radio => {}
         }
         self.remember_current();
         self.hovered_page = None;
@@ -3002,6 +3133,16 @@ impl AppRoot {
                         let downloaded = this.marks.downloaded(&row.song_id, &row.album_id) || row.downloaded;
                         let rating = row.rating;
                         let cover = cover_path(&row.cover_url);
+                        let cover_scale = this
+                            .row_cover_scales
+                            .entry(format!("library:{}", row.id))
+                            .or_insert_with(|| anim::Behavior::new(1.0))
+                            .target(
+                                if selected || hovered { 1.20 } else { 1.0 },
+                                anim::QUICK_MS,
+                                anim::Curve::Standard,
+                                &this.clock,
+                            );
                         let color = this
                             .row_colors
                             .entry(row.id.clone())
@@ -3030,7 +3171,7 @@ impl AppRoot {
                                     this.select(index);
                                     cx.notify();
                                 }))
-                                .child(art(cover, row_h * 0.78))
+                                .child(art_scaled(cover, row_h * 0.78, cover_scale))
                                 .child(
                                     div()
                                         .flex()
@@ -3308,8 +3449,8 @@ impl AppRoot {
         } else {
             0
         };
-        let start = active.saturating_sub(6);
-        let end = (active + 12).min(lyrics.lines.len());
+        let start = self.lyrics_window_start.min(lyrics.lines.len().saturating_sub(1));
+        let end = (start + 15).min(lyrics.lines.len());
         div()
             .absolute()
             .inset_0()
@@ -3330,6 +3471,8 @@ impl AppRoot {
                     .items_center()
                     .justify_center()
                     .gap_1()
+                    .opacity(self.lyrics_track_fade.value(&self.clock))
+                    .mt(px(self.lyrics_shift.value(&self.clock)))
                     .child(
                         div()
                             .text_size(px(10.0))
@@ -3383,8 +3526,8 @@ impl AppRoot {
                     .rposition(|(start, _)| start.is_some_and(|start| start <= ms))
             })
             .unwrap_or(0);
-        let start = active.saturating_sub(5);
-        let end = (active + 10).min(lines.len());
+        let start = self.lyrics_window_start.min(lines.len().saturating_sub(1));
+        let end = (start + 15).min(lines.len());
         let visible: Vec<(usize, String)> = lines
             .iter()
             .enumerate()
@@ -3439,13 +3582,18 @@ impl AppRoot {
                             .when(lyrics_inline, |this| this.flex_1())
                             .when(!lyrics_inline, |this| this.hidden())
                             .h_full()
-                            .opacity(if lyrics_inline && !self.lyrics_overlay { 1.0 } else { 0.0 })
+                            .opacity(if lyrics_inline && !self.lyrics_overlay {
+                                self.lyrics_track_fade.value(&self.clock)
+                            } else {
+                                0.0
+                            })
                             .min_w_0()
                             .overflow_hidden()
                             .flex_col()
                             .items_center()
                             .justify_center()
                             .gap_1()
+                            .mt(px(self.lyrics_shift.value(&self.clock)))
                             .child(
                                 div()
                                     .text_size(px(10.0))
@@ -3462,6 +3610,12 @@ impl AppRoot {
                                     .text_color(rgb(if is_active { ON_SURFACE } else { ON_VARIANT }))
                                     .text_center()
                                     .whitespace_normal()
+                                    .opacity(
+                                        self.lyrics_line_opacity
+                                            .get(&index)
+                                            .map(|anim| anim.value(&self.clock))
+                                            .unwrap_or(1.0),
+                                    )
                                     .when(is_active, |this| this.font_weight(gpui::FontWeight::SEMIBOLD))
                                     .child(text)
                             })),
@@ -3973,6 +4127,23 @@ impl AppRoot {
         }
 
         let count = page.rows.len();
+        if count == 0 && page.descriptor.kind == PageKind::Radio {
+            return div()
+                .flex()
+                .flex_col()
+                .flex_1()
+                .child(header)
+                .child(
+                    div()
+                        .flex()
+                        .flex_1()
+                        .items_center()
+                        .justify_center()
+                        .text_size(px(15.0))
+                        .text_color(rgb(ON_VARIANT))
+                        .child("No similar songs found"),
+                );
+        }
         let scroll = self.page_scroll.clone();
         div()
             .relative()
@@ -4003,7 +4174,7 @@ impl AppRoot {
                             let row_h = 36.0;
                             let mut items = Vec::with_capacity(range.len());
                             for index in range {
-                                let Some((title, subtitle, meta, selected, rating, starred, downloaded, key)) = this
+                                let Some((title, subtitle, meta, selected, rating, starred, downloaded, key, cover, show_cover)) = this
                                     .page
                                     .as_ref()
                                     .map(|page| {
@@ -4018,6 +4189,8 @@ impl AppRoot {
                                             row.starred,
                                             row.downloaded,
                                             format!("page:{}:{}", page.descriptor.id, row.id),
+                                            cover_path(&row.cover_url),
+                                            matches!(page.descriptor.kind, PageKind::Artist | PageKind::Playlist),
                                         )
                                     })
                                 else {
@@ -4032,6 +4205,17 @@ impl AppRoot {
                                     0x141218FF
                                 };
                                 let emphasis = if selected || hovered { 1.08 } else { 1.0 };
+                                let cover_scale = show_cover.then(|| {
+                                    this.row_cover_scales
+                                        .entry(format!("page-cover:{key}"))
+                                        .or_insert_with(|| anim::Behavior::new(1.0))
+                                        .target(
+                                            if selected || hovered { 1.20 } else { 1.0 },
+                                            anim::QUICK_MS,
+                                            anim::Curve::Standard,
+                                            &this.clock,
+                                        )
+                                });
                                 let color = this
                                     .row_colors
                                     .entry(key)
@@ -4060,8 +4244,27 @@ impl AppRoot {
                                                 page.select(index);
                                             }
                                             this.follow_page(true);
+                                            if let Some(page) = this.page.as_ref()
+                                                && page.descriptor.kind == PageKind::Radio
+                                            {
+                                                let seed_kind = page
+                                                    .descriptor
+                                                    .radio_seed_kind
+                                                    .clone()
+                                                    .unwrap_or_else(|| "album".to_string());
+                                                let seed_id = page.descriptor.id.clone();
+                                                this.bridge.play_radio(seed_kind, seed_id, index);
+                                            }
                                             cx.notify();
                                         }))
+                                        .child(if let Some(scale) = cover_scale {
+                                            div()
+                                                .mr_2()
+                                                .child(art_scaled(cover, row_h * 0.78, scale))
+                                                .into_any_element()
+                                        } else {
+                                            div().into_any_element()
+                                        })
                                         .child(
                                             div()
                                                 .flex()
@@ -4533,9 +4736,16 @@ fn parse_page_spec(spec: &str) -> Option<PageDescriptor> {
         "album" => PageKind::Album,
         "artist" => PageKind::Artist,
         "playlist" => PageKind::Playlist,
+        "radio" => {
+            let (seed_kind, seed_id) = id.split_once(':')?;
+            if seed_id.is_empty() {
+                return None;
+            }
+            return Some(PageDescriptor::radio(seed_kind, seed_id));
+        }
         _ => return None,
     };
-    Some(PageDescriptor { kind, id: id.to_string() })
+    Some(PageDescriptor::new(kind, id))
 }
 
 static COVERS: std::sync::OnceLock<std::sync::Mutex<covers::CoverStore>> =
@@ -4610,6 +4820,7 @@ fn page_key(descriptor: &PageDescriptor) -> String {
         PageKind::Album => "album",
         PageKind::Artist => "artist",
         PageKind::Playlist => "playlist",
+        PageKind::Radio => "radio",
     };
     format!("{kind}:{}", descriptor.id)
 }

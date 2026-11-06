@@ -304,6 +304,7 @@ pub enum PageKind {
     Album,
     Artist,
     Playlist,
+    Radio,
 }
 
 impl PageKind {
@@ -312,6 +313,7 @@ impl PageKind {
             PageKind::Album => "Album",
             PageKind::Artist => "Artist",
             PageKind::Playlist => "Playlist",
+            PageKind::Radio => "Radio",
         }
     }
 }
@@ -320,6 +322,26 @@ impl PageKind {
 pub struct PageDescriptor {
     pub kind: PageKind,
     pub id: String,
+    /// Radio pages carry their seed kind alongside the seed id.
+    pub radio_seed_kind: Option<String>,
+}
+
+impl PageDescriptor {
+    pub fn new(kind: PageKind, id: impl Into<String>) -> Self {
+        Self {
+            kind,
+            id: id.into(),
+            radio_seed_kind: None,
+        }
+    }
+
+    pub fn radio(seed_kind: impl Into<String>, seed_id: impl Into<String>) -> Self {
+        Self {
+            kind: PageKind::Radio,
+            id: seed_id.into(),
+            radio_seed_kind: Some(seed_kind.into()),
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -418,10 +440,23 @@ mod page_tests {
     use super::*;
 
     #[test]
+    fn radio_descriptor_keeps_seed_kind() {
+        let descriptor = PageDescriptor::radio("album", "a1");
+        assert_eq!(descriptor.kind, PageKind::Radio);
+        assert_eq!(descriptor.id, "a1");
+        assert_eq!(descriptor.radio_seed_kind.as_deref(), Some("album"));
+        assert_eq!(PageKind::Radio.label(), "Radio");
+        assert_eq!(
+            PageDescriptor::new(PageKind::Album, "x").radio_seed_kind,
+            None
+        );
+    }
+
+    #[test]
     fn travel_log_back_and_forward() {
         let mut travel = Travel::default();
-        travel.open(PageDescriptor { kind: PageKind::Album, id: "a".into() });
-        travel.open(PageDescriptor { kind: PageKind::Artist, id: "b".into() });
+        travel.open(PageDescriptor::new(PageKind::Album, "a"));
+        travel.open(PageDescriptor::new(PageKind::Artist, "b"));
         assert_eq!(travel.back().unwrap().id, "a");
         assert_eq!(travel.step(1).unwrap().id, "b");
         assert!(travel.step(1).is_none());
@@ -431,10 +466,10 @@ mod page_tests {
     fn travel_truncates_forward_history_on_open() {
         let mut travel = Travel::default();
         for id in ["a", "b", "c"] {
-            travel.open(PageDescriptor { kind: PageKind::Album, id: id.into() });
+            travel.open(PageDescriptor::new(PageKind::Album, id));
         }
         travel.back();
-        travel.open(PageDescriptor { kind: PageKind::Album, id: "d".into() });
+        travel.open(PageDescriptor::new(PageKind::Album, "d"));
         assert_eq!(travel.places.len(), 3);
         assert_eq!(travel.current().unwrap().id, "d");
     }
@@ -446,7 +481,7 @@ mod page_kind_tests {
 
     #[test]
     fn page_select_clamps() {
-        let mut page = PageState::new(PageDescriptor { kind: PageKind::Album, id: "a".into() });
+        let mut page = PageState::new(PageDescriptor::new(PageKind::Album, "a"));
         page.select(4);
         assert_eq!(page.cursor, 0);
         page.rows = vec![Row {

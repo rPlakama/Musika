@@ -340,6 +340,30 @@ impl Bridge {
         });
     }
 
+    pub fn play_album(&self, album_id: String, start: usize) {
+        let tx = self.tx.clone();
+        let offline = self.offline.load(Ordering::Relaxed);
+        crate::app::runtime().spawn(async move {
+            let Some(dbs) = crate::app::dbs() else { return };
+            match crate::queue::album_tracks_json(&dbs, &album_id, offline).await {
+                Ok(json) => match serde_json::from_str::<Vec<crate::player::Track>>(&json) {
+                    Ok(tracks) => {
+                        let _ = tx.send(Event::Queue {
+                            tracks,
+                            start,
+                        });
+                    }
+                    Err(err) => {
+                        let _ = tx.send(Event::Error(format!("Could not play album: {err:#}")));
+                    }
+                },
+                Err(err) => {
+                    let _ = tx.send(Event::Error(format!("Could not play album: {err:#}")));
+                }
+            }
+        });
+    }
+
     pub fn play_song(&self, song_id: String, order: String) {
         let tx = self.tx.clone();
         crate::app::runtime().spawn(async move {

@@ -808,6 +808,9 @@ impl AppRoot {
                 self.player.load(tracks, start);
                 self.playback_error = None;
                 self.request_current_lyrics();
+                if self.queue_open {
+                    self.land_queue(self.player.index());
+                }
             }
             Event::Search {
                 generation,
@@ -1275,8 +1278,7 @@ impl AppRoot {
     fn on_queue_toggle(&mut self, _: &QueueToggle, _window: &mut Window, cx: &mut Context<Self>) {
         self.queue_open = !self.queue_open;
         if self.queue_open {
-            self.queue_cursor = self.player.index().min(self.player.len().saturating_sub(1));
-            self.follow_queue(true);
+            self.land_queue(self.player.index());
         }
         cx.notify();
     }
@@ -1641,8 +1643,7 @@ impl AppRoot {
         self.press_transport(2);
         self.player.next();
         if self.queue_open {
-            self.queue_cursor = self.player.index();
-            self.follow_queue(true);
+            self.land_queue(self.player.index());
         }
         cx.notify();
     }
@@ -2698,7 +2699,15 @@ impl AppRoot {
                     self.open_descriptor(PageDescriptor::new(PageKind::Album, album_id));
                 }
             }
-            page_profile::PageAction::PlayAlbum | page_profile::PageAction::PlayArtist => {
+            page_profile::PageAction::PlayAlbum => {
+                if let Some(page) = self.page.as_ref() {
+                    self.bridge.play_album(
+                        page.descriptor.id.clone(),
+                        page.cursor,
+                    );
+                }
+            }
+            page_profile::PageAction::PlayArtist => {
                 if !song_id.is_empty() {
                     self.last_play = Some((song_id.clone(), self.view.order_label().to_string()));
                     self.bridge.play_song(song_id, self.view.order_label().to_string());
@@ -4588,8 +4597,7 @@ impl Render for AppRoot {
         if playback_index != self.last_player_index {
             self.last_player_index = playback_index;
             if self.queue_open {
-                self.queue_cursor = playback_index.min(self.player.len().saturating_sub(1));
-                self.follow_queue(true);
+                self.land_queue(playback_index);
             }
         }
         self.refresh_lyrics_emphasis();

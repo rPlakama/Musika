@@ -83,7 +83,7 @@ pub(crate) async fn window(
     start: usize,
     count: usize,
     offline: bool,
-) -> anyhow::Result<String> {
+) -> anyhow::Result<Value> {
     let start = start as i64;
     let count = count.max(1) as i64;
     // ARC-RS-4.11: offline filters the window in-memory instead of ignoring
@@ -165,8 +165,8 @@ pub(crate) async fn window(
         other => bail!("unknown row surface: {other}"),
     };
 
-    Ok(serde_json::to_string(&json!({
+    Ok(json!({
         "start": start,
         "rows": rows,
-    }))?)
+    }))
 }

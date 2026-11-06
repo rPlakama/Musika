@@ -5578,10 +5578,9 @@ mod rows {
                 .unwrap(),
             1
         );
-        let payload = crate::qml::rows::window(&dbs, "albums", "", "Artist", 0, 10, false)
+        let value = crate::qml::rows::window(&dbs, "albums", "", "Artist", 0, 10, false)
             .await
             .unwrap();
-        let value: Value = serde_json::from_str(&payload).unwrap();
         assert_eq!(value["start"], 0);
         assert_eq!(value["rows"].as_array().unwrap().len(), 1);
         assert_eq!(value["rows"][0]["title"], "Album");

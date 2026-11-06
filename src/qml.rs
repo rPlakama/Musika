@@ -214,6 +214,19 @@ struct DownloadedIdsPayload {
     queried_albums: Vec<String>,
 }
 
+#[derive(Clone, Copy)]
+enum OrderScope {
+    Album,
+    Song,
+    Artist,
+}
+
+enum CoverKind {
+    Album(String),
+    Artist(String),
+    Cover(String),
+}
+
 #[derive(Default)]
 pub struct Backend {
     server_url: String,
@@ -1505,9 +1518,7 @@ impl Backend {
             )
             .await
             {
-                Ok(payload) => {
-                    let value: serde_json::Value =
-                        serde_json::from_str(&payload).unwrap_or_default();
+                Ok(value) => {
                     emit(
                         &invoker,
                         "row_window",
@@ -1650,66 +1661,54 @@ impl Backend {
     /// Cycles the main-scope album order (Shift-L / Shift-H).
     #[qslot(qml_name = "albumOrderNext")]
     fn album_order_next(&mut self) {
-        self.step_album_order(1);
+        self.step_order(OrderScope::Album, 1);
     }
 
     #[qslot(qml_name = "albumOrderPrev")]
     fn album_order_prev(&mut self) {
-        self.step_album_order(-1);
+        self.step_order(OrderScope::Album, -1);
     }
 
     /// Cycles the Songs-segment order (Shift-L / Shift-H there).
     #[qslot(qml_name = "songOrderNext")]
     fn song_order_next(&mut self) {
-        self.step_song_order(1);
+        self.step_order(OrderScope::Song, 1);
     }
 
     #[qslot(qml_name = "songOrderPrev")]
     fn song_order_prev(&mut self) {
-        self.step_song_order(-1);
+        self.step_order(OrderScope::Song, -1);
     }
 
     /// Cycles the Artists-segment order (Shift-L / Shift-H there).
     #[qslot(qml_name = "artistOrderNext")]
     fn artist_order_next(&mut self) {
-        self.step_artist_order(1);
+        self.step_order(OrderScope::Artist, 1);
     }
 
     #[qslot(qml_name = "artistOrderPrev")]
     fn artist_order_prev(&mut self) {
-        self.step_artist_order(-1);
+        self.step_order(OrderScope::Artist, -1);
     }
 
-    fn step_album_order(&mut self, delta: i64) {
-        let next =
-            crate::library::effective_order(&crate::library::ORDERS, &self.album_order, delta)
-                .to_string();
-        if self.album_order != next {
-            self.album_order = next;
-            self.album_order_changed();
-        }
-    }
-
-    fn step_song_order(&mut self, delta: i64) {
-        let next =
-            crate::library::effective_order(&crate::library::ORDERS, &self.song_order, delta)
-                .to_string();
-        if self.song_order != next {
-            self.song_order = next;
-            self.song_order_changed();
-        }
-    }
-
-    fn step_artist_order(&mut self, delta: i64) {
-        let next = crate::library::effective_order(
-            &crate::library::ARTIST_ORDERS,
-            &self.artist_order,
-            delta,
-        )
-        .to_string();
-        if self.artist_order != next {
-            self.artist_order = next;
-            self.artist_order_changed();
+    fn step_order(&mut self, scope: OrderScope, delta: i64) {
+        let (orders, current, signal): (&[&str], &mut String, fn(&mut Self)) = match scope {
+            OrderScope::Album => (&crate::library::ORDERS, &mut self.album_order, |this| {
+                this.album_order_changed()
+            }),
+            OrderScope::Song => (&crate::library::ORDERS, &mut self.song_order, |this| {
+                this.song_order_changed()
+            }),
+            OrderScope::Artist => (
+                &crate::library::ARTIST_ORDERS,
+                &mut self.artist_order,
+                |this| this.artist_order_changed(),
+            ),
+        };
+        let next = crate::library::effective_order(orders, current, delta).to_string();
+        if *current != next {
+            *current = next;
+            signal(self);
         }
     }
 
@@ -1885,73 +1884,64 @@ impl Backend {
         self.download_album_impl(album_id, on);
     }
 
-    /// Resolves the album hero art on a runtime task: fetch/cache the cover
-    /// when needed, then emit the local file URL for CoverImage at the
-    /// QML-computed display bucket (`target_size`).
+    /// Resolves the album hero art on a runtime task.
     #[qslot(qml_name = "requestAlbumCover")]
     fn request_album_cover(&mut self, album_id: String, target_size: i32) {
-        let invoker = self.get_qml_method_invoker();
-        self.spawn_task(move |dbs| async move {
-            let Ok(Some(album)) = crate::library::album(&dbs.library, &album_id).await else {
-                return;
-            };
-            let Some(cover) = album.cover_art.filter(|id| !id.is_empty()) else {
-                return;
-            };
-            let Some(url) = resized_cover_url(&dbs, &cover, target_size).await else {
-                return;
-            };
-            let payload = serde_json::json!({
-                "album_id": album_id,
-                "cover": url,
-                "size": target_size,
-            })
-            .to_string();
-            emit(&invoker, "album_cover", payload);
-        });
+        self.request_cover_kind(CoverKind::Album(album_id), target_size);
     }
 
-    /// The artist-page twin of `requestAlbumCover`: look up the artist's
-    /// cover id, resolve a display-sized copy and emit `artist_cover`.
+    /// The artist-page twin of `requestAlbumCover`.
     #[qslot(qml_name = "requestArtistCover")]
     fn request_artist_cover(&mut self, artist_id: String, target_size: i32) {
+        self.request_cover_kind(CoverKind::Artist(artist_id), target_size);
+    }
+
+    /// The playback twin: resolves the current track's cover id.
+    #[qslot(qml_name = "requestCover")]
+    fn request_cover(&mut self, cover_id: String, target_size: i32) {
+        self.request_cover_kind(CoverKind::Cover(cover_id), target_size);
+    }
+
+    fn request_cover_kind(&mut self, kind: CoverKind, target_size: i32) {
         let invoker = self.get_qml_method_invoker();
         self.spawn_task(move |dbs| async move {
-            let Ok(Some(artist)) = crate::library::artist(&dbs.library, &artist_id).await else {
-                return;
-            };
-            let Some(cover) = artist.cover_art.filter(|id| !id.is_empty()) else {
-                return;
+            let (cover, channel, mut payload) = match kind {
+                CoverKind::Album(id) => {
+                    let Ok(Some(album)) = crate::library::album(&dbs.library, &id).await else {
+                        return;
+                    };
+                    let Some(cover) = album.cover_art.filter(|cover| !cover.is_empty()) else {
+                        return;
+                    };
+                    (
+                        cover,
+                        "album_cover",
+                        serde_json::json!({ "album_id": id, "size": target_size }),
+                    )
+                }
+                CoverKind::Artist(id) => {
+                    let Ok(Some(artist)) = crate::library::artist(&dbs.library, &id).await else {
+                        return;
+                    };
+                    let Some(cover) = artist.cover_art.filter(|cover| !cover.is_empty()) else {
+                        return;
+                    };
+                    (
+                        cover,
+                        "artist_cover",
+                        serde_json::json!({ "artist_id": id, "size": target_size }),
+                    )
+                }
+                CoverKind::Cover(id) => (id, "cover", serde_json::json!({ "size": target_size })),
             };
             let Some(url) = resized_cover_url(&dbs, &cover, target_size).await else {
                 return;
             };
-            let payload = serde_json::json!({
-                "artist_id": artist_id,
-                "cover": url,
-                "size": target_size,
-            })
-            .to_string();
-            emit(&invoker, "artist_cover", payload);
-        });
-    }
-
-    /// The playback twin: resolve the current track's cover id to a
-    /// display-sized copy and emit `cover` with the id for staleness checks.
-    #[qslot(qml_name = "requestCover")]
-    fn request_cover(&mut self, cover_id: String, target_size: i32) {
-        let invoker = self.get_qml_method_invoker();
-        self.spawn_task(move |dbs| async move {
-            let Some(url) = resized_cover_url(&dbs, &cover_id, target_size).await else {
-                return;
-            };
-            let payload = serde_json::json!({
-                "id": cover_id,
-                "cover": url,
-                "size": target_size,
-            })
-            .to_string();
-            emit(&invoker, "cover", payload);
+            payload["cover"] = serde_json::Value::String(url);
+            if channel == "cover" {
+                payload["id"] = serde_json::Value::String(cover);
+            }
+            emit(&invoker, channel, payload.to_string());
         });
     }
 

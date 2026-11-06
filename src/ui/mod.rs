@@ -56,6 +56,9 @@ actions!(
         MoveRight,
         Visual,
         VisualAll,
+        Search,
+        SearchNext,
+        SearchPrev,
     ]
 );
 
@@ -84,6 +87,12 @@ pub fn run() {
             KeyBinding::new("r", Refresh, None),
             KeyBinding::new("enter", Enter, None),
             KeyBinding::new("v", Visual, None),
+            KeyBinding::new("/", Search, None),
+            KeyBinding::new("shift-space f", Search, None),
+            KeyBinding::new("up", MoveUp, None),
+            KeyBinding::new("down", MoveDown, None),
+            KeyBinding::new("ctrl-n", SearchNext, None),
+            KeyBinding::new("ctrl-p", SearchPrev, None),
             KeyBinding::new("shift-v", VisualAll, None),
             KeyBinding::new("[ b", PrevPlace, None),
             KeyBinding::new("] b", NextPlace, None),
@@ -122,6 +131,14 @@ struct Header {
     counts: (i64, i64, i64),
 }
 
+struct SearchState {
+    query: String,
+    rows: Vec<Row>,
+    cursor: usize,
+    generation: u64,
+    loading: bool,
+}
+
 struct AppRoot {
     focus: FocusHandle,
     bridge: bridge::Bridge,
@@ -134,6 +151,7 @@ struct AppRoot {
     travel: Travel,
     page_generation: u64,
     page_scroll: UniformListScrollHandle,
+    search: Option<SearchState>,
 }
 
 impl AppRoot {
@@ -170,7 +188,20 @@ impl AppRoot {
             travel: Travel::default(),
             page_generation: 0,
             page_scroll: UniformListScrollHandle::new(),
+            search: None,
         };
+        if let Ok(query) = std::env::var("MUSIKA_GPUUI_SEARCH")
+            && !query.is_empty()
+        {
+            app.search = Some(SearchState {
+                query: query.clone(),
+                rows: Vec::new(),
+                cursor: 0,
+                generation: 1,
+                loading: true,
+            });
+            app.bridge.search(query);
+        }
         if let Ok(spec) = std::env::var("MUSIKA_GPUUI_PAGE")
             && let Some(descriptor) = parse_page_spec(&spec)
         {
@@ -240,6 +271,21 @@ impl AppRoot {
                 self.page_scroll
                     .scroll_to_item(page.cursor, ScrollStrategy::Center);
             }
+            Event::Search {
+                generation,
+                query,
+                rows,
+            } => {
+                if let Some(search) = self.search.as_mut()
+                    && generation >= search.generation
+                {
+                    search.generation = generation;
+                    search.query = query;
+                    search.rows = rows;
+                    search.cursor = 0;
+                    search.loading = false;
+                }
+            }
             Event::Error(message) => {
                 self.view.loading = false;
                 self.view.error = Some(message.clone());
@@ -275,6 +321,11 @@ impl AppRoot {
     }
 
     fn on_move_down(&mut self, _: &MoveDown, _window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(search) = self.search.as_mut() {
+            search.cursor = search.cursor.saturating_add(1).min(search.rows.len().saturating_sub(1));
+            cx.notify();
+            return;
+        }
         if let Some(page) = self.page.as_mut() {
             page.select(page.cursor.saturating_add(1));
             self.page_scroll.scroll_to_item(page.cursor, ScrollStrategy::Center);
@@ -285,6 +336,11 @@ impl AppRoot {
     }
 
     fn on_move_up(&mut self, _: &MoveUp, _window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(search) = self.search.as_mut() {
+            search.cursor = search.cursor.saturating_sub(1);
+            cx.notify();
+            return;
+        }
         if let Some(page) = self.page.as_mut() {
             page.select(page.cursor.saturating_sub(1));
             self.page_scroll.scroll_to_item(page.cursor, ScrollStrategy::Center);
@@ -335,6 +391,67 @@ impl AppRoot {
 
     fn on_refresh(&mut self, _: &Refresh, _window: &mut Window, cx: &mut Context<Self>) {
         self.reload();
+        cx.notify();
+    }
+
+    fn on_search(&mut self, _: &Search, _window: &mut Window, cx: &mut Context<Self>) {
+        if self.search.is_none() {
+            self.search = Some(SearchState {
+                query: String::new(),
+                rows: Vec::new(),
+                cursor: 0,
+                generation: 0,
+                loading: false,
+            });
+        }
+        cx.notify();
+    }
+
+    fn on_search_next(&mut self, _: &SearchNext, _window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(search) = self.search.as_mut() {
+            search.cursor = search.cursor.saturating_add(1).min(search.rows.len().saturating_sub(1));
+        }
+        cx.notify();
+    }
+
+    fn on_search_prev(&mut self, _: &SearchPrev, _window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(search) = self.search.as_mut() {
+            search.cursor = search.cursor.saturating_sub(1);
+        }
+        cx.notify();
+    }
+
+    fn on_key_down(&mut self, event: &gpui::KeyDownEvent, _window: &mut Window, cx: &mut Context<Self>) {
+        let Some(search) = self.search.as_mut() else {
+            return;
+        };
+        let key = event.keystroke.key.as_str();
+        let modified = event.keystroke.modifiers.control
+            || event.keystroke.modifiers.alt
+            || event.keystroke.modifiers.platform;
+        if key == "backspace" {
+            search.query.pop();
+        } else if key == "escape" {
+            self.search = None;
+            cx.notify();
+            return;
+        } else if !modified {
+            if let Some(text) = event.keystroke.key_char.as_ref()
+                && !text.chars().any(char::is_control)
+            {
+                search.query.push_str(text);
+            } else if key == "space" {
+                search.query.push(' ');
+            }
+        }
+        if search.query.is_empty() {
+            search.rows.clear();
+            search.loading = false;
+        } else {
+            search.generation = search.generation.wrapping_add(1);
+            search.loading = true;
+            self.bridge.search(search.query.clone());
+        }
         cx.notify();
     }
 
@@ -392,6 +509,15 @@ impl AppRoot {
     }
 
     fn on_enter(&mut self, _: &Enter, _window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(search) = self.search.as_ref() {
+            let row = search.rows.get(search.cursor).cloned();
+            if let Some(row) = row {
+                self.search = None;
+                self.open_row_page(&row);
+            }
+            cx.notify();
+            return;
+        }
         if self.page.is_some() {
             let row = self
                 .page
@@ -408,6 +534,11 @@ impl AppRoot {
     }
 
     fn on_back(&mut self, _: &Back, window: &mut Window, cx: &mut Context<Self>) {
+        if self.search.is_some() {
+            self.search = None;
+            cx.notify();
+            return;
+        }
         if self.page.as_ref().is_some_and(|page| page.selection.active()) {
             if let Some(page) = self.page.as_mut() {
                 page.selection.clear();
@@ -667,6 +798,100 @@ impl AppRoot {
         )
     }
 
+    fn search_overlay(&self, search: &SearchState) -> gpui::Div {
+        let query = if search.query.is_empty() {
+            "Search…".to_string()
+        } else {
+            format!("{}▌", search.query)
+        };
+        let results = search
+            .rows
+            .iter()
+            .take(12)
+            .enumerate()
+            .map(|(index, row)| {
+                let selected = index == search.cursor;
+                div()
+                    .flex()
+                    .items_center()
+                    .gap_3()
+                    .px_4()
+                    .py_2()
+                    .when(selected, |this| this.bg(rgb(SURFACE_HIGH)))
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .min_w_0()
+                            .flex_1()
+                            .child(div().text_size(px(14.0)).child(row.title.clone()))
+                            .child(
+                                div()
+                                    .text_size(px(11.0))
+                                    .text_color(rgb(ON_VARIANT))
+                                    .child(row.subtitle.clone()),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .text_size(px(11.0))
+                            .text_color(rgb(ON_VARIANT))
+                            .child(row.meta.clone()),
+                    )
+            })
+            .collect::<Vec<_>>();
+
+        div()
+            .absolute()
+            .inset_0()
+            .flex()
+            .justify_center()
+            .items_start()
+            .pt(px(72.0))
+            .child(
+                div()
+                    .w(px(720.0))
+                    .max_h(px(460.0))
+                    .flex()
+                    .flex_col()
+                    .overflow_hidden()
+                    .rounded_lg()
+                    .border_1()
+                    .border_color(rgb(OUTLINE))
+                    .bg(rgb(SURFACE))
+                    .shadow_lg()
+                    .child(
+                        div()
+                            .px_4()
+                            .py_3()
+                            .text_size(px(18.0))
+                            .text_color(if search.query.is_empty() { rgb(ON_VARIANT) } else { rgb(ON_SURFACE) })
+                            .child(query),
+                    )
+                    .child(div().h(px(1.0)).bg(rgb(OUTLINE)))
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .flex_1()
+                            .overflow_hidden()
+                            .children(results),
+                    )
+                    .child(
+                        div()
+                            .px_4()
+                            .py_2()
+                            .text_size(px(10.0))
+                            .text_color(rgb(ON_VARIANT))
+                            .child(if search.loading {
+                                "searching…"
+                            } else {
+                                "Enter opens · type to refine · Esc closes"
+                            }),
+                    ),
+            )
+    }
+
     fn page_view(&self, cx: &Context<Self>) -> impl IntoElement {
         let Some(page) = self.page.as_ref() else {
             return div().flex().flex_1();
@@ -862,6 +1087,7 @@ impl AppRoot {
 
 impl Render for AppRoot {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let overlay = self.search.as_ref().map(|search| self.search_overlay(search));
         let top = self.top_bar(&*cx);
         let body = if self.page.is_some() {
             self.page_view(&*cx).into_any_element()
@@ -883,6 +1109,10 @@ impl Render for AppRoot {
             .on_action(cx.listener(Self::on_refresh))
             .on_action(cx.listener(Self::on_enter))
             .on_action(cx.listener(Self::on_visual))
+            .on_action(cx.listener(Self::on_search))
+            .on_action(cx.listener(Self::on_search_next))
+            .on_action(cx.listener(Self::on_search_prev))
+            .on_key_down(cx.listener(Self::on_key_down))
             .on_action(cx.listener(Self::on_visual_all))
             .on_action(cx.listener(Self::on_page_down))
             .on_action(cx.listener(Self::on_page_up))
@@ -898,6 +1128,7 @@ impl Render for AppRoot {
             .child(top)
             .child(body)
             .child(status)
+            .child(div().when_some(overlay, |this, overlay| this.child(overlay)))
     }
 }
 

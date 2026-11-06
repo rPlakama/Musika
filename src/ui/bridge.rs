@@ -21,6 +21,11 @@ pub enum Event {
         header: super::state::PageHeader,
         rows: Vec<super::state::Row>,
     },
+    Search {
+        generation: u64,
+        query: String,
+        rows: Vec<super::state::Row>,
+    },
     Header {
         server_url: String,
         username: String,
@@ -34,6 +39,7 @@ pub struct Bridge {
     tx: UnboundedSender<Event>,
     generation: AtomicU64,
     page_generation: AtomicU64,
+    search_generation: AtomicU64,
 }
 
 impl Bridge {
@@ -42,6 +48,7 @@ impl Bridge {
             tx,
             generation: AtomicU64::new(0),
             page_generation: AtomicU64::new(0),
+            search_generation: AtomicU64::new(0),
         };
         bridge.load_header();
         bridge
@@ -92,6 +99,25 @@ impl Bridge {
                     }
                 }
                 Err(err) => Event::Error(format!("Page load failed: {err:#}")),
+            };
+            let _ = tx.send(event);
+        });
+    }
+
+    pub fn search(&self, query: String) {
+        let generation = self.search_generation.fetch_add(1, Ordering::SeqCst) + 1;
+        let tx = self.tx.clone();
+        crate::app::runtime().spawn(async move {
+            let event = match search_rows(&query).await {
+                Ok(rows) => {
+                    crate::debug_log!("GPUI: search {:?} {} rows", query, rows.len());
+                    Event::Search {
+                        generation,
+                        query,
+                        rows,
+                    }
+                }
+                Err(err) => Event::Error(format!("Search failed: {err:#}")),
             };
             let _ = tx.send(event);
         });
@@ -372,4 +398,65 @@ async fn page_data(
             Ok((header, rows))
         }
     }
+}
+
+async fn search_rows(query: &str) -> anyhow::Result<Vec<super::state::Row>> {
+    use super::state::{Row, RowKind};
+    let query = query.trim();
+    if query.is_empty() {
+        return Ok(Vec::new());
+    }
+    let dbs = crate::app::dbs().ok_or_else(|| anyhow::anyhow!("databases not ready"))?;
+    let index = crate::search::index::ensure(&dbs.library).await?;
+    let Some(index) = index else {
+        return Ok(Vec::new());
+    };
+    let results = index.search(query, 40);
+    let mut rows = Vec::new();
+    for album in results.albums {
+        rows.push(Row {
+            id: album.id.clone(),
+            kind: RowKind::Album,
+            title: album.title.clone(),
+            subtitle: album.artist.clone().unwrap_or_default(),
+            meta: format!("{} · {}", album.year.unwrap_or_default(), songs_label(album.song_count)),
+            cover_url: crate::covers::url_for(album.cover_art.as_deref(), &Default::default()),
+            song_id: String::new(),
+            album_id: album.id.clone(),
+            starred: album.starred.is_some(),
+            rating: album.rating,
+            downloaded: false,
+        });
+    }
+    for artist in results.artists {
+        rows.push(Row {
+            id: artist.id.clone(),
+            kind: RowKind::Artist,
+            title: artist.name.clone(),
+            subtitle: format!("{} albums", artist.album_count),
+            meta: String::new(),
+            cover_url: String::new(),
+            song_id: String::new(),
+            album_id: String::new(),
+            starred: artist.starred.is_some(),
+            rating: 0,
+            downloaded: false,
+        });
+    }
+    for song in results.songs {
+        rows.push(Row {
+            id: song.id.clone(),
+            kind: RowKind::Song,
+            title: song.title.clone(),
+            subtitle: song.artist.clone().unwrap_or_default(),
+            meta: song.album.clone().unwrap_or_default(),
+            cover_url: String::new(),
+            song_id: song.id.clone(),
+            album_id: song.album_id.clone().unwrap_or_default(),
+            starred: false,
+            rating: 0,
+            downloaded: false,
+        });
+    }
+    Ok(rows)
 }

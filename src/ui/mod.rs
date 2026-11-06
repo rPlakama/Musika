@@ -37,7 +37,7 @@ use gpui::{
 };
 
 use bridge::Event;
-use quick_actions::{AltGesture, Direction, QuickMenu, QuickVerb};
+use quick_actions::{AltGesture, Direction, QuickKind, QuickMenu, QuickVerb};
 use state::{PageDescriptor, PageKind, PageState, Row, RowKind, RowWindow, Scope, Travel, ViewState};
 
 actions!(
@@ -256,6 +256,8 @@ struct AltTarget {
     album_id: String,
     song_id: String,
     playlist_id: String,
+    ids: Vec<String>,
+    selection: bool,
 }
 
 impl AltTarget {
@@ -1772,6 +1774,8 @@ impl AppRoot {
             } else {
                 String::new()
             },
+            ids: vec![row.id.clone()],
+            selection: false,
         }
     }
 
@@ -1795,6 +1799,39 @@ impl AppRoot {
         )
     }
 
+    fn quick_kind(kind: RowKind) -> QuickKind {
+        match kind {
+            RowKind::Song => QuickKind::Song,
+            RowKind::Album => QuickKind::Album,
+            RowKind::Artist => QuickKind::Artist,
+            RowKind::Playlist => QuickKind::Playlist,
+        }
+    }
+
+    fn alt_selection_target(
+        &self,
+        rows: Vec<Row>,
+        cursor: usize,
+        anchor: (f32, f32),
+    ) -> Option<(QuickMenu, AltTarget, (f32, f32))> {
+        if rows.is_empty() {
+            return None;
+        }
+        let kind = rows[0].kind;
+        let all_starred = rows.iter().all(|row| row.starred);
+        let ids: Vec<String> = rows.iter().map(|row| row.id.clone()).collect();
+        let target = AltTarget {
+            kind,
+            id: rows[cursor.min(rows.len() - 1)].id.clone(),
+            album_id: rows[cursor.min(rows.len() - 1)].album_id.clone(),
+            song_id: rows[cursor.min(rows.len() - 1)].song_id.clone(),
+            playlist_id: String::new(),
+            ids,
+            selection: true,
+        };
+        Some((QuickMenu::selection(Self::quick_kind(kind), all_starred), target, anchor))
+    }
+
     fn alt_snapshot(&self) -> Option<(QuickMenu, AltTarget, (f32, f32))> {
         if self.fullscreen {
             let track = self.player.current()?;
@@ -1805,6 +1842,8 @@ impl AppRoot {
                 album_id: track.album_id.clone(),
                 song_id: track.id.clone(),
                 playlist_id: String::new(),
+                ids: vec![track.id.clone()],
+                selection: false,
             };
             return Some((menu, target, (self.win_w * 0.5, self.win_h * 0.5)));
         }
@@ -1827,12 +1866,29 @@ impl AppRoot {
                 album_id: track.album_id.clone(),
                 song_id: track.id.clone(),
                 playlist_id: String::new(),
+                ids: vec![track.id.clone()],
+                selection: false,
             };
             return Some((
                 menu,
                 target,
                 self.alt_anchor_for(&self.queue_scroll, self.queue_cursor, self.queue_row_h),
             ));
+        }
+        if let Some(page) = self.page.as_ref()
+            && page.selection.active()
+        {
+            let anchor_index = page.selection.anchor().unwrap_or(page.cursor);
+            let lo = anchor_index.min(page.cursor);
+            let hi = anchor_index.max(page.cursor);
+            let rows = page.rows.get(lo..=hi).unwrap_or_default().to_vec();
+            if let Some(hit) = self.alt_selection_target(
+                rows,
+                page.cursor.saturating_sub(lo),
+                self.alt_anchor_for(&self.page_scroll, page.cursor, self.page_row_h),
+            ) {
+                return Some(hit);
+            }
         }
         if let Some(page) = self.page.as_ref() {
             let row = page.rows.get(page.cursor)?;
@@ -1841,6 +1897,21 @@ impl AppRoot {
                 self.alt_target_for_row(row),
                 self.alt_anchor_for(&self.page_scroll, page.cursor, self.page_row_h),
             ));
+        }
+        if self.view.selection.active() {
+            let anchor_index = self.view.selection.anchor().unwrap_or(self.view.cursor);
+            let lo = anchor_index.min(self.view.cursor);
+            let hi = anchor_index.max(self.view.cursor);
+            let rows: Vec<Row> = (lo..=hi)
+                .filter_map(|index| self.view.rows.get(index).cloned())
+                .collect();
+            if let Some(hit) = self.alt_selection_target(
+                rows,
+                self.view.cursor.saturating_sub(lo),
+                self.alt_anchor_for(&self.scroll, self.view.cursor, self.library_row_h),
+            ) {
+                return Some(hit);
+            }
         }
         let row = self.view.rows.get(self.view.cursor)?;
         Some((
@@ -1898,6 +1969,33 @@ impl AppRoot {
 
     fn dispatch_quick(&mut self, verb: QuickVerb) {
         let Some(target) = self.alt_target.clone() else { return };
+        if target.selection {
+            match verb {
+                QuickVerb::Favorite { on } => {
+                    for id in &target.ids {
+                        self.bridge.quick_favorite(
+                            target.queue_kind().to_string(),
+                            id.clone(),
+                            on,
+                        );
+                    }
+                }
+                QuickVerb::AddToQueue => {
+                    for id in &target.ids {
+                        self.bridge
+                            .quick_queue_add(target.queue_kind().to_string(), id.clone());
+                    }
+                }
+                QuickVerb::Download { on } => {
+                    for id in &target.ids {
+                        self.bridge
+                            .quick_download(target.queue_kind().to_string(), id.clone(), on);
+                    }
+                }
+                _ => {}
+            }
+            return;
+        }
         match verb {
             QuickVerb::AddToQueue => {
                 self.bridge.quick_queue_add(target.queue_kind().to_string(), target.id.clone());

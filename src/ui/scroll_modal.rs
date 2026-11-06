@@ -183,6 +183,7 @@ impl ScrollModal {
 
     pub fn on_wheel(&mut self) {
         self.follow.active = false;
+        self.handle.0.borrow_mut().deferred_scroll_to_item = None;
     }
 }
 

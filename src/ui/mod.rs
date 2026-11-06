@@ -3196,7 +3196,7 @@ impl AppRoot {
                 .h_full()
                 .w_full()
                 .on_scroll_wheel(cx.listener(|this, _, _, _| {
-                    this.library_scroll.follow.active = false;
+                    this.library_scroll.on_wheel();
                 }))
                 .track_scroll(scroll),
             )
@@ -3431,6 +3431,46 @@ impl AppRoot {
             )
     }
 
+    fn lyric_line_elements(
+        &self,
+        lines: &[(Option<i64>, String)],
+        start: usize,
+        end: usize,
+        active: usize,
+        base: f32,
+    ) -> Vec<gpui::AnyElement> {
+        let active_size = (base * (1.0 + 0.12 * self.lyrics_active_anim.value(&self.clock))).min(24.5);
+        lines[start..end]
+            .iter()
+            .enumerate()
+            .map(|(offset, (_, text))| {
+                let index = start + offset;
+                let is_active = index == active;
+                div()
+                    .w_full()
+                    .min_w_0()
+                    .overflow_hidden()
+                    .text_size(px(if is_active { active_size } else { base }))
+                    .text_color(rgb(if is_active {
+                        palette::on_surface()
+                    } else {
+                        palette::on_surface_variant()
+                    }))
+                    .text_center()
+                    .whitespace_normal()
+                    .opacity(
+                        self.lyrics_line_opacity
+                            .get(&index)
+                            .map(|anim| anim.value(&self.clock))
+                            .unwrap_or(1.0),
+                    )
+                    .when(is_active, |this| this.font_weight(gpui::FontWeight::SEMIBOLD))
+                    .child(text.clone())
+                    .into_any_element()
+            })
+            .collect()
+    }
+
     fn lyrics_overlay_element(&self) -> gpui::AnyElement {
         if !self.lyrics_overlay {
             return div().into_any_element();
@@ -3470,7 +3510,7 @@ impl AppRoot {
                     .flex_col()
                     .items_center()
                     .justify_center()
-                    .gap(px(12.0))
+                    .gap(px((((self.win_h * 0.055).clamp(13.0, 22.0)) * 0.5).max(8.0)))
                     .opacity(self.lyrics_track_fade.value(&self.clock))
                     .mt(px(self.lyrics_shift.value(&self.clock)))
                     .child(
@@ -3479,30 +3519,13 @@ impl AppRoot {
                             .text_color(rgb(palette::on_surface_variant()))
                             .child(format!("Lyrics · {} · ? closes", lyrics.source)),
                     )
-                    .children(lyrics.lines[start..end].iter().enumerate().map(|(offset, (_, text))| {
-                        let index = start + offset;
-                        let is_active = index == active;
-                        let base = (self.win_h * 0.055).clamp(13.0, 22.0);
-                        let active_size = (base
-                            * (1.0 + 0.12 * self.lyrics_active_anim.value(&self.clock)))
-                            .min(24.5);
-                        div()
-                            .w_full()
-                            .min_w_0()
-                            .overflow_hidden()
-                            .text_size(px(if is_active { active_size } else { base }))
-                            .text_color(rgb(if is_active { palette::on_surface() } else { palette::on_surface_variant() }))
-                            .text_center()
-                            .whitespace_normal()
-                            .opacity(
-                                self.lyrics_line_opacity
-                                    .get(&index)
-                                    .map(|anim| anim.value(&self.clock))
-                                    .unwrap_or(1.0),
-                            )
-                            .when(is_active, |this| this.font_weight(gpui::FontWeight::SEMIBOLD))
-                            .child(text.clone())
-                    })),
+                    .children(self.lyric_line_elements(
+                        &lyrics.lines,
+                        start,
+                        end,
+                        active,
+                        (self.win_h * 0.055).clamp(13.0, 22.0),
+                    )),
             )
             .into_any_element()
     }
@@ -3538,13 +3561,6 @@ impl AppRoot {
             .unwrap_or(0);
         let start = self.lyrics_window_start.min(lines.len().saturating_sub(1));
         let end = (start + 15).min(lines.len());
-        let visible: Vec<(usize, String)> = lines
-            .iter()
-            .enumerate()
-            .skip(start)
-            .take(end.saturating_sub(start))
-            .map(|(index, (_, text))| (index, text.clone()))
-            .collect();
         let lyrics_label = match lyrics {
             Some(lyrics) if lyrics.lines.is_empty() => "No lyrics".to_string(),
             Some(lyrics) => format!("Lyrics · {}", lyrics.source),
@@ -3552,9 +3568,8 @@ impl AppRoot {
         };
         let lyrics_inline = self.lyrics_inline();
         let lyric_base = (self.win_h * 0.055).clamp(13.0, 22.0);
-        let lyric_active = (lyric_base * (1.0 + 0.12 * self.lyrics_active_anim.value(&self.clock))).min(24.5);
         let cover_side = if lyrics_inline {
-            300.0
+            ((self.win_w * 0.95 - 24.0) * 0.5).min(self.win_h * 0.62)
         } else {
             (self.win_w * 0.95).min(self.win_h * 0.62)
         };
@@ -3584,6 +3599,7 @@ impl AppRoot {
                             .items_center()
                             .justify_center()
                             .overflow_hidden()
+                            .when(self.lyrics_overlay, |this| this.hidden())
                             .child(art(cover, cover_side)),
                     )
                     .child(
@@ -3610,25 +3626,13 @@ impl AppRoot {
                                     .text_color(rgb(palette::on_surface_variant()))
                                     .child(lyrics_label),
                             )
-                            .children(visible.into_iter().map(|(index, text)| {
-                                let is_active = index == active;
-                                div()
-                                    .w_full()
-                                    .min_w_0()
-                                    .overflow_hidden()
-                                    .text_size(px(if is_active { lyric_active } else { lyric_base }))
-                                    .text_color(rgb(if is_active { palette::on_surface() } else { palette::on_surface_variant() }))
-                                    .text_center()
-                                    .whitespace_normal()
-                                    .opacity(
-                                        self.lyrics_line_opacity
-                                            .get(&index)
-                                            .map(|anim| anim.value(&self.clock))
-                                            .unwrap_or(1.0),
-                                    )
-                                    .when(is_active, |this| this.font_weight(gpui::FontWeight::SEMIBOLD))
-                                    .child(text)
-                            })),
+                            .children(self.lyric_line_elements(
+                                &lines,
+                                start,
+                                end,
+                                active,
+                                lyric_base,
+                            )),
                     ),
             )
             .child(
@@ -3839,7 +3843,7 @@ impl AppRoot {
                         }))
                         .h_full()
                         .on_scroll_wheel(cx.listener(|this, _, _, _| {
-                            this.queue_scroll_modal.follow.active = false;
+                            this.queue_scroll_modal.on_wheel();
                         }))
                         .track_scroll(scroll),
                     )
@@ -4302,7 +4306,7 @@ impl AppRoot {
                         .h_full()
                         .w_full()
                         .on_scroll_wheel(cx.listener(|this, _, _, _| {
-                            this.page_scroll_modal.follow.active = false;
+                            this.page_scroll_modal.on_wheel();
                         }))
                         .track_scroll(scroll),
                     ),

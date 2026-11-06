@@ -1035,14 +1035,30 @@ impl AppRoot {
                 uniform_list("page-rows", count, cx.processor(move |this, range: std::ops::Range<usize>, _window, cx| {
                     let mut items = Vec::with_capacity(range.len());
                     for index in range {
-                        let Some(page) = this.page.as_ref() else { break };
-                        let row = &page.rows[index];
-                        let title = row.title.clone();
-                        let subtitle = row.subtitle.clone();
-                        let meta = row.meta.clone();
-                        let downloaded = row.downloaded;
-                        let selected = index == page.cursor
-                            || page.selection.contains(page.cursor, index);
+                        let Some((title, subtitle, meta, downloaded, selected, key)) = this
+                            .page
+                            .as_ref()
+                            .map(|page| {
+                                let row = &page.rows[index];
+                                (
+                                    row.title.clone(),
+                                    row.subtitle.clone(),
+                                    row.meta.clone(),
+                                    row.downloaded,
+                                    index == page.cursor
+                                        || page.selection.contains(page.cursor, index),
+                                    format!("page:{}:{}", page.descriptor.id, row.id),
+                                )
+                            })
+                        else {
+                            break;
+                        };
+                        let target = if selected { 0x2B2930FF } else { 0x2B293000 };
+                        let color = this
+                            .row_colors
+                            .entry(key)
+                            .or_insert_with(|| anim::ColorBehavior::new(target))
+                            .target(target, anim::QUICK_MS, anim::Curve::Standard, &this.clock);
                         items.push(
                             div()
                                 .id(index)
@@ -1052,7 +1068,7 @@ impl AppRoot {
                                 .px_4()
                                 .gap_3()
                                 .cursor_pointer()
-                                .when(selected, |this| this.bg(rgb(SURFACE_HIGH)))
+                                .bg(rgba(color))
                                 .on_click(cx.listener(move |this, _, _, cx| {
                                     if let Some(page) = this.page.as_mut() {
                                         page.select(index);

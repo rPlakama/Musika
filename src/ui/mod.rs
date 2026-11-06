@@ -4020,8 +4020,11 @@ impl AppRoot {
             None => "Loading lyrics…".to_string(),
         };
         let lyrics_inline = self.lyrics_inline();
+        // The overlay is a centered lyrics panel over the full player: keep the
+        // cover as the backdrop instead of hiding it and splitting the pane.
+        let split_lyrics = lyrics_inline && !self.lyrics_overlay;
         let lyric_base = (self.win_h * 0.055).clamp(13.0, 22.0);
-        let cover_side = if lyrics_inline {
+        let cover_side = if split_lyrics {
             ((self.win_w * 0.95 - 24.0) * 0.5).min(self.win_h * 0.62)
         } else {
             (self.win_w * 0.95).min(self.win_h * 0.62)
@@ -4052,16 +4055,15 @@ impl AppRoot {
                             .items_center()
                             .justify_center()
                             .overflow_hidden()
-                            .when(self.lyrics_overlay, |this| this.hidden())
                             .child(art(cover, cover_side)),
                     )
                     .child(
                         div()
                             .flex()
-                            .when(lyrics_inline, |this| this.flex_1())
-                            .when(!lyrics_inline, |this| this.hidden())
+                            .when(split_lyrics, |this| this.flex_1())
+                            .when(!split_lyrics, |this| this.hidden())
                             .h_full()
-                            .opacity(if lyrics_inline && !self.lyrics_overlay {
+                            .opacity(if split_lyrics {
                                 self.lyrics_track_fade.value(&self.clock)
                             } else {
                                 0.0

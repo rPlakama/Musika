@@ -1592,6 +1592,7 @@ impl AppRoot {
                         let meta = row.meta.clone();
                         let starred = row.starred;
                         let downloaded = row.downloaded;
+                        let rating = row.rating;
                         let cover = cover_path(&row.cover_url);
                         let selected = index == this.view.cursor
                             || this.view.selection.contains(this.view.cursor, index);
@@ -1673,11 +1674,19 @@ impl AppRoot {
                                                 .text_color(rgb(ON_VARIANT))
                                                 .child(meta),
                                         )
-                                        .when(starred, |this| {
-                                            this.child(div().text_size(px(12.0)).text_color(rgb(0xFFD54F)).child("★"))
-                                        })
                                         .when(downloaded, |this| {
-                                            this.child(div().text_size(px(11.0)).text_color(rgb(PRIMARY)).child("↓"))
+                                            this.child(icon("outline-download.svg", 13.0, PRIMARY))
+                                        })
+                                        .when(starred, |this| {
+                                            this.child(icon("baseline-favorite.svg", 12.0, 0xFFD54F))
+                                        })
+                                        .when(rating > 0, |this| {
+                                            this.child(
+                                                div()
+                                                    .text_size(px(10.0))
+                                                    .text_color(rgb(PRIMARY))
+                                                    .child(rating.to_string()),
+                                            )
                                         }),
                                 ),
                         );
@@ -2241,7 +2250,7 @@ impl AppRoot {
                             let row_h = 36.0;
                             let mut items = Vec::with_capacity(range.len());
                             for index in range {
-                                let Some((title, subtitle, meta, selected, key)) = this
+                                let Some((title, subtitle, meta, selected, rating, starred, downloaded, key)) = this
                                     .page
                                     .as_ref()
                                     .map(|page| {
@@ -2252,6 +2261,9 @@ impl AppRoot {
                                             row.meta.clone(),
                                             index == page.cursor
                                                 || page.selection.contains(page.cursor, index),
+                                            row.rating,
+                                            row.starred,
+                                            row.downloaded,
                                             format!("page:{}:{}", page.descriptor.id, row.id),
                                         )
                                     })
@@ -2305,7 +2317,16 @@ impl AppRoot {
                                                 .text_size(px(11.0))
                                                 .text_color(rgb(ON_VARIANT))
                                                 .child(meta),
-                                        ),
+                                        )
+                                        .when(downloaded, |this| {
+                                            this.child(icon("outline-download.svg", 12.0, PRIMARY))
+                                        })
+                                        .when(starred, |this| {
+                                            this.child(icon("baseline-favorite.svg", 11.0, 0xFFD54F))
+                                        })
+                                        .when(rating > 0, |this| {
+                                            this.child(div().text_size(px(10.0)).text_color(rgb(PRIMARY)).child(rating.to_string()))
+                                        }),
                                 );
                             }
                             items

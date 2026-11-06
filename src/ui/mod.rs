@@ -284,6 +284,12 @@ struct AppRoot {
     page_row_h: f32,
     page_row_ref: Option<f32>,
     page_row_ratio: f32,
+    queue_row_h: f32,
+    queue_row_ref: Option<f32>,
+    queue_row_ratio: f32,
+    search_row_h: f32,
+    search_row_ref: Option<f32>,
+    search_row_ratio: f32,
     page: Option<PageState>,
     travel: Travel,
     page_generation: u64,
@@ -361,6 +367,12 @@ impl AppRoot {
             page_row_h: 36.0,
             page_row_ref: None,
             page_row_ratio: 36.0 / 600.0,
+            queue_row_h: 56.0,
+            queue_row_ref: None,
+            queue_row_ratio: 56.0 / 600.0,
+            search_row_h: 56.0,
+            search_row_ref: None,
+            search_row_ratio: 56.0 / 600.0,
             page: None,
             travel: Travel::default(),
             page_generation: 0,
@@ -785,6 +797,41 @@ impl AppRoot {
             start,
             end - start + 1,
         );
+    }
+
+    fn ensure_queue_metrics(&mut self) {
+        let measured = {
+            let state = self.queue_scroll.0.borrow();
+            state
+                .last_item_size
+                .map(|size| f32::from(size.item.height))
+                .filter(|height| *height > 0.0)
+        };
+        let Some(viewport) = measured else { return };
+        let reference = *self.queue_row_ref.get_or_insert(viewport);
+        self.queue_row_ratio = 56.0 / reference;
+        self.queue_row_h = metrics::adaptive_row(viewport, self.queue_row_ratio, 56.0)
+            .round()
+            .max(18.0);
+    }
+
+    fn ensure_search_metrics(&mut self, window_height: f32) {
+        let reference = match self.search_row_ref {
+            Some(reference) => reference,
+            None => {
+                let reference = (window_height * 0.72).max(1.0);
+                self.search_row_ref = Some(reference);
+                reference
+            }
+        };
+        self.search_row_ratio = 56.0 / reference;
+        self.search_row_h = metrics::adaptive_row(
+            window_height * 0.72,
+            self.search_row_ratio,
+            56.0,
+        )
+        .round()
+        .max(18.0);
     }
 
     fn ensure_page_metrics(&mut self) {
@@ -2351,7 +2398,7 @@ impl AppRoot {
                                         .flex()
                                         .items_center()
                                         .gap_2()
-                                        .h(px(56.0))
+                                        .h(px(this.queue_row_h))
                                         .px_3()
                                         .cursor_pointer()
                                         .when(active, |this| this.bg(rgb(0x4A4458)))
@@ -2360,7 +2407,7 @@ impl AppRoot {
                                             this.player.jump(index);
                                             cx.notify();
                                         }))
-                                        .child(art_scaled(cover, 40.0, cover_scale))
+                                        .child(art_scaled(cover, this.queue_row_h * 0.714, cover_scale))
                                         .child(
                                             div()
                                                 .flex()
@@ -2430,7 +2477,7 @@ impl AppRoot {
                     .gap_3()
                     .px_5()
                     .id(("search-row", index))
-                    .h(px(56.0))
+                    .h(px(self.search_row_h))
                     .cursor_pointer()
                     .on_hover(cx.listener(move |this, hovered: &bool, _, cx| {
                         if *hovered {
@@ -2442,7 +2489,7 @@ impl AppRoot {
                     }))
                     .when(selected, |this| this.bg(rgb(0x4A4458)))
                     .when(hovered && !selected, |this| this.bg(rgb(SURFACE_HIGH)))
-                    .child(art(cover, 40.0))
+                    .child(art(cover, self.search_row_h * 0.714))
                     .child(
                         div()
                             .flex()
@@ -3086,6 +3133,13 @@ impl Render for AppRoot {
         if self.page.is_some() {
             self.ensure_page_metrics();
             self.ensure_marks();
+        }
+        if self.queue_open {
+            self.ensure_queue_metrics();
+        }
+        if self.search.as_ref().is_some_and(|search| !search.query.is_empty()) {
+            let height = f32::from(window.viewport_size().height);
+            self.ensure_search_metrics(height);
         }
         self.ensure_library_window();
         if !self.preloaded && self.view.rows.count > 0 && self.view.scope != Scope::Playlists {

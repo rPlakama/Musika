@@ -478,7 +478,7 @@ impl Bridge {
             let event = match crate::app::dbs() {
                 Some(dbs) => {
                     let surface = scope.key();
-                    match crate::qml::rows::count(
+                    match crate::rows::count(
                         &dbs,
                         surface,
                         "",
@@ -516,7 +516,7 @@ impl Bridge {
         crate::app::runtime().spawn(async move {
             let Some(dbs) = crate::app::dbs() else { return };
             let surface = scope.key();
-            match crate::qml::rows::window(
+            match crate::rows::window(
                 &dbs,
                 surface,
                 "",
@@ -638,7 +638,7 @@ impl Bridge {
             let Some(dbs) = crate::app::dbs() else { return };
             if !on {
                 let result = if kind == "album" {
-                    crate::qml::download::album_container_off(&dbs, &id).await;
+                    crate::media_actions::album_container_off(&dbs, &id).await;
                     Ok(())
                 } else if kind == "song" {
                     let unmark = crate::download::unmark(&dbs.download, &id).await;
@@ -673,7 +673,7 @@ impl Bridge {
                 return;
             }
             for song in songs {
-                if let Err(err) = crate::qml::download::download_one(&dbs, &song).await {
+                if let Err(err) = crate::media_actions::download_one(&dbs, &song).await {
                     let _ = tx.send(Event::Error(format!("Download failed: {err:#}")));
                 }
             }
@@ -903,7 +903,7 @@ impl Bridge {
         let offline = self.offline.load(Ordering::Relaxed);
         crate::app::runtime().spawn(async move {
             let Some(dbs) = crate::app::dbs() else { return };
-            let Ok(count) = crate::qml::rows::count(
+            let Ok(count) = crate::rows::count(
                 &dbs,
                 scope.key(),
                 "",
@@ -917,7 +917,7 @@ impl Bridge {
             if count == 0 {
                 return;
             }
-            let Ok(value) = crate::qml::rows::window(
+            let Ok(value) = crate::rows::window(
                 &dbs,
                 scope.key(),
                 "",

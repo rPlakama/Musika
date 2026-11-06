@@ -18,9 +18,9 @@
 //!
 //! This mirrors two QML files without any Qt/GPUI dependency:
 //!
-//! - `src/qml/QuickActions.qml`: the verb tables (`song`, `album`, `artist`,
+//! - `the retired action tables`: the verb tables (`song`, `album`, `artist`,
 //!   `playlist`, `forSelection`) and the open quadrants.
-//! - `src/qml/AltActionsOverlay.qml`: the gesture state machine (`aim`,
+//! - `the retired gesture model`: the gesture state machine (`aim`,
 //!   `opposite`, `cycle`/`adjustRating`, `confirm`, `cancel`, `dismiss`).
 //!
 //! Labels are plain strings and icons are bare file names under `src/icons/`

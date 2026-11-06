@@ -16,7 +16,7 @@
 
 //! Pure layout metrics ported from the QML front end.
 //!
-//! Every formula here mirrors `src/qml/Theme.js`, `src/qml/ScrollProfiles.js`
+//! Every formula here mirrors `the retired reference UI`, ``
 //! and the row-metric block of `src/qml/ScrollContent.qml`/`SearchColumn.qml`.
 //! Nothing in this module touches GPUI: it is plain `f32` geometry so the
 //! port's type ramp and row sizing can be tested without a window. Font sizes

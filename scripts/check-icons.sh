@@ -24,7 +24,7 @@
 # Rules:
 #   1. every glyph asset carries a baked white fill/stroke
 #      (run scripts/bake-icons-white.sh otherwise);
-#   2. every `qrc:/app/icons/...` reference in `src/` resolves to a file;
+#   2. every `"<name>.svg"` reference in `src/` resolves to a file;
 #   3. every asset is referenced by the tree or listed as brand below.
 set -eu
 
@@ -52,9 +52,9 @@ for f in src/icons/*.svg; do
 done
 
 # 2. Every reference resolves.
-refs=$(grep -rhoE 'qrc:/app/icons/[A-Za-z0-9._-]+\.svg' src | sort -u)
+refs=$(grep -rhoE '"[A-Za-z0-9._-]+\.svg"' src --include='*.rs' | tr -d '"' | sort -u)
 for ref in $refs; do
-    name=${ref#qrc:/app/icons/}
+    name=$ref
     if [ ! -f "src/icons/$name" ]; then
         echo "check-icons: $ref is referenced but src/icons/$name does not exist" >&2
         fail=1
@@ -66,7 +66,7 @@ for f in src/icons/*.svg; do
     name=${f##*/}
     case " $brand " in *" $name "*) continue ;; esac
     case "$refs" in
-        *"qrc:/app/icons/$name"*) ;;
+        *"\"$name\""*) ;;
         *)
             echo "check-icons: $name is never referenced — reference it, brand-list it, or delete it" >&2
             warn=1

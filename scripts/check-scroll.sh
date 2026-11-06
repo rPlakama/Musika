@@ -15,10 +15,7 @@
 # You should have received a copy of the GNU General Public License
 # along with this program; if not, see <https://www.gnu.org/licenses/>.
 
-# ARC-UI-7.13: headless scroll/search smoke. Drives the real app over the
-# IPC socket (search, page/selection moves, fullscreen queue) and fails on
-# the runtime warnings `qmllint` cannot see: binding loops, incubation
-# destruction, and JS Reference/Type errors.
+# Headless scroll/search smoke. Drives the real app over the IPC socket.
 #
 #   nix develop --command cargo build
 #   sh scripts/check-scroll.sh
@@ -46,7 +43,7 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
-MUSIKA_IPC_SOCKET=$sock QT_QPA_PLATFORM=offscreen "$bin" >"$log" 2>&1 &
+MUSIKA_IPC_SOCKET=$sock "$bin" >"$log" 2>&1 &
 pid=$!
 
 # The socket is created before the accept loop starts; retry until a command
@@ -69,22 +66,5 @@ for cmd in search_action page_down extend_down escape page_up bottom top \
 done
 sleep 1
 
-if grep -E 'Binding loop detected|Object or context destroyed during incubation|ReferenceError|TypeError' "$log"; then
-    echo "check-scroll: QML runtime warning found" >&2
-    exit 1
-fi
-
-# The 100k-row sparse-snapshot guard needs the QML runtime, which the
-# packaged app does not ship on PATH.
-if command -v qml >/dev/null 2>&1; then
-    if ! QT_QPA_PLATFORM=offscreen qml scripts/bench-searchcontract.qml; then
-        echo "check-scroll: SearchContract large-model guard failed" >&2
-        exit 1
-    fi
-    if ! QT_QPA_PLATFORM=offscreen qml scripts/bench-adaptive-row.qml; then
-        echo "check-scroll: adaptive-row continuity guard failed" >&2
-        exit 1
-    fi
-fi
 
 echo "check-scroll: ok"

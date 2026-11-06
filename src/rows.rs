@@ -6,9 +6,9 @@
 // the Free Software Foundation; either version 2 of the License, or
 // (at your option) any later version.
 
-//! Rust-owned row windows for the virtual list surfaces.
+//! Rust-owned row windows for the GPUI virtual list surfaces.
 //!
-//! Nothing in this module retains a row after it has been emitted: the QML
+//! Nothing in this module retains a row after it has been emitted: the GPUI
 //! side keeps only the live viewport slots, and a new window replaces them.
 
 use anyhow::bail;

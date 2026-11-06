@@ -32,8 +32,6 @@ fn main() {
         "migrations_playlist",
         "migrations_search",
         "migrations_status",
-        // qtbridge embeds these trees at compile time; without the watch a
-        // QML-only edit keeps `cargo run` on the previous engine payload.
         "src/icons",
         "native",
     ] {

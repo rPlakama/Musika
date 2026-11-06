@@ -1,5 +1,5 @@
-// Transitional: the QML frontend has been retired, but the shared backend
-// modules it used are still compiled until they are extracted/removed.
+// Transitional: legacy backend helpers remain compiled until they are
+// cleaned up or reused by the GPUI front end.
 #![allow(dead_code)]
 
 // Musika — a keyboard-driven music player.
@@ -43,17 +43,16 @@ mod index;
 #[cfg(feature = "io-uring")]
 mod io_uring_read;
 mod ipc;
-mod keybind;
 mod library;
 mod lyrics;
 mod media;
 mod mpris;
 mod offline;
-mod palette;
 mod player;
 mod playlists;
-mod qml;
 mod queue;
+mod media_actions;
+mod rows;
 mod radio;
 mod scroll_memory;
 mod search;
@@ -230,8 +229,7 @@ fn main() {
     };
     crate::startup::trace("db.init");
 
-    // GPUI is the only front end. QML/Qt startup has been retired; the
-    // remaining qml_backend modules are shared data/action backends.
+    // GPUI is the only front end.
     crate::app::set_dbs(dbs);
     crate::startup::trace("app.gpuui");
     crate::ui::run();

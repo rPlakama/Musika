@@ -1,5 +1,5 @@
 {
-  description = "Musika — keyboard-driven Subsonic/Navidrome player (Rust + Qt6/QML)";
+  description = "Musika — keyboard-driven Subsonic/Navidrome player (Rust + GPUI)";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
@@ -10,14 +10,6 @@
     let
       system = "x86_64-linux";
       pkgs = import nixpkgs { inherit system; };
-      qt = pkgs.qt6.env "qt6-env" (
-        with pkgs.qt6;
-        [
-          qtbase
-          qtdeclarative
-          qtwayland
-        ]
-      );
 
       # App-scoped typeface: exposed to fontconfig through XDG_DATA_DIRS (by
       # the wrapper below and the dev shell), never installed system-wide.
@@ -28,30 +20,6 @@
       ];
       fontDataDirs = pkgs.lib.makeSearchPath "share" fonts;
 
-      # pkgs.qt6.env merges every Qt module into one prefix and drops a qt.conf
-      # next to qmake, so qmake reports the merged prefix. qtpaths, however, is
-      # left as a symlink to qtbase's binary; Qt resolves that symlink, finds no
-      # qt.conf there and falls back to the qtbase prefix. qtbridge resolves each
-      # module as "$QT_INSTALL_HEADERS/Qt<Module>", so QtQml/QtQuickTest end up
-      # under qtbase and the build fails.
-      #
-      # Pin qtpaths to the merged qt.conf, and make qmake advertise that wrapper
-      # as QT_HOST_BINS -- which is where qtbridge looks for the qtpaths tool.
-      qtpathsFixed = pkgs.writeShellScriptBin "qtpaths" ''
-        exec ${qt}/bin/qtpaths6 --qtconf ${qt}/bin/qt.conf "$@"
-      '';
-
-      qmakeFixed = pkgs.writeShellScriptBin "qmake" ''
-        if [ "$1" = "-query" ]; then
-          case "$2" in
-            QT_HOST_BINS|QT_HOST_BINS/get|QT_INSTALL_BINS|QT_INSTALL_BINS/get)
-              echo "${qtpathsFixed}/bin"
-              exit 0
-              ;;
-          esac
-        fi
-        exec ${qt}/bin/qmake "$@"
-      '';
 
       musika = pkgs.rustPlatform.buildRustPackage {
         pname = "musika";
@@ -73,7 +41,6 @@
               "app.db"
               "app.db-shm"
               "app.db-wal"
-              ".qmlls.ini"
             ]);
         };
 
@@ -93,37 +60,21 @@
           pkgs.liburing
           pkgs.sqlite
           pkgs.libglvnd
-          qt
         ];
-
-        QMAKE = "${qmakeFixed}/bin/qmake";
-        QT_VERSION_MAJOR = "6";
 
         # The sandbox has no /etc/ssl; reqwest builds a client even in tests.
         SSL_CERT_FILE = "${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt";
 
-        # ARC-41: refuse an unbaked icon asset or a dangling qrc reference
-        # before compiling (unused spares only warn; prune them eventually).
-        # UI-60: qmllint resolves the QtQuick modules (a bad Particles type
-        # would otherwise only fail when the engine loads Home). The merged
-        # `qt` env is not on the build PATH, so point the linter at its tool.
+        # ARC-41: refuse an unbaked icon asset before compiling.
         preBuild = ''
           sh scripts/check-icons.sh
-          QMLLINT=${qt}/bin/qmllint sh scripts/check-qml.sh
-          sh scripts/check-dry.sh
         '';
 
-        # Wrap by hand: the merged `qt` env is what qtbridge resolves against,
-        # and adding individual Qt modules breaks that discovery. The wrapper
-        # mirrors the dev-shell environment (plugins, QML imports).
+        # Wrap by hand: add the app font and certificate paths.
 
         postInstall = ''
           wrapProgram $out/bin/musika \
             --prefix XDG_DATA_DIRS : ${fontDataDirs} \
-            --prefix QT_PLUGIN_PATH : ${qt}/lib/qt-6/plugins \
-            --prefix QML_IMPORT_PATH : ${qt}/lib/qt-6/qml \
-            --prefix QML2_IMPORT_PATH : ${qt}/lib/qt-6/qml \
-            --set-default QSG_RHI_BACKEND vulkan \
             --set-default SSL_CERT_FILE ${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt
 
           # Desktop entry (PKG-1): launchers, docks, MIME data dirs.
@@ -183,7 +134,6 @@
           sqlx-cli
           clippy
           vulkan-tools # vulkaninfo for test::benchmark::vulkan_probe
-          qt
           # GPUI (Zed) display/font/Vulkan runtime dependencies.
           wayland
           wayland-protocols
@@ -205,20 +155,8 @@
           ]
         );
 
-        QMAKE = "${qmakeFixed}/bin/qmake";
-        QT_VERSION_MAJOR = "6";
-
         shellHook = ''
-          	export QSG_RHI_BACKEND="''${QSG_RHI_BACKEND:-vulkan}"
-          	export QML_IMPORT_PATH="${qt}/lib/qt-6/qml''${QML_IMPORT_PATH:+:$QML_IMPORT_PATH}"
-          	export QML2_IMPORT_PATH="${qt}/lib/qt-6/qml''${QML2_IMPORT_PATH:+:$QML2_IMPORT_PATH}"
-          	export QT_PLUGIN_PATH="${qt}/lib/qt-6/plugins''${QT_PLUGIN_PATH:+:$QT_PLUGIN_PATH}"
-          	export XDG_DATA_DIRS="${fontDataDirs}''${XDG_DATA_DIRS:+:$XDG_DATA_DIRS}"
-          		cat > .qmlls.ini <<EOF
-          [General]
-          no-cmake-calls=true
-          importPaths=${qt}/lib/qt-6/qml
-          EOF
+          export XDG_DATA_DIRS="${fontDataDirs}''${XDG_DATA_DIRS:+:$XDG_DATA_DIRS}"
         '';
       };
     };

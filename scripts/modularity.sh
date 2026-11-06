@@ -39,7 +39,6 @@ printf 'production files: %s\n' "$(printf '%s\n' "$files" | wc -l | tr -d ' ')"
 printf 'production loc:   %s\n' "$(wc -l $files | tail -1 | awk '{print $1}')"
 printf 'production fns:   %s\n' "$(grep -RhEc '^[[:space:]]*(pub(\([^)]*\))?[[:space:]]+)?(async[[:space:]]+)?fn[[:space:]]+' $files | awk '{s+=$1} END{print s}')"
 printf 'test loc:         %s\n' "$(wc -l <src/test.rs)"
-printf 'qslots:           %s\n' "$(grep -c '#\[qslot' src/qml.rs || true)"
 
 printf '\n== cross-module crate:: references\n'
 grep -rhoE 'crate::[a-z_]+' src --include='*.rs' --exclude='test.rs' \
@@ -50,7 +49,6 @@ printf 'md5_hex defs:          %s\n' "$(grep -R 'fn md5_hex' src --include='*.rs
 printf 'url_map_of calls:      %s\n' "$(grep -R 'url_map_of(' src --include='*.rs' --exclude='test.rs' | wc -l | tr -d ' ')"
 printf 'cover_url calls:       %s\n' "$(grep -RE 'cover_url(_ref)?\(' src --include='*.rs' --exclude='test.rs' | wc -l | tr -d ' ')"
 printf 'chunks(500):           %s\n' "$(grep -R 'chunks(500)' src --include='*.rs' --exclude='test.rs' | wc -l | tr -d ' ')"
-printf 'qml::{online,client}:  %s\n' "$(grep -R 'crate::qml::\(online\|client\)' src --include='*.rs' --exclude='test.rs' | wc -l | tr -d ' ')"
 printf 'crate::{dbs,runtime}:  %s\n' "$(grep -R 'crate::\(dbs\|runtime\|pool\)(' src --include='*.rs' --exclude='test.rs' | wc -l | tr -d ' ')"
 printf 'eprintln!:             %s\n' "$(grep -R 'eprintln!' src --include='*.rs' --exclude='test.rs' | wc -l | tr -d ' ')"
 

@@ -380,6 +380,9 @@ struct AppRoot {
     description: Option<DescriptionState>,
     lyrics_overlay: bool,
     lyrics_overlay_wanted: bool,
+    lyrics_active_line: Option<usize>,
+    lyrics_active_anim: anim::Behavior,
+    transport_press: [Option<f64>; 3],
     line_search: line_search::LineSearchState,
     line_search_anim: anim::Behavior,
     alt: AltGesture,
@@ -481,6 +484,9 @@ impl AppRoot {
             description: None,
             lyrics_overlay: false,
             lyrics_overlay_wanted: false,
+            lyrics_active_line: None,
+            lyrics_active_anim: anim::Behavior::new(1.0),
+            transport_press: [None; 3],
             line_search: line_search::LineSearchState::new(),
             line_search_anim: anim::Behavior::new(0.0),
             alt: AltGesture::new(),
@@ -1624,6 +1630,7 @@ impl AppRoot {
     }
 
     fn on_play_pause(&mut self, _: &PlayPause, _window: &mut Window, cx: &mut Context<Self>) {
+        self.press_transport(1);
         self.player.toggle();
         cx.notify();
     }
@@ -1654,11 +1661,13 @@ impl AppRoot {
     }
 
     fn on_next_track(&mut self, _: &NextTrack, _window: &mut Window, cx: &mut Context<Self>) {
+        self.press_transport(2);
         self.player.next();
         cx.notify();
     }
 
     fn on_prev_track(&mut self, _: &PrevTrack, _window: &mut Window, cx: &mut Context<Self>) {
+        self.press_transport(0);
         self.player.previous();
         cx.notify();
     }
@@ -2249,6 +2258,61 @@ impl AppRoot {
     fn lyrics_inline(&self) -> bool {
         let inline_width = (self.win_w * 0.95 - self.win_w * 0.012) / 2.0;
         self.lyrics.as_ref().is_some_and(|lyrics| !lyrics.lines.is_empty()) && inline_width >= 300.0
+    }
+
+    fn press_transport(&mut self, index: usize) {
+        if let Some(slot) = self.transport_press.get_mut(index) {
+            *slot = Some(self.clock.now);
+        }
+    }
+
+    fn transport_scale(&self, index: usize) -> f32 {
+        let Some(start) = self.transport_press.get(index).copied().flatten() else {
+            return 1.0;
+        };
+        let elapsed = (self.clock.now - start) as f32;
+        if elapsed < 0.0 || elapsed >= 0.32 {
+            return 1.0;
+        }
+        if elapsed < 0.08 {
+            1.0 - 0.14 * (elapsed / 0.08)
+        } else {
+            let progress = (elapsed - 0.08) / 0.24;
+            0.86 + 0.14 * anim::Curve::Bounce.sample(progress)
+        }
+    }
+
+    fn transport_press_live(&self) -> bool {
+        self.transport_press.iter().flatten().any(|start| {
+            let elapsed = (self.clock.now - start) as f32;
+            (0.0..0.32).contains(&elapsed)
+        })
+    }
+
+    fn refresh_lyrics_emphasis(&mut self) {
+        let Some(lyrics) = self.lyrics.as_ref() else {
+            self.lyrics_active_line = None;
+            return;
+        };
+        if lyrics.lines.is_empty() {
+            return;
+        }
+        let active = if lyrics.synced {
+            let ms = (self.player.position() * 1000.0) as i64;
+            lyrics
+                .lines
+                .iter()
+                .rposition(|(start, _)| start.is_some_and(|start| start <= ms))
+                .unwrap_or(0)
+        } else {
+            0
+        };
+        if self.lyrics_active_line != Some(active) {
+            self.lyrics_active_line = Some(active);
+            self.lyrics_active_anim.target(0.0, 0.0, anim::Curve::Standard, &self.clock);
+            self.lyrics_active_anim
+                .target(1.0, anim::QUICK_MS, anim::Curve::OutBack, &self.clock);
+        }
     }
 
     fn refresh_lyrics_overlay(&mut self) {
@@ -3327,6 +3391,14 @@ impl AppRoot {
             Some(lyrics) => format!("Lyrics · {}", lyrics.source),
             None => "Loading lyrics…".to_string(),
         };
+        let lyrics_inline = self.lyrics_inline();
+        let lyric_base = (self.win_h * 0.055).clamp(13.0, 22.0);
+        let lyric_active = (lyric_base * (1.0 + 0.12 * self.lyrics_active_anim.value(&self.clock))).min(24.5);
+        let cover_side = if lyrics_inline {
+            300.0
+        } else {
+            (self.win_w * 0.95).min(self.win_h * 0.62)
+        };
         div()
             .absolute()
             .inset_0()
@@ -3348,20 +3420,20 @@ impl AppRoot {
                         div()
                             .flex()
                             .flex_none()
-                            .w(relative(0.50))
+                            .w(if lyrics_inline { relative(0.50) } else { relative(1.0) })
                             .h_full()
                             .items_center()
                             .justify_center()
                             .overflow_hidden()
-                            .child(art(cover, 300.0)),
+                            .child(art(cover, cover_side)),
                     )
                     .child(
                         div()
                             .flex()
                             .flex_none()
-                            .w(relative(0.50))
+                            .w(if lyrics_inline { relative(0.50) } else { relative(0.0) })
                             .h_full()
-                            .opacity(if self.lyrics_overlay { 0.0 } else { 1.0 })
+                            .opacity(if lyrics_inline && !self.lyrics_overlay { 1.0 } else { 0.0 })
                             .min_w_0()
                             .overflow_hidden()
                             .flex_col()
@@ -3380,7 +3452,7 @@ impl AppRoot {
                                     .w_full()
                                     .min_w_0()
                                     .overflow_hidden()
-                                    .text_size(px(if is_active { 18.0 } else { 14.0 }))
+                                    .text_size(px(if is_active { lyric_active } else { lyric_base }))
                                     .text_color(rgb(if is_active { ON_SURFACE } else { ON_VARIANT }))
                                     .text_center()
                                     .whitespace_normal()
@@ -3452,13 +3524,18 @@ impl AppRoot {
                             .items_center()
                             .justify_center()
                             .gap_5()
-                            .child(icon("skip-previous-solid-svgrepo-com.svg", 22.0, ON_SURFACE))
-                            .child(if self.player.state() == crate::player::State::Playing {
-                                icon("pause-svgrepo-com.svg", 28.0, ON_SURFACE)
-                            } else {
-                                icon("play-1001-svgrepo-com.svg", 28.0, ON_SURFACE)
-                            })
-                            .child(icon("skip-next-circle-solid-svgrepo-com.svg", 22.0, ON_SURFACE)),
+                            .child(transport_button("skip-previous-solid-svgrepo-com.svg", 22.0, ON_SURFACE, self.transport_scale(0)))
+                            .child(transport_button(
+                                if self.player.state() == crate::player::State::Playing {
+                                    "pause-svgrepo-com.svg"
+                                } else {
+                                    "play-1001-svgrepo-com.svg"
+                                },
+                                28.0,
+                                ON_SURFACE,
+                                self.transport_scale(1),
+                            ))
+                            .child(transport_button("skip-next-circle-solid-svgrepo-com.svg", 22.0, ON_SURFACE, self.transport_scale(2))),
                     )
                     .child(
                         div()
@@ -4111,13 +4188,18 @@ impl AppRoot {
                             .items_center()
                             .justify_center()
                             .gap_5()
-                            .child(icon("skip-previous-solid-svgrepo-com.svg", 20.0, ON_SURFACE))
-                            .child(if state == crate::player::State::Playing {
-                                icon("pause-svgrepo-com.svg", 24.0, ON_SURFACE)
-                            } else {
-                                icon("play-1001-svgrepo-com.svg", 24.0, ON_SURFACE)
-                            })
-                            .child(icon("skip-next-circle-solid-svgrepo-com.svg", 20.0, ON_SURFACE)),
+                            .child(transport_button("skip-previous-solid-svgrepo-com.svg", 20.0, ON_SURFACE, self.transport_scale(0)))
+                            .child(transport_button(
+                                if state == crate::player::State::Playing {
+                                    "pause-svgrepo-com.svg"
+                                } else {
+                                    "play-1001-svgrepo-com.svg"
+                                },
+                                24.0,
+                                ON_SURFACE,
+                                self.transport_scale(1),
+                            ))
+                            .child(transport_button("skip-next-circle-solid-svgrepo-com.svg", 20.0, ON_SURFACE, self.transport_scale(2))),
                     )
                     .child(
                         div()
@@ -4459,6 +4541,16 @@ fn cover_path(url: &str) -> Option<std::path::PathBuf> {
         .lock()
         .ok()?
         .row_path(url)
+}
+
+fn transport_button(icon_name: &str, base: f32, color: u32, scale: f32) -> gpui::AnyElement {
+    div()
+        .size(px(base * 1.3))
+        .flex()
+        .items_center()
+        .justify_center()
+        .child(icon(icon_name, base * scale, color))
+        .into_any_element()
 }
 
 fn highlighted_text(text: &str, query: &str, color: u32) -> gpui::AnyElement {

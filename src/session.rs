@@ -19,6 +19,7 @@
 //! Kept out of the Qt bridge so cache and payload modules can use the client
 //! without depending on `qml`.
 
+#[cfg(not(test))]
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -30,8 +31,10 @@ static ONLINE: AtomicBool = AtomicBool::new(false);
 
 /// One client per credential set: the reqwest pool/TLS context is shared by
 /// every action (and the credential read only happens when the key changes).
+#[cfg(not(test))]
 static CLIENT_CACHE: OnceLock<tokio::sync::Mutex<Option<CachedClient>>> = OnceLock::new();
 
+#[cfg(not(test))]
 struct CachedClient {
     server_url: String,
     username: String,
@@ -111,8 +114,12 @@ pub(crate) async fn client(dbs: &crate::db::Dbs) -> anyhow::Result<SubsonicClien
 }
 
 /// Drops the cached client (account switch, logout or a full wipe).
+#[cfg(not(test))]
 pub(crate) async fn invalidate() {
     if let Some(cache) = CLIENT_CACHE.get() {
         *cache.lock().await = None;
     }
 }
+
+#[cfg(test)]
+pub(crate) async fn invalidate() {}

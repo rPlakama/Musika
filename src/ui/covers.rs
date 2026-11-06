@@ -278,6 +278,11 @@ impl CoverStore {
         true
     }
 
+    /// Removes a failed/incomplete request so the bridge can retry it later.
+    pub fn cancel_display_request(&mut self, key: &DisplayKey) {
+        self.pending.remove(key);
+    }
+
     /// Number of display resizes currently in flight (diagnostics).
     pub fn pending_len(&self) -> usize {
         self.pending.len()

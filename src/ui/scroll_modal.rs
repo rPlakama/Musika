@@ -104,8 +104,35 @@ impl ScrollModal {
         visible_index_range(offset, self.viewport_height(), self.row_h, count)
     }
 
+    /// The logical row height taffy asked for is rounded per item by the
+    /// uniform list's layout. Read the measured content back so targeting uses
+    /// the same stride the rows are painted at.
+    fn measured_row_h(&self, count: usize) -> f32 {
+        if count == 0 {
+            return self.row_h;
+        }
+        let content_h = self
+            .handle
+            .0
+            .borrow()
+            .last_item_size
+            .map(|size| f32::from(size.contents.height))
+            .unwrap_or(0.0);
+        if content_h > 0.0 {
+            let measured = content_h / count as f32;
+            // The content height is from the previous prepaint. On a scope
+            // switch the count can change before the list re-measures; only
+            // trust the measurement when it is plausibly this profile's row.
+            if (measured / self.row_h - 1.0).abs() <= 0.15 {
+                return measured;
+            }
+        }
+        self.row_h
+    }
+
     pub fn target_y(&self, count: usize, cursor: usize) -> f32 {
         let viewport = self.viewport();
+        let row_h = self.measured_row_h(count);
         let actual_max = f32::from(
             self.handle
                 .0
@@ -115,9 +142,9 @@ impl ScrollModal {
                 .height,
         );
         if actual_max > 0.0 {
-            target_y_max(self.row_h, cursor, viewport, actual_max)
+            target_y_max(row_h, cursor, viewport, actual_max)
         } else {
-            target_y(self.row_h, count, cursor, viewport)
+            target_y(row_h, count, cursor, viewport)
         }
     }
 
@@ -287,4 +314,6 @@ mod tests {
         assert_eq!(modal.row_ref, Some(1000.0));
         assert!((modal.row_h - 105.0).abs() < 20.0);
     }
+
+
 }

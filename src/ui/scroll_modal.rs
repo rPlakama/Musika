@@ -84,14 +84,14 @@ impl ScrollModal {
         }
     }
 
+    pub fn viewport_height(&self) -> f32 {
+        let height = self.handle.0.borrow().base_handle.bounds().size.height;
+        let height = f32::from(height);
+        if height > 0.0 { height } else { 600.0 }
+    }
+
     fn viewport(&self) -> f32 {
-        self.handle
-            .0
-            .borrow()
-            .last_item_size
-            .map(|size| f32::from(size.item.height))
-            .filter(|height| *height > 0.0)
-            .unwrap_or(600.0)
+        self.viewport_height()
     }
 
     pub fn target_y(&self, count: usize, cursor: usize) -> f32 {
@@ -156,12 +156,16 @@ impl ScrollModal {
     /// Capture the first stable viewport once, then use the QML profile ratio.
     /// Returns true when the row height changed.
     pub fn ensure_metrics(&mut self, viewport: f32) -> bool {
-        if viewport <= 0.0 {
+        self.ensure_metrics_ref(viewport)
+    }
+
+    pub fn ensure_metrics_ref(&mut self, reference: f32) -> bool {
+        if reference <= 0.0 {
             return false;
         }
-        self.row_ref.get_or_insert(viewport);
+        self.row_ref.get_or_insert(reference);
         let next = metrics::adaptive_row(
-            viewport,
+            reference,
             self.profile.row_ratio,
             self.profile.nominal_row_h,
         )

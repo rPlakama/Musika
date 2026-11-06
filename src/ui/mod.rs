@@ -914,11 +914,8 @@ impl AppRoot {
         let (top, measured) = {
             let state = self.library_scroll.handle.0.borrow();
             let top = state.base_handle.logical_scroll_top().0;
-            let measured = state
-                .last_item_size
-                .map(|size| f32::from(size.item.height))
-                .filter(|height| *height > 0.0);
-            (top, measured)
+            let height = f32::from(state.base_handle.bounds().size.height);
+            (top, (height > 0.0).then_some(height))
         };
         if let Some(viewport) = measured
             && self.library_scroll.ensure_metrics(viewport)
@@ -962,11 +959,17 @@ impl AppRoot {
 
     fn ensure_queue_metrics(&mut self) {
         let measured = {
-            let state = self.queue_scroll_modal.handle.0.borrow();
-            state
-                .last_item_size
-                .map(|size| f32::from(size.item.height))
-                .filter(|height| *height > 0.0)
+            let height = f32::from(
+                self.queue_scroll_modal
+                    .handle
+                    .0
+                    .borrow()
+                    .base_handle
+                    .bounds()
+                    .size
+                    .height,
+            );
+            (height > 0.0).then_some(height)
         };
         let Some(viewport) = measured else { return };
         if self.queue_scroll_modal.ensure_metrics(viewport) {
@@ -981,14 +984,21 @@ impl AppRoot {
 
     fn ensure_page_metrics(&mut self) {
         let measured = {
-            let state = self.page_scroll_modal.handle.0.borrow();
-            state
-                .last_item_size
-                .map(|size| f32::from(size.item.height))
-                .filter(|height| *height > 0.0)
+            let height = f32::from(
+                self.page_scroll_modal
+                    .handle
+                    .0
+                    .borrow()
+                    .base_handle
+                    .bounds()
+                    .size
+                    .height,
+            );
+            (height > 0.0).then_some(height)
         };
-        let Some(viewport) = measured else { return };
-        if self.page_scroll_modal.ensure_metrics(viewport) {
+        let Some(_viewport) = measured else { return };
+        let reference = (self.win_h - 100.0).max(1.0);
+        if self.page_scroll_modal.ensure_metrics_ref(reference) {
             self.marks.requested = None;
             self.follow_page(false);
         }
@@ -4256,8 +4266,10 @@ impl AppRoot {
                                         .w_full()
                                         .flex()
                                         .items_center()
-                                        .h(px(row_h))
-                                        .px_4()
+                                        .h(px((row_h - 2.0).max(18.0)))
+                                        .mt(px(1.0))
+                                        .px_3()
+                                        .rounded_sm()
                                         .cursor_pointer()
                                         .bg(if selected {
                                             rgb(palette::secondary_container())

@@ -188,6 +188,19 @@ struct LoginState {
     offline_available: bool,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RetryAction {
+    ReloadLibrary,
+    Playback,
+}
+
+#[derive(Debug, Clone)]
+struct ToastState {
+    message: String,
+    retry: Option<RetryAction>,
+    created_at: f64,
+}
+
 struct AppRoot {
     focus: FocusHandle,
     bridge: bridge::Bridge,
@@ -220,6 +233,8 @@ struct AppRoot {
     quit_armed_at: Option<f64>,
     exiting: Option<f64>,
     quit_after_ms: Option<u64>,
+    toasts: Vec<ToastState>,
+    last_play: Option<(String, String)>,
 }
 
 impl AppRoot {
@@ -278,7 +293,14 @@ impl AppRoot {
             quit_after_ms: std::env::var("MUSIKA_GPUUI_QUIT_MS")
                 .ok()
                 .and_then(|ms| ms.parse::<u64>().ok()),
+            toasts: Vec::new(),
+            last_play: None,
         };
+        if let Ok(message) = std::env::var("MUSIKA_GPUUI_TOAST")
+            && !message.is_empty()
+        {
+            app.push_toast(message, None);
+        }
         if std::env::var_os("MUSIKA_GPUUI_FULLSCREEN").is_some() {
             app.fullscreen = true;
         }
@@ -463,7 +485,15 @@ impl AppRoot {
             Event::Error(message) => {
                 self.view.loading = false;
                 self.view.error = Some(message.clone());
-                self.error = Some(message);
+                self.error = Some(message.clone());
+                let retry = if message.to_lowercase().contains("playback") {
+                    self.last_play.as_ref().map(|_| RetryAction::Playback)
+                } else if message.to_lowercase().contains("library") || message.to_lowercase().contains("search") {
+                    Some(RetryAction::ReloadLibrary)
+                } else {
+                    None
+                };
+                self.push_toast(message, retry);
             }
         }
     }
@@ -847,6 +877,92 @@ impl AppRoot {
             )
     }
 
+    fn push_toast(&mut self, message: String, retry: Option<RetryAction>) {
+        if self.toasts.iter().any(|toast| toast.message == message) {
+            return;
+        }
+        self.toasts.push(ToastState {
+            message,
+            retry,
+            created_at: self.clock.now,
+        });
+        if self.toasts.len() > 3 {
+            self.toasts.remove(0);
+        }
+    }
+
+    fn retry(&mut self, action: RetryAction) {
+        match action {
+            RetryAction::ReloadLibrary => self.reload(),
+            RetryAction::Playback => {
+                if let Some((song, order)) = self.last_play.clone() {
+                    self.bridge.play_song(song, order);
+                }
+            }
+        }
+    }
+
+    fn toast_overlay(&self, cx: &Context<Self>) -> gpui::Div {
+        div()
+            .absolute()
+            .bottom(px(88.0))
+            .left_0()
+            .right_0()
+            .flex()
+            .flex_col()
+            .items_center()
+            .gap_2()
+            .children(self.toasts.iter().map(|toast| {
+                let age = (self.clock.now - toast.created_at) as f32;
+                let opacity = if age < 0.120 {
+                    age / 0.120
+                } else if age > 6.0 {
+                    ((6.320 - age) / 0.320).clamp(0.0, 1.0)
+                } else {
+                    1.0
+                };
+                let retry = toast.retry;
+                div()
+                    .w(px(620.0))
+                    .max_h(px(150.0))
+                    .px_4()
+                    .py_3()
+                    .rounded_lg()
+                    .border_1()
+                    .border_color(rgb(OUTLINE))
+                    .bg(rgb(SURFACE))
+                    .opacity(opacity)
+                    .flex()
+                    .items_center()
+                    .gap_3()
+                    .child(
+                        div()
+                            .flex()
+                            .flex_1()
+                            .text_size(px(12.0))
+                            .text_color(rgb(ON_SURFACE))
+                            .child(toast.message.clone()),
+                    )
+                    .when_some(retry, |this, retry| {
+                        this.child(
+                            div()
+                                .id("toast-retry")
+                                .px_3()
+                                .py_1()
+                                .rounded_md()
+                                .bg(rgb(SURFACE_HIGH))
+                                .text_size(px(11.0))
+                                .cursor_pointer()
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    this.retry(retry);
+                                    cx.notify();
+                                }))
+                                .child("Retry"),
+                        )
+                    })
+            }))
+    }
+
     fn on_play_pause(&mut self, _: &PlayPause, _window: &mut Window, cx: &mut Context<Self>) {
         self.player.toggle();
         cx.notify();
@@ -1096,6 +1212,7 @@ impl AppRoot {
             return;
         }
         if matches!(row.kind, state::RowKind::Song) {
+            self.last_play = Some((row.song_id.clone(), self.view.order_label().to_string()));
             self.bridge.play_song(
                 row.song_id.clone(),
                 self.view.order_label().to_string(),
@@ -2058,6 +2175,11 @@ impl Render for AppRoot {
         if self.row_colors.values().any(|color| !color.settled(&self.clock)) {
             window.request_animation_frame();
         }
+        self.toasts.retain(|toast| self.clock.now - toast.created_at < 6.320);
+        if self.toasts.iter().any(|toast| self.clock.now - toast.created_at < 6.320) {
+            window.request_animation_frame();
+        }
+        let toast_overlay = (!self.toasts.is_empty()).then(|| self.toast_overlay(&*cx));
         let queue_overlay = (self.queue_open || queue_progress > 0.001)
             .then(|| self.queue_overlay(&*cx, queue_progress));
         let overlay = self.search.as_ref().map(|search| self.search_overlay(search, progress));
@@ -2127,6 +2249,7 @@ impl Render for AppRoot {
             .child(div().when_some(queue_overlay, |this, queue| this.child(queue)))
             .child(div().when_some(overlay, |this, overlay| this.child(overlay)))
             .child(div().when_some(fullscreen_overlay, |this, full| this.child(full)))
+            .child(div().when_some(toast_overlay, |this, overlay| this.child(overlay)))
             .child(div().when_some(exit_overlay, |this, overlay| this.child(overlay)))
             .into_any_element()
     }

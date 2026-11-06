@@ -512,6 +512,23 @@ async fn search_rows(query: &str) -> anyhow::Result<Vec<super::state::Row>> {
             downloaded: false,
         });
     }
+    if let Ok(playlists) = crate::playlists::search_rows(&dbs, query, 20).await {
+        for playlist in playlists {
+            rows.push(Row {
+                id: playlist["id"].as_str().unwrap_or_default().to_string(),
+                kind: RowKind::Playlist,
+                title: playlist["name"].as_str().unwrap_or_default().to_string(),
+                subtitle: playlist["subtitle"].as_str().unwrap_or_default().to_string(),
+                meta: playlist["meta"].as_str().unwrap_or_default().to_string(),
+                cover_url: String::new(),
+                song_id: String::new(),
+                album_id: String::new(),
+                starred: false,
+                rating: 0,
+                downloaded: false,
+            });
+        }
+    }
     for song in results.songs {
         rows.push(Row {
             id: song.id.clone(),

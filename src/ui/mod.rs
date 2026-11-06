@@ -73,6 +73,8 @@ actions!(
         QueueUp,
         QueueDown,
         RepeatCycle,
+        SearchScopeNext,
+        SearchScopePrev,
     ]
 );
 
@@ -94,6 +96,8 @@ pub fn run() {
             KeyBinding::new("ctrl-shift-k", QueueUp, None),
             KeyBinding::new("ctrl-shift-j", QueueDown, None),
             KeyBinding::new("ctrl-r", RepeatCycle, None),
+            KeyBinding::new("tab", SearchScopeNext, None),
+            KeyBinding::new("shift-tab", SearchScopePrev, None),
             KeyBinding::new("j", MoveDown, None),
             KeyBinding::new("k", MoveUp, None),
             KeyBinding::new("g g", Top, None),
@@ -159,7 +163,8 @@ struct Header {
 struct SearchState {
     query: String,
     rows: Vec<Row>,
-    cursor: usize,
+    scope: usize,
+    scope_cursors: [usize; 4],
     generation: u64,
     loading: bool,
 }
@@ -265,7 +270,8 @@ impl AppRoot {
             app.search = Some(SearchState {
                 query: query.clone(),
                 rows: Vec::new(),
-                cursor: 0,
+                scope: 0,
+                scope_cursors: [0; 4],
                 generation: 1,
                 loading: true,
             });
@@ -387,8 +393,24 @@ impl AppRoot {
                     search.generation = generation;
                     search.query = query;
                     search.rows = rows;
-                    search.cursor = 0;
+                    search.scope_cursors = [0; 4];
                     search.loading = false;
+                    crate::debug_log!(
+                        "GPUI: search scopes songs={} albums={} artists={} playlists={}",
+                        search.scope_count(0),
+                        search.scope_count(1),
+                        search.scope_count(2),
+                        search.scope_count(3)
+                    );
+                    if search.scope_count(search.scope) == 0 {
+                        for step in 0..4 {
+                            let candidate = (search.scope + step) % 4;
+                            if search.scope_count(candidate) > 0 {
+                                search.scope = candidate;
+                                break;
+                            }
+                        }
+                    }
                 }
             }
             Event::Error(message) => {
@@ -427,7 +449,7 @@ impl AppRoot {
 
     fn on_move_down(&mut self, _: &MoveDown, _window: &mut Window, cx: &mut Context<Self>) {
         if let Some(search) = self.search.as_mut() {
-            search.cursor = search.cursor.saturating_add(1).min(search.rows.len().saturating_sub(1));
+            search.move_cursor(1);
             cx.notify();
             return;
         }
@@ -448,7 +470,7 @@ impl AppRoot {
 
     fn on_move_up(&mut self, _: &MoveUp, _window: &mut Window, cx: &mut Context<Self>) {
         if let Some(search) = self.search.as_mut() {
-            search.cursor = search.cursor.saturating_sub(1);
+            search.move_cursor(-1);
             cx.notify();
             return;
         }
@@ -497,11 +519,21 @@ impl AppRoot {
     }
 
     fn on_order_next(&mut self, _: &OrderNext, _window: &mut Window, cx: &mut Context<Self>) {
+        if self.search.is_some() {
+            self.move_search_scope(1);
+            cx.notify();
+            return;
+        }
         self.cycle_order(true);
         cx.notify();
     }
 
     fn on_order_prev(&mut self, _: &OrderPrev, _window: &mut Window, cx: &mut Context<Self>) {
+        if self.search.is_some() {
+            self.move_search_scope(-1);
+            cx.notify();
+            return;
+        }
         self.cycle_order(false);
         cx.notify();
     }
@@ -723,13 +755,39 @@ impl AppRoot {
         cx.notify();
     }
 
+    fn on_search_scope_next(&mut self, _: &SearchScopeNext, _window: &mut Window, cx: &mut Context<Self>) {
+        if self.search.is_some() {
+            self.move_search_scope(1);
+            cx.notify();
+        }
+    }
+
+    fn on_search_scope_prev(&mut self, _: &SearchScopePrev, _window: &mut Window, cx: &mut Context<Self>) {
+        if self.search.is_some() {
+            self.move_search_scope(-1);
+            cx.notify();
+        }
+    }
+
+    fn move_search_scope(&mut self, delta: i32) {
+        let Some(search) = self.search.as_mut() else { return };
+        let current = search.scope;
+        search.scope_cursors[current] = search.cursor();
+        let next = (current as i32 + delta).rem_euclid(4) as usize;
+        search.scope = next;
+        search.scope_cursors[next] = search
+            .scope_cursors[next]
+            .min(search.scope_count(next).saturating_sub(1));
+    }
+
     fn on_search(&mut self, _: &Search, _window: &mut Window, cx: &mut Context<Self>) {
         if self.search.is_none() {
             self.search_open = true;
             self.search = Some(SearchState {
                 query: String::new(),
                 rows: Vec::new(),
-                cursor: 0,
+                scope: 0,
+                scope_cursors: [0; 4],
                 generation: 0,
                 loading: false,
             });
@@ -739,14 +797,14 @@ impl AppRoot {
 
     fn on_search_next(&mut self, _: &SearchNext, _window: &mut Window, cx: &mut Context<Self>) {
         if let Some(search) = self.search.as_mut() {
-            search.cursor = search.cursor.saturating_add(1).min(search.rows.len().saturating_sub(1));
+            search.move_cursor(1);
         }
         cx.notify();
     }
 
     fn on_search_prev(&mut self, _: &SearchPrev, _window: &mut Window, cx: &mut Context<Self>) {
         if let Some(search) = self.search.as_mut() {
-            search.cursor = search.cursor.saturating_sub(1);
+            search.move_cursor(-1);
         }
         cx.notify();
     }
@@ -773,7 +831,7 @@ impl AppRoot {
                 return;
             }
             "enter" => {
-                let row = search.rows.get(search.cursor).cloned();
+                let row = search.scoped().get(search.cursor()).cloned().cloned();
                 if let Some(row) = row {
                     self.search_open = false;
                     self.search = None;
@@ -786,12 +844,12 @@ impl AppRoot {
                 search.query.pop();
             }
             "up" | "ctrl-p" => {
-                search.cursor = search.cursor.saturating_sub(1);
+                search.move_cursor(-1);
                 cx.notify();
                 return;
             }
             "down" | "ctrl-n" => {
-                search.cursor = search.cursor.saturating_add(1).min(search.rows.len().saturating_sub(1));
+                search.move_cursor(1);
                 cx.notify();
                 return;
             }
@@ -881,7 +939,7 @@ impl AppRoot {
             return;
         }
         if let Some(search) = self.search.as_ref() {
-            let row = search.rows.get(search.cursor).cloned();
+            let row = search.scoped().get(search.scope_cursors[search.scope]).cloned().cloned();
             if let Some(row) = row {
                 self.search_open = false;
                 self.search = None;
@@ -1296,12 +1354,12 @@ impl AppRoot {
             format!("{}▌", search.query)
         };
         let results = search
-            .rows
-            .iter()
+            .scoped()
+            .into_iter()
             .take(12)
             .enumerate()
             .map(|(index, row)| {
-                let selected = index == search.cursor;
+                let selected = index == search.cursor();
                 div()
                     .flex()
                     .items_center()
@@ -1359,6 +1417,26 @@ impl AppRoot {
                             .text_size(px(18.0))
                             .text_color(if search.query.is_empty() { rgb(ON_VARIANT) } else { rgb(ON_SURFACE) })
                             .child(query),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap_1()
+                            .px_4()
+                            .pb_2()
+                            .children((0..4).map(|scope| {
+                                let active = scope == search.scope;
+                                let count = search.scope_count(scope);
+                                div()
+                                    .px_2()
+                                    .py_1()
+                                    .rounded_md()
+                                    .text_size(px(11.0))
+                                    .text_color(rgb(if active { PRIMARY } else { ON_VARIANT }))
+                                    .when(active, |this| this.bg(rgb(SURFACE_HIGH)))
+                                    .child(format!("{} {count}", search_scope_label(scope)))
+                            })),
                     )
                     .child(div().h(px(1.0)).bg(rgb(OUTLINE)))
                     .child(
@@ -1749,6 +1827,8 @@ impl Render for AppRoot {
             .on_action(cx.listener(Self::on_enter))
             .on_action(cx.listener(Self::on_visual))
             .on_action(cx.listener(Self::on_search))
+            .on_action(cx.listener(Self::on_search_scope_next))
+            .on_action(cx.listener(Self::on_search_scope_prev))
             .on_action(cx.listener(Self::on_play_pause))
             .on_action(cx.listener(Self::on_queue_toggle))
             .on_action(cx.listener(Self::on_repeat_cycle))
@@ -1838,5 +1918,53 @@ fn repeat_label(repeat: crate::player::Repeat) -> &'static str {
         crate::player::Repeat::Off => "off",
         crate::player::Repeat::One => "one",
         crate::player::Repeat::All => "all",
+    }
+}
+
+impl SearchState {
+    fn kind_index(kind: state::RowKind) -> usize {
+        match kind {
+            state::RowKind::Song => 0,
+            state::RowKind::Album => 1,
+            state::RowKind::Artist => 2,
+            state::RowKind::Playlist => 3,
+        }
+    }
+
+    fn scoped(&self) -> Vec<&Row> {
+        self.rows
+            .iter()
+            .filter(|row| Self::kind_index(row.kind) == self.scope)
+            .collect()
+    }
+
+    fn scope_count(&self, scope: usize) -> usize {
+        self.rows
+            .iter()
+            .filter(|row| Self::kind_index(row.kind) == scope)
+            .count()
+    }
+
+    fn cursor(&self) -> usize {
+        self.scope_cursors[self.scope]
+    }
+
+    fn move_cursor(&mut self, delta: i32) {
+        let len = self.scope_count(self.scope);
+        if len == 0 {
+            self.scope_cursors[self.scope] = 0;
+            return;
+        }
+        let next = (self.cursor() as i32 + delta).clamp(0, len as i32 - 1) as usize;
+        self.scope_cursors[self.scope] = next;
+    }
+}
+
+fn search_scope_label(scope: usize) -> &'static str {
+    match scope {
+        0 => "Songs",
+        1 => "Albums",
+        2 => "Artists",
+        _ => "Playlists",
     }
 }

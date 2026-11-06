@@ -803,7 +803,7 @@ impl AppRoot {
     fn login_view(&self) -> gpui::Div {
         let login = self.login.as_ref().expect("login view");
         let fields = [
-            ("Server", login.server.as_str(), login.field == 0),
+            ("Server URL", login.server.as_str(), login.field == 0),
             ("Username", login.username.as_str(), login.field == 1),
             ("Password", if login.password.is_empty() { "" } else { "••••••••" }, login.field == 2),
         ];
@@ -813,63 +813,68 @@ impl AppRoot {
             .text_color(rgb(ON_SURFACE))
             .font_family("Overused Grotesk")
             .flex()
-            .flex_col()
             .items_center()
             .justify_center()
             .child(
                 div()
                     .flex()
                     .flex_col()
-                    .w(px(420.0))
-                    .gap_4()
-                    .child(div().text_size(px(30.0)).text_center().child("Musika"))
+                    .w(relative(0.224))
+                    .gap_3()
                     .child(
                         div()
-                            .text_size(px(13.0))
-                            .text_color(rgb(ON_VARIANT))
+                            .text_size(px(26.0))
+                            .font_weight(gpui::FontWeight::BOLD)
+                            .text_color(rgb(PRIMARY))
                             .text_center()
-                            .child("Sign in to your Subsonic server"),
+                            .child("MUSIKA"),
                     )
                     .children(fields.into_iter().map(|(label, value, active)| {
                         div()
+                            .h(px(52.0))
+                            .px_3()
                             .flex()
-                            .flex_col()
-                            .gap_1()
-                            .child(
-                                div()
-                                    .text_size(px(11.0))
-                                    .text_color(rgb(ON_VARIANT))
-                                    .child(label),
-                            )
-                            .child(
-                                div()
-                                    .h(px(40.0))
-                                    .px_3()
-                                    .flex()
-                                    .items_center()
-                                    .rounded_md()
-                                    .border_1()
-                                    .border_color(rgb(if active { PRIMARY } else { OUTLINE }))
-                                    .bg(rgb(SURFACE))
-                                    .text_size(px(14.0))
-                                    .child(if value.is_empty() {
-                                        "…".to_string()
-                                    } else {
-                                        value.to_string()
-                                    }),
-                            )
+                            .items_center()
+                            .rounded_md()
+                            .border_1()
+                            .border_color(rgb(if active { PRIMARY } else { OUTLINE }))
+                            .bg(rgb(0x36343B))
+                            .text_size(px(14.0))
+                            .text_color(rgb(if value.is_empty() { ON_VARIANT } else { ON_SURFACE }))
+                            .child(if value.is_empty() {
+                                label.to_string()
+                            } else {
+                                value.to_string()
+                            })
                     }))
                     .child(
                         div()
+                            .h(px(52.0))
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .rounded_md()
+                            .bg(rgb(0x4F378B))
+                            .text_size(px(14.0))
+                            .text_color(rgb(0xEADDFF))
+                            .child(if login.busy { "Logging in…" } else { "Log in" }),
+                    )
+                    .child(
+                        div()
+                            .min_h(px(52.0))
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .rounded_md()
+                            .when(login.error.is_some(), |this| this.border_1().border_color(rgb(0xF2B8B5)).bg(rgb(0x8C1D18)))
                             .text_size(px(11.0))
-                            .text_color(if login.error.is_some() { rgb(0xFFB4AB) } else { rgb(ON_VARIANT) })
+                            .text_color(rgb(if login.error.is_some() { 0xF9DEDC } else { ON_VARIANT }))
+                            .text_center()
                             .child(login.error.clone().unwrap_or_else(|| {
-                                if login.busy {
-                                    "Connecting…".to_string()
-                                } else if login.offline_available {
-                                    "Enter logs in · Tab moves · F2 uses downloads offline".to_string()
+                                if login.offline_available {
+                                    "Tab moves · Enter logs in · F2 offline".to_string()
                                 } else {
-                                    "Enter logs in · Tab moves".to_string()
+                                    "Tab moves · Enter logs in".to_string()
                                 }
                             })),
                     ),
@@ -1729,103 +1734,118 @@ impl AppRoot {
     }
 
     fn queue_overlay(&self, cx: &Context<Self>, progress: f32) -> gpui::Div {
-        let queue = self.player.queue_snapshot();
-        let count = queue.len();
+        let count = self.player.len();
         let current = self.player.index();
         let cursor = self.queue_cursor;
         let scroll = self.queue_scroll.clone();
         div()
             .absolute()
-            .top(px(52.0))
-            .bottom(px(66.0))
-            .right(px(-40.0 * (1.0 - progress)))
-            .w(relative(0.36))
-            .opacity(progress)
+            .inset_0()
+            .size_full()
             .flex()
-            .flex_col()
-            .bg(rgb(SURFACE))
-            .border_l_1()
-            .border_color(rgb(OUTLINE))
-            .shadow_lg()
+            .justify_end()
+            .bg(gpui::black().opacity(0.35 * progress))
+            .opacity(progress)
             .child(
                 div()
+                    .h_full()
+                    .w(relative(0.36))
                     .flex()
-                    .items_center()
-                    .justify_between()
-                    .px_4()
-                    .py_3()
-                    .text_size(px(13.0))
-                    .child("Queue")
+                    .flex_col()
+                    .bg(rgb(SURFACE))
+                    .border_l_1()
+                    .border_color(rgb(OUTLINE))
+                    .shadow_lg()
                     .child(
                         div()
-                            .text_size(px(10.0))
-                            .text_color(rgb(ON_VARIANT))
-                            .child(format!("{} / {}", current.saturating_add(1), count)),
-                    ),
-            )
-            .child(
-                uniform_list("queue", count, cx.processor(move |this, range: std::ops::Range<usize>, _window, cx| {
-                    let queue = this.player.queue_snapshot();
-                    let mut items = Vec::with_capacity(range.len());
-                    for index in range {
-                        let Some(track) = queue.get(index) else { break };
-                        let title = track.title.clone();
-                        let artist = track.artist.clone();
-                        let active = index == cursor;
-                        let playing = index == this.player.index();
-                        items.push(
-                            div()
-                                .id(index)
-                                .flex()
-                                .items_center()
-                                .gap_2()
-                                .h(px(40.0))
-                                .px_3()
-                                .cursor_pointer()
-                                .when(active, |this| this.bg(rgb(SURFACE_HIGH)))
-                                .on_click(cx.listener(move |this, _, _, cx| {
-                                    this.queue_cursor = index;
-                                    this.player.jump(index);
-                                    cx.notify();
-                                }))
-                                .child(
+                            .flex()
+                            .items_center()
+                            .justify_between()
+                            .px_4()
+                            .py_3()
+                            .text_size(px(15.0))
+                            .child("Queue")
+                            .child(
+                                div()
+                                    .text_size(px(11.0))
+                                    .text_color(rgb(ON_VARIANT))
+                                    .child(format!("{} / {}", current.saturating_add(1), count)),
+                            ),
+                    )
+                    .child(div().h(px(1.0)).bg(rgb(OUTLINE)))
+                    .child(
+                        uniform_list("queue", count, cx.processor(move |this, range: std::ops::Range<usize>, _window, cx| {
+                            let queue = this.player.queue_snapshot();
+                            let mut items = Vec::with_capacity(range.len());
+                            for index in range {
+                                let Some(track) = queue.get(index) else { break };
+                                let title = track.title.clone();
+                                let artist = track.artist.clone();
+                                let cover = cover_path(&track.cover_url);
+                                let active = index == cursor;
+                                let playing = index == this.player.index();
+                                items.push(
                                     div()
-                                        .w(px(16.0))
-                                        .text_size(px(10.0))
-                                        .text_color(rgb(if playing { PRIMARY } else { ON_VARIANT }))
-                                        .child(if playing { "▶" } else { "" }),
-                                )
-                                .child(
-                                    div()
+                                        .id(index)
                                         .flex()
-                                        .flex_col()
-                                        .min_w_0()
-                                        .flex_1()
-                                        .child(div().text_size(px(12.0)).child(title))
+                                        .items_center()
+                                        .gap_2()
+                                        .h(px(56.0))
+                                        .px_3()
+                                        .cursor_pointer()
+                                        .when(active, |this| this.bg(rgb(0x4A4458)))
+                                        .on_click(cx.listener(move |this, _, _, cx| {
+                                            this.queue_cursor = index;
+                                            this.player.jump(index);
+                                            cx.notify();
+                                        }))
+                                        .child(art(cover, 40.0))
                                         .child(
                                             div()
-                                                .text_size(px(10.0))
-                                                .text_color(rgb(ON_VARIANT))
-                                                .child(artist),
+                                                .flex()
+                                                .flex_col()
+                                                .min_w_0()
+                                                .flex_1()
+                                                .child(
+                                                    div()
+                                                        .flex()
+                                                        .items_center()
+                                                        .gap_1()
+                                                        .child(
+                                                            div()
+                                                                .text_size(px(14.0))
+                                                                .when(playing, |this| this.text_color(rgb(PRIMARY)))
+                                                                .whitespace_nowrap()
+                                                                .text_ellipsis()
+                                                                .child(title),
+                                                        ),
+                                                )
+                                                .child(
+                                                    div()
+                                                        .text_size(px(10.0))
+                                                        .text_color(rgb(ON_VARIANT))
+                                                        .whitespace_nowrap()
+                                                        .text_ellipsis()
+                                                        .child(artist),
+                                                ),
                                         ),
-                                ),
-                        );
-                    }
-                    items
-                }))
-                .h_full()
-                .track_scroll(scroll),
-            )
-            .child(
-                div()
-                    .px_3()
-                    .py_2()
-                    .text_size(px(10.0))
-                    .text_color(rgb(ON_VARIANT))
-                    .child("Enter jumps · d d removes · Ctrl-Shift-J/K reorders · q closes"),
+                                );
+                            }
+                            items
+                        }))
+                        .h_full()
+                        .track_scroll(scroll),
+                    )
+                    .child(
+                        div()
+                            .px_3()
+                            .py_2()
+                            .text_size(px(10.0))
+                            .text_color(rgb(ON_VARIANT))
+                            .child("Enter jumps · d d removes · Ctrl-Shift-J/K reorders · q closes"),
+                    ),
             )
     }
-
 
     fn search_overlay(&self, search: &SearchState, progress: f32) -> gpui::Div {
         let query = if search.query.is_empty() {

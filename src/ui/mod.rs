@@ -3263,6 +3263,7 @@ impl AppRoot {
                             .flex_none()
                             .w(relative(0.50))
                             .h_full()
+                            .opacity(if self.lyrics_overlay { 0.0 } else { 1.0 })
                             .min_w_0()
                             .overflow_hidden()
                             .flex_col()

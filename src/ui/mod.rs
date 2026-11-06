@@ -33,7 +33,7 @@ mod state;
 
 use gpui::{
     App, Application, Bounds, Context, FocusHandle, KeyBinding, Render, Window,
-    AssetSource, WindowBounds, WindowOptions, actions, div, img, prelude::*, px, relative, rgb, size, svg, uniform_list,
+    AssetSource, WindowBounds, WindowOptions, Animation, AnimationExt, actions, div, img, prelude::*, px, relative, rgb, size, svg, uniform_list,
     HighlightStyle, StyledText,
     UniformListScrollHandle,
 };
@@ -328,6 +328,7 @@ struct AppRoot {
     hovered_page: Option<usize>,
     visual_mode: bool,
     row_scales: std::collections::HashMap<String, anim::Behavior>,
+    row_hover_colors: std::collections::HashMap<String, anim::ColorBehavior>,
     player: crate::player::Player,
     playback_error: Option<String>,
     queue_open: bool,
@@ -420,6 +421,7 @@ impl AppRoot {
             hovered_page: None,
             visual_mode: false,
             row_scales: std::collections::HashMap::new(),
+            row_hover_colors: std::collections::HashMap::new(),
             player: crate::player::Player::new(),
             playback_error: None,
             queue_open: false,
@@ -3011,6 +3013,17 @@ impl AppRoot {
                                 anim::Curve::Standard,
                                 &this.clock,
                             );
+                        let base_fill = if striped { 0x0F0D13 } else { 0x141218 };
+                        let hover_fill = this
+                            .row_hover_colors
+                            .entry(format!("library-hover:{}", row.id))
+                            .or_insert_with(|| anim::ColorBehavior::new(base_fill))
+                            .target(
+                                if hovered && !selected { 0x2B2930 } else { base_fill },
+                                anim::QUICK_MS,
+                                anim::Curve::Standard,
+                                &this.clock,
+                            );
                         items.push(
                             div()
                                 .id(index)
@@ -3022,12 +3035,8 @@ impl AppRoot {
                                 .rounded_sm()
                                 .bg(if selected {
                                     rgb(0x4A4458)
-                                } else if hovered {
-                                    rgb(0x2B2930)
-                                } else if striped {
-                                    rgb(0x0F0D13)
                                 } else {
-                                    rgb(0x141218)
+                                    gpui::rgba(hover_fill)
                                 })
                                 .cursor_pointer()
                                 .on_hover(cx.listener(move |this, hovered: &bool, _, cx| {
@@ -4136,6 +4145,17 @@ impl AppRoot {
                                         anim::Curve::Standard,
                                         &this.clock,
                                     );
+                                let page_base = if index % 2 != 0 { 0x0F0D13 } else { 0x141218 };
+                                let hover_fill = this
+                                    .row_hover_colors
+                                    .entry(format!("page-hover:{index}"))
+                                    .or_insert_with(|| anim::ColorBehavior::new(page_base))
+                                    .target(
+                                        if hovered && !selected { 0x2B2930 } else { page_base },
+                                        anim::QUICK_MS,
+                                        anim::Curve::Standard,
+                                        &this.clock,
+                                    );
                                 let cover_scale = show_cover.then(|| {
                                     this.row_scales
                                         .entry(format!("page-cover-scale:{index}"))
@@ -4158,12 +4178,8 @@ impl AppRoot {
                                         .cursor_pointer()
                                         .bg(if selected {
                                             rgb(0x4A4458)
-                                        } else if hovered {
-                                            rgb(0x2B2930)
-                                        } else if index % 2 != 0 {
-                                            rgb(0x0F0D13)
                                         } else {
-                                            rgb(0x141218)
+                                            gpui::rgba(hover_fill)
                                         })
                                         .on_hover(cx.listener(move |this, hovered: &bool, _, cx| {
                                             if *hovered {
@@ -4582,7 +4598,12 @@ impl Render for AppRoot {
         } else {
             self.list(&*cx, window).into_any_element()
         };
-        if self.row_scales.values().any(|scale| !scale.settled(&self.clock)) {
+        if self.row_scales.values().any(|scale| !scale.settled(&self.clock))
+            || self
+                .row_hover_colors
+                .values()
+                .any(|color| !color.settled(&self.clock))
+        {
             window.request_animation_frame();
         }
         if !self.lyrics_active_anim.settled(&self.clock)
@@ -4806,11 +4827,19 @@ fn art_scaled(path: Option<std::path::PathBuf>, base: f32, scale: f32) -> gpui::
 
 fn art(path: Option<std::path::PathBuf>, size: f32) -> gpui::AnyElement {
     match path {
-        Some(path) => img(path)
-            .size(px(size))
-            .rounded_sm()
-            .bg(rgb(0x36343B))
-            .into_any_element(),
+        Some(path) => {
+            let id = gpui::SharedString::from(format!("cover-fade:{}", path.display()));
+            img(path.clone())
+                .size(px(size))
+                .rounded_sm()
+                .bg(rgb(0x36343B))
+                .with_animation(
+                    id,
+                    Animation::new(std::time::Duration::from_millis(120)),
+                    |this, delta| this.opacity(delta),
+                )
+                .into_any_element()
+        }
         None => div()
             .size(px(size))
             .rounded_md()

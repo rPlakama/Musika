@@ -986,7 +986,7 @@ impl AppRoot {
                 };
                 let retry = toast.retry;
                 div()
-                    .w(px(620.0))
+                    .w(relative(0.42))
                     .max_h(px(150.0))
                     .px_4()
                     .py_3()
@@ -1494,6 +1494,7 @@ impl AppRoot {
         let order = format!("Shift-H / Shift-L  /  {}", self.view.order_label());
         let header = div()
             .flex()
+            .flex_none()
             .items_center()
             .gap_3()
             .w_full()
@@ -1600,7 +1601,7 @@ impl AppRoot {
                                                 .text_size(px(18.0))
                                                 .font_weight(gpui::FontWeight::SEMIBOLD)
                                                 .whitespace_nowrap()
-                                                .overflow_hidden()
+                                                .text_ellipsis()
                                                 .child(title),
                                         )
                                         .child(
@@ -1608,7 +1609,7 @@ impl AppRoot {
                                                 .text_size(px(12.0))
                                                 .text_color(rgb(ON_VARIANT))
                                                 .whitespace_nowrap()
-                                                .overflow_hidden()
+                                                .text_ellipsis()
                                                 .child(subtitle),
                                         ),
                                 )
@@ -1738,7 +1739,7 @@ impl AppRoot {
             .top(px(52.0))
             .bottom(px(66.0))
             .right(px(-40.0 * (1.0 - progress)))
-            .w(px(420.0))
+            .w(relative(0.36))
             .opacity(progress)
             .flex()
             .flex_col()
@@ -1845,14 +1846,15 @@ impl AppRoot {
                     .gap_3()
                     .px_4()
                     .py_2()
-                    .when(selected, |this| this.bg(rgb(SURFACE_HIGH)))
+                    .h(relative(0.112))
+                    .when(selected, |this| this.bg(rgb(0x4A4458)))
                     .child(
                         div()
                             .flex()
                             .flex_col()
                             .min_w_0()
                             .flex_1()
-                            .child(div().text_size(px(14.0)).child(row.title.clone()))
+                            .child(div().text_size(px(15.0)).child(row.title.clone()))
                             .child(
                                 div()
                                     .text_size(px(11.0))
@@ -1872,28 +1874,29 @@ impl AppRoot {
         div()
             .absolute()
             .inset_0()
+            .size_full()
             .flex()
             .justify_center()
-            .items_start()
-            .pt(px(72.0 - 8.0 * progress))
+            .items_center()
+            .justify_center()
             .opacity(progress)
             .child(
                 div()
-                    .w(px(720.0))
-                    .max_h(px(460.0))
-                    .flex()
-                    .flex_col()
-                    .overflow_hidden()
-                    .rounded_lg()
+                    .w(relative(0.714))
+                    .h(relative(0.78))
+                    .rounded_md()
                     .border_1()
-                    .border_color(rgb(OUTLINE))
-                    .bg(rgb(SURFACE))
+                    .border_color(rgb(PRIMARY))
+                    .bg(rgb(0x2B2930))
+                    .overflow_hidden()
                     .shadow_lg()
                     .child(
                         div()
+                            .h(relative(0.066))
                             .px_4()
-                            .py_3()
-                            .text_size(px(18.0))
+                            .flex()
+                            .items_center()
+                            .text_size(px(20.0))
                             .text_color(if search.query.is_empty() { rgb(ON_VARIANT) } else { rgb(ON_SURFACE) })
                             .child(query),
                     )
@@ -1902,8 +1905,8 @@ impl AppRoot {
                             .flex()
                             .items_center()
                             .gap_1()
+                            .h(relative(0.052))
                             .px_4()
-                            .pb_2()
                             .children((0..4).map(|scope| {
                                 let active = scope == search.scope;
                                 let count = search.scope_count(scope);
@@ -1951,26 +1954,36 @@ impl AppRoot {
         let cover = cover_path(&page.header.cover_url);
 
         let header = div()
-            .flex()
+            .relative()
+            .flex_none()
             .w_full()
             .h(px(520.0))
             .px(px(12.0))
-            .gap_3()
             .child(
                 div()
+                    .absolute()
+                    .right(px(16.0))
+                    .top(px(48.0))
+                    .child(art(cover, 360.0)),
+            )
+            .child(
+                div()
+                    .absolute()
+                    .left(px(12.0))
+                    .top(px(18.0))
+                    .w(relative(0.78))
+                    .p_3()
+                    .rounded_md()
+                    .bg(gpui::black().opacity(0.40))
                     .flex()
                     .flex_col()
-                    .flex_1()
-                    .min_w_0()
-                    .overflow_hidden()
-                    .pt_3()
                     .gap_1()
                     .child(
                         div()
                             .text_size(px(30.0))
                             .font_weight(gpui::FontWeight::BOLD)
                             .whitespace_nowrap()
-                            .overflow_hidden()
+                            .text_ellipsis()
                             .child(title),
                     )
                     .child(
@@ -1992,13 +2005,6 @@ impl AppRoot {
                             .whitespace_nowrap()
                             .child(meta),
                     ),
-            )
-            .child(
-                div()
-                    .flex_none()
-                    .w(px(360.0))
-                    .h(px(360.0))
-                    .child(art(cover, 360.0)),
             );
 
         if page.loading && page.rows.is_empty() {
@@ -2039,82 +2045,98 @@ impl AppRoot {
         let count = page.rows.len();
         let scroll = self.page_scroll.clone();
         div()
-            .flex()
-            .flex_col()
+            .relative()
             .flex_1()
-            .child(header)
+            .w_full()
             .child(
-                uniform_list("page-rows", count, cx.processor(move |this, range: std::ops::Range<usize>, _window, cx| {
-                    let row_h = 36.0;
-                    let mut items = Vec::with_capacity(range.len());
-                    for index in range {
-                        let Some((title, subtitle, meta, selected, key)) = this
-                            .page
-                            .as_ref()
-                            .map(|page| {
-                                let row = &page.rows[index];
-                                (
-                                    row.title.clone(),
-                                    row.subtitle.clone(),
-                                    row.meta.clone(),
-                                    index == page.cursor
-                                        || page.selection.contains(page.cursor, index),
-                                    format!("page:{}:{}", page.descriptor.id, row.id),
-                                )
-                            })
-                        else {
-                            break;
-                        };
-                        let target = if selected { 0x4A4458FF } else { 0x14121800 };
-                        let color = this
-                            .row_colors
-                            .entry(key)
-                            .or_insert_with(|| anim::ColorBehavior::new(target))
-                            .target(target, anim::QUICK_MS, anim::Curve::Standard, &this.clock);
-                        items.push(
-                            div()
-                                .id(index)
-                                .w_full()
-                                .flex()
-                                .items_center()
-                                .h(px(row_h))
-                                .px_4()
-                                .cursor_pointer()
-                                .bg(rgba(color))
-                                .on_click(cx.listener(move |this, _, _, cx| {
-                                    if let Some(page) = this.page.as_mut() {
-                                        page.select(index);
-                                    }
-                                    this.page_scroll.scroll_to_item(index, ScrollStrategy::Center);
-                                    cx.notify();
-                                }))
-                                .child(
+                div()
+                    .absolute()
+                    .top_0()
+                    .left_0()
+                    .right_0()
+                    .h(px(520.0))
+                    .child(header),
+            )
+            .child(
+                div()
+                    .absolute()
+                    .top(px(560.0))
+                    .left_0()
+                    .right_0()
+                    .bottom_0()
+                    .child(
+                        uniform_list("page-rows", count, cx.processor(move |this, range: std::ops::Range<usize>, _window, cx| {
+                            let row_h = 36.0;
+                            let mut items = Vec::with_capacity(range.len());
+                            for index in range {
+                                let Some((title, subtitle, meta, selected, key)) = this
+                                    .page
+                                    .as_ref()
+                                    .map(|page| {
+                                        let row = &page.rows[index];
+                                        (
+                                            row.title.clone(),
+                                            row.subtitle.clone(),
+                                            row.meta.clone(),
+                                            index == page.cursor
+                                                || page.selection.contains(page.cursor, index),
+                                            format!("page:{}:{}", page.descriptor.id, row.id),
+                                        )
+                                    })
+                                else {
+                                    break;
+                                };
+                                let target = if selected { 0x4A4458FF } else { 0x14121800 };
+                                let color = this
+                                    .row_colors
+                                    .entry(key)
+                                    .or_insert_with(|| anim::ColorBehavior::new(target))
+                                    .target(target, anim::QUICK_MS, anim::Curve::Standard, &this.clock);
+                                items.push(
                                     div()
+                                        .id(index)
+                                        .w_full()
                                         .flex()
-                                        .flex_col()
-                                        .min_w_0()
-                                        .flex_1()
-                                        .child(div().text_size(px(15.0)).child(title))
+                                        .items_center()
+                                        .h(px(row_h))
+                                        .px_4()
+                                        .cursor_pointer()
+                                        .bg(rgba(color))
+                                        .on_click(cx.listener(move |this, _, _, cx| {
+                                            if let Some(page) = this.page.as_mut() {
+                                                page.select(index);
+                                            }
+                                            this.page_scroll.scroll_to_item(index, ScrollStrategy::Center);
+                                            cx.notify();
+                                        }))
                                         .child(
                                             div()
-                                                .text_size(px(10.0))
+                                                .flex()
+                                                .flex_col()
+                                                .min_w_0()
+                                                .flex_1()
+                                                .child(div().text_size(px(15.0)).child(title))
+                                                .child(
+                                                    div()
+                                                        .text_size(px(11.0))
+                                                        .text_color(rgb(ON_VARIANT))
+                                                        .child(subtitle),
+                                                ),
+                                        )
+                                        .child(
+                                            div()
+                                                .text_size(px(11.0))
                                                 .text_color(rgb(ON_VARIANT))
-                                                .child(subtitle),
+                                                .child(meta),
                                         ),
-                                )
-                                .child(
-                                    div()
-                                        .text_size(px(11.0))
-                                        .text_color(rgb(ON_VARIANT))
-                                        .child(meta),
-                                ),
-                        );
-                    }
-                    items
-                }))
-                .h_full()
-                .w_full()
-                .track_scroll(scroll),
+                                );
+                            }
+                            items
+                        }))
+                        .h_full()
+                        .w_full()
+                        .track_scroll(scroll),
+                    ),
             )
     }
 
@@ -2161,7 +2183,8 @@ impl AppRoot {
                             .flex()
                             .items_center()
                             .gap_3()
-                            .w(relative(0.40))
+                            .flex_1()
+                            .min_w_0()
                             .child(art(cover, 44.0))
                             .child(
                                 div()
@@ -2174,7 +2197,7 @@ impl AppRoot {
                                             .text_size(px(15.0))
                                             .font_weight(gpui::FontWeight::MEDIUM)
                                             .whitespace_nowrap()
-                                            .overflow_hidden()
+                                            .text_ellipsis()
                                             .child(title),
                                     )
                                     .child(
@@ -2182,7 +2205,7 @@ impl AppRoot {
                                             .text_size(px(12.0))
                                             .text_color(rgb(ON_VARIANT))
                                             .whitespace_nowrap()
-                                            .overflow_hidden()
+                                            .text_ellipsis()
                                             .child(artist),
                                     ),
                             ),
@@ -2190,7 +2213,8 @@ impl AppRoot {
                     .child(
                         div()
                             .flex()
-                            .flex_1()
+                            .w(px(200.0))
+                            .flex_none()
                             .items_center()
                             .justify_center()
                             .gap_5()
@@ -2205,7 +2229,10 @@ impl AppRoot {
                     .child(
                         div()
                             .flex()
+                            .w(px(170.0))
+                            .flex_none()
                             .items_center()
+                            .justify_end()
                             .gap_3()
                             .child(
                                 div()
@@ -2408,11 +2435,11 @@ impl Render for AppRoot {
             .child(top)
             .child(body)
             .child(status)
-            .child(div().when_some(queue_overlay, |this, queue| this.child(queue)))
-            .child(div().when_some(overlay, |this, overlay| this.child(overlay)))
-            .child(div().when_some(fullscreen_overlay, |this, full| this.child(full)))
-            .child(div().when_some(toast_overlay, |this, overlay| this.child(overlay)))
-            .child(div().when_some(exit_overlay, |this, overlay| this.child(overlay)))
+            .child(match queue_overlay { Some(o) => o.into_any_element(), None => div().into_any_element() })
+            .child(match overlay { Some(o) => o.into_any_element(), None => div().into_any_element() })
+            .child(match fullscreen_overlay { Some(o) => o.into_any_element(), None => div().into_any_element() })
+            .child(match toast_overlay { Some(o) => o.into_any_element(), None => div().into_any_element() })
+            .child(match exit_overlay { Some(o) => o.into_any_element(), None => div().into_any_element() })
             .into_any_element()
     }
 }
@@ -2441,7 +2468,7 @@ fn cover_path(url: &str) -> Option<std::path::PathBuf> {
 
 fn art(path: Option<std::path::PathBuf>, size: f32) -> gpui::AnyElement {
     match path {
-        Some(path) => img(path).size(px(size)).rounded_md().into_any_element(),
+        Some(path) => img(path).size(px(size)).rounded_sm().into_any_element(),
         None => div()
             .size(px(size))
             .rounded_md()

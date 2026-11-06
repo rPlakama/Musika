@@ -111,7 +111,7 @@ impl Behavior {
             self.from = self.value(clock);
             self.to = to;
             self.start = clock.now;
-            self.duration = duration.max(0.0);
+            self.duration = duration.max(0.0) / 1000.0;
             self.curve = curve;
         }
         self.value(clock)
@@ -177,11 +177,11 @@ mod tests {
         let mut clock = Clock::new();
         clock.now = 0.0;
         let mut behavior = Behavior::new(0.0);
-        behavior.target(1.0, 1.0, Curve::Linear, &clock);
+        behavior.target(1.0, 1000.0, Curve::Linear, &clock);
         clock.now = 0.5;
         let mid = behavior.value(&clock);
         assert!((mid - 0.5).abs() < 1e-4);
-        behavior.target(0.0, 1.0, Curve::Linear, &clock);
+        behavior.target(0.0, 1000.0, Curve::Linear, &clock);
         assert!((behavior.value(&clock) - mid).abs() < 1e-4);
     }
 }
@@ -212,7 +212,7 @@ impl ColorBehavior {
             self.from = self.value(clock);
             self.to = to;
             self.start = clock.now;
-            self.duration = duration.max(0.0);
+            self.duration = duration.max(0.0) / 1000.0;
             self.curve = curve;
         }
         self.value(clock)
@@ -257,10 +257,10 @@ mod color_tests {
         let mut clock = Clock::new();
         clock.now = 0.0;
         let mut color = ColorBehavior::new(0x00000000);
-        color.target(0xFFFFFFFF, 1.0, Curve::Linear, &clock);
+        color.target(0xFFFFFFFF, 1000.0, Curve::Linear, &clock);
         clock.now = 0.5;
         let mid = color.value(&clock);
-        color.target(0x00000000, 1.0, Curve::Linear, &clock);
+        color.target(0x00000000, 1000.0, Curve::Linear, &clock);
         assert_eq!(color.value(&clock), mid);
     }
 }

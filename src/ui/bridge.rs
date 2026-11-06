@@ -71,6 +71,7 @@ pub enum Event {
     QueueAppend {
         tracks: Vec<crate::player::Track>,
     },
+    DownloadSettled,
     OpenPage {
         descriptor: super::state::PageDescriptor,
     },
@@ -584,6 +585,40 @@ impl Bridge {
                 starred: None,
                 rating: Some(level),
             });
+        });
+    }
+
+    pub fn quick_download(&self, kind: String, id: String, on: bool) {
+        if !on {
+            let _ = self.tx.send(Event::Error(
+                "Removing downloads is not wired yet".to_string(),
+            ));
+            return;
+        }
+        let tx = self.tx.clone();
+        crate::app::runtime().spawn(async move {
+            let Some(dbs) = crate::app::dbs() else { return };
+            let songs = if kind == "song" {
+                vec![id.clone()]
+            } else if kind == "album" {
+                crate::library::album_song_ids_of(&dbs.library, std::slice::from_ref(&id))
+                    .await
+                    .ok()
+                    .and_then(|mut map| map.remove(&id))
+                    .unwrap_or_default()
+            } else {
+                Vec::new()
+            };
+            if songs.is_empty() {
+                let _ = tx.send(Event::Error("No songs to download for this item".to_string()));
+                return;
+            }
+            for song in songs {
+                if let Err(err) = crate::qml::download::download_one(&dbs, &song).await {
+                    let _ = tx.send(Event::Error(format!("Download failed: {err:#}")));
+                }
+            }
+            let _ = tx.send(Event::DownloadSettled);
         });
     }
 

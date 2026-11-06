@@ -655,6 +655,10 @@ impl AppRoot {
             Event::QueueAppend { tracks } => {
                 self.player.append(tracks);
             }
+            Event::DownloadSettled => {
+                self.marks.requested = None;
+                self.ensure_marks();
+            }
             Event::OpenPage { descriptor } => {
                 self.open_descriptor(descriptor);
             }
@@ -874,6 +878,9 @@ impl AppRoot {
         } else {
             0.0
         };
+        if trace_scroll() {
+            crate::debug_log!("GPUI trace: follow from {current:.1} to {target:.1} duration {duration:.2}");
+        }
         follow.start(current, target, now, duration);
     }
 
@@ -898,6 +905,9 @@ impl AppRoot {
             .borrow()
             .base_handle
             .set_offset(gpui::point(px(0.0), px(-y)));
+        if trace_scroll() {
+            crate::debug_log!("GPUI trace: follow apply y {y:.1} active {}", follow.active);
+        }
         follow.active
     }
 
@@ -1913,12 +1923,9 @@ impl AppRoot {
             QuickVerb::PlayPlaylist => {
                 self.bridge.quick_play_playlist(target.playlist_id.clone());
             }
-            QuickVerb::Download { .. } => {
-                self.push_toast(
-                    "Download actions are not wired yet".to_string(),
-                    ToastKind::Error,
-                    None,
-                );
+            QuickVerb::Download { on } => {
+                self.bridge
+                    .quick_download(target.queue_kind().to_string(), target.id.clone(), on);
             }
         }
     }
@@ -4351,6 +4358,11 @@ fn page_key(descriptor: &PageDescriptor) -> String {
         PageKind::Playlist => "playlist",
     };
     format!("{kind}:{}", descriptor.id)
+}
+
+fn trace_scroll() -> bool {
+    static TRACE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *TRACE.get_or_init(|| std::env::var_os("MUSIKA_GPUUI_TRACE").is_some())
 }
 
 fn delete_word_back(text: &mut String) {

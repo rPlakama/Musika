@@ -3553,7 +3553,7 @@ impl AppRoot {
                             );
                         items.push(
                             div()
-                                .id(gpui::ElementId::named_usize(format!("library-row:{selected}"), index))
+                                .id(gpui::ElementId::named_usize("library-row", index))
                                 .w_full()
                                 .flex()
                                 .items_center()
@@ -4288,7 +4288,7 @@ impl AppRoot {
                                     );
                                 items.push(
                                     div()
-                                        .id(gpui::ElementId::named_usize(format!("queue-row:{selected}"), index))
+                                        .id(gpui::ElementId::named_usize("queue-row", index))
                                         .flex()
                                         .items_center()
                                         .gap_2()
@@ -4912,7 +4912,7 @@ impl AppRoot {
                                 });
                                 items.push(
                                     div()
-                                        .id(gpui::ElementId::named_usize(format!("page-row:{selected}"), index))
+                                        .id(gpui::ElementId::named_usize("page-row", index))
                                         .w_full()
                                         .flex()
                                         .items_center()

@@ -595,6 +595,7 @@ impl AppRoot {
                     let subtitle = row.subtitle.clone();
                     let meta = row.meta.clone();
                     let starred = row.starred;
+                    let downloaded = row.downloaded;
                     let cover = cover_path(&row.cover_url);
                     let selected = index == this.view.cursor
                         || this.view.selection.contains(this.view.cursor, index);
@@ -647,6 +648,14 @@ impl AppRoot {
                                         .text_size(px(12.0))
                                         .text_color(rgb(0xFFD54F))
                                         .child("★"),
+                                )
+                            })
+                            .when(downloaded, |this| {
+                                this.child(
+                                    div()
+                                        .text_size(px(11.0))
+                                        .text_color(rgb(PRIMARY))
+                                        .child("↓"),
                                 )
                             }),
                     );
@@ -758,6 +767,7 @@ impl AppRoot {
                         let title = row.title.clone();
                         let subtitle = row.subtitle.clone();
                         let meta = row.meta.clone();
+                        let downloaded = row.downloaded;
                         let selected = index == page.cursor
                             || page.selection.contains(page.cursor, index);
                         items.push(
@@ -796,7 +806,15 @@ impl AppRoot {
                                         .text_size(px(11.0))
                                         .text_color(rgb(ON_VARIANT))
                                         .child(meta),
-                                ),
+                                )
+                                .when(downloaded, |this| {
+                                    this.child(
+                                        div()
+                                            .text_size(px(11.0))
+                                            .text_color(rgb(PRIMARY))
+                                            .child("↓"),
+                                    )
+                                }),
                         );
                     }
                     items

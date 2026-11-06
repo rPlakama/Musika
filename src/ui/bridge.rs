@@ -77,7 +77,8 @@ impl Bridge {
         let tx = self.tx.clone();
         crate::app::runtime().spawn(async move {
             let event = match page_data(&descriptor).await {
-                Ok((header, rows)) => {
+                Ok((header, mut rows)) => {
+                    mark_downloaded(&mut rows).await;
                     crate::debug_log!(
                         "GPUI: {} page {} rows",
                         descriptor.kind.label(),
@@ -101,7 +102,8 @@ impl Bridge {
         let tx = self.tx.clone();
         crate::app::runtime().spawn(async move {
             let event = match library_rows(scope, order).await {
-                Ok(rows) => {
+                Ok(mut rows) => {
+                    mark_downloaded(&mut rows).await;
                     crate::debug_log!("GPUI: {} {} rows", scope.label(), rows.len());
                     Event::Library {
                         generation,
@@ -149,6 +151,7 @@ async fn library_rows(
                     album_id: album.id,
                     starred: album.starred.is_some(),
                     rating: album.rating,
+                    downloaded: false,
                 })
                 .collect())
         }
@@ -173,6 +176,7 @@ async fn library_rows(
                     album_id: String::new(),
                     starred: artist.starred.is_some(),
                     rating: 0,
+                    downloaded: false,
                 })
                 .collect())
         }
@@ -197,6 +201,7 @@ async fn library_rows(
                     album_id: song.album_id.unwrap_or_default(),
                     starred: song.starred.is_some(),
                     rating: 0,
+                    downloaded: false,
                 })
                 .collect())
         }
@@ -216,9 +221,29 @@ async fn library_rows(
                     album_id: String::new(),
                     starred: false,
                     rating: 0,
+                    downloaded: false,
                 })
                 .collect())
         }
+    }
+}
+
+async fn mark_downloaded(rows: &mut [super::state::Row]) {
+    let Some(dbs) = crate::app::dbs() else { return };
+    let ids: Vec<String> = rows
+        .iter()
+        .filter(|row| !row.song_id.is_empty())
+        .map(|row| row.song_id.clone())
+        .collect();
+    if ids.is_empty() {
+        return;
+    }
+    let Ok(done) = crate::download::done_ids_of(&dbs.download, &ids).await else {
+        return;
+    };
+    let done: std::collections::HashSet<String> = done.into_iter().collect();
+    for row in rows {
+        row.downloaded = done.contains(&row.song_id);
     }
 }
 
@@ -266,6 +291,7 @@ async fn page_data(
                     album_id: descriptor.id.clone(),
                     starred: song.starred.is_some(),
                     rating: 0,
+                    downloaded: false,
                 })
                 .collect();
             Ok((header, rows))
@@ -303,6 +329,7 @@ async fn page_data(
                     album_id: album.id,
                     starred: album.starred.is_some(),
                     rating: album.rating,
+                    downloaded: false,
                 })
                 .collect();
             Ok((header, rows))
@@ -337,6 +364,7 @@ async fn page_data(
                             album_id: song["albumId"].as_str().unwrap_or_default().to_string(),
                             starred: song["starred"].as_bool().unwrap_or(false),
                             rating: 0,
+                    downloaded: false,
                         })
                         .collect()
                 })

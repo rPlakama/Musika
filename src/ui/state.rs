@@ -68,6 +68,7 @@ pub struct Row {
     pub album_id: String,
     pub starred: bool,
     pub rating: i64,
+    pub downloaded: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -169,6 +170,7 @@ mod tests {
                 album_id: "a".into(),
                 starred: false,
                 rating: 0,
+                    downloaded: false,
             }],
             ..ViewState::default()
         };
@@ -348,6 +350,7 @@ mod page_kind_tests {
             album_id: "a".into(),
             starred: false,
             rating: 0,
+                    downloaded: false,
         }];
         page.select(9);
         assert_eq!(page.cursor, 0);

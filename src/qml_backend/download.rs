@@ -418,7 +418,7 @@ pub(super) async fn completed_album(dbs: &crate::db::Dbs, song_id: &str) -> Opti
 /// The conditional the UI cares about lives here: a cached blob wins (the
 /// ledger flips to `done`); an `active` row is a no-op; anything else is
 /// marked, fetched, stored and closed out (`done` / `error` with the reason).
-pub(super) async fn download_one(
+pub(crate) async fn download_one(
     dbs: &crate::db::Dbs,
     song_id: &str,
 ) -> anyhow::Result<&'static str> {

@@ -30,6 +30,15 @@ pub enum Event {
         header: super::state::PageHeader,
         rows: Vec<super::state::Row>,
     },
+    Restore {
+        volume: f64,
+        muted: bool,
+        tracks: Vec<crate::player::Track>,
+        start: usize,
+        position: f64,
+        page_kind: String,
+        page_id: String,
+    },
     Lyrics {
         song_id: String,
         document: crate::lyrics::Document,
@@ -121,6 +130,42 @@ impl Bridge {
                 Err(err) => Event::Error(format!("Page load failed: {err:#}")),
             };
             send_event(&tx, event);
+        });
+    }
+
+    pub fn restore(&self) {
+        let tx = self.tx.clone();
+        crate::app::runtime().spawn(async move {
+            let Some(dbs) = crate::app::dbs() else { return };
+            let Ok(Some(status)) = crate::status::load(&dbs.status).await else {
+                return;
+            };
+            let resume = crate::queue::resume_payload(&dbs, &status, false).await.ok();
+            let value: serde_json::Value = resume
+                .as_deref()
+                .and_then(|raw| serde_json::from_str(raw).ok())
+                .unwrap_or(serde_json::Value::Null);
+            let tracks = value["queue"]
+                .as_str()
+                .and_then(|json| serde_json::from_str::<Vec<crate::player::Track>>(json).ok())
+                .unwrap_or_default();
+            let start = value["start"].as_u64().unwrap_or(0) as usize;
+            let position = value["position"].as_f64().unwrap_or(status.position);
+            crate::debug_log!(
+                "GPUI: restore {} tracks start {} position {:.1}",
+                tracks.len(),
+                start,
+                position
+            );
+            let _ = tx.send(Event::Restore {
+                volume: status.volume,
+                muted: status.muted,
+                tracks,
+                start,
+                position,
+                page_kind: status.page_kind,
+                page_id: status.page_id,
+            });
         });
     }
 

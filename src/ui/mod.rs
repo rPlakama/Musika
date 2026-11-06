@@ -235,6 +235,7 @@ struct AppRoot {
     quit_after_ms: Option<u64>,
     toasts: Vec<ToastState>,
     last_play: Option<(String, String)>,
+    restored: bool,
 }
 
 impl AppRoot {
@@ -295,6 +296,7 @@ impl AppRoot {
                 .and_then(|ms| ms.parse::<u64>().ok()),
             toasts: Vec::new(),
             last_play: None,
+            restored: false,
         };
         if let Ok(message) = std::env::var("MUSIKA_GPUUI_TOAST")
             && !message.is_empty()
@@ -350,6 +352,10 @@ impl AppRoot {
                     counts,
                 });
                 self.error = None;
+                if !self.restored {
+                    self.restored = true;
+                    self.bridge.restore();
+                }
             }
             Event::Library {
                 generation,
@@ -371,6 +377,35 @@ impl AppRoot {
                 self.view.cursor = self.view.cursor.min(self.view.rows.len().saturating_sub(1));
                 self.scroll
                     .scroll_to_item(self.view.cursor, ScrollStrategy::Center);
+            }
+            Event::Restore {
+                volume,
+                muted,
+                tracks,
+                start,
+                position,
+                page_kind,
+                page_id,
+            } => {
+                self.player.set_volume(volume);
+                self.player.set_muted(muted);
+                if !tracks.is_empty() {
+                    self.player.load_paused(tracks, start);
+                    if position > 0.0 {
+                        self.player.seek(position);
+                    }
+                }
+                if self.page.is_none() && !page_kind.is_empty() && !page_id.is_empty() {
+                    let kind = match page_kind.as_str() {
+                        "album" => Some(PageKind::Album),
+                        "artist" => Some(PageKind::Artist),
+                        "playlist" => Some(PageKind::Playlist),
+                        _ => None,
+                    };
+                    if let Some(kind) = kind {
+                        self.open_descriptor(PageDescriptor { kind, id: page_id });
+                    }
+                }
             }
             Event::Page {
                 generation,

@@ -1954,12 +1954,15 @@ impl AppRoot {
     }
 
     fn animate_alt(&mut self, target: f32) {
-        self.alt_spawn.target(
-            target,
-            anim::ALT_MS,
-            anim::Curve::Linear,
-            &self.clock,
-        );
+        // Keep the legacy PopFx pop on open; the faster ALT_MS applies to
+        // both directions, and the collapse keeps its plain ease-in.
+        let curve = if target > 0.5 {
+            anim::Curve::OutBack
+        } else {
+            anim::Curve::Accelerate
+        };
+        self.alt_spawn
+            .target(target, anim::ALT_MS, curve, &self.clock);
     }
 
     fn page_alt_menu(&self, page: &PageBarState) -> Option<(QuickMenu, AltTarget)> {

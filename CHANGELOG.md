@@ -3,6 +3,24 @@
 All notable changes to Musika, newest first. `TASKLISTMAJOR.md` tracks the
 open work; this file is the release history.
 
+## 0.6.1 - _Patching_
+
+A patch release for the GPUI shell: smaller modules, calmer search updates, and
+one central `Visuals` config for row typography and motion.
+
+- Split the UI monolith into focused `app/`, `views/`, `widgets/` and
+  request-family `bridge/` modules; split the test monolith by production
+  module and remove the stale dead-code allowance from the UI root.
+- Search results now merge by row equality: identical payloads keep their
+  rows, cursor, selection and scroll position, and settled rows stay visible
+  while the next query is in flight instead of flashing a skeleton.
+- Centralize row/queue/search fonts, selected scales, durations and easing in
+  `Visuals`. Covers scale in 80 ms; text emphasis settles in 144 ms (80%
+  slower), both linear.
+- Add regression tests for search-row merging and the visual tokens.
+- Bake `dots-fill.svg` and `save-outline.svg` white so the Nix pre-build icon
+  check passes again.
+
 ## 0.6.0 - _Rework, rewrite. Changing, QT is dropped, gpuUI is implemented. Adjusts to the UI and various other changes._
 
 The Qt/QML front end is gone. Musika now runs on GPUI, Zed's GPU-accelerated

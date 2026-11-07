@@ -61,7 +61,7 @@ pub const SEARCH_VISIBLE_ROWS: usize = 5;
 /// Rows requested from the backend; the overlay scrolls beyond the visible 5.
 pub const SEARCH_FETCH_ROWS: usize = 100;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Row {
     pub id: String,
     pub kind: RowKind,

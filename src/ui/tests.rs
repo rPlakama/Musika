@@ -148,4 +148,59 @@ mod contextual_bar_tests {
         assert!((anim::ALT_MS - anim::EMPHASIZED_MS * 0.7).abs() < f32::EPSILON);
         assert!((anim::ALT_MS - 168.0).abs() < 0.001);
     }
+    fn test_search_row(id: &str, title: &str) -> Row {
+        Row {
+            id: id.to_string(),
+            kind: RowKind::Song,
+            title: title.to_string(),
+            subtitle: String::new(),
+            meta: String::new(),
+            track: String::new(),
+            cover_url: String::new(),
+            song_id: id.to_string(),
+            album_id: String::new(),
+            starred: false,
+            rating: 0,
+            downloaded: false,
+        }
+    }
+
+    fn test_search_state(rows: Vec<Row>) -> SearchState {
+        SearchState {
+            editor: line_search::LineEditor::new(),
+            rows,
+            most_played: false,
+            scope: 0,
+            scope_cursors: [2, 0, 0, 0],
+            selection: state::Selection::default(),
+            generation: 1,
+            loading: false,
+            typing: true,
+        }
+    }
+
+    #[test]
+    fn identical_search_payload_keeps_rows_and_cursor() {
+        let rows = vec![test_search_row("a", "A"), test_search_row("b", "B")];
+        let mut state = test_search_state(rows.clone());
+        assert!(!state.merge_rows(rows.clone(), false));
+        assert_eq!(state.rows, rows);
+        assert_eq!(state.scope_cursors, [2, 0, 0, 0]);
+    }
+
+    #[test]
+    fn search_payload_only_replaces_changed_rows() {
+        let first = test_search_row("a", "A");
+        let second = test_search_row("b", "B");
+        let replacement = test_search_row("c", "C");
+        let mut state = test_search_state(vec![first.clone(), second]);
+        assert!(state.merge_rows(vec![first.clone(), replacement.clone()], false));
+        assert_eq!(state.rows, vec![first, replacement]);
+
+        assert!(state.merge_rows(vec![test_search_row("a", "A")], false));
+        assert_eq!(state.rows.len(), 1);
+        assert!(state.merge_rows(Vec::new(), true));
+        assert!(state.most_played);
+        assert!(state.rows.is_empty());
+    }
 }

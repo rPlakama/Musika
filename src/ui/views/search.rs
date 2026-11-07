@@ -173,7 +173,10 @@ impl AppRoot {
         let loading = self.search_loading_visible(search);
         let query_empty = search.editor.text.is_empty();
         let scoped = search.scoped();
-        let nothing = !loading && !query_empty && scoped.is_empty();
+        // Keep settled rows visible while the next payload is in flight; the
+        // skeleton is only for the first empty search, not every keystroke.
+        let show_skeleton = loading && search.rows.is_empty();
+        let nothing = !show_skeleton && !query_empty && scoped.is_empty();
         let selection_count = search.selection.count(search.cursor());
         let footer = if selection_count > 0 {
             format!(
@@ -187,7 +190,7 @@ impl AppRoot {
                 .to_string()
         };
 
-        let result_area: gpui::AnyElement = if loading {
+        let result_area: gpui::AnyElement = if show_skeleton {
             loading_skeleton(row_h, state::SEARCH_VISIBLE_ROWS)
         } else if nothing {
             div()

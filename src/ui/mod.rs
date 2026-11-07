@@ -873,6 +873,29 @@ impl SearchState {
         }
     }
 
+    /// Install a search payload without replacing rows that are already equal.
+    ///
+    /// Search requests race typing, so a payload is often identical to what is
+    /// already on screen. Keeping those rows (and the cursor/selection) avoids
+    /// a pointless list rebuild and cover reload. When the length changes the
+    /// vector is replaced; otherwise only rows whose value differs are written.
+    fn merge_rows(&mut self, rows: Vec<Row>, most_played: bool) -> bool {
+        if self.most_played == most_played && self.rows == rows {
+            return false;
+        }
+        if self.rows.len() == rows.len() {
+            for (current, incoming) in self.rows.iter_mut().zip(rows) {
+                if *current != incoming {
+                    *current = incoming;
+                }
+            }
+        } else {
+            self.rows = rows;
+        }
+        self.most_played = most_played;
+        true
+    }
+
     fn scoped(&self) -> Vec<&Row> {
         self.rows
             .iter()

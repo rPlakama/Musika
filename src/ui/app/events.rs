@@ -560,35 +560,36 @@ impl AppRoot {
                         return;
                     }
                     search.generation = generation;
-                    search.rows = rows;
-                    search.most_played = most_played;
-                    search.scope_cursors = [0; 4];
-                    search.selection.clear();
-                    self.hovered_row = None;
+                    let rows_changed = search.merge_rows(rows, most_played);
                     search.loading = false;
                     self.search_loading_since = None;
                     if !most_played && !search.editor.text.is_empty() && search.rows.is_empty() {
                         self.search_denied_at = Some(self.clock.now);
                         self.search_denied_query = search.editor.text.clone();
                     }
-                    crate::debug_log!(
-                        "GPUI: search scopes songs={} albums={} artists={} playlists={}",
-                        search.scope_count(0),
-                        search.scope_count(1),
-                        search.scope_count(2),
-                        search.scope_count(3)
-                    );
-                    if search.scope_count(search.scope) == 0 {
-                        for step in 0..4 {
-                            let candidate = (search.scope + step) % 4;
-                            if search.scope_count(candidate) > 0 {
-                                search.scope = candidate;
-                                break;
+                    if rows_changed {
+                        search.scope_cursors = [0; 4];
+                        search.selection.clear();
+                        self.hovered_row = None;
+                        crate::debug_log!(
+                            "GPUI: search scopes songs={} albums={} artists={} playlists={}",
+                            search.scope_count(0),
+                            search.scope_count(1),
+                            search.scope_count(2),
+                            search.scope_count(3)
+                        );
+                        if search.scope_count(search.scope) == 0 {
+                            for step in 0..4 {
+                                let candidate = (search.scope + step) % 4;
+                                if search.scope_count(candidate) > 0 {
+                                    search.scope = candidate;
+                                    break;
+                                }
                             }
                         }
+                        self.follow_search(false);
                     }
                 }
-                self.follow_search(false);
             }
             Event::Error(message) => {
                 self.finish_sync();

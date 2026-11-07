@@ -135,30 +135,12 @@ impl AppRoot {
             Some(header) => (format!("Welcome, {}", header.username), false),
             None => ("Welcome".to_string(), false),
         };
-        let report = match self.header.as_ref() {
-            Some(header) => {
-                let sync = if self.syncing {
-                    "Syncing…".to_string()
-                } else {
-                    header
-                        .last_sync
-                        .as_deref()
-                        .map(last_sync_text)
-                        .unwrap_or_else(|| "—".to_string())
-                };
-                let provider = if header.server_type.is_empty() {
-                    String::new()
-                } else {
-                    let mut name = header.server_type.clone();
-                    if let Some(first) = name.get_mut(0..1) {
-                        first.make_ascii_uppercase();
-                    }
-                    format!(", {name}")
-                };
-                format!("Last Sync: {sync}{provider}")
-            }
-            None => String::new(),
-        };
+        let sync_label = self
+            .header
+            .as_ref()
+            .and_then(|header| header.last_sync.as_deref())
+            .map(last_sync_text)
+            .unwrap_or_else(|| "—".to_string());
         div()
             .flex()
             .items_center()
@@ -190,21 +172,6 @@ impl AppRoot {
                     .gap_3()
                     .child(
                         div()
-                            .flex_1()
-                            .min_w_0()
-                            .overflow_hidden()
-                            .text_size(px(14.0))
-                            .text_color(rgb(if self.syncing {
-                                palette::tertiary()
-                            } else {
-                                palette::on_surface_variant()
-                            }))
-                            .whitespace_nowrap()
-                            .text_ellipsis()
-                            .child(report),
-                    )
-                    .child(
-                        div()
                             .flex_none()
                             .w(px(2.0))
                             .h(px((self.win_h * 0.0648 * 0.16).max(2.0)))
@@ -222,19 +189,33 @@ impl AppRoot {
                                     })),
                             ),
                     )
-                    .children(
-                        self.topbar_actions()
-                            .into_iter()
-                            .map(|action| {
-                                self.topbar_action_chip(
-                                    action,
-                                    None,
-                                    self.status_anchors.clone(),
-                                    cx,
-                                )
-                            })
-                            .collect::<Vec<_>>(),
-                    ),
+                    .children({
+                        let mut children = Vec::new();
+                        for action in self.topbar_actions() {
+                            children.push(self.topbar_action_chip(
+                                action,
+                                None,
+                                self.status_anchors.clone(),
+                                cx,
+                            ));
+                            if action == TopBarAction::Sync {
+                                children.push(
+                                    div()
+                                        .flex_none()
+                                        .text_size(px(14.0))
+                                        .text_color(rgb(if self.syncing {
+                                            palette::tertiary()
+                                        } else {
+                                            palette::on_surface_variant()
+                                        }))
+                                        .whitespace_nowrap()
+                                        .child(sync_label.clone())
+                                        .into_any_element(),
+                                );
+                            }
+                        }
+                        children
+                    }),
             )
             .into_any_element()
     }

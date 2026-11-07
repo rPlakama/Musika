@@ -364,6 +364,8 @@ pub struct PageHeader {
     pub subtitle: String,
     pub meta: String,
     pub cover_url: String,
+    /// Distinct cover URLs for the Playlist/Radio golden-ratio mosaic.
+    pub collage: Vec<String>,
     /// Cover id for display-copy requests.
     pub cover_art: String,
     /// User star count (0..=5) for the one-line page phrase.
@@ -395,6 +397,7 @@ impl PageState {
                 subtitle: String::new(),
                 meta: String::new(),
                 cover_url: String::new(),
+                collage: Vec::new(),
                 cover_art: String::new(),
                 rating: 0,
                 starred: false,

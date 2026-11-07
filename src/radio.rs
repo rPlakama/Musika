@@ -171,7 +171,7 @@ pub async fn page_json(
     }
     for child in &children {
         let cover = crate::covers::url_for_ref(child.cover_art.as_deref(), &covers);
-        if !cover.is_empty() && !collage.iter().any(|url| url == cover) && collage.len() < 3 {
+        if !cover.is_empty() && !collage.iter().any(|url| url == cover) {
             collage.push(cover.to_string());
         }
     }

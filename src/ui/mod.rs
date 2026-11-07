@@ -23,6 +23,7 @@
 
 mod anim;
 mod bridge;
+mod collage;
 mod covers;
 mod command_line;
 mod ipc_command;
@@ -6844,10 +6845,13 @@ impl AppRoot {
         let cover_art_side = (cover_side - page_w * 0.04).max(1.0);
         let cover_bottom = cover_art_side + page_w * 0.02;
         let hero_bucket = self.page_hero_bucket();
-        let cover = self
-            .display_cover(&page.header.cover_art, hero_bucket)
-            .map(CoverSource::Path)
-            .or_else(|| self.hero_cover(&page.header.cover_url, hero_bucket));
+        let cover = if profile.collage {
+            None
+        } else {
+            self.display_cover(&page.header.cover_art, hero_bucket)
+                .map(CoverSource::Path)
+                .or_else(|| self.hero_cover(&page.header.cover_url, hero_bucket))
+        };
         let header_h = cover_bottom.max(240.0);
 
         if page.loading && page.rows.is_empty() {
@@ -6917,7 +6921,11 @@ impl AppRoot {
                     .flex()
                     .justify_center()
                     .overflow_hidden()
-                    .child(art(cover, cover_art_side)),
+                    .child(if profile.collage {
+                        collage_art(&page.header.collage, cover_art_side)
+                    } else {
+                        art(cover, cover_art_side)
+                    }),
             )
             .child(div().w_full().h(px(header_h)))
             .child(
@@ -7714,6 +7722,65 @@ fn cover_source(url: &str) -> Option<CoverSource> {
         return Some(CoverSource::Remote(remote));
     }
     cover_path(url).map(CoverSource::Path)
+}
+
+/// Playlist/Radio mosaic: golden-ratio panes for any number of distinct
+/// covers. The first split mirrors `PlaylistCollage.qml`; deeper splits keep
+/// subdividing the remaining tail, so there is no fixed cover cap.
+fn collage_art(urls: &[String], side: f32) -> gpui::AnyElement {
+    let sources: Vec<Option<CoverSource>> = urls
+        .iter()
+        .filter(|url| !url.trim().is_empty())
+        .map(|url| cover_source(url))
+        .collect();
+
+    let mut mosaic = div()
+        .relative()
+        .size(px(side))
+        .rounded_sm()
+        .overflow_hidden()
+        .bg(rgb(palette::surface_container_high()));
+    if sources.is_empty() {
+        mosaic = mosaic.child(
+            div()
+                .absolute()
+                .inset_0()
+                .flex()
+                .items_center()
+                .justify_center()
+                .text_size(px((side * 0.16).max(28.0)))
+                .text_color(rgb(palette::on_surface_variant()))
+                .child("♪"),
+        );
+        return mosaic.into_any_element();
+    }
+
+    for (pane, source) in collage::panes(side, sources.len())
+        .into_iter()
+        .zip(sources)
+    {
+        let content = match source {
+            Some(source) => img(source.image())
+                .size_full()
+                .object_fit(gpui::ObjectFit::Cover)
+                .into_any_element(),
+            None => div()
+                .size_full()
+                .bg(rgb(palette::surface_container_highest()))
+                .into_any_element(),
+        };
+        mosaic = mosaic.child(
+            div()
+                .absolute()
+                .left(px(pane.x))
+                .top(px(pane.y))
+                .w(px(pane.w))
+                .h(px(pane.h))
+                .overflow_hidden()
+                .child(content),
+        );
+    }
+    mosaic.into_any_element()
 }
 
 fn art_scaled(source: Option<CoverSource>, base: f32, scale: f32) -> gpui::AnyElement {

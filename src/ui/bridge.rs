@@ -1477,6 +1477,7 @@ async fn page_data(
                     if album.duration > 0 { format!(" · {} Minutes", (album.duration + 59) / 60) } else { String::new() }
                 ),
                 cover_url: thumbify(crate::covers::url_for(album.cover_art.as_deref(), &covers)),
+                collage: Vec::new(),
                 cover_art: album.cover_art.unwrap_or_default(),
                 rating: album.rating,
                 starred: album.starred.is_some(),
@@ -1518,6 +1519,7 @@ async fn page_data(
                 subtitle: albums_label(artist.album_count),
                 meta: String::new(),
                 cover_url: thumbify(crate::covers::url_for(artist.cover_art.as_deref(), &covers)),
+                collage: Vec::new(),
                 cover_art: artist.cover_art.unwrap_or_default(),
                 rating: 0,
                 starred: artist.starred.is_some(),
@@ -1559,6 +1561,18 @@ async fn page_data(
                     .and_then(|cover| cover.as_str())
                     .unwrap_or_default()
                     .to_string(),
+                collage: value["collage"]
+                    .as_array()
+                    .map(|collage| {
+                        collage
+                            .iter()
+                            .filter_map(|cover| cover.as_str())
+                            .map(str::trim)
+                            .filter(|cover| !cover.is_empty())
+                            .map(str::to_string)
+                            .collect()
+                    })
+                    .unwrap_or_default(),
                 cover_art: String::new(),
                 rating: 0,
                 starred: false,
@@ -1600,6 +1614,18 @@ async fn page_data(
                     .and_then(|cover| cover.as_str())
                     .unwrap_or_default()
                     .to_string(),
+                collage: value["collage"]
+                    .as_array()
+                    .map(|collage| {
+                        collage
+                            .iter()
+                            .filter_map(|cover| cover.as_str())
+                            .map(str::trim)
+                            .filter(|cover| !cover.is_empty())
+                            .map(str::to_string)
+                            .collect()
+                    })
+                    .unwrap_or_default(),
                 cover_art: String::new(),
                 rating: 0,
                 starred: false,

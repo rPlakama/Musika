@@ -656,7 +656,7 @@ pub async fn page_json(dbs: &Dbs, playlist_id: &str, offline: bool) -> Result<St
             .filter(|id| !id.is_empty())
             .or_else(|| row.album.clone().filter(|album| !album.is_empty()))
             .unwrap_or_else(|| format!("#{position}", position = row.position));
-        if !cover.is_empty() && collage_origins.len() < 3 && !collage_origins.contains(&origin) {
+        if !cover.is_empty() && !collage_origins.contains(&origin) {
             collage_origins.push(origin);
             collage.push(cover.clone());
         }

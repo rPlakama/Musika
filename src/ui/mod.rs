@@ -363,6 +363,8 @@ struct FullscreenAnchors {
     title: Option<(f32, f32)>,
 }
 
+type StatusAnchorSlots = std::rc::Rc<std::cell::RefCell<[Option<(f32, f32)>; 2]>>;
+
 const LIBRARY_ROW_FLAGS: page_profile::RowFlags = page_profile::RowFlags {
     show_cover: true,
     show_subtitle: true,
@@ -429,6 +431,9 @@ struct AppRoot {
     fullscreen_anchors: std::rc::Rc<std::cell::RefCell<FullscreenAnchors>>,
     fullscreen_album: Option<(String, bool, u8)>,
     fullscreen_album_requested: Option<String>,
+    status_anchors: StatusAnchorSlots,
+    status_extents: StatusAnchorSlots,
+    alt_target_size: Option<(f32, f32)>,
     lyrics: Option<LyricsState>,
     lyrics_requested: Option<String>,
     quit_armed_at: Option<f64>,
@@ -555,6 +560,9 @@ impl AppRoot {
             )),
             fullscreen_album: None,
             fullscreen_album_requested: None,
+            status_anchors: std::rc::Rc::new(std::cell::RefCell::new([None, None])),
+            status_extents: std::rc::Rc::new(std::cell::RefCell::new([None, None])),
+            alt_target_size: None,
             lyrics: None,
             lyrics_requested: None,
             quit_armed_at: None,
@@ -1632,7 +1640,8 @@ impl AppRoot {
         }
         self.alt_menu = Some(menu);
         self.alt_target = None;
-        self.alt_anchor = Some(self.status_anchor());
+        self.alt_anchor = Some(self.status_anchor(1));
+        self.alt_target_size = Some(self.status_extent(1));
         self.alt_spawn.target(
             1.0,
             anim::EMPHASIZED_MS,
@@ -2342,10 +2351,19 @@ impl AppRoot {
         )
     }
 
-    fn status_anchor(&self) -> (f32, f32) {
-        (
+    fn status_extent(&self, scope: usize) -> (f32, f32) {
+        self.status_extents.borrow()[scope.min(1)].unwrap_or((24.0, 24.0))
+    }
+
+    fn status_anchor(&self, scope: usize) -> (f32, f32) {
+        let stored = self.status_anchors.borrow()[scope.min(1)];
+        let (x, y) = stored.unwrap_or((
             (self.win_w - 42.0).max(30.0),
             (self.win_h * 0.0648 * 0.5).max(30.0),
+        ));
+        (
+            x.clamp(30.0, (self.win_w - 30.0).max(30.0)),
+            y.clamp(30.0, (self.win_h - 30.0).max(30.0)),
         )
     }
 
@@ -2410,7 +2428,7 @@ impl AppRoot {
                     ids: Vec::new(),
                     selection: false,
                 },
-                self.status_anchor(),
+                self.status_anchor(focus),
             ));
         }
         if let Some(search) = self.search.as_ref().filter(|_| self.search_open) {
@@ -2508,6 +2526,7 @@ impl AppRoot {
 
     fn alt_arm(&mut self) {
         self.clock.tick();
+        self.alt_target_size = None;
         if self.login.is_some() || self.line_search.open {
             return;
         }
@@ -2516,6 +2535,7 @@ impl AppRoot {
         };
         if self.status_focus.is_some() {
             self.alt = AltGesture::new();
+            self.alt_target_size = Some(self.status_extent(self.status_focus.unwrap_or(1)));
         }
         if !self.alt.arm(&menu) {
             return;
@@ -2555,6 +2575,7 @@ impl AppRoot {
             }
             self.alt.cancel();
         }
+        self.alt_target_size = None;
         self.alt_spawn.target(0.0, anim::EMPHASIZED_MS, anim::Curve::Accelerate, &self.clock);
     }
 
@@ -3725,6 +3746,7 @@ impl AppRoot {
             self.alt.cancel();
             self.alt_menu = None;
             self.alt_target = None;
+            self.alt_target_size = None;
             self.alt_spawn.target(0.0, anim::EMPHASIZED_MS, anim::Curve::Accelerate, &self.clock);
             cx.notify();
             return;
@@ -3885,6 +3907,7 @@ impl AppRoot {
             self.alt.cancel();
             self.alt_menu = None;
             self.alt_target = None;
+            self.alt_target_size = None;
             self.alt_spawn.target(0.0, anim::EMPHASIZED_MS, anim::Curve::Accelerate, &self.clock);
             cx.notify();
             return;
@@ -4084,6 +4107,10 @@ impl AppRoot {
             }
             None => String::new(),
         };
+        let sync_anchor = self.status_anchors.clone();
+        let sync_extent = self.status_extents.clone();
+        let wipe_anchor = self.status_anchors.clone();
+        let wipe_extent = self.status_extents.clone();
         div()
             .relative()
             .w_full()
@@ -4121,7 +4148,6 @@ impl AppRoot {
                     )
                     .child(
                         div()
-                            .id("status-sync")
                             .flex()
                             .items_center()
                             .justify_center()
@@ -4132,17 +4158,31 @@ impl AppRoot {
                             } else {
                                 palette::surface_container_low()
                             }))
-                            .p(px(3.0))
-                            .cursor_pointer()
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.activate_status(0);
-                                cx.notify();
-                            }))
-                            .child(icon("reload-ui-2-svgrepo-com.svg", 18.0, palette::on_surface())),
+                            .on_children_prepainted(move |bounds, _, _| {
+                                if let Some(first) = bounds.first() {
+                                    let x = f32::from(first.origin.x)
+                                        + f32::from(first.size.width) * 0.5;
+                                    let y = f32::from(first.origin.y)
+                                        + f32::from(first.size.height) * 0.5;
+                                    sync_anchor.borrow_mut()[0] = Some((x, y));
+                                    sync_extent.borrow_mut()[0] =
+                                        Some((f32::from(first.size.width), f32::from(first.size.height)));
+                                }
+                            })
+                            .child(
+                                div()
+                                    .id("status-sync")
+                                    .p(px(3.0))
+                                    .cursor_pointer()
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        this.activate_status(0);
+                                        cx.notify();
+                                    }))
+                                    .child(icon("reload-ui-2-svgrepo-com.svg", 18.0, palette::on_surface())),
+                            ),
                     )
                     .child(
                         div()
-                            .id("status-wipe")
                             .flex()
                             .items_center()
                             .justify_center()
@@ -4153,13 +4193,28 @@ impl AppRoot {
                             } else {
                                 palette::surface_container_low()
                             }))
-                            .p(px(3.0))
-                            .cursor_pointer()
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.activate_status(1);
-                                cx.notify();
-                            }))
-                            .child(icon("delete-outline.svg", 18.0, palette::on_surface())),
+                            .on_children_prepainted(move |bounds, _, _| {
+                                if let Some(first) = bounds.first() {
+                                    let x = f32::from(first.origin.x)
+                                        + f32::from(first.size.width) * 0.5;
+                                    let y = f32::from(first.origin.y)
+                                        + f32::from(first.size.height) * 0.5;
+                                    wipe_anchor.borrow_mut()[1] = Some((x, y));
+                                    wipe_extent.borrow_mut()[1] =
+                                        Some((f32::from(first.size.width), f32::from(first.size.height)));
+                                }
+                            })
+                            .child(
+                                div()
+                                    .id("status-wipe")
+                                    .p(px(3.0))
+                                    .cursor_pointer()
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        this.activate_status(1);
+                                        cx.notify();
+                                    }))
+                                    .child(icon("delete-outline.svg", 18.0, palette::on_surface())),
+                            ),
                     ),
             )
             .child(
@@ -4422,12 +4477,61 @@ impl AppRoot {
         let option_scale = (0.816
             * ((self.win_w - 20.0) / 1280.0).min((page_h - 20.0) / 720.0))
             .clamp(0.5, 0.816);
-        let box_side = page_h * 0.07 * option_scale;
+        let margin_box = page_h * 0.07 * option_scale;
         let spawned = 0.72 + 0.28 * progress;
-        let box_side = box_side * spawned;
-        let frame_side = (box_side * 8.0).min(self.win_w - 20.0).min(page_h - 20.0);
-        let board_x = (ax - frame_side * 0.5).clamp(10.0, (self.win_w - frame_side - 10.0).max(10.0));
-        let board_y = (ay - frame_side * 0.5).clamp(10.0, (page_h - frame_side + 10.0).max(10.0));
+        let box_side = margin_box * spawned;
+        // The status bar's targets are compact buttons: size the frame from
+        // the captured button, close the gaps, and let it sit centred on the
+        // highlighted control instead of clamping a huge row-sized board to
+        // the window edge.
+        let status_board = self.alt_target_size.is_some();
+        let target_extent = self
+            .alt_target_size
+            .map(|(w, h)| w.max(h))
+            .unwrap_or(0.0);
+        let base_margin = if status_board {
+            box_side * 0.12
+        } else {
+            page_h * 0.02
+        };
+        let margin = base_margin
+            .max(box_side * 0.25)
+            .max((margin_box.max(target_extent) - target_extent) * 0.5 + base_margin);
+        let frame_side = if status_board {
+            (target_extent + 2.0 * margin + 2.0 * box_side).min(box_side * 8.0)
+        } else {
+            box_side * 8.0
+        }
+        .min(self.win_w - 20.0)
+        .min(page_h - 20.0);
+        // Status targets are compact and sit in the superior bar; keep the
+        // neutral mark on the highlighted control's centre instead of sliding
+        // the board back into the window. Shrink the cluster just enough that
+        // every tile still clears the window edge.
+        let anchor_fit = if status_board {
+            let avail_x = ax.min(self.win_w - ax).max(1.0);
+            let avail_y = ay.min(page_h - ay).max(1.0);
+            (2.0 * avail_x / frame_side)
+                .min(2.0 * avail_y / frame_side)
+                .clamp(0.35, 1.0)
+        } else {
+            1.0
+        };
+        let frame_side = frame_side * anchor_fit;
+        let box_side = box_side * anchor_fit;
+        let wall_gap = 10.0;
+        let board_x = if status_board {
+            ax - frame_side * 0.5
+        } else {
+            (ax - frame_side * 0.5)
+                .clamp(wall_gap, (self.win_w - frame_side - wall_gap).max(wall_gap))
+        };
+        let board_y = if status_board {
+            ay - frame_side * 0.5
+        } else {
+            (ay - frame_side * 0.5)
+                .clamp(wall_gap, (page_h - frame_side + wall_gap).max(wall_gap))
+        };
         let mut board = div()
             .absolute()
             .left(px(board_x))

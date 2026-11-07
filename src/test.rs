@@ -1919,6 +1919,41 @@ mod http_client {
         assert_eq!(std::fs::read(&dest).expect("read back"), body);
         let _ = std::fs::remove_dir_all(dir);
     }
+
+    #[tokio::test]
+    async fn create_playlist_posts_repeated_song_ids() {
+        use std::io::{Read, Write};
+
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind loopback");
+        let addr = listener.local_addr().expect("local addr");
+        let server = std::thread::spawn(move || {
+            let (mut socket, _) = listener.accept().expect("accept");
+            let mut request = [0u8; 4096];
+            let n = socket.read(&mut request).expect("request");
+            let request = String::from_utf8_lossy(&request[..n]).to_string();
+            let body = r#"{"subsonic-response":{"status":"ok","version":"1.16.1"}}"#;
+            let head = format!(
+                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nContent-Type: application/json\r\nConnection: close\r\n\r\n",
+                body.len()
+            );
+            socket.write_all(head.as_bytes()).expect("head");
+            socket.write_all(body.as_bytes()).expect("body");
+            socket.flush().expect("flush");
+            request
+        });
+
+        let client = SubsonicClient::new(&format!("http://{addr}"), "alice", "secret");
+        client
+            .create_playlist("Saved Radio", &["s1".into(), "s2".into()])
+            .await
+            .expect("create playlist");
+        let request = server.join().expect("server thread");
+        assert!(request.contains("POST") || request.contains("GET"));
+        assert!(request.contains("/rest/createPlaylist.view"));
+        assert!(request.contains("name=Saved+Radio") || request.contains("name=Saved%20Radio"));
+        assert!(request.contains("songId=s1"));
+        assert!(request.contains("songId=s2"));
+    }
 }
 
 mod index {
@@ -3628,6 +3663,15 @@ mod playlists {
         };
         assert_eq!(matcher.resolve(&entry, dir), Some(0));
 
+        // App-owned saved-radio entries resolve by song id.
+        let saved = M3uEntry {
+            path: "musika:song:s2".into(),
+            artist: None,
+            title: None,
+            duration: None,
+        };
+        assert_eq!(matcher.resolve(&saved, dir), Some(1));
+
         // Unresolved stays unresolved.
         let entry = M3uEntry {
             path: "missing.flac".into(),
@@ -3636,6 +3680,82 @@ mod playlists {
             duration: None,
         };
         assert_eq!(matcher.resolve(&entry, dir), None);
+    }
+
+    #[tokio::test]
+    async fn saved_radio_writes_a_local_m3u_and_resolves_ids() {
+        let library = memory_pool().await;
+        sqlx::migrate!("./migrations_library")
+            .run(&library)
+            .await
+            .unwrap();
+        sqlx::query(
+            "INSERT INTO songs (id, title, artist, album, duration, path) VALUES
+             ('s1', 'First', 'Artist', 'Album', 100, 'Music/first.flac'),
+             ('s2', 'Second', 'Artist', 'Album', 200, 'Music/second.flac')",
+        )
+        .execute(&library)
+        .await
+        .unwrap();
+        let playlist = memory_pool().await;
+        sqlx::migrate!("./migrations_playlist")
+            .run(&playlist)
+            .await
+            .unwrap();
+        let dbs = test_dbs(&library, &playlist);
+        let rows = vec![
+            crate::library::SongRow {
+                id: "s1".into(),
+                title: "First".into(),
+                artist: Some("Artist".into()),
+                album: Some("Album".into()),
+                album_id: None,
+                track: None,
+                duration: Some(100),
+                suffix: None,
+                cover_art: None,
+                starred: None,
+            },
+            crate::library::SongRow {
+                id: "s2".into(),
+                title: "Second".into(),
+                artist: Some("Artist".into()),
+                album: Some("Album".into()),
+                album_id: None,
+                track: None,
+                duration: Some(200),
+                suffix: None,
+                cover_art: None,
+                starred: None,
+            },
+            crate::library::SongRow {
+                id: "missing".into(),
+                title: "Server Only".into(),
+                artist: Some("Artist".into()),
+                album: Some("Album".into()),
+                album_id: None,
+                track: None,
+                duration: Some(300),
+                suffix: None,
+                cover_art: None,
+                starred: None,
+            },
+        ];
+        let dir = std::env::temp_dir().join(format!("musika-radio-save-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = crate::radio::write_radio_m3u(&dbs, &dir, "Saved Radio", &rows)
+            .await
+            .unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(text.contains("musika:song:missing"));
+        let ids: Vec<Option<String>> =
+            sqlx::query_scalar("SELECT song_id FROM playlist_song ORDER BY position")
+                .fetch_all(&playlist)
+                .await
+                .unwrap();
+        assert_eq!(ids, vec![Some("s1".into()), Some("s2".into()), None]);
+        let _ = std::fs::remove_dir_all(dir);
     }
 }
 

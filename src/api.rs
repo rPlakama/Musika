@@ -413,6 +413,18 @@ impl SubsonicClient {
         self.get_key("getPlaylist", &params, "playlist").await
     }
 
+    /// `createPlaylist` — posts a new server playlist with the given songs in
+    /// order. The OpenSubsonic response may omit the playlist object; callers
+    /// refresh the local list afterwards.
+    pub async fn create_playlist(&self, name: &str, song_ids: &[String]) -> Result<()> {
+        if song_ids.is_empty() {
+            anyhow::bail!("a playlist needs at least one song");
+        }
+        let mut params: Vec<(&str, String)> = vec![("name", name.to_string())];
+        push_all(&mut params, "songId", song_ids);
+        self.call_ok("createPlaylist", &params).await
+    }
+
     /// `getArtist` — artist details including albums.
     pub async fn get_artist(&self, id: &str) -> Result<ArtistWithAlbumsID3> {
         let params = query(&[("id", Some(id.to_string()))]);

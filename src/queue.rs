@@ -229,7 +229,7 @@ pub async fn album_shuffle_json(
     tracks_json(dbs, songs).await
 }
 
-fn shuffle_songs(songs: &mut [crate::library::SongRow], seed: u128) {
+pub(crate) fn shuffle_songs(songs: &mut [crate::library::SongRow], seed: u128) {
     let mut rng = SplitMix64((seed as u64) ^ ((seed >> 64) as u64));
     for i in (1..songs.len()).rev() {
         songs.swap(i, rng.below(i + 1));

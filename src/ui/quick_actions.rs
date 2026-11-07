@@ -56,6 +56,9 @@ pub enum QuickVerb {
     PlayPlaylist,
     ShuffleArtist,
     ShuffleAlbum,
+    SaveRadio,
+    ShuffleRadio,
+    DownloadRadio,
     WipeLibrary,
     WipeIndexes,
     WipeCovers,
@@ -78,6 +81,9 @@ impl QuickVerb {
             QuickVerb::PlayPlaylist => "Play Playlist",
             QuickVerb::ShuffleArtist => "Shuffle Artist",
             QuickVerb::ShuffleAlbum => "Shuffle Album",
+            QuickVerb::SaveRadio => "Save Radio",
+            QuickVerb::ShuffleRadio => "Shuffle",
+            QuickVerb::DownloadRadio => "Download Radio",
             QuickVerb::WipeLibrary => "Wipe Library",
             QuickVerb::WipeIndexes => "Wipe Search Index",
             QuickVerb::WipeCovers => "Wipe Covers",
@@ -97,7 +103,9 @@ impl QuickVerb {
             QuickVerb::Download { on: true } => "outline-download.svg",
             QuickVerb::Download { on: false } => "baseline-download.svg",
             QuickVerb::PlayPlaylist => "play-1001-svgrepo-com.svg",
-            QuickVerb::ShuffleArtist | QuickVerb::ShuffleAlbum => "outline-shuffle.svg",
+            QuickVerb::ShuffleArtist | QuickVerb::ShuffleAlbum | QuickVerb::ShuffleRadio => "outline-shuffle.svg",
+            QuickVerb::SaveRadio => "save-outline.svg",
+            QuickVerb::DownloadRadio => "outline-download.svg",
             QuickVerb::WipeLibrary | QuickVerb::WipeIndexes | QuickVerb::WipeCovers => "delete-outline.svg",
         }
     }
@@ -346,6 +354,17 @@ impl QuickMenu {
             )),
             west: Some(single_slot(QuickVerb::ShuffleArtist)),
             east: Some(single_slot(QuickVerb::Download { on: !cached })),
+        }
+    }
+
+    /// Generated Radio page Tool menu. Radios have no star/rating; all four
+    /// quadrants carry the radio container actions.
+    pub fn radio_tool() -> Self {
+        Self {
+            north: Some(single_slot(QuickVerb::AddToQueue)),
+            south: Some(single_slot(QuickVerb::SaveRadio)),
+            west: Some(single_slot(QuickVerb::ShuffleRadio)),
+            east: Some(single_slot(QuickVerb::DownloadRadio)),
         }
     }
 
@@ -892,6 +911,26 @@ mod tests {
     }
 
     #[test]
+    fn radio_tool_has_all_four_container_actions() {
+        let menu = QuickMenu::radio_tool();
+        for direction in Direction::ALL {
+            assert!(!menu.is_open(direction));
+        }
+        let north = slot(&menu, Direction::North);
+        assert_eq!(north.actions, vec![QuickVerb::AddToQueue]);
+        let south = slot(&menu, Direction::South);
+        assert_eq!(south.actions, vec![QuickVerb::SaveRadio]);
+        assert_eq!(south.label, "Save Radio");
+        assert_eq!(south.icon, "save-outline.svg");
+        let west = slot(&menu, Direction::West);
+        assert_eq!(west.actions, vec![QuickVerb::ShuffleRadio]);
+        let east = slot(&menu, Direction::East);
+        assert_eq!(east.actions, vec![QuickVerb::DownloadRadio]);
+        assert_eq!(east.label, "Download Radio");
+        assert_eq!(east.icon, "outline-download.svg");
+    }
+
+    #[test]
     fn playlist_quadrants_leave_jumps_open() {
         let menu = QuickMenu::playlist();
         assert!(menu.is_open(Direction::West));
@@ -1015,6 +1054,21 @@ mod tests {
                 QuickVerb::PlayPlaylist,
                 "Play Playlist",
                 "play-1001-svgrepo-com.svg",
+            ),
+            (
+                QuickVerb::SaveRadio,
+                "Save Radio",
+                "save-outline.svg",
+            ),
+            (
+                QuickVerb::ShuffleRadio,
+                "Shuffle",
+                "outline-shuffle.svg",
+            ),
+            (
+                QuickVerb::DownloadRadio,
+                "Download Radio",
+                "outline-download.svg",
             ),
         ];
         for (verb, label, icon) in cases {

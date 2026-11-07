@@ -257,6 +257,8 @@ struct AltTarget {
     album_id: String,
     song_id: String,
     playlist_id: String,
+    radio_seed_kind: String,
+    radio_seed_id: String,
     ids: Vec<String>,
     selection: bool,
 }
@@ -465,7 +467,8 @@ fn topbar_actions_for(mode: SuperiorMode, page: Option<&PageBarState>) -> Vec<To
         SuperiorMode::Home => vec![TopBarAction::Sync, TopBarAction::Wipe],
         SuperiorMode::Album => page.map(|page| page_actions(page, false)).unwrap_or_default(),
         SuperiorMode::Artist => page.map(|page| page_actions(page, true)).unwrap_or_default(),
-        SuperiorMode::Playlist | SuperiorMode::Radio => Vec::new(),
+        SuperiorMode::Playlist => Vec::new(),
+        SuperiorMode::Radio => vec![TopBarAction::Tool],
     }
 }
 
@@ -501,6 +504,8 @@ struct PageBarState {
     starred: bool,
     cached: bool,
     downloading: bool,
+    /// Radio seed kind (`album`/`song`) for the Tool radio actions.
+    radio_seed_kind: Option<String>,
 }
 
 const LIBRARY_ROW_FLAGS: page_profile::RowFlags = page_profile::RowFlags {
@@ -989,6 +994,27 @@ impl AppRoot {
                     self.bridge.load_page(descriptor);
                 }
                 self.push_toast("Library synced".to_string(), ToastKind::Notice, None);
+            }
+            Event::RadioSaved {
+                name,
+                remote_error,
+            } => {
+                if let Some(error) = remote_error {
+                    self.push_toast(
+                        format!("Saved “{name}” locally; server save failed: {error}"),
+                        ToastKind::Error,
+                        None,
+                    );
+                } else {
+                    self.push_toast(
+                        format!("Saved radio “{name}”"),
+                        ToastKind::Notice,
+                        None,
+                    );
+                }
+                if self.page.is_none() && self.view.scope == Scope::Playlists {
+                    self.reload();
+                }
             }
             Event::Wiped { scope } => {
                 self.marks.requested = None;
@@ -2012,14 +2038,26 @@ impl AppRoot {
     }
 
     fn page_alt_menu(&self, page: &PageBarState) -> Option<(QuickMenu, AltTarget)> {
-        let (menu, kind) = match page.kind {
+        let (menu, kind, radio_seed_kind, radio_seed_id) = match page.kind {
             PageKind::Album => (
                 QuickMenu::album_tool(page.cached, page.starred, page.rating),
                 RowKind::Album,
+                String::new(),
+                String::new(),
             ),
             PageKind::Artist => (
                 QuickMenu::artist_tool(page.cached, page.starred, page.rating),
                 RowKind::Artist,
+                String::new(),
+                String::new(),
+            ),
+            PageKind::Radio => (
+                QuickMenu::radio_tool(),
+                RowKind::Song,
+                page.radio_seed_kind
+                    .clone()
+                    .unwrap_or_else(|| "album".to_string()),
+                page.id.clone(),
             ),
             _ => return None,
         };
@@ -2035,6 +2073,8 @@ impl AppRoot {
                 },
                 song_id: String::new(),
                 playlist_id: String::new(),
+                radio_seed_kind,
+                radio_seed_id,
                 ids: vec![page.id.clone()],
                 selection: false,
             },
@@ -2671,6 +2711,8 @@ impl AppRoot {
             } else {
                 String::new()
             },
+            radio_seed_kind: String::new(),
+            radio_seed_id: String::new(),
             ids: vec![row.id.clone()],
             selection: false,
         }
@@ -2758,6 +2800,8 @@ impl AppRoot {
             album_id: rows[cursor.min(rows.len() - 1)].album_id.clone(),
             song_id: rows[cursor.min(rows.len() - 1)].song_id.clone(),
             playlist_id: String::new(),
+            radio_seed_kind: String::new(),
+            radio_seed_id: String::new(),
             ids,
             selection: true,
         };
@@ -2815,6 +2859,7 @@ impl AppRoot {
             starred: page.header.starred,
             cached: page.container_cached,
             downloading: page.container_downloading,
+            radio_seed_kind: page.descriptor.radio_seed_kind.clone(),
         })
     }
 
@@ -2864,6 +2909,8 @@ impl AppRoot {
                     album_id: album_id.clone(),
                     song_id: String::new(),
                     playlist_id: String::new(),
+                    radio_seed_kind: String::new(),
+                    radio_seed_id: String::new(),
                     ids: vec![album_id],
                     selection: false,
                 };
@@ -2880,6 +2927,8 @@ impl AppRoot {
                 album_id: track.album_id.clone(),
                 song_id: track.id.clone(),
                 playlist_id: String::new(),
+                radio_seed_kind: String::new(),
+                radio_seed_id: String::new(),
                 ids: vec![track.id.clone()],
                 selection: false,
             };
@@ -2904,6 +2953,8 @@ impl AppRoot {
                         album_id: String::new(),
                         song_id: String::new(),
                         playlist_id: String::new(),
+                        radio_seed_kind: String::new(),
+                        radio_seed_id: String::new(),
                         ids: Vec::new(),
                         selection: false,
                     },
@@ -2955,6 +3006,8 @@ impl AppRoot {
                 album_id: track.album_id.clone(),
                 song_id: track.id.clone(),
                 playlist_id: String::new(),
+                radio_seed_kind: String::new(),
+                radio_seed_id: String::new(),
                 ids: vec![track.id.clone()],
                 selection: false,
             };
@@ -3079,6 +3132,27 @@ impl AppRoot {
             _ => {}
         }
         let Some(target) = self.alt_target.clone() else { return };
+        if !target.radio_seed_id.is_empty() {
+            let seed_kind = target.radio_seed_kind.clone();
+            let seed_id = target.radio_seed_id.clone();
+            match verb {
+                QuickVerb::AddToQueue => self.bridge.queue_add_radio(seed_kind, seed_id),
+                QuickVerb::SaveRadio => {
+                    let title = self
+                        .page
+                        .as_ref()
+                        .map(|page| page.header.title.trim().to_string())
+                        .filter(|title| !title.is_empty())
+                        .unwrap_or_else(|| "Radio".to_string());
+                    let name = format!("{title} · Radio");
+                    self.bridge.save_radio(seed_kind, seed_id, name);
+                }
+                QuickVerb::ShuffleRadio => self.bridge.shuffle_radio(seed_kind, seed_id),
+                QuickVerb::DownloadRadio => self.bridge.download_radio(seed_kind, seed_id),
+                _ => {}
+            }
+            return;
+        }
         if target.selection {
             match verb {
                 QuickVerb::Favorite { on } => {
@@ -3154,7 +3228,12 @@ impl AppRoot {
                         .quick_download(target.queue_kind().to_string(), target.id.clone(), on);
                 }
             }
-            QuickVerb::WipeLibrary | QuickVerb::WipeIndexes | QuickVerb::WipeCovers => {}
+            QuickVerb::SaveRadio
+            | QuickVerb::ShuffleRadio
+            | QuickVerb::DownloadRadio
+            | QuickVerb::WipeLibrary
+            | QuickVerb::WipeIndexes
+            | QuickVerb::WipeCovers => {}
         }
     }
 
@@ -5324,6 +5403,14 @@ impl AppRoot {
                         cx,
                     ));
                 }
+            }
+            SuperiorMode::Radio => {
+                row = row.child(self.topbar_action_chip(
+                    TopBarAction::Tool,
+                    Some(&page),
+                    self.status_anchors.clone(),
+                    cx,
+                ));
             }
             _ => {}
         }
@@ -8045,6 +8132,7 @@ mod contextual_bar_tests {
             starred,
             cached,
             downloading,
+            radio_seed_kind: None,
         }
     }
 
@@ -8056,7 +8144,10 @@ mod contextual_bar_tests {
             vec![Sync, Wipe]
         );
         assert!(topbar_actions_for(SuperiorMode::Playlist, None).is_empty());
-        assert!(topbar_actions_for(SuperiorMode::Radio, None).is_empty());
+        assert_eq!(
+            topbar_actions_for(SuperiorMode::Radio, None),
+            vec![Tool]
+        );
 
         let neutral = page_state(PageKind::Album, false, false, false);
         assert_eq!(

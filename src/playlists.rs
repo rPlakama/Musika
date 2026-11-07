@@ -199,12 +199,15 @@ pub struct Matcher {
     by_path: HashMap<String, usize>,
     by_base: HashMap<String, usize>,
     by_artist_title: HashMap<String, usize>,
+    /// App-owned M3U entries written by a saved radio use `musika:song:<id>`.
+    by_id: HashMap<String, usize>,
 }
 
 impl Matcher {
     pub fn new(songs: &[SongRef]) -> Self {
         let mut matcher = Matcher::default();
         for (i, song) in songs.iter().enumerate() {
+            matcher.by_id.entry(song.id.clone()).or_insert(i);
             if let Some(path) = song.path.as_deref() {
                 matcher.by_path.entry(norm(path)).or_insert(i);
                 matcher.by_base.entry(norm(basename(path))).or_insert(i);
@@ -222,6 +225,9 @@ impl Matcher {
     /// Resolves an entry; a relative path is joined against `dir` (the m3u's
     /// own directory).
     pub fn resolve(&self, entry: &M3uEntry, dir: &Path) -> Option<usize> {
+        if let Some(id) = entry.path.strip_prefix("musika:song:") {
+            return self.by_id.get(id).copied();
+        }
         let path = if entry.path.starts_with('/') {
             entry.path.clone()
         } else {
@@ -568,8 +574,8 @@ pub async fn name(dbs: &Dbs, playlist_id: &str) -> Result<Option<String>> {
     )
 }
 
-/// The playlist page payload: identity, song rows and the first three distinct
-/// song covers for the header collage. Rows keep playlist order and duplicates.
+/// The playlist page payload: identity, song rows and every distinct song cover
+/// for the header collage. Rows keep playlist order and duplicates.
 pub async fn page_json(dbs: &Dbs, playlist_id: &str, offline: bool) -> Result<String> {
     #[derive(sqlx::FromRow)]
     struct PlaylistRow {

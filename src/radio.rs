@@ -69,6 +69,33 @@ fn song_rows(children: &[crate::api::Child]) -> Vec<SongRow> {
         .collect()
 }
 
+/// Result of the Tool > Save Radio action. Local save is authoritative; the
+/// remote playlist is best-effort and reports its failure without losing the
+/// local copy.
+#[derive(Debug, Clone)]
+pub struct SavedRadio {
+    pub name: String,
+    pub path: std::path::PathBuf,
+    pub remote_error: Option<String>,
+}
+
+/// The generated rows for a radio seed: the cached page order when available,
+/// otherwise a fresh `getSimilarSongs` expansion recorded for playback.
+pub async fn radio_rows(
+    dbs: &crate::db::Dbs,
+    seed_kind: &str,
+    seed_id: &str,
+) -> Result<Vec<SongRow>> {
+    if let Some(rows) = cached_rows(seed_kind, seed_id) {
+        return Ok(rows);
+    }
+    let seed = resolve_seed(dbs, seed_kind, seed_id).await?;
+    let children = similar_songs(dbs, &seed).await?;
+    let rows = song_rows(&children);
+    remember_rows(seed_kind, seed_id, &rows);
+    Ok(rows)
+}
+
 struct Seed {
     song_id: String,
     title: String,
@@ -210,18 +237,168 @@ pub async fn tracks_json(
     seed_id: &str,
     start: i64,
 ) -> Result<(String, i64)> {
-    let songs = match cached_rows(seed_kind, seed_id) {
-        Some(rows) => rows,
-        None => {
-            let seed = resolve_seed(dbs, seed_kind, seed_id).await?;
-            let children = similar_songs(dbs, &seed).await?;
-            let rows = song_rows(&children);
-            remember_rows(seed_kind, seed_id, &rows);
-            rows
-        }
-    };
+    let songs = radio_rows(dbs, seed_kind, seed_id).await?;
     let start = start.clamp(0, songs.len().saturating_sub(1) as i64);
     Ok((crate::queue::tracks_json(dbs, songs).await?, start))
+}
+
+/// Shuffled radio queue: the page's generated rows, in a fresh Fisher–Yates
+/// order. Used by the Radio Tool board's Shuffle action.
+pub async fn shuffled_tracks_json(
+    dbs: &crate::db::Dbs,
+    seed_kind: &str,
+    seed_id: &str,
+    offline: bool,
+) -> Result<String> {
+    let mut songs = radio_rows(dbs, seed_kind, seed_id).await?;
+    if songs.is_empty() {
+        return Err(anyhow!("this radio has no songs to shuffle"));
+    }
+    crate::queue::shuffle_songs(&mut songs, crate::consts::now_nanos());
+    crate::offline::retain_songs(dbs, offline, &mut songs).await?;
+    crate::queue::tracks_json(dbs, songs).await
+}
+
+/// Saves the generated radio twice: an app-owned M3U in the local playlist
+/// folder and a server playlist through `createPlaylist`.
+///
+/// The local file is written and scanned first. A missing client or a failing
+/// `createPlaylist` is returned in [`SavedRadio::remote_error`] so the UI can
+/// say "saved locally, server failed" without discarding the local copy.
+pub async fn save_radio(
+    dbs: &crate::db::Dbs,
+    seed_kind: &str,
+    seed_id: &str,
+    name: &str,
+) -> Result<SavedRadio> {
+    let rows = radio_rows(dbs, seed_kind, seed_id).await?;
+    if rows.is_empty() {
+        return Err(anyhow!("this radio has no songs to save"));
+    }
+    let name = if name.trim().is_empty() {
+        "Radio".to_string()
+    } else {
+        name.trim().to_string()
+    };
+
+    let dir = crate::playlists::m3u_dir()?;
+    let path = write_radio_m3u(dbs, &dir, &name, &rows).await?;
+
+    let ids: Vec<String> = rows
+        .iter()
+        .map(|row| row.id.clone())
+        .filter(|id| !id.is_empty())
+        .collect();
+    let remote_error = match crate::session::client(dbs).await {
+        Ok(client) => match client.create_playlist(&name, &ids).await {
+            Ok(()) => {
+                // Keep the local list in step with the playlist that just
+                // appeared on the server.
+                if let Err(err) = crate::playlists::refresh_subsonic(dbs, &client).await {
+                    eprintln!("radio: saved playlist list refresh failed: {err:#}");
+                }
+                None
+            }
+            Err(err) => Some(format!("{err:#}")),
+        },
+        Err(err) => Some(format!("{err:#}")),
+    };
+    Ok(SavedRadio {
+        name,
+        path,
+        remote_error,
+    })
+}
+
+/// Writes one saved-radio M3U and refreshes the local playlist index. Split
+/// from [`save_radio`] so the file/scan half is testable without a server.
+pub(crate) async fn write_radio_m3u(
+    dbs: &crate::db::Dbs,
+    dir: &std::path::Path,
+    name: &str,
+    rows: &[SongRow],
+) -> Result<std::path::PathBuf> {
+    std::fs::create_dir_all(dir)?;
+    let paths = song_paths(
+        dbs,
+        &rows.iter().map(|row| row.id.clone()).collect::<Vec<_>>(),
+    )
+    .await?;
+    let path = dir.join(m3u_filename(dir, name));
+    std::fs::write(&path, m3u_text(rows, &paths))?;
+    crate::playlists::scan_dir(dbs, dir).await?;
+    Ok(path)
+}
+
+/// Library paths for the saved M3U. Server-only tracks fall back to the
+/// app-owned `musika:song:<id>` entry that [`crate::playlists::Matcher`]
+/// resolves back to `song_id` when the track is in the local library.
+async fn song_paths(
+    dbs: &crate::db::Dbs,
+    ids: &[String],
+) -> Result<HashMap<String, String>> {
+    if ids.is_empty() {
+        return Ok(HashMap::new());
+    }
+    let mut builder = sqlx::QueryBuilder::new("SELECT id, path FROM songs WHERE id IN (");
+    crate::cache::push_in_list(&mut builder, ids);
+    let rows: Vec<(String, Option<String>)> = builder.build_query_as().fetch_all(&dbs.library).await?;
+    Ok(rows
+        .into_iter()
+        .filter_map(|(id, path)| path.filter(|path| !path.is_empty()).map(|path| (id, path)))
+        .collect())
+}
+
+fn m3u_line(value: &str) -> String {
+    value.replace(['\r', '\n'], " ").trim().to_string()
+}
+
+fn m3u_text(rows: &[SongRow], paths: &HashMap<String, String>) -> String {
+    let mut text = String::from("#EXTM3U\n");
+    for row in rows {
+        let artist = row.artist.as_deref().unwrap_or_default();
+        let display = if artist.is_empty() {
+            row.title.clone()
+        } else {
+            format!("{artist} - {}", row.title)
+        };
+        text.push_str(&format!(
+            "#EXTINF:{},{}\n",
+            row.duration.unwrap_or(0),
+            m3u_line(&display)
+        ));
+        let path = paths
+            .get(&row.id)
+            .cloned()
+            .unwrap_or_else(|| format!("musika:song:{}", row.id));
+        text.push_str(&m3u_line(&path));
+        text.push('\n');
+    }
+    text
+}
+
+/// A local M3U name that also reads well in the Playlists segment (the m3u
+/// scanner uses the file name as the playlist name). A timestamp is added only
+/// when the same radio title is saved twice.
+fn m3u_filename(dir: &std::path::Path, name: &str) -> String {
+    let mut safe = String::new();
+    for ch in name.chars() {
+        if ch.is_alphanumeric()
+            || matches!(ch, ' ' | '-' | '_' | '(' | ')' | '&' | '\'' | '·')
+        {
+            safe.push(ch);
+        } else if !safe.ends_with('-') {
+            safe.push('-');
+        }
+    }
+    let safe = safe.trim().trim_end_matches('-').trim();
+    let safe = if safe.is_empty() { "Radio" } else { safe };
+    let candidate = format!("{safe}.m3u");
+    if dir.join(&candidate).is_file() {
+        format!("{safe} {}.m3u", crate::consts::now_nanos())
+    } else {
+        candidate
+    }
 }
 
 #[cfg(test)]
@@ -241,6 +418,24 @@ mod tests {
             cover_art: None,
             starred: None,
         }
+    }
+
+    #[test]
+    fn saved_radio_m3u_keeps_order_and_falls_back_to_song_ids() {
+        let mut a = row("a");
+        a.artist = Some("Artist".into());
+        a.duration = Some(42);
+        let b = row("b");
+        let rows = vec![a, b];
+        let paths = HashMap::from([("a".to_string(), "Music/a.flac".to_string())]);
+        let text = m3u_text(&rows, &paths);
+        assert!(text.starts_with("#EXTM3U\n"));
+        assert!(text.contains("#EXTINF:42,Artist - a\nMusic/a.flac\n"));
+        assert!(text.contains("musika:song:b\n"));
+        assert_eq!(
+            m3u_filename(std::path::Path::new("/nonexistent"), "A Beginner's Mind · Radio"),
+            "A Beginner's Mind · Radio.m3u"
+        );
     }
 
     #[test]

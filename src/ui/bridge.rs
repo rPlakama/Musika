@@ -84,6 +84,10 @@ pub enum Event {
         rating: u8,
     },
     LibrarySynced,
+    RadioSaved {
+        name: String,
+        remote_error: Option<String>,
+    },
     SyncProgress {
         message: String,
         done: usize,
@@ -1040,6 +1044,107 @@ impl Bridge {
                 },
                 Err(err) => {
                     let _ = tx.send(Event::Error(format!("Could not shuffle the artist: {err:#}")));
+                }
+            }
+        });
+    }
+
+    /// Radio Tool: save the generated rows locally and post them as a
+    /// Subsonic/Navidrome playlist. A local-only success is still reported.
+    pub fn save_radio(&self, seed_kind: String, seed_id: String, name: String) {
+        let tx = self.tx.clone();
+        crate::app::runtime().spawn(async move {
+            let Some(dbs) = crate::app::dbs() else { return };
+            match crate::radio::save_radio(&dbs, &seed_kind, &seed_id, &name).await {
+                Ok(saved) => {
+                    let _ = tx.send(Event::RadioSaved {
+                        name: saved.name,
+                        remote_error: saved.remote_error,
+                    });
+                }
+                Err(err) => {
+                    let _ = tx.send(Event::Error(format!("Could not save radio: {err:#}")));
+                }
+            }
+        });
+    }
+
+    /// Radio Tool: download every generated row. Best-effort per song, like
+    /// the artist-container download.
+    pub fn download_radio(&self, seed_kind: String, seed_id: String) {
+        let tx = self.tx.clone();
+        crate::app::runtime().spawn(async move {
+            let Some(dbs) = crate::app::dbs() else { return };
+            let rows = match crate::radio::radio_rows(&dbs, &seed_kind, &seed_id).await {
+                Ok(rows) => rows,
+                Err(err) => {
+                    let _ = tx.send(Event::Error(format!("Could not load radio: {err:#}")));
+                    return;
+                }
+            };
+            if rows.is_empty() {
+                let _ = tx.send(Event::Error("This radio has no songs to download.".to_string()));
+                return;
+            }
+            for song in rows {
+                if let Err(err) = crate::media_actions::download_one(&dbs, &song.id).await {
+                    let _ = tx.send(Event::Error(format!("Download failed: {err:#}")));
+                }
+            }
+            let _ = tx.send(Event::DownloadSettled);
+        });
+    }
+
+    /// Radio Tool: replace the queue with a shuffled copy of the generated
+    /// rows.
+    pub fn shuffle_radio(&self, seed_kind: String, seed_id: String) {
+        let tx = self.tx.clone();
+        let offline = self.offline.load(Ordering::Relaxed);
+        crate::app::runtime().spawn(async move {
+            let Some(dbs) = crate::app::dbs() else { return };
+            match crate::radio::shuffled_tracks_json(&dbs, &seed_kind, &seed_id, offline).await {
+                Ok(json) => match serde_json::from_str::<Vec<crate::player::Track>>(&json) {
+                    Ok(tracks) => {
+                        let _ = tx.send(Event::Queue { tracks, start: 0 });
+                    }
+                    Err(err) => {
+                        let _ = tx.send(Event::Error(format!(
+                            "Could not shuffle the radio: {err:#}"
+                        )));
+                    }
+                },
+                Err(err) => {
+                    let _ = tx.send(Event::Error(format!(
+                        "Could not shuffle the radio: {err:#}"
+                    )));
+                }
+            }
+        });
+    }
+
+    /// Radio Tool: append the whole generated queue without replacing what is
+    /// already playing.
+    pub fn queue_add_radio(&self, seed_kind: String, seed_id: String) {
+        let tx = self.tx.clone();
+        crate::app::runtime().spawn(async move {
+            let Some(dbs) = crate::app::dbs() else { return };
+            let json = match crate::radio::tracks_json(&dbs, &seed_kind, &seed_id, 0).await {
+                Ok((json, _)) => json,
+                Err(err) => {
+                    let _ = tx.send(Event::Error(format!(
+                        "Could not add the radio to the queue: {err:#}"
+                    )));
+                    return;
+                }
+            };
+            match serde_json::from_str::<Vec<crate::player::Track>>(&json) {
+                Ok(tracks) => {
+                    let _ = tx.send(Event::QueueAppend { tracks });
+                }
+                Err(err) => {
+                    let _ = tx.send(Event::Error(format!(
+                        "Could not add the radio to the queue: {err:#}"
+                    )));
                 }
             }
         });

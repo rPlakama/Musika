@@ -34,6 +34,8 @@ mod bridge;
 mod collage;
 mod command_line;
 mod covers;
+#[cfg(debug_assertions)]
+mod debug;
 mod ipc_command;
 mod line_search;
 mod lyrics_layout;
@@ -663,6 +665,8 @@ struct AppRoot {
     cover_trace: Option<CoverLoadTrace>,
     trace: bool,
     frames: u64,
+    #[cfg(debug_assertions)]
+    frame_hud: debug::FrameHud,
 }
 
 impl AppRoot {
@@ -804,6 +808,8 @@ impl AppRoot {
             cover_trace: None,
             trace: std::env::var_os("MUSIKA_GPUUI_TRACE").is_some(),
             frames: 0,
+            #[cfg(debug_assertions)]
+            frame_hud: debug::FrameHud::default(),
         };
         if let Ok(message) = std::env::var("MUSIKA_GPUUI_TOAST")
             && !message.is_empty()

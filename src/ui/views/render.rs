@@ -13,6 +13,8 @@ impl Render for AppRoot {
             crate::debug_log!("GPUI trace: frame {}", self.frames);
         }
         self.clock.tick();
+        #[cfg(debug_assertions)]
+        self.frame_hud.observe(self.clock.dt);
         palette::publish(self.palette_motion.value(&self.clock));
         if !self.palette_motion.settled(&self.clock) {
             window.request_animation_frame();
@@ -39,13 +41,15 @@ impl Render for AppRoot {
             // handler: returning the bare view here would bypass both
             // `track_focus` and `on_key_down`, leaving the fields uneditable.
             self.focus.focus(window);
-            return div()
+            let login = div()
                 .track_focus(&self.focus)
                 .on_key_down(cx.listener(Self::on_key_down))
                 .on_modifiers_changed(cx.listener(Self::on_modifiers_changed))
                 .size_full()
-                .child(self.login_view(window))
-                .into_any_element();
+                .child(self.login_view(window));
+            #[cfg(debug_assertions)]
+            let login = login.child(self.frame_hud.view());
+            return login.into_any_element();
         }
         let pending = std::mem::take(&mut self.pending_ipc);
         for command in pending {
@@ -311,7 +315,9 @@ impl Render for AppRoot {
             window.request_animation_frame();
         }
         let status = self.player_bar();
-        div()
+        #[cfg(debug_assertions)]
+        let frame_hud = self.frame_hud.view();
+        let root = div()
             .track_focus(&self.focus)
             .key_context(if self.command_line.is_open() {
                 "command-line"
@@ -410,7 +416,9 @@ impl Render for AppRoot {
             .child(match alt_overlay {
                 Some(o) => o,
                 None => div().into_any_element(),
-            })
-            .into_any_element()
+            });
+        #[cfg(debug_assertions)]
+        let root = root.child(frame_hud);
+        root.into_any_element()
     }
 }

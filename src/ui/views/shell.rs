@@ -1,4 +1,4 @@
-//! Extracted view methods.
+//! Top bar, status bar, player bar and login view.
 
 use super::super::*;
 
@@ -26,10 +26,7 @@ impl AppRoot {
                 ),
                 if self.syncing { 0.38 } else { 0.85 },
             ),
-            TopBarAction::Wipe => (
-                icon("delete-outline.svg", 18.0, palette::on_surface()),
-                1.0,
-            ),
+            TopBarAction::Wipe => (icon("delete-outline.svg", 18.0, palette::on_surface()), 1.0),
             TopBarAction::Download => {
                 let cached = page.is_some_and(|page| page.cached);
                 let downloading = page.is_some_and(|page| page.downloading);
@@ -169,23 +166,18 @@ impl AppRoot {
             .h_full()
             .px_4()
             .child(
-                div()
-                    .flex()
-                    .flex_1()
-                    .min_w_0()
-                    .items_center()
-                    .child(
-                        div()
-                            .text_size(px(19.0))
-                            .text_color(rgb(if offline {
-                                palette::tertiary()
-                            } else {
-                                palette::on_surface_variant()
-                            }))
-                            .whitespace_nowrap()
-                            .text_ellipsis()
-                            .child(welcome),
-                    ),
+                div().flex().flex_1().min_w_0().items_center().child(
+                    div()
+                        .text_size(px(19.0))
+                        .text_color(rgb(if offline {
+                            palette::tertiary()
+                        } else {
+                            palette::on_surface_variant()
+                        }))
+                        .whitespace_nowrap()
+                        .text_ellipsis()
+                        .child(welcome),
+                ),
             )
             .child(
                 div()
@@ -247,7 +239,11 @@ impl AppRoot {
             .into_any_element()
     }
 
-    pub(in crate::ui) fn page_context_bar(&self, mode: SuperiorMode, cx: &Context<Self>) -> gpui::AnyElement {
+    pub(in crate::ui) fn page_context_bar(
+        &self,
+        mode: SuperiorMode,
+        cx: &Context<Self>,
+    ) -> gpui::AnyElement {
         let Some(page) = self.page_bar() else {
             return div().into_any_element();
         };
@@ -284,8 +280,10 @@ impl AppRoot {
                     .child(page.subtitle.clone()),
             );
         }
-        if matches!(mode, SuperiorMode::Album | SuperiorMode::Playlist | SuperiorMode::Radio)
-            && !page.meta.is_empty()
+        if matches!(
+            mode,
+            SuperiorMode::Album | SuperiorMode::Playlist | SuperiorMode::Radio
+        ) && !page.meta.is_empty()
         {
             identity = identity.child(self.bar_separator()).child(
                 div()
@@ -385,7 +383,11 @@ impl AppRoot {
             0.0
         };
         let (title, artist, cover) = match &track {
-            Some(track) => (track.title.clone(), track.artist.clone(), cover_source(&track.cover_url)),
+            Some(track) => (
+                track.title.clone(),
+                track.artist.clone(),
+                cover_source(&track.cover_url),
+            ),
             None => ("Nothing playing".to_string(), String::new(), None),
         };
         let m = metrics::PlayerBarMetrics::new(self.win_w, self.win_h);
@@ -402,7 +404,12 @@ impl AppRoot {
                     .right_0()
                     .h(px(3.0))
                     .bg(rgb(palette::surface_container_high()))
-                    .child(div().h_full().w(relative(progress)).bg(rgb(palette::primary()))),
+                    .child(
+                        div()
+                            .h_full()
+                            .w(relative(progress))
+                            .bg(rgb(palette::primary())),
+                    ),
             )
             .child(
                 div()
@@ -509,10 +516,15 @@ impl AppRoot {
                                 )
                             })
                             .child(icon(
-                                if muted { "vol-mute-svgrepo-com.svg" }
-                                else if volume <= 1.0 { "vol-zero-svgrepo-com.svg" }
-                                else if volume <= 33.0 { "vol-low-svgrepo-com.svg" }
-                                else { "vol-high-svgrepo-com.svg" },
+                                if muted {
+                                    "vol-mute-svgrepo-com.svg"
+                                } else if volume <= 1.0 {
+                                    "vol-zero-svgrepo-com.svg"
+                                } else if volume <= 33.0 {
+                                    "vol-low-svgrepo-com.svg"
+                                } else {
+                                    "vol-high-svgrepo-com.svg"
+                                },
                                 m.volume_icon,
                                 palette::on_surface_variant(),
                             ))
@@ -555,7 +567,13 @@ impl AppRoot {
                     self.view.selection.count(self.view.cursor)
                 };
                 if visual > 0 {
-                    format!("VISUAL {visual} · {} · {} · {}/{}", self.view.scope.label(), self.view.order_label(), counts.0, counts.1)
+                    format!(
+                        "VISUAL {visual} · {} · {} · {}/{}",
+                        self.view.scope.label(),
+                        self.view.order_label(),
+                        counts.0,
+                        counts.1
+                    )
                 } else {
                     format!(
                         "{} · {} · {} artists / {} albums / {} songs",

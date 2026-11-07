@@ -1,4 +1,4 @@
-//! Bridge request family.
+//! Library, search and windowing requests.
 
 use super::*;
 
@@ -43,19 +43,19 @@ impl Bridge {
             if generation_counter.load(Ordering::Relaxed) != generation {
                 return;
             }
-            let event = match search_rows(&query, offline, super::super::state::SEARCH_FETCH_ROWS).await
-            {
-                Ok((rows, most_played)) => {
-                    crate::debug_log!("GPUI: search {:?} {} rows", query, rows.len());
-                    Event::Search {
-                        generation,
-                        query,
-                        rows,
-                        most_played,
+            let event =
+                match search_rows(&query, offline, super::super::state::SEARCH_FETCH_ROWS).await {
+                    Ok((rows, most_played)) => {
+                        crate::debug_log!("GPUI: search {:?} {} rows", query, rows.len());
+                        Event::Search {
+                            generation,
+                            query,
+                            rows,
+                            most_played,
+                        }
                     }
-                }
-                Err(err) => Event::Error(format!("Search failed: {err:#}")),
-            };
+                    Err(err) => Event::Error(format!("Search failed: {err:#}")),
+                };
             let _ = tx.send(event);
         });
     }
@@ -86,14 +86,8 @@ impl Bridge {
             let event = match crate::app::dbs() {
                 Some(dbs) => {
                     let surface = scope.key();
-                    match crate::rows::count(
-                        &dbs,
-                        surface,
-                        "",
-                        &order_name(scope, order),
-                        offline,
-                    )
-                    .await
+                    match crate::rows::count(&dbs, surface, "", &order_name(scope, order), offline)
+                        .await
                     {
                         Ok(count) => Event::LibraryCount {
                             generation,
@@ -164,14 +158,8 @@ impl Bridge {
         let offline = self.offline.load(Ordering::Relaxed);
         crate::app::runtime().spawn(async move {
             let Some(dbs) = crate::app::dbs() else { return };
-            let Ok(count) = crate::rows::count(
-                &dbs,
-                scope.key(),
-                "",
-                &order_name(scope, order),
-                offline,
-            )
-            .await
+            let Ok(count) =
+                crate::rows::count(&dbs, scope.key(), "", &order_name(scope, order), offline).await
             else {
                 return;
             };

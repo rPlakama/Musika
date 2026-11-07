@@ -2,7 +2,12 @@
 
 use super::super::*;
 
-pub(crate) fn transport_button(icon_name: &str, base: f32, color: u32, scale: f32) -> gpui::AnyElement {
+pub(crate) fn transport_button(
+    icon_name: &str,
+    base: f32,
+    color: u32,
+    scale: f32,
+) -> gpui::AnyElement {
     div()
         .size(px(base * 1.3))
         .flex()
@@ -12,15 +17,26 @@ pub(crate) fn transport_button(icon_name: &str, base: f32, color: u32, scale: f3
         .into_any_element()
 }
 
-pub(crate) fn highlighted_text(text: &str, query: &str, color: u32, current: bool) -> gpui::AnyElement {
+pub(crate) fn highlighted_text(
+    text: &str,
+    query: &str,
+    color: u32,
+    current: bool,
+) -> gpui::AnyElement {
     let ranges = line_search::match_ranges(query, text);
     if ranges.is_empty() {
-        return div().text_color(rgb(color)).child(text.to_string()).into_any_element();
+        return div()
+            .text_color(rgb(color))
+            .child(text.to_string())
+            .into_any_element();
     }
     let (foreground, background) = if current {
         (palette::on_primary(), palette::primary())
     } else {
-        (palette::on_primary_container(), palette::primary_container())
+        (
+            palette::on_primary_container(),
+            palette::primary_container(),
+        )
     };
     let highlight = HighlightStyle {
         color: Some(rgb(foreground).into()),
@@ -45,12 +61,7 @@ pub(crate) fn loading_placeholder(index: usize, row_h: f32) -> gpui::AnyElement 
         .flex()
         .items_center()
         .px_1()
-        .child(
-            div()
-                .size(px(row_h * 0.78))
-                .rounded_sm()
-                .bg(rgb(shade)),
-        )
+        .child(div().size(px(row_h * 0.78)).rounded_sm().bg(rgb(shade)))
         .child(
             div()
                 .flex()
@@ -171,10 +182,7 @@ pub(crate) fn collage_art(urls: &[String], side: f32) -> gpui::AnyElement {
         return mosaic.into_any_element();
     }
 
-    for (pane, source) in collage::panes(side, sources.len())
-        .into_iter()
-        .zip(sources)
-    {
+    for (pane, source) in collage::panes(side, sources.len()).into_iter().zip(sources) {
         let content = match source {
             Some(source) => img(source.image())
                 .size_full()
@@ -217,7 +225,11 @@ pub(crate) fn art(source: Option<CoverSource>, size: f32) -> gpui::AnyElement {
     cover_element(source, size, true)
 }
 
-pub(crate) fn cover_element(source: Option<CoverSource>, size: f32, fade: bool) -> gpui::AnyElement {
+pub(crate) fn cover_element(
+    source: Option<CoverSource>,
+    size: f32,
+    fade: bool,
+) -> gpui::AnyElement {
     match source {
         Some(source) => {
             let image = img(source.image())

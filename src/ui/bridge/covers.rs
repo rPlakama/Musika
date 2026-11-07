@@ -1,4 +1,4 @@
-//! Bridge request family.
+//! Palette and display-cover requests.
 
 use super::*;
 

@@ -1,4 +1,4 @@
-//! Bridge request family.
+//! Login and offline-login requests.
 
 use super::*;
 
@@ -32,7 +32,11 @@ impl Bridge {
         let tx = self.tx.clone();
         crate::app::runtime().spawn(async move {
             let account = crate::auth::offline(&server_url, &username).await;
-            crate::debug_log!("GPUI: offline login as {} @ {}", account.username, account.server_url);
+            crate::debug_log!(
+                "GPUI: offline login as {} @ {}",
+                account.username,
+                account.server_url
+            );
             send_event(
                 &tx,
                 Event::LoggedIn {

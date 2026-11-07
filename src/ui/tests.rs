@@ -42,10 +42,7 @@ mod contextual_bar_tests {
             vec![Sync, Wipe]
         );
         assert!(topbar_actions_for(SuperiorMode::Playlist, None).is_empty());
-        assert_eq!(
-            topbar_actions_for(SuperiorMode::Radio, None),
-            vec![Tool]
-        );
+        assert_eq!(topbar_actions_for(SuperiorMode::Radio, None), vec![Tool]);
 
         let neutral = page_state(PageKind::Album, false, false, false);
         assert_eq!(

@@ -1,4 +1,4 @@
-//! Page payload requests.
+//! Page payload and notes requests.
 
 use super::*;
 
@@ -10,11 +10,7 @@ impl Bridge {
         crate::app::runtime().spawn(async move {
             let event = match page_data(&descriptor, offline).await {
                 Ok((header, rows)) => {
-                    crate::debug_log!(
-                        "GPUI: {} page {} rows",
-                        descriptor.kind.label(),
-                        rows.len()
-                    );
+                    crate::debug_log!("GPUI: {} page {} rows", descriptor.kind.label(), rows.len());
                     Event::Page {
                         generation,
                         descriptor,
@@ -106,7 +102,8 @@ impl Bridge {
                 Err(_) => String::new(),
             };
             if !fresh.is_empty() {
-                let _ = crate::library::upsert_artist_info(&dbs.library, &artist_id, &fresh, "").await;
+                let _ =
+                    crate::library::upsert_artist_info(&dbs.library, &artist_id, &fresh, "").await;
             }
             let notes = if fresh.is_empty() {
                 cached.map(|row| row.biography).unwrap_or_default()

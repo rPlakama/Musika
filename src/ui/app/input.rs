@@ -1,9 +1,14 @@
-//! Extracted view methods.
+//! Raw keyboard routing, including the login form.
 
 use super::super::*;
 
 impl AppRoot {
-    pub(in crate::ui) fn on_key_down(&mut self, event: &gpui::KeyDownEvent, _window: &mut Window, cx: &mut Context<Self>) {
+    pub(in crate::ui) fn on_key_down(
+        &mut self,
+        event: &gpui::KeyDownEvent,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if self.login.is_some() {
             cx.stop_propagation();
             self.login_key(event, cx);
@@ -60,14 +65,15 @@ impl AppRoot {
             }
             return;
         }
-        let Some(search) = self.search.as_ref() else { return };
+        let Some(search) = self.search.as_ref() else {
+            return;
+        };
         cx.stop_propagation();
         let key = event.keystroke.key.as_str();
         let control = event.keystroke.modifiers.control;
         let shift = event.keystroke.modifiers.shift;
-        let modified = control
-            || event.keystroke.modifiers.alt
-            || event.keystroke.modifiers.platform;
+        let modified =
+            control || event.keystroke.modifiers.alt || event.keystroke.modifiers.platform;
         if !search.typing {
             match key {
                 "escape" => {
@@ -311,9 +317,10 @@ impl AppRoot {
                 }
             }
             "x" if control => {
-                let cut = self.search.as_ref().and_then(|search| {
-                    search.editor.selected_text().map(str::to_string)
-                });
+                let cut = self
+                    .search
+                    .as_ref()
+                    .and_then(|search| search.editor.selected_text().map(str::to_string));
                 if let Some(text) = cut {
                     cx.write_to_clipboard(gpui::ClipboardItem::new_string(text));
                     if let Some(search) = self.search.as_mut() {
@@ -337,7 +344,9 @@ impl AppRoot {
                 return;
             }
             _ if !modified => {
-                let Some(search) = self.search.as_mut() else { return };
+                let Some(search) = self.search.as_mut() else {
+                    return;
+                };
                 if let Some(text) = event.keystroke.key_char.as_ref()
                     && !text.chars().any(char::is_control)
                 {
@@ -355,7 +364,9 @@ impl AppRoot {
     }
 
     pub(in crate::ui) fn login_key(&mut self, event: &gpui::KeyDownEvent, cx: &mut Context<Self>) {
-        let Some(login) = self.login.as_mut() else { return };
+        let Some(login) = self.login.as_mut() else {
+            return;
+        };
         let key = event.keystroke.key.as_str();
         let modified = event.keystroke.modifiers.control
             || event.keystroke.modifiers.alt
@@ -371,8 +382,12 @@ impl AppRoot {
                 text.pop();
             }
             "enter" => {
-                if login.server.trim().is_empty() || login.username.trim().is_empty() || login.password.is_empty() {
-                    login.error = Some("Server, username and password are all required.".to_string());
+                if login.server.trim().is_empty()
+                    || login.username.trim().is_empty()
+                    || login.password.is_empty()
+                {
+                    login.error =
+                        Some("Server, username and password are all required.".to_string());
                 } else {
                     login.busy = true;
                     login.error = None;

@@ -1,4 +1,4 @@
-//! Bridge request family.
+//! Restore, lyrics and playback requests.
 
 use super::*;
 
@@ -10,7 +10,9 @@ impl Bridge {
             let Ok(Some(status)) = crate::status::load(&dbs.status).await else {
                 return;
             };
-            let resume = crate::queue::resume_payload(&dbs, &status, false).await.ok();
+            let resume = crate::queue::resume_payload(&dbs, &status, false)
+                .await
+                .ok();
             let value: serde_json::Value = resume
                 .as_deref()
                 .and_then(|raw| serde_json::from_str(raw).ok())
@@ -61,22 +63,12 @@ impl Bridge {
         let offline = self.offline.load(Ordering::Relaxed);
         crate::app::runtime().spawn(async move {
             let Some(dbs) = crate::app::dbs() else { return };
-            match crate::queue::album_tracks_json(&dbs, &album_id, offline).await {
-                Ok(json) => match serde_json::from_str::<Vec<crate::player::Track>>(&json) {
-                    Ok(tracks) => {
-                        let _ = tx.send(Event::Queue {
-                            tracks,
-                            start,
-                        });
-                    }
-                    Err(err) => {
-                        let _ = tx.send(Event::Error(format!("Could not play album: {err:#}")));
-                    }
-                },
-                Err(err) => {
-                    let _ = tx.send(Event::Error(format!("Could not play album: {err:#}")));
-                }
-            }
+            emit_queue(
+                &tx,
+                crate::queue::album_tracks_json(&dbs, &album_id, offline).await,
+                start,
+                "Could not play album",
+            );
         });
     }
 

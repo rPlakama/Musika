@@ -1,17 +1,18 @@
-//! Extracted view methods.
+//! Floating search state, scope changes and result activation.
 
 use super::super::*;
 
 impl AppRoot {
     pub(in crate::ui) fn move_search_scope(&mut self, delta: i32) {
-        let Some(search) = self.search.as_mut() else { return };
+        let Some(search) = self.search.as_mut() else {
+            return;
+        };
         let current = search.scope;
         search.scope_cursors[current] = search.cursor();
         let next = (current as i32 + delta).rem_euclid(4) as usize;
         search.scope = next;
-        search.scope_cursors[next] = search
-            .scope_cursors[next]
-            .min(search.scope_count(next).saturating_sub(1));
+        search.scope_cursors[next] =
+            search.scope_cursors[next].min(search.scope_count(next).saturating_sub(1));
         search.selection.clear();
         self.follow_search(false);
     }
@@ -36,12 +37,22 @@ impl AppRoot {
         self.bridge.search(String::new());
     }
 
-    pub(in crate::ui) fn on_search(&mut self, _: &Search, _window: &mut Window, cx: &mut Context<Self>) {
+    pub(in crate::ui) fn on_search(
+        &mut self,
+        _: &Search,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         self.open_search(true);
         cx.notify();
     }
 
-    pub(in crate::ui) fn on_insert_mode(&mut self, _: &InsertMode, _window: &mut Window, cx: &mut Context<Self>) {
+    pub(in crate::ui) fn on_insert_mode(
+        &mut self,
+        _: &InsertMode,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if let Some(search) = self.search.as_mut() {
             search.typing = true;
             self.search_open = true;
@@ -51,14 +62,24 @@ impl AppRoot {
         cx.notify();
     }
 
-    pub(in crate::ui) fn on_search_next(&mut self, _: &SearchNext, _window: &mut Window, cx: &mut Context<Self>) {
+    pub(in crate::ui) fn on_search_next(
+        &mut self,
+        _: &SearchNext,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if let Some(search) = self.search.as_mut() {
             search.move_cursor(1);
         }
         cx.notify();
     }
 
-    pub(in crate::ui) fn on_search_prev(&mut self, _: &SearchPrev, _window: &mut Window, cx: &mut Context<Self>) {
+    pub(in crate::ui) fn on_search_prev(
+        &mut self,
+        _: &SearchPrev,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if let Some(search) = self.search.as_mut() {
             search.move_cursor(-1);
         }
@@ -125,7 +146,9 @@ impl AppRoot {
     }
 
     pub(in crate::ui) fn search_edited(&mut self) {
-        let Some(search) = self.search.as_ref() else { return };
+        let Some(search) = self.search.as_ref() else {
+            return;
+        };
         let query = search.editor.text.clone();
         let empty = query.is_empty();
         if let Some(search) = self.search.as_mut() {
@@ -146,7 +169,9 @@ impl AppRoot {
             self.description = None;
             return;
         }
-        let Some(page) = self.page.as_ref() else { return };
+        let Some(page) = self.page.as_ref() else {
+            return;
+        };
         let notes = self
             .notes
             .as_ref()

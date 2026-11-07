@@ -1,4 +1,4 @@
-//! Extracted view methods.
+//! Fullscreen view, lyrics pane and transport controls.
 
 use super::super::*;
 
@@ -52,13 +52,7 @@ impl AppRoot {
                     .text_center()
                     .whitespace_normal()
                     .opacity(opacity)
-                    .child(
-                        div()
-                            .w_full()
-                            .text_center()
-                            .whitespace_normal()
-                            .child(text),
-                    )
+                    .child(div().w_full().text_center().whitespace_normal().child(text))
                     .into_any_element()
             })
             .collect()
@@ -116,9 +110,7 @@ impl AppRoot {
                 track.artist.clone(),
                 self.display_cover(&track.cover_art, self.fullscreen_hero_bucket())
                     .map(CoverSource::Path)
-                    .or_else(|| {
-                        self.hero_cover(&track.cover_url, self.fullscreen_hero_bucket())
-                    }),
+                    .or_else(|| self.hero_cover(&track.cover_url, self.fullscreen_hero_bucket())),
             ),
             None => ("No track playing".to_string(), String::new(), None),
         };
@@ -142,7 +134,9 @@ impl AppRoot {
             0.0
         };
         let lyrics = self.lyrics.as_ref();
-        let lines = lyrics.map(|lyrics| lyrics.lines.clone()).unwrap_or_default();
+        let lines = lyrics
+            .map(|lyrics| lyrics.lines.clone())
+            .unwrap_or_default();
         let lyrics_label = match lyrics {
             Some(lyrics) if lyrics.lines.is_empty() => "No lyrics".to_string(),
             Some(lyrics) => format!("Lyrics · {}", lyrics.source),

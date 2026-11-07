@@ -3,7 +3,7 @@
 
 use std::ops::Range;
 
-use gpui::{div, prelude::*, px, rgb, HighlightStyle, StyledText};
+use gpui::{HighlightStyle, StyledText, div, prelude::*, px, rgb};
 
 use crate::ui::palette;
 
@@ -258,9 +258,7 @@ pub fn editor_content(
             .min_w_0()
             .text_size(size)
             .text_color(rgb(palette::on_surface()))
-            .child(
-                StyledText::new(editor.text.clone()).with_highlights([(range, highlight)]),
-            )
+            .child(StyledText::new(editor.text.clone()).with_highlights([(range, highlight)]))
             .into_any_element();
     }
     if !caret {
@@ -282,12 +280,57 @@ pub fn editor_content(
         .text_size(size)
         .text_color(rgb(palette::on_surface()))
         .child(before.to_string())
-        .child(
-            div()
-                .w(px(2.0))
-                .h(px(caret_h))
-                .bg(rgb(palette::primary())),
-        )
+        .child(div().w(px(2.0)).h(px(caret_h)).bg(rgb(palette::primary())))
         .child(after.to_string())
         .into_any_element()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn editor_selection_and_word_delete_respect_char_boundaries() {
+        let mut editor = LineEditor::new();
+        editor.insert("héllo wörld");
+        assert_eq!(editor.cursor, editor.text.len());
+        editor.delete_word_back();
+        assert_eq!(editor.text, "héllo ");
+        editor.select_all();
+        assert_eq!(editor.selected_text(), Some("héllo "));
+        editor.insert("x");
+        assert_eq!(editor.text, "x");
+        assert_eq!(editor.cursor, 1);
+
+        editor.set_text("abc");
+        editor.home(false);
+        editor.move_right(true);
+        assert_eq!(editor.selection(), Some(0..1));
+        editor.insert("Z");
+        assert_eq!(editor.text, "Zbc");
+    }
+
+    #[test]
+    fn shared_command_maps_motion_and_deletion() {
+        assert_eq!(
+            command_for_key("left", true, false, None),
+            Some(EditCommand::MoveLeft { extend: true })
+        );
+        assert_eq!(
+            command_for_key("a", true, true, None),
+            Some(EditCommand::SelectAll)
+        );
+        assert_eq!(command_for_key("c", false, true, None), None);
+        assert_eq!(
+            command_for_key("x", false, false, Some("x")),
+            Some(EditCommand::Insert("x".to_string()))
+        );
+
+        let mut editor = LineEditor::from_text("abc");
+        apply(&mut editor, &EditCommand::Home { extend: false });
+        apply(&mut editor, &EditCommand::MoveRight { extend: true });
+        assert_eq!(editor.selection(), Some(0..1));
+        apply(&mut editor, &EditCommand::Insert("Z".to_string()));
+        assert_eq!(editor.text, "Zbc");
+    }
 }

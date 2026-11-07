@@ -1,4 +1,4 @@
-//! Extracted view methods.
+//! Library list, rows and selected-row rendering.
 
 use super::super::*;
 
@@ -16,7 +16,12 @@ impl AppRoot {
             .w_full()
             .h(px(72.0))
             .px_2()
-            .child(div().text_size(px(26.0)).font_weight(gpui::FontWeight::SEMIBOLD).child(title))
+            .child(
+                div()
+                    .text_size(px(26.0))
+                    .font_weight(gpui::FontWeight::SEMIBOLD)
+                    .child(title),
+            )
             .child(
                 div()
                     .text_size(px(11.0))
@@ -24,7 +29,11 @@ impl AppRoot {
                     .child(hint),
             )
             .child(div().flex_1())
-            .child(icon("outline-shuffle.svg", 14.0, palette::on_surface_variant()))
+            .child(icon(
+                "outline-shuffle.svg",
+                14.0,
+                palette::on_surface_variant(),
+            ))
             .child(
                 div()
                     .text_size(px(11.0))
@@ -88,89 +97,114 @@ impl AppRoot {
             .px(px(12.0))
             .child(header)
             .child(
-                uniform_list("library", count, cx.processor(move |this, range: std::ops::Range<usize>, _window, cx| {
-                    let row_h = this.library_scroll.row_h;
-                    let mut items = Vec::with_capacity(range.len());
-                    for index in range {
-                        let selected = this.view.rows.get(index).is_some_and(|row| {
-                            this.selected_id.as_deref() == Some(row.id.as_str())
-                        }) || index == this.view.cursor
-                            || this.view.selection.contains(this.view.cursor, index);
-                        let hovered = this.hovered_row == Some(index);
-                        let striped = index % 2 != 0;
-                                        let Some(row) = this.view.rows.get(index) else {
-                            // RowWindow blank slot: a waving grey placeholder
-                            // until the live window lands.
-                            _window.request_animation_frame();
+                uniform_list(
+                    "library",
+                    count,
+                    cx.processor(move |this, range: std::ops::Range<usize>, _window, cx| {
+                        let row_h = this.library_scroll.row_h;
+                        let mut items = Vec::with_capacity(range.len());
+                        for index in range {
+                            let selected = this.view.rows.get(index).is_some_and(|row| {
+                                this.selected_id.as_deref() == Some(row.id.as_str())
+                            }) || index == this.view.cursor
+                                || this.view.selection.contains(this.view.cursor, index);
+                            let hovered = this.hovered_row == Some(index);
+                            let striped = index % 2 != 0;
+                            let Some(row) = this.view.rows.get(index) else {
+                                // RowWindow blank slot: a waving grey placeholder
+                                // until the live window lands.
+                                _window.request_animation_frame();
+                                items.push(
+                                    div()
+                                        .id(index)
+                                        .w_full()
+                                        .flex()
+                                        .items_center()
+                                        .h(px(row_h))
+                                        .px_1()
+                                        .rounded_sm()
+                                        .bg(rgb(if selected {
+                                            palette::secondary_container()
+                                        } else {
+                                            palette::surface()
+                                        }))
+                                        .child(loading_placeholder(index, row_h)),
+                                );
+                                continue;
+                            };
+                            let cover_scale = if selected { 1.20 } else { 1.0 };
+                            let base_fill = if striped {
+                                palette::surface_container_lowest()
+                            } else {
+                                palette::surface()
+                            };
+                            let hover_fill = this
+                                .row_hover_colors
+                                .entry(format!("library-hover:{}", row.id))
+                                .or_insert_with(|| anim::ColorBehavior::new(base_fill))
+                                .target(
+                                    if hovered && !selected {
+                                        palette::surface_container_high()
+                                    } else {
+                                        base_fill
+                                    },
+                                    anim::QUICK_MS,
+                                    anim::Curve::Standard,
+                                    &this.clock,
+                                );
                             items.push(
                                 div()
-                                    .id(index)
+                                    .id(gpui::ElementId::named_usize(
+                                        if selected {
+                                            "library-row-selected"
+                                        } else {
+                                            "library-row"
+                                        },
+                                        index,
+                                    ))
                                     .w_full()
                                     .flex()
                                     .items_center()
                                     .h(px(row_h))
                                     .px_1()
                                     .rounded_sm()
-                                    .bg(rgb(if selected { palette::secondary_container() } else { palette::surface() }))
-                                    .child(loading_placeholder(index, row_h)),
+                                    .bg(if selected {
+                                        rgb(palette::secondary_container())
+                                    } else {
+                                        gpui::rgba(hover_fill)
+                                    })
+                                    .cursor_pointer()
+                                    .on_hover(cx.listener(move |this, hovered: &bool, _, cx| {
+                                        if *hovered {
+                                            this.hovered_row = Some(index);
+                                        } else if this.hovered_row == Some(index) {
+                                            this.hovered_row = None;
+                                        }
+                                        cx.notify();
+                                    }))
+                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                        this.select(index);
+                                        cx.notify();
+                                    }))
+                                    .child(this.row_content(
+                                        row,
+                                        RowPaint {
+                                            flags: LIBRARY_ROW_FLAGS,
+                                            surface: LineSurface::Library,
+                                            index,
+                                            selected,
+                                            height: row_h,
+                                            cover_scale,
+                                        },
+                                    )),
                             );
-                            continue;
-                        };
-                        let cover_scale = if selected { 1.20 } else { 1.0 };
-                        let base_fill = if striped { palette::surface_container_lowest() } else { palette::surface() };
-                        let hover_fill = this
-                            .row_hover_colors
-                            .entry(format!("library-hover:{}", row.id))
-                            .or_insert_with(|| anim::ColorBehavior::new(base_fill))
-                            .target(
-                                if hovered && !selected { palette::surface_container_high() } else { base_fill },
-                                anim::QUICK_MS,
-                                anim::Curve::Standard,
-                                &this.clock,
-                            );
-                        items.push(
-                            div()
-                                .id(gpui::ElementId::named_usize(if selected { "library-row-selected" } else { "library-row" }, index))
-                                .w_full()
-                                .flex()
-                                .items_center()
-                                .h(px(row_h))
-                                .px_1()
-                                .rounded_sm()
-                                .bg(if selected {
-                                    rgb(palette::secondary_container())
-                                } else {
-                                    gpui::rgba(hover_fill)
-                                })
-                                .cursor_pointer()
-                                .on_hover(cx.listener(move |this, hovered: &bool, _, cx| {
-                                    if *hovered {
-                                        this.hovered_row = Some(index);
-                                    } else if this.hovered_row == Some(index) {
-                                        this.hovered_row = None;
-                                    }
-                                    cx.notify();
-                                }))
-                                .on_click(cx.listener(move |this, _, _, cx| {
-                                    this.select(index);
-                                    cx.notify();
-                                }))
-                                .child(this.row_content(
-                                    row,
-                                    RowPaint {
-                                        flags: LIBRARY_ROW_FLAGS,
-                                        surface: LineSurface::Library,
-                                        index,
-                                        selected,
-                                        height: row_h,
-                                        cover_scale,
-                                    },
-                                )),
-                        );
-                    }
-                    items
-                }))
-                .pt(px(8.0)).pb(px(8.0)).h_full()
+                        }
+                        items
+                    }),
+                )
+                .pt(px(8.0))
+                .pb(px(8.0))
+                .h_full()
                 .w_full()
                 .on_scroll_wheel(cx.listener(|this, _, _, _| {
                     this.library_scroll.on_wheel();
@@ -187,11 +221,11 @@ impl AppRoot {
         let mut body = div().flex().items_center().min_w_0().flex_1();
         if paint.flags.show_cover {
             let cover = cover_source(&row.cover_url);
-            body = body.child(
-                div()
-                    .mr_3()
-                    .child(art_scaled(cover, paint.height * 0.78, paint.cover_scale)),
-            );
+            body = body.child(div().mr_3().child(art_scaled(
+                cover,
+                paint.height * 0.78,
+                paint.cover_scale,
+            )));
         }
         let mut cells = div().flex().flex_col().min_w_0().flex_1().overflow_hidden();
         let title_size = if paint.flags.compact { 15.0 } else { 18.0 } * emphasis;
@@ -235,10 +269,7 @@ impl AppRoot {
             cells = cells.child(subtitle);
         }
         body = body.child(cells);
-        let downloaded = self
-            .marks
-            .downloaded(&row.song_id, &row.album_id)
-            || row.downloaded;
+        let downloaded = self.marks.downloaded(&row.song_id, &row.album_id) || row.downloaded;
         let mut trailing = div().flex().items_center().gap_2();
         if paint.flags.show_length && !row.meta.is_empty() {
             trailing = trailing.child(

@@ -1,9 +1,12 @@
-//! Extracted view methods.
+//! Description, toast, exit, Alt-board and prompt-bar overlays.
 
 use super::super::*;
 
 impl AppRoot {
-    pub(in crate::ui) fn description_overlay(&self, cx: &Context<Self>) -> Option<gpui::AnyElement> {
+    pub(in crate::ui) fn description_overlay(
+        &self,
+        cx: &Context<Self>,
+    ) -> Option<gpui::AnyElement> {
         let description = self.description.as_ref()?;
         Some(
             div()
@@ -69,22 +72,19 @@ impl AppRoot {
             return div().into_any_element();
         };
         let page_h = (self.win_h - 120.0).max(1.0);
-        let option_scale = (0.816
-            * ((self.win_w - 20.0) / 1280.0).min((page_h - 20.0) / 720.0))
-            .clamp(0.5, 0.816);
+        let option_scale =
+            (0.816 * ((self.win_w - 20.0) / 1280.0).min((page_h - 20.0) / 720.0)).clamp(0.5, 0.816);
         let spawned = 0.72 + 0.28 * progress;
         let box_side = page_h * 0.07 * option_scale * spawned;
-        let frame_side = (box_side * 8.0)
-            .min(self.win_w - 20.0)
-            .min(page_h - 20.0);
+        let frame_side = (box_side * 8.0).min(self.win_w - 20.0).min(page_h - 20.0);
         // The board is anchored at the focused item but may slide inside the
         // safe window area: topbar/status anchors often sit too close to an
         // edge for a full-size board to stay centred there.
         let wall_gap = 10.0;
         let board_x = (ax - frame_side * 0.5)
             .clamp(wall_gap, (self.win_w - frame_side - wall_gap).max(wall_gap));
-        let board_y = (ay - frame_side * 0.5)
-            .clamp(wall_gap, (page_h - frame_side + wall_gap).max(wall_gap));
+        let board_y =
+            (ay - frame_side * 0.5).clamp(wall_gap, (page_h - frame_side + wall_gap).max(wall_gap));
         let mut board = div()
             .absolute()
             .left(px(board_x))
@@ -94,7 +94,9 @@ impl AppRoot {
             .opacity(progress);
         let center = (frame_side - box_side) * 0.5;
         for direction in Direction::ALL {
-            let Some(slot) = menu.slot(direction) else { continue };
+            let Some(slot) = menu.slot(direction) else {
+                continue;
+            };
             let aimed = self.alt.aimed == Some(direction);
             let size = if aimed { box_side * 1.30 } else { box_side };
             let (cx, cy) = match direction {
@@ -138,7 +140,11 @@ impl AppRoot {
                 .h(px(size))
                 .rounded_md()
                 .border_1()
-                .border_color(rgb(if aimed { palette::primary() } else { palette::outline_variant() }))
+                .border_color(rgb(if aimed {
+                    palette::primary()
+                } else {
+                    palette::outline_variant()
+                }))
                 .bg(rgb(bg))
                 .opacity(opacity)
                 .flex()
@@ -197,7 +203,10 @@ impl AppRoot {
     }
 
     pub(in crate::ui) fn line_search_overlay(&self, progress: f32) -> gpui::Div {
-        let counter = match (self.line_search.current_hit(), self.line_search.candidates.len()) {
+        let counter = match (
+            self.line_search.current_hit(),
+            self.line_search.candidates.len(),
+        ) {
             (Some(_), count) if count > 0 => {
                 format!("[{}/{}]", self.line_search.index.unwrap_or(0) + 1, count)
             }
@@ -477,7 +486,15 @@ impl AppRoot {
         let fields = [
             ("Server URL", login.server.as_str(), login.field == 0),
             ("Username", login.username.as_str(), login.field == 1),
-            ("Password", if login.password.is_empty() { "" } else { "••••••••" }, login.field == 2),
+            (
+                "Password",
+                if login.password.is_empty() {
+                    ""
+                } else {
+                    "••••••••"
+                },
+                login.field == 2,
+            ),
         ];
         div()
             .size_full()
@@ -513,10 +530,18 @@ impl AppRoot {
                             .max_h(px(46.0))
                             .rounded_md()
                             .border_1()
-                            .border_color(rgb(if active { palette::primary() } else { palette::outline_variant() }))
+                            .border_color(rgb(if active {
+                                palette::primary()
+                            } else {
+                                palette::outline_variant()
+                            }))
                             .bg(rgb(palette::surface_container_highest()))
                             .text_size(px(14.0))
-                            .text_color(rgb(if value.is_empty() { palette::on_surface_variant() } else { palette::on_surface() }))
+                            .text_color(rgb(if value.is_empty() {
+                                palette::on_surface_variant()
+                            } else {
+                                palette::on_surface()
+                            }))
                             .child(if value.is_empty() {
                                 label.to_string()
                             } else {
@@ -533,7 +558,11 @@ impl AppRoot {
                             .bg(rgb(palette::primary_container()))
                             .text_size(px(14.0))
                             .text_color(rgb(palette::on_primary_container()))
-                            .child(if login.busy { "Logging in…" } else { "Log in" }),
+                            .child(if login.busy {
+                                "Logging in…"
+                            } else {
+                                "Log in"
+                            }),
                     )
                     .child(
                         div()
@@ -545,9 +574,17 @@ impl AppRoot {
                             .items_center()
                             .justify_center()
                             .rounded_md()
-                            .when(login.error.is_some(), |this| this.border_1().border_color(rgb(palette::error())).bg(rgb(palette::error_container())))
+                            .when(login.error.is_some(), |this| {
+                                this.border_1()
+                                    .border_color(rgb(palette::error()))
+                                    .bg(rgb(palette::error_container()))
+                            })
                             .text_size(px(11.0))
-                            .text_color(rgb(if login.error.is_some() { palette::on_error_container() } else { palette::on_surface_variant() }))
+                            .text_color(rgb(if login.error.is_some() {
+                                palette::on_error_container()
+                            } else {
+                                palette::on_surface_variant()
+                            }))
                             .text_center()
                             .whitespace_normal()
                             .child(login.error.clone().unwrap_or_else(|| {

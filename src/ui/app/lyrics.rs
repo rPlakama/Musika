@@ -1,12 +1,18 @@
-//! Extracted view methods.
+//! Lyrics layout, emphasis and transport animation state.
 
 use super::super::*;
 
 impl AppRoot {
     pub(in crate::ui) fn request_current_lyrics(&mut self) {
-        let Some(track) = self.player.current() else { return };
+        let Some(track) = self.player.current() else {
+            return;
+        };
         let id = track.id.clone();
-        if self.lyrics.as_ref().is_some_and(|lyrics| lyrics.song_id == id) {
+        if self
+            .lyrics
+            .as_ref()
+            .is_some_and(|lyrics| lyrics.song_id == id)
+        {
             return;
         }
         if self.lyrics_requested.as_deref() == Some(id.as_str()) {
@@ -18,7 +24,10 @@ impl AppRoot {
 
     pub(in crate::ui) fn lyrics_inline(&self) -> bool {
         let inline_width = (self.win_w * 0.95 - self.win_w * 0.012) / 2.0;
-        self.lyrics.as_ref().is_some_and(|lyrics| !lyrics.lines.is_empty()) && inline_width >= 300.0
+        self.lyrics
+            .as_ref()
+            .is_some_and(|lyrics| !lyrics.lines.is_empty())
+            && inline_width >= 300.0
     }
 
     pub(in crate::ui) fn press_transport(&mut self, index: usize) {
@@ -107,7 +116,12 @@ impl AppRoot {
         }
     }
 
-    pub(in crate::ui) fn lyric_wrap_count(window: &Window, text: &str, size: f32, width: f32) -> usize {
+    pub(in crate::ui) fn lyric_wrap_count(
+        window: &Window,
+        text: &str,
+        size: f32,
+        width: f32,
+    ) -> usize {
         if width <= 0.0 || text.is_empty() {
             return 1;
         }
@@ -149,31 +163,18 @@ impl AppRoot {
             .unwrap_or(0)
             .min(lyrics.lines.len() - 1);
         let mut base = (height * 0.055).clamp(13.0, 22.0);
-        let mut layout = lyrics_layout::layout(
-            &lyrics.lines,
-            active,
-            width,
-            height,
-            base,
-            |text, size| Self::lyric_wrap_count(window, text, size, width),
-        );
+        let mut layout =
+            lyrics_layout::layout(&lyrics.lines, active, width, height, base, |text, size| {
+                Self::lyric_wrap_count(window, text, size, width)
+            });
         // A single very long line can still be taller than the pane at the
         // nominal size. Step the type down until it fits, then keep it.
-        while base > 13.0
-            && layout
-                .rows
-                .iter()
-                .any(|row| row.height > height)
-        {
+        while base > 13.0 && layout.rows.iter().any(|row| row.height > height) {
             base -= 1.0;
-            layout = lyrics_layout::layout(
-                &lyrics.lines,
-                active,
-                width,
-                height,
-                base,
-                |text, size| Self::lyric_wrap_count(window, text, size, width),
-            );
+            layout =
+                lyrics_layout::layout(&lyrics.lines, active, width, height, base, |text, size| {
+                    Self::lyric_wrap_count(window, text, size, width)
+                });
         }
         let old_start = self.lyrics_window_start;
         if layout.start != old_start {
@@ -187,7 +188,8 @@ impl AppRoot {
             self.lyrics_shift
                 .target(0.0, 300.0, anim::Curve::OutCubic, &self.clock);
         } else {
-            self.lyrics_shift.target(0.0, 0.0, anim::Curve::Standard, &self.clock);
+            self.lyrics_shift
+                .target(0.0, 0.0, anim::Curve::Standard, &self.clock);
         }
         self.lyrics_window_start = layout.start;
         self.lyrics_layout = Some(layout);
@@ -211,14 +213,25 @@ impl AppRoot {
         self.lyrics_overlay = self.lyrics_overlay_wanted && !inline;
     }
 
-    pub(in crate::ui) fn on_lyrics_overlay(&mut self, _: &LyricsOverlay, _window: &mut Window, cx: &mut Context<Self>) {
+    pub(in crate::ui) fn on_lyrics_overlay(
+        &mut self,
+        _: &LyricsOverlay,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if self.fullscreen {
-            if self.lyrics.as_ref().is_some_and(|lyrics| !lyrics.lines.is_empty()) {
+            if self
+                .lyrics
+                .as_ref()
+                .is_some_and(|lyrics| !lyrics.lines.is_empty())
+            {
                 self.lyrics_overlay_wanted = !self.lyrics_overlay_wanted;
                 self.refresh_lyrics_overlay();
             }
         } else if self.page.as_ref().is_some_and(|page| {
-            self.notes.as_ref().is_some_and(|(id, notes)| *id == page.descriptor.id && !notes.is_empty())
+            self.notes
+                .as_ref()
+                .is_some_and(|(id, notes)| *id == page.descriptor.id && !notes.is_empty())
         }) {
             self.toggle_description();
         }

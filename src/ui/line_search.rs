@@ -645,22 +645,13 @@ mod tests {
         let mut state = LineSearchState::new();
         state.open();
         state.set_query("wi", &targets);
-        assert_eq!(
-            state.latest_hit(),
-            Some(LineHit { target: 0, row: 0 })
-        );
+        assert_eq!(state.latest_hit(), Some(LineHit { target: 0, row: 0 }));
 
         // Garbage that no longer matches does not wipe the remembered hit.
         state.set_query("wi##", &targets);
         assert!(state.candidates.is_empty());
         assert_eq!(state.current_hit(), None);
-        assert_eq!(
-            state.latest_hit(),
-            Some(LineHit {
-                target: 0,
-                row: 0
-            })
-        );
+        assert_eq!(state.latest_hit(), Some(LineHit { target: 0, row: 0 }));
 
         // Emptying the query starts a fresh search; there is nothing to
         // fall back to.
@@ -684,8 +675,7 @@ mod tests {
 
     #[test]
     fn search_fields_control_matching_not_painted_cells() {
-        let row = LineRow::new("visible title", "hidden subtitle", "")
-            .with_search_fields([0]);
+        let row = LineRow::new("visible title", "hidden subtitle", "").with_search_fields([0]);
         assert!(row.matches("visible"));
         assert!(!row.matches("hidden"));
         assert_eq!(row.cells(), ["visible title", "hidden subtitle", ""]);
@@ -696,26 +686,4 @@ mod tests {
         assert!(album.matches("7"));
         assert!(!album.matches("3:20"));
     }
-
-    #[test]
-    fn editor_selection_and_word_delete_respect_char_boundaries() {
-        let mut editor = LineEditor::new();
-        editor.insert("héllo wörld");
-        assert_eq!(editor.cursor, editor.text.len());
-        editor.delete_word_back();
-        assert_eq!(editor.text, "héllo ");
-        editor.select_all();
-        assert_eq!(editor.selected_text(), Some("héllo "));
-        editor.insert("x");
-        assert_eq!(editor.text, "x");
-        assert_eq!(editor.cursor, 1);
-
-        editor.set_text("abc");
-        editor.home(false);
-        editor.move_right(true);
-        assert_eq!(editor.selection(), Some(0..1));
-        editor.insert("Z");
-        assert_eq!(editor.text, "Zbc");
-    }
-
 }

@@ -52,7 +52,11 @@ impl Render for AppRoot {
         let progress = self.search_anim.target(
             if self.search_open { 1.0 } else { 0.0 },
             anim::STANDARD_MS,
-            if self.search_open { anim::Curve::Decelerate } else { anim::Curve::Accelerate },
+            if self.search_open {
+                anim::Curve::Decelerate
+            } else {
+                anim::Curve::Accelerate
+            },
             &self.clock,
         );
         if self.search.is_some() && !self.search_open && progress <= 0.001 {
@@ -69,7 +73,11 @@ impl Render for AppRoot {
         let line_progress = self.line_search_anim.target(
             if self.line_search.open { 1.0 } else { 0.0 },
             anim::STANDARD_MS,
-            if self.line_search.open { anim::Curve::Decelerate } else { anim::Curve::Accelerate },
+            if self.line_search.open {
+                anim::Curve::Decelerate
+            } else {
+                anim::Curve::Accelerate
+            },
             &self.clock,
         );
         if !self.line_search_anim.settled(&self.clock) || self.line_search_denied_opacity() > 0.0 {
@@ -99,12 +107,16 @@ impl Render for AppRoot {
             self.alt_menu = None;
             self.alt_target = None;
         }
-        let alt_overlay = (self.alt.armed || alt_progress > 0.001)
-            .then(|| self.alt_overlay(alt_progress));
+        let alt_overlay =
+            (self.alt.armed || alt_progress > 0.001).then(|| self.alt_overlay(alt_progress));
         let queue_progress = self.queue_anim.target(
             if self.queue_open { 1.0 } else { 0.0 },
             anim::EMPHASIZED_MS,
-            if self.queue_open { anim::Curve::Decelerate } else { anim::Curve::Accelerate },
+            if self.queue_open {
+                anim::Curve::Decelerate
+            } else {
+                anim::Curve::Accelerate
+            },
             &self.clock,
         );
         if !self.queue_anim.settled(&self.clock) {
@@ -113,7 +125,11 @@ impl Render for AppRoot {
         let fullscreen_progress = self.fullscreen_anim.target(
             if self.fullscreen { 1.0 } else { 0.0 },
             anim::EMPHASIZED_MS,
-            if self.fullscreen { anim::Curve::Decelerate } else { anim::Curve::Accelerate },
+            if self.fullscreen {
+                anim::Curve::Decelerate
+            } else {
+                anim::Curve::Accelerate
+            },
             &self.clock,
         );
         if !self.fullscreen_anim.settled(&self.clock) {
@@ -179,14 +195,22 @@ impl Render for AppRoot {
             let progress = (((self.clock.now - started) / 0.200) as f32).clamp(0.0, 1.0);
             self.exit_overlay(progress)
         });
-        self.toasts.retain(|toast| self.clock.now - toast.created_at < 6.320);
-        if self.toasts.iter().any(|toast| self.clock.now - toast.created_at < 6.320) {
+        self.toasts
+            .retain(|toast| self.clock.now - toast.created_at < 6.320);
+        if self
+            .toasts
+            .iter()
+            .any(|toast| self.clock.now - toast.created_at < 6.320)
+        {
             window.request_animation_frame();
         }
         let toast_overlay = (!self.toasts.is_empty()).then(|| self.toast_overlay(&*cx));
         let queue_overlay = (self.queue_open || queue_progress > 0.001)
             .then(|| self.queue_overlay(&*cx, queue_progress));
-        let overlay = self.search.as_ref().map(|search| self.search_overlay(&*cx, search, progress));
+        let overlay = self
+            .search
+            .as_ref()
+            .map(|search| self.search_overlay(&*cx, search, progress));
         let description_overlay = self.description_overlay(&*cx);
         if let Some(started) = self.exiting {
             window.request_animation_frame();
@@ -202,7 +226,11 @@ impl Render for AppRoot {
         if self.queue_open {
             self.ensure_queue_metrics();
         }
-        if self.search.as_ref().is_some_and(|search| !search.editor.text.is_empty()) {
+        if self
+            .search
+            .as_ref()
+            .is_some_and(|search| !search.editor.text.is_empty())
+        {
             let height = f32::from(window.viewport_size().height);
             self.ensure_search_metrics(height);
         }
@@ -237,7 +265,10 @@ impl Render for AppRoot {
         } else {
             self.list(&*cx, window).into_any_element()
         };
-        if self.row_scales.values().any(|scale| !scale.settled(&self.clock))
+        if self
+            .row_scales
+            .values()
+            .any(|scale| !scale.settled(&self.clock))
             || self
                 .row_hover_colors
                 .values()
@@ -332,16 +363,43 @@ impl Render for AppRoot {
             .child(top)
             .child(body)
             .child(status)
-            .child(match queue_overlay { Some(o) => o.into_any_element(), None => div().into_any_element() })
-            .child(match fullscreen_overlay { Some(o) => o.into_any_element(), None => div().into_any_element() })
+            .child(match queue_overlay {
+                Some(o) => o.into_any_element(),
+                None => div().into_any_element(),
+            })
+            .child(match fullscreen_overlay {
+                Some(o) => o.into_any_element(),
+                None => div().into_any_element(),
+            })
             .child(self.lyrics_overlay_element(lyrics_overlay_progress))
-            .child(match description_overlay { Some(o) => o.into_any_element(), None => div().into_any_element() })
-            .child(match line_overlay { Some(o) => o.into_any_element(), None => div().into_any_element() })
-            .child(match command_overlay { Some(o) => o.into_any_element(), None => div().into_any_element() })
-            .child(match toast_overlay { Some(o) => o.into_any_element(), None => div().into_any_element() })
-            .child(match exit_overlay { Some(o) => o.into_any_element(), None => div().into_any_element() })
-            .child(match overlay { Some(o) => o.into_any_element(), None => div().into_any_element() })
-            .child(match alt_overlay { Some(o) => o, None => div().into_any_element() })
+            .child(match description_overlay {
+                Some(o) => o.into_any_element(),
+                None => div().into_any_element(),
+            })
+            .child(match line_overlay {
+                Some(o) => o.into_any_element(),
+                None => div().into_any_element(),
+            })
+            .child(match command_overlay {
+                Some(o) => o.into_any_element(),
+                None => div().into_any_element(),
+            })
+            .child(match toast_overlay {
+                Some(o) => o.into_any_element(),
+                None => div().into_any_element(),
+            })
+            .child(match exit_overlay {
+                Some(o) => o.into_any_element(),
+                None => div().into_any_element(),
+            })
+            .child(match overlay {
+                Some(o) => o.into_any_element(),
+                None => div().into_any_element(),
+            })
+            .child(match alt_overlay {
+                Some(o) => o,
+                None => div().into_any_element(),
+            })
             .into_any_element()
     }
 }

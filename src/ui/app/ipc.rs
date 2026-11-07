@@ -1,4 +1,4 @@
-//! Extracted view methods.
+//! IPC command validation and execution.
 
 use super::super::*;
 

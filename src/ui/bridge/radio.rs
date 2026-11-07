@@ -1,4 +1,4 @@
-//! Bridge request family.
+//! Radio playback and Radio Tool requests.
 
 use super::*;
 
@@ -11,22 +11,13 @@ impl Bridge {
         let tx = self.tx.clone();
         crate::app::runtime().spawn(async move {
             let Some(dbs) = crate::app::dbs() else { return };
-            match crate::radio::tracks_json(&dbs, &kind, &id, start_index as i64).await {
-                Ok((json, start)) => match serde_json::from_str::<Vec<crate::player::Track>>(&json) {
-                    Ok(tracks) => {
-                        let _ = tx.send(Event::Queue {
-                            tracks,
-                            start: start as usize,
-                        });
-                    }
-                    Err(err) => {
-                        let _ = tx.send(Event::Error(format!("Could not start radio: {err:#}")));
-                    }
-                },
-                Err(err) => {
-                    let _ = tx.send(Event::Error(format!("Could not start radio: {err:#}")));
-                }
-            }
+            emit_queue_pair(
+                &tx,
+                crate::radio::tracks_json(&dbs, &kind, &id, start_index as i64)
+                    .await
+                    .map(|(json, start)| (json, start as usize)),
+                "Could not start radio",
+            );
         });
     }
 
@@ -64,7 +55,9 @@ impl Bridge {
                 }
             };
             if rows.is_empty() {
-                let _ = tx.send(Event::Error("This radio has no songs to download.".to_string()));
+                let _ = tx.send(Event::Error(
+                    "This radio has no songs to download.".to_string(),
+                ));
                 return;
             }
             for song in rows {
@@ -83,23 +76,12 @@ impl Bridge {
         let offline = self.offline.load(Ordering::Relaxed);
         crate::app::runtime().spawn(async move {
             let Some(dbs) = crate::app::dbs() else { return };
-            match crate::radio::shuffled_tracks_json(&dbs, &seed_kind, &seed_id, offline).await {
-                Ok(json) => match serde_json::from_str::<Vec<crate::player::Track>>(&json) {
-                    Ok(tracks) => {
-                        let _ = tx.send(Event::Queue { tracks, start: 0 });
-                    }
-                    Err(err) => {
-                        let _ = tx.send(Event::Error(format!(
-                            "Could not shuffle the radio: {err:#}"
-                        )));
-                    }
-                },
-                Err(err) => {
-                    let _ = tx.send(Event::Error(format!(
-                        "Could not shuffle the radio: {err:#}"
-                    )));
-                }
-            }
+            emit_queue(
+                &tx,
+                crate::radio::shuffled_tracks_json(&dbs, &seed_kind, &seed_id, offline).await,
+                0,
+                "Could not shuffle the radio",
+            );
         });
     }
 
@@ -118,16 +100,7 @@ impl Bridge {
                     return;
                 }
             };
-            match serde_json::from_str::<Vec<crate::player::Track>>(&json) {
-                Ok(tracks) => {
-                    let _ = tx.send(Event::QueueAppend { tracks });
-                }
-                Err(err) => {
-                    let _ = tx.send(Event::Error(format!(
-                        "Could not add the radio to the queue: {err:#}"
-                    )));
-                }
-            }
+            emit_append(&tx, Ok(json), "Could not add the radio to the queue");
         });
     }
 
@@ -138,9 +111,14 @@ impl Bridge {
             let Ok(Some(song)) = crate::library::song(&dbs.library, &song_id).await else {
                 return;
             };
-            let Some(album_id) = song.album_id else { return };
+            let Some(album_id) = song.album_id else {
+                return;
+            };
             let _ = tx.send(Event::OpenPage {
-                descriptor: super::super::state::PageDescriptor::new(super::super::state::PageKind::Album, album_id),
+                descriptor: super::super::state::PageDescriptor::new(
+                    super::super::state::PageKind::Album,
+                    album_id,
+                ),
             });
         });
     }

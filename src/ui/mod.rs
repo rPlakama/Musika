@@ -19,40 +19,50 @@
 //! Target is [GPUI](https://gpui.rs). The 64-file legacy UI abstraction spec lives in
 //! `docs/mds/gpuui/`; `09-gpui-retarget.md` maps it onto GPUI. This slice wires
 //! the shared bridge into an entity root with scope tabs and a virtual list.
-#![allow(dead_code)] // shared state carries page/travel fields ahead of G1 pages.
+//!
+//! Module layout:
+//! - `app/` — backend event application, key actions, navigation and search state.
+//! - `views/` — render-only surfaces (shell, library, page, fullscreen, queue, overlays).
+//! - `bridge/` — tokio request families and the single `Event` channel.
+//! - `widgets/` — shared text editing, media and row primitives.
 
 mod anim;
 mod app;
 mod bridge;
 mod collage;
-mod covers;
 mod command_line;
+mod covers;
 mod ipc_command;
 mod line_search;
 mod lyrics_layout;
 mod metrics;
-mod quick_actions;
 mod page_profile;
 mod palette;
+mod quick_actions;
 mod remote_images;
 mod scroll_modal;
 mod state;
 mod views;
 mod widgets;
 
+use self::widgets::media::{
+    CoverSource, art, art_scaled, collage_art, cover_source, format_time, highlighted_text, icon,
+    icon_rotated, loading_placeholder, loading_skeleton, page_key, remote_cover, repeat_label,
+    transport_button,
+};
 use self::widgets::text_edit;
-use self::widgets::media::{art, art_scaled, cover_source, collage_art, format_time, highlighted_text, icon, icon_rotated, loading_placeholder, loading_skeleton, page_key, repeat_label, transport_button, CoverSource, remote_cover};
 
 use gpui::{
-    App, Application, Bounds, Context, FocusHandle, KeyBinding, Render, Window,
-    AssetSource, WindowBounds, WindowOptions, Animation, AnimationExt, actions, div, img, prelude::*, px, relative, rgb, size, svg, uniform_list,
-    HighlightStyle, StyledText,
-    UniformListScrollHandle,
+    Animation, AnimationExt, App, Application, AssetSource, Bounds, Context, FocusHandle,
+    HighlightStyle, KeyBinding, Render, StyledText, UniformListScrollHandle, Window, WindowBounds,
+    WindowOptions, actions, div, img, prelude::*, px, relative, rgb, size, svg, uniform_list,
 };
 
 use bridge::{Event, SyncMode};
 use quick_actions::{AltGesture, Direction, QuickKind, QuickMenu, QuickVerb};
-use state::{PageDescriptor, PageKind, PageState, Row, RowKind, RowWindow, Scope, Travel, ViewState};
+use state::{
+    PageDescriptor, PageKind, PageState, Row, RowKind, RowWindow, Scope, Travel, ViewState,
+};
 
 actions!(
     musika,
@@ -108,73 +118,73 @@ pub fn run() {
         .with_http_client(remote_images::app_http_client())
         .with_assets(Assets)
         .run(|cx: &mut App| {
-        cx.bind_keys([
-            KeyBinding::new("q", Back, Some("main")),
-            KeyBinding::new("ctrl-q", QueueToggle, Some("main")),
-            KeyBinding::new("d d", QueueRemove, Some("main")),
-            KeyBinding::new("ctrl-shift-k", QueueUp, Some("main")),
-            KeyBinding::new("ctrl-shift-j", QueueDown, Some("main")),
-            KeyBinding::new("ctrl-r", RepeatCycle, Some("main")),
-            KeyBinding::new("tab", SearchScopeNext, Some("main")),
-            KeyBinding::new("shift-tab", SearchScopePrev, Some("main")),
-            KeyBinding::new("shift-enter", ToggleFullscreen, Some("main")),
-            KeyBinding::new("j", MoveDown, Some("main")),
-            KeyBinding::new("k", MoveUp, Some("main")),
-            KeyBinding::new("g g", Top, Some("main")),
-            KeyBinding::new("shift-g", Bottom, Some("main")),
-            KeyBinding::new("shift-j", ScopeNext, Some("main")),
-            KeyBinding::new("shift-k", ScopePrev, Some("main")),
-            KeyBinding::new("shift-l", OrderNext, Some("main")),
-            KeyBinding::new("shift-h", OrderPrev, Some("main")),
-            KeyBinding::new("r", Refresh, Some("main")),
-            KeyBinding::new("enter", Enter, Some("main")),
-            KeyBinding::new("v", Visual, Some("main")),
-            KeyBinding::new("shift-q", Home, Some("main")),
-            KeyBinding::new("i", InsertMode, Some("main")),
-            KeyBinding::new("ctrl-h", SearchScopePrev, Some("main")),
-            KeyBinding::new("ctrl-l", SearchScopeNext, Some("main")),
-            KeyBinding::new("shift-space f", Search, Some("main")),
-            KeyBinding::new("shift-space shift-f", Search, Some("main")),
-            KeyBinding::new("up", MoveUp, Some("main")),
-            KeyBinding::new("down", MoveDown, Some("main")),
-            KeyBinding::new("space", PlayPause, Some("main")),
-            KeyBinding::new("m", Mute, Some("main")),
-            KeyBinding::new("-", VolumeDown, Some("main")),
-            KeyBinding::new("=", VolumeUp, Some("main")),
-            KeyBinding::new("+", VolumeUp, Some("main")),
-            KeyBinding::new(",", SeekBack, Some("main")),
-            KeyBinding::new(".", SeekForward, Some("main")),
-            KeyBinding::new("ctrl-n", NextTrack, Some("main")),
-            KeyBinding::new("ctrl-p", PrevTrack, Some("main")),
-            KeyBinding::new("shift-v", VisualAll, Some("main")),
-            KeyBinding::new("[ b", PrevPlace, Some("main")),
-            KeyBinding::new("] b", NextPlace, Some("main")),
-            KeyBinding::new("ctrl-d", PageDown, Some("main")),
-            KeyBinding::new("ctrl-u", PageUp, Some("main")),
-            KeyBinding::new("pagedown", PageDown, Some("main")),
-            KeyBinding::new("pageup", PageUp, Some("main")),
-        ]);
-        cx.on_window_closed(|cx| {
-            crate::scroll_memory::persist();
-            if cx.windows().is_empty() {
-                cx.quit();
-            }
-        })
-        .detach();
+            cx.bind_keys([
+                KeyBinding::new("q", Back, Some("main")),
+                KeyBinding::new("ctrl-q", QueueToggle, Some("main")),
+                KeyBinding::new("d d", QueueRemove, Some("main")),
+                KeyBinding::new("ctrl-shift-k", QueueUp, Some("main")),
+                KeyBinding::new("ctrl-shift-j", QueueDown, Some("main")),
+                KeyBinding::new("ctrl-r", RepeatCycle, Some("main")),
+                KeyBinding::new("tab", SearchScopeNext, Some("main")),
+                KeyBinding::new("shift-tab", SearchScopePrev, Some("main")),
+                KeyBinding::new("shift-enter", ToggleFullscreen, Some("main")),
+                KeyBinding::new("j", MoveDown, Some("main")),
+                KeyBinding::new("k", MoveUp, Some("main")),
+                KeyBinding::new("g g", Top, Some("main")),
+                KeyBinding::new("shift-g", Bottom, Some("main")),
+                KeyBinding::new("shift-j", ScopeNext, Some("main")),
+                KeyBinding::new("shift-k", ScopePrev, Some("main")),
+                KeyBinding::new("shift-l", OrderNext, Some("main")),
+                KeyBinding::new("shift-h", OrderPrev, Some("main")),
+                KeyBinding::new("r", Refresh, Some("main")),
+                KeyBinding::new("enter", Enter, Some("main")),
+                KeyBinding::new("v", Visual, Some("main")),
+                KeyBinding::new("shift-q", Home, Some("main")),
+                KeyBinding::new("i", InsertMode, Some("main")),
+                KeyBinding::new("ctrl-h", SearchScopePrev, Some("main")),
+                KeyBinding::new("ctrl-l", SearchScopeNext, Some("main")),
+                KeyBinding::new("shift-space f", Search, Some("main")),
+                KeyBinding::new("shift-space shift-f", Search, Some("main")),
+                KeyBinding::new("up", MoveUp, Some("main")),
+                KeyBinding::new("down", MoveDown, Some("main")),
+                KeyBinding::new("space", PlayPause, Some("main")),
+                KeyBinding::new("m", Mute, Some("main")),
+                KeyBinding::new("-", VolumeDown, Some("main")),
+                KeyBinding::new("=", VolumeUp, Some("main")),
+                KeyBinding::new("+", VolumeUp, Some("main")),
+                KeyBinding::new(",", SeekBack, Some("main")),
+                KeyBinding::new(".", SeekForward, Some("main")),
+                KeyBinding::new("ctrl-n", NextTrack, Some("main")),
+                KeyBinding::new("ctrl-p", PrevTrack, Some("main")),
+                KeyBinding::new("shift-v", VisualAll, Some("main")),
+                KeyBinding::new("[ b", PrevPlace, Some("main")),
+                KeyBinding::new("] b", NextPlace, Some("main")),
+                KeyBinding::new("ctrl-d", PageDown, Some("main")),
+                KeyBinding::new("ctrl-u", PageUp, Some("main")),
+                KeyBinding::new("pagedown", PageDown, Some("main")),
+                KeyBinding::new("pageup", PageUp, Some("main")),
+            ]);
+            cx.on_window_closed(|cx| {
+                crate::scroll_memory::persist();
+                if cx.windows().is_empty() {
+                    cx.quit();
+                }
+            })
+            .detach();
 
-        let bounds = Bounds::centered(None, size(px(1200.0), px(800.0)), cx);
-        cx.open_window(
-            WindowOptions {
-                window_bounds: Some(WindowBounds::Windowed(bounds)),
-                ..Default::default()
-            },
-            |window, cx| {
-                cx.activate(true);
-                cx.new(|cx| AppRoot::new(window, cx))
-            },
-        )
-        .expect("GPUI: could not open the application window");
-    });
+            let bounds = Bounds::centered(None, size(px(1200.0), px(800.0)), cx);
+            cx.open_window(
+                WindowOptions {
+                    window_bounds: Some(WindowBounds::Windowed(bounds)),
+                    ..Default::default()
+                },
+                |window, cx| {
+                    cx.activate(true);
+                    cx.new(|cx| AppRoot::new(window, cx))
+                },
+            )
+            .expect("GPUI: could not open the application window");
+        });
 }
 
 struct Header {
@@ -471,8 +481,12 @@ fn page_actions(page: &PageBarState, artist_tool: bool) -> Vec<TopBarAction> {
 fn topbar_actions_for(mode: SuperiorMode, page: Option<&PageBarState>) -> Vec<TopBarAction> {
     match mode {
         SuperiorMode::Home => vec![TopBarAction::Sync, TopBarAction::Wipe],
-        SuperiorMode::Album => page.map(|page| page_actions(page, false)).unwrap_or_default(),
-        SuperiorMode::Artist => page.map(|page| page_actions(page, true)).unwrap_or_default(),
+        SuperiorMode::Album => page
+            .map(|page| page_actions(page, false))
+            .unwrap_or_default(),
+        SuperiorMode::Artist => page
+            .map(|page| page_actions(page, true))
+            .unwrap_or_default(),
         SuperiorMode::Playlist => Vec::new(),
         SuperiorMode::Radio => vec![TopBarAction::Tool],
     }
@@ -716,7 +730,9 @@ impl AppRoot {
             )),
             fullscreen_album: None,
             fullscreen_album_requested: None,
-            status_anchors: std::rc::Rc::new(std::cell::RefCell::new([None, None, None, None, None, None])),
+            status_anchors: std::rc::Rc::new(std::cell::RefCell::new([
+                None, None, None, None, None, None,
+            ])),
             lyrics: None,
             lyrics_requested: None,
             quit_armed_at: None,
@@ -820,188 +836,8 @@ impl AppRoot {
         app
     }
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
     const SYNC_TURN_SECS: f64 = 1.05;
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 }
-
-
 
 fn parse_page_spec(spec: &str) -> Option<PageDescriptor> {
     let (kind, id) = spec.split_once(':')?;
@@ -1026,23 +862,6 @@ fn parse_page_spec(spec: &str) -> Option<PageDescriptor> {
 
 static COVERS: std::sync::OnceLock<std::sync::Mutex<covers::CoverStore>> =
     std::sync::OnceLock::new();
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 impl SearchState {
     fn kind_index(kind: state::RowKind) -> usize {
@@ -1140,9 +959,6 @@ fn local_day(secs: i64) -> String {
         .map(|tm| format!("{:02}", tm.tm_mday))
         .unwrap_or_else(|| "—".to_string())
 }
-
-
-
 
 fn join_phrase(parts: &[&str]) -> String {
     parts

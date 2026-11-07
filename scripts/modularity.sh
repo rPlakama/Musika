@@ -38,7 +38,7 @@ printf '\n== totals\n'
 printf 'production files: %s\n' "$(printf '%s\n' "$files" | wc -l | tr -d ' ')"
 printf 'production loc:   %s\n' "$(wc -l $files | tail -1 | awk '{print $1}')"
 printf 'production fns:   %s\n' "$(grep -RhEc '^[[:space:]]*(pub(\([^)]*\))?[[:space:]]+)?(async[[:space:]]+)?fn[[:space:]]+' $files | awk '{s+=$1} END{print s}')"
-printf 'test loc:         %s\n' "$(wc -l <src/test.rs)"
+printf 'test loc:         %s\n' "$(wc -l src/test.rs src/test/*.rs | tail -1 | awk '{print $1}')"
 
 printf '\n== cross-module crate:: references\n'
 grep -rhoE 'crate::[a-z_]+' src --include='*.rs' --exclude='test.rs' \

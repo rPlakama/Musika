@@ -1,10 +1,12 @@
-//! Extracted view methods.
+//! Prompt status, toasts and retry actions.
 
 use super::super::*;
 
 impl AppRoot {
     pub(in crate::ui) fn flush_status(&self) {
-        let Some(header) = self.header.as_ref() else { return };
+        let Some(header) = self.header.as_ref() else {
+            return;
+        };
         let Some(dbs) = crate::app::dbs() else { return };
         let queue = self.player.queue_snapshot();
         let queue: Vec<&str> = queue.iter().map(|track| track.id.as_str()).collect();
@@ -25,7 +27,8 @@ impl AppRoot {
         let status = crate::status::SessionStatus {
             server_url: header.server_url.clone(),
             username: header.username.clone(),
-            album_id: current.and_then(|track| (!track.album_id.is_empty()).then(|| track.album_id.clone())),
+            album_id: current
+                .and_then(|track| (!track.album_id.is_empty()).then(|| track.album_id.clone())),
             song_id: current.map(|track| track.id.clone()),
             page_kind,
             page_id,
@@ -37,12 +40,18 @@ impl AppRoot {
             updated_at: crate::consts::now_secs(),
         };
         crate::debug_log!("GPUI: flushing status (queue {} tracks)", self.player.len());
-        if let Err(err) = crate::app::runtime().block_on(crate::status::save(&dbs.status, &status)) {
+        if let Err(err) = crate::app::runtime().block_on(crate::status::save(&dbs.status, &status))
+        {
             eprintln!("status: could not save the session: {err:#}");
         }
     }
 
-    pub(in crate::ui) fn push_toast(&mut self, message: String, kind: ToastKind, retry: Option<RetryAction>) {
+    pub(in crate::ui) fn push_toast(
+        &mut self,
+        message: String,
+        kind: ToastKind,
+        retry: Option<RetryAction>,
+    ) {
         if self.toasts.iter().any(|toast| toast.message == message) {
             return;
         }

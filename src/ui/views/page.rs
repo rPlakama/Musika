@@ -1,4 +1,4 @@
-//! Extracted view methods.
+//! Album/artist/playlist/radio page view.
 
 use super::super::*;
 
@@ -26,54 +26,42 @@ impl AppRoot {
         let header_h = cover_bottom.max(240.0);
 
         if page.loading && page.rows.is_empty() {
-            return div()
-                .flex()
-                .flex_col()
-                .flex_1()
-                .child(
-                    div()
-                        .flex()
-                        .flex_1()
-                        .items_center()
-                        .justify_center()
-                        .text_size(px(15.0))
-                        .text_color(rgb(palette::on_surface_variant()))
-                        .child("Loading…"),
-                );
+            return div().flex().flex_col().flex_1().child(
+                div()
+                    .flex()
+                    .flex_1()
+                    .items_center()
+                    .justify_center()
+                    .text_size(px(15.0))
+                    .text_color(rgb(palette::on_surface_variant()))
+                    .child("Loading…"),
+            );
         }
         if let Some(error) = &page.error {
-            return div()
-                .flex()
-                .flex_col()
-                .flex_1()
-                .child(
-                    div()
-                        .flex()
-                        .flex_1()
-                        .items_center()
-                        .justify_center()
-                        .text_size(px(13.0))
-                        .text_color(rgb(palette::on_surface_variant()))
-                        .child(error.clone()),
-                );
+            return div().flex().flex_col().flex_1().child(
+                div()
+                    .flex()
+                    .flex_1()
+                    .items_center()
+                    .justify_center()
+                    .text_size(px(13.0))
+                    .text_color(rgb(palette::on_surface_variant()))
+                    .child(error.clone()),
+            );
         }
 
         let count = page.rows.len();
         if count == 0 {
-            return div()
-                .flex()
-                .flex_col()
-                .flex_1()
-                .child(
-                    div()
-                        .flex()
-                        .flex_1()
-                        .items_center()
-                        .justify_center()
-                        .text_size(px(15.0))
-                        .text_color(rgb(palette::on_surface_variant()))
-                        .child(profile.empty_text),
-                );
+            return div().flex().flex_col().flex_1().child(
+                div()
+                    .flex()
+                    .flex_1()
+                    .items_center()
+                    .justify_center()
+                    .text_size(px(15.0))
+                    .text_color(rgb(palette::on_surface_variant()))
+                    .child(profile.empty_text),
+            );
         }
         let scroll = self.page_scroll_modal.handle.clone();
         div()
@@ -106,83 +94,110 @@ impl AppRoot {
                     .px(px(page_w * 0.02))
                     .pt(px(page_w * 0.02))
                     .child(
-                        uniform_list("page-rows", count, cx.processor(move |this, range: std::ops::Range<usize>, _window, cx| {
-                            let row_h = this.page_scroll_modal.row_h;
-                            let mut items = Vec::with_capacity(range.len());
-                            for index in range {
-                                let selected_id = this.selected_id.clone();
-                                let Some((row, selected)) = this.page.as_ref().and_then(|page| {
-                                    page.rows.get(index).map(|row| {
-                                        let selected = selected_id.as_deref()
-                                            == Some(row.id.as_str())
-                                            || index == page.cursor
-                                            || page.selection.contains(page.cursor, index);
-                                        (row.clone(), selected)
-                                    })
-                                }) else {
-                                    break;
-                                };
-                                let hovered = this.hovered_page == Some(index);
-                                let page_base = if index % 2 != 0 { palette::surface_container_lowest() } else { palette::surface() };
-                                let hover_fill = this
-                                    .row_hover_colors
-                                    .entry(format!("page-hover:{index}"))
-                                    .or_insert_with(|| anim::ColorBehavior::new(page_base))
-                                    .target(
-                                        if hovered && !selected { palette::surface_container_high() } else { page_base },
-                                        anim::QUICK_MS,
-                                        anim::Curve::Standard,
-                                        &this.clock,
-                                    );
-                                let cover_scale = if selected { 1.20 } else { 1.0 };
-                                items.push(
-                                    div()
-                                        .id(gpui::ElementId::named_usize(if selected { "page-row-selected" } else { "page-row" }, index))
-                                        .w_full()
-                                        .flex()
-                                        .items_center()
-                                        .h(px((row_h - 2.0).max(18.0)))
-                                        .mt(px(1.0))
-                                        .px_3()
-                                        .rounded_sm()
-                                        .cursor_pointer()
-                                        .bg(if selected {
-                                            rgb(palette::secondary_container())
+                        uniform_list(
+                            "page-rows",
+                            count,
+                            cx.processor(
+                                move |this, range: std::ops::Range<usize>, _window, cx| {
+                                    let row_h = this.page_scroll_modal.row_h;
+                                    let mut items = Vec::with_capacity(range.len());
+                                    for index in range {
+                                        let selected_id = this.selected_id.clone();
+                                        let Some((row, selected)) =
+                                            this.page.as_ref().and_then(|page| {
+                                                page.rows.get(index).map(|row| {
+                                                    let selected = selected_id.as_deref()
+                                                        == Some(row.id.as_str())
+                                                        || index == page.cursor
+                                                        || page
+                                                            .selection
+                                                            .contains(page.cursor, index);
+                                                    (row.clone(), selected)
+                                                })
+                                            })
+                                        else {
+                                            break;
+                                        };
+                                        let hovered = this.hovered_page == Some(index);
+                                        let page_base = if index % 2 != 0 {
+                                            palette::surface_container_lowest()
                                         } else {
-                                            gpui::rgba(hover_fill)
-                                        })
-                                        .on_hover(cx.listener(move |this, hovered: &bool, _, cx| {
-                                            if *hovered {
-                                                this.hovered_page = Some(index);
-                                            } else if this.hovered_page == Some(index) {
-                                                this.hovered_page = None;
-                                            }
-                                            cx.notify();
-                                        }))
-                                        .on_click(cx.listener(move |this, _, _, cx| {
-                                            this.status_focus = None;
-                                            if let Some(page) = this.page.as_mut() {
-                                                page.select(index);
-                                            }
-                                            this.follow_page(true);
-                                            this.activate_page_cursor();
-                                            cx.notify();
-                                        }))
-                                        .child(this.row_content(
-                                            &row,
-                                            RowPaint {
-                                                flags: row_flags,
-                                                surface: LineSurface::Page,
-                                                index,
-                                                selected,
-                                                height: row_h,
-                                                cover_scale,
-                                            },
-                                        )),
-                                );
-                            }
-                            items
-                        }))
+                                            palette::surface()
+                                        };
+                                        let hover_fill = this
+                                            .row_hover_colors
+                                            .entry(format!("page-hover:{index}"))
+                                            .or_insert_with(|| anim::ColorBehavior::new(page_base))
+                                            .target(
+                                                if hovered && !selected {
+                                                    palette::surface_container_high()
+                                                } else {
+                                                    page_base
+                                                },
+                                                anim::QUICK_MS,
+                                                anim::Curve::Standard,
+                                                &this.clock,
+                                            );
+                                        let cover_scale = if selected { 1.20 } else { 1.0 };
+                                        items.push(
+                                            div()
+                                                .id(gpui::ElementId::named_usize(
+                                                    if selected {
+                                                        "page-row-selected"
+                                                    } else {
+                                                        "page-row"
+                                                    },
+                                                    index,
+                                                ))
+                                                .w_full()
+                                                .flex()
+                                                .items_center()
+                                                .h(px((row_h - 2.0).max(18.0)))
+                                                .mt(px(1.0))
+                                                .px_3()
+                                                .rounded_sm()
+                                                .cursor_pointer()
+                                                .bg(if selected {
+                                                    rgb(palette::secondary_container())
+                                                } else {
+                                                    gpui::rgba(hover_fill)
+                                                })
+                                                .on_hover(cx.listener(
+                                                    move |this, hovered: &bool, _, cx| {
+                                                        if *hovered {
+                                                            this.hovered_page = Some(index);
+                                                        } else if this.hovered_page == Some(index) {
+                                                            this.hovered_page = None;
+                                                        }
+                                                        cx.notify();
+                                                    },
+                                                ))
+                                                .on_click(cx.listener(move |this, _, _, cx| {
+                                                    this.status_focus = None;
+                                                    if let Some(page) = this.page.as_mut() {
+                                                        page.select(index);
+                                                    }
+                                                    this.follow_page(true);
+                                                    this.activate_page_cursor();
+                                                    cx.notify();
+                                                }))
+                                                .child(this.row_content(
+                                                    &row,
+                                                    RowPaint {
+                                                        flags: row_flags,
+                                                        surface: LineSurface::Page,
+                                                        index,
+                                                        selected,
+                                                        height: row_h,
+                                                        cover_scale,
+                                                    },
+                                                )),
+                                        );
+                                    }
+                                    items
+                                },
+                            ),
+                        )
                         .pt(px(8.0))
                         .pb(px(8.0))
                         .h_full()

@@ -1,9 +1,12 @@
-//! Extracted view methods.
+//! Alt gesture snapshots, arm/release/aim, and quick-menu dispatch.
 
 use super::super::*;
 
 impl AppRoot {
-    pub(in crate::ui) fn page_alt_menu(&self, page: &PageBarState) -> Option<(QuickMenu, AltTarget)> {
+    pub(in crate::ui) fn page_alt_menu(
+        &self,
+        page: &PageBarState,
+    ) -> Option<(QuickMenu, AltTarget)> {
         let (menu, kind, radio_seed_kind, radio_seed_id) = match page.kind {
             PageKind::Album => (
                 QuickMenu::album_tool(page.cached, page.starred, page.rating),
@@ -186,10 +189,8 @@ impl AppRoot {
         let bounds = state.base_handle.bounds();
         let offset = state.base_handle.offset();
         let x = f32::from(bounds.origin.x) + f32::from(bounds.size.width) * 0.5;
-        let y = f32::from(bounds.origin.y)
-            + index as f32 * row_h
-            + f32::from(offset.y)
-            + row_h * 0.5;
+        let y =
+            f32::from(bounds.origin.y) + index as f32 * row_h + f32::from(offset.y) + row_h * 0.5;
         (
             x.clamp(30.0, (self.win_w - 30.0).max(30.0)),
             y.clamp(30.0, (self.win_h - 30.0).max(30.0)),
@@ -263,7 +264,11 @@ impl AppRoot {
             ids,
             selection: true,
         };
-        Some((QuickMenu::selection(Self::quick_kind(kind), all_starred), target, anchor))
+        Some((
+            QuickMenu::selection(Self::quick_kind(kind), all_starred),
+            target,
+            anchor,
+        ))
     }
 
     pub(in crate::ui) fn search_anchor_for(&self, index: usize, row_h: f32) -> (f32, f32) {
@@ -290,7 +295,12 @@ impl AppRoot {
         } else {
             (
                 self.win_w * 0.5,
-                self.win_h * 0.14 + 16.0 + 54.0 + 12.0 + 30.0 + 12.0
+                self.win_h * 0.14
+                    + 16.0
+                    + 54.0
+                    + 12.0
+                    + 30.0
+                    + 12.0
                     + index as f32 * row_h
                     + row_h * 0.5,
             )
@@ -372,11 +382,7 @@ impl AppRoot {
                     ids: vec![album_id],
                     selection: false,
                 };
-                return Some((
-                    menu,
-                    target,
-                    self.fullscreen_anchor(FullscreenFocus::Cover),
-                ));
+                return Some((menu, target, self.fullscreen_anchor(FullscreenFocus::Cover)));
             }
             let menu = QuickMenu::song_with(track.favorite);
             let target = AltTarget {
@@ -390,11 +396,7 @@ impl AppRoot {
                 ids: vec![track.id.clone()],
                 selection: false,
             };
-            return Some((
-                menu,
-                target,
-                self.fullscreen_anchor(FullscreenFocus::Title),
-            ));
+            return Some((menu, target, self.fullscreen_anchor(FullscreenFocus::Title)));
         }
         if let Some(focus) = self.status_focus {
             // The scoped status region owns Alt. Wipe opens the maintenance
@@ -472,7 +474,11 @@ impl AppRoot {
             return Some((
                 menu,
                 target,
-                self.alt_scroll_anchor(&self.queue_scroll_modal, self.queue_cursor, self.player.len()),
+                self.alt_scroll_anchor(
+                    &self.queue_scroll_modal,
+                    self.queue_cursor,
+                    self.player.len(),
+                ),
             ));
         }
         if let Some(page) = self.page.as_ref()
@@ -508,7 +514,11 @@ impl AppRoot {
             if let Some(hit) = self.alt_selection_target(
                 rows,
                 self.view.cursor.saturating_sub(lo),
-                self.alt_scroll_anchor(&self.library_scroll, self.view.cursor, self.view.rows.count),
+                self.alt_scroll_anchor(
+                    &self.library_scroll,
+                    self.view.cursor,
+                    self.view.rows.count,
+                ),
             ) {
                 return Some(hit);
             }
@@ -589,7 +599,9 @@ impl AppRoot {
             }
             _ => {}
         }
-        let Some(target) = self.alt_target.clone() else { return };
+        let Some(target) = self.alt_target.clone() else {
+            return;
+        };
         if !target.radio_seed_id.is_empty() {
             let seed_kind = target.radio_seed_kind.clone();
             let seed_id = target.radio_seed_id.clone();
@@ -615,11 +627,8 @@ impl AppRoot {
             match verb {
                 QuickVerb::Favorite { on } => {
                     for id in &target.ids {
-                        self.bridge.quick_favorite(
-                            target.queue_kind().to_string(),
-                            id.clone(),
-                            on,
-                        );
+                        self.bridge
+                            .quick_favorite(target.queue_kind().to_string(), id.clone(), on);
                     }
                 }
                 QuickVerb::AddToQueue => {
@@ -640,7 +649,8 @@ impl AppRoot {
         }
         match verb {
             QuickVerb::AddToQueue => {
-                self.bridge.quick_queue_add(target.queue_kind().to_string(), target.id.clone());
+                self.bridge
+                    .quick_queue_add(target.queue_kind().to_string(), target.id.clone());
             }
             QuickVerb::StartRadio => {
                 let seed_id = if !target.song_id.is_empty() {
@@ -658,10 +668,12 @@ impl AppRoot {
                     .quick_favorite(target.queue_kind().to_string(), target.id.clone(), on);
             }
             QuickVerb::RateAlbum { level } => {
-                self.bridge.quick_rate("album".to_string(), target.id.clone(), level);
+                self.bridge
+                    .quick_rate("album".to_string(), target.id.clone(), level);
             }
             QuickVerb::RateArtist { level } => {
-                self.bridge.quick_rate("artist".to_string(), target.id.clone(), level);
+                self.bridge
+                    .quick_rate("artist".to_string(), target.id.clone(), level);
             }
             QuickVerb::GoToAlbum => {
                 self.bridge.quick_go_album(target.song_id.clone());
@@ -682,8 +694,11 @@ impl AppRoot {
                 if target.kind == RowKind::Artist {
                     self.bridge.download_artist(target.id.clone(), on);
                 } else {
-                    self.bridge
-                        .quick_download(target.queue_kind().to_string(), target.id.clone(), on);
+                    self.bridge.quick_download(
+                        target.queue_kind().to_string(),
+                        target.id.clone(),
+                        on,
+                    );
                 }
             }
             QuickVerb::SaveRadio

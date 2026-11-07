@@ -1,4 +1,4 @@
-//! Extracted view methods.
+//! List/page/queue navigation, windowing, scroll follow and cover preload.
 
 use super::super::*;
 
@@ -17,21 +17,29 @@ impl AppRoot {
 
     pub(in crate::ui) fn follow_library(&mut self, animated: bool) {
         self.clock.tick();
-        self.library_scroll
-            .start(self.view.rows.count, self.view.cursor, animated, self.clock.now);
+        self.library_scroll.start(
+            self.view.rows.count,
+            self.view.cursor,
+            animated,
+            self.clock.now,
+        );
     }
 
     pub(in crate::ui) fn follow_page(&mut self, animated: bool) {
         self.status_focus = None;
         self.clock.tick();
-        let Some(page) = self.page.as_ref() else { return };
+        let Some(page) = self.page.as_ref() else {
+            return;
+        };
         self.selected_id = page.rows.get(page.cursor).map(|row| row.id.clone());
         self.page_scroll_modal
             .start(page.rows.len(), page.cursor, animated, self.clock.now);
     }
 
     pub(in crate::ui) fn follow_search(&mut self, animated: bool) {
-        let Some(search) = self.search.as_ref() else { return };
+        let Some(search) = self.search.as_ref() else {
+            return;
+        };
         let scope = search.scope;
         let count = search.scope_count(scope);
         let cursor = search.cursor();
@@ -48,16 +56,18 @@ impl AppRoot {
             .queue_snapshot()
             .get(self.queue_cursor)
             .map(|track| track.id.clone());
-        self.queue_scroll_modal
-            .start(self.player.len(), self.queue_cursor, animated, self.clock.now);
+        self.queue_scroll_modal.start(
+            self.player.len(),
+            self.queue_cursor,
+            animated,
+            self.clock.now,
+        );
     }
 
     pub(in crate::ui) fn land_library(&mut self, index: usize) {
         self.status_focus = None;
         self.reset_row_scales();
-        let cursor = self
-            .library_scroll
-            .land(self.view.rows.count, index);
+        let cursor = self.library_scroll.land(self.view.rows.count, index);
         self.view.select(cursor);
         self.selected_id = self.view.rows.get(cursor).map(|row| row.id.clone());
         self.view.rows.requested = None;
@@ -68,7 +78,9 @@ impl AppRoot {
     pub(in crate::ui) fn land_page(&mut self, index: usize) {
         self.status_focus = None;
         self.reset_row_scales();
-        let Some(page) = self.page.as_mut() else { return };
+        let Some(page) = self.page.as_mut() else {
+            return;
+        };
         let cursor = self.page_scroll_modal.land(page.rows.len(), index);
         page.select(cursor);
         self.selected_id = page.rows.get(cursor).map(|row| row.id.clone());
@@ -328,7 +340,11 @@ impl AppRoot {
             .request_display_cover(key, cover_art.to_string(), target);
     }
 
-    pub(in crate::ui) fn display_cover(&self, cover_art: &str, target: u32) -> Option<std::path::PathBuf> {
+    pub(in crate::ui) fn display_cover(
+        &self,
+        cover_art: &str,
+        target: u32,
+    ) -> Option<std::path::PathBuf> {
         self.display_covers
             .get(&format!("{cover_art}:{target}"))
             .cloned()
@@ -473,8 +489,12 @@ impl AppRoot {
     }
 
     pub(in crate::ui) fn activate_page_cursor(&mut self) {
-        let Some(page) = self.page.as_ref() else { return };
-        let Some(row) = page.rows.get(page.cursor) else { return };
+        let Some(page) = self.page.as_ref() else {
+            return;
+        };
+        let Some(row) = page.rows.get(page.cursor) else {
+            return;
+        };
         let profile = page_profile::PageProfile::for_descriptor(&page.descriptor);
         let action = profile.row_action(row);
         let index = page.cursor;
@@ -489,16 +509,15 @@ impl AppRoot {
             }
             page_profile::PageAction::PlayAlbum => {
                 if let Some(page) = self.page.as_ref() {
-                    self.bridge.play_album(
-                        page.descriptor.id.clone(),
-                        page.cursor,
-                    );
+                    self.bridge
+                        .play_album(page.descriptor.id.clone(), page.cursor);
                 }
             }
             page_profile::PageAction::PlayArtist => {
                 if !song_id.is_empty() {
                     self.last_play = Some((song_id.clone(), self.view.order_label().to_string()));
-                    self.bridge.play_song(song_id, self.view.order_label().to_string());
+                    self.bridge
+                        .play_song(song_id, self.view.order_label().to_string());
                 }
             }
             page_profile::PageAction::PlayPlaylist => {
@@ -519,10 +538,8 @@ impl AppRoot {
         }
         if matches!(row.kind, state::RowKind::Song) {
             self.last_play = Some((row.song_id.clone(), self.view.order_label().to_string()));
-            self.bridge.play_song(
-                row.song_id.clone(),
-                self.view.order_label().to_string(),
-            );
+            self.bridge
+                .play_song(row.song_id.clone(), self.view.order_label().to_string());
             return;
         }
         self.open_row_page(row);

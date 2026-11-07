@@ -1,4 +1,4 @@
-//! Extracted view methods.
+//! Floating search overlay and fields.
 
 use super::super::*;
 
@@ -10,7 +10,12 @@ impl AppRoot {
                 .is_some_and(|started| self.clock.now - started >= 0.06)
     }
 
-    pub(in crate::ui) fn search_field(&self, search: &SearchState, height: f32, denied: f32) -> gpui::AnyElement {
+    pub(in crate::ui) fn search_field(
+        &self,
+        search: &SearchState,
+        height: f32,
+        denied: f32,
+    ) -> gpui::AnyElement {
         let field = div()
             .h(px(height))
             .w_full()
@@ -92,7 +97,11 @@ impl AppRoot {
                 }
                 this.activate_search_result(cx);
             }))
-            .child(art_scaled(cover, row_h * 0.714, if selected || hovered { 1.08 } else { 1.0 }))
+            .child(art_scaled(
+                cover,
+                row_h * 0.714,
+                if selected || hovered { 1.08 } else { 1.0 },
+            ))
             .child(
                 div()
                     .flex()
@@ -143,11 +152,23 @@ impl AppRoot {
             .into_any_element()
     }
 
-    pub(in crate::ui) fn search_overlay(&self, cx: &Context<Self>, search: &SearchState, progress: f32) -> gpui::AnyElement {
+    pub(in crate::ui) fn search_overlay(
+        &self,
+        cx: &Context<Self>,
+        search: &SearchState,
+        progress: f32,
+    ) -> gpui::AnyElement {
         let row_h = 56.0;
         let field_h = 54.0;
         let panel_w = (self.win_w * 0.60).clamp(360.0, 680.0);
-        let panel_h = field_h + 12.0 + 34.0 + 10.0 + 24.0 + row_h * state::SEARCH_VISIBLE_ROWS as f32 + 36.0 + 32.0;
+        let panel_h = field_h
+            + 12.0
+            + 34.0
+            + 10.0
+            + 24.0
+            + row_h * state::SEARCH_VISIBLE_ROWS as f32
+            + 36.0
+            + 32.0;
         let denied = self.search_denied_opacity();
         let loading = self.search_loading_visible(search);
         let query_empty = search.editor.text.is_empty();
@@ -197,8 +218,7 @@ impl AppRoot {
                     let cursor = search.cursor();
                     for index in range {
                         let Some(row) = rows.get(index) else { break };
-                        let selected = index == cursor
-                            || search.selection.contains(cursor, index);
+                        let selected = index == cursor || search.selection.contains(cursor, index);
                         let hovered = this.hovered_row == Some(index);
                         items.push(this.search_result_row(
                             cx,
@@ -248,8 +268,8 @@ impl AppRoot {
                         if let Some(search) = this.search.as_mut() {
                             search.scope_cursors[search.scope] = search.cursor();
                             search.scope = scope;
-                            search.scope_cursors[scope] =
-                                search.scope_cursors[scope].min(search.scope_count(scope).saturating_sub(1));
+                            search.scope_cursors[scope] = search.scope_cursors[scope]
+                                .min(search.scope_count(scope).saturating_sub(1));
                             search.selection.clear();
                         }
                         this.follow_search(false);
@@ -312,7 +332,13 @@ impl AppRoot {
                                 .child("Most Played"),
                         )
                     })
-                    .child(div().flex_1().min_h_0().overflow_hidden().child(result_area))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_h_0()
+                            .overflow_hidden()
+                            .child(result_area),
+                    )
                     .child(
                         div()
                             .h(px(24.0))

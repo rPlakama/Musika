@@ -1,12 +1,12 @@
-//! Extracted view methods.
+//! Library sync lifecycle and palette rebuilds.
 
 use super::super::*;
 
 impl AppRoot {
     pub(in crate::ui) fn sync_angle(&self) -> f32 {
         if self.syncing {
-            let elapsed = ((self.clock.now - self.sync_spin_started).max(0.0)
-                / Self::SYNC_TURN_SECS) as f32;
+            let elapsed =
+                ((self.clock.now - self.sync_spin_started).max(0.0) / Self::SYNC_TURN_SECS) as f32;
             (self.sync_spin_offset + elapsed * 360.0).rem_euclid(360.0)
         } else {
             self.sync_settle.value(&self.clock)
@@ -42,12 +42,8 @@ impl AppRoot {
         self.sync_fill
             .target(1.0, anim::QUICK_MS, anim::Curve::Linear, &self.clock);
         self.sync_settle = anim::Behavior::new(angle);
-        self.sync_settle.target(
-            target,
-            anim::STANDARD_MS,
-            anim::Curve::Bounce,
-            &self.clock,
-        );
+        self.sync_settle
+            .target(target, anim::STANDARD_MS, anim::Curve::Bounce, &self.clock);
     }
 
     pub(in crate::ui) fn mark_sync_progress(&mut self, done: usize, total: usize) {

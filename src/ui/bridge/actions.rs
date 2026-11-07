@@ -1,4 +1,4 @@
-//! Bridge request family.
+//! Quick action requests (favourite/rating/download/queue/shuffle).
 
 use super::*;
 
@@ -26,7 +26,9 @@ impl Bridge {
                 }
             };
             if let Err(err) = result.await {
-                let _ = tx.send(Event::Error(format!("Could not update the favourite: {err:#}")));
+                let _ = tx.send(Event::Error(format!(
+                    "Could not update the favourite: {err:#}"
+                )));
                 return;
             }
             let local = match kind.as_str() {
@@ -35,7 +37,9 @@ impl Bridge {
                 _ => crate::artist_user::set_starred(&dbs.artist_user, &id, on).await,
             };
             if let Err(err) = local {
-                let _ = tx.send(Event::Error(format!("Could not save the favourite: {err:#}")));
+                let _ = tx.send(Event::Error(format!(
+                    "Could not save the favourite: {err:#}"
+                )));
                 return;
             }
             let row_kind = match kind.as_str() {
@@ -94,7 +98,9 @@ impl Bridge {
                     Ok(())
                 } else if kind == "song" {
                     let unmark = crate::download::unmark(&dbs.download, &id).await;
-                    let media = crate::media::remove_songs_media(&dbs.media, std::slice::from_ref(&id)).await;
+                    let media =
+                        crate::media::remove_songs_media(&dbs.media, std::slice::from_ref(&id))
+                            .await;
                     match (unmark, media) {
                         (Err(err), _) | (_, Err(err)) => Err(err),
                         _ => Ok(()),
@@ -121,7 +127,9 @@ impl Bridge {
                 Vec::new()
             };
             if songs.is_empty() {
-                let _ = tx.send(Event::Error("No songs to download for this item".to_string()));
+                let _ = tx.send(Event::Error(
+                    "No songs to download for this item".to_string(),
+                ));
                 return;
             }
             for song in songs {
@@ -145,19 +153,7 @@ impl Bridge {
             } else {
                 crate::queue::quick_tracks_json(&dbs, &kind, &id, offline).await
             };
-            match queued {
-                Ok(json) => match serde_json::from_str::<Vec<crate::player::Track>>(&json) {
-                    Ok(tracks) => {
-                        let _ = tx.send(Event::QueueAppend { tracks });
-                    }
-                    Err(err) => {
-                        let _ = tx.send(Event::Error(format!("Could not add to queue: {err:#}")));
-                    }
-                },
-                Err(err) => {
-                    let _ = tx.send(Event::Error(format!("Could not add to queue: {err:#}")));
-                }
-            }
+            emit_append(&tx, queued, "Could not add to queue");
         });
     }
 
@@ -165,12 +161,16 @@ impl Bridge {
         let tx = self.tx.clone();
         crate::app::runtime().spawn(async move {
             let Some(dbs) = crate::app::dbs() else { return };
-            let Ok(Some(artist_id)) = crate::library::album_artist_id(&dbs.library, &album_id).await
+            let Ok(Some(artist_id)) =
+                crate::library::album_artist_id(&dbs.library, &album_id).await
             else {
                 return;
             };
             let _ = tx.send(Event::OpenPage {
-                descriptor: super::super::state::PageDescriptor::new(super::super::state::PageKind::Artist, artist_id),
+                descriptor: super::super::state::PageDescriptor::new(
+                    super::super::state::PageKind::Artist,
+                    artist_id,
+                ),
             });
         });
     }
@@ -180,22 +180,13 @@ impl Bridge {
         let offline = self.offline.load(Ordering::Relaxed);
         crate::app::runtime().spawn(async move {
             let Some(dbs) = crate::app::dbs() else { return };
-            match crate::queue::playlist_tracks_json(&dbs, &id, offline, 0).await {
-                Ok((json, start)) => match serde_json::from_str::<Vec<crate::player::Track>>(&json) {
-                    Ok(tracks) => {
-                        let _ = tx.send(Event::Queue {
-                            tracks,
-                            start: start as usize,
-                        });
-                    }
-                    Err(err) => {
-                        let _ = tx.send(Event::Error(format!("Could not play the playlist: {err:#}")));
-                    }
-                },
-                Err(err) => {
-                    let _ = tx.send(Event::Error(format!("Could not play the playlist: {err:#}")));
-                }
-            }
+            emit_queue_pair(
+                &tx,
+                crate::queue::playlist_tracks_json(&dbs, &id, offline, 0)
+                    .await
+                    .map(|(json, start)| (json, start as usize)),
+                "Could not play the playlist",
+            );
         });
     }
 
@@ -205,19 +196,12 @@ impl Bridge {
         let offline = self.offline.load(Ordering::Relaxed);
         crate::app::runtime().spawn(async move {
             let Some(dbs) = crate::app::dbs() else { return };
-            match crate::queue::album_shuffle_json(&dbs, &album_id, offline).await {
-                Ok(json) => match serde_json::from_str::<Vec<crate::player::Track>>(&json) {
-                    Ok(tracks) => {
-                        let _ = tx.send(Event::Queue { tracks, start: 0 });
-                    }
-                    Err(err) => {
-                        let _ = tx.send(Event::Error(format!("Could not shuffle the album: {err:#}")));
-                    }
-                },
-                Err(err) => {
-                    let _ = tx.send(Event::Error(format!("Could not shuffle the album: {err:#}")));
-                }
-            }
+            emit_queue(
+                &tx,
+                crate::queue::album_shuffle_json(&dbs, &album_id, offline).await,
+                0,
+                "Could not shuffle the album",
+            );
         });
     }
 
@@ -226,19 +210,12 @@ impl Bridge {
         let offline = self.offline.load(Ordering::Relaxed);
         crate::app::runtime().spawn(async move {
             let Some(dbs) = crate::app::dbs() else { return };
-            match crate::queue::artist_shuffle_json(&dbs, &artist_id, offline).await {
-                Ok(json) => match serde_json::from_str::<Vec<crate::player::Track>>(&json) {
-                    Ok(tracks) => {
-                        let _ = tx.send(Event::Queue { tracks, start: 0 });
-                    }
-                    Err(err) => {
-                        let _ = tx.send(Event::Error(format!("Could not shuffle the artist: {err:#}")));
-                    }
-                },
-                Err(err) => {
-                    let _ = tx.send(Event::Error(format!("Could not shuffle the artist: {err:#}")));
-                }
-            }
+            emit_queue(
+                &tx,
+                crate::queue::artist_shuffle_json(&dbs, &artist_id, offline).await,
+                0,
+                "Could not shuffle the artist",
+            );
         });
     }
 }

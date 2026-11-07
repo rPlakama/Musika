@@ -1,4 +1,4 @@
-//! Bridge request family.
+//! Downloaded/starred mark requests.
 
 use super::*;
 

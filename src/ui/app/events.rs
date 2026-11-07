@@ -1,4 +1,4 @@
-//! Extracted view methods.
+//! Applies backend `Event`s to the root state.
 
 use super::super::*;
 
@@ -32,7 +32,10 @@ impl AppRoot {
                 order,
                 count,
             } => {
-                if generation < self.generation || scope != self.view.scope || order != self.view.order {
+                if generation < self.generation
+                    || scope != self.view.scope
+                    || order != self.view.order
+                {
                     return;
                 }
                 self.generation = generation;
@@ -54,7 +57,10 @@ impl AppRoot {
                 start,
                 rows,
             } => {
-                if generation < self.generation || scope != self.view.scope || order != self.view.order {
+                if generation < self.generation
+                    || scope != self.view.scope
+                    || order != self.view.order
+                {
                     return;
                 }
                 self.view.rows.install_window(start, rows);
@@ -68,7 +74,10 @@ impl AppRoot {
                 order,
                 rows,
             } => {
-                if generation < self.generation || scope != self.view.scope || order != self.view.order {
+                if generation < self.generation
+                    || scope != self.view.scope
+                    || order != self.view.order
+                {
                     return;
                 }
                 self.generation = generation;
@@ -132,10 +141,7 @@ impl AppRoot {
                 }
                 if kind == RowKind::Song
                     && let Some(starred) = starred
-                    && self
-                        .player
-                        .current()
-                        .is_some_and(|track| track.id == id)
+                    && self.player.current().is_some_and(|track| track.id == id)
                 {
                     self.player.set_track_favorite(&id, starred);
                 }
@@ -184,10 +190,7 @@ impl AppRoot {
                 }
                 self.push_toast("Library synced".to_string(), ToastKind::Notice, None);
             }
-            Event::RadioSaved {
-                name,
-                remote_error,
-            } => {
+            Event::RadioSaved { name, remote_error } => {
                 if let Some(error) = remote_error {
                     self.push_toast(
                         format!("Saved “{name}” locally; server save failed: {error}"),
@@ -195,11 +198,7 @@ impl AppRoot {
                         None,
                     );
                 } else {
-                    self.push_toast(
-                        format!("Saved radio “{name}”"),
-                        ToastKind::Notice,
-                        None,
-                    );
+                    self.push_toast(format!("Saved radio “{name}”"), ToastKind::Notice, None);
                 }
                 if self.page.is_none() && self.view.scope == Scope::Playlists {
                     self.reload();
@@ -304,36 +303,34 @@ impl AppRoot {
                 cover_art,
                 target,
                 path,
-            } => {
-                match path {
-                    Some(path) => {
-                        self.display_retry.remove(&key);
-                        self.display_covers.insert(key, path.clone());
-                        if let Some(trace) = self.cover_trace.as_ref()
-                            && trace.cover_art == cover_art
-                            && trace.bucket == target
-                        {
-                            crate::debug_log!(
-                                "album entry: proper res loaded cover={} bucket={} path={} elapsed_ms={:.1} at={}",
-                                cover_art,
-                                target,
-                                path.display(),
-                                trace.started.elapsed().as_secs_f64() * 1000.0,
-                                unix_ms()
-                            );
-                        }
-                    }
-                    None => {
-                        self.display_requested.remove(&key);
-                        self.display_retry.insert(key, self.clock.now + 5.0);
+            } => match path {
+                Some(path) => {
+                    self.display_retry.remove(&key);
+                    self.display_covers.insert(key, path.clone());
+                    if let Some(trace) = self.cover_trace.as_ref()
+                        && trace.cover_art == cover_art
+                        && trace.bucket == target
+                    {
                         crate::debug_log!(
-                            "album entry: cover load failed cover={} bucket={} path=none",
+                            "album entry: proper res loaded cover={} bucket={} path={} elapsed_ms={:.1} at={}",
                             cover_art,
-                            target
+                            target,
+                            path.display(),
+                            trace.started.elapsed().as_secs_f64() * 1000.0,
+                            unix_ms()
                         );
                     }
                 }
-            }
+                None => {
+                    self.display_requested.remove(&key);
+                    self.display_retry.insert(key, self.clock.now + 5.0);
+                    crate::debug_log!(
+                        "album entry: cover load failed cover={} bucket={} path=none",
+                        cover_art,
+                        target
+                    );
+                }
+            },
             Event::Preload {
                 scope,
                 order,
@@ -341,7 +338,12 @@ impl AppRoot {
                 rows,
             } => {
                 if self.trace {
-                    crate::debug_log!("GPUI trace: preload {} order {} count {}", scope.label(), order, count);
+                    crate::debug_log!(
+                        "GPUI trace: preload {} order {} count {}",
+                        scope.label(),
+                        order,
+                        count
+                    );
                 }
                 self.warm.insert((scope, order), (count, rows));
             }
@@ -397,7 +399,11 @@ impl AppRoot {
                 if page.descriptor != descriptor {
                     *page = PageState::new(descriptor.clone());
                 }
-                crate::debug_log!("GPUI: page cover={:?} title={}", header.cover_url, header.title);
+                crate::debug_log!(
+                    "GPUI: page cover={:?} title={}",
+                    header.cover_url,
+                    header.title
+                );
                 page.header = header;
                 page.rows = rows;
                 page.loading = false;
@@ -445,16 +451,28 @@ impl AppRoot {
                     offline_available,
                 });
             }
-            Event::LoggedIn { server_url, username, offline } => {
+            Event::LoggedIn {
+                server_url,
+                username,
+                offline,
+            } => {
                 self.login = None;
                 self.header = Some(Header {
                     server_url: server_url.clone(),
                     username: username.clone(),
                     server_type: String::new(),
                     last_sync: None,
-                    counts: self.header.as_ref().map(|header| header.counts).unwrap_or((0, 0, 0)),
+                    counts: self
+                        .header
+                        .as_ref()
+                        .map(|header| header.counts)
+                        .unwrap_or((0, 0, 0)),
                 });
-                self.error = Some(if offline { "Offline mode".to_string() } else { "Logged in".to_string() });
+                self.error = Some(if offline {
+                    "Offline mode".to_string()
+                } else {
+                    "Logged in".to_string()
+                });
                 self.reload();
                 if !offline {
                     self.bridge.refresh_header();
@@ -474,7 +492,8 @@ impl AppRoot {
                     document.lines.len(),
                     document.source
                 );
-                let new_song = self.lyrics.as_ref().map(|lyrics| lyrics.song_id.clone()) != Some(song_id.clone());
+                let new_song = self.lyrics.as_ref().map(|lyrics| lyrics.song_id.clone())
+                    != Some(song_id.clone());
                 self.lyrics = Some(LyricsState {
                     song_id,
                     synced: document.synced,
@@ -491,7 +510,8 @@ impl AppRoot {
                     self.lyrics_line_emphasis.clear();
                     self.lyrics_line_color.clear();
                     self.lyrics_layout = None;
-                    self.lyrics_track_fade.target(0.0, 0.0, anim::Curve::Standard, &self.clock);
+                    self.lyrics_track_fade
+                        .target(0.0, 0.0, anim::Curve::Standard, &self.clock);
                     self.lyrics_track_fade
                         .target(1.0, 300.0, anim::Curve::Decelerate, &self.clock);
                 }
@@ -547,10 +567,7 @@ impl AppRoot {
                     self.hovered_row = None;
                     search.loading = false;
                     self.search_loading_since = None;
-                    if !most_played
-                        && !search.editor.text.is_empty()
-                        && search.rows.is_empty()
-                    {
+                    if !most_played && !search.editor.text.is_empty() && search.rows.is_empty() {
                         self.search_denied_at = Some(self.clock.now);
                         self.search_denied_query = search.editor.text.clone();
                     }
@@ -596,8 +613,14 @@ impl AppRoot {
                 self.error = Some(message.clone());
                 let lower = message.to_lowercase();
                 let (kind, retry) = if lower.contains("playback") {
-                    (ToastKind::Error, self.last_play.as_ref().map(|_| RetryAction::Playback))
-                } else if lower.contains("library") || lower.contains("search") || lower.contains("sync") {
+                    (
+                        ToastKind::Error,
+                        self.last_play.as_ref().map(|_| RetryAction::Playback),
+                    )
+                } else if lower.contains("library")
+                    || lower.contains("search")
+                    || lower.contains("sync")
+                {
                     (ToastKind::Sync, Some(RetryAction::ReloadLibrary))
                 } else {
                     (ToastKind::Error, None)

@@ -1,4 +1,4 @@
-//! Bridge request family.
+//! Sync, wipe and container-maintenance requests.
 
 use super::*;
 
@@ -84,15 +84,17 @@ impl Bridge {
             let Some(dbs) = crate::app::dbs() else { return };
             let (cached, starred, rating) = match kind {
                 super::super::state::PageKind::Album => {
-                    let cached = crate::download::window_state(&dbs, &[], std::slice::from_ref(&id))
-                        .await
-                        .map(|marks| marks.albums_done.iter().any(|album| album == &id))
-                        .unwrap_or(false);
-                    let state = crate::library::album_states(&dbs.library, std::slice::from_ref(&id))
-                        .await
-                        .ok()
-                        .and_then(|states| states.get(&id).copied())
-                        .unwrap_or((false, 0));
+                    let cached =
+                        crate::download::window_state(&dbs, &[], std::slice::from_ref(&id))
+                            .await
+                            .map(|marks| marks.albums_done.iter().any(|album| album == &id))
+                            .unwrap_or(false);
+                    let state =
+                        crate::library::album_states(&dbs.library, std::slice::from_ref(&id))
+                            .await
+                            .ok()
+                            .and_then(|states| states.get(&id).copied())
+                            .unwrap_or((false, 0));
                     (cached, state.0, state.1.clamp(0, 5) as u8)
                 }
                 super::super::state::PageKind::Artist => {
@@ -137,7 +139,9 @@ impl Bridge {
                 .await
                 .unwrap_or_default();
             if ids.is_empty() {
-                let _ = tx.send(Event::Error("This artist has no songs to download.".to_string()));
+                let _ = tx.send(Event::Error(
+                    "This artist has no songs to download.".to_string(),
+                ));
                 return;
             }
             if on {
@@ -151,7 +155,9 @@ impl Bridge {
                     let _ = crate::download::unmark(&dbs.download, song).await;
                 }
                 if let Err(err) = crate::media::remove_songs_media(&dbs.media, &ids).await {
-                    let _ = tx.send(Event::Error(format!("Could not remove the artist media: {err:#}")));
+                    let _ = tx.send(Event::Error(format!(
+                        "Could not remove the artist media: {err:#}"
+                    )));
                 }
             }
             let _ = tx.send(Event::DownloadSettled);

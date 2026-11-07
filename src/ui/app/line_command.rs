@@ -1,4 +1,4 @@
-//! Extracted view methods.
+//! The `/` line-search and `:` command-line sessions.
 
 use super::super::*;
 
@@ -44,7 +44,11 @@ impl AppRoot {
         }
     }
 
-    pub(in crate::ui) fn line_search_commit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(in crate::ui) fn line_search_commit(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         // A typo after a valid prefix must not make Enter a no-op: fall back
         // to the last candidate that actually matched in this session.
         if let Some(hit) = self.line_search.latest_hit() {
@@ -67,7 +71,12 @@ impl AppRoot {
         cx.notify();
     }
 
-    pub(in crate::ui) fn line_search_key(&mut self, event: &gpui::KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
+    pub(in crate::ui) fn line_search_key(
+        &mut self,
+        event: &gpui::KeyDownEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let key = event.keystroke.key.as_str();
         let control = event.keystroke.modifiers.control;
         let shift = event.keystroke.modifiers.shift;
@@ -133,7 +142,9 @@ impl AppRoot {
         }
     }
 
-    pub(in crate::ui) fn line_search_targets(&self) -> (Vec<line_search::LineTarget>, Vec<LineSurface>) {
+    pub(in crate::ui) fn line_search_targets(
+        &self,
+    ) -> (Vec<line_search::LineTarget>, Vec<LineSurface>) {
         use line_search::{LineRow, LineTarget};
         let mut targets = Vec::new();
         let mut surfaces = Vec::new();
@@ -145,7 +156,11 @@ impl AppRoot {
             let visible = 12usize;
             let mut lines = vec![None; rows.len()];
             for (index, row) in rows.iter().take(visible).enumerate() {
-                lines[index] = Some(LineRow::new(row.title.clone(), row.subtitle.clone(), row.meta.clone()));
+                lines[index] = Some(LineRow::new(
+                    row.title.clone(),
+                    row.subtitle.clone(),
+                    row.meta.clone(),
+                ));
             }
             targets.push(LineTarget::new(lines));
             surfaces.push(LineSurface::Search);
@@ -158,10 +173,16 @@ impl AppRoot {
             let mut lines = vec![None; queue.len()];
             for (index, track) in queue.iter().enumerate() {
                 if range.contains(&index) {
-                    let duration = crate::browse::rows::format_duration(Some(track.duration as i32));
+                    let duration =
+                        crate::browse::rows::format_duration(Some(track.duration as i32));
                     lines[index] = Some(
-                        LineRow::with_extra(track.title.clone(), track.artist.clone(), "", vec![duration])
-                            .with_search_fields([0, 1, 3]),
+                        LineRow::with_extra(
+                            track.title.clone(),
+                            track.artist.clone(),
+                            "",
+                            vec![duration],
+                        )
+                        .with_search_fields([0, 1, 3]),
                     );
                 }
             }
@@ -179,7 +200,8 @@ impl AppRoot {
                 let mut lines = vec![None; count];
                 for (index, (_, text)) in lyrics.lines.iter().enumerate() {
                     if (start..end).contains(&index) {
-                        lines[index] = Some(LineRow::new(text.clone(), "", "").with_search_fields([0]));
+                        lines[index] =
+                            Some(LineRow::new(text.clone(), "", "").with_search_fields([0]));
                     }
                 }
                 targets.push(LineTarget::new(lines));
@@ -282,7 +304,12 @@ impl AppRoot {
             .target(0.0, anim::STANDARD_MS, anim::Curve::Accelerate, &self.clock);
     }
 
-    pub(in crate::ui) fn on_line_search(&mut self, _: &LineSearch, _window: &mut Window, cx: &mut Context<Self>) {
+    pub(in crate::ui) fn on_line_search(
+        &mut self,
+        _: &LineSearch,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         self.clear_line_search_selection();
         self.line_search.open();
         let (targets, surfaces) = self.line_search_targets();

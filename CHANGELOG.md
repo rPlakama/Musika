@@ -3,6 +3,12 @@
 All notable changes to Musika, newest first. `TASKLISTMAJOR.md` tracks the
 open work; this file is the release history.
 
+## 0.6.2 - _small fix_
+
+- Restore keyboard focus and key routing on the login screen: the login view
+  was returned outside the root key handler, so typing, Tab and Backspace did
+  nothing. The form now renders inside the focused root and is editable again.
+
 ## 0.6.1 - _Patching_
 
 A patch release for the GPUI shell: smaller modules, calmer search updates, and

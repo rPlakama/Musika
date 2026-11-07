@@ -14,7 +14,8 @@
 // You should have received a copy of the GNU General Public License
 // along with this program; if not, see <https://www.gnu.org/licenses/>.
 
-//! The `/` in-surface command line, as a pure model (no GPUI types).
+//! The `/` in-surface command line model. Editable text state lives in the shared
+//! `TextModal`; this module only owns matching, candidates and preview state.
 //!
 //! This mirrors `LineSearch.legacy` + `SearchMatch.js`: the whole window is one
 //! search buffer, made of the surfaces' visible rows in window order. Rows are
@@ -34,6 +35,8 @@
 //! The model has no window, focus or target-snapshot ownership. The caller
 //! snapshots `&[LineTarget]` once when `/` opens and reuses it for every query
 //! edit, exactly like legacy UI `LineSearch.open()` captures the visible row buffer.
+
+use super::text_modal::TextModal;
 
 use std::ops::Range;
 
@@ -198,15 +201,13 @@ pub struct LineHit {
     pub row: usize,
 }
 
-pub use super::widgets::text_edit::LineEditor;
-
 /// The `/` command-line session. `target` tracks the target that owns the
 /// currently previewed candidate (0 when there is none), for callers that
 /// publish the preview to one surface at a time.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct LineSearchState {
     pub open: bool,
-    pub editor: LineEditor,
+    pub editor: TextModal,
     pub candidates: Vec<LineHit>,
     pub index: Option<usize>,
     pub target: usize,
@@ -225,7 +226,7 @@ impl LineSearchState {
         &self.editor.text
     }
 
-    pub fn editor_mut(&mut self) -> &mut LineEditor {
+    pub fn editor_mut(&mut self) -> &mut TextModal {
         &mut self.editor
     }
 

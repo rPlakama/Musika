@@ -1,12 +1,12 @@
 //! Neovim-style `:` command line model.
 //!
-//! Text/cursor/selection live in [`LineEditor`] (shared with `/`). This module
+//! Text/cursor/selection live in [`TextModal`] (shared with `/`). This module
 //! owns the open state, auto-suggestions, Tab completion cycling, denied-flash
 //! timing and the INSERT/VISUAL label derivation.
 
 use super::anim;
 use super::ipc_command::{self, Suggestion};
-use super::line_search::LineEditor;
+use super::text_modal::{EditCommand, TextModal, apply};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct CompletionCycle {
@@ -19,7 +19,7 @@ struct CompletionCycle {
 #[derive(Debug, Default)]
 pub struct CommandLineState {
     open: bool,
-    pub editor: LineEditor,
+    pub editor: TextModal,
     pub suggestions: Vec<Suggestion>,
     pub selected: usize,
     cycle: Option<CompletionCycle>,
@@ -131,8 +131,8 @@ impl CommandLineState {
         self.refresh();
     }
 
-    pub fn apply_edit(&mut self, command: &super::widgets::text_edit::EditCommand) {
-        super::widgets::text_edit::apply(&mut self.editor, command);
+    pub fn apply_edit(&mut self, command: &EditCommand) {
+        apply(&mut self.editor, command);
         self.reset_completion();
         self.refresh();
     }

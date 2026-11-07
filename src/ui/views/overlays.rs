@@ -1,5 +1,6 @@
 //! Description, toast, exit, Alt-board and prompt-bar overlays.
 
+use super::super::text_modal::TextBoxStyle;
 use super::super::*;
 
 impl AppRoot {
@@ -192,17 +193,30 @@ impl AppRoot {
         anim::denied_opacity(self.line_search_denied_at, self.clock.now)
     }
 
-    pub(in crate::ui) fn line_search_field(&self, bar_h: f32) -> gpui::AnyElement {
-        text_edit::editor_content(
-            &self.line_search.editor,
-            bar_h * 0.36,
-            bar_h * 0.46,
-            "Search this surface",
-            true,
+    pub(in crate::ui) fn line_search_field(
+        &self,
+        window: &gpui::Window,
+        bar_h: f32,
+        width: f32,
+    ) -> gpui::AnyElement {
+        self.line_search.editor.render(
+            window,
+            TextBoxStyle {
+                placeholder: "Search this surface",
+                text_size: bar_h * 0.36,
+                caret_h: bar_h * 0.46,
+                max_width: width,
+                caret: true,
+                mask: false,
+            },
         )
     }
 
-    pub(in crate::ui) fn line_search_overlay(&self, progress: f32) -> gpui::Div {
+    pub(in crate::ui) fn line_search_overlay(
+        &self,
+        window: &gpui::Window,
+        progress: f32,
+    ) -> gpui::Div {
         let counter = match (
             self.line_search.current_hit(),
             self.line_search.candidates.len(),
@@ -213,6 +227,7 @@ impl AppRoot {
             _ => String::new(),
         };
         let bar_h = (self.win_h * 0.07).max(32.0);
+        let field_w = (self.win_w * 0.738).max(1.0);
         let denied = self.line_search_denied_opacity();
         div()
             .absolute()
@@ -239,7 +254,7 @@ impl AppRoot {
                             .text_color(rgb(palette::primary()))
                             .child("/"),
                     )
-                    .child(self.line_search_field(bar_h))
+                    .child(self.line_search_field(window, bar_h, field_w))
                     .child(
                         div()
                             .text_size(px(bar_h * 0.30))
@@ -260,18 +275,32 @@ impl AppRoot {
             )
     }
 
-    pub(in crate::ui) fn command_line_field(&self, bar_h: f32) -> gpui::AnyElement {
-        text_edit::editor_content(
-            &self.command_line.editor,
-            bar_h * 0.36,
-            bar_h * 0.46,
-            "Type a command…",
-            true,
+    pub(in crate::ui) fn command_line_field(
+        &self,
+        window: &gpui::Window,
+        bar_h: f32,
+        width: f32,
+    ) -> gpui::AnyElement {
+        self.command_line.editor.render(
+            window,
+            TextBoxStyle {
+                placeholder: "Type a command…",
+                text_size: bar_h * 0.36,
+                caret_h: bar_h * 0.46,
+                max_width: width,
+                caret: true,
+                mask: false,
+            },
         )
     }
 
-    pub(in crate::ui) fn command_line_overlay(&self, progress: f32) -> gpui::Div {
+    pub(in crate::ui) fn command_line_overlay(
+        &self,
+        window: &gpui::Window,
+        progress: f32,
+    ) -> gpui::Div {
         let bar_h = (self.win_h * 0.07).max(32.0);
+        let field_w = (self.win_w * 0.55).max(1.0);
         let row_h = (bar_h * 0.44).max(18.0);
         let suggestions: Vec<_> = self
             .command_line
@@ -357,7 +386,7 @@ impl AppRoot {
                             .text_color(rgb(palette::primary()))
                             .child(":"),
                     )
-                    .child(self.command_line_field(bar_h))
+                    .child(self.command_line_field(window, bar_h, field_w))
                     .child(
                         div()
                             .text_size(px(bar_h * 0.28))
@@ -481,21 +510,14 @@ impl AppRoot {
             }))
     }
 
-    pub(in crate::ui) fn login_view(&self) -> gpui::Div {
+    pub(in crate::ui) fn login_view(&self, window: &gpui::Window) -> gpui::Div {
         let login = self.login.as_ref().expect("login view");
         let fields = [
-            ("Server URL", login.server.as_str(), login.field == 0),
-            ("Username", login.username.as_str(), login.field == 1),
-            (
-                "Password",
-                if login.password.is_empty() {
-                    ""
-                } else {
-                    "••••••••"
-                },
-                login.field == 2,
-            ),
+            ("Server URL", &login.server, 0, false),
+            ("Username", &login.username, 1, false),
+            ("Password", &login.password, 2, true),
         ];
+        let field_w = (self.win_w * 0.224 - 26.0).max(1.0);
         div()
             .size_full()
             .bg(rgb(palette::background()))
@@ -518,7 +540,8 @@ impl AppRoot {
                             .text_center()
                             .child("MUSIKA"),
                     )
-                    .children(fields.into_iter().map(|(label, value, active)| {
+                    .children(fields.into_iter().map(|(label, input, index, mask)| {
+                        let active = login.field == index;
                         div()
                             .h(px(52.0))
                             .px_3()
@@ -526,8 +549,6 @@ impl AppRoot {
                             .items_center()
                             .min_w_0()
                             .overflow_hidden()
-                            .whitespace_normal()
-                            .max_h(px(46.0))
                             .rounded_md()
                             .border_1()
                             .border_color(rgb(if active {
@@ -536,17 +557,17 @@ impl AppRoot {
                                 palette::outline_variant()
                             }))
                             .bg(rgb(palette::surface_container_highest()))
-                            .text_size(px(14.0))
-                            .text_color(rgb(if value.is_empty() {
-                                palette::on_surface_variant()
-                            } else {
-                                palette::on_surface()
-                            }))
-                            .child(if value.is_empty() {
-                                label.to_string()
-                            } else {
-                                value.to_string()
-                            })
+                            .child(input.render(
+                                window,
+                                TextBoxStyle {
+                                    placeholder: label,
+                                    text_size: 14.0,
+                                    caret_h: 20.0,
+                                    max_width: field_w,
+                                    caret: active,
+                                    mask,
+                                },
+                            ))
                     }))
                     .child(
                         div()

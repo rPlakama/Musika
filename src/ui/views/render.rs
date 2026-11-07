@@ -44,7 +44,7 @@ impl Render for AppRoot {
                 .on_key_down(cx.listener(Self::on_key_down))
                 .on_modifiers_changed(cx.listener(Self::on_modifiers_changed))
                 .size_full()
-                .child(self.login_view())
+                .child(self.login_view(window))
                 .into_any_element();
         }
         let pending = std::mem::take(&mut self.pending_ipc);
@@ -94,7 +94,7 @@ impl Render for AppRoot {
             window.request_animation_frame();
         }
         let line_overlay = (self.line_search.open || line_progress > 0.001)
-            .then(|| self.line_search_overlay(line_progress));
+            .then(|| self.line_search_overlay(window, line_progress));
         let command_progress = self.command_line_anim.target(
             self.command_line.animation_target(),
             anim::STANDARD_MS,
@@ -107,7 +107,7 @@ impl Render for AppRoot {
             window.request_animation_frame();
         }
         let command_overlay = (self.command_line.is_open() || command_progress > 0.001)
-            .then(|| self.command_line_overlay(command_progress));
+            .then(|| self.command_line_overlay(window, command_progress));
         self.animate_alt(if self.alt.armed { 1.0 } else { 0.0 });
         let alt_progress = self.alt_spawn.value(&self.clock);
         if !self.alt_spawn.settled(&self.clock) {
@@ -220,7 +220,7 @@ impl Render for AppRoot {
         let overlay = self
             .search
             .as_ref()
-            .map(|search| self.search_overlay(&*cx, search, progress));
+            .map(|search| self.search_overlay(window, &*cx, search, progress));
         let description_overlay = self.description_overlay(&*cx);
         if let Some(started) = self.exiting {
             window.request_animation_frame();

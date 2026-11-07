@@ -1,5 +1,6 @@
 //! Floating search overlay and fields.
 
+use super::super::text_modal::TextBoxStyle;
 use super::super::*;
 
 impl AppRoot {
@@ -12,9 +13,11 @@ impl AppRoot {
 
     pub(in crate::ui) fn search_field(
         &self,
+        window: &gpui::Window,
         search: &SearchState,
         height: f32,
         denied: f32,
+        width: f32,
     ) -> gpui::AnyElement {
         let field = div()
             .h(px(height))
@@ -44,12 +47,16 @@ impl AppRoot {
                     palette::on_surface_variant()
                 },
             ))
-            .child(text_edit::editor_content(
-                &search.editor,
-                height * 0.32,
-                height * 0.42,
-                "Search artists, albums, songs",
-                search.typing,
+            .child(search.editor.render(
+                window,
+                TextBoxStyle {
+                    placeholder: "Search artists, albums, songs",
+                    text_size: height * 0.32,
+                    caret_h: height * 0.42,
+                    max_width: width,
+                    caret: search.typing,
+                    mask: false,
+                },
             ));
         field.into_any_element()
     }
@@ -155,6 +162,7 @@ impl AppRoot {
 
     pub(in crate::ui) fn search_overlay(
         &self,
+        window: &gpui::Window,
         cx: &Context<Self>,
         search: &SearchState,
         progress: f32,
@@ -319,7 +327,13 @@ impl AppRoot {
                     .flex_col()
                     .gap_3()
                     .on_click(cx.listener(|_, _, _, cx| cx.stop_propagation()))
-                    .child(self.search_field(search, field_h, denied))
+                    .child(self.search_field(
+                        window,
+                        search,
+                        field_h,
+                        denied,
+                        (panel_w - 76.0 - field_h * 0.40).max(1.0),
+                    ))
                     .child(
                         div()
                             .h(px(30.0))

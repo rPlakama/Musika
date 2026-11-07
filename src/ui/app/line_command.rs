@@ -2,6 +2,8 @@
 
 use super::super::*;
 
+use super::super::text_modal::{apply as apply_text, command_for_key};
+
 impl AppRoot {
     pub(in crate::ui) fn apply_line_hit(&mut self, hit: line_search::LineHit) {
         let Some(surface) = self.line_search_surfaces.get(hit.target).copied() else {
@@ -119,14 +121,10 @@ impl AppRoot {
                 }
             }
             _ => {
-                let command = text_edit::command_for_key(
-                    key,
-                    shift,
-                    control,
-                    event.keystroke.key_char.as_deref(),
-                );
+                let command =
+                    command_for_key(key, shift, control, event.keystroke.key_char.as_deref());
                 let Some(command) = command else { return };
-                text_edit::apply(self.line_search.editor_mut(), &command);
+                apply_text(self.line_search.editor_mut(), &command);
             }
         }
         self.refresh_line_search();
@@ -405,12 +403,8 @@ impl AppRoot {
                 }
             }
             _ => {
-                let command = text_edit::command_for_key(
-                    key,
-                    shift,
-                    control,
-                    event.keystroke.key_char.as_deref(),
-                );
+                let command =
+                    command_for_key(key, shift, control, event.keystroke.key_char.as_deref());
                 let Some(command) = command else { return };
                 self.command_line.apply_edit(&command);
             }

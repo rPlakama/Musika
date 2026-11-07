@@ -442,9 +442,9 @@ impl AppRoot {
             }
             Event::LoginRequired { offline_available } => {
                 self.login = Some(LoginState {
-                    server: String::new(),
-                    username: String::new(),
-                    password: String::new(),
+                    server: TextModal::new(),
+                    username: TextModal::new(),
+                    password: TextModal::new(),
                     field: 0,
                     busy: false,
                     error: None,

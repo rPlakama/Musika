@@ -21,7 +21,7 @@ impl AppRoot {
         self.status_focus = None;
         self.search_open = true;
         self.search = Some(SearchState {
-            editor: line_search::LineEditor::new(),
+            editor: TextModal::new(),
             rows: Vec::new(),
             most_played: false,
             scope: 0,

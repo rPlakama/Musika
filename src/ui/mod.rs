@@ -26,6 +26,7 @@
 //! - `bridge/` — tokio request families and the single `Event` channel.
 //! - `widgets/` — shared text editing, media and row primitives.
 //! - `visuals/` — centralized typography and motion tokens.
+//! - `text_modal` — the one editable-text engine used by every text box.
 
 mod anim;
 mod app;
@@ -43,16 +44,17 @@ mod quick_actions;
 mod remote_images;
 mod scroll_modal;
 mod state;
+mod text_modal;
 mod views;
 mod visuals;
 mod widgets;
 
+use self::text_modal::TextModal;
 use self::widgets::media::{
     CoverSource, art, art_scaled, collage_art, cover_source, format_time, highlighted_text, icon,
     icon_rotated, loading_placeholder, loading_skeleton, page_key, remote_cover, repeat_label,
     transport_button,
 };
-use self::widgets::text_edit;
 
 use gpui::{
     Animation, AnimationExt, App, Application, AssetSource, Bounds, Context, FocusHandle,
@@ -209,7 +211,7 @@ enum LineSurface {
 }
 
 struct SearchState {
-    editor: line_search::LineEditor,
+    editor: TextModal,
     rows: Vec<Row>,
     most_played: bool,
     scope: usize,
@@ -294,9 +296,9 @@ impl AltTarget {
 }
 
 struct LoginState {
-    server: String,
-    username: String,
-    password: String,
+    server: TextModal,
+    username: TextModal,
+    password: TextModal,
     field: usize,
     busy: bool,
     error: Option<String>,
@@ -826,7 +828,7 @@ impl AppRoot {
             app.search_open = true;
             app.hovered_row = None;
             app.search = Some(SearchState {
-                editor: line_search::LineEditor::from_text(&query),
+                editor: TextModal::from_text(&query),
                 rows: Vec::new(),
                 most_played: false,
                 scope: 0,

@@ -167,7 +167,7 @@ mod contextual_bar_tests {
 
     fn test_search_state(rows: Vec<Row>) -> SearchState {
         SearchState {
-            editor: line_search::LineEditor::new(),
+            editor: TextModal::new(),
             rows,
             most_played: false,
             scope: 0,

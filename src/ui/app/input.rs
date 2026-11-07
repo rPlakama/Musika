@@ -1,5 +1,6 @@
 //! Raw keyboard routing, including the login form.
 
+use super::super::text_modal::TextModal;
 use super::super::*;
 
 impl AppRoot {
@@ -72,8 +73,6 @@ impl AppRoot {
         let key = event.keystroke.key.as_str();
         let control = event.keystroke.modifiers.control;
         let shift = event.keystroke.modifiers.shift;
-        let modified =
-            control || event.keystroke.modifiers.alt || event.keystroke.modifiers.platform;
         if !search.typing {
             match key {
                 "escape" => {
@@ -268,46 +267,6 @@ impl AppRoot {
                 cx.notify();
                 return;
             }
-            "left" => {
-                if let Some(search) = self.search.as_mut() {
-                    search.editor.move_left(shift);
-                }
-            }
-            "right" => {
-                if let Some(search) = self.search.as_mut() {
-                    search.editor.move_right(shift);
-                }
-            }
-            "home" => {
-                if let Some(search) = self.search.as_mut() {
-                    search.editor.home(shift);
-                }
-            }
-            "end" => {
-                if let Some(search) = self.search.as_mut() {
-                    search.editor.end(shift);
-                }
-            }
-            "backspace" => {
-                if let Some(search) = self.search.as_mut() {
-                    search.editor.backspace();
-                }
-            }
-            "delete" => {
-                if let Some(search) = self.search.as_mut() {
-                    search.editor.delete_forward();
-                }
-            }
-            "a" if control => {
-                if let Some(search) = self.search.as_mut() {
-                    search.editor.select_all();
-                }
-            }
-            "w" if control => {
-                if let Some(search) = self.search.as_mut() {
-                    search.editor.delete_word_back();
-                }
-            }
             "c" if control => {
                 if let Some(search) = self.search.as_ref()
                     && let Some(text) = search.editor.selected_text()
@@ -332,7 +291,7 @@ impl AppRoot {
                 if let Some(text) = cx.read_from_clipboard().and_then(|item| item.text())
                     && let Some(search) = self.search.as_mut()
                 {
-                    search.editor.insert(&text);
+                    search.editor.paste(&text);
                 }
             }
             "h" if control => {
@@ -343,21 +302,18 @@ impl AppRoot {
                 self.on_search_scope_next(&SearchScopeNext, _window, cx);
                 return;
             }
-            _ if !modified => {
-                let Some(search) = self.search.as_mut() else {
-                    return;
-                };
-                if let Some(text) = event.keystroke.key_char.as_ref()
-                    && !text.chars().any(char::is_control)
-                {
-                    search.editor.insert(text);
-                } else if key == "space" {
-                    search.editor.insert(" ");
-                } else {
-                    return;
+            _ => {
+                let command = TextModal::command_for_key(
+                    key,
+                    shift,
+                    control,
+                    event.keystroke.key_char.as_deref(),
+                );
+                let Some(command) = command else { return };
+                if let Some(search) = self.search.as_mut() {
+                    search.editor.apply_command(&command);
                 }
             }
-            _ => return,
         }
         self.search_edited();
         cx.notify();
@@ -368,58 +324,69 @@ impl AppRoot {
             return;
         };
         let key = event.keystroke.key.as_str();
-        let modified = event.keystroke.modifiers.control
-            || event.keystroke.modifiers.alt
-            || event.keystroke.modifiers.platform;
+        let control = event.keystroke.modifiers.control;
+        let shift = event.keystroke.modifiers.shift;
+        let modified =
+            control || event.keystroke.modifiers.alt || event.keystroke.modifiers.platform;
+        let field = match login.field {
+            0 => &mut login.server,
+            1 => &mut login.username,
+            _ => &mut login.password,
+        };
         match key {
             "tab" => login.field = (login.field + 1) % 3,
-            "backspace" => {
-                let text = match login.field {
-                    0 => &mut login.server,
-                    1 => &mut login.username,
-                    _ => &mut login.password,
-                };
-                text.pop();
-            }
+            "backtab" => login.field = (login.field + 2) % 3,
             "enter" => {
-                if login.server.trim().is_empty()
-                    || login.username.trim().is_empty()
-                    || login.password.is_empty()
+                if login.server.text.trim().is_empty()
+                    || login.username.text.trim().is_empty()
+                    || login.password.text.is_empty()
                 {
                     login.error =
                         Some("Server, username and password are all required.".to_string());
                 } else {
                     login.busy = true;
                     login.error = None;
-                    let (server, username, password) = (
-                        login.server.trim().to_string(),
-                        login.username.trim().to_string(),
-                        login.password.clone(),
-                    );
+                    let server = login.server.text.trim().to_string();
+                    let username = login.username.text.trim().to_string();
+                    let password = login.password.text.clone();
                     self.bridge.login(server, username, password);
                 }
             }
             "f2" => {
                 if login.offline_available {
-                    let (server, username) = (
-                        login.server.trim().to_string(),
-                        login.username.trim().to_string(),
-                    );
+                    let server = login.server.text.trim().to_string();
+                    let username = login.username.text.trim().to_string();
                     self.bridge.offline_login(server, username);
                 }
             }
-            _ if !modified => {
-                if let Some(text) = event.keystroke.key_char.as_ref()
-                    && !text.chars().any(char::is_control)
-                {
-                    match login.field {
-                        0 => login.server.push_str(text),
-                        1 => login.username.push_str(text),
-                        _ => login.password.push_str(text),
-                    }
+            "c" if control => {
+                if let Some(text) = field.copy_selection() {
+                    cx.write_to_clipboard(gpui::ClipboardItem::new_string(text));
                 }
             }
-            _ => {}
+            "x" if control => {
+                if let Some(text) = field.cut_selection() {
+                    cx.write_to_clipboard(gpui::ClipboardItem::new_string(text));
+                }
+            }
+            "v" if control => {
+                if let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) {
+                    field.paste(&text);
+                }
+            }
+            _ => {
+                let command = TextModal::command_for_key(
+                    key,
+                    shift,
+                    control,
+                    event.keystroke.key_char.as_deref(),
+                );
+                if let Some(command) = command {
+                    field.apply_command(&command);
+                } else if !modified {
+                    return;
+                }
+            }
         }
         cx.notify();
     }

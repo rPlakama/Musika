@@ -818,6 +818,7 @@ mod tests {
             url: format!("file://{}", path.display()),
             cover_art: String::new(),
             cover_url: String::new(),
+            cover_remote: String::new(),
         };
         let mut player = Player::new();
         player.load(vec![track("a", &a), track("b", &b)], 0);
@@ -856,6 +857,7 @@ mod tests {
                 url: format!("file://{}", path.display()),
                 cover_art: String::new(),
                 cover_url: String::new(),
+                cover_remote: String::new(),
             }],
             0,
         );
@@ -889,6 +891,7 @@ mod tests {
                 url: format!("file://{}", path.display()),
                 cover_art: String::new(),
                 cover_url: String::new(),
+                cover_remote: String::new(),
             }],
             0,
         );
@@ -961,6 +964,7 @@ mod tests {
                     url: format!("file://{}", first.display()),
                     cover_art: String::new(),
                     cover_url: String::new(),
+                    cover_remote: String::new(),
                 },
                 Track {
                     id: "second".to_string(),
@@ -973,6 +977,7 @@ mod tests {
                     url: format!("file://{}", second.display()),
                     cover_art: String::new(),
                     cover_url: String::new(),
+                    cover_remote: String::new(),
                 },
             ],
             0,

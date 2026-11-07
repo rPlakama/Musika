@@ -1,6 +1,7 @@
 //! Shared icon, cover and text/presentation helpers.
 
 use super::super::*;
+use gpui::StyledImage as _;
 
 pub(crate) fn transport_button(
     icon_name: &str,
@@ -121,6 +122,11 @@ pub(crate) fn cover_path(url: &str) -> Option<std::path::PathBuf> {
 pub(crate) enum CoverSource {
     Path(std::path::PathBuf),
     Remote(String),
+    /// A cached file with a provider URL to try when it does not load.
+    Fallback {
+        path: std::path::PathBuf,
+        remote: String,
+    },
 }
 
 impl CoverSource {
@@ -128,20 +134,45 @@ impl CoverSource {
         match self {
             Self::Path(path) => path.display().to_string(),
             Self::Remote(url) => url.clone(),
+            Self::Fallback { path, remote } => format!("{}|{remote}", path.display()),
         }
     }
 
     fn image(&self) -> gpui::ImageSource {
         match self {
-            Self::Path(path) => path.clone().into(),
+            Self::Path(path) | Self::Fallback { path, .. } => path.clone().into(),
             Self::Remote(url) => url.clone().into(),
         }
     }
 
     pub(crate) fn resource(&self) -> gpui::Resource {
         match self {
-            Self::Path(path) => path.clone().into(),
+            Self::Path(path) | Self::Fallback { path, .. } => path.clone().into(),
             Self::Remote(url) => gpui::Resource::Uri(gpui::SharedUri::from(url.clone())),
+        }
+    }
+
+    /// The provider URL to try when a cached file cannot be decoded.
+    pub(crate) fn remote_resource(&self) -> Option<gpui::Resource> {
+        let url = match self {
+            Self::Remote(url) => url,
+            Self::Fallback { remote, .. } => remote,
+            Self::Path(_) => return None,
+        };
+        Some(gpui::Resource::Uri(gpui::SharedUri::from(url.clone())))
+    }
+
+    /// Attaches the provider URL as a load-time fallback for a cached path.
+    ///
+    /// A source that is already remote keeps its URL: the fallback is only
+    /// meaningful for a local file that can fail to decode.
+    pub(crate) fn with_remote_fallback(self, remote: &str) -> Self {
+        let Some(remote) = remote_cover(remote) else {
+            return self;
+        };
+        match self {
+            Self::Path(path) => Self::Fallback { path, remote },
+            other => other,
         }
     }
 }
@@ -158,14 +189,29 @@ pub(crate) fn cover_source(url: &str) -> Option<CoverSource> {
     cover_path(url).map(CoverSource::Path)
 }
 
+/// Resolves a cover URL with a provider URL as the fallback for a local file
+/// that is missing or fails to load.
+pub(crate) fn cover_source_with_remote(url: &str, remote: &str) -> Option<CoverSource> {
+    match cover_source(url) {
+        Some(source) => Some(source.with_remote_fallback(remote)),
+        None => remote_cover(remote).map(CoverSource::Remote),
+    }
+}
+
 /// Playlist/Radio mosaic: golden-ratio panes for any number of distinct
 /// covers. The first split mirrors `PlaylistCollage.qml`; deeper splits keep
 /// subdividing the remaining tail, so there is no fixed cover cap.
-pub(crate) fn collage_art(urls: &[String], side: f32) -> gpui::AnyElement {
+pub(crate) fn collage_art(urls: &[String], remotes: &[String], side: f32) -> gpui::AnyElement {
     let sources: Vec<Option<CoverSource>> = urls
         .iter()
-        .filter(|url| !url.trim().is_empty())
-        .map(|url| cover_source(url))
+        .enumerate()
+        .filter(|(_, url)| !url.trim().is_empty())
+        .map(|(index, url)| {
+            cover_source_with_remote(
+                url,
+                remotes.get(index).map(String::as_str).unwrap_or_default(),
+            )
+        })
         .collect();
 
     let mut mosaic = div()
@@ -191,6 +237,19 @@ pub(crate) fn collage_art(urls: &[String], side: f32) -> gpui::AnyElement {
 
     for (pane, source) in collage::panes(side, sources.len()).into_iter().zip(sources) {
         let content = match source {
+            Some(CoverSource::Fallback { path, remote }) => {
+                let fallback = remote.clone();
+                img(path)
+                    .size_full()
+                    .object_fit(gpui::ObjectFit::Cover)
+                    .with_fallback(move || {
+                        img(fallback.clone())
+                            .size_full()
+                            .object_fit(gpui::ObjectFit::Cover)
+                            .into_any_element()
+                    })
+                    .into_any_element()
+            }
             Some(source) => img(source.image())
                 .size_full()
                 .object_fit(gpui::ObjectFit::Cover)
@@ -238,6 +297,35 @@ pub(crate) fn cover_element(
     fade: bool,
 ) -> gpui::AnyElement {
     match source {
+        Some(CoverSource::Fallback { path, remote }) => {
+            let id = gpui::SharedString::from(format!(
+                "cover-fade:{}|{remote}:{size:.0}",
+                path.display()
+            ));
+            let fallback_url = remote.clone();
+            let image = img(path)
+                .size(px(size))
+                .rounded_sm()
+                .bg(rgb(palette::surface_container_highest()))
+                .with_fallback(move || {
+                    img(fallback_url.clone())
+                        .size(px(size))
+                        .rounded_sm()
+                        .bg(rgb(palette::surface_container_highest()))
+                        .into_any_element()
+                });
+            if fade {
+                image
+                    .with_animation(
+                        id,
+                        Animation::new(std::time::Duration::from_millis(120)),
+                        |this, delta| this.opacity(delta),
+                    )
+                    .into_any_element()
+            } else {
+                image.into_any_element()
+            }
+        }
         Some(source) => {
             let image = img(source.image())
                 .size(px(size))

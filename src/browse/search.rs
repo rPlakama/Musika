@@ -371,6 +371,7 @@ async fn search_payload_value(
     cover_ids.extend(artists.iter().filter_map(|artist| artist.cover_art.clone()));
     cover_ids.extend(songs.iter().filter_map(|song| song.cover_art.clone()));
     let covers = crate::covers::url_map_of(dbs, &cover_ids);
+    let remotes = crate::covers::remote_map_of(dbs, &cover_ids);
     // UI-56: hearts/ratings are live library state, not the index's
     // sync-time snapshot; read them for just this page.
     let song_ids: Vec<String> = songs.iter().map(|song| song.id.clone()).collect();
@@ -379,8 +380,9 @@ async fn search_payload_value(
     let album_states = crate::library::album_states(&dbs.library, &album_ids);
     let user_starred = crate::artist_user::starred_ids(&dbs.artist_user);
     let user_ratings = crate::artist_user::ratings(&dbs.artist_user);
-    let (covers, song_starred, album_states, user_starred, user_ratings) = tokio::try_join!(
+    let (covers, remotes, song_starred, album_states, user_starred, user_ratings) = tokio::try_join!(
         covers,
+        remotes,
         song_starred,
         album_states,
         user_starred,
@@ -393,13 +395,30 @@ async fn search_payload_value(
         .map(|artist| {
             let starred = artist.starred.is_some() || user_starred.contains(&artist.id);
             let rating = user_ratings.get(&artist.id).copied().unwrap_or(0);
-            artist_json(artist, &covers, None, starred, rating)
+            let mut value = artist_json(artist, &covers, None, starred, rating);
+            value["coverRemote"] = serde_json::json!(
+                artist
+                    .cover_art
+                    .as_deref()
+                    .and_then(|id| remotes.get(id))
+                    .cloned()
+                    .unwrap_or_default()
+            );
+            value
         })
         .collect();
     let album_rows: Vec<serde_json::Value> = albums
         .iter()
         .map(|album| {
             let mut value = album_json(album, &covers, None);
+            value["coverRemote"] = serde_json::json!(
+                album
+                    .cover_art
+                    .as_deref()
+                    .and_then(|id| remotes.get(id))
+                    .cloned()
+                    .unwrap_or_default()
+            );
             if let Some((starred, rating)) = album_states.get(&album.id) {
                 value["starred"] = serde_json::json!(starred);
                 value["rating"] = serde_json::json!(rating);
@@ -421,6 +440,13 @@ async fn search_payload_value(
                 None,
                 crate::covers::url_for(song.cover_art.as_deref(), &covers),
                 song_starred.contains(&song.id),
+            );
+            value["coverRemote"] = serde_json::json!(
+                song.cover_art
+                    .as_deref()
+                    .and_then(|id| remotes.get(id))
+                    .cloned()
+                    .unwrap_or_default()
             );
             value["play_count"] = serde_json::json!(song.play_count);
             value

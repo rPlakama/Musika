@@ -105,13 +105,17 @@ impl AppRoot {
     pub(in crate::ui) fn fullscreen_overlay(&self, progress: f32) -> gpui::Div {
         let track = self.player.current().cloned();
         let (title, artist, cover) = match &track {
-            Some(track) => (
-                track.title.clone(),
-                track.artist.clone(),
-                self.display_cover(&track.cover_art, self.fullscreen_hero_bucket())
+            Some(track) => {
+                let local = self
+                    .display_cover(&track.cover_art, self.fullscreen_hero_bucket())
                     .map(CoverSource::Path)
-                    .or_else(|| self.hero_cover(&track.cover_url, self.fullscreen_hero_bucket())),
-            ),
+                    .or_else(|| self.hero_cover(&track.cover_url, self.fullscreen_hero_bucket()));
+                let cover = match local {
+                    Some(source) => Some(source.with_remote_fallback(&track.cover_remote)),
+                    None => remote_cover(&track.cover_remote).map(CoverSource::Remote),
+                };
+                (track.title.clone(), track.artist.clone(), cover)
+            }
             None => ("No track playing".to_string(), String::new(), None),
         };
         let title_size = (metrics::font_size("headline", self.win_h)

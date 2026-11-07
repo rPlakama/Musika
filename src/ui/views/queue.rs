@@ -55,7 +55,10 @@ impl AppRoot {
                                         let Some(track) = queue.get(index) else { break };
                                         let title = track.title.clone();
                                         let artist = track.artist.clone();
-                                        let cover = cover_source(&track.cover_url);
+                                        let cover = cover_source_with_remote(
+                                            &track.cover_url,
+                                            &track.cover_remote,
+                                        );
                                         let active = index == cursor;
                                         let selected = this.selected_id.as_deref()
                                             == Some(track.id.as_str())

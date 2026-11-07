@@ -55,11 +55,12 @@ struct TrackElement<'a> {
     song: &'a crate::library::SongRow,
     url: &'a str,
     cover_url: &'a str,
+    cover_remote: String,
 }
 
 impl Serialize for TrackElement<'_> {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        let mut state = serializer.serialize_struct("track", 15)?;
+        let mut state = serializer.serialize_struct("track", 16)?;
         state.serialize_field("id", &self.song.id)?;
         state.serialize_field("title", &self.song.title)?;
         state.serialize_field("artist", self.song.artist.as_deref().unwrap_or_default())?;
@@ -76,6 +77,7 @@ impl Serialize for TrackElement<'_> {
             self.song.cover_art.as_deref().unwrap_or_default(),
         )?;
         state.serialize_field("cover_url", self.cover_url)?;
+        state.serialize_field("cover_remote", &self.cover_remote)?;
         state.serialize_field("subtitle", self.song.artist.as_deref().unwrap_or_default())?;
         state.serialize_field(
             "meta",
@@ -101,10 +103,16 @@ impl Serialize for TrackRows<'_> {
         for song in self.songs {
             let url = track_url(self.client, song, self.media).map_err(S::Error::custom)?;
             let cover_url = crate::covers::url_for_ref(song.cover_art.as_deref(), self.covers);
+            let cover_remote = song
+                .cover_art
+                .as_deref()
+                .map(|id| crate::covers::provider_cover_url(self.client, id))
+                .unwrap_or_default();
             seq.serialize_element(&TrackElement {
                 song,
                 url: &url,
                 cover_url,
+                cover_remote,
             })?;
         }
         seq.end()

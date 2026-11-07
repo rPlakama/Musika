@@ -71,6 +71,8 @@ pub struct Row {
     /// Album track number/module text, searchable by `/` but not painted.
     pub track: String,
     pub cover_url: String,
+    /// Provider URL used when the cached row cover does not load.
+    pub cover_remote: String,
     pub song_id: String,
     pub album_id: String,
     pub starred: bool,
@@ -256,6 +258,7 @@ mod tests {
                 subtitle: String::new(),
                 meta: String::new(),
                 cover_url: String::new(),
+                cover_remote: String::new(),
                 song_id: String::new(),
                 album_id: "a".into(),
                 starred: false,
@@ -295,6 +298,7 @@ mod tests {
             subtitle: String::new(),
             meta: String::new(),
             cover_url: String::new(),
+            cover_remote: String::new(),
             song_id: String::new(),
             album_id: "ten".into(),
             starred: false,
@@ -364,8 +368,12 @@ pub struct PageHeader {
     pub subtitle: String,
     pub meta: String,
     pub cover_url: String,
+    /// Provider `getCoverArt` URL used when the cached copy does not load.
+    pub cover_remote: String,
     /// Distinct cover URLs for the Playlist/Radio golden-ratio mosaic.
     pub collage: Vec<String>,
+    /// Provider fallbacks aligned with [`Self::collage`].
+    pub collage_remote: Vec<String>,
     /// Cover id for display-copy requests.
     pub cover_art: String,
     /// User star count (0..=5) for the one-line page phrase.
@@ -397,7 +405,9 @@ impl PageState {
                 subtitle: String::new(),
                 meta: String::new(),
                 cover_url: String::new(),
+                cover_remote: String::new(),
                 collage: Vec::new(),
+                collage_remote: Vec::new(),
                 cover_art: String::new(),
                 rating: 0,
                 starred: false,
@@ -519,6 +529,7 @@ mod page_kind_tests {
             subtitle: String::new(),
             meta: String::new(),
             cover_url: String::new(),
+            cover_remote: String::new(),
             song_id: "s".into(),
             album_id: "a".into(),
             starred: false,

@@ -640,22 +640,24 @@ pub async fn page_json(dbs: &Dbs, playlist_id: &str, offline: bool) -> Result<St
         .chain(by_id.values().map(|song| song.cover_art.clone()))
         .collect();
     let covers = crate::covers::url_map_for(dbs, cover_ids.iter()).await?;
+    let remotes = crate::covers::remote_map_for(dbs, cover_ids.iter()).await?;
     let filter = crate::offline::load(dbs, offline).await?;
 
     let mut collage: Vec<String> = Vec::new();
+    let mut collage_remote: Vec<String> = Vec::new();
     let mut collage_origins: Vec<String> = Vec::new();
     let mut songs = Vec::with_capacity(rows.len());
     for row in &rows {
         let library_song = row.song_id.as_ref().and_then(|id| by_id.get(id));
-        let cover = row
+        let cover_id = row
             .cover_art
             .as_ref()
+            .or_else(|| library_song.and_then(|song| song.cover_art.as_ref()));
+        let cover = cover_id
             .and_then(|id| covers.get(id).cloned())
-            .or_else(|| {
-                library_song
-                    .and_then(|song| song.cover_art.as_ref())
-                    .and_then(|id| covers.get(id).cloned())
-            })
+            .unwrap_or_default();
+        let cover_remote = cover_id
+            .and_then(|id| remotes.get(id).cloned())
             .unwrap_or_default();
         let origin = library_song
             .and_then(|song| song.album_id.clone())
@@ -665,6 +667,7 @@ pub async fn page_json(dbs: &Dbs, playlist_id: &str, offline: bool) -> Result<St
         if !cover.is_empty() && !collage_origins.contains(&origin) {
             collage_origins.push(origin);
             collage.push(cover.clone());
+            collage_remote.push(cover_remote.clone());
         }
         let playable = row.song_id.as_ref().is_some_and(|id| {
             filter
@@ -688,6 +691,7 @@ pub async fn page_json(dbs: &Dbs, playlist_id: &str, offline: bool) -> Result<St
             "album": row.album.clone().or_else(|| library_song.and_then(|s| s.album.clone())).unwrap_or_default(),
             "duration": duration.map(|seconds| crate::browse::rows::format_duration(Some(seconds as i32))).unwrap_or_default(),
             "cover": cover,
+            "coverRemote": cover_remote,
             "songId": row.song_id.clone().unwrap_or_default(),
             "albumId": album_id,
             "starred": library_song.and_then(|song| song.starred.as_ref()).is_some(),
@@ -715,6 +719,7 @@ pub async fn page_json(dbs: &Dbs, playlist_id: &str, offline: bool) -> Result<St
         },
         "song_count": playlist.song_count,
         "collage": collage,
+        "collage_remote": collage_remote,
         "songs": songs,
     })
     .to_string())

@@ -104,9 +104,23 @@ pub(crate) async fn window(
             let covers =
                 crate::covers::url_map_for(dbs, albums.iter().map(|album| &album.cover_art))
                     .await?;
+            let remotes =
+                crate::covers::remote_map_for(dbs, albums.iter().map(|album| &album.cover_art))
+                    .await?;
             albums
                 .iter()
-                .map(|album| crate::browse::rows::album_json(album, &covers, None))
+                .map(|album| {
+                    let mut value = crate::browse::rows::album_json(album, &covers, None);
+                    value["coverRemote"] = json!(
+                        album
+                            .cover_art
+                            .as_deref()
+                            .and_then(|id| remotes.get(id))
+                            .cloned()
+                            .unwrap_or_default()
+                    );
+                    value
+                })
                 .collect()
         }
         "artists" => {
@@ -116,6 +130,9 @@ pub(crate) async fn window(
             }
             let covers =
                 crate::covers::url_map_for(dbs, artists.iter().map(|artist| &artist.cover_art))
+                    .await?;
+            let remotes =
+                crate::covers::remote_map_for(dbs, artists.iter().map(|artist| &artist.cover_art))
                     .await?;
             let starred: std::collections::HashSet<String> =
                 crate::artist_user::starred_ids(&dbs.artist_user)
@@ -127,13 +144,22 @@ pub(crate) async fn window(
                 .iter()
                 .map(|artist| {
                     let is_starred = artist.starred.is_some() || starred.contains(&artist.id);
-                    crate::browse::rows::artist_json(
+                    let mut value = crate::browse::rows::artist_json(
                         artist,
                         &covers,
                         None,
                         is_starred,
                         ratings.get(&artist.id).copied().unwrap_or(0),
-                    )
+                    );
+                    value["coverRemote"] = json!(
+                        artist
+                            .cover_art
+                            .as_deref()
+                            .and_then(|id| remotes.get(id))
+                            .cloned()
+                            .unwrap_or_default()
+                    );
+                    value
                 })
                 .collect()
         }
@@ -144,10 +170,13 @@ pub(crate) async fn window(
             }
             let covers =
                 crate::covers::url_map_for(dbs, songs.iter().map(|song| &song.cover_art)).await?;
+            let remotes =
+                crate::covers::remote_map_for(dbs, songs.iter().map(|song| &song.cover_art))
+                    .await?;
             songs
                 .iter()
                 .map(|song| {
-                    crate::browse::rows::song_json(
+                    let mut value = crate::browse::rows::song_json(
                         &song.id,
                         &song.title,
                         song.artist.as_deref(),
@@ -158,7 +187,15 @@ pub(crate) async fn window(
                         song.suffix.as_deref(),
                         crate::covers::url_for(song.cover_art.as_deref(), &covers),
                         song.starred.is_some(),
-                    )
+                    );
+                    value["coverRemote"] = json!(
+                        song.cover_art
+                            .as_deref()
+                            .and_then(|id| remotes.get(id))
+                            .cloned()
+                            .unwrap_or_default()
+                    );
+                    value
                 })
                 .collect()
         }

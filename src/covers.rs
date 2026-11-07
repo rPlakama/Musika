@@ -781,6 +781,67 @@ pub async fn url_map_of(dbs: &crate::db::Dbs, ids: &[String]) -> Result<HashMap<
     Ok(map)
 }
 
+/// The provider's authenticated `getCoverArt` URL for one cover id.
+///
+/// Unlike the cache-first mapping in [`url_map_of`], this always names the
+/// remote object: the UI keeps it as a fallback for a cached file that fails
+/// to decode or disappears after the URL was resolved.
+pub(crate) fn provider_cover_url(client: &SubsonicClient, id: &str) -> String {
+    if id.is_empty() {
+        return String::new();
+    }
+    client
+        .endpoint_url("getCoverArt", &[("id", id.to_string())])
+        .map(|url| url.to_string())
+        .unwrap_or_default()
+}
+
+/// Remote fallback URL for a cover id, or empty when no saved session exists.
+pub async fn remote_url_for(dbs: &crate::db::Dbs, id: Option<&str>) -> String {
+    let Some(id) = id.filter(|id| !id.is_empty()) else {
+        return String::new();
+    };
+    match crate::session::client(dbs).await {
+        Ok(client) => provider_cover_url(&client, id),
+        Err(_) => String::new(),
+    }
+}
+
+/// Remote fallback URLs for a batch of ids, sharing one saved session.
+pub(crate) async fn remote_map_for<'a, I>(
+    dbs: &crate::db::Dbs,
+    ids: I,
+) -> Result<HashMap<String, String>>
+where
+    I: IntoIterator<Item = &'a Option<String>>,
+{
+    let ids: Vec<String> = ids.into_iter().flatten().cloned().collect();
+    remote_map_of(dbs, &ids).await
+}
+
+/// Remote fallback URLs for the unique non-empty ids, or an empty map when no
+/// saved session exists.
+pub(crate) async fn remote_map_of(
+    dbs: &crate::db::Dbs,
+    ids: &[String],
+) -> Result<HashMap<String, String>> {
+    let unique = unique_ids(ids);
+    if unique.is_empty() {
+        return Ok(HashMap::new());
+    }
+    let Ok(client) = crate::session::client(dbs).await else {
+        return Ok(HashMap::new());
+    };
+    let mut map = HashMap::with_capacity(unique.len());
+    for id in unique {
+        let url = provider_cover_url(&client, id);
+        if !url.is_empty() {
+            map.insert(id.to_string(), url);
+        }
+    }
+    Ok(map)
+}
+
 fn unique_ids(ids: &[String]) -> Vec<&str> {
     let mut unique: Vec<&str> = ids
         .iter()

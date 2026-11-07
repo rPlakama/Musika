@@ -185,21 +185,36 @@ pub async fn page_json(
     let children = similar_songs(dbs, &seed).await?;
     let rows = song_rows(&children);
     remember_rows(seed_kind, seed_id, &rows);
-    let covers = crate::covers::url_map_for(
-        dbs,
-        std::iter::once(&seed.cover_art).chain(children.iter().map(|child| &child.cover_art)),
-    )
-    .await?;
+    let cover_ids =
+        std::iter::once(&seed.cover_art).chain(children.iter().map(|child| &child.cover_art));
+    let covers = crate::covers::url_map_for(dbs, cover_ids.clone()).await?;
+    let remotes = crate::covers::remote_map_for(dbs, cover_ids).await?;
 
     let mut collage: Vec<String> = Vec::new();
+    let mut collage_remote: Vec<String> = Vec::new();
     let seed_cover = crate::covers::url_for(seed.cover_art.as_deref(), &covers);
     if !seed_cover.is_empty() {
         collage.push(seed_cover);
+        collage_remote.push(
+            seed.cover_art
+                .as_deref()
+                .and_then(|id| remotes.get(id))
+                .cloned()
+                .unwrap_or_default(),
+        );
     }
     for child in &children {
         let cover = crate::covers::url_for_ref(child.cover_art.as_deref(), &covers);
         if !cover.is_empty() && !collage.iter().any(|url| url == cover) {
             collage.push(cover.to_string());
+            collage_remote.push(
+                child
+                    .cover_art
+                    .as_deref()
+                    .and_then(|id| remotes.get(id))
+                    .cloned()
+                    .unwrap_or_default(),
+            );
         }
     }
 
@@ -214,6 +229,12 @@ pub async fn page_json(
                 "subtitle": child.artist.clone().or_else(|| child.album.clone()).unwrap_or_default(),
                 "duration": crate::browse::rows::format_duration(child.duration),
                 "cover": crate::covers::url_for_ref(child.cover_art.as_deref(), &covers),
+                "coverRemote": child
+                    .cover_art
+                    .as_deref()
+                    .and_then(|id| remotes.get(id))
+                    .cloned()
+                    .unwrap_or_default(),
                 "songId": child.id,
                 "albumId": child.album_id.clone().unwrap_or_default(),
                 "starred": child.starred.is_some(),
@@ -225,6 +246,7 @@ pub async fn page_json(
     page["song_count"] = json!(songs.len());
     page["duration"] = json!(duration);
     page["collage"] = json!(collage);
+    page["collage_remote"] = json!(collage_remote);
     page["songs"] = json!(songs);
     Ok(page.to_string())
 }

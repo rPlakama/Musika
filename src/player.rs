@@ -68,6 +68,9 @@ pub struct Track {
     pub url: String,
     pub cover_art: String,
     pub cover_url: String,
+    /// Provider `getCoverArt` URL used when the cached copy does not load.
+    #[serde(default)]
+    pub cover_remote: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -653,6 +656,7 @@ mod navigation_tests {
                 url: String::new(),
                 cover_art: String::new(),
                 cover_url: String::new(),
+                cover_remote: String::new(),
             })
             .collect()
     }
@@ -715,6 +719,7 @@ mod repeat_tests {
             url: String::new(),
             cover_art: String::new(),
             cover_url: String::new(),
+            cover_remote: String::new(),
         }
     }
 

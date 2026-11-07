@@ -79,7 +79,7 @@ impl AppRoot {
         let fonts = self.visuals.fonts;
         let emphasis = self.visuals.search_text_emphasis(text_scale);
         let cover_scale = self.visuals.search_cover_scale(scale);
-        let cover = cover_source(&row.cover_url);
+        let cover = cover_source_with_remote(&row.cover_url, &row.cover_remote);
         div()
             .id(("search-row", index))
             .flex()

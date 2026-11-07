@@ -3,6 +3,19 @@
 All notable changes to Musika, newest first. `TASKLISTMAJOR.md` tracks the
 open work; this file is the release history.
 
+## 0.6.3 - _Faster Strong Better_
+
+- Fall back to the provider's authenticated `getCoverArt` URL whenever a cached
+  cover is missing or fails to decode: library and search rows, album/artist
+  page headers and rows, playlist/radio collages and rows, the player bar, the
+  queue and fullscreen playback.
+- Retain row text, covers and marks across scroll frames, paint the list
+  allocation-free with readahead hints, and automatically recenter the list
+  after a window resize.
+- Route every text box through the shared `TextModal` editor, restore the FPS
+  HUD, and darken the lyrics backdrop.
+- Add the 100k-row GPUI list benchmark used to compare scroll strategies.
+
 ## 0.6.2 - _small fix_
 
 - Restore keyboard focus and key routing on the login screen: the login view

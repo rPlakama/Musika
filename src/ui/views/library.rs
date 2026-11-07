@@ -236,7 +236,7 @@ impl AppRoot {
         let current = self.line_search_current(paint.surface, paint.index);
         let mut body = div().flex().items_center().min_w_0().flex_1();
         if paint.flags.show_cover {
-            let cover = cover_source(&row.cover_url);
+            let cover = cover_source_with_remote(&row.cover_url, &row.cover_remote);
             let id_name = match paint.surface {
                 LineSurface::Library => "retained-cover-library",
                 LineSurface::Page => "retained-cover-page",

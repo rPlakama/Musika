@@ -90,10 +90,18 @@ impl Element for RetainedCover {
             return;
         };
         let resource = source.resource();
-        self.image = self
+        let loaded = self
             .cache
-            .update(cx, |cache, cx| cache.load(&resource, window, cx))
-            .and_then(Result::ok);
+            .update(cx, |cache, cx| cache.load(&resource, window, cx));
+        self.image = match loaded {
+            Some(Ok(image)) => Some(image),
+            Some(Err(_)) => source.remote_resource().and_then(|resource| {
+                self.cache
+                    .update(cx, |cache, cx| cache.load(&resource, window, cx))
+                    .and_then(Result::ok)
+            }),
+            None => None,
+        };
     }
 
     fn paint(

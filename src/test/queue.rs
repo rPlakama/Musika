@@ -106,6 +106,7 @@ fn bench_track_rows_streaming() {
                     url,
                     cover_art: song.cover_art.clone().unwrap_or_default(),
                     cover_url: crate::covers::url_for(song.cover_art.as_deref(), &covers),
+                    cover_remote: String::new(),
                 }
             })
             .collect();

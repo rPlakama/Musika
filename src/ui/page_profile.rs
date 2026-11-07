@@ -150,6 +150,7 @@ mod tests {
             subtitle: String::new(),
             meta: String::new(),
             cover_url: String::new(),
+            cover_remote: String::new(),
             song_id: "s".into(),
             album_id: "a".into(),
             starred: false,

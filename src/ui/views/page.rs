@@ -19,9 +19,14 @@ impl AppRoot {
         let cover = if profile.collage {
             None
         } else {
-            self.display_cover(&page.header.cover_art, hero_bucket)
+            let local = self
+                .display_cover(&page.header.cover_art, hero_bucket)
                 .map(CoverSource::Path)
-                .or_else(|| self.hero_cover(&page.header.cover_url, hero_bucket))
+                .or_else(|| self.hero_cover(&page.header.cover_url, hero_bucket));
+            match local {
+                Some(source) => Some(source.with_remote_fallback(&page.header.cover_remote)),
+                None => remote_cover(&page.header.cover_remote).map(CoverSource::Remote),
+            }
         };
         let header_h = cover_bottom.max(240.0);
 
@@ -81,7 +86,11 @@ impl AppRoot {
                     .justify_center()
                     .overflow_hidden()
                     .child(if profile.collage {
-                        collage_art(&page.header.collage, cover_art_side)
+                        collage_art(
+                            &page.header.collage,
+                            &page.header.collage_remote,
+                            cover_art_side,
+                        )
                     } else {
                         art(cover, cover_art_side)
                     }),

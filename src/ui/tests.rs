@@ -18,6 +18,7 @@ mod fullscreen_focus_tests {
 #[cfg(test)]
 mod contextual_bar_tests {
     use super::*;
+    use crate::ui::widgets::media::cover_source;
 
     fn page_state(kind: PageKind, starred: bool, cached: bool, downloading: bool) -> PageBarState {
         PageBarState {
@@ -144,6 +145,26 @@ mod contextual_bar_tests {
     }
 
     #[test]
+    fn cached_cover_keeps_its_provider_fallback() {
+        let source = CoverSource::Path(std::path::PathBuf::from("/tmp/cover.jpg"))
+            .with_remote_fallback("https://provider.test/rest/getCoverArt?id=x");
+        match source {
+            CoverSource::Fallback { path, remote } => {
+                assert_eq!(path, std::path::PathBuf::from("/tmp/cover.jpg"));
+                assert_eq!(remote, "https://provider.test/rest/getCoverArt?id=x");
+            }
+            _ => panic!("expected a cached path with a remote fallback"),
+        }
+
+        let source = CoverSource::Remote("https://cache.test/cover.jpg".into())
+            .with_remote_fallback("https://provider.test/rest/getCoverArt?id=x");
+        assert!(matches!(
+            source,
+            CoverSource::Remote(url) if url == "https://cache.test/cover.jpg"
+        ));
+    }
+
+    #[test]
     fn alt_actions_are_thirty_percent_faster() {
         assert!((anim::ALT_MS - anim::EMPHASIZED_MS * 0.7).abs() < f32::EPSILON);
         assert!((anim::ALT_MS - 168.0).abs() < 0.001);
@@ -157,6 +178,7 @@ mod contextual_bar_tests {
             meta: String::new(),
             track: String::new(),
             cover_url: String::new(),
+            cover_remote: String::new(),
             song_id: id.to_string(),
             album_id: String::new(),
             starred: false,

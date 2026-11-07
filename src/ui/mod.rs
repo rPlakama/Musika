@@ -53,9 +53,9 @@ mod widgets;
 
 use self::text_modal::TextModal;
 use self::widgets::media::{
-    CoverSource, art, asset_root, collage_art, cover_source, format_time, highlighted_text, icon,
-    icon_rotated, loading_placeholder, loading_skeleton, page_key, remote_cover, repeat_label,
-    transport_button,
+    CoverSource, art, asset_root, collage_art, cover_source_with_remote, format_time,
+    highlighted_text, icon, icon_rotated, loading_placeholder, loading_skeleton, page_key,
+    remote_cover, repeat_label, transport_button,
 };
 use self::widgets::retained_cover::RetainedCover;
 use self::widgets::retained_icon::RetainedIcon;

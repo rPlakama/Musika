@@ -386,7 +386,7 @@ impl AppRoot {
             Some(track) => (
                 track.title.clone(),
                 track.artist.clone(),
-                cover_source(&track.cover_url),
+                cover_source_with_remote(&track.cover_url, &track.cover_remote),
             ),
             None => ("Nothing playing".to_string(), String::new(), None),
         };

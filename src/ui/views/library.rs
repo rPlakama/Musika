@@ -136,7 +136,7 @@ impl AppRoot {
                                 LineSurface::Library,
                                 this.view.scope as usize,
                                 index,
-                                selected,
+                                selected || hovered,
                             );
                             let cover_scale = this.visuals.row_cover_scale(scale);
                             let emphasis = this.visuals.row_text_emphasis(text_scale);

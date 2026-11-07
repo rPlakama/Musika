@@ -102,8 +102,11 @@ impl AppRoot {
                                                     this.player.jump(index);
                                                     cx.notify();
                                                 }))
-                                                .child(art_scaled(
+                                                .child(RetainedCover::new(
+                                                    "retained-cover-queue",
+                                                    index,
                                                     cover,
+                                                    this.image_cache.clone(),
                                                     this.queue_scroll_modal.row_h * 0.714,
                                                     cover_scale,
                                                 ))

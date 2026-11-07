@@ -53,10 +53,12 @@ mod widgets;
 
 use self::text_modal::TextModal;
 use self::widgets::media::{
-    CoverSource, art, art_scaled, collage_art, cover_source, format_time, highlighted_text, icon,
+    CoverSource, art, asset_root, collage_art, cover_source, format_time, highlighted_text, icon,
     icon_rotated, loading_placeholder, loading_skeleton, page_key, remote_cover, repeat_label,
     transport_button,
 };
+use self::widgets::retained_cover::RetainedCover;
+use self::widgets::retained_icon::RetainedIcon;
 use self::widgets::retained_text::RetainedText;
 
 use gpui::{
@@ -610,6 +612,7 @@ struct AppRoot {
     queue_selection: state::Selection,
     last_player_index: usize,
     visuals: Visuals,
+    image_cache: gpui::Entity<gpui::RetainAllImageCache>,
     row_scales:
         std::cell::RefCell<std::collections::HashMap<(LineSurface, usize, usize), RowEmphasis>>,
     library_hover_fill: anim::ColorBehavior,
@@ -749,6 +752,7 @@ impl AppRoot {
             queue_selection: state::Selection::default(),
             last_player_index: 0,
             visuals: Visuals::default(),
+            image_cache: gpui::RetainAllImageCache::new(cx),
             row_scales: std::cell::RefCell::new(std::collections::HashMap::new()),
             library_hover_fill: anim::ColorBehavior::new(palette::surface()),
             page_hover_fill: anim::ColorBehavior::new(palette::surface()),

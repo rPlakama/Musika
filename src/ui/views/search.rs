@@ -109,7 +109,14 @@ impl AppRoot {
                 }
                 this.activate_search_result(cx);
             }))
-            .child(art_scaled(cover, row_h * 0.714, cover_scale))
+            .child(RetainedCover::new(
+                "retained-cover-search",
+                index,
+                cover,
+                self.image_cache.clone(),
+                row_h * 0.714,
+                cover_scale,
+            ))
             .child(
                 div()
                     .flex()

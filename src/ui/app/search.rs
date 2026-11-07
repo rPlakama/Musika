@@ -88,6 +88,14 @@ impl AppRoot {
 
     /// Fully disable the floating search overlay: no animation tail, no
     /// stale loading/denied state and no way for a late payload to resurrect it.
+    /// A successful quick action launched from the Search overlay is a
+    /// search success: close the overlay exactly like Enter on a result.
+    pub(in crate::ui) fn dismiss_search_after_quick(&mut self) {
+        if self.search_open && self.search.is_some() {
+            self.dismiss_search_overlay();
+        }
+    }
+
     pub(in crate::ui) fn dismiss_search_overlay(&mut self) {
         self.search_open = false;
         self.search = None;

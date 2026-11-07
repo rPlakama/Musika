@@ -92,7 +92,12 @@ impl AppRoot {
             self.lyrics_line_opacity
                 .entry(index)
                 .or_insert_with(|| anim::Behavior::new(opacity))
-                .target(opacity, anim::QUICK_MS, anim::Curve::Standard, &self.clock);
+                .target(
+                    opacity,
+                    self.visuals.motion.lyrics_fade_ms,
+                    anim::Curve::Standard,
+                    &self.clock,
+                );
 
             let emphasis = if lyrics.synced && index == active {
                 lyrics_layout::EMPHASIS
@@ -102,7 +107,12 @@ impl AppRoot {
             self.lyrics_line_emphasis
                 .entry(index)
                 .or_insert_with(|| anim::Behavior::new(1.0))
-                .target(emphasis, anim::QUICK_MS, anim::Curve::Standard, &self.clock);
+                .target(
+                    emphasis,
+                    self.visuals.motion.lyrics_line_ms,
+                    anim::Curve::Standard,
+                    &self.clock,
+                );
 
             let color = if lyrics.synced && index == active {
                 palette::on_surface()
@@ -112,7 +122,12 @@ impl AppRoot {
             self.lyrics_line_color
                 .entry(index)
                 .or_insert_with(|| anim::ColorBehavior::new(color))
-                .target(color, anim::MICRO_MS, anim::Curve::Standard, &self.clock);
+                .target(
+                    color,
+                    self.visuals.motion.lyrics_fade_ms,
+                    anim::Curve::Standard,
+                    &self.clock,
+                );
         }
     }
 
@@ -178,15 +193,19 @@ impl AppRoot {
         }
         let old_start = self.lyrics_window_start;
         if layout.start != old_start {
-            let unit = layout.text_height.max(1.0);
+            let unit = (layout.text_height + layout.gap).max(1.0);
             self.lyrics_shift.target(
                 (old_start as f32 - layout.start as f32) * unit,
                 0.0,
                 anim::Curve::Standard,
                 &self.clock,
             );
-            self.lyrics_shift
-                .target(0.0, 300.0, anim::Curve::OutCubic, &self.clock);
+            self.lyrics_shift.target(
+                0.0,
+                self.visuals.motion.lyrics_scroll_ms,
+                anim::Curve::OutCubic,
+                &self.clock,
+            );
         } else {
             self.lyrics_shift
                 .target(0.0, 0.0, anim::Curve::Standard, &self.clock);

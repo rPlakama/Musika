@@ -397,15 +397,15 @@ impl Render for AppRoot {
             .child(top)
             .child(body)
             .child(status)
-            .child(match queue_overlay {
-                Some(o) => o.into_any_element(),
-                None => div().into_any_element(),
-            })
             .child(match fullscreen_overlay {
                 Some(o) => o.into_any_element(),
                 None => div().into_any_element(),
             })
             .child(self.lyrics_overlay_element(lyrics_overlay_progress))
+            .child(match queue_overlay {
+                Some(o) => o.into_any_element(),
+                None => div().into_any_element(),
+            })
             .child(match description_overlay {
                 Some(o) => o.into_any_element(),
                 None => div().into_any_element(),

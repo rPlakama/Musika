@@ -291,14 +291,16 @@ impl AppRoot {
                                     .items_center()
                                     .gap_2()
                                     .child(
-                                        div()
-                                            .flex_1()
-                                            .min_w_0()
-                                            .text_size(px(title_size))
-                                            .font_weight(gpui::FontWeight::BOLD)
-                                            .whitespace_nowrap()
-                                            .text_ellipsis()
-                                            .child(title),
+                                        div().flex_1().min_w_0().overflow_hidden().child(
+                                            MarqueeText::new(
+                                                "fullscreen-title",
+                                                0,
+                                                title,
+                                                title_size,
+                                                700.0,
+                                                palette::on_surface(),
+                                            ),
+                                        ),
                                     )
                                     .when(favorite, |this| {
                                         this.child(icon(
@@ -317,13 +319,14 @@ impl AppRoot {
                             ),
                     )
                     .child(
-                        div()
-                            .w_full()
-                            .text_size(px(13.0))
-                            .text_color(rgb(palette::on_surface_variant()))
-                            .whitespace_nowrap()
-                            .text_ellipsis()
-                            .child(artist),
+                        div().w_full().overflow_hidden().child(MarqueeText::new(
+                            "fullscreen-artist",
+                            0,
+                            artist,
+                            13.0,
+                            400.0,
+                            palette::on_surface_variant(),
+                        )),
                     )
                     .child(
                         div()

@@ -433,23 +433,27 @@ impl AppRoot {
                                     .flex_col()
                                     .min_w_0()
                                     .flex_1()
-                                    .child(
-                                        div()
-                                            .text_size(px(m.title_size))
-                                            .font_weight(gpui::FontWeight::MEDIUM)
-                                            .whitespace_nowrap()
-                                            .text_ellipsis()
-                                            .child(title),
-                                    )
+                                    .child(div().w_full().overflow_hidden().child(
+                                        MarqueeText::new(
+                                            "player-title",
+                                            0,
+                                            title,
+                                            m.title_size,
+                                            500.0,
+                                            palette::on_surface(),
+                                        ),
+                                    ))
                                     .when(!artist.is_empty(), |this| {
-                                        this.child(
-                                            div()
-                                                .text_size(px(m.artist_size))
-                                                .text_color(rgb(palette::on_surface_variant()))
-                                                .whitespace_nowrap()
-                                                .text_ellipsis()
-                                                .child(artist),
-                                        )
+                                        this.child(div().w_full().overflow_hidden().child(
+                                            MarqueeText::new(
+                                                "player-artist",
+                                                0,
+                                                artist,
+                                                m.artist_size,
+                                                400.0,
+                                                palette::on_surface_variant(),
+                                            ),
+                                        ))
                                     }),
                             ),
                     )

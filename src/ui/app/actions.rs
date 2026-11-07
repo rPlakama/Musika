@@ -518,11 +518,20 @@ impl AppRoot {
             return;
         }
         if self.alt.armed && self.alt.sticky {
+            let from_search = self.search_open
+                && self.search.is_some()
+                && self.alt_target.is_some()
+                && self.status_focus.is_none();
             let menu = self.alt_menu.clone();
+            let mut acted = false;
             if let Some(menu) = menu
                 && let Some(verb) = self.alt.confirm_plan(&menu)
             {
                 self.dispatch_quick(verb);
+                acted = true;
+            }
+            if acted && from_search {
+                self.dismiss_search_after_quick();
             }
             self.alt.cancel();
             self.alt_menu = None;

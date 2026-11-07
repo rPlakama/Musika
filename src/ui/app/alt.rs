@@ -559,6 +559,11 @@ impl AppRoot {
 
     pub(in crate::ui) fn alt_release(&mut self) {
         self.clock.tick();
+        let from_search = self.search_open
+            && self.search.is_some()
+            && self.alt_target.is_some()
+            && self.status_focus.is_none();
+        let mut acted = false;
         if self.alt_was_typing {
             if let Some(search) = self.search.as_mut() {
                 search.selection.clear();
@@ -573,12 +578,17 @@ impl AppRoot {
             {
                 if let Some(verb) = self.alt.confirm_plan(&menu) {
                     self.dispatch_quick(verb);
+                    acted = true;
                 }
                 if let Some(verb) = self.alt.commit_rating(&menu) {
                     self.dispatch_quick(verb);
+                    acted = true;
                 }
             }
             self.alt.cancel();
+        }
+        if acted && from_search {
+            self.dismiss_search_after_quick();
         }
         self.animate_alt(0.0);
     }

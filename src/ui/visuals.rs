@@ -95,6 +95,12 @@ pub struct Motion {
     pub search_text_selected: f32,
     /// Fullscreen lyrics overlay backdrop. 50% stronger than the old 0.35.
     pub lyrics_scrim: f32,
+    /// Spotify-like active-line size/gap settle: very quick.
+    pub lyrics_line_ms: f32,
+    /// Softer fade for unsung/neighbouring lines.
+    pub lyrics_fade_ms: f32,
+    /// Lyric window glide when the active line changes.
+    pub lyrics_scroll_ms: f32,
 }
 
 impl Default for Motion {
@@ -110,6 +116,9 @@ impl Default for Motion {
             search_cover_selected: 0.08,
             search_text_selected: 0.08,
             lyrics_scrim: 0.525,
+            lyrics_line_ms: 50.0,
+            lyrics_fade_ms: 120.0,
+            lyrics_scroll_ms: 300.0,
         }
     }
 }
@@ -128,5 +137,6 @@ mod tests {
         assert_eq!(visuals.fonts.row_title(false), 18.0);
         assert_eq!(visuals.fonts.row_subtitle(true), 11.0);
         assert_eq!(visuals.motion.lyrics_scrim, 0.525);
+        assert_eq!(visuals.motion.lyrics_line_ms, 50.0);
     }
 }

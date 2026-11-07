@@ -93,6 +93,8 @@ pub struct Motion {
     pub row_text_selected: f32,
     pub search_cover_selected: f32,
     pub search_text_selected: f32,
+    /// Fullscreen lyrics overlay backdrop. 50% stronger than the old 0.35.
+    pub lyrics_scrim: f32,
 }
 
 impl Default for Motion {
@@ -107,6 +109,7 @@ impl Default for Motion {
             row_text_selected: 0.08,
             search_cover_selected: 0.08,
             search_text_selected: 0.08,
+            lyrics_scrim: 0.525,
         }
     }
 }
@@ -124,5 +127,6 @@ mod tests {
         assert_eq!(visuals.fonts.row_title(true), 15.0);
         assert_eq!(visuals.fonts.row_title(false), 18.0);
         assert_eq!(visuals.fonts.row_subtitle(true), 11.0);
+        assert_eq!(visuals.motion.lyrics_scrim, 0.525);
     }
 }

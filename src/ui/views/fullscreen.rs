@@ -75,7 +75,7 @@ impl AppRoot {
             .flex()
             .items_center()
             .justify_center()
-            .bg(gpui::black().opacity(0.35 * progress))
+            .bg(gpui::black().opacity(self.visuals.motion.lyrics_scrim * progress))
             .opacity(progress.clamp(0.0, 1.0))
             .child(
                 div()

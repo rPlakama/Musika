@@ -23,6 +23,8 @@ pub enum Curve {
     Bounce,
     /// legacy UI `Easing.OutBack` with overshoot 1.7 (PopFx).
     OutBack,
+    /// `Easing.OutCubic`: fast start, gentle settle (lyrics follow).
+    OutCubic,
 }
 
 impl Curve {
@@ -40,6 +42,7 @@ impl Curve {
                 let u = t - 1.0;
                 1.0 + c3 * u * u * u + c1 * u * u
             }
+            Curve::OutCubic => 1.0 - (1.0 - t).powi(3),
         }
     }
 }
@@ -164,12 +167,14 @@ mod tests {
             Curve::Decelerate,
             Curve::Accelerate,
             Curve::Bounce,
+            Curve::OutCubic,
         ] {
             assert!((curve.sample(0.0) - 0.0).abs() < 1e-5);
             assert!((curve.sample(1.0) - 1.0).abs() < 1e-5);
         }
         let out_back = Curve::OutBack.sample(0.6);
         assert!(out_back > 1.0, "OutBack overshoot at the crest: {out_back}");
+        assert!((Curve::OutCubic.sample(0.5) - 0.875).abs() < 1e-5);
     }
 
     #[test]

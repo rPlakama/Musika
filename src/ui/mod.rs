@@ -25,6 +25,7 @@ mod anim;
 mod bridge;
 mod covers;
 mod line_search;
+mod lyrics_layout;
 mod metrics;
 mod quick_actions;
 mod page_profile;
@@ -336,6 +337,31 @@ struct SearchRowPaint {
     hovered: bool,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FullscreenFocus {
+    Cover,
+    Title,
+}
+
+impl FullscreenFocus {
+    fn next(self) -> Self {
+        match self {
+            Self::Cover => Self::Title,
+            Self::Title => Self::Cover,
+        }
+    }
+
+    fn prev(self) -> Self {
+        self.next()
+    }
+}
+
+#[derive(Debug, Default)]
+struct FullscreenAnchors {
+    cover: Option<(f32, f32)>,
+    title: Option<(f32, f32)>,
+}
+
 const LIBRARY_ROW_FLAGS: page_profile::RowFlags = page_profile::RowFlags {
     show_cover: true,
     show_subtitle: true,
@@ -398,6 +424,10 @@ struct AppRoot {
     login: Option<LoginState>,
     fullscreen: bool,
     fullscreen_anim: anim::Behavior,
+    fullscreen_focus: FullscreenFocus,
+    fullscreen_anchors: std::rc::Rc<std::cell::RefCell<FullscreenAnchors>>,
+    fullscreen_album: Option<(String, bool, u8)>,
+    fullscreen_album_requested: Option<String>,
     lyrics: Option<LyricsState>,
     lyrics_requested: Option<String>,
     quit_armed_at: Option<f64>,
@@ -412,8 +442,10 @@ struct AppRoot {
     lyrics_overlay_wanted: bool,
     lyrics_overlay_anim: anim::Behavior,
     lyrics_active_line: Option<usize>,
-    lyrics_active_anim: anim::Behavior,
     lyrics_line_opacity: std::collections::HashMap<usize, anim::Behavior>,
+    lyrics_line_emphasis: std::collections::HashMap<usize, anim::Behavior>,
+    lyrics_line_color: std::collections::HashMap<usize, anim::ColorBehavior>,
+    lyrics_layout: Option<lyrics_layout::LyricsLayout>,
     lyrics_window_start: usize,
     lyrics_shift: anim::Behavior,
     lyrics_track_fade: anim::Behavior,
@@ -515,6 +547,12 @@ impl AppRoot {
             login: None,
             fullscreen: false,
             fullscreen_anim: anim::Behavior::new(0.0),
+            fullscreen_focus: FullscreenFocus::Cover,
+            fullscreen_anchors: std::rc::Rc::new(std::cell::RefCell::new(
+                FullscreenAnchors::default(),
+            )),
+            fullscreen_album: None,
+            fullscreen_album_requested: None,
             lyrics: None,
             lyrics_requested: None,
             quit_armed_at: None,
@@ -531,8 +569,10 @@ impl AppRoot {
             lyrics_overlay_wanted: false,
             lyrics_overlay_anim: anim::Behavior::new(0.0),
             lyrics_active_line: None,
-            lyrics_active_anim: anim::Behavior::new(1.0),
             lyrics_line_opacity: std::collections::HashMap::new(),
+            lyrics_line_emphasis: std::collections::HashMap::new(),
+            lyrics_line_color: std::collections::HashMap::new(),
+            lyrics_layout: None,
             lyrics_window_start: 0,
             lyrics_shift: anim::Behavior::new(0.0),
             lyrics_track_fade: anim::Behavior::new(1.0),
@@ -718,6 +758,40 @@ impl AppRoot {
                     for row in &mut search.rows {
                         patch(row);
                     }
+                }
+                if kind == RowKind::Song
+                    && let Some(starred) = starred
+                    && self
+                        .player
+                        .current()
+                        .is_some_and(|track| track.id == id)
+                {
+                    self.player.set_track_favorite(&id, starred);
+                }
+                if kind == RowKind::Album
+                    && let Some((album_id, album_starred, album_rating)) =
+                        self.fullscreen_album.as_mut()
+                    && *album_id == id
+                {
+                    if let Some(starred) = starred {
+                        *album_starred = starred;
+                    }
+                    if let Some(rating) = rating {
+                        *album_rating = rating;
+                    }
+                }
+            }
+            Event::AlbumState {
+                id,
+                starred,
+                rating,
+            } => {
+                if self
+                    .player
+                    .current()
+                    .is_some_and(|track| track.album_id == id)
+                {
+                    self.fullscreen_album = Some((id, starred, rating));
                 }
             }
             Event::QueueAppend { tracks } => {
@@ -926,6 +1000,9 @@ impl AppRoot {
                 if new_song {
                     self.lyrics_window_start = 0;
                     self.lyrics_line_opacity.clear();
+                    self.lyrics_line_emphasis.clear();
+                    self.lyrics_line_color.clear();
+                    self.lyrics_layout = None;
                     self.lyrics_track_fade.target(0.0, 0.0, anim::Curve::Standard, &self.clock);
                     self.lyrics_track_fade
                         .target(1.0, 300.0, anim::Curve::Decelerate, &self.clock);
@@ -1232,6 +1309,16 @@ impl AppRoot {
         let mut songs = Vec::new();
         let mut albums = Vec::new();
         let mut seen = std::collections::HashSet::new();
+        // The fullscreen title shows the current track's marks even when it is
+        // not part of the visible list window.
+        if let Some(track) = self.player.current() {
+            if !track.id.is_empty() && seen.insert(format!("s:{}", track.id)) {
+                songs.push(track.id.clone());
+            }
+            if !track.album_id.is_empty() && seen.insert(format!("a:{}", track.album_id)) {
+                albums.push(track.album_id.clone());
+            }
+        }
         let mut push = |row: &Row, songs: &mut Vec<String>, albums: &mut Vec<String>| {
             if !row.song_id.is_empty() && seen.insert(format!("s:{}", row.song_id)) {
                 songs.push(row.song_id.clone());
@@ -1277,6 +1364,28 @@ impl AppRoot {
             );
         }
         self.bridge.request_marks(songs, albums);
+    }
+
+    fn refresh_fullscreen_album_state(&mut self) {
+        let Some(track) = self.player.current() else {
+            return;
+        };
+        let album_id = track.album_id.clone();
+        if album_id.is_empty() {
+            return;
+        }
+        if self
+            .fullscreen_album
+            .as_ref()
+            .is_some_and(|(id, _, _)| *id == album_id)
+        {
+            return;
+        }
+        if self.fullscreen_album_requested.as_deref() == Some(album_id.as_str()) {
+            return;
+        }
+        self.fullscreen_album_requested = Some(album_id.clone());
+        self.bridge.request_album_state(album_id);
     }
 
     fn page_hero_bucket(&self) -> u32 {
@@ -1475,10 +1584,23 @@ impl AppRoot {
         cx.notify();
     }
 
+    fn cycle_fullscreen_focus(&mut self, backward: bool) {
+        self.fullscreen_focus = match (self.fullscreen_focus, backward) {
+            (FullscreenFocus::Cover, false) | (FullscreenFocus::Title, true) => {
+                FullscreenFocus::Title
+            }
+            (FullscreenFocus::Title, false) | (FullscreenFocus::Cover, true) => {
+                FullscreenFocus::Cover
+            }
+        };
+    }
+
     fn on_toggle_fullscreen(&mut self, _: &ToggleFullscreen, _window: &mut Window, cx: &mut Context<Self>) {
         self.fullscreen = !self.fullscreen;
         if self.fullscreen {
             self.request_current_lyrics();
+            self.ensure_marks();
+            self.refresh_fullscreen_album_state();
         }
         cx.notify();
     }
@@ -2055,6 +2177,22 @@ impl AppRoot {
         )
     }
 
+    fn fullscreen_anchor(&self, focus: FullscreenFocus) -> (f32, f32) {
+        let anchors = self.fullscreen_anchors.borrow();
+        let stored = match focus {
+            FullscreenFocus::Cover => anchors.cover,
+            FullscreenFocus::Title => anchors.title,
+        };
+        let (x, y) = stored.unwrap_or(match focus {
+            FullscreenFocus::Cover => (self.win_w * 0.5, self.win_h * 0.42),
+            FullscreenFocus::Title => (self.win_w * 0.5, self.win_h * 0.86),
+        });
+        (
+            x.clamp(30.0, (self.win_w - 30.0).max(30.0)),
+            y.clamp(30.0, (self.win_h - 30.0).max(30.0)),
+        )
+    }
+
     fn alt_scroll_anchor(
         &self,
         modal: &scroll_modal::ScrollModal,
@@ -2143,6 +2281,31 @@ impl AppRoot {
     fn alt_snapshot(&self) -> Option<(QuickMenu, AltTarget, (f32, f32))> {
         if self.fullscreen {
             let track = self.player.current()?;
+            if self.fullscreen_focus == FullscreenFocus::Cover && !track.album_id.is_empty() {
+                let album_id = track.album_id.clone();
+                let (starred, rating) = self
+                    .fullscreen_album
+                    .as_ref()
+                    .filter(|(id, _, _)| *id == album_id)
+                    .map(|(_, starred, rating)| (*starred, *rating))
+                    .unwrap_or((false, 0));
+                let cached = self.marks.albums_done.contains(&album_id);
+                let menu = QuickMenu::album_with(cached, starred, rating);
+                let target = AltTarget {
+                    kind: RowKind::Album,
+                    id: album_id.clone(),
+                    album_id: album_id.clone(),
+                    song_id: String::new(),
+                    playlist_id: String::new(),
+                    ids: vec![album_id],
+                    selection: false,
+                };
+                return Some((
+                    menu,
+                    target,
+                    self.fullscreen_anchor(FullscreenFocus::Cover),
+                ));
+            }
             let menu = QuickMenu::song_with(track.favorite);
             let target = AltTarget {
                 kind: RowKind::Song,
@@ -2153,7 +2316,11 @@ impl AppRoot {
                 ids: vec![track.id.clone()],
                 selection: false,
             };
-            return Some((menu, target, (self.win_w * 0.5, self.win_h * 0.5)));
+            return Some((
+                menu,
+                target,
+                self.fullscreen_anchor(FullscreenFocus::Title),
+            ));
         }
         if let Some(search) = self.search.as_ref().filter(|_| self.search_open) {
             let scoped = search.scoped();
@@ -2687,36 +2854,9 @@ impl AppRoot {
         } else {
             0
         };
-        if self.lyrics_active_line != Some(active) {
-            self.lyrics_active_line = Some(active);
-            self.lyrics_active_anim.target(0.0, 0.0, anim::Curve::Standard, &self.clock);
-            self.lyrics_active_anim
-                .target(1.0, anim::QUICK_MS, anim::Curve::Standard, &self.clock);
-        }
-        let stride = (self.win_h * 0.055).clamp(13.0, 22.0) * 1.55;
-        let visible = 15usize;
-        let old_start = self.lyrics_window_start;
-        let mut start = old_start.min(lyrics.lines.len().saturating_sub(1));
-        if active < start + 2 {
-            start = active.saturating_sub(2);
-        } else if active + visible > start + visible.saturating_sub(2) && active + 2 >= start + visible {
-            start = (active + 2).saturating_sub(visible);
-        }
-        if start != old_start {
-            self.lyrics_window_start = start;
-            self.lyrics_shift.target(
-                (old_start as f32 - start as f32) * stride,
-                0.0,
-                anim::Curve::Standard,
-                &self.clock,
-            );
-            self.lyrics_shift
-                .target(0.0, 300.0, anim::Curve::Decelerate, &self.clock);
-        } else {
-            self.lyrics_shift.target(0.0, 0.0, anim::Curve::Standard, &self.clock);
-        }
+        self.lyrics_active_line = Some(active);
         for (index, _) in lyrics.lines.iter().enumerate() {
-            let target = if !lyrics.synced {
+            let opacity = if !lyrics.synced {
                 0.8
             } else {
                 match index.abs_diff(active) {
@@ -2727,9 +2867,115 @@ impl AppRoot {
             };
             self.lyrics_line_opacity
                 .entry(index)
-                .or_insert_with(|| anim::Behavior::new(target))
-                .target(target, anim::QUICK_MS, anim::Curve::Standard, &self.clock);
+                .or_insert_with(|| anim::Behavior::new(opacity))
+                .target(opacity, anim::QUICK_MS, anim::Curve::Standard, &self.clock);
+
+            let emphasis = if lyrics.synced && index == active {
+                lyrics_layout::EMPHASIS
+            } else {
+                1.0
+            };
+            self.lyrics_line_emphasis
+                .entry(index)
+                .or_insert_with(|| anim::Behavior::new(1.0))
+                .target(emphasis, anim::QUICK_MS, anim::Curve::Standard, &self.clock);
+
+            let color = if lyrics.synced && index == active {
+                palette::on_surface()
+            } else {
+                palette::on_surface_variant()
+            };
+            self.lyrics_line_color
+                .entry(index)
+                .or_insert_with(|| anim::ColorBehavior::new(color))
+                .target(color, anim::MICRO_MS, anim::Curve::Standard, &self.clock);
         }
+    }
+
+    fn lyric_wrap_count(window: &Window, text: &str, size: f32, width: f32) -> usize {
+        if width <= 0.0 || text.is_empty() {
+            return 1;
+        }
+        let mut wrapper = window
+            .text_system()
+            .line_wrapper(gpui::font("Overused Grotesk Roman"), px(size));
+        wrapper
+            .wrap_line(&[gpui::LineFragment::text(text)], px(width))
+            .count()
+            .max(1)
+    }
+
+    fn sync_lyrics_layout(&mut self, window: &Window) {
+        let Some(lyrics) = self.lyrics.as_ref() else {
+            self.lyrics_layout = None;
+            return;
+        };
+        if lyrics.lines.is_empty() {
+            self.lyrics_layout = None;
+            return;
+        }
+        let overlay = self.lyrics_overlay;
+        let (width, height) = if overlay {
+            (
+                ((self.win_w * 0.72).min(720.0) - 32.0).max(1.0),
+                (self.win_h * 0.80).max(1.0),
+            )
+        } else if self.fullscreen {
+            (
+                ((self.win_w * 0.95 - 24.0) * 0.5 - 24.0).max(1.0),
+                (self.win_h * 0.55).max(1.0),
+            )
+        } else {
+            self.lyrics_layout = None;
+            return;
+        };
+        let active = self
+            .lyrics_active_line
+            .unwrap_or(0)
+            .min(lyrics.lines.len() - 1);
+        let mut base = (height * 0.055).clamp(13.0, 22.0);
+        let mut layout = lyrics_layout::layout(
+            &lyrics.lines,
+            active,
+            width,
+            height,
+            base,
+            |text, size| Self::lyric_wrap_count(window, text, size, width),
+        );
+        // A single very long line can still be taller than the pane at the
+        // nominal size. Step the type down until it fits, then keep it.
+        while base > 13.0
+            && layout
+                .rows
+                .iter()
+                .any(|row| row.height > height)
+        {
+            base -= 1.0;
+            layout = lyrics_layout::layout(
+                &lyrics.lines,
+                active,
+                width,
+                height,
+                base,
+                |text, size| Self::lyric_wrap_count(window, text, size, width),
+            );
+        }
+        let old_start = self.lyrics_window_start;
+        if layout.start != old_start {
+            let unit = layout.text_height.max(1.0);
+            self.lyrics_shift.target(
+                (old_start as f32 - layout.start as f32) * unit,
+                0.0,
+                anim::Curve::Standard,
+                &self.clock,
+            );
+            self.lyrics_shift
+                .target(0.0, 300.0, anim::Curve::OutCubic, &self.clock);
+        } else {
+            self.lyrics_shift.target(0.0, 0.0, anim::Curve::Standard, &self.clock);
+        }
+        self.lyrics_window_start = layout.start;
+        self.lyrics_layout = Some(layout);
     }
 
 
@@ -2746,7 +2992,6 @@ impl AppRoot {
         let inline = self.lyrics_inline();
         if !has_lyrics {
             self.lyrics_overlay = false;
-            self.lyrics_overlay_wanted = false;
             return;
         }
         self.lyrics_overlay = self.lyrics_overlay_wanted && !inline;
@@ -2936,6 +3181,20 @@ impl AppRoot {
             cx.stop_propagation();
             self.line_search_key(event, _window, cx);
             return;
+        }
+        if self.fullscreen
+            && !self.lyrics_overlay
+            && !self.alt_held
+            && !self.alt.armed
+            && !(self.search.is_some() && self.search_open)
+        {
+            let key = event.keystroke.key.as_str();
+            if key == "tab" || key == "backtab" {
+                cx.stop_propagation();
+                self.cycle_fullscreen_focus(key == "backtab");
+                cx.notify();
+                return;
+            }
         }
         if self.alt_held || self.alt.armed {
             cx.stop_propagation();
@@ -4189,43 +4448,65 @@ impl AppRoot {
 
     fn lyric_line_elements(
         &self,
+        layout: &lyrics_layout::LyricsLayout,
         lines: &[(Option<i64>, String)],
-        start: usize,
-        end: usize,
-        active: usize,
-        base: f32,
+        synced: bool,
     ) -> Vec<gpui::AnyElement> {
-        let active_size = (base * (1.0 + 0.12 * self.lyrics_active_anim.value(&self.clock))).min(24.5);
-        lines[start..end]
+        layout
+            .rows
             .iter()
-            .enumerate()
-            .map(|(offset, (_, text))| {
-                let index = start + offset;
-                let is_active = index == active;
+            .map(|row| {
+                let is_active = synced && row.active;
+                let emphasis = self
+                    .lyrics_line_emphasis
+                    .get(&row.index)
+                    .map(|anim| anim.value(&self.clock))
+                    .unwrap_or(1.0);
+                let color = self
+                    .lyrics_line_color
+                    .get(&row.index)
+                    .map(|anim| anim.value(&self.clock))
+                    .unwrap_or_else(|| {
+                        if is_active {
+                            palette::on_surface()
+                        } else {
+                            palette::on_surface_variant()
+                        }
+                    });
+                let opacity = self
+                    .lyrics_line_opacity
+                    .get(&row.index)
+                    .map(|anim| anim.value(&self.clock))
+                    .unwrap_or(1.0);
+                let text = lines
+                    .get(row.index)
+                    .map(|(_, text)| text.clone())
+                    .unwrap_or_default();
                 div()
-                    .w_full()
+                    .w(px(layout.width))
                     .min_w_0()
-                    .overflow_hidden()
-                    .text_size(px(if is_active { active_size } else { base }))
-                    .text_color(rgb(if is_active {
-                        palette::on_surface()
-                    } else {
-                        palette::on_surface_variant()
-                    }))
+                    .h(px(row.height))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .text_size(px(layout.base_size * emphasis))
+                    .line_height(px(layout.text_height * emphasis))
+                    .text_color(rgb(color))
                     .text_center()
                     .whitespace_normal()
-                    .opacity(
-                        self.lyrics_line_opacity
-                            .get(&index)
-                            .map(|anim| anim.value(&self.clock))
-                            .unwrap_or(1.0),
+                    .opacity(opacity)
+                    .child(
+                        div()
+                            .w_full()
+                            .text_center()
+                            .whitespace_normal()
+                            .child(text),
                     )
-                    .when(is_active, |this| this.font_weight(gpui::FontWeight::SEMIBOLD))
-                    .child(text.clone())
                     .into_any_element()
             })
             .collect()
     }
+
 
     fn lyrics_overlay_element(&self, progress: f32) -> gpui::AnyElement {
         if !self.lyrics_overlay && progress <= 0.001 {
@@ -4234,19 +4515,9 @@ impl AppRoot {
         let Some(lyrics) = self.lyrics.as_ref() else {
             return div().into_any_element();
         };
-        let position = self.player.position();
-        let active = if lyrics.synced {
-            let ms = (position * 1000.0) as i64;
-            lyrics
-                .lines
-                .iter()
-                .rposition(|(start, _)| start.is_some_and(|start| start <= ms))
-                .unwrap_or(0)
-        } else {
-            0
+        let Some(layout) = self.lyrics_layout.as_ref() else {
+            return div().into_any_element();
         };
-        let start = self.lyrics_window_start.min(lyrics.lines.len().saturating_sub(1));
-        let end = (start + 15).min(lyrics.lines.len());
         div()
             .absolute()
             .inset_0()
@@ -4258,7 +4529,7 @@ impl AppRoot {
             .opacity(progress.clamp(0.0, 1.0))
             .child(
                 div()
-                    .w(relative(0.72 * (0.84 + 0.16 * progress).clamp(0.84, 1.04)))
+                    .w(relative(0.72))
                     .max_w(px(720.0))
                     .h_full()
                     .px_4()
@@ -4267,7 +4538,7 @@ impl AppRoot {
                     .flex_col()
                     .items_center()
                     .justify_center()
-                    .gap(px((((self.win_h * 0.055).clamp(13.0, 22.0)) * 0.5).max(8.0)))
+                    .gap(px(layout.gap))
                     .opacity(self.lyrics_track_fade.value(&self.clock))
                     .mt(px(self.lyrics_shift.value(&self.clock)))
                     .child(
@@ -4276,16 +4547,11 @@ impl AppRoot {
                             .text_color(rgb(palette::on_surface_variant()))
                             .child(format!("Lyrics · {} · ? closes", lyrics.source)),
                     )
-                    .children(self.lyric_line_elements(
-                        &lyrics.lines,
-                        start,
-                        end,
-                        active,
-                        (self.win_h * 0.055).clamp(13.0, 22.0),
-                    )),
+                    .children(self.lyric_line_elements(layout, &lyrics.lines, lyrics.synced)),
             )
             .into_any_element()
     }
+
 
     fn fullscreen_overlay(&self, progress: f32) -> gpui::Div {
         let track = self.player.current().cloned();
@@ -4300,6 +4566,17 @@ impl AppRoot {
             ),
             None => ("No track playing".to_string(), String::new(), None),
         };
+        let title_size = (metrics::font_size("headline", self.win_h)
+            * metrics::width_scale(self.win_w))
+        .clamp(18.0, 32.0);
+        let favorite = track.as_ref().is_some_and(|track| track.favorite);
+        let downloaded = track
+            .as_ref()
+            .is_some_and(|track| self.marks.downloaded(&track.id, &track.album_id));
+        let cover_focus = self.fullscreen_focus == FullscreenFocus::Cover;
+        let title_focus = self.fullscreen_focus == FullscreenFocus::Title;
+        let cover_anchor_slot = self.fullscreen_anchors.clone();
+        let title_anchor_slot = self.fullscreen_anchors.clone();
         let position = self.player.position();
         let duration = self.player.duration();
         let progress_ratio = if duration > 0.0 {
@@ -4309,27 +4586,26 @@ impl AppRoot {
         };
         let lyrics = self.lyrics.as_ref();
         let lines = lyrics.map(|lyrics| lyrics.lines.clone()).unwrap_or_default();
-        let active = lyrics
-            .filter(|lyrics| lyrics.synced)
-            .and_then(|_| {
-                let ms = (position * 1000.0) as i64;
-                lines
-                    .iter()
-                    .rposition(|(start, _)| start.is_some_and(|start| start <= ms))
-            })
-            .unwrap_or(0);
-        let start = self.lyrics_window_start.min(lines.len().saturating_sub(1));
-        let end = (start + 15).min(lines.len());
         let lyrics_label = match lyrics {
             Some(lyrics) if lyrics.lines.is_empty() => "No lyrics".to_string(),
             Some(lyrics) => format!("Lyrics · {}", lyrics.source),
             None => "Loading lyrics…".to_string(),
         };
         let lyrics_inline = self.lyrics_inline();
+        let lyrics_synced = lyrics.is_some_and(|lyrics| lyrics.synced);
+        let lyric_gap = self
+            .lyrics_layout
+            .as_ref()
+            .map(|layout| layout.gap)
+            .unwrap_or(12.0);
+        let lyric_children = self
+            .lyrics_layout
+            .as_ref()
+            .map(|layout| self.lyric_line_elements(layout, &lines, lyrics_synced))
+            .unwrap_or_default();
         // The overlay is a centered lyrics panel over the full player: keep the
         // cover as the backdrop instead of hiding it and splitting the pane.
         let split_lyrics = lyrics_inline && !self.lyrics_overlay;
-        let lyric_base = (self.win_h * 0.055).clamp(13.0, 22.0);
         let cover_side = if split_lyrics {
             ((self.win_w * 0.95 - 24.0) * 0.5).min(self.win_h * 0.62)
         } else {
@@ -4361,6 +4637,22 @@ impl AppRoot {
                             .items_center()
                             .justify_center()
                             .overflow_hidden()
+                            .rounded_md()
+                            .border_1()
+                            .border_color(rgb(if cover_focus {
+                                palette::primary()
+                            } else {
+                                palette::outline_variant()
+                            }))
+                            .on_children_prepainted(move |bounds, _, _| {
+                                if let Some(bounds) = bounds.first() {
+                                    let x = f32::from(bounds.origin.x)
+                                        + f32::from(bounds.size.width) * 0.5;
+                                    let y = f32::from(bounds.origin.y)
+                                        + f32::from(bounds.size.height) * 0.5;
+                                    cover_anchor_slot.borrow_mut().cover = Some((x, y));
+                                }
+                            })
                             .child(art(cover, cover_side)),
                     )
                     .child(
@@ -4375,11 +4667,10 @@ impl AppRoot {
                                 0.0
                             })
                             .min_w_0()
-                            .overflow_hidden()
                             .flex_col()
                             .items_center()
                             .justify_center()
-                            .gap(px((lyric_base * 0.5).max(8.0)))
+                            .gap(px(lyric_gap))
                             .mt(px(self.lyrics_shift.value(&self.clock)))
                             .child(
                                 div()
@@ -4387,13 +4678,7 @@ impl AppRoot {
                                     .text_color(rgb(palette::on_surface_variant()))
                                     .child(lyrics_label),
                             )
-                            .children(self.lyric_line_elements(
-                                &lines,
-                                start,
-                                end,
-                                active,
-                                lyric_base,
-                            )),
+                            .children(lyric_children),
                     ),
             )
             .child(
@@ -4405,11 +4690,69 @@ impl AppRoot {
                     .child(
                         div()
                             .w_full()
-                            .text_size(px(24.0))
-                            .font_weight(gpui::FontWeight::BOLD)
-                            .whitespace_nowrap()
-                            .text_ellipsis()
-                            .child(title),
+                            .rounded_md()
+                            .border_1()
+                            .border_color(rgb(if title_focus {
+                                palette::primary()
+                            } else {
+                                palette::outline_variant()
+                            }))
+                            .px_2()
+                            .py_1()
+                            .on_children_prepainted(move |bounds, _, _| {
+                                if let Some(first) = bounds.first() {
+                                    let mut left = f32::from(first.origin.x);
+                                    let mut right = left + f32::from(first.size.width);
+                                    let mut top = f32::from(first.origin.y);
+                                    let mut bottom = top + f32::from(first.size.height);
+                                    for bounds in bounds.iter().skip(1) {
+                                        left = left.min(f32::from(bounds.origin.x));
+                                        right = right.max(
+                                            f32::from(bounds.origin.x)
+                                                + f32::from(bounds.size.width),
+                                        );
+                                        top = top.min(f32::from(bounds.origin.y));
+                                        bottom = bottom.max(
+                                            f32::from(bounds.origin.y)
+                                                + f32::from(bounds.size.height),
+                                        );
+                                    }
+                                    title_anchor_slot
+                                        .borrow_mut()
+                                        .title = Some(((left + right) * 0.5, (top + bottom) * 0.5));
+                                }
+                            })
+                            .child(
+                                div()
+                                    .w_full()
+                                    .flex()
+                                    .items_center()
+                                    .gap_2()
+                                    .child(
+                                        div()
+                                            .flex_1()
+                                            .min_w_0()
+                                            .text_size(px(title_size))
+                                            .font_weight(gpui::FontWeight::BOLD)
+                                            .whitespace_nowrap()
+                                            .text_ellipsis()
+                                            .child(title),
+                                    )
+                                    .when(favorite, |this| {
+                                        this.child(icon(
+                                            "baseline-favorite.svg",
+                                            (title_size * 0.62).clamp(13.0, 19.0),
+                                            0xFFD54F,
+                                        ))
+                                    })
+                                    .when(downloaded, |this| {
+                                        this.child(icon(
+                                            "outline-download.svg",
+                                            (title_size * 0.58).clamp(12.0, 18.0),
+                                            palette::primary(),
+                                        ))
+                                    }),
+                            ),
                     )
                     .child(
                         div()
@@ -4477,7 +4820,7 @@ impl AppRoot {
                             .text_size(px(10.0))
                             .text_color(rgb(palette::on_surface_variant()))
                             .text_center()
-                            .child("Shift-Enter or q closes · Space play/pause · Ctrl-Q queue"),
+                            .child("Tab cover/title · Alt actions · Shift-Enter/q closes · Space play/pause · Ctrl-Q queue"),
                     ),
             )
     }
@@ -5353,6 +5696,7 @@ impl AppRoot {
             Some(track) => (track.title.clone(), track.artist.clone(), cover_path(&track.cover_url)),
             None => ("Nothing playing".to_string(), String::new(), None),
         };
+        let m = metrics::PlayerBarMetrics::new(self.win_w, self.win_h);
         div()
             .relative()
             .w_full()
@@ -5382,9 +5726,8 @@ impl AppRoot {
                             .gap_3()
                             .flex_1()
                             .min_w_0()
-                            .max_w(relative(0.46))
                             .overflow_hidden()
-                            .child(art(cover, 44.0))
+                            .child(art(cover, m.cover_side))
                             .child(
                                 div()
                                     .flex()
@@ -5393,55 +5736,72 @@ impl AppRoot {
                                     .flex_1()
                                     .child(
                                         div()
-                                            .text_size(px(15.0))
+                                            .text_size(px(m.title_size))
                                             .font_weight(gpui::FontWeight::MEDIUM)
                                             .whitespace_nowrap()
                                             .text_ellipsis()
                                             .child(title),
                                     )
-                                    .child(
-                                        div()
-                                            .text_size(px(12.0))
-                                            .text_color(rgb(palette::on_surface_variant()))
-                                            .whitespace_nowrap()
-                                            .text_ellipsis()
-                                            .child(artist),
-                                    ),
+                                    .when(!artist.is_empty(), |this| {
+                                        this.child(
+                                            div()
+                                                .text_size(px(m.artist_size))
+                                                .text_color(rgb(palette::on_surface_variant()))
+                                                .whitespace_nowrap()
+                                                .text_ellipsis()
+                                                .child(artist),
+                                        )
+                                    }),
                             ),
                     )
                     .child(
                         div()
                             .flex()
-                            .w(px(200.0))
                             .flex_none()
                             .items_center()
                             .justify_center()
-                            .gap_5()
-                            .child(transport_button("skip-previous-solid-svgrepo-com.svg", 20.0, palette::on_surface(), self.transport_scale(0)))
+                            .gap(px(m.transport_spacing))
+                            .child(transport_button(
+                                "skip-previous-solid-svgrepo-com.svg",
+                                m.transport_unit,
+                                palette::on_surface(),
+                                self.transport_scale(0),
+                            ))
                             .child(transport_button(
                                 if state == crate::player::State::Playing {
                                     "pause-svgrepo-com.svg"
                                 } else {
                                     "play-1001-svgrepo-com.svg"
                                 },
-                                24.0,
+                                m.play_size,
                                 palette::on_surface(),
                                 self.transport_scale(1),
                             ))
-                            .child(transport_button("skip-next-circle-solid-svgrepo-com.svg", 20.0, palette::on_surface(), self.transport_scale(2))),
+                            .child(transport_button(
+                                "skip-next-circle-solid-svgrepo-com.svg",
+                                m.transport_unit,
+                                palette::on_surface(),
+                                self.transport_scale(2),
+                            )),
                     )
                     .child(
                         div()
                             .flex()
-                            .w(px(170.0))
-                            .flex_none()
+                            .flex_1()
+                            .min_w_0()
                             .items_center()
+                            .overflow_hidden()
                             .justify_end()
                             .gap_3()
                             .child(
                                 div()
-                                    .text_size(px(11.0))
+                                    .flex_1()
+                                    .min_w_0()
+                                    .text_size(px(m.time_size))
                                     .text_color(rgb(palette::on_surface_variant()))
+                                    .text_right()
+                                    .whitespace_nowrap()
+                                    .text_ellipsis()
                                     .child(format!(
                                         "{} / {}",
                                         format_time(position),
@@ -5451,7 +5811,7 @@ impl AppRoot {
                             .when(self.repeat != crate::player::Repeat::Off, |this| {
                                 this.child(
                                     div()
-                                        .text_size(px(10.0))
+                                        .text_size(px(m.time_size))
                                         .text_color(rgb(palette::primary()))
                                         .child(repeat_label(self.repeat)),
                                 )
@@ -5461,12 +5821,12 @@ impl AppRoot {
                                 else if volume <= 1.0 { "vol-zero-svgrepo-com.svg" }
                                 else if volume <= 33.0 { "vol-low-svgrepo-com.svg" }
                                 else { "vol-high-svgrepo-com.svg" },
-                                16.0,
+                                m.volume_icon,
                                 palette::on_surface_variant(),
                             ))
                             .child(
                                 div()
-                                    .w(px(54.0))
+                                    .w(px(m.volume_bar))
                                     .h(px(3.0))
                                     .rounded_full()
                                     .bg(rgb(palette::surface_container_high()))
@@ -5481,6 +5841,7 @@ impl AppRoot {
                     ),
             )
     }
+
 
     fn status_bar(&self) -> impl IntoElement {
         let counts = self
@@ -5542,6 +5903,7 @@ impl Render for AppRoot {
             }
         }
         self.refresh_lyrics_emphasis();
+        self.sync_lyrics_layout(window);
         if self.exiting.is_none()
             && let Some(ms) = self.quit_after_ms
             && self.clock.now * 1000.0 >= ms as f64
@@ -5622,6 +5984,8 @@ impl Render for AppRoot {
         }
         if self.fullscreen {
             self.request_current_lyrics();
+            self.ensure_marks();
+            self.refresh_fullscreen_album_state();
         }
         if let Some(page) = self.page.as_ref() {
             let cover_art = page.header.cover_art.clone();
@@ -5665,8 +6029,8 @@ impl Render for AppRoot {
         }
         let lyrics_overlay_progress = self.lyrics_overlay_anim.target(
             if self.lyrics_overlay { 1.0 } else { 0.0 },
-            if self.lyrics_overlay { anim::EMPHASIZED_MS } else { anim::STANDARD_MS },
-            if self.lyrics_overlay { anim::Curve::OutBack } else { anim::Curve::Accelerate },
+            anim::QUICK_MS,
+            anim::Curve::Standard,
             &self.clock,
         );
         if !self.lyrics_overlay_anim.settled(&self.clock) {
@@ -5744,13 +6108,20 @@ impl Render for AppRoot {
         {
             window.request_animation_frame();
         }
-        if !self.lyrics_active_anim.settled(&self.clock)
-            || !self.lyrics_shift.settled(&self.clock)
+        if !self.lyrics_shift.settled(&self.clock)
             || !self.lyrics_track_fade.settled(&self.clock)
             || self
                 .lyrics_line_opacity
                 .values()
                 .any(|value| !value.settled(&self.clock))
+            || self
+                .lyrics_line_emphasis
+                .values()
+                .any(|value| !value.settled(&self.clock))
+            || self
+                .lyrics_line_color
+                .values()
+                .any(|color| !color.settled(&self.clock))
         {
             window.request_animation_frame();
         }
@@ -6205,5 +6576,18 @@ mod page_header_phrase_tests {
             page_header_phrases("Playlist", "", "12 tracks", ""),
             ("Playlist".to_string(), "12 tracks".to_string())
         );
+    }
+}
+
+#[cfg(test)]
+mod fullscreen_focus_tests {
+    use super::FullscreenFocus;
+
+    #[test]
+    fn tab_cycles_cover_and_title() {
+        assert_eq!(FullscreenFocus::Cover.next(), FullscreenFocus::Title);
+        assert_eq!(FullscreenFocus::Title.next(), FullscreenFocus::Cover);
+        assert_eq!(FullscreenFocus::Cover.prev(), FullscreenFocus::Title);
+        assert_eq!(FullscreenFocus::Title.prev(), FullscreenFocus::Cover);
     }
 }

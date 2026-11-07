@@ -71,6 +71,11 @@ pub enum Event {
         starred: Option<bool>,
         rating: Option<u8>,
     },
+    AlbumState {
+        id: String,
+        starred: bool,
+        rating: u8,
+    },
     QueueAppend {
         tracks: Vec<crate::player::Track>,
     },
@@ -752,6 +757,25 @@ impl Bridge {
             let _ = tx.send(Event::OpenPage {
                 descriptor: super::state::PageDescriptor::new(super::state::PageKind::Album, album_id),
             });
+        });
+    }
+
+    /// Fullscreen cover focus: fetch the playing album's favourite/rating.
+    pub fn request_album_state(&self, album_id: String) {
+        let tx = self.tx.clone();
+        crate::app::runtime().spawn(async move {
+            let Some(dbs) = crate::app::dbs() else { return };
+            let state = crate::library::album_states(&dbs.library, std::slice::from_ref(&album_id))
+                .await
+                .ok()
+                .and_then(|states| states.get(&album_id).copied());
+            if let Some((starred, rating)) = state {
+                let _ = tx.send(Event::AlbumState {
+                    id: album_id,
+                    starred,
+                    rating: rating.clamp(0, 5) as u8,
+                });
+            }
         });
     }
 

@@ -253,6 +253,22 @@ impl Player {
         self.revision += 1;
     }
 
+    /// Reflect a favourite change on the matching queued track without
+    /// refetching library metadata (the fullscreen title reads this flag).
+    pub fn set_track_favorite(&mut self, song_id: &str, favorite: bool) {
+        let tracks = self.queue_mut();
+        let mut changed = false;
+        for track in tracks.iter_mut() {
+            if track.id == song_id {
+                track.favorite = favorite;
+                changed = true;
+            }
+        }
+        if changed {
+            self.revision += 1;
+        }
+    }
+
     /// Ids of the next `count` tracks after the current one (LYR-5 prefetch).
     pub fn upcoming(&self, count: usize) -> Vec<String> {
         self.queue

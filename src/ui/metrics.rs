@@ -225,6 +225,53 @@ impl SurfaceMetrics {
     }
 }
 
+/// Responsive geometry for the inferior playback bar.
+///
+/// Mirrors `InferiorBar`: the bar height is the stable reference, the title and
+/// artist share the title ramp, and the transport unit is a fraction of the
+/// bar height. The left/right zones use equal flex space in the bar itself;
+/// these are only the in-zone sizes.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PlayerBarMetrics {
+    pub bar_h: f32,
+    pub width_scale: f32,
+    pub title_size: f32,
+    pub artist_size: f32,
+    pub time_size: f32,
+    pub cover_side: f32,
+    pub transport_unit: f32,
+    pub play_size: f32,
+    pub transport_spacing: f32,
+    pub volume_icon: f32,
+    pub volume_bar: f32,
+}
+
+impl PlayerBarMetrics {
+    pub fn new(window_width: f32, window_height: f32) -> Self {
+        let bar_h = (window_height * 0.0828).max(1.0);
+        let width_scale = width_scale(window_width);
+        let title_full = font_size("label", bar_h) * 1.6;
+        let title_size = clamp(title_full * width_scale, 16.0, title_full);
+        let artist_size = title_size;
+        let time_full = font_size("mono", bar_h);
+        let time_size = clamp(time_full * width_scale, 10.0, time_full);
+        let transport_unit = (bar_h * 0.46).min(window_width * 0.045).max(18.0);
+        Self {
+            bar_h,
+            width_scale,
+            title_size,
+            artist_size,
+            time_size,
+            cover_side: bar_h * 0.62,
+            transport_unit,
+            play_size: transport_unit * 1.22,
+            transport_spacing: transport_unit * 0.11,
+            volume_icon: bar_h * 0.34,
+            volume_bar: (window_width * 0.07).clamp(28.0, 96.0),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -363,6 +410,25 @@ mod tests {
 
         // Integers stay exact (no double rounding).
         assert_eq!(tiny.row_height(ScrollProfile::LIBRARY, 1000.0), 105.0);
+    }
+
+    #[test]
+    fn player_bar_scales_with_window_and_keeps_bar_ratios() {
+        let narrow = PlayerBarMetrics::new(640.0, 1000.0);
+        let wide = PlayerBarMetrics::new(1600.0, 1000.0);
+        assert!(wide.volume_bar > narrow.volume_bar);
+        assert!(wide.transport_unit > narrow.transport_unit);
+        assert!(wide.title_size >= narrow.title_size);
+        assert!(wide.time_size >= narrow.time_size);
+        assert!(wide.cover_side >= narrow.cover_side);
+        assert!((narrow.width_scale - 0.7).abs() < 0.001);
+        assert!((wide.width_scale - 1.0).abs() < 0.001);
+        assert!(narrow.transport_unit >= 18.0);
+        assert!(narrow.title_size >= 16.0);
+        // The transport grows with the bar, not with a fixed 200 px box.
+        let short = PlayerBarMetrics::new(1600.0, 700.0);
+        assert!(short.transport_unit < wide.transport_unit);
+        assert!(short.play_size > short.transport_unit);
     }
 
     #[test]

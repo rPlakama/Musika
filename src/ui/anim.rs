@@ -11,6 +11,8 @@ pub const REDUCE_MOTION: bool = false;
 pub const QUICK_MS: f32 = 120.0;
 pub const STANDARD_MS: f32 = 160.0;
 pub const EMPHASIZED_MS: f32 = 240.0;
+/// Alt quick-actions: 30% faster than the standard emphasized motion.
+pub const ALT_MS: f32 = EMPHASIZED_MS * 0.7;
 pub const MICRO_MS: f32 = 80.0;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

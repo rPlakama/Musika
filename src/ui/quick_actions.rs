@@ -307,6 +307,25 @@ impl QuickMenu {
         }
     }
 
+    /// Artist page Tool menu: the favourite/rating slot plus the container
+    /// download toggle (the artist header's separate actions folded into one
+    /// discoverable board).
+    pub fn artist_tool(cached: bool, starred: bool, rating: u8) -> Self {
+        Self {
+            north: Some(multi_slot(vec![
+                QuickVerb::AddToQueue,
+                QuickVerb::StartRadio,
+            ])),
+            south: Some(rated_slot(
+                QuickVerb::Favorite { on: !starred },
+                rating,
+                QuickKind::Artist,
+            )),
+            west: None,
+            east: Some(single_slot(QuickVerb::Download { on: !cached })),
+        }
+    }
+
     /// Playlist row/page (legacy UI `QuickActions.playlist`). Playlists have no
     /// server star/rating in the Subsonic API, so only Play and Add to Queue
     /// are offered and both jumps are open.

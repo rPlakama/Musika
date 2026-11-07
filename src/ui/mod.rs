@@ -369,7 +369,7 @@ struct FullscreenAnchors {
     title: Option<(f32, f32)>,
 }
 
-type StatusAnchorSlots = std::rc::Rc<std::cell::RefCell<[Option<(f32, f32)>; 5]>>;
+type StatusAnchorSlots = std::rc::Rc<std::cell::RefCell<[Option<(f32, f32)>; 6]>>;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum TopBarAction {
@@ -378,6 +378,7 @@ enum TopBarAction {
     Download,
     Shuffle,
     Favorite,
+    Tool,
 }
 
 impl TopBarAction {
@@ -388,6 +389,7 @@ impl TopBarAction {
             Self::Download => 2,
             Self::Shuffle => 3,
             Self::Favorite => 4,
+            Self::Tool => 5,
         }
     }
 
@@ -406,6 +408,7 @@ impl TopBarAction {
                 SuperiorMode::Artist => "Favorite artist",
                 _ => "Favorite",
             },
+            Self::Tool => "Tool",
         }
     }
 }
@@ -435,15 +438,32 @@ impl SuperiorMode {
     }
 }
 
-fn topbar_actions_for(mode: SuperiorMode) -> Vec<TopBarAction> {
+fn page_tool_visible(page: &PageBarState) -> bool {
+    !page.starred || !page.cached
+}
+
+fn page_actions(page: &PageBarState, shuffle: bool) -> Vec<TopBarAction> {
+    let mut actions = Vec::new();
+    if page.starred {
+        actions.push(TopBarAction::Favorite);
+    }
+    if page.cached || page.downloading {
+        actions.push(TopBarAction::Download);
+    }
+    if page_tool_visible(page) {
+        actions.push(TopBarAction::Tool);
+    }
+    if shuffle {
+        actions.push(TopBarAction::Shuffle);
+    }
+    actions
+}
+
+fn topbar_actions_for(mode: SuperiorMode, page: Option<&PageBarState>) -> Vec<TopBarAction> {
     match mode {
         SuperiorMode::Home => vec![TopBarAction::Sync, TopBarAction::Wipe],
-        SuperiorMode::Album => vec![TopBarAction::Favorite, TopBarAction::Download],
-        SuperiorMode::Artist => vec![
-            TopBarAction::Favorite,
-            TopBarAction::Download,
-            TopBarAction::Shuffle,
-        ],
+        SuperiorMode::Album => page.map(|page| page_actions(page, false)).unwrap_or_default(),
+        SuperiorMode::Artist => page.map(|page| page_actions(page, true)).unwrap_or_default(),
         SuperiorMode::Playlist | SuperiorMode::Radio => Vec::new(),
     }
 }
@@ -683,8 +703,8 @@ impl AppRoot {
             )),
             fullscreen_album: None,
             fullscreen_album_requested: None,
-            status_anchors: std::rc::Rc::new(std::cell::RefCell::new([None, None, None, None, None])),
-            status_extents: std::rc::Rc::new(std::cell::RefCell::new([None, None, None, None, None])),
+            status_anchors: std::rc::Rc::new(std::cell::RefCell::new([None, None, None, None, None, None])),
+            status_extents: std::rc::Rc::new(std::cell::RefCell::new([None, None, None, None, None, None])),
             alt_target_size: None,
             lyrics: None,
             lyrics_requested: None,
@@ -1310,12 +1330,18 @@ impl AppRoot {
             }
             Event::Error(message) => {
                 self.finish_sync();
-                if let Some(page) = self
+                let reconcile = self
                     .page
                     .as_mut()
                     .filter(|page| page.container_downloading)
+                    .map(|page| {
+                        page.container_downloading = false;
+                        (page.descriptor.kind, page.descriptor.id.clone())
+                    });
+                if let Some((kind, id)) = reconcile
+                    && matches!(kind, PageKind::Album | PageKind::Artist)
                 {
-                    page.container_downloading = false;
+                    self.bridge.request_container_state(kind, id);
                 }
                 if let Some(search) = self.search.as_mut() {
                     search.loading = false;
@@ -1896,6 +1922,7 @@ impl AppRoot {
             2 => self.activate_container_download(),
             3 => self.activate_shuffle_artist(),
             4 => self.activate_container_favorite(),
+            5 => self.open_page_menu(5, true),
             _ => {}
         }
     }
@@ -1942,6 +1969,62 @@ impl AppRoot {
             .quick_favorite(kind.to_string(), page.id, !page.starred);
     }
 
+    fn animate_alt(&mut self, target: f32) {
+        self.alt_spawn.target(
+            target,
+            anim::ALT_MS,
+            anim::Curve::Linear,
+            &self.clock,
+        );
+    }
+
+    fn page_alt_menu(&self, page: &PageBarState) -> Option<(QuickMenu, AltTarget)> {
+        let (menu, kind) = match page.kind {
+            PageKind::Album => (
+                QuickMenu::album_with(page.cached, page.starred, page.rating),
+                RowKind::Album,
+            ),
+            PageKind::Artist => (
+                QuickMenu::artist_tool(page.cached, page.starred, page.rating),
+                RowKind::Artist,
+            ),
+            _ => return None,
+        };
+        Some((
+            menu,
+            AltTarget {
+                kind,
+                id: page.id.clone(),
+                album_id: if page.kind == PageKind::Album {
+                    page.id.clone()
+                } else {
+                    String::new()
+                },
+                song_id: String::new(),
+                playlist_id: String::new(),
+                ids: vec![page.id.clone()],
+                selection: false,
+            },
+        ))
+    }
+
+    fn open_page_menu(&mut self, anchor_slot: usize, sticky: bool) {
+        let Some(page) = self.page_bar() else { return };
+        let Some((menu, target)) = self.page_alt_menu(&page) else {
+            return;
+        };
+        self.clock.tick();
+        self.alt = AltGesture::with_sticky(sticky);
+        if !self.alt.arm(&menu) {
+            return;
+        }
+        self.alt_menu = Some(menu);
+        self.alt_target = Some(target);
+        self.alt_anchor = Some(self.status_anchor(anchor_slot));
+        self.alt_target_size = Some(self.status_extent(anchor_slot));
+        self.animate_alt(1.0);
+    }
+
     fn open_wipe_menu(&mut self) {
         self.clock.tick();
         let menu = QuickMenu::wipe();
@@ -1953,12 +2036,7 @@ impl AppRoot {
         self.alt_target = None;
         self.alt_anchor = Some(self.status_anchor(1));
         self.alt_target_size = Some(self.status_extent(1));
-        self.alt_spawn.target(
-            1.0,
-            anim::EMPHASIZED_MS,
-            anim::Curve::OutBack,
-            &self.clock,
-        );
+        self.animate_alt(1.0);
     }
 
     fn on_refresh(&mut self, _: &Refresh, _window: &mut Window, cx: &mut Context<Self>) {
@@ -2510,7 +2588,7 @@ impl AppRoot {
         self.alt.cancel();
         self.alt_menu = None;
         self.alt_target = None;
-        self.alt_spawn.target(0.0, anim::EMPHASIZED_MS, anim::Curve::Accelerate, &self.clock);
+        self.animate_alt(0.0);
         self.search_open = false;
         self.search = None;
         self.queue_open = false;
@@ -2710,7 +2788,8 @@ impl AppRoot {
     }
 
     fn topbar_actions(&self) -> Vec<TopBarAction> {
-        topbar_actions_for(self.superior_mode())
+        let page = self.page_bar();
+        topbar_actions_for(self.superior_mode(), page.as_ref())
     }
 
     fn topbar_tab_order(&self) -> Vec<usize> {
@@ -2721,11 +2800,11 @@ impl AppRoot {
     }
 
     fn status_extent(&self, scope: usize) -> (f32, f32) {
-        self.status_extents.borrow()[scope.min(1)].unwrap_or((24.0, 24.0))
+        self.status_extents.borrow()[scope.min(5)].unwrap_or((24.0, 24.0))
     }
 
     fn status_anchor(&self, scope: usize) -> (f32, f32) {
-        let stored = self.status_anchors.borrow()[scope.min(1)];
+        let stored = self.status_anchors.borrow()[scope.min(5)];
         let (x, y) = stored.unwrap_or((
             (self.win_w - 42.0).max(30.0),
             (self.win_h * 0.0648 * 0.5).max(30.0),
@@ -2784,25 +2863,32 @@ impl AppRoot {
             ));
         }
         if let Some(focus) = self.status_focus {
-            // The scoped status region owns Alt. Sync has no Alt action; Wipe
-            // opens the same maintenance board as the trashcan click, but
-            // never while a sync is writing the databases.
-            if focus != 1 || self.syncing {
-                return None;
+            // The scoped status region owns Alt. Wipe opens the maintenance
+            // board; Favorite and Tool open the page's contextual actions.
+            if focus == TopBarAction::Wipe.slot() {
+                if self.syncing {
+                    return None;
+                }
+                return Some((
+                    QuickMenu::wipe(),
+                    AltTarget {
+                        kind: RowKind::Song,
+                        id: String::new(),
+                        album_id: String::new(),
+                        song_id: String::new(),
+                        playlist_id: String::new(),
+                        ids: Vec::new(),
+                        selection: false,
+                    },
+                    self.status_anchor(focus),
+                ));
             }
-            return Some((
-                QuickMenu::wipe(),
-                AltTarget {
-                    kind: RowKind::Song,
-                    id: String::new(),
-                    album_id: String::new(),
-                    song_id: String::new(),
-                    playlist_id: String::new(),
-                    ids: Vec::new(),
-                    selection: false,
-                },
-                self.status_anchor(focus),
-            ));
+            if focus == TopBarAction::Favorite.slot() || focus == TopBarAction::Tool.slot() {
+                let page = self.page_bar()?;
+                let (menu, target) = self.page_alt_menu(&page)?;
+                return Some((menu, target, self.status_anchor(focus)));
+            }
+            return None;
         }
         if let Some(search) = self.search.as_ref().filter(|_| self.search_open) {
             let scoped = search.scoped();
@@ -2922,7 +3008,7 @@ impl AppRoot {
         self.alt_menu = Some(menu);
         self.alt_target = Some(target);
         self.alt_anchor = Some(anchor);
-        self.alt_spawn.target(1.0, anim::EMPHASIZED_MS, anim::Curve::OutBack, &self.clock);
+        self.animate_alt(1.0);
     }
 
     fn alt_release(&mut self) {
@@ -2949,7 +3035,7 @@ impl AppRoot {
             self.alt.cancel();
         }
         self.alt_target_size = None;
-        self.alt_spawn.target(0.0, anim::EMPHASIZED_MS, anim::Curve::Accelerate, &self.clock);
+        self.animate_alt(0.0);
     }
 
     fn dispatch_quick(&mut self, verb: QuickVerb) {
@@ -3031,8 +3117,12 @@ impl AppRoot {
                 self.bridge.quick_play_playlist(target.playlist_id.clone());
             }
             QuickVerb::Download { on } => {
-                self.bridge
-                    .quick_download(target.queue_kind().to_string(), target.id.clone(), on);
+                if target.kind == RowKind::Artist {
+                    self.bridge.download_artist(target.id.clone(), on);
+                } else {
+                    self.bridge
+                        .quick_download(target.queue_kind().to_string(), target.id.clone(), on);
+                }
             }
             QuickVerb::WipeLibrary | QuickVerb::WipeIndexes | QuickVerb::WipeCovers => {}
         }
@@ -3062,7 +3152,7 @@ impl AppRoot {
             "escape" => {
                 self.alt.dismiss();
                 self.alt_menu = None;
-                self.alt_spawn.target(0.0, anim::EMPHASIZED_MS, anim::Curve::Accelerate, &self.clock);
+                self.animate_alt(0.0);
             }
             "h" if shift => {
                 if let Some(menu) = self.alt_menu.clone() {
@@ -4131,7 +4221,7 @@ impl AppRoot {
             self.alt_menu = None;
             self.alt_target = None;
             self.alt_target_size = None;
-            self.alt_spawn.target(0.0, anim::EMPHASIZED_MS, anim::Curve::Accelerate, &self.clock);
+            self.animate_alt(0.0);
             cx.notify();
             return;
         }
@@ -4297,7 +4387,7 @@ impl AppRoot {
             self.alt_menu = None;
             self.alt_target = None;
             self.alt_target_size = None;
-            self.alt_spawn.target(0.0, anim::EMPHASIZED_MS, anim::Curve::Accelerate, &self.clock);
+            self.animate_alt(0.0);
             cx.notify();
             return;
         }
@@ -4528,7 +4618,7 @@ impl AppRoot {
                 (
                     icon(
                         if starred {
-                            "heart-minus.svg"
+                            "baseline-favorite.svg"
                         } else {
                             "heart-add-fill.svg"
                         },
@@ -4542,6 +4632,10 @@ impl AppRoot {
                     1.0,
                 )
             }
+            TopBarAction::Tool => (
+                icon("dots-fill.svg", 18.0, palette::on_surface_variant()),
+                1.0,
+            ),
         };
         div()
             .flex_none()
@@ -4782,48 +4876,44 @@ impl AppRoot {
             .gap_2()
             .child(identity);
         match mode {
-            SuperiorMode::Album => {
-                row = row
-                    .child(self.topbar_action_chip(
+            SuperiorMode::Album | SuperiorMode::Artist => {
+                if page.starred {
+                    row = row.child(self.topbar_action_chip(
                         TopBarAction::Favorite,
                         Some(&page),
                         self.status_anchors.clone(),
                         self.status_extents.clone(),
                         cx,
-                    ))
-                    .child(self.star_counter(page.rating))
-                    .child(self.topbar_action_chip(
+                    ));
+                }
+                row = row.child(self.star_counter(page.rating));
+                if page.cached || page.downloading {
+                    row = row.child(self.topbar_action_chip(
                         TopBarAction::Download,
                         Some(&page),
                         self.status_anchors.clone(),
                         self.status_extents.clone(),
                         cx,
                     ));
-            }
-            SuperiorMode::Artist => {
-                row = row
-                    .child(self.topbar_action_chip(
-                        TopBarAction::Favorite,
+                }
+                if page_tool_visible(&page) {
+                    row = row.child(self.topbar_action_chip(
+                        TopBarAction::Tool,
                         Some(&page),
                         self.status_anchors.clone(),
                         self.status_extents.clone(),
                         cx,
-                    ))
-                    .child(self.star_counter(page.rating))
-                    .child(self.topbar_action_chip(
-                        TopBarAction::Download,
-                        Some(&page),
-                        self.status_anchors.clone(),
-                        self.status_extents.clone(),
-                        cx,
-                    ))
-                    .child(self.topbar_action_chip(
+                    ));
+                }
+                if mode == SuperiorMode::Artist {
+                    row = row.child(self.topbar_action_chip(
                         TopBarAction::Shuffle,
                         Some(&page),
                         self.status_anchors.clone(),
                         self.status_extents.clone(),
                         cx,
                     ));
+                }
             }
             _ => {}
         }
@@ -6826,12 +6916,8 @@ impl Render for AppRoot {
         }
         let line_overlay = (self.line_search.open || line_progress > 0.001)
             .then(|| self.line_search_overlay(line_progress));
-        let alt_progress = self.alt_spawn.target(
-            if self.alt.armed { 1.0 } else { 0.0 },
-            anim::EMPHASIZED_MS,
-            if self.alt.armed { anim::Curve::OutBack } else { anim::Curve::Accelerate },
-            &self.clock,
-        );
+        self.animate_alt(if self.alt.armed { 1.0 } else { 0.0 });
+        let alt_progress = self.alt_spawn.value(&self.clock);
         if !self.alt_spawn.settled(&self.clock) {
             window.request_animation_frame();
         }
@@ -7451,23 +7537,73 @@ mod fullscreen_focus_tests {
 mod contextual_bar_tests {
     use super::*;
 
+    fn page_state(kind: PageKind, starred: bool, cached: bool, downloading: bool) -> PageBarState {
+        PageBarState {
+            kind,
+            id: "id".to_string(),
+            title: String::new(),
+            subtitle: String::new(),
+            meta: String::new(),
+            rating: 0,
+            starred,
+            cached,
+            downloading,
+        }
+    }
+
     #[test]
     fn contexts_pick_the_right_action_matrix() {
         use TopBarAction::*;
         assert_eq!(
-            topbar_actions_for(SuperiorMode::Home),
+            topbar_actions_for(SuperiorMode::Home, None),
             vec![Sync, Wipe]
         );
+        assert!(topbar_actions_for(SuperiorMode::Playlist, None).is_empty());
+        assert!(topbar_actions_for(SuperiorMode::Radio, None).is_empty());
+
+        let neutral = page_state(PageKind::Album, false, false, false);
         assert_eq!(
-            topbar_actions_for(SuperiorMode::Album),
+            topbar_actions_for(SuperiorMode::Album, Some(&neutral)),
+            vec![Tool]
+        );
+        let favorite = page_state(PageKind::Album, true, false, false);
+        assert_eq!(
+            topbar_actions_for(SuperiorMode::Album, Some(&favorite)),
+            vec![Favorite, Tool]
+        );
+        let cached = page_state(PageKind::Album, false, true, false);
+        assert_eq!(
+            topbar_actions_for(SuperiorMode::Album, Some(&cached)),
+            vec![Download, Tool]
+        );
+        let both = page_state(PageKind::Album, true, true, false);
+        assert_eq!(
+            topbar_actions_for(SuperiorMode::Album, Some(&both)),
             vec![Favorite, Download]
         );
+
         assert_eq!(
-            topbar_actions_for(SuperiorMode::Artist),
+            topbar_actions_for(SuperiorMode::Artist, Some(&neutral)),
+            vec![Tool, Shuffle]
+        );
+        assert_eq!(
+            topbar_actions_for(SuperiorMode::Artist, Some(&favorite)),
+            vec![Favorite, Tool, Shuffle]
+        );
+        assert_eq!(
+            topbar_actions_for(SuperiorMode::Artist, Some(&cached)),
+            vec![Download, Tool, Shuffle]
+        );
+        assert_eq!(
+            topbar_actions_for(SuperiorMode::Artist, Some(&both)),
             vec![Favorite, Download, Shuffle]
         );
-        assert!(topbar_actions_for(SuperiorMode::Playlist).is_empty());
-        assert!(topbar_actions_for(SuperiorMode::Radio).is_empty());
+        assert!(page_tool_visible(&neutral));
+        assert!(page_tool_visible(&favorite));
+        assert!(page_tool_visible(&cached));
+        assert!(!page_tool_visible(&both));
+        let downloading = page_state(PageKind::Album, false, true, true);
+        assert!(topbar_actions_for(SuperiorMode::Album, Some(&downloading)).contains(&Download));
     }
 
     #[test]
@@ -7495,12 +7631,14 @@ mod contextual_bar_tests {
 
     #[test]
     fn tab_wraps_through_the_action_order() {
-        let album = [4, 2];
+        let album = [4, 5, 3];
         assert_eq!(next_tab_slot(&album, None, false), Some(4));
-        assert_eq!(next_tab_slot(&album, Some(4), false), Some(2));
-        assert_eq!(next_tab_slot(&album, Some(2), false), None);
-        assert_eq!(next_tab_slot(&album, None, true), Some(2));
-        assert_eq!(next_tab_slot(&album, Some(2), true), Some(4));
+        assert_eq!(next_tab_slot(&album, Some(4), false), Some(5));
+        assert_eq!(next_tab_slot(&album, Some(5), false), Some(3));
+        assert_eq!(next_tab_slot(&album, Some(3), false), None);
+        assert_eq!(next_tab_slot(&album, None, true), Some(3));
+        assert_eq!(next_tab_slot(&album, Some(3), true), Some(5));
+        assert_eq!(next_tab_slot(&album, Some(5), true), Some(4));
         assert_eq!(next_tab_slot(&album, Some(4), true), None);
         assert_eq!(next_tab_slot(&[], None, false), None);
     }
@@ -7510,5 +7648,11 @@ mod contextual_bar_tests {
         assert_eq!(crate::ui::bridge::albums_label(0), "0 albums");
         assert_eq!(crate::ui::bridge::albums_label(1), "1 album");
         assert_eq!(crate::ui::bridge::albums_label(4), "4 albums");
+    }
+
+    #[test]
+    fn alt_actions_are_thirty_percent_faster() {
+        assert!((anim::ALT_MS - anim::EMPHASIZED_MS * 0.7).abs() < f32::EPSILON);
+        assert!((anim::ALT_MS - 168.0).abs() < 0.001);
     }
 }

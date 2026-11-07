@@ -237,16 +237,8 @@ impl AppRoot {
         let mut body = div().flex().items_center().min_w_0().flex_1();
         if paint.flags.show_cover {
             let cover = cover_source(&row.cover_url);
-            let id_name = match paint.surface {
-                LineSurface::Library => "retained-cover-library",
-                LineSurface::Page => "retained-cover-page",
-                _ => "retained-cover",
-            };
-            body = body.child(div().mr_3().child(RetainedCover::new(
-                id_name,
-                paint.index,
+            body = body.child(div().mr_3().child(art_scaled(
                 cover,
-                self.image_cache.clone(),
                 paint.height * 0.78,
                 paint.cover_scale,
             )));
@@ -294,22 +286,10 @@ impl AppRoot {
             );
         }
         if downloaded {
-            trailing = trailing.child(RetainedIcon::new(
-                "retained-download-mark",
-                paint.index,
-                format!("{}/icons/outline-download.svg", asset_root()),
-                12.0,
-                palette::primary(),
-            ));
+            trailing = trailing.child(icon("outline-download.svg", 12.0, palette::primary()));
         }
         if row.starred {
-            trailing = trailing.child(RetainedIcon::new(
-                "retained-star-mark",
-                paint.index,
-                format!("{}/icons/baseline-favorite.svg", asset_root()),
-                11.0,
-                0xFFD54F,
-            ));
+            trailing = trailing.child(icon("baseline-favorite.svg", 11.0, 0xFFD54F));
         }
         if row.rating > 0 {
             trailing = trailing.child(

@@ -13,10 +13,6 @@ impl Render for AppRoot {
             crate::debug_log!("GPUI trace: frame {}", self.frames);
         }
         self.clock.tick();
-        self.library_scroll.frame_dt = self.clock.dt;
-        self.page_scroll_modal.frame_dt = self.clock.dt;
-        self.queue_scroll_modal.frame_dt = self.clock.dt;
-        self.search_scroll.frame_dt = self.clock.dt;
         #[cfg(debug_assertions)]
         self.frame_hud.observe(self.clock.dt);
         palette::publish(self.palette_motion.value(&self.clock));

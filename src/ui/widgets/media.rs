@@ -137,13 +137,6 @@ impl CoverSource {
             Self::Remote(url) => url.clone().into(),
         }
     }
-
-    pub(crate) fn resource(&self) -> gpui::Resource {
-        match self {
-            Self::Path(path) => path.clone().into(),
-            Self::Remote(url) => gpui::Resource::Uri(gpui::SharedUri::from(url.clone())),
-        }
-    }
 }
 
 pub(crate) fn remote_cover(url: &str) -> Option<String> {

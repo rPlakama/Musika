@@ -232,9 +232,10 @@ impl AppRoot {
                         let Some(row) = rows.get(index) else { break };
                         let selected = index == cursor || search.selection.contains(cursor, index);
                         let hovered = this.hovered_row == Some(index);
+                        let key = format!("search:{scope}:{}", row.id);
                         let active = selected || hovered;
-                        let (scale, text_scale) =
-                            this.row_emphasis(LineSurface::Search, scope, index, active);
+                        let scale = this.row_scale_factor(&key, active);
+                        let text_scale = this.row_text_factor(&key, active);
                         items.push(this.search_result_row(
                             cx,
                             row,

@@ -372,9 +372,8 @@ impl AppRoot {
     pub(in crate::ui) fn reset_row_scales(&mut self) {
         self.clock.tick();
         let curve = self.visuals.motion.row_curve;
-        for emphasis in self.row_scales.borrow_mut().values_mut() {
-            emphasis.cover.target(0.0, 0.0, curve, &self.clock);
-            emphasis.text.target(0.0, 0.0, curve, &self.clock);
+        for scale in self.row_scales.borrow_mut().values_mut() {
+            scale.target(0.0, 0.0, curve, &self.clock);
         }
     }
 
@@ -382,30 +381,26 @@ impl AppRoot {
     ///
     /// Cover and text use separate factors because the text needs a little
     /// longer to settle. Both are linear; covers stay brief, text is 80%
-    /// slower so the glyphs do not feel like they snapped into place. Keys are
-    /// numeric `(surface, scope, index)` keys: the list paint path never
-    /// formats or allocates a string per visible row.
-    pub(in crate::ui) fn row_emphasis(
-        &self,
-        surface: LineSurface,
-        scope: usize,
-        index: usize,
-        active: bool,
-    ) -> (f32, f32) {
-        let target = if active { 1.0 } else { 0.0 };
+    /// slower so the glyphs do not feel like they snapped into place.
+    pub(in crate::ui) fn row_scale_factor(&self, key: &str, active: bool) -> f32 {
         let motion = self.visuals.motion;
-        let curve = motion.row_curve;
+        self.row_emphasis(key, active, motion.row_cover_ms, "cover")
+    }
+
+    pub(in crate::ui) fn row_text_factor(&self, key: &str, active: bool) -> f32 {
+        let motion = self.visuals.motion;
+        self.row_emphasis(key, active, motion.row_text_ms, "text")
+    }
+
+    fn row_emphasis(&self, key: &str, active: bool, duration: f32, kind: &str) -> f32 {
+        let target = if active { 1.0 } else { 0.0 };
+        let key = format!("{key}:{kind}");
+        let curve = self.visuals.motion.row_curve;
         let mut scales = self.row_scales.borrow_mut();
-        let emphasis = scales
-            .entry((surface, scope, index))
-            .or_insert_with(|| RowEmphasis::new(active));
-        let cover = emphasis
-            .cover
-            .target(target, motion.row_cover_ms, curve, &self.clock);
-        let text = emphasis
-            .text
-            .target(target, motion.row_text_ms, curve, &self.clock);
-        (cover, text)
+        scales
+            .entry(key)
+            .or_insert_with(|| anim::Behavior::new(target))
+            .target(target, duration, curve, &self.clock)
     }
 
     pub(in crate::ui) fn select(&mut self, index: usize) {

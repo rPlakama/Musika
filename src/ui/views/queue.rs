@@ -113,32 +113,61 @@ impl AppRoot {
                                                         .flex_col()
                                                         .min_w_0()
                                                         .flex_1()
-                                                        .h(px(this.queue_scroll_modal.row_h))
-                                                        .child(RetainedText::new(
-                                                            "retained-text-queue",
-                                                            index,
-                                                            title.clone().into(),
-                                                            artist.clone().into(),
-                                                            this.line_search
-                                                                .query()
-                                                                .to_string()
-                                                                .into(),
-                                                            this.line_search_current(
-                                                                LineSurface::Queue,
-                                                                index,
+                                                        .child(
+                                                            div()
+                                                                .flex()
+                                                                .items_center()
+                                                                .gap_1()
+                                                                .child(
+                                                                div()
+                                                                    .text_size(px(fonts
+                                                                        .queue_title
+                                                                        * emphasis))
+                                                                    .font_weight(if active {
+                                                                        gpui::FontWeight::BOLD
+                                                                    } else {
+                                                                        gpui::FontWeight::NORMAL
+                                                                    })
+                                                                    .when(playing, |this| {
+                                                                        this.text_color(rgb(
+                                                                            palette::primary(),
+                                                                        ))
+                                                                    })
+                                                                    .whitespace_normal()
+                                                                    .max_h(px(20.0))
+                                                                    .overflow_hidden()
+                                                                    .child(highlighted_text(
+                                                                        &title,
+                                                                        this.line_search.query(),
+                                                                        palette::on_surface(),
+                                                                        this.line_search_current(
+                                                                            LineSurface::Queue,
+                                                                            index,
+                                                                        ),
+                                                                    )),
                                                             ),
-                                                            active,
-                                                            fonts.queue_title * emphasis,
-                                                            fonts.queue_meta * emphasis,
-                                                            this.queue_scroll_modal.row_h,
-                                                            if playing {
-                                                                palette::primary()
-                                                            } else {
-                                                                palette::on_surface()
-                                                            },
-                                                            palette::on_surface_variant(),
-                                                            true,
-                                                        )),
+                                                        )
+                                                        .child(
+                                                            div()
+                                                                .text_size(px(
+                                                                    fonts.queue_meta * emphasis
+                                                                ))
+                                                                .text_color(rgb(
+                                                                    palette::on_surface_variant(),
+                                                                ))
+                                                                .whitespace_normal()
+                                                                .max_h(px(16.0))
+                                                                .overflow_hidden()
+                                                                .child(highlighted_text(
+                                                                    &artist,
+                                                                    this.line_search.query(),
+                                                                    palette::on_surface_variant(),
+                                                                    this.line_search_current(
+                                                                        LineSurface::Queue,
+                                                                        index,
+                                                                    ),
+                                                                )),
+                                                        ),
                                                 ),
                                         );
                                     }

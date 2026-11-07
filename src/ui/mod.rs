@@ -57,7 +57,6 @@ use self::widgets::media::{
     icon_rotated, loading_placeholder, loading_skeleton, page_key, remote_cover, repeat_label,
     transport_button,
 };
-use self::widgets::retained_text::RetainedText;
 
 use gpui::{
     Animation, AnimationExt, App, Application, AssetSource, Bounds, Context, FocusHandle,

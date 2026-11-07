@@ -243,32 +243,47 @@ impl AppRoot {
                 paint.cover_scale,
             )));
         }
-        let id_name = match paint.surface {
-            LineSurface::Library => "retained-text-library",
-            LineSurface::Page => "retained-text-page",
-            _ => "retained-text",
-        };
-        let cells = div()
-            .flex()
-            .flex_col()
-            .min_w_0()
-            .flex_1()
+        let mut cells = div().flex().flex_col().min_w_0().flex_1().overflow_hidden();
+        let title_size = fonts.row_title(paint.flags.compact) * emphasis;
+        let title = div()
+            .text_size(px(title_size))
+            .font_weight(if paint.selected {
+                gpui::FontWeight::BOLD
+            } else {
+                gpui::FontWeight::NORMAL
+            })
+            .text_color(rgb(palette::on_surface()))
             .overflow_hidden()
-            .child(div().h(px(paint.height)).w_full().child(RetainedText::new(
-                id_name,
-                paint.index,
-                row.title.clone().into(),
-                row.subtitle.clone().into(),
-                self.line_search.query().to_string().into(),
-                current,
-                paint.selected,
-                fonts.row_title(paint.flags.compact) * emphasis,
-                fonts.row_subtitle(paint.flags.compact) * emphasis,
-                paint.height,
+            .child(highlighted_text(
+                &row.title,
+                self.line_search.query(),
                 palette::on_surface(),
-                palette::on_surface_variant(),
-                paint.flags.compact,
-            )));
+                current,
+            ));
+        let title = if paint.flags.compact {
+            title.whitespace_nowrap().text_ellipsis()
+        } else {
+            title.whitespace_normal().max_h(px(34.0))
+        };
+        cells = cells.child(title);
+        if paint.flags.show_subtitle && !row.subtitle.is_empty() {
+            let subtitle = div()
+                .text_size(px(fonts.row_subtitle(paint.flags.compact) * emphasis))
+                .text_color(rgb(palette::on_surface_variant()))
+                .overflow_hidden()
+                .child(highlighted_text(
+                    &row.subtitle,
+                    self.line_search.query(),
+                    palette::on_surface_variant(),
+                    current,
+                ));
+            let subtitle = if paint.flags.compact {
+                subtitle.whitespace_nowrap().text_ellipsis()
+            } else {
+                subtitle.whitespace_normal().max_h(px(22.0))
+            };
+            cells = cells.child(subtitle);
+        }
         body = body.child(cells);
         let downloaded = self.marks.downloaded(&row.song_id, &row.album_id) || row.downloaded;
         let mut trailing = div().flex().items_center().gap_2();

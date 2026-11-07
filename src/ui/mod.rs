@@ -32,6 +32,7 @@ mod metrics;
 mod quick_actions;
 mod page_profile;
 mod palette;
+mod remote_images;
 mod scroll_modal;
 mod state;
 
@@ -97,6 +98,7 @@ actions!(
 
 pub fn run() {
     Application::new()
+        .with_http_client(remote_images::app_http_client())
         .with_assets(Assets)
         .run(|cx: &mut App| {
         cx.bind_keys([
@@ -1685,12 +1687,15 @@ impl AppRoot {
         covers::bucket_for(FULLSCREEN_HERO_PX, self.scale_factor)
     }
 
-    fn hero_cover(&self, url: &str, target: u32) -> Option<std::path::PathBuf> {
-        COVERS
+    fn hero_cover(&self, url: &str, target: u32) -> Option<CoverSource> {
+        let local = COVERS
             .get_or_init(|| std::sync::Mutex::new(covers::CoverStore::new(768)))
             .lock()
             .ok()?
-            .hero_url(url, target)
+            .hero_url(url, target);
+        local
+            .map(CoverSource::Path)
+            .or_else(|| remote_cover(url).map(CoverSource::Remote))
     }
 
     fn ensure_display_cover(&mut self, cover_art: &str, target: u32) {
@@ -3346,6 +3351,18 @@ impl AppRoot {
     }
 
 
+    /// Fully disable the floating search overlay: no animation tail, no
+    /// stale loading/denied state and no way for a late payload to resurrect it.
+    fn dismiss_search_overlay(&mut self) {
+        self.search_open = false;
+        self.search = None;
+        self.search_loading_since = None;
+        self.search_denied_at = None;
+        self.search_denied_query.clear();
+        self.search_anim
+            .target(0.0, anim::STANDARD_MS, anim::Curve::Accelerate, &self.clock);
+    }
+
     fn activate_search_result(&mut self, cx: &mut Context<Self>) {
         let row = self
             .search
@@ -3355,8 +3372,7 @@ impl AppRoot {
             cx.notify();
             return;
         };
-        self.search_open = false;
-        self.search = None;
+        self.dismiss_search_overlay();
         // A chosen result is a navigation: dismiss the surfaces the search was
         // floating over so the destination is visible.
         self.fullscreen = false;
@@ -3855,6 +3871,7 @@ impl AppRoot {
                 match ipc_command::parse(&text) {
                     Ok(command) => {
                         self.close_command_line();
+                        self.dismiss_search_overlay();
                         self.pending_ipc.push(command);
                     }
                     Err(error) => {
@@ -5920,6 +5937,7 @@ impl AppRoot {
                 track.title.clone(),
                 track.artist.clone(),
                 self.display_cover(&track.cover_art, self.fullscreen_hero_bucket())
+                    .map(CoverSource::Path)
                     .or_else(|| {
                         self.hero_cover(&track.cover_url, self.fullscreen_hero_bucket())
                     }),
@@ -6241,7 +6259,7 @@ impl AppRoot {
                                 let Some(track) = queue.get(index) else { break };
                                 let title = track.title.clone();
                                 let artist = track.artist.clone();
-                                let cover = cover_path(&track.cover_url);
+                                let cover = cover_source(&track.cover_url);
                                 let active = index == cursor;
                                 let selected = this.selected_id.as_deref()
                                     == Some(track.id.as_str())
@@ -6456,7 +6474,7 @@ impl AppRoot {
             selected,
             hovered,
         } = paint;
-        let cover = cover_path(&row.cover_url);
+        let cover = cover_source(&row.cover_url);
         div()
             .id(("search-row", index))
             .flex()
@@ -6728,7 +6746,7 @@ impl AppRoot {
         let current = self.line_search_current(paint.surface, paint.index);
         let mut body = div().flex().items_center().min_w_0().flex_1();
         if paint.flags.show_cover {
-            let cover = cover_path(&row.cover_url);
+            let cover = cover_source(&row.cover_url);
             body = body.child(
                 div()
                     .mr_3()
@@ -6828,6 +6846,7 @@ impl AppRoot {
         let hero_bucket = self.page_hero_bucket();
         let cover = self
             .display_cover(&page.header.cover_art, hero_bucket)
+            .map(CoverSource::Path)
             .or_else(|| self.hero_cover(&page.header.cover_url, hero_bucket));
         let header_h = cover_bottom.max(240.0);
 
@@ -7010,7 +7029,7 @@ impl AppRoot {
             0.0
         };
         let (title, artist, cover) = match &track {
-            Some(track) => (track.title.clone(), track.artist.clone(), cover_path(&track.cover_url)),
+            Some(track) => (track.title.clone(), track.artist.clone(), cover_source(&track.cover_url)),
             None => ("Nothing playing".to_string(), String::new(), None),
         };
         let m = metrics::PlayerBarMetrics::new(self.win_w, self.win_h);
@@ -7660,7 +7679,44 @@ fn loading_skeleton(now: f32, row_h: f32, count: usize) -> gpui::AnyElement {
         .children((0..count).map(|index| row_placeholder(index, row_h, now)))
         .into_any_element()
 }
-fn art_scaled(path: Option<std::path::PathBuf>, base: f32, scale: f32) -> gpui::AnyElement {
+/// A cover that may still be only on the provider's stream. Local cache hits
+/// use a resolved `file://` path; cold caches fall back to the authenticated
+/// `getCoverArt` URL, which GPUI can stream through [`remote_images`].
+#[derive(Clone, Debug)]
+enum CoverSource {
+    Path(std::path::PathBuf),
+    Remote(String),
+}
+
+impl CoverSource {
+    fn key(&self) -> String {
+        match self {
+            Self::Path(path) => path.display().to_string(),
+            Self::Remote(url) => url.clone(),
+        }
+    }
+
+    fn image(&self) -> gpui::ImageSource {
+        match self {
+            Self::Path(path) => path.clone().into(),
+            Self::Remote(url) => url.clone().into(),
+        }
+    }
+}
+
+fn remote_cover(url: &str) -> Option<String> {
+    let url = url.trim();
+    (url.starts_with("http://") || url.starts_with("https://")).then(|| url.to_string())
+}
+
+fn cover_source(url: &str) -> Option<CoverSource> {
+    if let Some(remote) = remote_cover(url) {
+        return Some(CoverSource::Remote(remote));
+    }
+    cover_path(url).map(CoverSource::Path)
+}
+
+fn art_scaled(source: Option<CoverSource>, base: f32, scale: f32) -> gpui::AnyElement {
     let size = base * scale;
     let offset = (size - base) * 0.5;
     div()
@@ -7670,13 +7726,13 @@ fn art_scaled(path: Option<std::path::PathBuf>, base: f32, scale: f32) -> gpui::
         .mr(px(-offset))
         .mt(px(-offset))
         .mb(px(-offset))
-        .child(art_plain(path, size))
+        .child(art_plain(source, size))
         .into_any_element()
 }
 
-fn art_plain(path: Option<std::path::PathBuf>, size: f32) -> gpui::AnyElement {
-    match path {
-        Some(path) => img(path)
+fn art_plain(source: Option<CoverSource>, size: f32) -> gpui::AnyElement {
+    match source {
+        Some(source) => img(source.image())
             .size(px(size))
             .rounded_sm()
             .bg(rgb(palette::surface_container_highest()))
@@ -7689,11 +7745,14 @@ fn art_plain(path: Option<std::path::PathBuf>, size: f32) -> gpui::AnyElement {
     }
 }
 
-fn art(path: Option<std::path::PathBuf>, size: f32) -> gpui::AnyElement {
-    match path {
-        Some(path) => {
-            let id = gpui::SharedString::from(format!("cover-fade:{}:{size:.0}", path.display()));
-            img(path.clone())
+fn art(source: Option<CoverSource>, size: f32) -> gpui::AnyElement {
+    match source {
+        Some(source) => {
+            let id = gpui::SharedString::from(format!(
+                "cover-fade:{}:{size:.0}",
+                source.key()
+            ));
+            img(source.image())
                 .size(px(size))
                 .rounded_sm()
                 .bg(rgb(palette::surface_container_highest()))
@@ -8019,6 +8078,16 @@ mod contextual_bar_tests {
         assert_eq!(crate::ui::bridge::albums_label(0), "0 albums");
         assert_eq!(crate::ui::bridge::albums_label(1), "1 album");
         assert_eq!(crate::ui::bridge::albums_label(4), "4 albums");
+    }
+
+    #[test]
+    fn remote_covers_are_a_cover_source() {
+        assert!(matches!(
+            cover_source("https://navidrome.example/rest/getCoverArt.view?id=x"),
+            Some(CoverSource::Remote(_))
+        ));
+        assert!(cover_source("").is_none());
+        assert!(remote_cover("http://example.test/a.jpg").is_some());
     }
 
     #[test]

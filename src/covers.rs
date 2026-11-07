@@ -727,13 +727,14 @@ where
     url_map_of(dbs, &ids).await
 }
 
-/// Maps only the requested cover ids to `file://` URLs, in bounded batches.
-/// Payload loaders use this so a page's cost follows
-/// the page, never the whole cover cache.
+/// Maps only the requested cover ids to cover URLs, in bounded batches.
+/// Payload loaders use this so a page's cost follows the page, never the whole
+/// cover cache.
 ///
-/// Cache first: a missing cover is resolved to the provider URL right away
-/// and cached in the background, so library pages never wait on artwork.
-/// Offline/no-credentials simply keeps the cache-only result.
+/// Cache first: a missing cover is resolved to the provider's authenticated
+/// `getCoverArt` URL right away and cached in the background, so library pages
+/// never wait on artwork. The UI can stream the remote URL while the cache is
+/// cold. No-credentials keeps the cache-only result.
 pub async fn url_map_of(dbs: &crate::db::Dbs, ids: &[String]) -> Result<HashMap<String, String>> {
     let mut map = cached_urls(&dbs.covers, ids).await?;
     let missing: Vec<String> = unique_ids(ids)
@@ -741,10 +742,14 @@ pub async fn url_map_of(dbs: &crate::db::Dbs, ids: &[String]) -> Result<HashMap<
         .filter(|id| !map.contains_key(*id))
         .map(str::to_string)
         .collect();
-    if missing.is_empty() || !crate::session::online() {
+    if missing.is_empty() {
         return Ok(map);
     }
 
+    // The provider URL is the streaming fallback whenever saved credentials
+    // can build a client. This deliberately does not depend on the UI's
+    // `online` latch: a restored session starts with the latch clear until a
+    // network request succeeds, but cover art must not stay blank meanwhile.
     let Ok(client) = crate::session::client(dbs).await else {
         return Ok(map);
     };

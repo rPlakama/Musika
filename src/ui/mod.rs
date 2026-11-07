@@ -342,18 +342,24 @@ struct SearchRowPaint {
 enum FullscreenFocus {
     Cover,
     Title,
+    Lyrics,
 }
 
 impl FullscreenFocus {
     fn next(self) -> Self {
         match self {
             Self::Cover => Self::Title,
-            Self::Title => Self::Cover,
+            Self::Title => Self::Lyrics,
+            Self::Lyrics => Self::Cover,
         }
     }
 
     fn prev(self) -> Self {
-        self.next()
+        match self {
+            Self::Cover => Self::Lyrics,
+            Self::Title => Self::Cover,
+            Self::Lyrics => Self::Title,
+        }
     }
 }
 
@@ -363,7 +369,118 @@ struct FullscreenAnchors {
     title: Option<(f32, f32)>,
 }
 
-type StatusAnchorSlots = std::rc::Rc<std::cell::RefCell<[Option<(f32, f32)>; 2]>>;
+type StatusAnchorSlots = std::rc::Rc<std::cell::RefCell<[Option<(f32, f32)>; 5]>>;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TopBarAction {
+    Sync,
+    Wipe,
+    Download,
+    Shuffle,
+    Favorite,
+}
+
+impl TopBarAction {
+    const fn slot(self) -> usize {
+        match self {
+            Self::Sync => 0,
+            Self::Wipe => 1,
+            Self::Download => 2,
+            Self::Shuffle => 3,
+            Self::Favorite => 4,
+        }
+    }
+
+    const fn label(self, mode: SuperiorMode) -> &'static str {
+        match self {
+            Self::Sync => "Sync",
+            Self::Wipe => "Wipe",
+            Self::Download => match mode {
+                SuperiorMode::Album => "Download album",
+                SuperiorMode::Artist => "Download artist",
+                _ => "Download",
+            },
+            Self::Shuffle => "Shuffle artist",
+            Self::Favorite => match mode {
+                SuperiorMode::Album => "Favorite album",
+                SuperiorMode::Artist => "Favorite artist",
+                _ => "Favorite",
+            },
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SuperiorMode {
+    Home,
+    Album,
+    Artist,
+    Playlist,
+    Radio,
+}
+
+impl SuperiorMode {
+    fn from_page(page: Option<&PageState>) -> Self {
+        match page.map(|page| page.descriptor.kind) {
+            None => Self::Home,
+            Some(PageKind::Album) => Self::Album,
+            Some(PageKind::Artist) => Self::Artist,
+            Some(PageKind::Playlist) => Self::Playlist,
+            Some(PageKind::Radio) => Self::Radio,
+        }
+    }
+
+    fn is_page(self) -> bool {
+        !matches!(self, Self::Home)
+    }
+}
+
+fn topbar_actions_for(mode: SuperiorMode) -> Vec<TopBarAction> {
+    match mode {
+        SuperiorMode::Home => vec![TopBarAction::Sync, TopBarAction::Wipe],
+        SuperiorMode::Album => vec![TopBarAction::Favorite, TopBarAction::Download],
+        SuperiorMode::Artist => vec![
+            TopBarAction::Favorite,
+            TopBarAction::Download,
+            TopBarAction::Shuffle,
+        ],
+        SuperiorMode::Playlist | SuperiorMode::Radio => Vec::new(),
+    }
+}
+
+fn next_tab_slot(order: &[usize], current: Option<usize>, backward: bool) -> Option<usize> {
+    let Some(current) = current else {
+        return if backward {
+            order.last().copied()
+        } else {
+            order.first().copied()
+        };
+    };
+    order
+        .iter()
+        .position(|slot| *slot == current)
+        .and_then(|position| {
+            if backward {
+                position.checked_sub(1)
+            } else {
+                Some(position + 1)
+            }
+        })
+        .and_then(|position| order.get(position).copied())
+}
+
+#[derive(Debug, Clone)]
+struct PageBarState {
+    kind: PageKind,
+    id: String,
+    title: String,
+    subtitle: String,
+    meta: String,
+    rating: u8,
+    starred: bool,
+    cached: bool,
+    downloading: bool,
+}
 
 const LIBRARY_ROW_FLAGS: page_profile::RowFlags = page_profile::RowFlags {
     show_cover: true,
@@ -566,8 +683,8 @@ impl AppRoot {
             )),
             fullscreen_album: None,
             fullscreen_album_requested: None,
-            status_anchors: std::rc::Rc::new(std::cell::RefCell::new([None, None])),
-            status_extents: std::rc::Rc::new(std::cell::RefCell::new([None, None])),
+            status_anchors: std::rc::Rc::new(std::cell::RefCell::new([None, None, None, None, None])),
+            status_extents: std::rc::Rc::new(std::cell::RefCell::new([None, None, None, None, None])),
             alt_target_size: None,
             lyrics: None,
             lyrics_requested: None,
@@ -782,6 +899,20 @@ impl AppRoot {
                         patch(row);
                     }
                 }
+                if matches!(kind, RowKind::Album | RowKind::Artist)
+                    && let Some(page) = self.page.as_mut().filter(|page| {
+                        page.descriptor.kind != PageKind::Playlist
+                            && page.descriptor.kind != PageKind::Radio
+                            && page.descriptor.id == id
+                    })
+                {
+                    if let Some(starred) = starred {
+                        page.header.starred = starred;
+                    }
+                    if let Some(rating) = rating {
+                        page.header.rating = i64::from(rating);
+                    }
+                }
                 if kind == RowKind::Song
                     && let Some(starred) = starred
                     && self
@@ -851,12 +982,41 @@ impl AppRoot {
                 );
             }
 
+            Event::PageContainerState {
+                kind,
+                id,
+                cached,
+                starred,
+                rating,
+            } => {
+                if let Some(page) = self
+                    .page
+                    .as_mut()
+                    .filter(|page| page.descriptor.kind == kind && page.descriptor.id == id)
+                {
+                    page.container_cached = cached;
+                    page.header.starred = starred;
+                    page.header.rating = i64::from(rating);
+                    if !cached {
+                        page.container_downloading = false;
+                    }
+                }
+            }
             Event::QueueAppend { tracks } => {
                 self.player.append(tracks);
             }
             Event::DownloadSettled => {
                 self.marks.requested = None;
                 self.ensure_marks();
+                if let Some((kind, id)) = self.page.as_ref().and_then(|page| {
+                    matches!(page.descriptor.kind, PageKind::Album | PageKind::Artist)
+                        .then(|| (page.descriptor.kind, page.descriptor.id.clone()))
+                }) {
+                    if let Some(page) = self.page.as_mut() {
+                        page.container_downloading = false;
+                    }
+                    self.bridge.request_container_state(kind, id);
+                }
             }
             Event::OpenPage { descriptor } => {
                 self.open_descriptor(descriptor);
@@ -1002,6 +1162,12 @@ impl AppRoot {
                 }
                 self.marks.requested = None;
                 self.ensure_marks();
+                if let Some((kind, id)) = self.page.as_ref().and_then(|page| {
+                    matches!(page.descriptor.kind, PageKind::Album | PageKind::Artist)
+                        .then(|| (page.descriptor.kind, page.descriptor.id.clone()))
+                }) {
+                    self.bridge.request_container_state(kind, id);
+                }
             }
             Event::LoginRequired { offline_available } => {
                 self.login = Some(LoginState {
@@ -1144,6 +1310,13 @@ impl AppRoot {
             }
             Event::Error(message) => {
                 self.finish_sync();
+                if let Some(page) = self
+                    .page
+                    .as_mut()
+                    .filter(|page| page.container_downloading)
+                {
+                    page.container_downloading = false;
+                }
                 if let Some(search) = self.search.as_mut() {
                     search.loading = false;
                 }
@@ -1705,11 +1878,11 @@ impl AppRoot {
         );
     }
 
-    fn activate_status(&mut self, row: usize) {
-        self.status_focus = Some(row.min(1));
-        match row {
+    fn activate_status(&mut self, slot: usize) {
+        self.status_focus = Some(slot);
+        match slot {
             0 => self.start_sync(),
-            _ => {
+            1 => {
                 if self.syncing {
                     self.push_toast(
                         "Wait for the sync to finish before wiping.".to_string(),
@@ -1720,7 +1893,53 @@ impl AppRoot {
                 }
                 self.open_wipe_menu();
             }
+            2 => self.activate_container_download(),
+            3 => self.activate_shuffle_artist(),
+            4 => self.activate_container_favorite(),
+            _ => {}
         }
+    }
+
+    fn activate_container_download(&mut self) {
+        let Some(page) = self.page_bar() else { return };
+        if page.downloading {
+            return;
+        }
+        let on = !page.cached;
+        if let Some(page) = self.page.as_mut() {
+            page.container_cached = on;
+            page.container_downloading = true;
+        }
+        match page.kind {
+            PageKind::Album => {
+                self.bridge.quick_download("album".to_string(), page.id, on);
+            }
+            PageKind::Artist => {
+                self.bridge.download_artist(page.id, on);
+            }
+            _ => {}
+        }
+    }
+
+    fn activate_shuffle_artist(&mut self) {
+        let Some(page) = self.page_bar() else { return };
+        if page.kind == PageKind::Artist {
+            self.bridge.shuffle_artist(page.id);
+        }
+    }
+
+    fn activate_container_favorite(&mut self) {
+        let Some(page) = self.page_bar() else { return };
+        let kind = match page.kind {
+            PageKind::Album => "album",
+            PageKind::Artist => "artist",
+            _ => return,
+        };
+        if let Some(page) = self.page.as_mut() {
+            page.header.starred = !page.header.starred;
+        }
+        self.bridge
+            .quick_favorite(kind.to_string(), page.id, !page.starred);
     }
 
     fn open_wipe_menu(&mut self) {
@@ -1748,14 +1967,20 @@ impl AppRoot {
     }
 
     fn cycle_fullscreen_focus(&mut self, backward: bool) {
-        self.fullscreen_focus = match (self.fullscreen_focus, backward) {
-            (FullscreenFocus::Cover, false) | (FullscreenFocus::Title, true) => {
-                FullscreenFocus::Title
-            }
-            (FullscreenFocus::Title, false) | (FullscreenFocus::Cover, true) => {
-                FullscreenFocus::Cover
-            }
+        let mut order = vec![FullscreenFocus::Cover, FullscreenFocus::Title];
+        if self.lyrics_inline() && !self.lyrics_overlay {
+            order.push(FullscreenFocus::Lyrics);
+        }
+        let position = order
+            .iter()
+            .position(|focus| *focus == self.fullscreen_focus)
+            .unwrap_or(0);
+        let next = if backward {
+            (position + order.len() - 1) % order.len()
+        } else {
+            (position + 1) % order.len()
         };
+        self.fullscreen_focus = order[next];
     }
 
     fn on_toggle_fullscreen(&mut self, _: &ToggleFullscreen, _window: &mut Window, cx: &mut Context<Self>) {
@@ -2194,10 +2419,12 @@ impl AppRoot {
             cx.notify();
             return;
         }
-        if self.search.is_some() {
+        if self.search.is_some() && self.search_open {
             self.move_search_scope(1);
             cx.notify();
+            return;
         }
+        self.on_tab(false, cx);
     }
 
     fn on_search_scope_prev(&mut self, _: &SearchScopePrev, _window: &mut Window, cx: &mut Context<Self>) {
@@ -2206,10 +2433,28 @@ impl AppRoot {
             cx.notify();
             return;
         }
-        if self.search.is_some() {
+        if self.search.is_some() && self.search_open {
             self.move_search_scope(-1);
             cx.notify();
+            return;
         }
+        self.on_tab(true, cx);
+    }
+
+    /// Tab's contextual walk. The superior bar exposes the current page's
+    /// chips (the artist entry adds Download/Shuffle/Favorite) followed by
+    /// the status actions; leaving the end drops back to the content.
+    fn on_tab(&mut self, backward: bool, cx: &mut Context<Self>) {
+        if self.fullscreen {
+            if !self.lyrics_overlay {
+                self.cycle_fullscreen_focus(backward);
+            }
+            cx.notify();
+            return;
+        }
+        let order = self.topbar_tab_order();
+        self.status_focus = next_tab_slot(&order, self.status_focus, backward);
+        cx.notify();
     }
 
     fn move_search_scope(&mut self, delta: i32) {
@@ -2347,10 +2592,12 @@ impl AppRoot {
         let stored = match focus {
             FullscreenFocus::Cover => anchors.cover,
             FullscreenFocus::Title => anchors.title,
+            FullscreenFocus::Lyrics => None,
         };
         let (x, y) = stored.unwrap_or(match focus {
             FullscreenFocus::Cover => (self.win_w * 0.5, self.win_h * 0.42),
             FullscreenFocus::Title => (self.win_w * 0.5, self.win_h * 0.86),
+            FullscreenFocus::Lyrics => (self.win_w * 0.5, self.win_h * 0.5),
         });
         (
             x.clamp(30.0, (self.win_w - 30.0).max(30.0)),
@@ -2443,6 +2690,36 @@ impl AppRoot {
         )
     }
 
+    fn superior_mode(&self) -> SuperiorMode {
+        SuperiorMode::from_page(self.page.as_ref())
+    }
+
+    fn page_bar(&self) -> Option<PageBarState> {
+        let page = self.page.as_ref()?;
+        Some(PageBarState {
+            kind: page.descriptor.kind,
+            id: page.descriptor.id.clone(),
+            title: page.header.title.clone(),
+            subtitle: page.header.subtitle.clone(),
+            meta: page.header.meta.clone(),
+            rating: page.header.rating.clamp(0, 5) as u8,
+            starred: page.header.starred,
+            cached: page.container_cached,
+            downloading: page.container_downloading,
+        })
+    }
+
+    fn topbar_actions(&self) -> Vec<TopBarAction> {
+        topbar_actions_for(self.superior_mode())
+    }
+
+    fn topbar_tab_order(&self) -> Vec<usize> {
+        self.topbar_actions()
+            .into_iter()
+            .map(TopBarAction::slot)
+            .collect()
+    }
+
     fn status_extent(&self, scope: usize) -> (f32, f32) {
         self.status_extents.borrow()[scope.min(1)].unwrap_or((24.0, 24.0))
     }
@@ -2462,6 +2739,9 @@ impl AppRoot {
     fn alt_snapshot(&self) -> Option<(QuickMenu, AltTarget, (f32, f32))> {
         if self.fullscreen {
             let track = self.player.current()?;
+            if self.fullscreen_focus == FullscreenFocus::Lyrics {
+                return None;
+            }
             if self.fullscreen_focus == FullscreenFocus::Cover && !track.album_id.is_empty() {
                 let album_id = track.album_id.clone();
                 let (starred, rating) = self
@@ -2846,7 +3126,9 @@ impl AppRoot {
                 self.lyrics_window_start = hit.row.saturating_sub(2);
             }
             LineSurface::Status => {
-                self.status_focus = Some(hit.row.min(1));
+                if let Some(slot) = self.topbar_tab_order().get(hit.row) {
+                    self.status_focus = Some(*slot);
+                }
             }
         }
     }
@@ -2863,10 +3145,13 @@ impl AppRoot {
         // to the last candidate that actually matched in this session.
         if let Some(hit) = self.line_search.latest_hit() {
             let status = self.line_search_surfaces.get(hit.target) == Some(&LineSurface::Status);
+            let status_slot = self.topbar_tab_order().get(hit.row).copied();
             self.apply_line_hit(hit);
             self.close_line_search();
             if status {
-                self.activate_status(hit.row);
+                if let Some(slot) = status_slot {
+                    self.activate_status(slot);
+                }
             } else {
                 self.on_enter(&Enter, window, cx);
             }
@@ -3310,10 +3595,13 @@ impl AppRoot {
 
         // The status bar's two objects are part of the plain-window buffer,
         // before the active list, exactly like the legacy `/` contract.
-        targets.push(LineTarget::new(vec![
-            Some(LineRow::new("Sync", "Refresh the library", "")),
-            Some(LineRow::new("Wipe", "Clear cached data", "")),
-        ]));
+        let mode = self.superior_mode();
+        let status_rows = self
+            .topbar_actions()
+            .into_iter()
+            .map(|action| Some(LineRow::new(action.label(mode), "Superior bar", "")))
+            .collect();
+        targets.push(LineTarget::new(status_rows));
         surfaces.push(LineSurface::Status);
 
         if let Some(page) = self.page.as_ref() {
@@ -3847,6 +4135,11 @@ impl AppRoot {
             cx.notify();
             return;
         }
+        if let Some(slot) = self.status_focus {
+            self.activate_status(slot);
+            cx.notify();
+            return;
+        }
         if self.search.is_some() {
             self.activate_search_result(cx);
             return;
@@ -4008,6 +4301,11 @@ impl AppRoot {
             cx.notify();
             return;
         }
+        if self.status_focus.is_some() {
+            self.status_focus = None;
+            cx.notify();
+            return;
+        }
         if self.description.is_some() {
             self.description = None;
             cx.notify();
@@ -4118,6 +4416,7 @@ impl AppRoot {
     }
 
     fn back_page(&mut self) {
+        self.status_focus = None;
         self.remember_current();
         match self.travel.back() {
             Some(descriptor) => {
@@ -4132,6 +4431,7 @@ impl AppRoot {
     }
 
     fn step_travel(&mut self, delta: i32) {
+        self.status_focus = None;
         self.remember_current();
         if let Some(descriptor) = self.travel.step(delta) {
             self.page = Some(PageState::new(descriptor.clone()));
@@ -4175,12 +4475,142 @@ impl AppRoot {
         }
     }
 
-    fn top_bar(&self, cx: &Context<Self>) -> impl IntoElement {
-        let (welcome, offline) = match self.header.as_ref() {
-            Some(header) => (
-                format!("Welcome, {}", header.username),
-                false,
+    fn topbar_action_chip(
+        &self,
+        action: TopBarAction,
+        page: Option<&PageBarState>,
+        anchors: StatusAnchorSlots,
+        extents: StatusAnchorSlots,
+        cx: &Context<Self>,
+    ) -> gpui::AnyElement {
+        let slot = action.slot();
+        let focused = self.status_focus == Some(slot);
+        let (icon_el, opacity) = match action {
+            TopBarAction::Sync => (
+                icon_rotated(
+                    "reload-ui-2-svgrepo-com.svg",
+                    18.0,
+                    if self.syncing {
+                        palette::on_surface_variant()
+                    } else {
+                        palette::on_surface()
+                    },
+                    self.sync_angle(),
+                ),
+                if self.syncing { 0.38 } else { 0.85 },
             ),
+            TopBarAction::Wipe => (
+                icon("delete-outline.svg", 18.0, palette::on_surface()),
+                1.0,
+            ),
+            TopBarAction::Download => {
+                let cached = page.is_some_and(|page| page.cached);
+                let downloading = page.is_some_and(|page| page.downloading);
+                (
+                    icon(
+                        if cached {
+                            "baseline-download.svg"
+                        } else {
+                            "outline-download.svg"
+                        },
+                        18.0,
+                        palette::on_surface_variant(),
+                    ),
+                    if downloading { 0.38 } else { 1.0 },
+                )
+            }
+            TopBarAction::Shuffle => (
+                icon("outline-shuffle.svg", 18.0, palette::on_surface_variant()),
+                1.0,
+            ),
+            TopBarAction::Favorite => {
+                let starred = page.is_some_and(|page| page.starred);
+                (
+                    icon(
+                        if starred {
+                            "heart-minus.svg"
+                        } else {
+                            "heart-add-fill.svg"
+                        },
+                        18.0,
+                        if starred {
+                            palette::primary()
+                        } else {
+                            palette::on_surface_variant()
+                        },
+                    ),
+                    1.0,
+                )
+            }
+        };
+        div()
+            .flex_none()
+            .flex()
+            .items_center()
+            .justify_center()
+            .rounded_md()
+            .border_1()
+            .border_color(rgb(if focused {
+                palette::primary()
+            } else {
+                palette::surface_container_low()
+            }))
+            .on_children_prepainted(move |bounds, _, _| {
+                if let Some(first) = bounds.first() {
+                    let x = f32::from(first.origin.x) + f32::from(first.size.width) * 0.5;
+                    let y = f32::from(first.origin.y) + f32::from(first.size.height) * 0.5;
+                    anchors.borrow_mut()[slot] = Some((x, y));
+                    extents.borrow_mut()[slot] =
+                        Some((f32::from(first.size.width), f32::from(first.size.height)));
+                }
+            })
+            .child(
+                div()
+                    .id(gpui::ElementId::named_usize("topbar-action", slot))
+                    .p(px(3.0))
+                    .cursor_pointer()
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.activate_status(slot);
+                        cx.notify();
+                    }))
+                    .opacity(opacity)
+                    .child(icon_el),
+            )
+            .into_any_element()
+    }
+
+    fn bar_separator(&self) -> gpui::AnyElement {
+        div()
+            .text_size(px(14.0))
+            .text_color(rgb(palette::on_surface_variant()))
+            .child("·")
+            .into_any_element()
+    }
+
+    fn star_glyphs(rating: u8) -> [bool; 5] {
+        std::array::from_fn(|index| index < usize::from(rating.min(5)))
+    }
+
+    fn star_counter(&self, rating: u8) -> gpui::AnyElement {
+        let mut row = div().flex_none().flex().items_center().gap_1();
+        for filled in Self::star_glyphs(rating) {
+            row = row.child(
+                div()
+                    .text_size(px(13.0))
+                    .text_color(rgb(if filled {
+                        palette::primary()
+                    } else {
+                        palette::on_surface_variant()
+                    }))
+                    .child(if filled { "★" } else { "☆" }),
+            );
+        }
+        row.into_any_element()
+    }
+
+    fn home_bar(&self, cx: &Context<Self>) -> gpui::AnyElement {
+        let (welcome, offline) = match self.header.as_ref() {
+            Some(header) => (format!("Welcome, {}", header.username), false),
             None => ("Welcome".to_string(), false),
         };
         let report = match self.header.as_ref() {
@@ -4207,27 +4637,26 @@ impl AppRoot {
             }
             None => String::new(),
         };
-        let sync_anchor = self.status_anchors.clone();
-        let sync_extent = self.status_extents.clone();
-        let wipe_anchor = self.status_anchors.clone();
-        let wipe_extent = self.status_extents.clone();
         div()
-            .relative()
-            .w_full()
-            .h(relative(0.0648))
-            .px_4()
-            .bg(rgb(palette::surface_container_low()))
             .flex()
             .items_center()
+            .w_full()
+            .h_full()
+            .px_4()
             .child(
                 div()
                     .flex()
                     .flex_1()
+                    .min_w_0()
                     .items_center()
                     .child(
                         div()
                             .text_size(px(19.0))
-                            .text_color(rgb(if offline { palette::tertiary() } else { palette::on_surface_variant() }))
+                            .text_color(rgb(if offline {
+                                palette::tertiary()
+                            } else {
+                                palette::on_surface_variant()
+                            }))
                             .whitespace_nowrap()
                             .text_ellipsis()
                             .child(welcome),
@@ -4236,10 +4665,17 @@ impl AppRoot {
             .child(
                 div()
                     .flex()
+                    .flex_1()
+                    .min_w_0()
+                    .overflow_hidden()
+                    .justify_end()
                     .items_center()
                     .gap_3()
                     .child(
                         div()
+                            .flex_1()
+                            .min_w_0()
+                            .overflow_hidden()
                             .text_size(px(14.0))
                             .text_color(rgb(if self.syncing {
                                 palette::tertiary()
@@ -4252,6 +4688,7 @@ impl AppRoot {
                     )
                     .child(
                         div()
+                            .flex_none()
                             .w(px(2.0))
                             .h(px((self.win_h * 0.0648 * 0.16).max(2.0)))
                             .rounded_full()
@@ -4268,87 +4705,146 @@ impl AppRoot {
                                     })),
                             ),
                     )
-                    .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .rounded_md()
-                            .border_1()
-                            .border_color(rgb(if self.status_focus == Some(0) {
-                                palette::primary()
-                            } else {
-                                palette::surface_container_low()
-                            }))
-                            .on_children_prepainted(move |bounds, _, _| {
-                                if let Some(first) = bounds.first() {
-                                    let x = f32::from(first.origin.x)
-                                        + f32::from(first.size.width) * 0.5;
-                                    let y = f32::from(first.origin.y)
-                                        + f32::from(first.size.height) * 0.5;
-                                    sync_anchor.borrow_mut()[0] = Some((x, y));
-                                    sync_extent.borrow_mut()[0] =
-                                        Some((f32::from(first.size.width), f32::from(first.size.height)));
-                                }
+                    .children(
+                        self.topbar_actions()
+                            .into_iter()
+                            .map(|action| {
+                                self.topbar_action_chip(
+                                    action,
+                                    None,
+                                    self.status_anchors.clone(),
+                                    self.status_extents.clone(),
+                                    cx,
+                                )
                             })
-                            .child(
-                                div()
-                                    .id("status-sync")
-                                    .p(px(3.0))
-                                    .cursor_pointer()
-                                    .on_click(cx.listener(|this, _, _, cx| {
-                                        this.activate_status(0);
-                                        cx.notify();
-                                    }))
-                                    .child(icon_rotated(
-                                        "reload-ui-2-svgrepo-com.svg",
-                                        18.0,
-                                        if self.syncing {
-                                            palette::on_surface_variant()
-                                        } else {
-                                            palette::on_surface()
-                                        },
-                                        self.sync_angle(),
-                                    ))
-                                    .opacity(if self.syncing { 0.38 } else { 0.85 }),
-                            ),
-                    )
-                    .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .rounded_md()
-                            .border_1()
-                            .border_color(rgb(if self.status_focus == Some(1) {
-                                palette::primary()
-                            } else {
-                                palette::surface_container_low()
-                            }))
-                            .on_children_prepainted(move |bounds, _, _| {
-                                if let Some(first) = bounds.first() {
-                                    let x = f32::from(first.origin.x)
-                                        + f32::from(first.size.width) * 0.5;
-                                    let y = f32::from(first.origin.y)
-                                        + f32::from(first.size.height) * 0.5;
-                                    wipe_anchor.borrow_mut()[1] = Some((x, y));
-                                    wipe_extent.borrow_mut()[1] =
-                                        Some((f32::from(first.size.width), f32::from(first.size.height)));
-                                }
-                            })
-                            .child(
-                                div()
-                                    .id("status-wipe")
-                                    .p(px(3.0))
-                                    .cursor_pointer()
-                                    .on_click(cx.listener(|this, _, _, cx| {
-                                        this.activate_status(1);
-                                        cx.notify();
-                                    }))
-                                    .child(icon("delete-outline.svg", 18.0, palette::on_surface())),
-                            ),
+                            .collect::<Vec<_>>(),
                     ),
             )
+            .into_any_element()
+    }
+
+    fn page_context_bar(&self, mode: SuperiorMode, cx: &Context<Self>) -> gpui::AnyElement {
+        let Some(page) = self.page_bar() else {
+            return div().into_any_element();
+        };
+        let title = if page.title.is_empty() {
+            page.kind.label().to_string()
+        } else {
+            page.title.clone()
+        };
+        let mut identity = div()
+            .flex()
+            .flex_1()
+            .min_w_0()
+            .overflow_hidden()
+            .items_center()
+            .gap_2()
+            .child(
+                div()
+                    .flex_none()
+                    .text_size(px(19.0))
+                    .font_weight(gpui::FontWeight::SEMIBOLD)
+                    .text_color(rgb(palette::on_surface()))
+                    .whitespace_nowrap()
+                    .text_ellipsis()
+                    .child(title),
+            );
+        if !page.subtitle.is_empty() {
+            identity = identity.child(self.bar_separator()).child(
+                div()
+                    .flex_none()
+                    .text_size(px(14.0))
+                    .text_color(rgb(palette::on_surface_variant()))
+                    .whitespace_nowrap()
+                    .text_ellipsis()
+                    .child(page.subtitle.clone()),
+            );
+        }
+        if matches!(mode, SuperiorMode::Album | SuperiorMode::Playlist | SuperiorMode::Radio)
+            && !page.meta.is_empty()
+        {
+            identity = identity.child(self.bar_separator()).child(
+                div()
+                    .flex_none()
+                    .text_size(px(14.0))
+                    .text_color(rgb(palette::on_surface_variant()))
+                    .whitespace_nowrap()
+                    .text_ellipsis()
+                    .child(page.meta.clone()),
+            );
+        }
+        let mut row = div()
+            .flex()
+            .items_center()
+            .w_full()
+            .h_full()
+            .px_4()
+            .gap_2()
+            .child(identity);
+        match mode {
+            SuperiorMode::Album => {
+                row = row
+                    .child(self.topbar_action_chip(
+                        TopBarAction::Favorite,
+                        Some(&page),
+                        self.status_anchors.clone(),
+                        self.status_extents.clone(),
+                        cx,
+                    ))
+                    .child(self.star_counter(page.rating))
+                    .child(self.topbar_action_chip(
+                        TopBarAction::Download,
+                        Some(&page),
+                        self.status_anchors.clone(),
+                        self.status_extents.clone(),
+                        cx,
+                    ));
+            }
+            SuperiorMode::Artist => {
+                row = row
+                    .child(self.topbar_action_chip(
+                        TopBarAction::Favorite,
+                        Some(&page),
+                        self.status_anchors.clone(),
+                        self.status_extents.clone(),
+                        cx,
+                    ))
+                    .child(self.star_counter(page.rating))
+                    .child(self.topbar_action_chip(
+                        TopBarAction::Download,
+                        Some(&page),
+                        self.status_anchors.clone(),
+                        self.status_extents.clone(),
+                        cx,
+                    ))
+                    .child(self.topbar_action_chip(
+                        TopBarAction::Shuffle,
+                        Some(&page),
+                        self.status_anchors.clone(),
+                        self.status_extents.clone(),
+                        cx,
+                    ));
+            }
+            _ => {}
+        }
+        row.into_any_element()
+    }
+
+    fn top_bar(&self, cx: &Context<Self>) -> impl IntoElement {
+        let mode = self.superior_mode();
+        let content = if mode.is_page() {
+            self.page_context_bar(mode, cx)
+        } else {
+            self.home_bar(cx)
+        };
+        div()
+            .relative()
+            .w_full()
+            .h(relative(0.0648))
+            .bg(rgb(palette::surface_container_low()))
+            .flex()
+            .items_center()
+            .child(content)
             .child(
                 div()
                     .absolute()
@@ -4999,6 +5495,7 @@ impl AppRoot {
             .is_some_and(|track| self.marks.downloaded(&track.id, &track.album_id));
         let cover_focus = self.fullscreen_focus == FullscreenFocus::Cover;
         let title_focus = self.fullscreen_focus == FullscreenFocus::Title;
+        let lyrics_focus = self.fullscreen_focus == FullscreenFocus::Lyrics;
         let cover_anchor_slot = self.fullscreen_anchors.clone();
         let title_anchor_slot = self.fullscreen_anchors.clone();
         let position = self.player.position();
@@ -5091,6 +5588,13 @@ impl AppRoot {
                                 0.0
                             })
                             .min_w_0()
+                            .rounded_md()
+                            .border_1()
+                            .border_color(rgb(if lyrics_focus {
+                                palette::primary()
+                            } else {
+                                palette::outline_variant()
+                            }))
                             .flex_col()
                             .items_center()
                             .justify_center()
@@ -5244,7 +5748,7 @@ impl AppRoot {
                             .text_size(px(10.0))
                             .text_color(rgb(palette::on_surface_variant()))
                             .text_center()
-                            .child("Tab cover/title · Alt actions · Shift-Enter/q closes · Space play/pause · Ctrl-Q queue"),
+                            .child("Tab cover/title/lyrics · Alt actions · Shift-Enter/q closes · Space play/pause · Ctrl-Q queue"),
                     ),
             )
     }
@@ -5875,9 +6379,6 @@ impl AppRoot {
         };
         let profile = page_profile::PageProfile::for_descriptor(&page.descriptor);
         let row_flags = profile.row_flags;
-        let title = page.header.title.clone();
-        let subtitle = page.header.subtitle.clone();
-        let meta = page.header.meta.clone();
         let page_h = (self.win_h - 120.0).max(1.0);
         let page_w = self.win_w.max(1.0);
         let max_cover = (page_h - page_w * 0.04) * 0.75;
@@ -5889,58 +6390,12 @@ impl AppRoot {
             .display_cover(&page.header.cover_art, hero_bucket)
             .or_else(|| self.hero_cover(&page.header.cover_url, hero_bucket));
         let header_h = cover_bottom.max(240.0);
-        let spacer_h = 0.0;
-
-        let stars = "★★★★★"
-            .chars()
-            .take(page.header.rating.clamp(0, 5) as usize)
-            .collect::<String>();
-        let (primary_phrase, secondary_phrase) =
-            page_header_phrases(&title, &subtitle, &meta, &stars);
-        let phrase_size = page_h * 0.022 * (page_w / 1280.0).clamp(0.9, 1.6);
-        let header = div()
-            .relative()
-            .flex_none()
-            .w_full()
-            .h(px(header_h))
-            .child(
-                div()
-                    .absolute()
-                    .left(px(page_w * 0.04))
-                    .right(px(page_w * 0.04))
-                    .bottom(px(page_w * 0.025))
-                    .px_3()
-                    .py_2()
-                    .rounded_md()
-                    .bg(gpui::black().opacity(0.45))
-                    .flex()
-                    .flex_col()
-                    .gap_1()
-                    .child(
-                        div()
-                            .text_size(px(phrase_size))
-                            .font_weight(gpui::FontWeight::SEMIBOLD)
-                            .text_color(rgb(palette::on_surface()))
-                            .whitespace_nowrap()
-                            .text_ellipsis()
-                            .child(primary_phrase),
-                    )
-                    .child(
-                        div()
-                            .text_size(px(phrase_size * 0.72))
-                            .text_color(rgb(palette::on_surface_variant()))
-                            .whitespace_nowrap()
-                            .text_ellipsis()
-                            .child(secondary_phrase),
-                    ),
-            );
 
         if page.loading && page.rows.is_empty() {
             return div()
                 .flex()
                 .flex_col()
                 .flex_1()
-                .child(header)
                 .child(
                     div()
                         .flex()
@@ -5957,7 +6412,6 @@ impl AppRoot {
                 .flex()
                 .flex_col()
                 .flex_1()
-                .child(header)
                 .child(
                     div()
                         .flex()
@@ -5976,7 +6430,6 @@ impl AppRoot {
                 .flex()
                 .flex_col()
                 .flex_1()
-                .child(header)
                 .child(
                     div()
                         .flex()
@@ -6007,8 +6460,7 @@ impl AppRoot {
                     .overflow_hidden()
                     .child(art(cover, cover_art_side)),
             )
-            .child(header)
-            .child(div().h(px(spacer_h)))
+            .child(div().w_full().h(px(header_h)))
             .child(
                 div()
                     .flex_1()
@@ -6070,6 +6522,7 @@ impl AppRoot {
                                             cx.notify();
                                         }))
                                         .on_click(cx.listener(move |this, _, _, cx| {
+                                            this.status_focus = None;
                                             if let Some(page) = this.page.as_mut() {
                                                 page.select(index);
                                             }
@@ -6979,57 +7432,83 @@ fn join_phrase(parts: &[&str]) -> String {
         .join(" · ")
 }
 
-/// The PageEntry header's two phrases: identity (title/artist or playlist
-/// subtitle) and the metadata/rating line.
-fn page_header_phrases(
-    title: &str,
-    subtitle: &str,
-    meta: &str,
-    stars: &str,
-) -> (String, String) {
-    (
-        join_phrase(&[title, subtitle]),
-        join_phrase(&[meta, stars]),
-    )
-}
-
-#[cfg(test)]
-mod page_header_phrase_tests {
-    use super::page_header_phrases;
-
-    #[test]
-    fn splits_identity_and_metadata() {
-        assert_eq!(
-            page_header_phrases("Album", "Artist", "2024 · 10 tracks", "★★★"),
-            (
-                "Album · Artist".to_string(),
-                "2024 · 10 tracks · ★★★".to_string()
-            )
-        );
-    }
-
-    #[test]
-    fn hides_empty_phrases() {
-        assert_eq!(
-            page_header_phrases("Artist", "", "", "★★★★★"),
-            ("Artist".to_string(), "★★★★★".to_string())
-        );
-        assert_eq!(
-            page_header_phrases("Playlist", "", "12 tracks", ""),
-            ("Playlist".to_string(), "12 tracks".to_string())
-        );
-    }
-}
-
 #[cfg(test)]
 mod fullscreen_focus_tests {
     use super::FullscreenFocus;
 
     #[test]
-    fn tab_cycles_cover_and_title() {
+    fn tab_cycles_cover_title_and_lyrics() {
         assert_eq!(FullscreenFocus::Cover.next(), FullscreenFocus::Title);
-        assert_eq!(FullscreenFocus::Title.next(), FullscreenFocus::Cover);
-        assert_eq!(FullscreenFocus::Cover.prev(), FullscreenFocus::Title);
+        assert_eq!(FullscreenFocus::Title.next(), FullscreenFocus::Lyrics);
+        assert_eq!(FullscreenFocus::Lyrics.next(), FullscreenFocus::Cover);
+        assert_eq!(FullscreenFocus::Cover.prev(), FullscreenFocus::Lyrics);
+        assert_eq!(FullscreenFocus::Lyrics.prev(), FullscreenFocus::Title);
         assert_eq!(FullscreenFocus::Title.prev(), FullscreenFocus::Cover);
+    }
+}
+
+#[cfg(test)]
+mod contextual_bar_tests {
+    use super::*;
+
+    #[test]
+    fn contexts_pick_the_right_action_matrix() {
+        use TopBarAction::*;
+        assert_eq!(
+            topbar_actions_for(SuperiorMode::Home),
+            vec![Sync, Wipe]
+        );
+        assert_eq!(
+            topbar_actions_for(SuperiorMode::Album),
+            vec![Favorite, Download]
+        );
+        assert_eq!(
+            topbar_actions_for(SuperiorMode::Artist),
+            vec![Favorite, Download, Shuffle]
+        );
+        assert!(topbar_actions_for(SuperiorMode::Playlist).is_empty());
+        assert!(topbar_actions_for(SuperiorMode::Radio).is_empty());
+    }
+
+    #[test]
+    fn page_kinds_map_to_contexts() {
+        use PageKind;
+        assert_eq!(SuperiorMode::from_page(None), SuperiorMode::Home);
+        for (kind, mode) in [
+            (PageKind::Album, SuperiorMode::Album),
+            (PageKind::Artist, SuperiorMode::Artist),
+            (PageKind::Playlist, SuperiorMode::Playlist),
+            (PageKind::Radio, SuperiorMode::Radio),
+        ] {
+            let page = PageState::new(PageDescriptor::new(kind, "id"));
+            assert_eq!(SuperiorMode::from_page(Some(&page)), mode);
+        }
+    }
+
+    #[test]
+    fn stars_fill_only_the_rating() {
+        assert_eq!(AppRoot::star_glyphs(0), [false; 5]);
+        assert_eq!(AppRoot::star_glyphs(3), [true, true, true, false, false]);
+        assert_eq!(AppRoot::star_glyphs(5), [true; 5]);
+        assert_eq!(AppRoot::star_glyphs(9), [true; 5]);
+    }
+
+    #[test]
+    fn tab_wraps_through_the_action_order() {
+        let album = [4, 2];
+        assert_eq!(next_tab_slot(&album, None, false), Some(4));
+        assert_eq!(next_tab_slot(&album, Some(4), false), Some(2));
+        assert_eq!(next_tab_slot(&album, Some(2), false), None);
+        assert_eq!(next_tab_slot(&album, None, true), Some(2));
+        assert_eq!(next_tab_slot(&album, Some(2), true), Some(4));
+        assert_eq!(next_tab_slot(&album, Some(4), true), None);
+        assert_eq!(next_tab_slot(&[], None, false), None);
+    }
+
+    #[test]
+    fn album_counts_are_pluralized() {
+        assert_eq!(crate::ui::bridge::albums_label(0), "0 albums");
+        assert_eq!(crate::ui::bridge::albums_label(1), "1 album");
+        assert_eq!(crate::ui::bridge::albums_label(4), "4 albums");
     }
 }

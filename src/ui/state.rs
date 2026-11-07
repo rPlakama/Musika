@@ -165,6 +165,9 @@ pub struct ViewState {
     pub loading: bool,
     pub error: Option<String>,
     pub selection: Selection,
+    /// Container state for the superior bar's contextual chips (Album/Artist).
+    pub container_cached: bool,
+    pub container_downloading: bool,
 }
 
 impl Default for ViewState {
@@ -178,6 +181,8 @@ impl Default for ViewState {
             loading: true,
             error: None,
             selection: Selection::default(),
+            container_cached: false,
+            container_downloading: false,
         }
     }
 }
@@ -376,6 +381,9 @@ pub struct PageState {
     pub loading: bool,
     pub error: Option<String>,
     pub selection: Selection,
+    /// Container state for the superior bar's contextual chips (Album/Artist).
+    pub container_cached: bool,
+    pub container_downloading: bool,
 }
 
 impl PageState {
@@ -397,6 +405,8 @@ impl PageState {
             loading: true,
             error: None,
             selection: Selection::default(),
+            container_cached: false,
+            container_downloading: false,
         }
     }
 

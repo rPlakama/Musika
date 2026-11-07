@@ -82,6 +82,13 @@ pub enum Event {
         done: usize,
         total: usize,
     },
+    PageContainerState {
+        kind: super::state::PageKind,
+        id: String,
+        cached: bool,
+        starred: bool,
+        rating: u8,
+    },
     Wiped {
         scope: String,
     },
@@ -839,6 +846,109 @@ impl Bridge {
         });
     }
 
+    /// Download coverage + favourite/rating for an Album or Artist page.
+    pub fn request_container_state(&self, kind: super::state::PageKind, id: String) {
+        let tx = self.tx.clone();
+        crate::app::runtime().spawn(async move {
+            let Some(dbs) = crate::app::dbs() else { return };
+            let (cached, starred, rating) = match kind {
+                super::state::PageKind::Album => {
+                    let cached = crate::download::window_state(&dbs, &[], std::slice::from_ref(&id))
+                        .await
+                        .map(|marks| marks.albums_done.iter().any(|album| album == &id))
+                        .unwrap_or(false);
+                    let state = crate::library::album_states(&dbs.library, std::slice::from_ref(&id))
+                        .await
+                        .ok()
+                        .and_then(|states| states.get(&id).copied())
+                        .unwrap_or((false, 0));
+                    (cached, state.0, state.1.clamp(0, 5) as u8)
+                }
+                super::state::PageKind::Artist => {
+                    let albums = crate::library::artist_album_ids(&dbs.library, &id)
+                        .await
+                        .unwrap_or_default();
+                    let cached = if albums.is_empty() {
+                        false
+                    } else {
+                        crate::download::window_state(&dbs, &[], &albums)
+                            .await
+                            .map(|marks| marks.albums_done.len() == albums.len())
+                            .unwrap_or(false)
+                    };
+                    let user = crate::artist_user::get(&dbs.artist_user, &id)
+                        .await
+                        .ok()
+                        .flatten();
+                    let (starred, rating) = user
+                        .map(|user| (user.starred, user.rating.clamp(0, 5) as u8))
+                        .unwrap_or((false, 0));
+                    (cached, starred, rating)
+                }
+                _ => (false, false, 0),
+            };
+            let _ = tx.send(Event::PageContainerState {
+                kind,
+                id,
+                cached,
+                starred,
+                rating,
+            });
+        });
+    }
+
+    /// Download or remove the whole artist container.
+    pub fn download_artist(&self, artist_id: String, on: bool) {
+        let tx = self.tx.clone();
+        crate::app::runtime().spawn(async move {
+            let Some(dbs) = crate::app::dbs() else { return };
+            let ids = crate::library::artist_song_ids(&dbs.library, &artist_id)
+                .await
+                .unwrap_or_default();
+            if ids.is_empty() {
+                let _ = tx.send(Event::Error("This artist has no songs to download.".to_string()));
+                return;
+            }
+            if on {
+                for song in &ids {
+                    if let Err(err) = crate::media_actions::download_one(&dbs, song).await {
+                        let _ = tx.send(Event::Error(format!("Download failed: {err:#}")));
+                    }
+                }
+            } else {
+                for song in &ids {
+                    let _ = crate::download::unmark(&dbs.download, song).await;
+                }
+                if let Err(err) = crate::media::remove_songs_media(&dbs.media, &ids).await {
+                    let _ = tx.send(Event::Error(format!("Could not remove the artist media: {err:#}")));
+                }
+            }
+            let _ = tx.send(Event::DownloadSettled);
+        });
+    }
+
+    /// Replace the queue with one shuffled artist pass.
+    pub fn shuffle_artist(&self, artist_id: String) {
+        let tx = self.tx.clone();
+        let offline = self.offline.load(Ordering::Relaxed);
+        crate::app::runtime().spawn(async move {
+            let Some(dbs) = crate::app::dbs() else { return };
+            match crate::queue::artist_shuffle_json(&dbs, &artist_id, offline).await {
+                Ok(json) => match serde_json::from_str::<Vec<crate::player::Track>>(&json) {
+                    Ok(tracks) => {
+                        let _ = tx.send(Event::Queue { tracks, start: 0 });
+                    }
+                    Err(err) => {
+                        let _ = tx.send(Event::Error(format!("Could not shuffle the artist: {err:#}")));
+                    }
+                },
+                Err(err) => {
+                    let _ = tx.send(Event::Error(format!("Could not shuffle the artist: {err:#}")));
+                }
+            }
+        });
+    }
+
     pub fn quick_go_artist(&self, album_id: String) {
         let tx = self.tx.clone();
         crate::app::runtime().spawn(async move {
@@ -1177,7 +1287,7 @@ async fn library_rows(
                     id: artist.id,
                     kind: RowKind::Artist,
                     title: artist.name,
-                    subtitle: format!("{} albums", artist.album_count),
+                    subtitle: albums_label(artist.album_count),
                     meta: String::new(),
                     cover_url: crate::covers::url_for(artist.cover_art.as_deref(), &covers),
                     song_id: String::new(),
@@ -1240,6 +1350,10 @@ async fn library_rows(
 
 fn songs_label(count: i64) -> String {
     if count == 1 { "1 song".to_string() } else { format!("{count} songs") }
+}
+
+pub(crate) fn albums_label(count: i64) -> String {
+    if count == 1 { "1 album".to_string() } else { format!("{count} albums") }
 }
 
 async fn page_data(
@@ -1305,7 +1419,7 @@ async fn page_data(
             .await?;
             let header = PageHeader {
                 title: artist.name,
-                subtitle: format!("{} albums", artist.album_count),
+                subtitle: albums_label(artist.album_count),
                 meta: String::new(),
                 cover_url: thumbify(crate::covers::url_for(artist.cover_art.as_deref(), &covers)),
                 cover_art: artist.cover_art.unwrap_or_default(),

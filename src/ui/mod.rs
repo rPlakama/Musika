@@ -376,7 +376,6 @@ enum TopBarAction {
     Sync,
     Wipe,
     Download,
-    Shuffle,
     Favorite,
     Tool,
 }
@@ -387,7 +386,6 @@ impl TopBarAction {
             Self::Sync => 0,
             Self::Wipe => 1,
             Self::Download => 2,
-            Self::Shuffle => 3,
             Self::Favorite => 4,
             Self::Tool => 5,
         }
@@ -402,7 +400,6 @@ impl TopBarAction {
                 SuperiorMode::Artist => "Download artist",
                 _ => "Download",
             },
-            Self::Shuffle => "Shuffle artist",
             Self::Favorite => match mode {
                 SuperiorMode::Album => "Favorite album",
                 SuperiorMode::Artist => "Favorite artist",
@@ -442,7 +439,7 @@ fn page_tool_visible(page: &PageBarState) -> bool {
     !page.starred || !page.cached
 }
 
-fn page_actions(page: &PageBarState, shuffle: bool) -> Vec<TopBarAction> {
+fn page_actions(page: &PageBarState, artist_tool: bool) -> Vec<TopBarAction> {
     let mut actions = Vec::new();
     if page.starred {
         actions.push(TopBarAction::Favorite);
@@ -450,11 +447,10 @@ fn page_actions(page: &PageBarState, shuffle: bool) -> Vec<TopBarAction> {
     if page.cached || page.downloading {
         actions.push(TopBarAction::Download);
     }
-    if page_tool_visible(page) {
+    // The ArtistEntry Tool also carries Shuffle, so it stays available even
+    // when both status insights are on.
+    if artist_tool || page_tool_visible(page) {
         actions.push(TopBarAction::Tool);
-    }
-    if shuffle {
-        actions.push(TopBarAction::Shuffle);
     }
     actions
 }
@@ -569,8 +565,6 @@ struct AppRoot {
     fullscreen_album: Option<(String, bool, u8)>,
     fullscreen_album_requested: Option<String>,
     status_anchors: StatusAnchorSlots,
-    status_extents: StatusAnchorSlots,
-    alt_target_size: Option<(f32, f32)>,
     lyrics: Option<LyricsState>,
     lyrics_requested: Option<String>,
     quit_armed_at: Option<f64>,
@@ -704,8 +698,6 @@ impl AppRoot {
             fullscreen_album: None,
             fullscreen_album_requested: None,
             status_anchors: std::rc::Rc::new(std::cell::RefCell::new([None, None, None, None, None, None])),
-            status_extents: std::rc::Rc::new(std::cell::RefCell::new([None, None, None, None, None, None])),
-            alt_target_size: None,
             lyrics: None,
             lyrics_requested: None,
             quit_armed_at: None,
@@ -1920,7 +1912,6 @@ impl AppRoot {
                 self.open_wipe_menu();
             }
             2 => self.activate_container_download(),
-            3 => self.activate_shuffle_artist(),
             4 => self.activate_container_favorite(),
             5 => self.open_page_menu(5, true),
             _ => {}
@@ -1945,13 +1936,6 @@ impl AppRoot {
                 self.bridge.download_artist(page.id, on);
             }
             _ => {}
-        }
-    }
-
-    fn activate_shuffle_artist(&mut self) {
-        let Some(page) = self.page_bar() else { return };
-        if page.kind == PageKind::Artist {
-            self.bridge.shuffle_artist(page.id);
         }
     }
 
@@ -2021,7 +2005,6 @@ impl AppRoot {
         self.alt_menu = Some(menu);
         self.alt_target = Some(target);
         self.alt_anchor = Some(self.status_anchor(anchor_slot));
-        self.alt_target_size = Some(self.status_extent(anchor_slot));
         self.animate_alt(1.0);
     }
 
@@ -2035,7 +2018,6 @@ impl AppRoot {
         self.alt_menu = Some(menu);
         self.alt_target = None;
         self.alt_anchor = Some(self.status_anchor(1));
-        self.alt_target_size = Some(self.status_extent(1));
         self.animate_alt(1.0);
     }
 
@@ -2799,10 +2781,6 @@ impl AppRoot {
             .collect()
     }
 
-    fn status_extent(&self, scope: usize) -> (f32, f32) {
-        self.status_extents.borrow()[scope.min(5)].unwrap_or((24.0, 24.0))
-    }
-
     fn status_anchor(&self, scope: usize) -> (f32, f32) {
         let stored = self.status_anchors.borrow()[scope.min(5)];
         let (x, y) = stored.unwrap_or((
@@ -2985,7 +2963,6 @@ impl AppRoot {
 
     fn alt_arm(&mut self) {
         self.clock.tick();
-        self.alt_target_size = None;
         if self.login.is_some() || self.line_search.open {
             return;
         }
@@ -2994,7 +2971,6 @@ impl AppRoot {
         };
         if self.status_focus.is_some() {
             self.alt = AltGesture::new();
-            self.alt_target_size = Some(self.status_extent(self.status_focus.unwrap_or(1)));
         }
         if !self.alt.arm(&menu) {
             return;
@@ -3034,7 +3010,6 @@ impl AppRoot {
             }
             self.alt.cancel();
         }
-        self.alt_target_size = None;
         self.animate_alt(0.0);
     }
 
@@ -3115,6 +3090,9 @@ impl AppRoot {
             }
             QuickVerb::PlayPlaylist => {
                 self.bridge.quick_play_playlist(target.playlist_id.clone());
+            }
+            QuickVerb::ShuffleArtist => {
+                self.bridge.shuffle_artist(target.id.clone());
             }
             QuickVerb::Download { on } => {
                 if target.kind == RowKind::Artist {
@@ -4220,8 +4198,7 @@ impl AppRoot {
             self.alt.cancel();
             self.alt_menu = None;
             self.alt_target = None;
-            self.alt_target_size = None;
-            self.animate_alt(0.0);
+                self.animate_alt(0.0);
             cx.notify();
             return;
         }
@@ -4386,8 +4363,7 @@ impl AppRoot {
             self.alt.cancel();
             self.alt_menu = None;
             self.alt_target = None;
-            self.alt_target_size = None;
-            self.animate_alt(0.0);
+                self.animate_alt(0.0);
             cx.notify();
             return;
         }
@@ -4570,7 +4546,6 @@ impl AppRoot {
         action: TopBarAction,
         page: Option<&PageBarState>,
         anchors: StatusAnchorSlots,
-        extents: StatusAnchorSlots,
         cx: &Context<Self>,
     ) -> gpui::AnyElement {
         let slot = action.slot();
@@ -4609,10 +4584,6 @@ impl AppRoot {
                     if downloading { 0.38 } else { 1.0 },
                 )
             }
-            TopBarAction::Shuffle => (
-                icon("outline-shuffle.svg", 18.0, palette::on_surface_variant()),
-                1.0,
-            ),
             TopBarAction::Favorite => {
                 let starred = page.is_some_and(|page| page.starred);
                 (
@@ -4654,8 +4625,6 @@ impl AppRoot {
                     let x = f32::from(first.origin.x) + f32::from(first.size.width) * 0.5;
                     let y = f32::from(first.origin.y) + f32::from(first.size.height) * 0.5;
                     anchors.borrow_mut()[slot] = Some((x, y));
-                    extents.borrow_mut()[slot] =
-                        Some((f32::from(first.size.width), f32::from(first.size.height)));
                 }
             })
             .child(
@@ -4807,7 +4776,6 @@ impl AppRoot {
                                     action,
                                     None,
                                     self.status_anchors.clone(),
-                                    self.status_extents.clone(),
                                     cx,
                                 )
                             })
@@ -4882,7 +4850,6 @@ impl AppRoot {
                         TopBarAction::Favorite,
                         Some(&page),
                         self.status_anchors.clone(),
-                        self.status_extents.clone(),
                         cx,
                     ));
                 }
@@ -4892,25 +4859,14 @@ impl AppRoot {
                         TopBarAction::Download,
                         Some(&page),
                         self.status_anchors.clone(),
-                        self.status_extents.clone(),
                         cx,
                     ));
                 }
-                if page_tool_visible(&page) {
+                if mode == SuperiorMode::Artist || page_tool_visible(&page) {
                     row = row.child(self.topbar_action_chip(
                         TopBarAction::Tool,
                         Some(&page),
                         self.status_anchors.clone(),
-                        self.status_extents.clone(),
-                        cx,
-                    ));
-                }
-                if mode == SuperiorMode::Artist {
-                    row = row.child(self.topbar_action_chip(
-                        TopBarAction::Shuffle,
-                        Some(&page),
-                        self.status_anchors.clone(),
-                        self.status_extents.clone(),
                         cx,
                     ));
                 }
@@ -5195,61 +5151,19 @@ impl AppRoot {
         let option_scale = (0.816
             * ((self.win_w - 20.0) / 1280.0).min((page_h - 20.0) / 720.0))
             .clamp(0.5, 0.816);
-        let margin_box = page_h * 0.07 * option_scale;
         let spawned = 0.72 + 0.28 * progress;
-        let box_side = margin_box * spawned;
-        // The status bar's targets are compact buttons: size the frame from
-        // the captured button, close the gaps, and let it sit centred on the
-        // highlighted control instead of clamping a huge row-sized board to
-        // the window edge.
-        let status_board = self.alt_target_size.is_some();
-        let target_extent = self
-            .alt_target_size
-            .map(|(w, h)| w.max(h))
-            .unwrap_or(0.0);
-        let base_margin = if status_board {
-            box_side * 0.12
-        } else {
-            page_h * 0.02
-        };
-        let margin = base_margin
-            .max(box_side * 0.25)
-            .max((margin_box.max(target_extent) - target_extent) * 0.5 + base_margin);
-        let frame_side = if status_board {
-            (target_extent + 2.0 * margin + 2.0 * box_side).min(box_side * 8.0)
-        } else {
-            box_side * 8.0
-        }
-        .min(self.win_w - 20.0)
-        .min(page_h - 20.0);
-        // Status targets are compact and sit in the superior bar; keep the
-        // neutral mark on the highlighted control's centre instead of sliding
-        // the board back into the window. Shrink the cluster just enough that
-        // every tile still clears the window edge.
-        let anchor_fit = if status_board {
-            let avail_x = ax.min(self.win_w - ax).max(1.0);
-            let avail_y = ay.min(page_h - ay).max(1.0);
-            (2.0 * avail_x / frame_side)
-                .min(2.0 * avail_y / frame_side)
-                .clamp(0.35, 1.0)
-        } else {
-            1.0
-        };
-        let frame_side = frame_side * anchor_fit;
-        let box_side = box_side * anchor_fit;
+        let box_side = page_h * 0.07 * option_scale * spawned;
+        let frame_side = (box_side * 8.0)
+            .min(self.win_w - 20.0)
+            .min(page_h - 20.0);
+        // The board is anchored at the focused item but may slide inside the
+        // safe window area: topbar/status anchors often sit too close to an
+        // edge for a full-size board to stay centred there.
         let wall_gap = 10.0;
-        let board_x = if status_board {
-            ax - frame_side * 0.5
-        } else {
-            (ax - frame_side * 0.5)
-                .clamp(wall_gap, (self.win_w - frame_side - wall_gap).max(wall_gap))
-        };
-        let board_y = if status_board {
-            ay - frame_side * 0.5
-        } else {
-            (ay - frame_side * 0.5)
-                .clamp(wall_gap, (page_h - frame_side + wall_gap).max(wall_gap))
-        };
+        let board_x = (ax - frame_side * 0.5)
+            .clamp(wall_gap, (self.win_w - frame_side - wall_gap).max(wall_gap));
+        let board_y = (ay - frame_side * 0.5)
+            .clamp(wall_gap, (page_h - frame_side + wall_gap).max(wall_gap));
         let mut board = div()
             .absolute()
             .left(px(board_x))
@@ -7584,19 +7498,19 @@ mod contextual_bar_tests {
 
         assert_eq!(
             topbar_actions_for(SuperiorMode::Artist, Some(&neutral)),
-            vec![Tool, Shuffle]
+            vec![Tool]
         );
         assert_eq!(
             topbar_actions_for(SuperiorMode::Artist, Some(&favorite)),
-            vec![Favorite, Tool, Shuffle]
+            vec![Favorite, Tool]
         );
         assert_eq!(
             topbar_actions_for(SuperiorMode::Artist, Some(&cached)),
-            vec![Download, Tool, Shuffle]
+            vec![Download, Tool]
         );
         assert_eq!(
             topbar_actions_for(SuperiorMode::Artist, Some(&both)),
-            vec![Favorite, Download, Shuffle]
+            vec![Favorite, Download, Tool]
         );
         assert!(page_tool_visible(&neutral));
         assert!(page_tool_visible(&favorite));

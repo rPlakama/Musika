@@ -54,6 +54,7 @@ pub enum QuickVerb {
     GoToAlbum,
     Download { on: bool },
     PlayPlaylist,
+    ShuffleArtist,
     WipeLibrary,
     WipeIndexes,
     WipeCovers,
@@ -74,6 +75,7 @@ impl QuickVerb {
             QuickVerb::Download { on: true } => "Download",
             QuickVerb::Download { on: false } => "Remove Download",
             QuickVerb::PlayPlaylist => "Play Playlist",
+            QuickVerb::ShuffleArtist => "Shuffle Artist",
             QuickVerb::WipeLibrary => "Wipe Library",
             QuickVerb::WipeIndexes => "Wipe Search Index",
             QuickVerb::WipeCovers => "Wipe Covers",
@@ -93,6 +95,7 @@ impl QuickVerb {
             QuickVerb::Download { on: true } => "outline-download.svg",
             QuickVerb::Download { on: false } => "baseline-download.svg",
             QuickVerb::PlayPlaylist => "play-1001-svgrepo-com.svg",
+            QuickVerb::ShuffleArtist => "outline-shuffle.svg",
             QuickVerb::WipeLibrary | QuickVerb::WipeIndexes | QuickVerb::WipeCovers => "delete-outline.svg",
         }
     }
@@ -321,7 +324,7 @@ impl QuickMenu {
                 rating,
                 QuickKind::Artist,
             )),
-            west: None,
+            west: Some(single_slot(QuickVerb::ShuffleArtist)),
             east: Some(single_slot(QuickVerb::Download { on: !cached })),
         }
     }

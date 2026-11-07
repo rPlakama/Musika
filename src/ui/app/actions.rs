@@ -25,7 +25,6 @@ impl AppRoot {
             return;
         }
         if self.queue_open {
-            self.reset_row_scales();
             self.queue_cursor = self
                 .queue_cursor
                 .saturating_add(1)
@@ -34,7 +33,6 @@ impl AppRoot {
             cx.notify();
             return;
         }
-        self.reset_row_scales();
         if let Some(page) = self.page.as_mut() {
             if !self.visual_mode {
                 page.selection.clear();
@@ -61,13 +59,11 @@ impl AppRoot {
             return;
         }
         if self.queue_open {
-            self.reset_row_scales();
             self.queue_cursor = self.queue_cursor.saturating_sub(1);
             self.follow_queue(true);
             cx.notify();
             return;
         }
-        self.reset_row_scales();
         if let Some(page) = self.page.as_mut() {
             if !self.visual_mode {
                 page.selection.clear();

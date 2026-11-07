@@ -66,7 +66,9 @@ impl AppRoot {
             row_h,
             selected,
             hovered,
+            scale,
         } = paint;
+        let emphasis = 1.0 + scale * 0.08;
         let cover = cover_source(&row.cover_url);
         div()
             .id(("search-row", index))
@@ -97,11 +99,7 @@ impl AppRoot {
                 }
                 this.activate_search_result(cx);
             }))
-            .child(art_scaled(
-                cover,
-                row_h * 0.714,
-                if selected || hovered { 1.08 } else { 1.0 },
-            ))
+            .child(art_scaled(cover, row_h * 0.714, 1.0 + scale * 0.08))
             .child(
                 div()
                     .flex()
@@ -110,7 +108,7 @@ impl AppRoot {
                     .flex_1()
                     .child(
                         div()
-                            .text_size(px(15.0))
+                            .text_size(px(15.0 * emphasis))
                             .font_weight(if selected {
                                 gpui::FontWeight::SEMIBOLD
                             } else {
@@ -127,7 +125,7 @@ impl AppRoot {
                     )
                     .child(
                         div()
-                            .text_size(px(11.0))
+                            .text_size(px(11.0 * emphasis))
                             .text_color(rgb(if selected {
                                 palette::on_primary_container()
                             } else {
@@ -140,7 +138,7 @@ impl AppRoot {
             )
             .child(
                 div()
-                    .text_size(px(11.0))
+                    .text_size(px(11.0 * emphasis))
                     .text_color(rgb(if selected {
                         palette::on_primary_container()
                     } else {
@@ -223,6 +221,10 @@ impl AppRoot {
                         let Some(row) = rows.get(index) else { break };
                         let selected = index == cursor || search.selection.contains(cursor, index);
                         let hovered = this.hovered_row == Some(index);
+                        let scale = this.row_scale_factor(
+                            format!("search:{scope}:{}", row.id),
+                            selected || hovered,
+                        );
                         items.push(this.search_result_row(
                             cx,
                             row,
@@ -232,6 +234,7 @@ impl AppRoot {
                                 row_h,
                                 selected,
                                 hovered,
+                                scale,
                             },
                         ));
                     }

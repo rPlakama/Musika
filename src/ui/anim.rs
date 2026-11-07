@@ -180,6 +180,14 @@ mod tests {
     }
 
     #[test]
+    fn row_scale_uses_a_short_linear_curve() {
+        assert_eq!(MICRO_MS, 80.0);
+        for t in [0.0, 0.25, 0.5, 0.75, 1.0] {
+            assert!((Curve::Linear.sample(t) - t).abs() < 1e-6);
+        }
+    }
+
+    #[test]
     fn denied_flash_rises_and_fades() {
         assert_eq!(denied_opacity(None, 10.0), 0.0);
         assert!((denied_opacity(Some(10.0), 10.015) - 0.5).abs() < 0.02);

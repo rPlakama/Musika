@@ -100,6 +100,11 @@ impl AppRoot {
                             cx.processor(
                                 move |this, range: std::ops::Range<usize>, _window, cx| {
                                     let row_h = this.page_scroll_modal.row_h;
+                                    let page_id = this
+                                        .page
+                                        .as_ref()
+                                        .map(|page| page.descriptor.id.clone())
+                                        .unwrap_or_default();
                                     let mut items = Vec::with_capacity(range.len());
                                     for index in range {
                                         let selected_id = this.selected_id.clone();
@@ -138,7 +143,11 @@ impl AppRoot {
                                                 anim::Curve::Standard,
                                                 &this.clock,
                                             );
-                                        let cover_scale = if selected { 1.20 } else { 1.0 };
+                                        let scale = this.row_scale_factor(
+                                            format!("page:{page_id}:{}", row.id),
+                                            selected,
+                                        );
+                                        let cover_scale = 1.0 + scale * 0.20;
                                         items.push(
                                             div()
                                                 .id(gpui::ElementId::named_usize(

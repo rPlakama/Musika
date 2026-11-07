@@ -359,6 +359,8 @@ struct SearchRowPaint {
     row_h: f32,
     selected: bool,
     hovered: bool,
+    /// 0 = resting, 1 = selected/hovered. Animated with a short linear curve.
+    scale: f32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -579,7 +581,7 @@ struct AppRoot {
     visual_mode: bool,
     queue_selection: state::Selection,
     last_player_index: usize,
-    row_scales: std::collections::HashMap<String, anim::Behavior>,
+    row_scales: std::cell::RefCell<std::collections::HashMap<String, anim::Behavior>>,
     row_hover_colors: std::collections::HashMap<String, anim::ColorBehavior>,
     player: crate::player::Player,
     playback_error: Option<String>,
@@ -713,7 +715,7 @@ impl AppRoot {
             visual_mode: false,
             queue_selection: state::Selection::default(),
             last_player_index: 0,
-            row_scales: std::collections::HashMap::new(),
+            row_scales: std::cell::RefCell::new(std::collections::HashMap::new()),
             row_hover_colors: std::collections::HashMap::new(),
             player: crate::player::Player::new(),
             playback_error: None,

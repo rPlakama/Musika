@@ -371,14 +371,27 @@ impl AppRoot {
 
     pub(in crate::ui) fn reset_row_scales(&mut self) {
         self.clock.tick();
-        for scale in self.row_scales.values_mut() {
-            scale.target(1.0, 0.0, anim::Curve::Standard, &self.clock);
+        for scale in self.row_scales.borrow_mut().values_mut() {
+            scale.target(0.0, 0.0, anim::Curve::Linear, &self.clock);
         }
+    }
+
+    /// Row selection emphasis: 0 at rest, 1 when selected or hovered.
+    ///
+    /// The scale is animated linearly and briefly so cover and text emphasis
+    /// feel immediate rather than bouncy. Cover and font sizes are derived from
+    /// this factor by each row renderer.
+    pub(in crate::ui) fn row_scale_factor(&self, key: String, active: bool) -> f32 {
+        let target = if active { 1.0 } else { 0.0 };
+        let mut scales = self.row_scales.borrow_mut();
+        scales
+            .entry(key)
+            .or_insert_with(|| anim::Behavior::new(target))
+            .target(target, anim::MICRO_MS, anim::Curve::Linear, &self.clock)
     }
 
     pub(in crate::ui) fn select(&mut self, index: usize) {
         self.status_focus = None;
-        self.reset_row_scales();
         if !self.visual_mode {
             self.view.selection.clear();
         }

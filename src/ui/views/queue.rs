@@ -65,8 +65,12 @@ impl AppRoot {
                                                 .queue_selection
                                                 .contains(this.queue_cursor, index);
                                         let playing = index == this.player.index();
-                                        let emphasis = if selected { 1.08 } else { 1.0 };
-                                        let cover_scale = if selected { 1.20 } else { 1.0 };
+                                        let scale = this.row_scale_factor(
+                                            format!("queue:{}", track.id),
+                                            selected,
+                                        );
+                                        let emphasis = 1.0 + scale * 0.08;
+                                        let cover_scale = 1.0 + scale * 0.20;
                                         items.push(
                                             div()
                                                 .id(gpui::ElementId::named_usize(

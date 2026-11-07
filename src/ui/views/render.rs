@@ -267,6 +267,7 @@ impl Render for AppRoot {
         };
         if self
             .row_scales
+            .borrow()
             .values()
             .any(|scale| !scale.settled(&self.clock))
             || self

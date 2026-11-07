@@ -371,8 +371,9 @@ impl AppRoot {
 
     pub(in crate::ui) fn reset_row_scales(&mut self) {
         self.clock.tick();
+        let curve = self.visuals.motion.row_curve;
         for scale in self.row_scales.borrow_mut().values_mut() {
-            scale.target(0.0, 0.0, anim::Curve::Linear, &self.clock);
+            scale.target(0.0, 0.0, curve, &self.clock);
         }
     }
 
@@ -382,21 +383,24 @@ impl AppRoot {
     /// longer to settle. Both are linear; covers stay brief, text is 80%
     /// slower so the glyphs do not feel like they snapped into place.
     pub(in crate::ui) fn row_scale_factor(&self, key: &str, active: bool) -> f32 {
-        self.row_emphasis(key, active, anim::ROW_SCALE_MS, "cover")
+        let motion = self.visuals.motion;
+        self.row_emphasis(key, active, motion.row_cover_ms, "cover")
     }
 
     pub(in crate::ui) fn row_text_factor(&self, key: &str, active: bool) -> f32 {
-        self.row_emphasis(key, active, anim::ROW_TEXT_MS, "text")
+        let motion = self.visuals.motion;
+        self.row_emphasis(key, active, motion.row_text_ms, "text")
     }
 
     fn row_emphasis(&self, key: &str, active: bool, duration: f32, kind: &str) -> f32 {
         let target = if active { 1.0 } else { 0.0 };
         let key = format!("{key}:{kind}");
+        let curve = self.visuals.motion.row_curve;
         let mut scales = self.row_scales.borrow_mut();
         scales
             .entry(key)
             .or_insert_with(|| anim::Behavior::new(target))
-            .target(target, duration, anim::Curve::Linear, &self.clock)
+            .target(target, duration, curve, &self.clock)
     }
 
     pub(in crate::ui) fn select(&mut self, index: usize) {

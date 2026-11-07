@@ -14,11 +14,6 @@ pub const EMPHASIZED_MS: f32 = 240.0;
 /// Alt quick-actions: 30% faster than the standard emphasized motion.
 pub const ALT_MS: f32 = EMPHASIZED_MS * 0.7;
 pub const MICRO_MS: f32 = 80.0;
-/// Selected-row cover scaling: brief so the row feels immediate.
-pub const ROW_SCALE_MS: f32 = 80.0;
-/// Selected-row text emphasis: 80% slower than the cover so the glyphs settle
-/// instead of popping in ahead of the image.
-pub const ROW_TEXT_MS: f32 = ROW_SCALE_MS * 1.8;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Curve {
@@ -182,16 +177,6 @@ mod tests {
         let out_back = Curve::OutBack.sample(0.6);
         assert!(out_back > 1.0, "OutBack overshoot at the crest: {out_back}");
         assert!((Curve::OutCubic.sample(0.5) - 0.875).abs() < 1e-5);
-    }
-
-    #[test]
-    fn row_scale_uses_a_short_linear_curve() {
-        assert_eq!(MICRO_MS, 80.0);
-        assert_eq!(ROW_SCALE_MS, 80.0);
-        assert_eq!(ROW_TEXT_MS, 144.0);
-        for t in [0.0, 0.25, 0.5, 0.75, 1.0] {
-            assert!((Curve::Linear.sample(t) - t).abs() < 1e-6);
-        }
     }
 
     #[test]

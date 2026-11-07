@@ -135,7 +135,8 @@ impl AppRoot {
                             let key = format!("library:{}", row.id);
                             let scale = this.row_scale_factor(&key, selected);
                             let emphasis = this.row_text_factor(&key, selected);
-                            let cover_scale = 1.0 + scale * 0.20;
+                            let cover_scale = this.visuals.row_cover_scale(scale);
+                            let emphasis = this.visuals.row_text_emphasis(emphasis);
                             let base_fill = if striped {
                                 palette::surface_container_lowest()
                             } else {
@@ -198,7 +199,7 @@ impl AppRoot {
                                             selected,
                                             height: row_h,
                                             cover_scale,
-                                            emphasis: 1.0 + emphasis * 0.08,
+                                            emphasis,
                                         },
                                     )),
                             );
@@ -221,6 +222,7 @@ impl AppRoot {
     /// surface supplies the flags that decide which cells are materialized.
     pub(in crate::ui) fn row_content(&self, row: &state::Row, paint: RowPaint) -> gpui::Div {
         let emphasis = paint.emphasis;
+        let fonts = self.visuals.fonts;
         let current = self.line_search_current(paint.surface, paint.index);
         let mut body = div().flex().items_center().min_w_0().flex_1();
         if paint.flags.show_cover {
@@ -232,7 +234,7 @@ impl AppRoot {
             )));
         }
         let mut cells = div().flex().flex_col().min_w_0().flex_1().overflow_hidden();
-        let title_size = if paint.flags.compact { 15.0 } else { 18.0 } * emphasis;
+        let title_size = fonts.row_title(paint.flags.compact) * emphasis;
         let title = div()
             .text_size(px(title_size))
             .font_weight(if paint.selected {
@@ -256,7 +258,7 @@ impl AppRoot {
         cells = cells.child(title);
         if paint.flags.show_subtitle && !row.subtitle.is_empty() {
             let subtitle = div()
-                .text_size(px(if paint.flags.compact { 11.0 } else { 12.0 } * emphasis))
+                .text_size(px(fonts.row_subtitle(paint.flags.compact) * emphasis))
                 .text_color(rgb(palette::on_surface_variant()))
                 .overflow_hidden()
                 .child(highlighted_text(
@@ -278,7 +280,7 @@ impl AppRoot {
         if paint.flags.show_length && !row.meta.is_empty() {
             trailing = trailing.child(
                 div()
-                    .text_size(px(11.0 * emphasis))
+                    .text_size(px(fonts.row_meta * emphasis))
                     .text_color(rgb(palette::on_surface_variant()))
                     .child(highlighted_text(
                         &row.meta,
@@ -297,7 +299,7 @@ impl AppRoot {
         if row.rating > 0 {
             trailing = trailing.child(
                 div()
-                    .text_size(px(10.0))
+                    .text_size(px(fonts.row_rating))
                     .text_color(rgb(palette::primary()))
                     .child(row.rating.to_string()),
             );

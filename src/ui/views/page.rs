@@ -146,7 +146,8 @@ impl AppRoot {
                                         let key = format!("page:{page_id}:{}", row.id);
                                         let scale = this.row_scale_factor(&key, selected);
                                         let emphasis = this.row_text_factor(&key, selected);
-                                        let cover_scale = 1.0 + scale * 0.20;
+                                        let cover_scale = this.visuals.row_cover_scale(scale);
+                                        let emphasis = this.visuals.row_text_emphasis(emphasis);
                                         items.push(
                                             div()
                                                 .id(gpui::ElementId::named_usize(
@@ -198,7 +199,7 @@ impl AppRoot {
                                                         selected,
                                                         height: row_h,
                                                         cover_scale,
-                                                        emphasis: 1.0 + emphasis * 0.08,
+                                                        emphasis,
                                                     },
                                                 )),
                                         );

@@ -69,7 +69,9 @@ impl AppRoot {
             scale,
             text_scale,
         } = paint;
-        let emphasis = 1.0 + text_scale * 0.08;
+        let fonts = self.visuals.fonts;
+        let emphasis = self.visuals.search_text_emphasis(text_scale);
+        let cover_scale = self.visuals.search_cover_scale(scale);
         let cover = cover_source(&row.cover_url);
         div()
             .id(("search-row", index))
@@ -100,7 +102,7 @@ impl AppRoot {
                 }
                 this.activate_search_result(cx);
             }))
-            .child(art_scaled(cover, row_h * 0.714, 1.0 + scale * 0.08))
+            .child(art_scaled(cover, row_h * 0.714, cover_scale))
             .child(
                 div()
                     .flex()
@@ -109,7 +111,7 @@ impl AppRoot {
                     .flex_1()
                     .child(
                         div()
-                            .text_size(px(15.0 * emphasis))
+                            .text_size(px(fonts.search_title * emphasis))
                             .font_weight(if selected {
                                 gpui::FontWeight::SEMIBOLD
                             } else {
@@ -126,7 +128,7 @@ impl AppRoot {
                     )
                     .child(
                         div()
-                            .text_size(px(11.0 * emphasis))
+                            .text_size(px(fonts.search_subtitle * emphasis))
                             .text_color(rgb(if selected {
                                 palette::on_primary_container()
                             } else {
@@ -139,7 +141,7 @@ impl AppRoot {
             )
             .child(
                 div()
-                    .text_size(px(11.0 * emphasis))
+                    .text_size(px(fonts.search_meta * emphasis))
                     .text_color(rgb(if selected {
                         palette::on_primary_container()
                     } else {

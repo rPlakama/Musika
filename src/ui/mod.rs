@@ -25,6 +25,7 @@
 //! - `views/` — render-only surfaces (shell, library, page, fullscreen, queue, overlays).
 //! - `bridge/` — tokio request families and the single `Event` channel.
 //! - `widgets/` — shared text editing, media and row primitives.
+//! - `visuals/` — centralized typography and motion tokens.
 
 mod anim;
 mod app;
@@ -43,6 +44,7 @@ mod remote_images;
 mod scroll_modal;
 mod state;
 mod views;
+mod visuals;
 mod widgets;
 
 use self::widgets::media::{
@@ -63,6 +65,7 @@ use quick_actions::{AltGesture, Direction, QuickKind, QuickMenu, QuickVerb};
 use state::{
     PageDescriptor, PageKind, PageState, Row, RowKind, RowWindow, Scope, Travel, ViewState,
 };
+use visuals::Visuals;
 
 actions!(
     musika,
@@ -584,6 +587,7 @@ struct AppRoot {
     visual_mode: bool,
     queue_selection: state::Selection,
     last_player_index: usize,
+    visuals: Visuals,
     row_scales: std::cell::RefCell<std::collections::HashMap<String, anim::Behavior>>,
     row_hover_colors: std::collections::HashMap<String, anim::ColorBehavior>,
     player: crate::player::Player,
@@ -718,6 +722,7 @@ impl AppRoot {
             visual_mode: false,
             queue_selection: state::Selection::default(),
             last_player_index: 0,
+            visuals: Visuals::default(),
             row_scales: std::cell::RefCell::new(std::collections::HashMap::new()),
             row_hover_colors: std::collections::HashMap::new(),
             player: crate::player::Player::new(),

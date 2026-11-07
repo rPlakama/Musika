@@ -68,8 +68,9 @@ impl AppRoot {
                                         let key = format!("queue:{}", track.id);
                                         let scale = this.row_scale_factor(&key, selected);
                                         let text_scale = this.row_text_factor(&key, selected);
-                                        let emphasis = 1.0 + text_scale * 0.08;
-                                        let cover_scale = 1.0 + scale * 0.20;
+                                        let emphasis = this.visuals.row_text_emphasis(text_scale);
+                                        let cover_scale = this.visuals.row_cover_scale(scale);
+                                        let fonts = this.visuals.fonts;
                                         items.push(
                                             div()
                                                 .id(gpui::ElementId::named_usize(
@@ -116,7 +117,9 @@ impl AppRoot {
                                                                 .gap_1()
                                                                 .child(
                                                                 div()
-                                                                    .text_size(px(14.0 * emphasis))
+                                                                    .text_size(px(fonts
+                                                                        .queue_title
+                                                                        * emphasis))
                                                                     .font_weight(if active {
                                                                         gpui::FontWeight::BOLD
                                                                     } else {
@@ -143,7 +146,9 @@ impl AppRoot {
                                                         )
                                                         .child(
                                                             div()
-                                                                .text_size(px(10.0 * emphasis))
+                                                                .text_size(px(
+                                                                    fonts.queue_meta * emphasis
+                                                                ))
                                                                 .text_color(rgb(
                                                                     palette::on_surface_variant(),
                                                                 ))

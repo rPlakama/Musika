@@ -25,7 +25,7 @@ impl LyricsLayout {
         Self {
             start: 0,
             rows: Vec::new(),
-            gap: base_size * 0.5,
+            gap: base_size * 1.2,
             base_size,
             text_height: base_size * LINE_HEIGHT_SCALE,
             width: 0.0,
@@ -47,7 +47,7 @@ where
     F: Fn(&str, f32) -> usize,
 {
     let base = base_size.max(1.0);
-    let gap = base * 0.5;
+    let gap = base * 1.2;
     let text_height = base * LINE_HEIGHT_SCALE;
     if lines.is_empty() || width <= 0.0 || height <= 0.0 {
         return LyricsLayout::empty(base);
@@ -187,8 +187,8 @@ mod tests {
         let lines = lines(10);
         let small = layout(&lines, 4, 500.0, 300.0, 13.0, char_lines);
         let large = layout(&lines, 4, 500.0, 300.0, 22.0, char_lines);
-        assert!((small.gap - 13.0 * 0.5).abs() < 0.01);
-        assert!((large.gap - 22.0 * 0.5).abs() < 0.01);
+        assert!((small.gap - 13.0 * 1.2).abs() < 0.01);
+        assert!((large.gap - 22.0 * 1.2).abs() < 0.01);
         assert!(small.rows.len() >= large.rows.len());
     }
 }

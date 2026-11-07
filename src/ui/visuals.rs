@@ -116,9 +116,9 @@ impl Default for Motion {
             search_cover_selected: 0.08,
             search_text_selected: 0.08,
             lyrics_scrim: 0.525,
-            lyrics_line_ms: 50.0,
-            lyrics_fade_ms: 120.0,
-            lyrics_scroll_ms: 300.0,
+            lyrics_line_ms: 400.0,
+            lyrics_fade_ms: 400.0,
+            lyrics_scroll_ms: 400.0,
         }
     }
 }
@@ -137,6 +137,6 @@ mod tests {
         assert_eq!(visuals.fonts.row_title(false), 18.0);
         assert_eq!(visuals.fonts.row_subtitle(true), 11.0);
         assert_eq!(visuals.motion.lyrics_scrim, 0.525);
-        assert_eq!(visuals.motion.lyrics_line_ms, 50.0);
+        assert_eq!(visuals.motion.lyrics_line_ms, 400.0);
     }
 }

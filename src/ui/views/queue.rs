@@ -65,11 +65,10 @@ impl AppRoot {
                                                 .queue_selection
                                                 .contains(this.queue_cursor, index);
                                         let playing = index == this.player.index();
-                                        let scale = this.row_scale_factor(
-                                            format!("queue:{}", track.id),
-                                            selected,
-                                        );
-                                        let emphasis = 1.0 + scale * 0.08;
+                                        let key = format!("queue:{}", track.id);
+                                        let scale = this.row_scale_factor(&key, selected);
+                                        let text_scale = this.row_text_factor(&key, selected);
+                                        let emphasis = 1.0 + text_scale * 0.08;
                                         let cover_scale = 1.0 + scale * 0.20;
                                         items.push(
                                             div()

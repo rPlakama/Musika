@@ -67,8 +67,9 @@ impl AppRoot {
             selected,
             hovered,
             scale,
+            text_scale,
         } = paint;
-        let emphasis = 1.0 + scale * 0.08;
+        let emphasis = 1.0 + text_scale * 0.08;
         let cover = cover_source(&row.cover_url);
         div()
             .id(("search-row", index))
@@ -221,10 +222,10 @@ impl AppRoot {
                         let Some(row) = rows.get(index) else { break };
                         let selected = index == cursor || search.selection.contains(cursor, index);
                         let hovered = this.hovered_row == Some(index);
-                        let scale = this.row_scale_factor(
-                            format!("search:{scope}:{}", row.id),
-                            selected || hovered,
-                        );
+                        let key = format!("search:{scope}:{}", row.id);
+                        let active = selected || hovered;
+                        let scale = this.row_scale_factor(&key, active);
+                        let text_scale = this.row_text_factor(&key, active);
                         items.push(this.search_result_row(
                             cx,
                             row,
@@ -235,6 +236,7 @@ impl AppRoot {
                                 selected,
                                 hovered,
                                 scale,
+                                text_scale,
                             },
                         ));
                     }

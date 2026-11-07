@@ -132,8 +132,9 @@ impl AppRoot {
                                 );
                                 continue;
                             };
-                            let scale =
-                                this.row_scale_factor(format!("library:{}", row.id), selected);
+                            let key = format!("library:{}", row.id);
+                            let scale = this.row_scale_factor(&key, selected);
+                            let emphasis = this.row_text_factor(&key, selected);
                             let cover_scale = 1.0 + scale * 0.20;
                             let base_fill = if striped {
                                 palette::surface_container_lowest()
@@ -197,6 +198,7 @@ impl AppRoot {
                                             selected,
                                             height: row_h,
                                             cover_scale,
+                                            emphasis: 1.0 + emphasis * 0.08,
                                         },
                                     )),
                             );
@@ -218,9 +220,7 @@ impl AppRoot {
     /// One row body for every list surface. The data lives in `Row`; the
     /// surface supplies the flags that decide which cells are materialized.
     pub(in crate::ui) fn row_content(&self, row: &state::Row, paint: RowPaint) -> gpui::Div {
-        // Cover scale 1.0–1.2 maps to font emphasis 1.0–1.08; both animate
-        // together from the same row scale factor.
-        let emphasis = 1.0 + (paint.cover_scale - 1.0) * 0.4;
+        let emphasis = paint.emphasis;
         let current = self.line_search_current(paint.surface, paint.index);
         let mut body = div().flex().items_center().min_w_0().flex_1();
         if paint.flags.show_cover {

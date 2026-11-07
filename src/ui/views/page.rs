@@ -143,10 +143,9 @@ impl AppRoot {
                                                 anim::Curve::Standard,
                                                 &this.clock,
                                             );
-                                        let scale = this.row_scale_factor(
-                                            format!("page:{page_id}:{}", row.id),
-                                            selected,
-                                        );
+                                        let key = format!("page:{page_id}:{}", row.id);
+                                        let scale = this.row_scale_factor(&key, selected);
+                                        let emphasis = this.row_text_factor(&key, selected);
                                         let cover_scale = 1.0 + scale * 0.20;
                                         items.push(
                                             div()
@@ -199,6 +198,7 @@ impl AppRoot {
                                                         selected,
                                                         height: row_h,
                                                         cover_scale,
+                                                        emphasis: 1.0 + emphasis * 0.08,
                                                     },
                                                 )),
                                         );

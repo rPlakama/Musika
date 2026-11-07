@@ -378,16 +378,25 @@ impl AppRoot {
 
     /// Row selection emphasis: 0 at rest, 1 when selected or hovered.
     ///
-    /// The scale is animated linearly and briefly so cover and text emphasis
-    /// feel immediate rather than bouncy. Cover and font sizes are derived from
-    /// this factor by each row renderer.
-    pub(in crate::ui) fn row_scale_factor(&self, key: String, active: bool) -> f32 {
+    /// Cover and text use separate factors because the text needs a little
+    /// longer to settle. Both are linear; covers stay brief, text is 80%
+    /// slower so the glyphs do not feel like they snapped into place.
+    pub(in crate::ui) fn row_scale_factor(&self, key: &str, active: bool) -> f32 {
+        self.row_emphasis(key, active, anim::ROW_SCALE_MS, "cover")
+    }
+
+    pub(in crate::ui) fn row_text_factor(&self, key: &str, active: bool) -> f32 {
+        self.row_emphasis(key, active, anim::ROW_TEXT_MS, "text")
+    }
+
+    fn row_emphasis(&self, key: &str, active: bool, duration: f32, kind: &str) -> f32 {
         let target = if active { 1.0 } else { 0.0 };
+        let key = format!("{key}:{kind}");
         let mut scales = self.row_scales.borrow_mut();
         scales
             .entry(key)
             .or_insert_with(|| anim::Behavior::new(target))
-            .target(target, anim::MICRO_MS, anim::Curve::Linear, &self.clock)
+            .target(target, duration, anim::Curve::Linear, &self.clock)
     }
 
     pub(in crate::ui) fn select(&mut self, index: usize) {

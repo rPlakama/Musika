@@ -351,6 +351,7 @@ struct RowPaint {
     selected: bool,
     height: f32,
     cover_scale: f32,
+    emphasis: f32,
 }
 
 struct SearchRowPaint {
@@ -361,6 +362,8 @@ struct SearchRowPaint {
     hovered: bool,
     /// 0 = resting, 1 = selected/hovered. Animated with a short linear curve.
     scale: f32,
+    /// Text factor, animated separately and 80% slower than the cover.
+    text_scale: f32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

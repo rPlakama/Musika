@@ -1152,6 +1152,7 @@ impl AppRoot {
     }
 
     fn follow_page(&mut self, animated: bool) {
+        self.status_focus = None;
         self.clock.tick();
         let Some(page) = self.page.as_ref() else { return };
         self.selected_id = page.rows.get(page.cursor).map(|row| row.id.clone());
@@ -1170,6 +1171,7 @@ impl AppRoot {
     }
 
     fn follow_queue(&mut self, animated: bool) {
+        self.status_focus = None;
         self.clock.tick();
         self.selected_id = self
             .player
@@ -1181,6 +1183,7 @@ impl AppRoot {
     }
 
     fn land_library(&mut self, index: usize) {
+        self.status_focus = None;
         self.reset_row_scales();
         let cursor = self
             .library_scroll
@@ -1193,6 +1196,7 @@ impl AppRoot {
     }
 
     fn land_page(&mut self, index: usize) {
+        self.status_focus = None;
         self.reset_row_scales();
         let Some(page) = self.page.as_mut() else { return };
         let cursor = self.page_scroll_modal.land(page.rows.len(), index);
@@ -1202,6 +1206,7 @@ impl AppRoot {
     }
 
     fn land_queue(&mut self, index: usize) {
+        self.status_focus = None;
         self.reset_row_scales();
         let cursor = self.queue_scroll_modal.land(self.player.len(), index);
         self.queue_cursor = cursor;
@@ -1483,6 +1488,7 @@ impl AppRoot {
     }
 
     fn select(&mut self, index: usize) {
+        self.status_focus = None;
         self.reset_row_scales();
         if !self.visual_mode {
             self.view.selection.clear();
@@ -1499,6 +1505,7 @@ impl AppRoot {
     }
 
     fn on_move_down(&mut self, _: &MoveDown, _window: &mut Window, cx: &mut Context<Self>) {
+        self.status_focus = None;
         if let Some(search) = self.search.as_mut() {
             search.move_cursor(1);
             cx.notify();
@@ -1526,6 +1533,7 @@ impl AppRoot {
     }
 
     fn on_move_up(&mut self, _: &MoveUp, _window: &mut Window, cx: &mut Context<Self>) {
+        self.status_focus = None;
         if let Some(search) = self.search.as_mut() {
             search.move_cursor(-1);
             cx.notify();
@@ -1624,10 +1632,7 @@ impl AppRoot {
         }
         self.alt_menu = Some(menu);
         self.alt_target = None;
-        self.alt_anchor = Some((
-            (self.win_w - 42.0).max(30.0),
-            (self.win_h * 0.0648 * 0.5).max(30.0),
-        ));
+        self.alt_anchor = Some(self.status_anchor());
         self.alt_spawn.target(
             1.0,
             anim::EMPHASIZED_MS,
@@ -1699,6 +1704,7 @@ impl AppRoot {
     }
 
     fn on_queue_toggle(&mut self, _: &QueueToggle, _window: &mut Window, cx: &mut Context<Self>) {
+        self.status_focus = None;
         self.queue_open = !self.queue_open;
         if self.queue_open {
             self.land_queue(self.player.index());
@@ -2119,6 +2125,7 @@ impl AppRoot {
     }
 
     fn open_search(&mut self, typing: bool) {
+        self.status_focus = None;
         self.search_open = true;
         self.search = Some(SearchState {
             editor: line_search::LineEditor::new(),
@@ -2335,6 +2342,13 @@ impl AppRoot {
         )
     }
 
+    fn status_anchor(&self) -> (f32, f32) {
+        (
+            (self.win_w - 42.0).max(30.0),
+            (self.win_h * 0.0648 * 0.5).max(30.0),
+        )
+    }
+
     fn alt_snapshot(&self) -> Option<(QuickMenu, AltTarget, (f32, f32))> {
         if self.fullscreen {
             let track = self.player.current()?;
@@ -2377,6 +2391,26 @@ impl AppRoot {
                 menu,
                 target,
                 self.fullscreen_anchor(FullscreenFocus::Title),
+            ));
+        }
+        if let Some(focus) = self.status_focus {
+            // The scoped status region owns Alt. Sync has no Alt action; Wipe
+            // opens the same maintenance board as the trashcan click.
+            if focus != 1 {
+                return None;
+            }
+            return Some((
+                QuickMenu::wipe(),
+                AltTarget {
+                    kind: RowKind::Song,
+                    id: String::new(),
+                    album_id: String::new(),
+                    song_id: String::new(),
+                    playlist_id: String::new(),
+                    ids: Vec::new(),
+                    selection: false,
+                },
+                self.status_anchor(),
             ));
         }
         if let Some(search) = self.search.as_ref().filter(|_| self.search_open) {
@@ -2480,6 +2514,9 @@ impl AppRoot {
         let Some((menu, target, anchor)) = self.alt_snapshot() else {
             return;
         };
+        if self.status_focus.is_some() {
+            self.alt = AltGesture::new();
+        }
         if !self.alt.arm(&menu) {
             return;
         }
@@ -3933,6 +3970,7 @@ impl AppRoot {
     }
 
     fn open_descriptor(&mut self, descriptor: PageDescriptor) {
+        self.status_focus = None;
         self.pending_page_reveal = None;
         let profile = page_profile::PageProfile::for_descriptor(&descriptor);
         if profile.notes {

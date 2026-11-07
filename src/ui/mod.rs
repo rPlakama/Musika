@@ -181,6 +181,7 @@ enum LineSurface {
     Page,
     Library,
     Lyrics,
+    Status,
 }
 
 struct SearchState {
@@ -454,6 +455,7 @@ struct AppRoot {
     line_search_anim: anim::Behavior,
     line_search_snapshot: Vec<line_search::LineTarget>,
     line_search_surfaces: Vec<LineSurface>,
+    status_focus: Option<usize>,
     line_search_denied_at: Option<f64>,
     line_search_denied_query: String,
     alt: AltGesture,
@@ -581,6 +583,7 @@ impl AppRoot {
             line_search_anim: anim::Behavior::new(0.0),
             line_search_snapshot: Vec::new(),
             line_search_surfaces: Vec::new(),
+            status_focus: None,
             line_search_denied_at: None,
             line_search_denied_query: String::new(),
             alt: AltGesture::new(),
@@ -794,6 +797,31 @@ impl AppRoot {
                     self.fullscreen_album = Some((id, starred, rating));
                 }
             }
+            Event::LibrarySynced => {
+                self.marks.requested = None;
+                self.bridge.refresh_header();
+                self.reload();
+                if let Some(page) = self.page.as_ref() {
+                    let descriptor = page.descriptor.clone();
+                    self.bridge.load_page(descriptor);
+                }
+                self.push_toast("Library synced".to_string(), ToastKind::Notice, None);
+            }
+            Event::Wiped { scope } => {
+                self.marks.requested = None;
+                self.bridge.refresh_header();
+                self.reload();
+                if let Some(page) = self.page.as_ref() {
+                    let descriptor = page.descriptor.clone();
+                    self.bridge.load_page(descriptor);
+                }
+                self.push_toast(
+                    format!("Wiped {scope}"),
+                    ToastKind::Notice,
+                    None,
+                );
+            }
+
             Event::QueueAppend { tracks } => {
                 self.player.append(tracks);
             }
@@ -1579,8 +1607,37 @@ impl AppRoot {
         cx.notify();
     }
 
+    fn activate_status(&mut self, row: usize) {
+        self.status_focus = Some(row.min(1));
+        match row {
+            0 => self.bridge.sync(),
+            _ => self.open_wipe_menu(),
+        }
+    }
+
+    fn open_wipe_menu(&mut self) {
+        self.clock.tick();
+        let menu = QuickMenu::wipe();
+        self.alt = AltGesture::with_sticky(true);
+        if !self.alt.arm(&menu) {
+            return;
+        }
+        self.alt_menu = Some(menu);
+        self.alt_target = None;
+        self.alt_anchor = Some((
+            (self.win_w - 42.0).max(30.0),
+            (self.win_h * 0.0648 * 0.5).max(30.0),
+        ));
+        self.alt_spawn.target(
+            1.0,
+            anim::EMPHASIZED_MS,
+            anim::Curve::OutBack,
+            &self.clock,
+        );
+    }
+
     fn on_refresh(&mut self, _: &Refresh, _window: &mut Window, cx: &mut Context<Self>) {
-        self.reload();
+        self.bridge.sync();
         cx.notify();
     }
 
@@ -2465,6 +2522,21 @@ impl AppRoot {
     }
 
     fn dispatch_quick(&mut self, verb: QuickVerb) {
+        match verb {
+            QuickVerb::WipeLibrary => {
+                self.bridge.wipe("library".to_string());
+                return;
+            }
+            QuickVerb::WipeIndexes => {
+                self.bridge.wipe("indexes".to_string());
+                return;
+            }
+            QuickVerb::WipeCovers => {
+                self.bridge.wipe("covers".to_string());
+                return;
+            }
+            _ => {}
+        }
         let Some(target) = self.alt_target.clone() else { return };
         if target.selection {
             match verb {
@@ -2531,6 +2603,7 @@ impl AppRoot {
                 self.bridge
                     .quick_download(target.queue_kind().to_string(), target.id.clone(), on);
             }
+            QuickVerb::WipeLibrary | QuickVerb::WipeIndexes | QuickVerb::WipeCovers => {}
         }
     }
 
@@ -2621,6 +2694,9 @@ impl AppRoot {
             LineSurface::Lyrics => {
                 self.lyrics_window_start = hit.row.saturating_sub(2);
             }
+            LineSurface::Status => {
+                self.status_focus = Some(hit.row.min(1));
+            }
         }
     }
 
@@ -2633,14 +2709,18 @@ impl AppRoot {
 
     fn line_search_commit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(hit) = self.line_search.current_hit() {
+            let status = self.line_search_surfaces.get(hit.target) == Some(&LineSurface::Status);
             self.apply_line_hit(hit);
             self.close_line_search();
-            self.on_enter(&Enter, window, cx);
+            if status {
+                self.activate_status(hit.row);
+            } else {
+                self.on_enter(&Enter, window, cx);
+            }
         } else if self.line_search.query().is_empty() {
             self.close_line_search();
         } else {
             self.flash_line_search_denied();
-            window.request_animation_frame();
         }
         cx.notify();
     }
@@ -3074,6 +3154,14 @@ impl AppRoot {
             }
             return (targets, surfaces);
         }
+
+        // The status bar's two objects are part of the plain-window buffer,
+        // before the active list, exactly like the legacy `/` contract.
+        targets.push(LineTarget::new(vec![
+            Some(LineRow::new("Sync", "Refresh the library", "")),
+            Some(LineRow::new("Wipe", "Clear cached data", "")),
+        ]));
+        surfaces.push(LineSurface::Status);
 
         if let Some(page) = self.page.as_ref() {
             let range = self.page_scroll_modal.visible_range(page.rows.len());
@@ -3590,6 +3678,20 @@ impl AppRoot {
             self.line_search_commit(_window, cx);
             return;
         }
+        if self.alt.armed && self.alt.sticky {
+            let menu = self.alt_menu.clone();
+            if let Some(menu) = menu
+                && let Some(verb) = self.alt.confirm_plan(&menu)
+            {
+                self.dispatch_quick(verb);
+            }
+            self.alt.cancel();
+            self.alt_menu = None;
+            self.alt_target = None;
+            self.alt_spawn.target(0.0, anim::EMPHASIZED_MS, anim::Curve::Accelerate, &self.clock);
+            cx.notify();
+            return;
+        }
         if self.search.is_some() {
             self.activate_search_result(cx);
             return;
@@ -3739,6 +3841,14 @@ impl AppRoot {
     fn on_back(&mut self, _: &Back, _window: &mut Window, cx: &mut Context<Self>) {
         if self.line_search.open {
             self.close_line_search();
+            cx.notify();
+            return;
+        }
+        if self.alt.armed || self.alt_menu.is_some() {
+            self.alt.cancel();
+            self.alt_menu = None;
+            self.alt_target = None;
+            self.alt_spawn.target(0.0, anim::EMPHASIZED_MS, anim::Curve::Accelerate, &self.clock);
             cx.notify();
             return;
         }
@@ -3908,7 +4018,7 @@ impl AppRoot {
         }
     }
 
-    fn top_bar(&self, _cx: &Context<Self>) -> impl IntoElement {
+    fn top_bar(&self, cx: &Context<Self>) -> impl IntoElement {
         let (welcome, offline) = match self.header.as_ref() {
             Some(header) => (
                 format!("Welcome, {}", header.username),
@@ -3971,8 +4081,48 @@ impl AppRoot {
                             .text_ellipsis()
                             .child(report),
                     )
-                    .child(icon("reload-ui-2-svgrepo-com.svg", 18.0, palette::on_surface()))
-                    .child(icon("delete-outline.svg", 18.0, palette::on_surface())),
+                    .child(
+                        div()
+                            .id("status-sync")
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .rounded_md()
+                            .border_1()
+                            .border_color(rgb(if self.status_focus == Some(0) {
+                                palette::primary()
+                            } else {
+                                palette::surface_container_low()
+                            }))
+                            .p(px(3.0))
+                            .cursor_pointer()
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.activate_status(0);
+                                cx.notify();
+                            }))
+                            .child(icon("reload-ui-2-svgrepo-com.svg", 18.0, palette::on_surface())),
+                    )
+                    .child(
+                        div()
+                            .id("status-wipe")
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .rounded_md()
+                            .border_1()
+                            .border_color(rgb(if self.status_focus == Some(1) {
+                                palette::primary()
+                            } else {
+                                palette::surface_container_low()
+                            }))
+                            .p(px(3.0))
+                            .cursor_pointer()
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.activate_status(1);
+                                cx.notify();
+                            }))
+                            .child(icon("delete-outline.svg", 18.0, palette::on_surface())),
+                    ),
             )
             .child(
                 div()

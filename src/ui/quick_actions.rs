@@ -54,6 +54,9 @@ pub enum QuickVerb {
     GoToAlbum,
     Download { on: bool },
     PlayPlaylist,
+    WipeLibrary,
+    WipeIndexes,
+    WipeCovers,
 }
 
 impl QuickVerb {
@@ -71,6 +74,9 @@ impl QuickVerb {
             QuickVerb::Download { on: true } => "Download",
             QuickVerb::Download { on: false } => "Remove Download",
             QuickVerb::PlayPlaylist => "Play Playlist",
+            QuickVerb::WipeLibrary => "Wipe Library",
+            QuickVerb::WipeIndexes => "Wipe Search Index",
+            QuickVerb::WipeCovers => "Wipe Covers",
         }
     }
 
@@ -87,6 +93,7 @@ impl QuickVerb {
             QuickVerb::Download { on: true } => "outline-download.svg",
             QuickVerb::Download { on: false } => "baseline-download.svg",
             QuickVerb::PlayPlaylist => "play-1001-svgrepo-com.svg",
+            QuickVerb::WipeLibrary | QuickVerb::WipeIndexes | QuickVerb::WipeCovers => "delete-outline.svg",
         }
     }
 
@@ -267,6 +274,16 @@ impl QuickMenu {
             )),
             west: Some(single_slot(QuickVerb::GoToArtist)),
             east: Some(single_slot(QuickVerb::Download { on: !cached })),
+        }
+    }
+
+    /// The status-bar trashcan: the maintenance chooser.
+    pub fn wipe() -> Self {
+        Self {
+            north: Some(single_slot(QuickVerb::WipeLibrary)),
+            south: Some(single_slot(QuickVerb::WipeIndexes)),
+            west: None,
+            east: Some(single_slot(QuickVerb::WipeCovers)),
         }
     }
 

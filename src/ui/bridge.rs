@@ -76,6 +76,10 @@ pub enum Event {
         starred: bool,
         rating: u8,
     },
+    LibrarySynced,
+    Wiped {
+        scope: String,
+    },
     QueueAppend {
         tracks: Vec<crate::player::Track>,
     },
@@ -775,6 +779,48 @@ impl Bridge {
                     starred,
                     rating: rating.clamp(0, 5) as u8,
                 });
+            }
+        });
+    }
+
+    /// Run a normal (shallow) library sync against the configured server.
+    pub fn sync(&self) {
+        let tx = self.tx.clone();
+        crate::app::runtime().spawn(async move {
+            let Some(dbs) = crate::app::dbs() else { return };
+            let Ok(client) = crate::session::client(&dbs).await else {
+                let _ = tx.send(Event::Error("Sync needs a live session.".to_string()));
+                return;
+            };
+            match crate::index::sync_library(&dbs, Arc::new(client), false, |_| {}).await {
+                Ok(_) => {
+                    let _ = tx.send(Event::LibrarySynced);
+                }
+                Err(err) => {
+                    let _ = tx.send(Event::Error(format!("Library sync failed: {err:#}")));
+                }
+            }
+        });
+    }
+
+    /// Wipe a maintenance scope. Library/index/cover scopes are independent.
+    pub fn wipe(&self, scope: String) {
+        let tx = self.tx.clone();
+        crate::app::runtime().spawn(async move {
+            let Some(dbs) = crate::app::dbs() else { return };
+            let result = match scope.as_str() {
+                "library" => crate::db::wipe_library(&dbs).await,
+                "indexes" => crate::db::wipe_indexes(&dbs).await,
+                "covers" => crate::db::wipe_covers(&dbs).await,
+                other => Err(anyhow::anyhow!("unknown wipe scope: {other}")),
+            };
+            match result {
+                Ok(()) => {
+                    let _ = tx.send(Event::Wiped { scope });
+                }
+                Err(err) => {
+                    let _ = tx.send(Event::Error(format!("Wipe failed: {err:#}")));
+                }
             }
         });
     }

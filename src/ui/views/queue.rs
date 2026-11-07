@@ -65,12 +65,10 @@ impl AppRoot {
                                                 .queue_selection
                                                 .contains(this.queue_cursor, index);
                                         let playing = index == this.player.index();
-                                        let (scale, text_scale) = this.row_emphasis(
-                                            LineSurface::Queue,
-                                            0,
-                                            index,
-                                            selected,
-                                        );
+                                        let hovered = this.hovered_row == Some(index);
+                                        let active = selected || hovered;
+                                        let (scale, text_scale) =
+                                            this.row_emphasis(LineSurface::Queue, 0, index, active);
                                         let emphasis = this.visuals.row_text_emphasis(text_scale);
                                         let cover_scale = this.visuals.row_cover_scale(scale);
                                         let fonts = this.visuals.fonts;
@@ -94,6 +92,19 @@ impl AppRoot {
                                                 .when(selected, |this| {
                                                     this.bg(rgb(palette::secondary_container()))
                                                 })
+                                                .when(hovered && !selected, |this| {
+                                                    this.bg(rgb(palette::surface_container_high()))
+                                                })
+                                                .on_hover(cx.listener(
+                                                    move |this, hovered: &bool, _, cx| {
+                                                        if *hovered {
+                                                            this.hovered_row = Some(index);
+                                                        } else if this.hovered_row == Some(index) {
+                                                            this.hovered_row = None;
+                                                        }
+                                                        cx.notify();
+                                                    },
+                                                ))
                                                 .on_click(cx.listener(move |this, _, _, cx| {
                                                     if !this.visual_mode {
                                                         this.queue_selection.clear();

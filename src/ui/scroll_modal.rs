@@ -24,28 +24,28 @@ pub const LIBRARY: ScrollProfile = ScrollProfile {
     nominal_row_h: 58.0,
     min_row_h: 18.0,
     overscan_rows: 10,
-    follow_ms: 420.0,
+    follow_ms: 360.0,
 };
 pub const ALBUM: ScrollProfile = ScrollProfile {
     row_ratio: 0.06,
     nominal_row_h: 36.0,
     min_row_h: 18.0,
     overscan_rows: 10,
-    follow_ms: 420.0,
+    follow_ms: 360.0,
 };
 pub const SEARCH: ScrollProfile = ScrollProfile {
     row_ratio: 0.12,
     nominal_row_h: 56.0,
     min_row_h: 18.0,
     overscan_rows: 10,
-    follow_ms: 420.0,
+    follow_ms: 360.0,
 };
 pub const QUEUE: ScrollProfile = ScrollProfile {
     row_ratio: 0.10,
     nominal_row_h: 56.0,
     min_row_h: 18.0,
     overscan_rows: 10,
-    follow_ms: 420.0,
+    follow_ms: 360.0,
 };
 
 #[derive(Default, Clone, Copy)]
@@ -169,7 +169,7 @@ impl ScrollModal {
             // the frame rate falls: at 60 fps this is the profile duration,
             // and a slower renderer gets a proportionally longer wall-clock
             // glide instead of a few large jumps.
-            let fps_scale = (self.frame_dt * 60.0).clamp(1.0, 1.75);
+            let fps_scale = (self.frame_dt * 60.0).clamp(1.0, 1.35);
             self.profile.follow_ms * fps_scale / 1000.0
         } else {
             0.0
@@ -311,7 +311,7 @@ mod tests {
         assert!((LIBRARY.row_ratio - 0.105).abs() < f32::EPSILON);
         assert!((ALBUM.row_ratio - 0.06).abs() < f32::EPSILON);
         assert!((QUEUE.row_ratio - 0.10).abs() < f32::EPSILON);
-        assert_eq!(LIBRARY.follow_ms, 420.0);
+        assert_eq!(LIBRARY.follow_ms, 360.0);
     }
 
     #[test]

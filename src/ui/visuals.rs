@@ -99,12 +99,14 @@ pub struct Motion {
 
 impl Default for Motion {
     fn default() -> Self {
-        let row_cover_ms = 80.0;
+        let row_cover_ms = 120.0;
         Self {
             row_cover_ms,
-            // 80% slower than the cover so glyphs do not pop ahead of art.
-            row_text_ms: row_cover_ms * 1.8,
-            row_curve: Curve::Linear,
+            // Text gets a little longer than the cover so glyphs do not pop
+            // ahead of the art, but uses the same easing family as QML's
+            // `Behavior on scale { Anim {} }`.
+            row_text_ms: 144.0,
+            row_curve: Curve::Standard,
             row_cover_selected: 0.20,
             row_text_selected: 0.08,
             search_cover_selected: 0.08,
@@ -121,9 +123,9 @@ mod tests {
     #[test]
     fn defaults_are_snappy_and_centralized() {
         let visuals = Visuals::default();
-        assert_eq!(visuals.motion.row_cover_ms, 80.0);
+        assert_eq!(visuals.motion.row_cover_ms, 120.0);
         assert_eq!(visuals.motion.row_text_ms, 144.0);
-        assert_eq!(visuals.motion.row_curve, Curve::Linear);
+        assert_eq!(visuals.motion.row_curve, Curve::Standard);
         assert_eq!(visuals.fonts.row_title(true), 15.0);
         assert_eq!(visuals.fonts.row_title(false), 18.0);
         assert_eq!(visuals.fonts.row_subtitle(true), 11.0);

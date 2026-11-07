@@ -35,7 +35,17 @@ impl Render for AppRoot {
         }
         if self.login.is_some() {
             self.pending_ipc.clear();
-            return self.login_view().into_any_element();
+            // The login form is keyboard-only. Keep it inside the root key
+            // handler: returning the bare view here would bypass both
+            // `track_focus` and `on_key_down`, leaving the fields uneditable.
+            self.focus.focus(window);
+            return div()
+                .track_focus(&self.focus)
+                .on_key_down(cx.listener(Self::on_key_down))
+                .on_modifiers_changed(cx.listener(Self::on_modifiers_changed))
+                .size_full()
+                .child(self.login_view())
+                .into_any_element();
         }
         let pending = std::mem::take(&mut self.pending_ipc);
         for command in pending {

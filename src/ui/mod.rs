@@ -2766,7 +2766,9 @@ impl AppRoot {
     }
 
     fn line_search_commit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(hit) = self.line_search.current_hit() {
+        // A typo after a valid prefix must not make Enter a no-op: fall back
+        // to the last candidate that actually matched in this session.
+        if let Some(hit) = self.line_search.latest_hit() {
             let status = self.line_search_surfaces.get(hit.target) == Some(&LineSurface::Status);
             self.apply_line_hit(hit);
             self.close_line_search();
@@ -3287,6 +3289,7 @@ impl AppRoot {
         if query.is_empty() {
             self.line_search_denied_query.clear();
         } else if self.line_search.candidates.is_empty()
+            && self.line_search.last_hit.is_none()
             && query != self.line_search_denied_query
         {
             self.flash_line_search_denied();

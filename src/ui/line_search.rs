@@ -369,6 +369,10 @@ pub struct LineSearchState {
     pub candidates: Vec<LineHit>,
     pub index: Option<usize>,
     pub target: usize,
+    /// The last candidate that was actually matched while the query was
+    /// valid. A later typo (no candidates) falls back to this on Enter
+    /// instead of doing nothing.
+    pub last_hit: Option<LineHit>,
 }
 
 impl LineSearchState {
@@ -410,6 +414,7 @@ impl LineSearchState {
         self.candidates.clear();
         self.index = None;
         self.target = 0;
+        self.last_hit = None;
     }
 
     /// Replace the query, rediscover candidates over the current visible
@@ -428,6 +433,12 @@ impl LineSearchState {
         } else {
             Some(0)
         };
+        if let Some(hit) = self.current_hit() {
+            self.last_hit = Some(hit);
+        }
+        if self.editor.text.is_empty() {
+            self.last_hit = None;
+        }
         self.sync_target();
     }
 
@@ -442,6 +453,9 @@ impl LineSearchState {
         }
         let current = self.index.unwrap_or(0) as isize;
         self.index = Some((current + delta).rem_euclid(len as isize) as usize);
+        if let Some(hit) = self.current_hit() {
+            self.last_hit = Some(hit);
+        }
         self.sync_target();
     }
 
@@ -449,6 +463,12 @@ impl LineSearchState {
     pub fn current_hit(&self) -> Option<LineHit> {
         self.index
             .and_then(|index| self.candidates.get(index).copied())
+    }
+
+    /// The candidate an Enter should use: the current ring hit when the
+    /// query still matches, otherwise the last match seen before the typo.
+    pub fn latest_hit(&self) -> Option<LineHit> {
+        self.current_hit().or(self.last_hit)
     }
 
     /// Act on the current candidate: return it and make it the active target.
@@ -776,6 +796,35 @@ mod tests {
         assert!(state.candidates.is_empty());
         assert_eq!(state.index, None);
         assert_eq!(state.target, 0);
+    }
+
+    #[test]
+    fn a_typo_keeps_the_last_match_for_enter() {
+        let targets = vec![target(vec![row("Wipe", "", "")])];
+        let mut state = LineSearchState::new();
+        state.open();
+        state.set_query("wi", &targets);
+        assert_eq!(
+            state.latest_hit(),
+            Some(LineHit { target: 0, row: 0 })
+        );
+
+        // Garbage that no longer matches does not wipe the remembered hit.
+        state.set_query("wi##", &targets);
+        assert!(state.candidates.is_empty());
+        assert_eq!(state.current_hit(), None);
+        assert_eq!(
+            state.latest_hit(),
+            Some(LineHit {
+                target: 0,
+                row: 0
+            })
+        );
+
+        // Emptying the query starts a fresh search; there is nothing to
+        // fall back to.
+        state.set_query("", &targets);
+        assert_eq!(state.latest_hit(), None);
     }
 
     #[test]

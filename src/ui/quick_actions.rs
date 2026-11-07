@@ -55,6 +55,7 @@ pub enum QuickVerb {
     Download { on: bool },
     PlayPlaylist,
     ShuffleArtist,
+    ShuffleAlbum,
     WipeLibrary,
     WipeIndexes,
     WipeCovers,
@@ -76,6 +77,7 @@ impl QuickVerb {
             QuickVerb::Download { on: false } => "Remove Download",
             QuickVerb::PlayPlaylist => "Play Playlist",
             QuickVerb::ShuffleArtist => "Shuffle Artist",
+            QuickVerb::ShuffleAlbum => "Shuffle Album",
             QuickVerb::WipeLibrary => "Wipe Library",
             QuickVerb::WipeIndexes => "Wipe Search Index",
             QuickVerb::WipeCovers => "Wipe Covers",
@@ -95,7 +97,7 @@ impl QuickVerb {
             QuickVerb::Download { on: true } => "outline-download.svg",
             QuickVerb::Download { on: false } => "baseline-download.svg",
             QuickVerb::PlayPlaylist => "play-1001-svgrepo-com.svg",
-            QuickVerb::ShuffleArtist => "outline-shuffle.svg",
+            QuickVerb::ShuffleArtist | QuickVerb::ShuffleAlbum => "outline-shuffle.svg",
             QuickVerb::WipeLibrary | QuickVerb::WipeIndexes | QuickVerb::WipeCovers => "delete-outline.svg",
         }
     }
@@ -276,6 +278,24 @@ impl QuickMenu {
                 QuickKind::Album,
             )),
             west: Some(single_slot(QuickVerb::GoToArtist)),
+            east: Some(single_slot(QuickVerb::Download { on: !cached })),
+        }
+    }
+
+    /// Album page Tool menu: the album quick actions plus a Shuffle Album
+    /// option in the west slot (Shift-H/L cycles it with Go to Artist).
+    pub fn album_tool(cached: bool, starred: bool, rating: u8) -> Self {
+        Self {
+            north: Some(multi_slot(vec![
+                QuickVerb::AddToQueue,
+                QuickVerb::StartRadio,
+            ])),
+            south: Some(rated_slot(
+                QuickVerb::Favorite { on: !starred },
+                rating,
+                QuickKind::Album,
+            )),
+            west: Some(single_slot(QuickVerb::ShuffleAlbum)),
             east: Some(single_slot(QuickVerb::Download { on: !cached })),
         }
     }
@@ -1484,5 +1504,28 @@ mod tests {
         assert!(!gesture.arm(&menu));
         gesture.clear_dismissed();
         assert!(gesture.arm(&menu));
+    }
+
+    #[test]
+    fn page_tool_menus_offer_shuffle_for_album_and_artist() {
+        let album = QuickMenu::album_tool(false, false, 0);
+        assert_eq!(
+            album.west.expect("album shuffle").actions,
+            vec![QuickVerb::ShuffleAlbum]
+        );
+        assert_eq!(
+            album.east.expect("download").actions,
+            vec![QuickVerb::Download { on: true }]
+        );
+
+        let artist = QuickMenu::artist_tool(false, false, 0);
+        assert_eq!(
+            artist.west.expect("artist shuffle").actions,
+            vec![QuickVerb::ShuffleArtist]
+        );
+        assert_eq!(
+            artist.east.expect("artist download").actions,
+            vec![QuickVerb::Download { on: true }]
+        );
     }
 }

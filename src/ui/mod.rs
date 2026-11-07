@@ -1965,7 +1965,7 @@ impl AppRoot {
     fn page_alt_menu(&self, page: &PageBarState) -> Option<(QuickMenu, AltTarget)> {
         let (menu, kind) = match page.kind {
             PageKind::Album => (
-                QuickMenu::album_with(page.cached, page.starred, page.rating),
+                QuickMenu::album_tool(page.cached, page.starred, page.rating),
                 RowKind::Album,
             ),
             PageKind::Artist => (
@@ -3093,6 +3093,9 @@ impl AppRoot {
             }
             QuickVerb::ShuffleArtist => {
                 self.bridge.shuffle_artist(target.id.clone());
+            }
+            QuickVerb::ShuffleAlbum => {
+                self.bridge.shuffle_album(target.id.clone());
             }
             QuickVerb::Download { on } => {
                 if target.kind == RowKind::Artist {

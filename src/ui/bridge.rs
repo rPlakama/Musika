@@ -928,6 +928,27 @@ impl Bridge {
     }
 
     /// Replace the queue with one shuffled artist pass.
+    pub fn shuffle_album(&self, album_id: String) {
+        let tx = self.tx.clone();
+        let offline = self.offline.load(Ordering::Relaxed);
+        crate::app::runtime().spawn(async move {
+            let Some(dbs) = crate::app::dbs() else { return };
+            match crate::queue::album_shuffle_json(&dbs, &album_id, offline).await {
+                Ok(json) => match serde_json::from_str::<Vec<crate::player::Track>>(&json) {
+                    Ok(tracks) => {
+                        let _ = tx.send(Event::Queue { tracks, start: 0 });
+                    }
+                    Err(err) => {
+                        let _ = tx.send(Event::Error(format!("Could not shuffle the album: {err:#}")));
+                    }
+                },
+                Err(err) => {
+                    let _ = tx.send(Event::Error(format!("Could not shuffle the album: {err:#}")));
+                }
+            }
+        });
+    }
+
     pub fn shuffle_artist(&self, artist_id: String) {
         let tx = self.tx.clone();
         let offline = self.offline.load(Ordering::Relaxed);

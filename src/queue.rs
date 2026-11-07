@@ -214,6 +214,28 @@ pub async fn artist_shuffle_json(
     tracks_json(dbs, songs).await
 }
 
+/// Shuffle one album's tracklist for an explicit "Shuffle Album" action.
+pub async fn album_shuffle_json(
+    dbs: &crate::db::Dbs,
+    album_id: &str,
+    offline: bool,
+) -> anyhow::Result<String> {
+    let mut songs = crate::library::album_songs(&dbs.library, album_id).await?;
+    if songs.is_empty() {
+        return Err(anyhow::anyhow!("this album has no tracks to shuffle"));
+    }
+    shuffle_songs(&mut songs, crate::consts::now_nanos());
+    crate::offline::retain_songs(dbs, offline, &mut songs).await?;
+    tracks_json(dbs, songs).await
+}
+
+fn shuffle_songs(songs: &mut [crate::library::SongRow], seed: u128) {
+    let mut rng = SplitMix64((seed as u64) ^ ((seed >> 64) as u64));
+    for i in (1..songs.len()).rev() {
+        songs.swap(i, rng.below(i + 1));
+    }
+}
+
 /// A seeded SplitMix64 — the shuffle's only randomness source. Deterministic
 /// for a given seed (tests), statistically independent across clock seeds.
 struct SplitMix64(u64);

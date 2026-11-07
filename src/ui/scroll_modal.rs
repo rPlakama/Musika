@@ -24,28 +24,28 @@ pub const LIBRARY: ScrollProfile = ScrollProfile {
     nominal_row_h: 58.0,
     min_row_h: 18.0,
     overscan_rows: 10,
-    follow_ms: 360.0,
+    follow_ms: 300.0,
 };
 pub const ALBUM: ScrollProfile = ScrollProfile {
     row_ratio: 0.06,
     nominal_row_h: 36.0,
     min_row_h: 18.0,
     overscan_rows: 10,
-    follow_ms: 360.0,
+    follow_ms: 300.0,
 };
 pub const SEARCH: ScrollProfile = ScrollProfile {
     row_ratio: 0.12,
     nominal_row_h: 56.0,
     min_row_h: 18.0,
     overscan_rows: 10,
-    follow_ms: 360.0,
+    follow_ms: 300.0,
 };
 pub const QUEUE: ScrollProfile = ScrollProfile {
     row_ratio: 0.10,
     nominal_row_h: 56.0,
     min_row_h: 18.0,
     overscan_rows: 10,
-    follow_ms: 360.0,
+    follow_ms: 300.0,
 };
 
 #[derive(Default, Clone, Copy)]
@@ -72,7 +72,6 @@ pub struct ScrollModal {
     pub follow: ScrollFollow,
     pub row_h: f32,
     pub row_ref: Option<f32>,
-    pub frame_dt: f32,
     pub profile: ScrollProfile,
 }
 
@@ -83,7 +82,6 @@ impl ScrollModal {
             follow: ScrollFollow::default(),
             row_h: profile.nominal_row_h,
             row_ref: None,
-            frame_dt: 0.0,
             profile,
         }
     }
@@ -165,12 +163,7 @@ impl ScrollModal {
         let current = -f32::from(self.handle.0.borrow().base_handle.offset().y);
         let moved = (target - current).abs() > 0.5;
         let duration = if animated && moved {
-            // Keep the number of visible animation steps roughly stable when
-            // the frame rate falls: at 60 fps this is the profile duration,
-            // and a slower renderer gets a proportionally longer wall-clock
-            // glide instead of a few large jumps.
-            let fps_scale = (self.frame_dt * 60.0).clamp(1.0, 1.35);
-            self.profile.follow_ms * fps_scale / 1000.0
+            self.profile.follow_ms / 1000.0
         } else {
             0.0
         };
@@ -311,21 +304,7 @@ mod tests {
         assert!((LIBRARY.row_ratio - 0.105).abs() < f32::EPSILON);
         assert!((ALBUM.row_ratio - 0.06).abs() < f32::EPSILON);
         assert!((QUEUE.row_ratio - 0.10).abs() < f32::EPSILON);
-        assert_eq!(LIBRARY.follow_ms, 360.0);
-    }
-
-    #[test]
-    fn slower_frames_extend_the_glide() {
-        let mut fast = ScrollModal::new(LIBRARY);
-        fast.frame_dt = 1.0 / 60.0;
-        fast.start(100, 10, true, 0.0);
-        let fast_duration = fast.follow.duration;
-
-        let mut slow = ScrollModal::new(LIBRARY);
-        slow.frame_dt = 1.0 / 30.0;
-        slow.start(100, 10, true, 0.0);
-        assert!(slow.follow.duration > fast_duration);
-        assert!((fast_duration - (LIBRARY.follow_ms / 1000.0)).abs() < 1e-6);
+        assert_eq!(LIBRARY.follow_ms, 300.0);
     }
 
     #[test]

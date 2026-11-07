@@ -133,7 +133,7 @@ impl AppRoot {
                                             LineSurface::Page,
                                             this.page_generation as usize,
                                             index,
-                                            selected || hovered,
+                                            selected,
                                         );
                                         let cover_scale = this.visuals.row_cover_scale(scale);
                                         let emphasis = this.visuals.row_text_emphasis(text_scale);

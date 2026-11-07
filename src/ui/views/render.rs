@@ -5,14 +5,36 @@ use super::super::*;
 impl Render for AppRoot {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.frames = self.frames.wrapping_add(1);
-        self.win_w = f32::from(window.viewport_size().width);
-        self.win_h = f32::from(window.viewport_size().height);
+        let viewport = window.viewport_size();
+        let viewport_w = f32::from(viewport.width);
+        let viewport_h = f32::from(viewport.height);
+        let previous_size = self.resize_last_size;
+        self.win_w = viewport_w;
+        self.win_h = viewport_h;
         self.scale_factor = window.scale_factor();
         self.refresh_lyrics_overlay();
         if self.trace && self.frames.is_multiple_of(120) {
             crate::debug_log!("GPUI trace: frame {}", self.frames);
         }
         self.clock.tick();
+        let resized = previous_size.is_some_and(|(width, height)| {
+            (width - viewport_w).abs() > 0.5 || (height - viewport_h).abs() > 0.5
+        });
+        self.resize_last_size = Some((viewport_w, viewport_h));
+        if resized {
+            // The list has not laid out the new viewport yet. Recenter after
+            // it settles, not on the intermediate resize events themselves.
+            self.resize_settle_at = Some(self.clock.now + 0.1);
+            window.request_animation_frame();
+        }
+        if let Some(settle_at) = self.resize_settle_at {
+            if self.clock.now >= settle_at {
+                self.resize_settle_at = None;
+                self.recenter_after_resize();
+            } else {
+                window.request_animation_frame();
+            }
+        }
         #[cfg(debug_assertions)]
         self.frame_hud.observe(self.clock.dt);
         palette::publish(self.palette_motion.value(&self.clock));

@@ -132,30 +132,24 @@ impl AppRoot {
                                 );
                                 continue;
                             };
-                            let key = format!("library:{}", row.id);
-                            let scale = this.row_scale_factor(&key, selected);
-                            let emphasis = this.row_text_factor(&key, selected);
+                            let (scale, text_scale) = this.row_emphasis(
+                                LineSurface::Library,
+                                this.view.scope as usize,
+                                index,
+                                selected,
+                            );
                             let cover_scale = this.visuals.row_cover_scale(scale);
-                            let emphasis = this.visuals.row_text_emphasis(emphasis);
+                            let emphasis = this.visuals.row_text_emphasis(text_scale);
                             let base_fill = if striped {
                                 palette::surface_container_lowest()
                             } else {
                                 palette::surface()
                             };
-                            let hover_fill = this
-                                .row_hover_colors
-                                .entry(format!("library-hover:{}", row.id))
-                                .or_insert_with(|| anim::ColorBehavior::new(base_fill))
-                                .target(
-                                    if hovered && !selected {
-                                        palette::surface_container_high()
-                                    } else {
-                                        base_fill
-                                    },
-                                    anim::QUICK_MS,
-                                    anim::Curve::Standard,
-                                    &this.clock,
-                                );
+                            let hover_fill = if hovered && !selected {
+                                this.library_hover_fill.value(&this.clock)
+                            } else {
+                                base_fill
+                            };
                             items.push(
                                 div()
                                     .id(gpui::ElementId::named_usize(
@@ -179,6 +173,22 @@ impl AppRoot {
                                     })
                                     .cursor_pointer()
                                     .on_hover(cx.listener(move |this, hovered: &bool, _, cx| {
+                                        let base_fill = if striped {
+                                            palette::surface_container_lowest()
+                                        } else {
+                                            palette::surface()
+                                        };
+                                        let target = if *hovered && !selected {
+                                            palette::surface_container_high()
+                                        } else {
+                                            base_fill
+                                        };
+                                        this.library_hover_fill.target(
+                                            target,
+                                            anim::QUICK_MS,
+                                            anim::Curve::Standard,
+                                            &this.clock,
+                                        );
                                         if *hovered {
                                             this.hovered_row = Some(index);
                                         } else if this.hovered_row == Some(index) {

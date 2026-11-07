@@ -159,6 +159,9 @@ fn warm_path(path: &Path) -> std::io::Result<()> {
 
 fn warm_file(path: &Path) -> std::io::Result<()> {
     use std::io::Read;
+    // Ask the kernel to start readahead without copying through userspace;
+    // the buffered pass below remains the actual page-cache fallback.
+    let _ = crate::linux::advise_willneed(path);
     let mut file = std::fs::File::open(path)?;
     let mut buffer = vec![0u8; 1024 * 1024];
     while file.read(&mut buffer)? > 0 {}

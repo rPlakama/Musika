@@ -65,9 +65,12 @@ impl AppRoot {
                                                 .queue_selection
                                                 .contains(this.queue_cursor, index);
                                         let playing = index == this.player.index();
-                                        let key = format!("queue:{}", track.id);
-                                        let scale = this.row_scale_factor(&key, selected);
-                                        let text_scale = this.row_text_factor(&key, selected);
+                                        let (scale, text_scale) = this.row_emphasis(
+                                            LineSurface::Queue,
+                                            0,
+                                            index,
+                                            selected,
+                                        );
                                         let emphasis = this.visuals.row_text_emphasis(text_scale);
                                         let cover_scale = this.visuals.row_cover_scale(scale);
                                         let fonts = this.visuals.fonts;

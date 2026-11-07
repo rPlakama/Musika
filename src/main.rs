@@ -44,6 +44,7 @@ mod index;
 mod io_uring_read;
 mod ipc;
 mod library;
+mod linux;
 mod lyrics;
 mod media;
 mod mpris;

@@ -190,7 +190,9 @@ pub fn run() {
                     cx.new(|cx| AppRoot::new(window, cx))
                 },
             )
-            .expect("GPUI: could not open the application window");
+            .expect(
+                "GPUI: could not open the application window (Vulkan/display initialization failed; run `vulkaninfo --summary`)",
+            );
         });
 }
 
@@ -202,7 +204,7 @@ struct Header {
     counts: (i64, i64, i64),
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 enum LineSurface {
     Search,
     Queue,
@@ -359,6 +361,21 @@ struct RowPaint {
     height: f32,
     cover_scale: f32,
     emphasis: f32,
+}
+
+struct RowEmphasis {
+    cover: anim::Behavior,
+    text: anim::Behavior,
+}
+
+impl RowEmphasis {
+    fn new(active: bool) -> Self {
+        let value = if active { 1.0 } else { 0.0 };
+        Self {
+            cover: anim::Behavior::new(value),
+            text: anim::Behavior::new(value),
+        }
+    }
 }
 
 struct SearchRowPaint {
@@ -592,8 +609,10 @@ struct AppRoot {
     queue_selection: state::Selection,
     last_player_index: usize,
     visuals: Visuals,
-    row_scales: std::cell::RefCell<std::collections::HashMap<String, anim::Behavior>>,
-    row_hover_colors: std::collections::HashMap<String, anim::ColorBehavior>,
+    row_scales:
+        std::cell::RefCell<std::collections::HashMap<(LineSurface, usize, usize), RowEmphasis>>,
+    library_hover_fill: anim::ColorBehavior,
+    page_hover_fill: anim::ColorBehavior,
     player: crate::player::Player,
     playback_error: Option<String>,
     queue_open: bool,
@@ -730,7 +749,8 @@ impl AppRoot {
             last_player_index: 0,
             visuals: Visuals::default(),
             row_scales: std::cell::RefCell::new(std::collections::HashMap::new()),
-            row_hover_colors: std::collections::HashMap::new(),
+            library_hover_fill: anim::ColorBehavior::new(palette::surface()),
+            page_hover_fill: anim::ColorBehavior::new(palette::surface()),
             player: crate::player::Player::new(),
             playback_error: None,
             queue_open: false,

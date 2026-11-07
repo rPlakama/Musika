@@ -608,6 +608,7 @@ pub(crate) fn thumb_name(file: &str) -> String {
 }
 
 pub(crate) fn build_thumb(source: &Path) -> Result<Vec<u8>> {
+    let _ = crate::linux::advise_willneed(source);
     let reader = image::ImageReader::open(source)
         .with_context(|| format!("failed to open cover {}", source.display()))?
         .with_guessed_format()

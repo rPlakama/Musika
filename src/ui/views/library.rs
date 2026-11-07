@@ -132,30 +132,24 @@ impl AppRoot {
                                 );
                                 continue;
                             };
-                            let key = format!("library:{}", row.id);
-                            let scale = this.row_scale_factor(&key, selected);
-                            let emphasis = this.row_text_factor(&key, selected);
+                            let (scale, text_scale) = this.row_emphasis(
+                                LineSurface::Library,
+                                this.view.scope as usize,
+                                index,
+                                selected,
+                            );
                             let cover_scale = this.visuals.row_cover_scale(scale);
-                            let emphasis = this.visuals.row_text_emphasis(emphasis);
+                            let emphasis = this.visuals.row_text_emphasis(text_scale);
                             let base_fill = if striped {
                                 palette::surface_container_lowest()
                             } else {
                                 palette::surface()
                             };
-                            let hover_fill = this
-                                .row_hover_colors
-                                .entry(format!("library-hover:{}", row.id))
-                                .or_insert_with(|| anim::ColorBehavior::new(base_fill))
-                                .target(
-                                    if hovered && !selected {
-                                        palette::surface_container_high()
-                                    } else {
-                                        base_fill
-                                    },
-                                    anim::QUICK_MS,
-                                    anim::Curve::Standard,
-                                    &this.clock,
-                                );
+                            let hover_fill = if hovered && !selected {
+                                this.library_hover_fill.value(&this.clock)
+                            } else {
+                                base_fill
+                            };
                             items.push(
                                 div()
                                     .id(gpui::ElementId::named_usize(
@@ -179,6 +173,22 @@ impl AppRoot {
                                     })
                                     .cursor_pointer()
                                     .on_hover(cx.listener(move |this, hovered: &bool, _, cx| {
+                                        let base_fill = if striped {
+                                            palette::surface_container_lowest()
+                                        } else {
+                                            palette::surface()
+                                        };
+                                        let target = if *hovered && !selected {
+                                            palette::surface_container_high()
+                                        } else {
+                                            base_fill
+                                        };
+                                        this.library_hover_fill.target(
+                                            target,
+                                            anim::QUICK_MS,
+                                            anim::Curve::Standard,
+                                            &this.clock,
+                                        );
                                         if *hovered {
                                             this.hovered_row = Some(index);
                                         } else if this.hovered_row == Some(index) {
@@ -227,53 +237,46 @@ impl AppRoot {
         let mut body = div().flex().items_center().min_w_0().flex_1();
         if paint.flags.show_cover {
             let cover = cover_source(&row.cover_url);
-            body = body.child(div().mr_3().child(art_scaled(
+            let id_name = match paint.surface {
+                LineSurface::Library => "retained-cover-library",
+                LineSurface::Page => "retained-cover-page",
+                _ => "retained-cover",
+            };
+            body = body.child(div().mr_3().child(RetainedCover::new(
+                id_name,
+                paint.index,
                 cover,
+                self.image_cache.clone(),
                 paint.height * 0.78,
                 paint.cover_scale,
             )));
         }
-        let mut cells = div().flex().flex_col().min_w_0().flex_1().overflow_hidden();
-        let title_size = fonts.row_title(paint.flags.compact) * emphasis;
-        let title = div()
-            .text_size(px(title_size))
-            .font_weight(if paint.selected {
-                gpui::FontWeight::BOLD
-            } else {
-                gpui::FontWeight::NORMAL
-            })
-            .text_color(rgb(palette::on_surface()))
-            .overflow_hidden()
-            .child(highlighted_text(
-                &row.title,
-                self.line_search.query(),
-                palette::on_surface(),
-                current,
-            ));
-        let title = if paint.flags.compact {
-            title.whitespace_nowrap().text_ellipsis()
-        } else {
-            title.whitespace_normal().max_h(px(34.0))
+        let id_name = match paint.surface {
+            LineSurface::Library => "retained-text-library",
+            LineSurface::Page => "retained-text-page",
+            _ => "retained-text",
         };
-        cells = cells.child(title);
-        if paint.flags.show_subtitle && !row.subtitle.is_empty() {
-            let subtitle = div()
-                .text_size(px(fonts.row_subtitle(paint.flags.compact) * emphasis))
-                .text_color(rgb(palette::on_surface_variant()))
-                .overflow_hidden()
-                .child(highlighted_text(
-                    &row.subtitle,
-                    self.line_search.query(),
-                    palette::on_surface_variant(),
-                    current,
-                ));
-            let subtitle = if paint.flags.compact {
-                subtitle.whitespace_nowrap().text_ellipsis()
-            } else {
-                subtitle.whitespace_normal().max_h(px(22.0))
-            };
-            cells = cells.child(subtitle);
-        }
+        let cells = div()
+            .flex()
+            .flex_col()
+            .min_w_0()
+            .flex_1()
+            .overflow_hidden()
+            .child(div().h(px(paint.height)).w_full().child(RetainedText::new(
+                id_name,
+                paint.index,
+                row.title.clone().into(),
+                row.subtitle.clone().into(),
+                self.line_search.query().to_string().into(),
+                current,
+                paint.selected,
+                fonts.row_title(paint.flags.compact) * emphasis,
+                fonts.row_subtitle(paint.flags.compact) * emphasis,
+                paint.height,
+                palette::on_surface(),
+                palette::on_surface_variant(),
+                paint.flags.compact,
+            )));
         body = body.child(cells);
         let downloaded = self.marks.downloaded(&row.song_id, &row.album_id) || row.downloaded;
         let mut trailing = div().flex().items_center().gap_2();
@@ -291,10 +294,22 @@ impl AppRoot {
             );
         }
         if downloaded {
-            trailing = trailing.child(icon("outline-download.svg", 12.0, palette::primary()));
+            trailing = trailing.child(RetainedIcon::new(
+                "retained-download-mark",
+                paint.index,
+                format!("{}/icons/outline-download.svg", asset_root()),
+                12.0,
+                palette::primary(),
+            ));
         }
         if row.starred {
-            trailing = trailing.child(icon("baseline-favorite.svg", 11.0, 0xFFD54F));
+            trailing = trailing.child(RetainedIcon::new(
+                "retained-star-mark",
+                paint.index,
+                format!("{}/icons/baseline-favorite.svg", asset_root()),
+                11.0,
+                0xFFD54F,
+            ));
         }
         if row.rating > 0 {
             trailing = trailing.child(

@@ -279,15 +279,10 @@ impl Render for AppRoot {
         } else {
             self.list(&*cx, window).into_any_element()
         };
-        if self
-            .row_scales
-            .borrow()
-            .values()
-            .any(|scale| !scale.settled(&self.clock))
-            || self
-                .row_hover_colors
-                .values()
-                .any(|color| !color.settled(&self.clock))
+        if self.row_scales.borrow().values().any(|emphasis| {
+            !emphasis.cover.settled(&self.clock) || !emphasis.text.settled(&self.clock)
+        }) || !self.library_hover_fill.settled(&self.clock)
+            || !self.page_hover_fill.settled(&self.clock)
         {
             window.request_animation_frame();
         }

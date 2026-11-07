@@ -65,9 +65,10 @@ impl AppRoot {
                                                 .queue_selection
                                                 .contains(this.queue_cursor, index);
                                         let playing = index == this.player.index();
-                                        let key = format!("queue:{}", track.id);
-                                        let scale = this.row_scale_factor(&key, selected);
-                                        let text_scale = this.row_text_factor(&key, selected);
+                                        let hovered = this.hovered_row == Some(index);
+                                        let active = selected || hovered;
+                                        let (scale, text_scale) =
+                                            this.row_emphasis(LineSurface::Queue, 0, index, active);
                                         let emphasis = this.visuals.row_text_emphasis(text_scale);
                                         let cover_scale = this.visuals.row_cover_scale(scale);
                                         let fonts = this.visuals.fonts;
@@ -91,6 +92,19 @@ impl AppRoot {
                                                 .when(selected, |this| {
                                                     this.bg(rgb(palette::secondary_container()))
                                                 })
+                                                .when(hovered && !selected, |this| {
+                                                    this.bg(rgb(palette::surface_container_high()))
+                                                })
+                                                .on_hover(cx.listener(
+                                                    move |this, hovered: &bool, _, cx| {
+                                                        if *hovered {
+                                                            this.hovered_row = Some(index);
+                                                        } else if this.hovered_row == Some(index) {
+                                                            this.hovered_row = None;
+                                                        }
+                                                        cx.notify();
+                                                    },
+                                                ))
                                                 .on_click(cx.listener(move |this, _, _, cx| {
                                                     if !this.visual_mode {
                                                         this.queue_selection.clear();
@@ -99,8 +113,11 @@ impl AppRoot {
                                                     this.player.jump(index);
                                                     cx.notify();
                                                 }))
-                                                .child(art_scaled(
+                                                .child(RetainedCover::new(
+                                                    "retained-cover-queue",
+                                                    index,
                                                     cover,
+                                                    this.image_cache.clone(),
                                                     this.queue_scroll_modal.row_h * 0.714,
                                                     cover_scale,
                                                 ))
@@ -110,61 +127,32 @@ impl AppRoot {
                                                         .flex_col()
                                                         .min_w_0()
                                                         .flex_1()
-                                                        .child(
-                                                            div()
-                                                                .flex()
-                                                                .items_center()
-                                                                .gap_1()
-                                                                .child(
-                                                                div()
-                                                                    .text_size(px(fonts
-                                                                        .queue_title
-                                                                        * emphasis))
-                                                                    .font_weight(if active {
-                                                                        gpui::FontWeight::BOLD
-                                                                    } else {
-                                                                        gpui::FontWeight::NORMAL
-                                                                    })
-                                                                    .when(playing, |this| {
-                                                                        this.text_color(rgb(
-                                                                            palette::primary(),
-                                                                        ))
-                                                                    })
-                                                                    .whitespace_normal()
-                                                                    .max_h(px(20.0))
-                                                                    .overflow_hidden()
-                                                                    .child(highlighted_text(
-                                                                        &title,
-                                                                        this.line_search.query(),
-                                                                        palette::on_surface(),
-                                                                        this.line_search_current(
-                                                                            LineSurface::Queue,
-                                                                            index,
-                                                                        ),
-                                                                    )),
+                                                        .h(px(this.queue_scroll_modal.row_h))
+                                                        .child(RetainedText::new(
+                                                            "retained-text-queue",
+                                                            index,
+                                                            title.clone().into(),
+                                                            artist.clone().into(),
+                                                            this.line_search
+                                                                .query()
+                                                                .to_string()
+                                                                .into(),
+                                                            this.line_search_current(
+                                                                LineSurface::Queue,
+                                                                index,
                                                             ),
-                                                        )
-                                                        .child(
-                                                            div()
-                                                                .text_size(px(
-                                                                    fonts.queue_meta * emphasis
-                                                                ))
-                                                                .text_color(rgb(
-                                                                    palette::on_surface_variant(),
-                                                                ))
-                                                                .whitespace_normal()
-                                                                .max_h(px(16.0))
-                                                                .overflow_hidden()
-                                                                .child(highlighted_text(
-                                                                    &artist,
-                                                                    this.line_search.query(),
-                                                                    palette::on_surface_variant(),
-                                                                    this.line_search_current(
-                                                                        LineSurface::Queue,
-                                                                        index,
-                                                                    ),
-                                                                )),
-                                                        ),
+                                                            active,
+                                                            fonts.queue_title * emphasis,
+                                                            fonts.queue_meta * emphasis,
+                                                            this.queue_scroll_modal.row_h,
+                                                            if playing {
+                                                                palette::primary()
+                                                            } else {
+                                                                palette::on_surface()
+                                                            },
+                                                            palette::on_surface_variant(),
+                                                            true,
+                                                        )),
                                                 ),
                                         );
                                     }

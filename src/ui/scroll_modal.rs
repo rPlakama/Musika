@@ -150,14 +150,7 @@ impl ScrollModal {
     pub fn target_y(&self, count: usize, cursor: usize) -> f32 {
         let viewport = self.viewport();
         let row_h = self.measured_row_h(count);
-        let actual_max = f32::from(
-            self.handle
-                .0
-                .borrow()
-                .base_handle
-                .max_offset()
-                .height,
-        );
+        let actual_max = f32::from(self.handle.0.borrow().base_handle.max_offset().height);
         if actual_max > 0.0 {
             target_y_max(row_h, cursor, viewport, actual_max)
         } else {
@@ -208,11 +201,7 @@ impl ScrollModal {
 
     /// Set the cursor and pin the viewport instantly (legacy UI `land()`).
     pub fn land(&mut self, count: usize, cursor: usize) -> usize {
-        let cursor = if count == 0 {
-            0
-        } else {
-            cursor.min(count - 1)
-        };
+        let cursor = if count == 0 { 0 } else { cursor.min(count - 1) };
         self.follow.active = false;
         let target = self.target_y(count, cursor);
         self.set_offset_now(target);
@@ -256,12 +245,7 @@ impl ScrollModal {
 /// Row range visible at `offset` for a fixed-height list. A zero viewport
 /// means layout is not ready yet: return the whole model (legacy UI's first-open
 /// fallback) so the first `/` is not starved to zero candidates.
-pub fn visible_index_range(
-    offset: f32,
-    viewport: f32,
-    row_h: f32,
-    count: usize,
-) -> Range<usize> {
+pub fn visible_index_range(offset: f32, viewport: f32, row_h: f32, count: usize) -> Range<usize> {
     if count == 0 || row_h <= 0.0 {
         return 0..0;
     }
@@ -331,6 +315,4 @@ mod tests {
         assert_eq!(modal.row_ref, Some(1000.0));
         assert!((modal.row_h - 105.0).abs() < 20.0);
     }
-
-
 }

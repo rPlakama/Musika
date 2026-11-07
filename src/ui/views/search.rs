@@ -109,42 +109,44 @@ impl AppRoot {
                 }
                 this.activate_search_result(cx);
             }))
-            .child(art_scaled(cover, row_h * 0.714, cover_scale))
+            .child(RetainedCover::new(
+                "retained-cover-search",
+                index,
+                cover,
+                self.image_cache.clone(),
+                row_h * 0.714,
+                cover_scale,
+            ))
             .child(
                 div()
                     .flex()
                     .flex_col()
                     .min_w_0()
                     .flex_1()
-                    .child(
-                        div()
-                            .text_size(px(fonts.search_title * emphasis))
-                            .font_weight(if selected {
-                                gpui::FontWeight::SEMIBOLD
-                            } else {
-                                gpui::FontWeight::NORMAL
-                            })
-                            .text_color(rgb(if selected {
-                                palette::on_primary_container()
-                            } else {
-                                palette::on_surface()
-                            }))
-                            .whitespace_nowrap()
-                            .text_ellipsis()
-                            .child(row.title.clone()),
-                    )
-                    .child(
-                        div()
-                            .text_size(px(fonts.search_subtitle * emphasis))
-                            .text_color(rgb(if selected {
-                                palette::on_primary_container()
-                            } else {
-                                palette::on_surface_variant()
-                            }))
-                            .whitespace_nowrap()
-                            .text_ellipsis()
-                            .child(row.subtitle.clone()),
-                    ),
+                    .h(px(row_h))
+                    .child(RetainedText::new(
+                        "retained-text-search",
+                        index,
+                        row.title.clone().into(),
+                        row.subtitle.clone().into(),
+                        "".into(),
+                        false,
+                        selected,
+                        fonts.search_title * emphasis,
+                        fonts.search_subtitle * emphasis,
+                        row_h,
+                        if selected {
+                            palette::on_primary_container()
+                        } else {
+                            palette::on_surface()
+                        },
+                        if selected {
+                            palette::on_primary_container()
+                        } else {
+                            palette::on_surface_variant()
+                        },
+                        true,
+                    )),
             )
             .child(
                 div()
@@ -232,10 +234,9 @@ impl AppRoot {
                         let Some(row) = rows.get(index) else { break };
                         let selected = index == cursor || search.selection.contains(cursor, index);
                         let hovered = this.hovered_row == Some(index);
-                        let key = format!("search:{scope}:{}", row.id);
                         let active = selected || hovered;
-                        let scale = this.row_scale_factor(&key, active);
-                        let text_scale = this.row_text_factor(&key, active);
+                        let (scale, text_scale) =
+                            this.row_emphasis(LineSurface::Search, scope, index, active);
                         items.push(this.search_result_row(
                             cx,
                             row,

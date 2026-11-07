@@ -461,6 +461,12 @@ struct AppRoot {
     line_search_snapshot: Vec<line_search::LineTarget>,
     line_search_surfaces: Vec<LineSurface>,
     status_focus: Option<usize>,
+    syncing: bool,
+    sync_progress: f32,
+    sync_fill: anim::Behavior,
+    sync_spin_started: f64,
+    sync_spin_offset: f32,
+    sync_settle: anim::Behavior,
     line_search_denied_at: Option<f64>,
     line_search_denied_query: String,
     alt: AltGesture,
@@ -592,6 +598,12 @@ impl AppRoot {
             line_search_snapshot: Vec::new(),
             line_search_surfaces: Vec::new(),
             status_focus: None,
+            syncing: false,
+            sync_progress: 0.0,
+            sync_fill: anim::Behavior::new(0.0),
+            sync_spin_started: 0.0,
+            sync_spin_offset: 0.0,
+            sync_settle: anim::Behavior::new(0.0),
             line_search_denied_at: None,
             line_search_denied_query: String::new(),
             alt: AltGesture::new(),
@@ -805,7 +817,16 @@ impl AppRoot {
                     self.fullscreen_album = Some((id, starred, rating));
                 }
             }
+            Event::SyncProgress {
+                message: _,
+                done,
+                total,
+            } => {
+                self.mark_sync_progress(done, total);
+            }
             Event::LibrarySynced => {
+                self.sync_progress = 1.0;
+                self.finish_sync();
                 self.marks.requested = None;
                 self.bridge.refresh_header();
                 self.reload();
@@ -1122,6 +1143,7 @@ impl AppRoot {
                 self.follow_search(false);
             }
             Event::Error(message) => {
+                self.finish_sync();
                 if let Some(search) = self.search.as_mut() {
                     search.loading = false;
                 }
@@ -1623,11 +1645,81 @@ impl AppRoot {
         cx.notify();
     }
 
+    const SYNC_TURN_SECS: f64 = 1.05;
+
+    fn sync_angle(&self) -> f32 {
+        if self.syncing {
+            let elapsed = ((self.clock.now - self.sync_spin_started).max(0.0)
+                / Self::SYNC_TURN_SECS) as f32;
+            (self.sync_spin_offset + elapsed * 360.0).rem_euclid(360.0)
+        } else {
+            self.sync_settle.value(&self.clock)
+        }
+    }
+
+    fn start_sync(&mut self) {
+        if self.syncing {
+            return;
+        }
+        self.clock.tick();
+        self.syncing = true;
+        self.sync_progress = 0.0;
+        self.sync_fill = anim::Behavior::new(0.0);
+        self.sync_spin_started = self.clock.now;
+        self.sync_spin_offset = self.sync_settle.value(&self.clock);
+        self.bridge.sync();
+    }
+
+    fn finish_sync(&mut self) {
+        if !self.syncing {
+            return;
+        }
+        self.clock.tick();
+        let angle = self.sync_angle();
+        self.syncing = false;
+        let target = ((angle / 360.0).ceil() * 360.0).max(360.0);
+        self.sync_fill
+            .target(1.0, anim::QUICK_MS, anim::Curve::Linear, &self.clock);
+        self.sync_settle = anim::Behavior::new(angle);
+        self.sync_settle.target(
+            target,
+            anim::STANDARD_MS,
+            anim::Curve::Bounce,
+            &self.clock,
+        );
+    }
+
+    fn mark_sync_progress(&mut self, done: usize, total: usize) {
+        self.clock.tick();
+        if !self.syncing {
+            self.syncing = true;
+            self.sync_spin_started = self.clock.now;
+            self.sync_spin_offset = self.sync_settle.value(&self.clock);
+        }
+        self.sync_progress = (done as f32 / total.max(1) as f32).clamp(0.0, 1.0);
+        self.sync_fill.target(
+            self.sync_progress,
+            anim::QUICK_MS,
+            anim::Curve::Linear,
+            &self.clock,
+        );
+    }
+
     fn activate_status(&mut self, row: usize) {
         self.status_focus = Some(row.min(1));
         match row {
-            0 => self.bridge.sync(),
-            _ => self.open_wipe_menu(),
+            0 => self.start_sync(),
+            _ => {
+                if self.syncing {
+                    self.push_toast(
+                        "Wait for the sync to finish before wiping.".to_string(),
+                        ToastKind::Notice,
+                        None,
+                    );
+                    return;
+                }
+                self.open_wipe_menu();
+            }
         }
     }
 
@@ -1651,7 +1743,7 @@ impl AppRoot {
     }
 
     fn on_refresh(&mut self, _: &Refresh, _window: &mut Window, cx: &mut Context<Self>) {
-        self.bridge.sync();
+        self.start_sync();
         cx.notify();
     }
 
@@ -2413,8 +2505,9 @@ impl AppRoot {
         }
         if let Some(focus) = self.status_focus {
             // The scoped status region owns Alt. Sync has no Alt action; Wipe
-            // opens the same maintenance board as the trashcan click.
-            if focus != 1 {
+            // opens the same maintenance board as the trashcan click, but
+            // never while a sync is writing the databases.
+            if focus != 1 || self.syncing {
                 return None;
             }
             return Some((
@@ -4092,11 +4185,15 @@ impl AppRoot {
         };
         let report = match self.header.as_ref() {
             Some(header) => {
-                let sync = header
-                    .last_sync
-                    .as_deref()
-                    .map(last_sync_text)
-                    .unwrap_or_else(|| "—".to_string());
+                let sync = if self.syncing {
+                    "Syncing…".to_string()
+                } else {
+                    header
+                        .last_sync
+                        .as_deref()
+                        .map(last_sync_text)
+                        .unwrap_or_else(|| "—".to_string())
+                };
                 let provider = if header.server_type.is_empty() {
                     String::new()
                 } else {
@@ -4144,10 +4241,32 @@ impl AppRoot {
                     .child(
                         div()
                             .text_size(px(14.0))
-                            .text_color(rgb(palette::on_surface_variant()))
+                            .text_color(rgb(if self.syncing {
+                                palette::tertiary()
+                            } else {
+                                palette::on_surface_variant()
+                            }))
                             .whitespace_nowrap()
                             .text_ellipsis()
                             .child(report),
+                    )
+                    .child(
+                        div()
+                            .w(px(2.0))
+                            .h(px((self.win_h * 0.0648 * 0.16).max(2.0)))
+                            .rounded_full()
+                            .bg(rgb(palette::outline_variant()))
+                            .overflow_hidden()
+                            .child(
+                                div()
+                                    .w(px(2.0 * self.sync_fill.value(&self.clock)))
+                                    .h_full()
+                                    .bg(rgb(if self.syncing {
+                                        palette::tertiary()
+                                    } else {
+                                        palette::primary()
+                                    })),
+                            ),
                     )
                     .child(
                         div()
@@ -4181,7 +4300,17 @@ impl AppRoot {
                                         this.activate_status(0);
                                         cx.notify();
                                     }))
-                                    .child(icon("reload-ui-2-svgrepo-com.svg", 18.0, palette::on_surface())),
+                                    .child(icon_rotated(
+                                        "reload-ui-2-svgrepo-com.svg",
+                                        18.0,
+                                        if self.syncing {
+                                            palette::on_surface_variant()
+                                        } else {
+                                            palette::on_surface()
+                                        },
+                                        self.sync_angle(),
+                                    ))
+                                    .opacity(if self.syncing { 0.38 } else { 0.85 }),
                             ),
                     )
                     .child(
@@ -6420,6 +6549,12 @@ impl Render for AppRoot {
         {
             window.request_animation_frame();
         }
+        if self.syncing
+            || !self.sync_settle.settled(&self.clock)
+            || !self.sync_fill.settled(&self.clock)
+        {
+            window.request_animation_frame();
+        }
         let status = self.player_bar();
         div()
             .track_focus(&self.focus)
@@ -6820,6 +6955,18 @@ fn icon(name: &str, size: f32, color: u32) -> gpui::AnyElement {
         .path(path)
         .size(px(size))
         .text_color(rgb(color))
+        .into_any_element()
+}
+
+fn icon_rotated(name: &str, size: f32, color: u32, degrees: f32) -> gpui::AnyElement {
+    let path = format!("{}/icons/{}", asset_root(), name);
+    svg()
+        .path(path)
+        .size(px(size))
+        .text_color(rgb(color))
+        .with_transformation(gpui::Transformation::rotate(gpui::radians(
+            degrees.to_radians(),
+        )))
         .into_any_element()
 }
 

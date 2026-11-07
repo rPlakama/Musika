@@ -77,6 +77,11 @@ pub enum Event {
         rating: u8,
     },
     LibrarySynced,
+    SyncProgress {
+        message: String,
+        done: usize,
+        total: usize,
+    },
     Wiped {
         scope: String,
     },
@@ -792,7 +797,16 @@ impl Bridge {
                 let _ = tx.send(Event::Error("Sync needs a live session.".to_string()));
                 return;
             };
-            match crate::index::sync_library(&dbs, Arc::new(client), false, |_| {}).await {
+            let progress_tx = tx.clone();
+            match crate::index::sync_library(&dbs, Arc::new(client), false, |progress| {
+                let _ = progress_tx.send(Event::SyncProgress {
+                    message: progress.message,
+                    done: progress.done,
+                    total: progress.total,
+                });
+            })
+            .await
+            {
                 Ok(_) => {
                     let _ = tx.send(Event::LibrarySynced);
                 }

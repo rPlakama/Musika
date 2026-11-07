@@ -24,6 +24,8 @@
 mod anim;
 mod bridge;
 mod covers;
+mod command_line;
+mod ipc_command;
 mod line_search;
 mod lyrics_layout;
 mod metrics;
@@ -40,7 +42,7 @@ use gpui::{
     UniformListScrollHandle,
 };
 
-use bridge::Event;
+use bridge::{Event, SyncMode};
 use quick_actions::{AltGesture, Direction, QuickKind, QuickMenu, QuickVerb};
 use state::{PageDescriptor, PageKind, PageState, Row, RowKind, RowWindow, Scope, Travel, ViewState};
 
@@ -589,6 +591,9 @@ struct AppRoot {
     transport_press: [Option<f64>; 3],
     line_search: line_search::LineSearchState,
     line_search_anim: anim::Behavior,
+    command_line: command_line::CommandLineState,
+    command_line_anim: anim::Behavior,
+    pending_ipc: Vec<ipc_command::IpcCommand>,
     line_search_snapshot: Vec<line_search::LineTarget>,
     line_search_surfaces: Vec<LineSurface>,
     status_focus: Option<usize>,
@@ -724,6 +729,9 @@ impl AppRoot {
             transport_press: [None; 3],
             line_search: line_search::LineSearchState::new(),
             line_search_anim: anim::Behavior::new(0.0),
+            command_line: command_line::CommandLineState::new(),
+            command_line_anim: anim::Behavior::new(0.0),
+            pending_ipc: Vec::new(),
             line_search_snapshot: Vec::new(),
             line_search_surfaces: Vec::new(),
             status_focus: None,
@@ -981,17 +989,44 @@ impl AppRoot {
             }
             Event::Wiped { scope } => {
                 self.marks.requested = None;
+                match scope.as_str() {
+                    "covers" => {
+                        if let Some(covers) = COVERS.get()
+                            && let Ok(mut covers) = covers.lock()
+                        {
+                            covers.clear();
+                        }
+                        self.display_covers.clear();
+                        self.display_requested.clear();
+                        self.display_retry.clear();
+                        self.palette_cover = None;
+                        self.palette_motion.reset(&self.clock);
+                    }
+                    "lyrics" => {
+                        self.lyrics = None;
+                        self.lyrics_requested = self.player.current().map(|track| track.id.clone());
+                        self.lyrics_overlay = false;
+                        self.lyrics_overlay_wanted = false;
+                        self.lyrics_layout = None;
+                    }
+                    "album" => {
+                        if let Some(page) = self.page.as_ref()
+                            && matches!(page.descriptor.kind, PageKind::Album | PageKind::Artist)
+                        {
+                            let kind = page.descriptor.kind;
+                            let id = page.descriptor.id.clone();
+                            self.bridge.request_container_state(kind, id);
+                        }
+                    }
+                    _ => {}
+                }
                 self.bridge.refresh_header();
                 self.reload();
                 if let Some(page) = self.page.as_ref() {
                     let descriptor = page.descriptor.clone();
                     self.bridge.load_page(descriptor);
                 }
-                self.push_toast(
-                    format!("Wiped {scope}"),
-                    ToastKind::Notice,
-                    None,
-                );
+                self.push_toast(format!("Wiped {scope}"), ToastKind::Notice, None);
             }
 
             Event::PageContainerState {
@@ -1848,8 +1883,13 @@ impl AppRoot {
         }
     }
 
-    fn start_sync(&mut self) {
+    fn start_sync(&mut self, mode: SyncMode) {
         if self.syncing {
+            self.push_toast(
+                "A sync is already running.".to_string(),
+                ToastKind::Notice,
+                None,
+            );
             return;
         }
         self.clock.tick();
@@ -1858,7 +1898,7 @@ impl AppRoot {
         self.sync_fill = anim::Behavior::new(0.0);
         self.sync_spin_started = self.clock.now;
         self.sync_spin_offset = self.sync_settle.value(&self.clock);
-        self.bridge.sync();
+        self.bridge.sync(mode);
     }
 
     fn finish_sync(&mut self) {
@@ -1899,7 +1939,7 @@ impl AppRoot {
     fn activate_status(&mut self, slot: usize) {
         self.status_focus = Some(slot);
         match slot {
-            0 => self.start_sync(),
+            0 => self.start_sync(SyncMode::Incremental),
             1 => {
                 if self.syncing {
                     self.push_toast(
@@ -2025,7 +2065,7 @@ impl AppRoot {
     }
 
     fn on_refresh(&mut self, _: &Refresh, _window: &mut Window, cx: &mut Context<Self>) {
-        self.start_sync();
+        self.start_sync(SyncMode::Incremental);
         cx.notify();
     }
 
@@ -3775,10 +3815,286 @@ impl AppRoot {
         cx.notify();
     }
 
+    fn open_command_line(&mut self) {
+        self.command_line.open();
+        self.clock.tick();
+        self.command_line_anim
+            .target(1.0, anim::STANDARD_MS, anim::Curve::Decelerate, &self.clock);
+    }
+
+    fn close_command_line(&mut self) {
+        self.command_line.close();
+        self.command_line_anim
+            .target(0.0, anim::STANDARD_MS, anim::Curve::Accelerate, &self.clock);
+    }
+
+    fn command_line_key(
+        &mut self,
+        event: &gpui::KeyDownEvent,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let key = event.keystroke.key.as_str();
+        let control = event.keystroke.modifiers.control;
+        let shift = event.keystroke.modifiers.shift;
+        let modified =
+            control || event.keystroke.modifiers.alt || event.keystroke.modifiers.platform;
+        match key {
+            "escape" => {
+                self.close_command_line();
+                cx.notify();
+                return;
+            }
+            "enter" => {
+                let text = self.command_line.query().to_string();
+                if text.trim().is_empty() {
+                    self.close_command_line();
+                    cx.notify();
+                    return;
+                }
+                match ipc_command::parse(&text) {
+                    Ok(command) => {
+                        self.close_command_line();
+                        self.pending_ipc.push(command);
+                    }
+                    Err(error) => {
+                        let now = self.clock.now;
+                        self.command_line.deny(now, error.to_string());
+                    }
+                }
+                cx.notify();
+                return;
+            }
+            "tab" => {
+                self.command_line.complete(false);
+                self.command_line.clear_denied();
+                cx.notify();
+                return;
+            }
+            "backtab" => {
+                self.command_line.complete(true);
+                self.command_line.clear_denied();
+                cx.notify();
+                return;
+            }
+            "left" => self.command_line.move_left(shift),
+            "right" => self.command_line.move_right(shift),
+            "home" => self.command_line.home(shift),
+            "end" => self.command_line.end(shift),
+            "backspace" => self.command_line.backspace(),
+            "delete" => self.command_line.delete_forward(),
+            "a" if control => self.command_line.select_all(),
+            "w" if control => self.command_line.delete_word_back(),
+            "c" if control => {
+                if let Some(text) = self.command_line.editor.selected_text() {
+                    let text = text.to_string();
+                    cx.write_to_clipboard(gpui::ClipboardItem::new_string(text));
+                }
+            }
+            "x" if control => {
+                if let Some(text) = self.command_line.editor.selected_text() {
+                    let text = text.to_string();
+                    cx.write_to_clipboard(gpui::ClipboardItem::new_string(text));
+                    self.command_line.editor.replace_selection("");
+                    self.command_line.reset_completion();
+                    self.command_line.refresh();
+                }
+            }
+            "v" if control => {
+                if let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) {
+                    self.command_line.insert(&text);
+                }
+            }
+            _ if !modified => {
+                if let Some(text) = event.keystroke.key_char.as_ref()
+                    && !text.chars().any(char::is_control)
+                {
+                    self.command_line.insert(text);
+                } else if key == "space" {
+                    self.command_line.insert(" ");
+                } else {
+                    return;
+                }
+            }
+            _ => return,
+        }
+        self.command_line.clear_denied();
+        cx.notify();
+    }
+
+    fn command_line_field(&self, bar_h: f32) -> gpui::AnyElement {
+        let editor = &self.command_line.editor;
+        let text_size = px(bar_h * 0.36);
+        if editor.text.is_empty() {
+            return div()
+                .flex_1()
+                .min_w_0()
+                .text_size(text_size)
+                .text_color(rgb(palette::on_surface_variant()))
+                .child("Type a command…")
+                .into_any_element();
+        }
+        if let Some(range) = editor.selection() {
+            let highlight = HighlightStyle {
+                color: Some(rgb(palette::on_primary_container()).into()),
+                background_color: Some(rgb(palette::primary_container()).into()),
+                ..Default::default()
+            };
+            return StyledText::new(editor.text.clone())
+                .with_highlights([(range, highlight)])
+                .into_any_element();
+        }
+        let cursor = editor.cursor.min(editor.text.len());
+        let (before, after) = editor.text.split_at(cursor);
+        div()
+            .flex_1()
+            .min_w_0()
+            .flex()
+            .items_center()
+            .text_size(text_size)
+            .text_color(rgb(palette::on_surface()))
+            .child(before.to_string())
+            .child(
+                div()
+                    .w(px(2.0))
+                    .h(px(bar_h * 0.46))
+                    .bg(rgb(palette::primary())),
+            )
+            .child(after.to_string())
+            .into_any_element()
+    }
+
+    fn command_line_overlay(&self, progress: f32) -> gpui::Div {
+        let bar_h = (self.win_h * 0.07).max(32.0);
+        let row_h = (bar_h * 0.44).max(18.0);
+        let suggestions: Vec<_> = self
+            .command_line
+            .suggestions
+            .iter()
+            .take(6)
+            .enumerate()
+            .map(|(index, suggestion)| {
+                let selected = index == self.command_line.selected;
+                div()
+                    .h(px(row_h))
+                    .px(px(self.win_w * 0.04))
+                    .flex()
+                    .items_center()
+                    .gap(px(bar_h * 0.12))
+                    .bg(if selected {
+                        rgb(palette::primary_container())
+                    } else {
+                        rgb(palette::surface_container())
+                    })
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .text_size(px(row_h * 0.44))
+                            .text_color(if selected {
+                                rgb(palette::on_primary_container())
+                            } else {
+                                rgb(palette::on_surface())
+                            })
+                            .child(suggestion.label.clone()),
+                    )
+                    .child(
+                        div()
+                            .max_w(px(self.win_w * 0.48))
+                            .text_size(px(row_h * 0.36))
+                            .text_color(if selected {
+                                rgb(palette::on_primary_container())
+                            } else {
+                                rgb(palette::on_surface_variant())
+                            })
+                            .child(suggestion.description.clone()),
+                    )
+            })
+            .collect();
+        let list_h = row_h * suggestions.len() as f32;
+        let denied = self.command_line.denied_opacity(self.clock.now);
+        div()
+            .absolute()
+            .inset_0()
+            .size_full()
+            .bg(gpui::black().opacity(0.50 * progress))
+            .child(
+                div()
+                    .absolute()
+                    .left_0()
+                    .right_0()
+                    .bottom(px(bar_h))
+                    .h(px(list_h))
+                    .bg(rgb(palette::surface_container()))
+                    .opacity(if progress > 0.0 { progress } else { 0.0 })
+                    .flex()
+                    .flex_col()
+                    .children(suggestions),
+            )
+            .child(
+                div()
+                    .absolute()
+                    .left_0()
+                    .right_0()
+                    .bottom(px(-(1.0 - progress) * bar_h))
+                    .h(px(bar_h))
+                    .rounded_md()
+                    .bg(rgb(palette::surface()))
+                    .px(px(self.win_w * 0.04))
+                    .flex()
+                    .items_center()
+                    .gap(px(bar_h * 0.08))
+                    .child(
+                        div()
+                            .text_size(px(bar_h * 0.42))
+                            .font_weight(gpui::FontWeight::BOLD)
+                            .text_color(rgb(palette::primary()))
+                            .child(":"),
+                    )
+                    .child(self.command_line_field(bar_h))
+                    .child(
+                        div()
+                            .text_size(px(bar_h * 0.28))
+                            .text_color(if self.command_line.denied_text.is_empty() {
+                                rgb(palette::on_surface_variant())
+                            } else {
+                                rgb(palette::error())
+                            })
+                            .child(if self.command_line.denied_text.is_empty() {
+                                format!("[{}]", self.command_line.mode_label())
+                            } else {
+                                self.command_line.denied_text.clone()
+                            }),
+                    )
+                    .child(
+                        div()
+                            .text_size(px(bar_h * 0.24))
+                            .text_color(rgb(palette::on_surface_variant()))
+                            .child("Tab complete"),
+                    )
+                    .child(
+                        div()
+                            .absolute()
+                            .left_0()
+                            .right_0()
+                            .bottom_0()
+                            .h(px(2.0))
+                            .rounded_full()
+                            .bg(rgb(palette::error()))
+                            .opacity(denied),
+                    ),
+            )
+    }
+
     fn on_key_down(&mut self, event: &gpui::KeyDownEvent, _window: &mut Window, cx: &mut Context<Self>) {
         if self.login.is_some() {
             cx.stop_propagation();
             self.login_key(event, cx);
+            return;
+        }
+        if self.command_line.is_open() {
+            cx.stop_propagation();
+            self.command_line_key(event, _window, cx);
             return;
         }
         if self.line_search.open {
@@ -3807,6 +4123,12 @@ impl AppRoot {
         }
         if self.search.is_none() || !self.search_open {
             let key = event.keystroke.key.as_str();
+            if key == ":" || key == "colon" || (key == ";" && event.keystroke.modifiers.shift) {
+                cx.stop_propagation();
+                self.open_command_line();
+                cx.notify();
+                return;
+            }
             if key == "/" || key == "?" || key == "slash" {
                 cx.stop_propagation();
                 if event.keystroke.modifiers.shift || key == "?" {
@@ -4278,55 +4600,48 @@ impl AppRoot {
     }
 
     fn handle_command(&mut self, command: &str, cx: &mut Context<Self>) {
-        match command.trim() {
-            "bottom" => {
-                if self.queue_open {
-                    let last = self.player.len().saturating_sub(1);
-                    self.land_queue(last);
-                } else if let Some(page) = self.page.as_ref() {
-                    let last = page.rows.len().saturating_sub(1);
-                    self.land_page(last);
+        match ipc_command::parse(command) {
+            Ok(command) => self.pending_ipc.push(command),
+            Err(error) => crate::debug_log!("ipc: ignored {command:?}: {error}"),
+        }
+        cx.notify();
+    }
+
+    /// Execute one shared IPC/`:` command. Runs with a live `Window`, so it can
+    /// reuse the existing action handlers instead of duplicating them.
+    fn execute_ipc_command(
+        &mut self,
+        command: ipc_command::IpcCommand,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        use ipc_command::{IpcCommand, QuickDirection, WipeScope};
+        match command {
+            IpcCommand::Sync(mode) => self.start_sync(mode),
+            IpcCommand::Wipe(scope) => {
+                if self.syncing {
+                    self.push_toast(
+                        "Wait for the sync to finish before wiping.".to_string(),
+                        ToastKind::Notice,
+                        None,
+                    );
                 } else {
-                    let last = self.view.rows.len().saturating_sub(1);
-                    self.land_library(last);
-                }
-            }
-            "top" => {
-                if self.queue_open {
-                    self.land_queue(0);
-                } else if self.page.is_some() {
-                    self.land_page(0);
-                } else {
-                    self.land_library(0);
-                }
-            }
-            "move_up" | "move_down" => {
-                let down = command.trim() == "move_down";
-                if self.queue_open {
-                    self.queue_cursor = if down {
-                        (self.queue_cursor + 1).min(self.player.len().saturating_sub(1))
-                    } else {
-                        self.queue_cursor.saturating_sub(1)
+                    let scope = match scope {
+                        WipeScope::Album => "album",
+                        WipeScope::Lyrics => "lyrics",
+                        WipeScope::Covers => "covers",
                     };
-                    self.follow_queue(true);
-                } else if let Some(page) = self.page.as_mut() {
-                    page.select(if down {
-                        page.cursor.saturating_add(1)
-                    } else {
-                        page.cursor.saturating_sub(1)
-                    });
-                    self.follow_page(true);
-                } else {
-                    let cursor = if down {
-                        self.view.cursor.saturating_add(1).min(self.view.rows.len().saturating_sub(1))
-                    } else {
-                        self.view.cursor.saturating_sub(1)
-                    };
-                    self.select(cursor);
+                    self.bridge.wipe(scope.to_string());
                 }
             }
-            "scroll_up" | "scroll_down" => {
-                let down = command.trim() == "scroll_down";
+            IpcCommand::WipeDatabases => self.open_wipe_menu(),
+            IpcCommand::Refresh => self.on_refresh(&Refresh, window, cx),
+            IpcCommand::Top => self.on_top(&Top, window, cx),
+            IpcCommand::Bottom => self.on_bottom(&Bottom, window, cx),
+            IpcCommand::MoveUp => self.on_move_up(&MoveUp, window, cx),
+            IpcCommand::MoveDown => self.on_move_down(&MoveDown, window, cx),
+            IpcCommand::ScrollUp | IpcCommand::ScrollDown => {
+                let down = matches!(command, IpcCommand::ScrollDown);
                 let modal = if self.queue_open {
                     &mut self.queue_scroll_modal
                 } else if self.page.is_some() {
@@ -4339,7 +4654,122 @@ impl AppRoot {
                 modal.on_wheel();
                 modal.set_offset_now(next.max(0.0));
             }
-            _ => {}
+            IpcCommand::PageUp => self.on_page_up(&PageUp, window, cx),
+            IpcCommand::PageDown => self.on_page_down(&PageDown, window, cx),
+            IpcCommand::MoveLeft | IpcCommand::MoveRight => {
+                let left = matches!(command, IpcCommand::MoveLeft);
+                if self.search.is_some() && self.search_open {
+                    if left {
+                        self.on_search_scope_prev(&SearchScopePrev, window, cx);
+                    } else {
+                        self.on_search_scope_next(&SearchScopeNext, window, cx);
+                    }
+                } else if self.fullscreen {
+                    self.cycle_fullscreen_focus(left);
+                }
+            }
+            IpcCommand::PrevPlace => self.step_travel(-1),
+            IpcCommand::NextPlace => self.step_travel(1),
+            IpcCommand::Home => self.on_home(&Home, window, cx),
+            IpcCommand::Back => self.on_back(&Back, window, cx),
+            IpcCommand::Enter => self.on_enter(&Enter, window, cx),
+            IpcCommand::ScopeNext => self.on_scope_next(&ScopeNext, window, cx),
+            IpcCommand::ScopePrev => self.on_scope_prev(&ScopePrev, window, cx),
+            IpcCommand::OrderNext => self.on_order_next(&OrderNext, window, cx),
+            IpcCommand::OrderPrev => self.on_order_prev(&OrderPrev, window, cx),
+            IpcCommand::Visual => self.on_visual(&Visual, window, cx),
+            IpcCommand::VisualAll => self.on_visual_all(&VisualAll, window, cx),
+            IpcCommand::QueueToggle => self.on_queue_toggle(&QueueToggle, window, cx),
+            IpcCommand::QueueRemove => self.on_queue_remove(&QueueRemove, window, cx),
+            IpcCommand::QueueUp => self.on_queue_up(&QueueUp, window, cx),
+            IpcCommand::QueueDown => self.on_queue_down(&QueueDown, window, cx),
+            IpcCommand::RepeatCycle => self.on_repeat_cycle(&RepeatCycle, window, cx),
+            IpcCommand::ToggleFullscreen => {
+                self.on_toggle_fullscreen(&ToggleFullscreen, window, cx)
+            }
+            IpcCommand::LyricsOverlay => self.on_lyrics_overlay(&LyricsOverlay, window, cx),
+            IpcCommand::PaneCycle { backward } => self.on_tab(backward, cx),
+            IpcCommand::Search { query } => {
+                self.open_search(true);
+                if !query.is_empty() {
+                    if let Some(search) = self.search.as_mut() {
+                        search.editor.set_text(&query);
+                    }
+                    self.search_edited();
+                }
+            }
+            IpcCommand::InsertMode { query } => {
+                self.open_search(true);
+                if !query.is_empty() {
+                    if let Some(search) = self.search.as_mut() {
+                        search.editor.set_text(&query);
+                        search.typing = true;
+                    }
+                    self.search_edited();
+                }
+            }
+            IpcCommand::SearchNext => self.on_search_next(&SearchNext, window, cx),
+            IpcCommand::SearchPrev => self.on_search_prev(&SearchPrev, window, cx),
+            IpcCommand::SearchScopeNext => self.on_search_scope_next(&SearchScopeNext, window, cx),
+            IpcCommand::SearchScopePrev => self.on_search_scope_prev(&SearchScopePrev, window, cx),
+            IpcCommand::LineSearch => self.on_line_search(&LineSearch, window, cx),
+            IpcCommand::PlayPause => self.on_play_pause(&PlayPause, window, cx),
+            IpcCommand::Play => self.player.resume(),
+            IpcCommand::Pause => self.player.pause(),
+            IpcCommand::Stop => self.player.stop(),
+            IpcCommand::NextTrack => self.on_next_track(&NextTrack, window, cx),
+            IpcCommand::PrevTrack => self.on_prev_track(&PrevTrack, window, cx),
+            IpcCommand::Mute => self.on_mute(&Mute, window, cx),
+            IpcCommand::VolumeUp => self.on_volume_up(&VolumeUp, window, cx),
+            IpcCommand::VolumeDown => self.on_volume_down(&VolumeDown, window, cx),
+            IpcCommand::SetVolume(volume) => self.player.set_volume(volume),
+            IpcCommand::SeekBack => self.on_seek_back(&SeekBack, window, cx),
+            IpcCommand::SeekForward => self.on_seek_forward(&SeekForward, window, cx),
+            IpcCommand::Seek(position) => self.player.seek(position),
+            IpcCommand::SeekRelative(offset) => {
+                self.player.seek((self.player.position() + offset).max(0.0))
+            }
+            IpcCommand::PlaySong(id) => {
+                self.last_play = Some((id.clone(), self.view.order_label().to_string()));
+                self.bridge
+                    .play_song(id, self.view.order_label().to_string());
+            }
+            IpcCommand::PlaySongInAlbum(id) => self.bridge.play_song_in_album(id),
+            IpcCommand::OpenSongAlbum(id) => self.bridge.quick_go_album(id),
+            IpcCommand::DownloadSong(id) => {
+                self.bridge.quick_download("song".to_string(), id, true)
+            }
+            IpcCommand::QuickHold(true) => {
+                self.alt_held = true;
+                self.alt_arm();
+            }
+            IpcCommand::QuickHold(false) => {
+                self.alt_held = false;
+                self.alt_release();
+            }
+            IpcCommand::QuickAim(direction) => {
+                if let Some(menu) = self.alt_menu.clone() {
+                    let direction = match direction {
+                        QuickDirection::North => Direction::North,
+                        QuickDirection::South => Direction::South,
+                        QuickDirection::East => Direction::East,
+                        QuickDirection::West => Direction::West,
+                    };
+                    self.alt.aim(direction, &menu, false);
+                }
+            }
+            IpcCommand::QuickCycle { next } => {
+                if let Some(menu) = self.alt_menu.clone() {
+                    self.alt.cycle(if next { 1 } else { -1 }, &menu);
+                }
+            }
+            IpcCommand::QuickCancel => {
+                self.alt.dismiss();
+                self.alt_menu = None;
+                self.alt_target = None;
+                self.animate_alt(0.0);
+            }
+            IpcCommand::Quit => self.on_quit(&Quit, window, cx),
         }
         cx.notify();
     }
@@ -6798,7 +7228,12 @@ impl Render for AppRoot {
             self.exiting = Some(self.clock.now);
         }
         if self.login.is_some() {
+            self.pending_ipc.clear();
             return self.login_view().into_any_element();
+        }
+        let pending = std::mem::take(&mut self.pending_ipc);
+        for command in pending {
+            self.execute_ipc_command(command, window, cx);
         }
         if self.player.state() != crate::player::State::Stopped
             && let Some(message) = self.player.pump()
@@ -6836,6 +7271,19 @@ impl Render for AppRoot {
         }
         let line_overlay = (self.line_search.open || line_progress > 0.001)
             .then(|| self.line_search_overlay(line_progress));
+        let command_progress = self.command_line_anim.target(
+            self.command_line.animation_target(),
+            anim::STANDARD_MS,
+            self.command_line.anim_curve(),
+            &self.clock,
+        );
+        if !self.command_line_anim.settled(&self.clock)
+            || self.command_line.denied_opacity(self.clock.now) > 0.0
+        {
+            window.request_animation_frame();
+        }
+        let command_overlay = (self.command_line.is_open() || command_progress > 0.001)
+            .then(|| self.command_line_overlay(command_progress));
         self.animate_alt(if self.alt.armed { 1.0 } else { 0.0 });
         let alt_progress = self.alt_spawn.value(&self.clock);
         if !self.alt_spawn.settled(&self.clock) {
@@ -7017,7 +7465,9 @@ impl Render for AppRoot {
         let status = self.player_bar();
         div()
             .track_focus(&self.focus)
-            .key_context(if self.line_search.open {
+            .key_context(if self.command_line.is_open() {
+                "command-line"
+            } else if self.line_search.open {
                 "line-search"
             } else if self.search.is_some() && self.search_open {
                 "search"
@@ -7081,6 +7531,7 @@ impl Render for AppRoot {
             .child(self.lyrics_overlay_element(lyrics_overlay_progress))
             .child(match description_overlay { Some(o) => o.into_any_element(), None => div().into_any_element() })
             .child(match line_overlay { Some(o) => o.into_any_element(), None => div().into_any_element() })
+            .child(match command_overlay { Some(o) => o.into_any_element(), None => div().into_any_element() })
             .child(match toast_overlay { Some(o) => o.into_any_element(), None => div().into_any_element() })
             .child(match exit_overlay { Some(o) => o.into_any_element(), None => div().into_any_element() })
             .child(match overlay { Some(o) => o.into_any_element(), None => div().into_any_element() })

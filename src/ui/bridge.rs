@@ -10,6 +10,13 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use tokio::sync::mpsc::UnboundedSender;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SyncMode {
+    Incremental,
+    All,
+    Repair,
+}
+
 pub enum Event {
     LoginRequired {
         offline_available: bool,
@@ -390,6 +397,51 @@ impl Bridge {
                 },
                 Err(err) => {
                     let _ = tx.send(Event::Error(format!("Could not play album: {err:#}")));
+                }
+            }
+        });
+    }
+
+    /// IPC `play_song_in_album`: load the song's album queue at that song.
+    pub fn play_song_in_album(&self, song_id: String) {
+        let tx = self.tx.clone();
+        let offline = self.offline.load(Ordering::Relaxed);
+        crate::app::runtime().spawn(async move {
+            let Some(dbs) = crate::app::dbs() else { return };
+            let Some(album_id) =
+                crate::library::song_album_ids(&dbs.library, std::slice::from_ref(&song_id))
+                    .await
+                    .ok()
+                    .and_then(|map| map.get(&song_id).cloned())
+            else {
+                let _ = tx.send(Event::Error("That song has no album to open.".to_string()));
+                return;
+            };
+            match crate::queue::album_tracks_json(&dbs, &album_id, offline).await {
+                Ok(json) => match serde_json::from_str::<Vec<crate::player::Track>>(&json) {
+                    Ok(tracks) => {
+                        let start = tracks
+                            .iter()
+                            .position(|track| track.id == song_id)
+                            .unwrap_or(0);
+                        let _ = tx.send(Event::Queue { tracks, start });
+                        let _ = tx.send(Event::OpenPage {
+                            descriptor: super::state::PageDescriptor::new(
+                                super::state::PageKind::Album,
+                                album_id,
+                            ),
+                        });
+                    }
+                    Err(err) => {
+                        let _ = tx.send(Event::Error(format!(
+                            "Could not play the song's album: {err:#}"
+                        )));
+                    }
+                },
+                Err(err) => {
+                    let _ = tx.send(Event::Error(format!(
+                        "Could not play the song's album: {err:#}"
+                    )));
                 }
             }
         });
@@ -795,8 +847,8 @@ impl Bridge {
         });
     }
 
-    /// Run a normal (shallow) library sync against the configured server.
-    pub fn sync(&self) {
+    /// Run an incremental, deep, or clean-rebuild library sync.
+    pub fn sync(&self, mode: SyncMode) {
         let tx = self.tx.clone();
         crate::app::runtime().spawn(async move {
             let Some(dbs) = crate::app::dbs() else { return };
@@ -804,8 +856,21 @@ impl Bridge {
                 let _ = tx.send(Event::Error("Sync needs a live session.".to_string()));
                 return;
             };
+            let client = Arc::new(client);
+            if mode == SyncMode::Repair {
+                let _ = tx.send(Event::SyncProgress {
+                    message: "Repairing library…".to_string(),
+                    done: 0,
+                    total: 100,
+                });
+                if let Err(err) = crate::db::wipe_library(&dbs).await {
+                    let _ = tx.send(Event::Error(format!("Library repair failed: {err:#}")));
+                    return;
+                }
+            }
+            let deep = mode != SyncMode::Incremental;
             let progress_tx = tx.clone();
-            match crate::index::sync_library(&dbs, Arc::new(client), false, |progress| {
+            let report = match crate::index::sync_library(&dbs, client.clone(), deep, |progress| {
                 let _ = progress_tx.send(Event::SyncProgress {
                     message: progress.message,
                     done: progress.done,
@@ -814,13 +879,21 @@ impl Bridge {
             })
             .await
             {
-                Ok(_) => {
-                    let _ = tx.send(Event::LibrarySynced);
-                }
+                Ok(report) => report,
                 Err(err) => {
                     let _ = tx.send(Event::Error(format!("Library sync failed: {err:#}")));
+                    return;
                 }
+            };
+            if mode != SyncMode::Incremental && report.covers_due {
+                let _ = tx.send(Event::SyncProgress {
+                    message: "Refreshing covers…".to_string(),
+                    done: 90,
+                    total: 100,
+                });
+                crate::index::cache_covers(&dbs, &client, &report.forced_covers).await;
             }
+            let _ = tx.send(Event::LibrarySynced);
         });
     }
 
@@ -833,6 +906,8 @@ impl Bridge {
                 "library" => crate::db::wipe_library(&dbs).await,
                 "indexes" => crate::db::wipe_indexes(&dbs).await,
                 "covers" => crate::db::wipe_covers(&dbs).await,
+                "lyrics" => crate::db::wipe_lyrics(&dbs).await,
+                "album" => crate::media_actions::wipe_albums(&dbs).await,
                 other => Err(anyhow::anyhow!("unknown wipe scope: {other}")),
             };
             match result {

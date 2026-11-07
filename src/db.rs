@@ -336,6 +336,12 @@ pub async fn wipe_library(dbs: &Dbs) -> Result<()> {
     Ok(())
 }
 
+/// Wipes cached lyric documents and lines. Local `.lrc`/`.txt` overrides and
+/// the capability flag in `lyrics_meta` are user/server state and stay.
+pub async fn wipe_lyrics(dbs: &Dbs) -> Result<()> {
+    delete_tables(&dbs.lyrics, &["lyric_line", "lyrics"]).await
+}
+
 /// Wipes the derived full-text index plus the `index.txt` mirror. Both
 /// rebuild from the library on the next sync.
 pub async fn wipe_indexes(dbs: &Dbs) -> Result<()> {

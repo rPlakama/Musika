@@ -36,6 +36,32 @@ pub(crate) async fn rule_off(dbs: &crate::db::Dbs, rule_id: &str) {
     }
 }
 
+/// Drops every downloaded album: album media rules plus explicit downloads
+/// for songs that belong to an album. Library metadata is untouched.
+pub(crate) async fn wipe_albums(dbs: &crate::db::Dbs) -> anyhow::Result<()> {
+    let rules: Vec<String> = sqlx::query_scalar("SELECT id FROM media_rule WHERE kind = 'album'")
+        .fetch_all(&dbs.media)
+        .await?;
+    for rule_id in rules {
+        rule_off(dbs, &rule_id).await;
+    }
+
+    let done = crate::download::done_ids(&dbs.download).await?;
+    if done.is_empty() {
+        return Ok(());
+    }
+    let albums = crate::library::song_album_ids(&dbs.library, &done).await?;
+    let album_songs: Vec<String> = done
+        .into_iter()
+        .filter(|song| albums.contains_key(song))
+        .collect();
+    for song in &album_songs {
+        let _ = crate::download::unmark(&dbs.download, song).await;
+    }
+    crate::media::remove_songs_media(&dbs.media, &album_songs).await?;
+    Ok(())
+}
+
 /// Drops an album container: its rule, marks and blobs.
 pub(crate) async fn album_container_off(dbs: &crate::db::Dbs, album_id: &str) {
     match crate::media::rule_for(&dbs.media, "album", album_id).await {

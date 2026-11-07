@@ -24,9 +24,13 @@
 //! echo search | socat - UNIX-CONNECT:~/.config/musika/ipc.sock
 //! ```
 //!
-//! Commands are things like `search`, `play_pause`, `next`, `back`, ...
-//! Payload commands append an argument, e.g.
-//! `play_song_in_album <song-id>` (opens the album page and plays from there).
+//! Commands are parsed by the shared `ui::ipc_command` registry, so the
+//! socket and the `:` command line accept the same vocabulary: navigation and
+//! list actions (`top`, `move_down`, `queue_toggle`, ...), transport
+//! (`play_pause`, `next`, `volume 40`, `seek 30`), payload commands
+//! (`play_song_in_album <song-id>`, `download_song <song-id>`), maintenance
+//! (`sync`, `sync all`, `sync repair`, `wipe album|lyrics|covers`) and the
+//! legacy/MPRIS aliases.
 
 use std::io::{BufRead, BufReader};
 use std::os::unix::net::{UnixListener, UnixStream};

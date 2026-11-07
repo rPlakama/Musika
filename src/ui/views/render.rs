@@ -1,0 +1,347 @@
+//! Root render composition.
+
+use super::super::*;
+
+impl Render for AppRoot {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.frames = self.frames.wrapping_add(1);
+        self.win_w = f32::from(window.viewport_size().width);
+        self.win_h = f32::from(window.viewport_size().height);
+        self.scale_factor = window.scale_factor();
+        self.refresh_lyrics_overlay();
+        if self.trace && self.frames.is_multiple_of(120) {
+            crate::debug_log!("GPUI trace: frame {}", self.frames);
+        }
+        self.clock.tick();
+        palette::publish(self.palette_motion.value(&self.clock));
+        if !self.palette_motion.settled(&self.clock) {
+            window.request_animation_frame();
+        }
+        self.sync_palette();
+        let playback_index = self.player.index();
+        if playback_index != self.last_player_index {
+            self.last_player_index = playback_index;
+            if self.queue_open {
+                self.land_queue(playback_index);
+            }
+        }
+        self.refresh_lyrics_emphasis();
+        self.sync_lyrics_layout(window);
+        if self.exiting.is_none()
+            && let Some(ms) = self.quit_after_ms
+            && self.clock.now * 1000.0 >= ms as f64
+        {
+            self.exiting = Some(self.clock.now);
+        }
+        if self.login.is_some() {
+            self.pending_ipc.clear();
+            return self.login_view().into_any_element();
+        }
+        let pending = std::mem::take(&mut self.pending_ipc);
+        for command in pending {
+            self.execute_ipc_command(command, window, cx);
+        }
+        if self.player.state() != crate::player::State::Stopped
+            && let Some(message) = self.player.pump()
+        {
+            self.playback_error = Some(message);
+        }
+        if self.player.state() == crate::player::State::Playing {
+            window.request_animation_frame();
+        }
+        let progress = self.search_anim.target(
+            if self.search_open { 1.0 } else { 0.0 },
+            anim::STANDARD_MS,
+            if self.search_open { anim::Curve::Decelerate } else { anim::Curve::Accelerate },
+            &self.clock,
+        );
+        if self.search.is_some() && !self.search_open && progress <= 0.001 {
+            self.search = None;
+        }
+        if self.search.is_some() && !self.search_anim.settled(&self.clock) {
+            window.request_animation_frame();
+        }
+        if self.search.as_ref().is_some_and(|search| search.loading)
+            || self.search_denied_opacity() > 0.0
+        {
+            window.request_animation_frame();
+        }
+        let line_progress = self.line_search_anim.target(
+            if self.line_search.open { 1.0 } else { 0.0 },
+            anim::STANDARD_MS,
+            if self.line_search.open { anim::Curve::Decelerate } else { anim::Curve::Accelerate },
+            &self.clock,
+        );
+        if !self.line_search_anim.settled(&self.clock) || self.line_search_denied_opacity() > 0.0 {
+            window.request_animation_frame();
+        }
+        let line_overlay = (self.line_search.open || line_progress > 0.001)
+            .then(|| self.line_search_overlay(line_progress));
+        let command_progress = self.command_line_anim.target(
+            self.command_line.animation_target(),
+            anim::STANDARD_MS,
+            self.command_line.anim_curve(),
+            &self.clock,
+        );
+        if !self.command_line_anim.settled(&self.clock)
+            || self.command_line.denied_opacity(self.clock.now) > 0.0
+        {
+            window.request_animation_frame();
+        }
+        let command_overlay = (self.command_line.is_open() || command_progress > 0.001)
+            .then(|| self.command_line_overlay(command_progress));
+        self.animate_alt(if self.alt.armed { 1.0 } else { 0.0 });
+        let alt_progress = self.alt_spawn.value(&self.clock);
+        if !self.alt_spawn.settled(&self.clock) {
+            window.request_animation_frame();
+        }
+        if !self.alt.armed && alt_progress <= 0.001 {
+            self.alt_menu = None;
+            self.alt_target = None;
+        }
+        let alt_overlay = (self.alt.armed || alt_progress > 0.001)
+            .then(|| self.alt_overlay(alt_progress));
+        let queue_progress = self.queue_anim.target(
+            if self.queue_open { 1.0 } else { 0.0 },
+            anim::EMPHASIZED_MS,
+            if self.queue_open { anim::Curve::Decelerate } else { anim::Curve::Accelerate },
+            &self.clock,
+        );
+        if !self.queue_anim.settled(&self.clock) {
+            window.request_animation_frame();
+        }
+        let fullscreen_progress = self.fullscreen_anim.target(
+            if self.fullscreen { 1.0 } else { 0.0 },
+            anim::EMPHASIZED_MS,
+            if self.fullscreen { anim::Curve::Decelerate } else { anim::Curve::Accelerate },
+            &self.clock,
+        );
+        if !self.fullscreen_anim.settled(&self.clock) {
+            window.request_animation_frame();
+        }
+        if self.fullscreen {
+            self.request_current_lyrics();
+            self.ensure_marks();
+            self.refresh_fullscreen_album_state();
+        }
+        if let Some(page) = self.page.as_ref() {
+            let cover_art = page.header.cover_art.clone();
+            let bucket = self.page_hero_bucket();
+            let changed = self
+                .cover_trace
+                .as_ref()
+                .map(|trace| (trace.cover_art.as_str(), trace.bucket))
+                != Some((cover_art.as_str(), bucket));
+            if changed {
+                let started = std::time::Instant::now();
+                crate::debug_log!(
+                    "album entry: init album cover load cover={} bucket={} at={}",
+                    cover_art,
+                    bucket,
+                    unix_ms()
+                );
+                self.cover_trace = Some(CoverLoadTrace {
+                    cover_art: cover_art.clone(),
+                    bucket,
+                    started,
+                    thumb_logged: false,
+                });
+            }
+            if self.display_cover(&cover_art, bucket).is_none()
+                && let Some(trace) = self.cover_trace.as_mut()
+                && !trace.thumb_logged
+            {
+                trace.thumb_logged = true;
+                crate::debug_log!(
+                    "album entry: album cover thumb shown cover={} bucket={} elapsed_ms={:.1}",
+                    cover_art,
+                    bucket,
+                    trace.started.elapsed().as_secs_f64() * 1000.0
+                );
+            }
+            self.ensure_display_cover(&cover_art, bucket);
+        }
+        if let Some(track) = self.player.current().cloned() {
+            self.ensure_display_cover(&track.cover_art, self.fullscreen_hero_bucket());
+        }
+        let lyrics_overlay_progress = self.lyrics_overlay_anim.target(
+            if self.lyrics_overlay { 1.0 } else { 0.0 },
+            anim::QUICK_MS,
+            anim::Curve::Standard,
+            &self.clock,
+        );
+        if !self.lyrics_overlay_anim.settled(&self.clock) {
+            window.request_animation_frame();
+        }
+        let fullscreen_overlay = (self.fullscreen || fullscreen_progress > 0.001)
+            .then(|| self.fullscreen_overlay(fullscreen_progress));
+        let exit_overlay = self.exiting.map(|started| {
+            let progress = (((self.clock.now - started) / 0.200) as f32).clamp(0.0, 1.0);
+            self.exit_overlay(progress)
+        });
+        self.toasts.retain(|toast| self.clock.now - toast.created_at < 6.320);
+        if self.toasts.iter().any(|toast| self.clock.now - toast.created_at < 6.320) {
+            window.request_animation_frame();
+        }
+        let toast_overlay = (!self.toasts.is_empty()).then(|| self.toast_overlay(&*cx));
+        let queue_overlay = (self.queue_open || queue_progress > 0.001)
+            .then(|| self.queue_overlay(&*cx, queue_progress));
+        let overlay = self.search.as_ref().map(|search| self.search_overlay(&*cx, search, progress));
+        let description_overlay = self.description_overlay(&*cx);
+        if let Some(started) = self.exiting {
+            window.request_animation_frame();
+            if self.clock.now - started >= 0.200 {
+                self.flush_status();
+                window.remove_window();
+            }
+        }
+        if self.page.is_some() {
+            self.ensure_page_metrics();
+            self.ensure_marks();
+        }
+        if self.queue_open {
+            self.ensure_queue_metrics();
+        }
+        if self.search.as_ref().is_some_and(|search| !search.editor.text.is_empty()) {
+            let height = f32::from(window.viewport_size().height);
+            self.ensure_search_metrics(height);
+        }
+        self.ensure_library_window();
+        if !self.preloaded && self.view.rows.count > 0 && self.view.scope != Scope::Playlists {
+            self.preloaded = true;
+            let start_scope = self.view.scope;
+            cx.spawn(async move |this, cx| {
+                cx.background_executor()
+                    .timer(std::time::Duration::from_millis(350))
+                    .await;
+                let _ = this.update(cx, |this, _| {
+                    for scope in Scope::ALL {
+                        if scope != start_scope && scope != Scope::Playlists {
+                            this.bridge.preload_library(scope, 0);
+                        }
+                    }
+                });
+            })
+            .detach();
+        }
+        let following = self.library_scroll.apply(self.clock.now)
+            | self.page_scroll_modal.apply(self.clock.now)
+            | self.queue_scroll_modal.apply(self.clock.now)
+            | self.search_scroll.apply(self.clock.now);
+        if following {
+            window.request_animation_frame();
+        }
+        let top = self.top_bar(&*cx);
+        let body = if self.page.is_some() {
+            self.page_view(&*cx).into_any_element()
+        } else {
+            self.list(&*cx, window).into_any_element()
+        };
+        if self.row_scales.values().any(|scale| !scale.settled(&self.clock))
+            || self
+                .row_hover_colors
+                .values()
+                .any(|color| !color.settled(&self.clock))
+        {
+            window.request_animation_frame();
+        }
+        if !self.lyrics_shift.settled(&self.clock)
+            || !self.lyrics_track_fade.settled(&self.clock)
+            || self
+                .lyrics_line_opacity
+                .values()
+                .any(|value| !value.settled(&self.clock))
+            || self
+                .lyrics_line_emphasis
+                .values()
+                .any(|value| !value.settled(&self.clock))
+            || self
+                .lyrics_line_color
+                .values()
+                .any(|color| !color.settled(&self.clock))
+        {
+            window.request_animation_frame();
+        }
+        if self.syncing
+            || !self.sync_settle.settled(&self.clock)
+            || !self.sync_fill.settled(&self.clock)
+        {
+            window.request_animation_frame();
+        }
+        let status = self.player_bar();
+        div()
+            .track_focus(&self.focus)
+            .key_context(if self.command_line.is_open() {
+                "command-line"
+            } else if self.line_search.open {
+                "line-search"
+            } else if self.search.is_some() && self.search_open {
+                "search"
+            } else {
+                "main"
+            })
+            .on_action(cx.listener(Self::on_quit))
+            .on_action(cx.listener(Self::on_move_down))
+            .on_action(cx.listener(Self::on_move_up))
+            .on_action(cx.listener(Self::on_top))
+            .on_action(cx.listener(Self::on_bottom))
+            .on_action(cx.listener(Self::on_scope_next))
+            .on_action(cx.listener(Self::on_scope_prev))
+            .on_action(cx.listener(Self::on_order_next))
+            .on_action(cx.listener(Self::on_order_prev))
+            .on_action(cx.listener(Self::on_refresh))
+            .on_action(cx.listener(Self::on_enter))
+            .on_action(cx.listener(Self::on_visual))
+            .on_action(cx.listener(Self::on_search))
+            .on_action(cx.listener(Self::on_insert_mode))
+            .on_action(cx.listener(Self::on_line_search))
+            .on_action(cx.listener(Self::on_lyrics_overlay))
+            .on_action(cx.listener(Self::on_home))
+            .on_action(cx.listener(Self::on_search_scope_next))
+            .on_action(cx.listener(Self::on_search_scope_prev))
+            .on_action(cx.listener(Self::on_play_pause))
+            .on_action(cx.listener(Self::on_queue_toggle))
+            .on_action(cx.listener(Self::on_repeat_cycle))
+            .on_action(cx.listener(Self::on_toggle_fullscreen))
+            .on_action(cx.listener(Self::on_queue_remove))
+            .on_action(cx.listener(Self::on_queue_up))
+            .on_action(cx.listener(Self::on_queue_down))
+            .on_action(cx.listener(Self::on_mute))
+            .on_action(cx.listener(Self::on_volume_up))
+            .on_action(cx.listener(Self::on_volume_down))
+            .on_action(cx.listener(Self::on_seek_back))
+            .on_action(cx.listener(Self::on_seek_forward))
+            .on_action(cx.listener(Self::on_next_track))
+            .on_action(cx.listener(Self::on_prev_track))
+            .on_action(cx.listener(Self::on_search_next))
+            .on_action(cx.listener(Self::on_search_prev))
+            .on_key_down(cx.listener(Self::on_key_down))
+            .on_modifiers_changed(cx.listener(Self::on_modifiers_changed))
+            .on_action(cx.listener(Self::on_visual_all))
+            .on_action(cx.listener(Self::on_page_down))
+            .on_action(cx.listener(Self::on_page_up))
+            .on_action(cx.listener(Self::on_back))
+            .on_action(cx.listener(Self::on_prev_place))
+            .on_action(cx.listener(Self::on_next_place))
+            .flex()
+            .flex_col()
+            .size_full()
+            .bg(rgb(palette::background()))
+            .font_family("Overused Grotesk Roman")
+            .text_color(rgb(palette::on_surface()))
+            .child(top)
+            .child(body)
+            .child(status)
+            .child(match queue_overlay { Some(o) => o.into_any_element(), None => div().into_any_element() })
+            .child(match fullscreen_overlay { Some(o) => o.into_any_element(), None => div().into_any_element() })
+            .child(self.lyrics_overlay_element(lyrics_overlay_progress))
+            .child(match description_overlay { Some(o) => o.into_any_element(), None => div().into_any_element() })
+            .child(match line_overlay { Some(o) => o.into_any_element(), None => div().into_any_element() })
+            .child(match command_overlay { Some(o) => o.into_any_element(), None => div().into_any_element() })
+            .child(match toast_overlay { Some(o) => o.into_any_element(), None => div().into_any_element() })
+            .child(match exit_overlay { Some(o) => o.into_any_element(), None => div().into_any_element() })
+            .child(match overlay { Some(o) => o.into_any_element(), None => div().into_any_element() })
+            .child(match alt_overlay { Some(o) => o, None => div().into_any_element() })
+            .into_any_element()
+    }
+}

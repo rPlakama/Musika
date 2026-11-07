@@ -131,6 +131,12 @@ impl CommandLineState {
         self.refresh();
     }
 
+    pub fn apply_edit(&mut self, command: &super::widgets::text_edit::EditCommand) {
+        super::widgets::text_edit::apply(&mut self.editor, command);
+        self.reset_completion();
+        self.refresh();
+    }
+
     pub fn set_text(&mut self, text: &str) {
         self.editor.set_text(text);
         self.reset_completion();
@@ -255,15 +261,7 @@ impl CommandLineState {
     }
 
     pub fn denied_opacity(&self, now: f64) -> f32 {
-        let Some(started) = self.denied_at else {
-            return 0.0;
-        };
-        let elapsed = ((now - started) as f32).max(0.0);
-        if elapsed < 0.03 {
-            elapsed / 0.03
-        } else {
-            (1.0 - (elapsed - 0.03) / 0.12).clamp(0.0, 1.0)
-        }
+        anim::denied_opacity(self.denied_at, now)
     }
 
     pub fn animation_target(&self) -> f32 {

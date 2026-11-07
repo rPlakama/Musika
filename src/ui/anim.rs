@@ -180,6 +180,14 @@ mod tests {
     }
 
     #[test]
+    fn denied_flash_rises_and_fades() {
+        assert_eq!(denied_opacity(None, 10.0), 0.0);
+        assert!((denied_opacity(Some(10.0), 10.015) - 0.5).abs() < 0.02);
+        assert_eq!(denied_opacity(Some(10.0), 10.03), 1.0);
+        assert_eq!(denied_opacity(Some(10.0), 10.20), 0.0);
+    }
+
+    #[test]
     fn behavior_retargets_from_current_value() {
         let mut clock = Clock::new();
         clock.now = 0.0;
@@ -190,6 +198,20 @@ mod tests {
         assert!((mid - 0.5).abs() < 1e-4);
         behavior.target(0.0, 1000.0, Curve::Linear, &clock);
         assert!((behavior.value(&clock) - mid).abs() < 1e-4);
+    }
+}
+
+/// The red denied-flash envelope shared by the floating search, `/` and `:`.
+/// It rises for 30 ms, then fades over 120 ms.
+pub fn denied_opacity(started_at: Option<f64>, now: f64) -> f32 {
+    let Some(started) = started_at else {
+        return 0.0;
+    };
+    let elapsed = ((now - started) as f32).max(0.0);
+    if elapsed < 0.03 {
+        elapsed / 0.03
+    } else {
+        (1.0 - (elapsed - 0.03) / 0.12).clamp(0.0, 1.0)
     }
 }
 

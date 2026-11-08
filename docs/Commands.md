@@ -65,7 +65,7 @@ mpris_position:5000000
 | `wipe_databases` | `wipe_databases` | Open the destructive database wipe chooser; this is not an immediate wipe. |
 | `logout` | `logout` | End the live session and show the login screen. The account and its data stay stored. |
 | `add_account` | `add_account` | Open the login screen in add-account mode. Escape cancels without touching the current account. |
-| `remove_account` | `remove_account [--keep-data]` | Remove the current account. Account-local data is removed unless `--keep-data` is supplied. If another account exists it becomes active; otherwise the login screen is shown. |
+| `remove_account` | `remove_account [--keep-data]` | Remove the current account. The account-local data directory is removed unless `--keep-data` is supplied (legacy config-root data is preserved). If another account exists it becomes active; otherwise the login screen is shown. |
 
 ## Playlists, radio, shuffle and downloads
 
@@ -117,16 +117,16 @@ existing mix of the same name instead of creating timestamped duplicates.
 `radio` starts a radio queue:
 
 ```text
-radio                 # current context: album page, selected song, or playing track
+radio                 # currently playing track
 radio current         # currently playing track
 radio album           # current album page, or pass a name
 radio album "Kid A"
 radio song "Idioteque"
 ```
 
-`radio save` saves the currently open radio page. The M3U is named from the
-radio page's origin title. By default it also creates the server playlist;
-`--offline` writes only the local M3U.
+`radio save` saves the currently open radio page. It requires a radio page to
+be open; the M3U is named from that page's origin title. By default it also
+creates the server playlist; `--offline` writes only the local M3U.
 
 ```text
 radio save

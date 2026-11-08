@@ -372,7 +372,7 @@ impl AppRoot {
                             .child(transport_button("skip-previous-solid-svgrepo-com.svg", 22.0, palette::on_surface(), self.transport_scale(0)))
                             .child(if self.player.is_loading() {
                                 transport_loading_button(
-                                    "reload-ui-2-svgrepo-com.svg",
+                                    "loading-loop.svg",
                                     28.0,
                                     palette::on_surface(),
                                     self.transport_scale(1),

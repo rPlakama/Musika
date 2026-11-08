@@ -86,6 +86,7 @@ unsafe extern "C" {
     ) -> c_int;
     fn musika_decoder_seek(decoder: *mut MusikaDecoder, seconds: c_double) -> c_int;
     fn musika_decoder_duration(decoder: *mut MusikaDecoder) -> c_double;
+    fn musika_decoder_size(decoder: *mut MusikaDecoder) -> i64;
     fn musika_decoder_close(decoder: *mut MusikaDecoder);
 }
 
@@ -96,6 +97,7 @@ struct Status {
     failed: Option<String>,
     position: f64,
     duration: f64,
+    stream_size: u64,
     level: f64,
     peak: f64,
 }
@@ -291,12 +293,18 @@ impl Native {
         let played_frames = unsafe { musika_sink_played_frames(self.sink) };
         let buffered_frames = unsafe { musika_sink_buffered_frames(self.sink) };
         status.position = origin + played_frames as f64 / 48_000.0;
-        // 2 MiB of decoded audio is enough to leave the fetching state. This
-        // also works while paused: the stream can fill the ring without any
-        // played frames.
-        const BUFFER_BYTES: u64 = 2 * 1024 * 1024;
+        // A 20th of the source file is the reference read-ahead. Unknown
+        // lengths fall back to 1 MiB; the sink ring caps the effective value.
+        const MIN_REFERENCE: u64 = 64 * 1024;
+        const MAX_REFERENCE: u64 = 2 * 1024 * 1024;
+        const FALLBACK_REFERENCE: u64 = 1024 * 1024;
+        let reference = if status.stream_size > 0 {
+            (status.stream_size / 20).clamp(MIN_REFERENCE, MAX_REFERENCE)
+        } else {
+            FALLBACK_REFERENCE
+        };
         let buffered_bytes = buffered_frames * 4;
-        if status.loading && (buffered_bytes >= BUFFER_BYTES || (playing && played_frames > 0)) {
+        if status.loading && (buffered_bytes >= reference || (playing && played_frames > 0)) {
             status.loading = false;
             self.lock_status().loading = false;
         }
@@ -466,7 +474,12 @@ fn decode_loop(
     // context (owned by the decoder); musika_decoder_close frees it via the
     // avio context closure. Nothing to drop here.
     crate::startup::trace("fetch.first_chunk");
-    lock(&status).duration = unsafe { musika_decoder_duration(decoder) };
+    {
+        let mut guard = lock(&status);
+        guard.duration = unsafe { musika_decoder_duration(decoder) };
+        let size = unsafe { musika_decoder_size(decoder) };
+        guard.stream_size = if size > 0 { size as u64 } else { 0 };
+    }
 
     let (pre_tx, pre_rx) = mpsc::channel::<Result<NextDecoder, String>>();
     let mut pre_handle: Option<JoinHandle<()>> = None;
@@ -561,6 +574,8 @@ fn decode_loop(
                 let mut guard = lock(&status);
                 guard.position = 0.0;
                 guard.duration = unsafe { musika_decoder_duration(decoder) };
+                let size = unsafe { musika_decoder_size(decoder) };
+                guard.stream_size = if size > 0 { size as u64 } else { 0 };
                 guard.ended = false;
                 drop(guard);
                 boundary.store(true, Ordering::Release);

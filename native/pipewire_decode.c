@@ -491,6 +491,13 @@ int musika_decoder_read(MusikaDecoder *d, int16_t *out, int max_frames, int *fra
     return 0;
 }
 
+int64_t musika_decoder_size(MusikaDecoder *d)
+{
+    if (!d || !d->format || !d->format->pb)
+        return -1;
+    return avio_size(d->format->pb);
+}
+
 int musika_decoder_seek(MusikaDecoder *d, double seconds)
 {
     if (!d || seconds < 0)

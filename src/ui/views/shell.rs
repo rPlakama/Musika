@@ -15,7 +15,7 @@ impl AppRoot {
         let (icon_el, opacity) = match action {
             TopBarAction::Sync => (
                 icon_rotated(
-                    "reload-ui-2-svgrepo-com.svg",
+                    "loading-loop.svg",
                     18.0,
                     if self.syncing {
                         palette::on_surface_variant()
@@ -453,7 +453,7 @@ impl AppRoot {
                             ))
                             .child(if self.player.is_loading() {
                                 transport_loading_button(
-                                    "reload-ui-2-svgrepo-com.svg",
+                                    "loading-loop.svg",
                                     m.play_size,
                                     palette::on_surface(),
                                     self.transport_scale(1),

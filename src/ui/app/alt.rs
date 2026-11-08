@@ -739,6 +739,7 @@ impl AppRoot {
     pub(in crate::ui) fn on_alt_key(&mut self, event: &gpui::KeyDownEvent, cx: &mut Context<Self>) {
         let key = event.keystroke.key.as_str();
         let shift = event.keystroke.modifiers.shift;
+        let control = event.keystroke.modifiers.control;
         match key {
             "escape" => {
                 self.alt.dismiss();
@@ -758,6 +759,16 @@ impl AppRoot {
             "h" | "left" => {
                 if let Some(menu) = self.alt_menu.clone() {
                     self.alt.aim(Direction::West, &menu, false);
+                }
+            }
+            "j" if control => {
+                if let Some(menu) = self.alt_menu.clone() {
+                    self.alt.cycle(1, &menu);
+                }
+            }
+            "k" if control => {
+                if let Some(menu) = self.alt_menu.clone() {
+                    self.alt.cycle(-1, &menu);
                 }
             }
             "j" | "down" | "ctrl-j" => {

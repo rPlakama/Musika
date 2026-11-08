@@ -3,6 +3,35 @@
 All notable changes to Musika, newest first. `TASKLISTMAJOR.md` tracks the
 open work; this file is the release history.
 
+## 0.6.4 - _Everything Is A Command_
+
+- Add multi-account/multi-server storage: a global account registry, isolated
+  per-account databases/caches/playlists, and migration of the existing
+  single-account data root into the first account.
+- Add `logout`, `add_account`, and `remove_account` commands, an add-account
+  login mode, automatic account switching, and per-account session restoration.
+  Remove the top-bar Wipe icon while keeping every `wipe` command available;
+  move the last-sync time beside the sync action.
+- Rework local playlist creation around command names: `playlist create` takes
+  the current track, `playlist add` accepts multiple search-resolved targets
+  for local M3U or Subsonic playlists, and mix files use deterministic
+  origin/named filenames that overwrite instead of timestamping duplicates.
+  Add `radio save [--offline]`.
+- Add scoped `shuffle`, `radio`, and `download` IPC commands, including
+  current-context defaults, named shuffle/radio targets, artist → album → track
+  download paths, local download removal, and current-track download fallback.
+- Use the unified Search-overlay engine for command-line argument
+  autosuggestions, scoped by the previous command argument, with stale-result
+  suppression and quoted completions.
+- Make Ctrl-J/Ctrl-K act as universal down/up navigation across lists, search,
+  line search, command suggestions and insert modes; keep the smaller command
+  line font while restoring the Search overlay's readable font size.
+- Fix Tab completion to insert the highlighted auto-suggestion instead of
+  always taking the first candidate in the list.
+- Smooth the Spotify-style lyric phrase rhythm to 400 ms, marquee overflowing
+  now-playing names, keep the queue overlay above playback, dismiss the search
+  overlay after a successful Alt action, and soften the queue/search motion.
+
 ## 0.6.3 - _Faster Strong Better_
 
 - Fall back to the provider's authenticated `getCoverArt` URL whenever a cached

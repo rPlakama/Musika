@@ -242,7 +242,13 @@ impl CommandLineState {
         if values.is_empty() {
             return false;
         }
-        let index = if backward { values.len() - 1 } else { 0 };
+        let selected_completion = self
+            .suggestions
+            .get(self.selected)
+            .and_then(|suggestion| suggestion.completion.as_deref());
+        let index = selected_completion
+            .and_then(|selected| values.iter().position(|(value, _)| value == selected))
+            .unwrap_or(if backward { values.len() - 1 } else { 0 });
         let completion = values[index].0.clone();
         let is_command = token.index == 0;
         let append_space = is_command && ipc_command::needs_argument(&completion);
@@ -353,6 +359,22 @@ mod tests {
         state.set_text("sync");
         state.select_all();
         assert_eq!(state.mode_label(), "VISUAL");
+    }
+
+    #[test]
+    fn tab_completes_the_selected_suggestion() {
+        let mut state = CommandLineState::new();
+        state.open();
+        state.set_text("shuffle ");
+        let labels: Vec<&str> = state.suggestions.iter().map(|s| s.label.as_str()).collect();
+        assert!(labels.contains(&"shuffle album"));
+        let album = labels
+            .iter()
+            .position(|label| *label == "shuffle album")
+            .unwrap();
+        state.selected = album;
+        assert!(state.complete(false));
+        assert_eq!(state.query(), "shuffle album");
     }
 
     #[test]

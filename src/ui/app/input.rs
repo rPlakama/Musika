@@ -75,6 +75,20 @@ impl AppRoot {
         let shift = event.keystroke.modifiers.shift;
         if !search.typing {
             match key {
+                "j" if control => {
+                    if let Some(search) = self.search.as_mut() {
+                        search.move_cursor(1);
+                    }
+                    self.follow_search(true);
+                    cx.notify();
+                }
+                "k" if control => {
+                    if let Some(search) = self.search.as_mut() {
+                        search.move_cursor(-1);
+                    }
+                    self.follow_search(true);
+                    cx.notify();
+                }
                 "escape" => {
                     let had_selection = self
                         .search
@@ -196,6 +210,22 @@ impl AppRoot {
             return;
         }
         match key {
+            "j" if control => {
+                if let Some(search) = self.search.as_mut() {
+                    search.move_cursor(1);
+                }
+                self.follow_search(true);
+                cx.notify();
+                return;
+            }
+            "k" if control => {
+                if let Some(search) = self.search.as_mut() {
+                    search.move_cursor(-1);
+                }
+                self.follow_search(true);
+                cx.notify();
+                return;
+            }
             "escape" => {
                 if let Some(search) = self.search.as_mut() {
                     search.typing = false;

@@ -83,6 +83,16 @@ impl AppRoot {
         let control = event.keystroke.modifiers.control;
         let shift = event.keystroke.modifiers.shift;
         match key {
+            "j" if control => {
+                self.line_search_step(1);
+                cx.notify();
+                return;
+            }
+            "k" if control => {
+                self.line_search_step(-1);
+                cx.notify();
+                return;
+            }
             "up" | "ctrl-p" | "ctrl-k" => {
                 self.line_search_step(-1);
                 cx.notify();
@@ -419,6 +429,16 @@ impl AppRoot {
         let control = event.keystroke.modifiers.control;
         let shift = event.keystroke.modifiers.shift;
         match key {
+            "j" if control => {
+                self.command_line.move_suggestion(1);
+                cx.notify();
+                return;
+            }
+            "k" if control => {
+                self.command_line.move_suggestion(-1);
+                cx.notify();
+                return;
+            }
             "up" | "ctrl-p" | "ctrl-k" => {
                 self.command_line.move_suggestion(-1);
                 cx.notify();

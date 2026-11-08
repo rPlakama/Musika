@@ -325,6 +325,7 @@ unsafe extern "C" fn stop_interrupt(opaque: *mut c_void) -> c_int {
 /// keeps at most `1024 * 64` bytes live: FFmpeg pulls via AVIO, this thread's
 /// reader thread feeds from the network/file, so a whole track is never
 /// resident. `opaque` is the `StreamSrc` pointer created in `open_url_decoder`.
+#[allow(dead_code)]
 pub(crate) struct StreamSrc {
     rx: std::sync::mpsc::Receiver<Vec<u8>>,
     buf: Vec<u8>,
@@ -333,6 +334,7 @@ pub(crate) struct StreamSrc {
     stop: Arc<AtomicBool>,
 }
 
+#[allow(dead_code)]
 pub(crate) unsafe extern "C" fn musika_stream_read(
     opaque: *mut c_void,
     buf: *mut u8,
@@ -366,6 +368,7 @@ pub(crate) unsafe extern "C" fn musika_stream_read(
 /// Reader thread: fills the bounded 32 MiB read-ahead channel from `url`
 /// without buffering the whole track. Local `file://` paths are read incrementally; other URLs
 /// are streamed via `reqwest` blocking? No: playback is URL-only.
+#[allow(dead_code)]
 fn spawn_stream_reader(url: &str, stop: Arc<AtomicBool>) -> std::sync::mpsc::Receiver<Vec<u8>> {
     use std::io::Read;
     // 512 x 64 KiB = 32 MiB of read-ahead. Bounded so a slow decoder cannot
@@ -406,37 +409,10 @@ fn spawn_stream_reader(url: &str, stop: Arc<AtomicBool>) -> std::sync::mpsc::Rec
 }
 
 fn open_url_decoder(url: &str, stop: &Arc<AtomicBool>) -> Result<NextDecoder, String> {
-    // ARC-RS-4.2: local files stream in 64 KB chunks (no whole-track Vec).
-    // Remote URLs keep FFmpeg's native http AVIO — already streaming, no
-    // whole-file buffer was ever allocated for them.
-    if let Some(_path) = url.strip_prefix("file://") {
-        let rx = spawn_stream_reader(url, Arc::clone(stop));
-        let src = Box::new(StreamSrc {
-            rx,
-            buf: Vec::new(),
-            pos: 0,
-            eof: false,
-            stop: Arc::clone(stop),
-        });
-        let opaque = Box::into_raw(src) as *mut c_void;
-        let mut error = [0 as c_char; 512];
-        let decoder = unsafe {
-            musika_decoder_open_stream(
-                Some(musika_stream_read),
-                opaque,
-                Some(stop_interrupt),
-                error.as_mut_ptr(),
-                error.len(),
-            )
-        };
-        if decoder.is_null() {
-            unsafe {
-                let _ = Box::from_raw(opaque as *mut StreamSrc);
-            }
-            return Err(c_string(&error));
-        }
-        return Ok(NextDecoder(decoder));
-    }
+    // Use FFmpeg's native AVIO for both file and network URLs. The custom
+    // file reader below is not seekable, which made `+5s` on a downloaded file
+    // fail the decoder and skip the track; FFmpeg's `file:` protocol supports
+    // seeking properly.
     let Ok(c_url) = CString::new(url) else {
         return Err("invalid media URL".to_string());
     };

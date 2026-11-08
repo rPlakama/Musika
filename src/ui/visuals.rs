@@ -99,7 +99,7 @@ pub struct Motion {
     pub lyrics_line_ms: f32,
     /// Softer fade for unsung/neighbouring lines.
     pub lyrics_fade_ms: f32,
-    /// Lyric window glide when the active line changes.
+    /// Lyric-centering glide when the active line changes.
     pub lyrics_scroll_ms: f32,
 }
 
@@ -118,7 +118,7 @@ impl Default for Motion {
             lyrics_scrim: 0.525,
             lyrics_line_ms: 400.0,
             lyrics_fade_ms: 400.0,
-            lyrics_scroll_ms: 400.0,
+            lyrics_scroll_ms: 300.0,
         }
     }
 }
@@ -138,5 +138,6 @@ mod tests {
         assert_eq!(visuals.fonts.row_subtitle(true), 11.0);
         assert_eq!(visuals.motion.lyrics_scrim, 0.525);
         assert_eq!(visuals.motion.lyrics_line_ms, 400.0);
+        assert_eq!(visuals.motion.lyrics_scroll_ms, 300.0);
     }
 }

@@ -195,16 +195,16 @@ impl AppRoot {
         if layout.start != old_start {
             let unit = (layout.text_height + layout.gap).max(1.0);
             self.lyrics_shift.target(
-                (old_start as f32 - layout.start as f32) * unit,
+                (layout.start as f32 - old_start as f32) * unit,
                 0.0,
                 anim::Curve::Standard,
                 &self.clock,
             );
-            // The phrase transition owns the rhythm: centering glides with
-            // the same duration/easing instead of front-loading the motion.
+            // Softer than the phrase transition: a long, calm settle instead
+            // of a quick recenter.
             self.lyrics_shift.target(
                 0.0,
-                self.visuals.motion.lyrics_line_ms,
+                self.visuals.motion.lyrics_scroll_ms,
                 anim::Curve::Standard,
                 &self.clock,
             );

@@ -90,7 +90,8 @@ impl AppRoot {
                     .justify_center()
                     .gap(px(layout.gap))
                     .opacity(self.lyrics_track_fade.value(&self.clock))
-                    .mt(px(self.lyrics_shift.value(&self.clock)))
+                    .relative()
+                    .top(px(self.lyrics_shift.value(&self.clock)))
                     .child(
                         div()
                             .text_size(px(10.0))
@@ -233,7 +234,8 @@ impl AppRoot {
                             .items_center()
                             .justify_center()
                             .gap(px(lyric_gap))
-                            .mt(px(self.lyrics_shift.value(&self.clock)))
+                            .relative()
+                            .top(px(self.lyrics_shift.value(&self.clock)))
                             .child(
                                 div()
                                     .text_size(px(10.0))

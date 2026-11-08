@@ -31,6 +31,11 @@ use crate::library::SongRow;
 static RADIO_ROWS: LazyLock<Mutex<HashMap<String, Vec<SongRow>>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
 
+/// Serializes the first expansion for a seed. Opening the page and starting
+/// its queue can race, and two `getSimilarSongs` calls may return different
+/// random lists; the first caller owns the cached order.
+static RADIO_FETCH: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
 fn cache_key(kind: &str, id: &str) -> String {
     format!("{kind}:{id}")
 }
@@ -86,6 +91,10 @@ pub async fn radio_rows(
     seed_kind: &str,
     seed_id: &str,
 ) -> Result<Vec<SongRow>> {
+    if let Some(rows) = cached_rows(seed_kind, seed_id) {
+        return Ok(rows);
+    }
+    let _guard = RADIO_FETCH.lock().await;
     if let Some(rows) = cached_rows(seed_kind, seed_id) {
         return Ok(rows);
     }
@@ -182,11 +191,10 @@ pub async fn page_json(
         return Ok(page.to_string());
     }
 
-    let children = similar_songs(dbs, &seed).await?;
-    let rows = song_rows(&children);
-    remember_rows(seed_kind, seed_id, &rows);
-    let cover_ids =
-        std::iter::once(&seed.cover_art).chain(children.iter().map(|child| &child.cover_art));
+    // The page and the playback queue must share one expansion. `radio_rows`
+    // caches under a fetch lock; use it here instead of fetching again.
+    let rows = radio_rows(dbs, seed_kind, seed_id).await?;
+    let cover_ids = std::iter::once(&seed.cover_art).chain(rows.iter().map(|row| &row.cover_art));
     let covers = crate::covers::url_map_for(dbs, cover_ids.clone()).await?;
     let remotes = crate::covers::remote_map_for(dbs, cover_ids).await?;
 
@@ -203,13 +211,12 @@ pub async fn page_json(
                 .unwrap_or_default(),
         );
     }
-    for child in &children {
-        let cover = crate::covers::url_for_ref(child.cover_art.as_deref(), &covers);
+    for row in &rows {
+        let cover = crate::covers::url_for_ref(row.cover_art.as_deref(), &covers);
         if !cover.is_empty() && !collage.iter().any(|url| url == cover) {
             collage.push(cover.to_string());
             collage_remote.push(
-                child
-                    .cover_art
+                row.cover_art
                     .as_deref()
                     .and_then(|id| remotes.get(id))
                     .cloned()
@@ -219,25 +226,25 @@ pub async fn page_json(
     }
 
     let mut duration = 0i64;
-    let songs: Vec<serde_json::Value> = children
+    let songs: Vec<serde_json::Value> = rows
         .iter()
-        .map(|child| {
-            duration += i64::from(child.duration.unwrap_or(0));
+        .map(|row| {
+            duration += i64::from(row.duration.unwrap_or(0));
             json!({
                 "track": "",
-                "title": child.title,
-                "subtitle": child.artist.clone().or_else(|| child.album.clone()).unwrap_or_default(),
-                "duration": crate::browse::rows::format_duration(child.duration),
-                "cover": crate::covers::url_for_ref(child.cover_art.as_deref(), &covers),
-                "coverRemote": child
+                "title": row.title,
+                "subtitle": row.artist.clone().or_else(|| row.album.clone()).unwrap_or_default(),
+                "duration": crate::browse::rows::format_duration(row.duration),
+                "cover": crate::covers::url_for_ref(row.cover_art.as_deref(), &covers),
+                "coverRemote": row
                     .cover_art
                     .as_deref()
                     .and_then(|id| remotes.get(id))
                     .cloned()
                     .unwrap_or_default(),
-                "songId": child.id,
-                "albumId": child.album_id.clone().unwrap_or_default(),
-                "starred": child.starred.is_some(),
+                "songId": row.id,
+                "albumId": row.album_id.clone().unwrap_or_default(),
+                "starred": row.starred.is_some(),
                 "playable": true,
             })
         })
@@ -250,7 +257,6 @@ pub async fn page_json(
     page["songs"] = json!(songs);
     Ok(page.to_string())
 }
-
 /// The radio queue: the same similar-song list, in server order. The clicked
 /// row becomes the queue start.
 pub async fn tracks_json(

@@ -36,7 +36,7 @@ impl AppRoot {
             .start(page.rows.len(), page.cursor, animated, self.clock.now);
     }
 
-    pub(in crate::ui) fn follow_search(&mut self, animated: bool) {
+    pub(in crate::ui) fn follow_search(&mut self, _animated: bool) {
         let Some(search) = self.search.as_ref() else {
             return;
         };
@@ -44,8 +44,10 @@ impl AppRoot {
         let count = search.scope_count(scope);
         let cursor = search.cursor();
         self.clock.tick();
+        // Search navigation is keyboard-repeat heavy: snap the viewport to
+        // the cursor so it can never lag behind and lose the active row.
         self.search_scroll
-            .start(count, cursor, animated, self.clock.now);
+            .start(count, cursor, false, self.clock.now);
     }
 
     pub(in crate::ui) fn follow_queue(&mut self, animated: bool) {

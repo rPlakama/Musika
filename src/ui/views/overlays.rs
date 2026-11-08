@@ -203,8 +203,8 @@ impl AppRoot {
             window,
             TextBoxStyle {
                 placeholder: "Search this surface",
-                text_size: bar_h * 0.36,
-                caret_h: bar_h * 0.46,
+                text_size: bar_h * 0.18,
+                caret_h: bar_h * 0.28,
                 max_width: width,
                 caret: true,
                 mask: false,
@@ -285,8 +285,8 @@ impl AppRoot {
             window,
             TextBoxStyle {
                 placeholder: "Type a command…",
-                text_size: bar_h * 0.36,
-                caret_h: bar_h * 0.46,
+                text_size: bar_h * 0.18,
+                caret_h: bar_h * 0.28,
                 max_width: width,
                 caret: true,
                 mask: false,
@@ -304,10 +304,7 @@ impl AppRoot {
         let row_h = (bar_h * 0.44).max(18.0);
         let suggestions: Vec<_> = self
             .command_line
-            .suggestions
-            .iter()
-            .take(6)
-            .enumerate()
+            .visible_suggestions()
             .map(|(index, suggestion)| {
                 let selected = index == self.command_line.selected;
                 div()

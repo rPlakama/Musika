@@ -122,7 +122,7 @@ impl AppRoot {
                     }
                     cx.notify();
                 }
-                "j" | "down" | "ctrl-n" => {
+                "j" | "down" | "ctrl-n" | "ctrl-j" => {
                     if let Some(search) = self.search.as_mut() {
                         if shift {
                             let cursor = search.cursor();
@@ -133,7 +133,7 @@ impl AppRoot {
                     self.follow_search(true);
                     cx.notify();
                 }
-                "k" | "up" | "ctrl-p" => {
+                "k" | "up" | "ctrl-p" | "ctrl-k" => {
                     if let Some(search) = self.search.as_mut() {
                         if shift {
                             let cursor = search.cursor();
@@ -215,7 +215,7 @@ impl AppRoot {
                 self.on_search_scope_prev(&SearchScopePrev, _window, cx);
                 return;
             }
-            "up" | "ctrl-p" => {
+            "up" | "ctrl-p" | "ctrl-k" => {
                 if let Some(search) = self.search.as_mut() {
                     search.move_cursor(-1);
                 }
@@ -223,7 +223,7 @@ impl AppRoot {
                 cx.notify();
                 return;
             }
-            "down" | "ctrl-n" => {
+            "down" | "ctrl-n" | "ctrl-j" => {
                 if let Some(search) = self.search.as_mut() {
                     search.move_cursor(1);
                 }

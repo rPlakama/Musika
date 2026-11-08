@@ -8,6 +8,9 @@ use super::anim;
 use super::ipc_command::{self, Suggestion};
 use super::text_modal::{EditCommand, TextModal, apply};
 
+/// Number of suggestion rows painted above the command line.
+pub const VISIBLE_SUGGESTIONS: usize = 6;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct CompletionCycle {
     start: usize,
@@ -22,6 +25,7 @@ pub struct CommandLineState {
     pub editor: TextModal,
     pub suggestions: Vec<Suggestion>,
     pub selected: usize,
+    suggestions_offset: usize,
     context: ipc_command::SuggestionContext,
     cycle: Option<CompletionCycle>,
     denied_at: Option<f64>,
@@ -73,6 +77,7 @@ impl CommandLineState {
         self.suggestions =
             ipc_command::suggestions_with(&self.editor.text, self.editor.cursor, &self.context);
         self.selected = 0;
+        self.suggestions_offset = 0;
     }
 
     pub fn set_context(&mut self, context: ipc_command::SuggestionContext) {
@@ -97,6 +102,31 @@ impl CommandLineState {
             })
             .collect();
         self.selected = 0;
+        self.suggestions_offset = 0;
+    }
+
+    /// Move the highlighted completion. The list keeps the selected row in
+    /// view; Up/Down therefore scrolls long suggestion sets.
+    pub fn move_suggestion(&mut self, delta: isize) {
+        let len = self.suggestions.len();
+        if len == 0 {
+            return;
+        }
+        let next = (self.selected as isize + delta).clamp(0, len as isize - 1) as usize;
+        self.selected = next;
+        if next < self.suggestions_offset {
+            self.suggestions_offset = next;
+        } else if next >= self.suggestions_offset + VISIBLE_SUGGESTIONS {
+            self.suggestions_offset = next + 1 - VISIBLE_SUGGESTIONS;
+        }
+    }
+
+    pub fn visible_suggestions(&self) -> impl Iterator<Item = (usize, &Suggestion)> {
+        self.suggestions
+            .iter()
+            .enumerate()
+            .skip(self.suggestions_offset)
+            .take(VISIBLE_SUGGESTIONS)
     }
 
     pub fn reset_completion(&mut self) {

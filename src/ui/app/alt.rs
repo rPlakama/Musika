@@ -760,12 +760,12 @@ impl AppRoot {
                     self.alt.aim(Direction::West, &menu, false);
                 }
             }
-            "j" | "down" => {
+            "j" | "down" | "ctrl-j" => {
                 if let Some(menu) = self.alt_menu.clone() {
                     self.alt.aim(Direction::South, &menu, false);
                 }
             }
-            "k" | "up" => {
+            "k" | "up" | "ctrl-k" => {
                 if let Some(menu) = self.alt_menu.clone() {
                     self.alt.aim(Direction::North, &menu, false);
                 }

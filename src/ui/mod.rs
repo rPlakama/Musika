@@ -141,6 +141,8 @@ pub fn run() {
                 KeyBinding::new("shift-enter", ToggleFullscreen, Some("main")),
                 KeyBinding::new("j", MoveDown, Some("main")),
                 KeyBinding::new("k", MoveUp, Some("main")),
+                KeyBinding::new("ctrl-j", MoveDown, Some("main")),
+                KeyBinding::new("ctrl-k", MoveUp, Some("main")),
                 KeyBinding::new("g g", Top, Some("main")),
                 KeyBinding::new("shift-g", Bottom, Some("main")),
                 KeyBinding::new("shift-j", ScopeNext, Some("main")),

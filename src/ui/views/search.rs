@@ -51,8 +51,8 @@ impl AppRoot {
                 window,
                 TextBoxStyle {
                     placeholder: "Search artists, albums, songs",
-                    text_size: height * 0.32,
-                    caret_h: height * 0.42,
+                    text_size: height * 0.16,
+                    caret_h: height * 0.30,
                     max_width: width,
                     caret: search.typing,
                     mask: false,

@@ -27,6 +27,8 @@
 
 #define MUSIKA_RATE 48000
 #define MUSIKA_CHANNELS 2
+/* Network streaming read-ahead: FFmpeg HTTP/HTTPS AVIO buffer. */
+#define MUSIKA_STREAM_BUFFER_SIZE "33554432"
 
 typedef struct MusikaDecoder MusikaDecoder;
 void musika_decoder_close(MusikaDecoder *d);
@@ -240,7 +242,10 @@ static MusikaDecoder *decoder_open(const char *url, const unsigned char *buffer,
                 goto fail;
             }
         }
-        ret = avformat_open_input(&d->format, url, NULL, NULL);
+        AVDictionary *options = NULL;
+        av_dict_set(&options, "buffer_size", MUSIKA_STREAM_BUFFER_SIZE, 0);
+        ret = avformat_open_input(&d->format, url, NULL, &options);
+        av_dict_free(&options);
     }
     if (ret < 0) {
         set_error(err, err_len, "cannot open input: %s", av_err2str(ret));

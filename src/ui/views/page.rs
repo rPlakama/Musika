@@ -86,11 +86,34 @@ impl AppRoot {
                     .justify_center()
                     .overflow_hidden()
                     .child(if profile.collage {
-                        collage_art(
-                            &page.header.collage,
-                            &page.header.collage_remote,
-                            cover_art_side,
-                        )
+                        let sources = page
+                            .header
+                            .collage
+                            .iter()
+                            .enumerate()
+                            .map(|(index, url)| {
+                                page.header
+                                    .collage_art
+                                    .get(index)
+                                    .filter(|id| !id.is_empty())
+                                    .and_then(|id| {
+                                        self.display_cover(id, hero_bucket)
+                                            .map(CoverSource::Path)
+                                            .or_else(|| self.hero_cover(id, hero_bucket))
+                                    })
+                                    .or_else(|| {
+                                        cover_source_with_remote(
+                                            url,
+                                            page.header
+                                                .collage_remote
+                                                .get(index)
+                                                .map(String::as_str)
+                                                .unwrap_or_default(),
+                                        )
+                                    })
+                            })
+                            .collect();
+                        collage_art_from_sources(sources, cover_art_side)
                     } else {
                         art(cover, cover_art_side)
                     }),

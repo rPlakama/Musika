@@ -200,8 +200,10 @@ pub async fn page_json(
 
     let mut collage: Vec<String> = Vec::new();
     let mut collage_remote: Vec<String> = Vec::new();
+    let mut collage_art: Vec<String> = Vec::new();
     let seed_cover = crate::covers::url_for(seed.cover_art.as_deref(), &covers);
     if !seed_cover.is_empty() {
+        let id = seed.cover_art.clone().unwrap_or_default();
         collage.push(seed_cover);
         collage_remote.push(
             seed.cover_art
@@ -210,6 +212,7 @@ pub async fn page_json(
                 .cloned()
                 .unwrap_or_default(),
         );
+        collage_art.push(id);
     }
     for row in &rows {
         let cover = crate::covers::url_for_ref(row.cover_art.as_deref(), &covers);
@@ -222,6 +225,7 @@ pub async fn page_json(
                     .cloned()
                     .unwrap_or_default(),
             );
+            collage_art.push(row.cover_art.clone().unwrap_or_default());
         }
     }
 
@@ -254,6 +258,7 @@ pub async fn page_json(
     page["duration"] = json!(duration);
     page["collage"] = json!(collage);
     page["collage_remote"] = json!(collage_remote);
+    page["collage_art"] = json!(collage_art);
     page["songs"] = json!(songs);
     Ok(page.to_string())
 }

@@ -383,6 +383,9 @@ pub struct PageHeader {
     pub collage: Vec<String>,
     /// Provider fallbacks aligned with [`Self::collage`].
     pub collage_remote: Vec<String>,
+    /// Cover ids aligned with [`Self::collage`], used to prefer local hero
+    /// caches over streamed provider art.
+    pub collage_art: Vec<String>,
     /// Cover id for display-copy requests.
     pub cover_art: String,
     /// User star count (0..=5) for the one-line page phrase.
@@ -417,6 +420,7 @@ impl PageState {
                 cover_remote: String::new(),
                 collage: Vec::new(),
                 collage_remote: Vec::new(),
+                collage_art: Vec::new(),
                 cover_art: String::new(),
                 rating: 0,
                 starred: false,

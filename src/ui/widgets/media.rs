@@ -213,7 +213,13 @@ pub(crate) fn collage_art(urls: &[String], remotes: &[String], side: f32) -> gpu
             )
         })
         .collect();
+    collage_art_from_sources(sources, side)
+}
 
+pub(crate) fn collage_art_from_sources(
+    sources: Vec<Option<CoverSource>>,
+    side: f32,
+) -> gpui::AnyElement {
     let mut mosaic = div()
         .relative()
         .size(px(side))

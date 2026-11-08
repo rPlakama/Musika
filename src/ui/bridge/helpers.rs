@@ -241,6 +241,7 @@ pub(crate) async fn page_data(
                 cover_remote,
                 collage: Vec::new(),
                 collage_remote: Vec::new(),
+                collage_art: Vec::new(),
                 cover_art: album.cover_art.unwrap_or_default(),
                 rating: album.rating,
                 starred: album.starred.is_some(),
@@ -307,6 +308,7 @@ pub(crate) async fn page_data(
                 cover_remote,
                 collage: Vec::new(),
                 collage_remote: Vec::new(),
+                collage_art: Vec::new(),
                 cover_art: artist.cover_art.unwrap_or_default(),
                 rating: 0,
                 starred: artist.starred.is_some(),
@@ -617,6 +619,14 @@ pub(crate) fn collage_header(value: &serde_json::Value, title_key: &str) -> Page
             .and_then(|remote| remote.as_str())
             .unwrap_or_default()
             .to_string(),
+        collage_art: value["collage_art"]
+            .as_array()
+            .map(|ids| {
+                ids.iter()
+                    .map(|id| id.as_str().unwrap_or_default().to_string())
+                    .collect()
+            })
+            .unwrap_or_default(),
         collage,
         collage_remote: value["collage_remote"]
             .as_array()

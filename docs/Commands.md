@@ -1,0 +1,275 @@
+# Musika commands
+
+Musika exposes one command registry in two places:
+
+- the interactive command line (`:`)
+- the Unix IPC socket
+
+Both parse exactly the same syntax, so every `:` command can be scripted and
+every IPC command can be typed. Commands are one line each; the socket reads
+one command per line.
+
+## IPC socket
+
+The socket lives in the app config dir as `ipc.sock`. `MUSIKA_IPC_SOCKET`
+overrides the path. The usual manual test is:
+
+```sh
+printf 'play_pause\n' | nc -U "$MUSIKA_IPC_SOCKET"
+```
+
+or, with the default config location:
+
+```sh
+printf 'shuffle queue\n' | nc -U ~/.config/musika/ipc.sock
+```
+
+## Syntax
+
+- Command names are case-sensitive and use the canonical names below.
+- Arguments are whitespace-separated; wrap names containing spaces in quotes:
+  `"Pink Floyd"`, `"Atom Heart Mother"`, `"Fat Old Sun"`.
+- `playlist add` and `download` use a shell-like tokenizer supporting double
+  quotes, single quotes and backslash escapes.
+- Commands that accept free text (`search`, `insert_mode`) receive the rest of
+  the line verbatim.
+- The command line (`:`) additionally offers `Tab` completion and scoped search
+  suggestions for command arguments.
+
+Aliases are available where noted: `cancel` → `back`, `next` → `next_track`,
+`prev`/`previous` → `prev_track`, `volume` → `set_volume`,
+`fullscreen` → `toggle_fullscreen`, `lyrics` → `lyrics_overlay`,
+`insert` → `insert_mode`, `search_action` → `line_search`.
+
+MPRIS compatibility forms are also accepted:
+
+```text
+mpris_play
+mpris_pause
+mpris_play_pause
+mpris_stop
+mpris_next
+mpris_previous
+mpris_volume:40
+mpris_seek:5000000
+mpris_position:5000000
+```
+
+## Accounts and library maintenance
+
+| Command | Usage | What it does |
+| --- | --- | --- |
+| `sync` | `sync [all|repair]` | Incremental sync by default; `all` performs the deep pass; `repair` rebuilds the search/library indexes. |
+| `refresh` | `refresh` | Start an incremental sync. |
+| `wipe` | `wipe <album|lyrics|covers>` | Clear downloaded album files, cached lyrics, or cached covers. |
+| `wipe_databases` | `wipe_databases` | Open the destructive database wipe chooser; this is not an immediate wipe. |
+| `logout` | `logout` | End the live session and show the login screen. The account and its data stay stored. |
+| `add_account` | `add_account` | Open the login screen in add-account mode. Escape cancels without touching the current account. |
+| `remove_account` | `remove_account [--keep-data]` | Remove the current account. Account-local data is removed unless `--keep-data` is supplied. If another account exists it becomes active; otherwise the login screen is shown. |
+
+## Playlists, radio, shuffle and downloads
+
+### Playlists
+
+| Command | Usage |
+| --- | --- |
+| `playlist create` | `playlist create <name> [--offline]` |
+| `playlist add` | `playlist add <target>... <playlist>` |
+
+`playlist create` creates a playlist containing the currently playing track.
+By default it is posted to the server; `--offline` writes only the account-local
+M3U file.
+
+```text
+playlist create "Rated R Mix"
+playlist create "Rated R Mix" --offline
+```
+
+`playlist add` appends one or more targets to an existing playlist. Targets are
+resolved through the same search engine as the Search overlay:
+
+- an artist expands to all of its songs;
+- an album expands to all of its tracks;
+- a track adds that one song;
+- the literal `current` adds the currently playing track.
+
+The final argument is the destination playlist name or id. Wrap multiword names
+in quotes; comma-separated and whitespace-separated targets are both accepted.
+
+```text
+playlist add current "Rated R Mix"
+playlist add "Pink Floyd", "King Crimson" "Model Man" "Road Trip"
+playlist add "Rated R" "Leg of Lamb" "Rated R Mix"
+```
+
+Local M3U playlists are appended to and rescanned. Server playlists are updated
+with the server's `updatePlaylist` endpoint and refreshed afterwards. Local mix
+files use the sanitized origin/playlist name (`<name>.m3u`) and overwrite an
+existing mix of the same name instead of creating timestamped duplicates.
+
+### Radio
+
+| Command | Usage |
+| --- | --- |
+| `radio` | `radio [current|album|song] [name]` |
+| `radio save` | `radio save [--offline]` |
+
+`radio` starts a radio queue:
+
+```text
+radio                 # current context: album page, selected song, or playing track
+radio current         # currently playing track
+radio album           # current album page, or pass a name
+radio album "Kid A"
+radio song "Idioteque"
+```
+
+`radio save` saves the currently open radio page. The M3U is named from the
+radio page's origin title. By default it also creates the server playlist;
+`--offline` writes only the local M3U.
+
+```text
+radio save
+radio save --offline
+```
+
+### Shuffle
+
+| Command | Usage |
+| --- | --- |
+| `shuffle queue` | Shuffle the current queue and restart it. |
+| `shuffle album [name]` | Shuffle the current album page, or an album resolved by name/id. |
+| `shuffle artist [name]` | Shuffle the current artist page, or an artist resolved by name/id. |
+
+```text
+shuffle queue
+shuffle album "Rated R"
+shuffle artist "Queens of the Stone Age"
+```
+
+Album/artist names use the unified search engine; exact library ids also work.
+
+### Downloads
+
+```text
+download
+download current
+download rm
+download artist "Pink Floyd"
+download album "Atom Heart Mother"
+download track "Fat Old Sun"
+download "Pink Floyd"
+download "Pink Floyd" album "Atom Heart Mother"
+download "Pink Floyd" album "Atom Heart Mother" "Fat Old Sun"
+download rm "Pink Floyd"
+```
+
+Rules:
+
+- No arguments (or `current`) downloads/removes the currently playing track.
+- `rm` removes local download marks/media; it never deletes anything on the
+  server.
+- Scope keywords `artist`, `album`, `track` force a direct search at that level.
+- Without keywords, names are positional: artist, then album, then track.
+- Multiword names must be quoted.
+- Album/artist downloads expand to all matching songs; removal uses the same
+  scope and clears the relevant local rules/marks/media.
+- `download_song <song-id>` remains available for a single known song id.
+
+## Playback
+
+| Command | Usage | What it does |
+| --- | --- | --- |
+| `play_pause` | `play_pause` | Toggle playback. |
+| `play` | `play` | Resume playback. |
+| `pause` | `pause` | Pause playback. |
+| `stop` | `stop` | Stop playback (`mpris_stop`). |
+| `next_track` | `next_track` | Skip to the next track (`next`). |
+| `prev_track` | `prev_track` | Previous track (`prev`, `previous`). |
+| `mute` | `mute` | Toggle mute. |
+| `volume_up` | `volume_up` | Raise volume by 5. |
+| `volume_down` | `volume_down` | Lower volume by 5. |
+| `set_volume` | `set_volume <0..100>` | Set absolute volume (`volume`). |
+| `seek_back` | `seek_back` | Seek back 5 seconds. |
+| `seek_forward` | `seek_forward` | Seek forward 5 seconds. |
+| `seek` | `seek <seconds>` | Seek to an absolute position. |
+| `seek_relative` | `seek_relative <±seconds>` | Seek relative to the playhead. |
+| `toggle_fullscreen` | `toggle_fullscreen` | Toggle fullscreen playback (`fullscreen`). |
+| `lyrics_overlay` | `lyrics_overlay` | Toggle the fullscreen lyrics overlay (`lyrics`). |
+
+## Navigation and selection
+
+| Command | What it does |
+| --- | --- |
+| `top` | Jump to the first row. |
+| `bottom` | Jump to the last row. |
+| `move_up` / `move_down` | Move the cursor up/down one row. |
+| `scroll_up` / `scroll_down` | Scroll the active surface up/down one row. |
+| `page_up` / `page_down` | Move one page up/down. |
+| `move_left` / `move_right` | Move left/right within the active surface. |
+| `prev_place` / `next_place` | Previous/next entry in the travel log. |
+| `home` | Return to Home and close overlays/fullscreen/pages. |
+| `back` | Back out of the current surface (`cancel`). |
+| `enter` | Activate the current selection. |
+| `scope_next` / `scope_prev` | Next/previous library scope. |
+| `order_next` / `order_prev` | Next/previous library ordering. |
+| `visual` | Toggle visual selection. |
+| `visual_all` | Select every visible row. |
+| `pane_cycle [back]` | Cycle the active pane; `back` reverses. |
+
+## Queue
+
+| Command | What it does |
+| --- | --- |
+| `queue_toggle` | Open/close the queue drawer. |
+| `queue_remove` | Remove the queue cursor row. |
+| `queue_up` / `queue_down` | Move the queue row up/down. |
+| `repeat_cycle` | Cycle repeat mode (off → all → one). |
+
+## Search
+
+| Command | Usage | What it does |
+| --- | --- | --- |
+| `search` | `search [query]` | Open floating search, optionally pre-filled. |
+| `insert_mode` | `insert_mode [query]` | Open search directly in insert/typing mode (`insert`). |
+| `search_next` / `search_prev` | | Next/previous floating-search row. |
+| `search_scope_next` / `search_scope_prev` | | Next/previous floating-search scope. |
+| `line_search` | `line_search` | Open the in-surface `/` line search (`search_action`). |
+
+## Direct row/song commands
+
+| Command | Usage | What it does |
+| --- | --- | --- |
+| `play_song` | `play_song <song-id>` | Play one song in the current order. |
+| `play_song_in_album` | `play_song_in_album <song-id>` | Play a song in its album queue. |
+| `open_song_album` | `open_song_album <song-id>` | Open the song's album page. |
+| `download_song` | `download_song <song-id>` | Download one song by id. |
+
+## Alt quick actions and quit
+
+| Command | Usage | What it does |
+| --- | --- | --- |
+| `quick_hold` | `quick_hold <on|off>` | Arm/release the Alt quick-action gesture. |
+| `quick_aim` | `quick_aim <north|south|east|west>` | Aim a quick-action slot. |
+| `quick_cycle` | `quick_cycle <next|prev>` | Cycle the aimed slot's verbs. |
+| `quick_cancel` | `quick_cancel` | Cancel the quick-action menu. |
+| `quit` | `quit` | Quit Musika. |
+
+## Automation examples
+
+```sh
+socket="${MUSIKA_IPC_SOCKET:-$HOME/.config/musika/ipc.sock}"
+
+printf 'shuffle album "Rated R"\n' | nc -U "$socket"
+printf 'radio album "Kid A"\n' | nc -U "$socket"
+printf 'playlist add current "Road Trip"\n' | nc -U "$socket"
+printf 'playlist create "Road Trip" --offline\n' | nc -U "$socket"
+printf 'radio save --offline\n' | nc -U "$socket"
+printf 'download "Pink Floyd" album "Atom Heart Mother"\n' | nc -U "$socket"
+printf 'download rm "Pink Floyd"\n' | nc -U "$socket"
+printf 'quick_hold on\nquick_aim north\nquick_hold off\n' | nc -U "$socket"
+```
+
+`download`, `playlist add`, `shuffle album/artist`, `radio album/song` and the
+command-line suggestions resolve names through the same local search engine as
+the Search overlay, so quoted names do not need to be ids.

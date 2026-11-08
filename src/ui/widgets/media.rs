@@ -18,6 +18,22 @@ pub(crate) fn transport_button(
         .into_any_element()
 }
 
+pub(crate) fn transport_loading_button(
+    icon_name: &str,
+    base: f32,
+    color: u32,
+    scale: f32,
+    degrees: f32,
+) -> gpui::AnyElement {
+    div()
+        .size(px(base * 1.3))
+        .flex()
+        .items_center()
+        .justify_center()
+        .child(icon_rotated(icon_name, base * scale, color, degrees))
+        .into_any_element()
+}
+
 pub(crate) fn highlighted_text(
     text: &str,
     query: &str,

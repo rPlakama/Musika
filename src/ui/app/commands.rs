@@ -166,3 +166,11 @@ impl AppRoot {
             })
     }
 }
+
+impl AppRoot {
+    /// Continuous rotation for the transport loading spinner while the
+    /// decoder is opening/fetching a stream.
+    pub(in crate::ui) fn stream_loading_angle(&self) -> f32 {
+        ((self.clock.now * 260.0) as f32).rem_euclid(360.0)
+    }
+}

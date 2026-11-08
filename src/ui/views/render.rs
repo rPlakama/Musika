@@ -325,6 +325,9 @@ impl Render for AppRoot {
         {
             window.request_animation_frame();
         }
+        if self.player.is_loading() {
+            window.request_animation_frame();
+        }
         if self.syncing
             || !self.sync_settle.settled(&self.clock)
             || !self.sync_fill.settled(&self.clock)

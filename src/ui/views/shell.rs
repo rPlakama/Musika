@@ -451,16 +451,26 @@ impl AppRoot {
                                 palette::on_surface(),
                                 self.transport_scale(0),
                             ))
-                            .child(transport_button(
-                                if state == crate::player::State::Playing {
-                                    "pause-svgrepo-com.svg"
-                                } else {
-                                    "play-1001-svgrepo-com.svg"
-                                },
-                                m.play_size,
-                                palette::on_surface(),
-                                self.transport_scale(1),
-                            ))
+                            .child(if self.player.is_loading() {
+                                transport_loading_button(
+                                    "reload-ui-2-svgrepo-com.svg",
+                                    m.play_size,
+                                    palette::on_surface(),
+                                    self.transport_scale(1),
+                                    self.stream_loading_angle(),
+                                )
+                            } else {
+                                transport_button(
+                                    if state == crate::player::State::Playing {
+                                        "pause-svgrepo-com.svg"
+                                    } else {
+                                        "play-1001-svgrepo-com.svg"
+                                    },
+                                    m.play_size,
+                                    palette::on_surface(),
+                                    self.transport_scale(1),
+                                )
+                            })
                             .child(transport_button(
                                 "skip-next-circle-solid-svgrepo-com.svg",
                                 m.transport_unit,

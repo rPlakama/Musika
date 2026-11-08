@@ -370,16 +370,26 @@ impl AppRoot {
                             .justify_center()
                             .gap_5()
                             .child(transport_button("skip-previous-solid-svgrepo-com.svg", 22.0, palette::on_surface(), self.transport_scale(0)))
-                            .child(transport_button(
-                                if self.player.state() == crate::player::State::Playing {
-                                    "pause-svgrepo-com.svg"
-                                } else {
-                                    "play-1001-svgrepo-com.svg"
-                                },
-                                28.0,
-                                palette::on_surface(),
-                                self.transport_scale(1),
-                            ))
+                            .child(if self.player.is_loading() {
+                                transport_loading_button(
+                                    "reload-ui-2-svgrepo-com.svg",
+                                    28.0,
+                                    palette::on_surface(),
+                                    self.transport_scale(1),
+                                    self.stream_loading_angle(),
+                                )
+                            } else {
+                                transport_button(
+                                    if self.player.state() == crate::player::State::Playing {
+                                        "pause-svgrepo-com.svg"
+                                    } else {
+                                        "play-1001-svgrepo-com.svg"
+                                    },
+                                    28.0,
+                                    palette::on_surface(),
+                                    self.transport_scale(1),
+                                )
+                            })
                             .child(transport_button("skip-next-circle-solid-svgrepo-com.svg", 22.0, palette::on_surface(), self.transport_scale(2))),
                     )
                     .child(

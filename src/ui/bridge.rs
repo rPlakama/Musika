@@ -47,6 +47,12 @@ pub enum Event {
         label: String,
         next: Option<String>,
     },
+    CommandSuggestions {
+        generation: u64,
+        start: usize,
+        end: usize,
+        rows: Vec<(String, String)>,
+    },
     PlaylistSaved {
         name: String,
         offline: bool,

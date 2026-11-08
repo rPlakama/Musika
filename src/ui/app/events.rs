@@ -93,6 +93,19 @@ impl AppRoot {
                 self.view.cursor = self.view.cursor.min(self.view.rows.len().saturating_sub(1));
                 self.follow_library(false);
             }
+            Event::CommandSuggestions {
+                generation,
+                start,
+                end,
+                rows,
+            } => {
+                if generation != self.command_suggestions_generation || !self.command_line.is_open()
+                {
+                    return;
+                }
+                self.command_line
+                    .install_search_suggestions(start, end, &rows);
+            }
             Event::Notes { album_id, notes } => {
                 self.notes = Some((album_id, notes));
             }

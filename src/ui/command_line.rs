@@ -80,6 +80,25 @@ impl CommandLineState {
         self.refresh();
     }
 
+    pub fn install_search_suggestions(
+        &mut self,
+        start: usize,
+        end: usize,
+        rows: &[(String, String)],
+    ) {
+        self.suggestions = rows
+            .iter()
+            .map(|(title, subtitle)| Suggestion {
+                start,
+                end,
+                label: title.clone(),
+                description: subtitle.clone(),
+                completion: Some(ipc_command::quote_arg(title)),
+            })
+            .collect();
+        self.selected = 0;
+    }
+
     pub fn reset_completion(&mut self) {
         self.cycle = None;
     }

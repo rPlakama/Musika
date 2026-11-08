@@ -169,6 +169,34 @@ async fn resolve_path(
     Ok(ResolvedIds::Track(track_id))
 }
 
+/// Resolve a name-or-id argument for commands that need one scope id
+/// (`shuffle album`, `radio song`, …). An exact library id wins; otherwise the
+/// same search engine the Search overlay uses resolves the phrase.
+pub(crate) async fn resolve_named_id(
+    dbs: &Dbs,
+    scope: DownloadScope,
+    value: &str,
+) -> Result<String> {
+    let value = value.trim();
+    if value.is_empty() {
+        bail!("An empty name cannot be resolved.");
+    }
+    let is_id = match scope {
+        DownloadScope::Artist => crate::library::artist(&dbs.library, value).await?.is_some(),
+        DownloadScope::Album => crate::library::album(&dbs.library, value).await?.is_some(),
+        DownloadScope::Track => crate::library::song(&dbs.library, value).await?.is_some(),
+    };
+    if is_id {
+        return Ok(value.to_string());
+    }
+    let json = crate::browse::search_json(dbs, value, false, RESOLVE_LIMIT)
+        .await
+        .context("Could not search the library")?;
+    let payload: Value =
+        serde_json::from_str(&json).context("Could not parse the search results")?;
+    search_match_id(&payload, scope, value).ok_or_else(|| no_match(scope, value))
+}
+
 /// Turn one already-matched scope id into its concrete download/removal set.
 async fn resolve_id(dbs: &Dbs, scope: DownloadScope, id: String) -> Result<ResolvedIds> {
     match scope {

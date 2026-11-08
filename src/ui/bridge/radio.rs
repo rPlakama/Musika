@@ -180,3 +180,26 @@ impl Bridge {
         });
     }
 }
+
+impl Bridge {
+    /// Resolve an album/song name through the search engine, then start radio.
+    pub fn play_radio_query(&self, kind: String, query: String, start_index: usize) {
+        let tx = self.tx.clone();
+        crate::app::runtime().spawn(async move {
+            let Some(dbs) = crate::app::dbs() else { return };
+            let scope = if kind == "album" {
+                crate::ui::ipc_command::DownloadScope::Album
+            } else {
+                crate::ui::ipc_command::DownloadScope::Track
+            };
+            let result = async {
+                let id = crate::download_command::resolve_named_id(&dbs, scope, &query).await?;
+                crate::radio::tracks_json(&dbs, &kind, &id, start_index as i64)
+                    .await
+                    .map(|(json, start)| (json, start as usize))
+            }
+            .await;
+            emit_queue_pair(&tx, result, "Could not start radio");
+        });
+    }
+}

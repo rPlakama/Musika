@@ -191,3 +191,65 @@ impl Bridge {
         });
     }
 }
+
+impl Bridge {
+    /// Async scoped suggestions for `:`/IPC commands. Uses the same unified
+    /// search payload as the Search overlay; stale generations are ignored by
+    /// the caller.
+    pub fn request_command_suggestions(
+        &self,
+        generation: u64,
+        scope: crate::ui::ipc_command::SuggestScope,
+        query: String,
+        start: usize,
+        end: usize,
+    ) {
+        let tx = self.tx.clone();
+        let offline = self.offline.load(Ordering::Relaxed);
+        crate::app::runtime().spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_millis(120)).await;
+            let Some(dbs) = crate::app::dbs() else { return };
+            let Ok(json) = crate::browse::search_json(&dbs, &query, offline, 8).await else {
+                let _ = tx.send(Event::CommandSuggestions {
+                    generation,
+                    start,
+                    end,
+                    rows: Vec::new(),
+                });
+                return;
+            };
+            let Ok(payload) = serde_json::from_str::<serde_json::Value>(&json) else {
+                return;
+            };
+            let column = match scope {
+                crate::ui::ipc_command::SuggestScope::Artist => "artists",
+                crate::ui::ipc_command::SuggestScope::Album => "albums",
+                crate::ui::ipc_command::SuggestScope::Track => "songs",
+            };
+            let mut rows = Vec::new();
+            if let Some(array) = payload.get(column).and_then(serde_json::Value::as_array) {
+                for row in array.iter().take(8) {
+                    let title = row
+                        .get("name")
+                        .or_else(|| row.get("title"))
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or_default();
+                    let subtitle = row
+                        .get("artist")
+                        .and_then(serde_json::Value::as_str)
+                        .or_else(|| row.get("subtitle").and_then(serde_json::Value::as_str))
+                        .unwrap_or_default();
+                    if !title.is_empty() {
+                        rows.push((title.to_string(), subtitle.to_string()));
+                    }
+                }
+            }
+            let _ = tx.send(Event::CommandSuggestions {
+                generation,
+                start,
+                end,
+                rows,
+            });
+        });
+    }
+}

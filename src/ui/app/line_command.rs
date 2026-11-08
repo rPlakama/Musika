@@ -376,6 +376,23 @@ impl AppRoot {
         SuggestionContext { current, rows }
     }
 
+    fn request_command_suggestions(&mut self) {
+        self.command_suggestions_generation = self.command_suggestions_generation.wrapping_add(1);
+        let generation = self.command_suggestions_generation;
+        let text = self.command_line.query().to_string();
+        let cursor = self.command_line.editor.cursor;
+        let Some(request) = ipc_command::suggestion_request(&text, cursor) else {
+            return;
+        };
+        self.bridge.request_command_suggestions(
+            generation,
+            request.scope,
+            request.query,
+            request.start,
+            request.end,
+        );
+    }
+
     pub(in crate::ui) fn close_command_line(&mut self) {
         self.command_line.close();
         self.command_line_anim
@@ -458,6 +475,7 @@ impl AppRoot {
             }
         }
         self.command_line.clear_denied();
+        self.request_command_suggestions();
         cx.notify();
     }
 }

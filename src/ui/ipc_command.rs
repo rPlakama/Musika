@@ -186,6 +186,20 @@ pub struct SuggestionContext {
     pub current: Option<CurrentTrack>,
     pub rows: Vec<ContextRow>,
 }
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SuggestScope {
+    Artist,
+    Album,
+    Track,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SuggestRequest {
+    pub scope: SuggestScope,
+    pub query: String,
+    pub start: usize,
+    pub end: usize,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CommandError(pub String);
@@ -265,13 +279,13 @@ pub const COMMANDS: &[CommandSpec] = &[
     },
     CommandSpec {
         name: "shuffle",
-        usage: "shuffle <queue|album|artist> [id]",
+        usage: "shuffle <queue|album|artist> [name]",
         description: "Shuffle the queue, an album, or an artist",
         args: ArgSpec::Enum(&["queue", "album", "artist"]),
     },
     CommandSpec {
         name: "radio",
-        usage: "radio [current|album|song] [id]",
+        usage: "radio [current|album|song] [name]",
         description: "Start radio from the current context or an explicit seed",
         args: ArgSpec::OptionalEnum(&["save", "current", "album", "song"]),
     },
@@ -1072,7 +1086,7 @@ fn parse_playlist(rest: &str) -> Result<IpcCommand, CommandError> {
     }
 }
 
-fn quote_arg(value: &str) -> String {
+pub(crate) fn quote_arg(value: &str) -> String {
     if value.is_empty() || value.chars().any(char::is_whitespace) || value.contains('"') {
         format!("\"{}\"", value.replace('"', "\\\""))
     } else {
@@ -1292,6 +1306,69 @@ fn token_at(input: &str, cursor: usize) -> (usize, usize, usize) {
     }
     let index = input[..start].split_whitespace().count();
     (start, end, index)
+}
+
+/// Parse the current command-line token into a scoped search request. Only
+/// commands whose previous argument names a scope participate; the query is
+/// the text after that scope plus the partially typed current token.
+pub fn suggestion_request(input: &str, cursor: usize) -> Option<SuggestRequest> {
+    let (start, end, index) = token_at(input, cursor);
+    if index == 0 {
+        return None;
+    }
+    let before = &input[..start];
+    let args = split_quoted_args(before).ok()?;
+    let command = canonical_name(args.first()?.as_str());
+    let current = input[start..end]
+        .trim_matches(['"', '\''])
+        .trim()
+        .to_string();
+    let (scope, query_start) = match command {
+        "shuffle" => match args.get(1).map(String::as_str) {
+            Some("artist") => (SuggestScope::Artist, 2),
+            Some("album") => (SuggestScope::Album, 2),
+            _ => return None,
+        },
+        "radio" => match args.get(1).map(String::as_str) {
+            Some("album") => (SuggestScope::Album, 2),
+            Some("song") => (SuggestScope::Track, 2),
+            _ => return None,
+        },
+        "download" => {
+            let (scope, index) =
+                args.iter()
+                    .enumerate()
+                    .rev()
+                    .find_map(|(index, arg)| match arg.as_str() {
+                        "artist" => Some((SuggestScope::Artist, index + 1)),
+                        "album" => Some((SuggestScope::Album, index + 1)),
+                        "track" | "song" => Some((SuggestScope::Track, index + 1)),
+                        _ => None,
+                    })?;
+            (scope, index)
+        }
+        _ => return None,
+    };
+    let mut query = args
+        .iter()
+        .skip(query_start)
+        .map(String::as_str)
+        .collect::<Vec<_>>()
+        .join(" ");
+    if !query.is_empty() && !current.is_empty() {
+        query.push(' ');
+    }
+    query.push_str(&current);
+    let query = query.trim().to_string();
+    if query.is_empty() {
+        return None;
+    }
+    Some(SuggestRequest {
+        scope,
+        query,
+        start,
+        end,
+    })
 }
 
 pub fn suggestions(input: &str, cursor: usize) -> Vec<Suggestion> {
@@ -1588,6 +1665,23 @@ mod tests {
         );
         assert!(parse("download \"unterminated").is_err());
         assert!(parse("download a b c d").is_err());
+    }
+
+    #[test]
+    fn scoped_suggestion_request_uses_the_previous_arg() {
+        let request = suggestion_request("shuffle artist \"P", 19).expect("artist scope");
+        assert_eq!(request.scope, SuggestScope::Artist);
+        assert_eq!(request.query, "P");
+        let request = suggestion_request("radio album \"K", 16).expect("album scope");
+        assert_eq!(request.scope, SuggestScope::Album);
+        assert_eq!(request.query, "K");
+        let request = suggestion_request("download track \"Fat", 21).expect("track scope");
+        assert_eq!(request.scope, SuggestScope::Track);
+        let request =
+            suggestion_request("download \"Pink Floyd\" album \"A", 31).expect("album path scope");
+        assert_eq!(request.scope, SuggestScope::Album);
+        assert_eq!(request.query, "A");
+        assert!(suggestion_request("shuffle queue", 13).is_none());
     }
 
     #[test]

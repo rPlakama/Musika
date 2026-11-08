@@ -235,3 +235,45 @@ impl Bridge {
         });
     }
 }
+
+impl Bridge {
+    /// Named shuffle target: resolve via search, then reuse the id path.
+    pub fn shuffle_album_query(&self, query: String) {
+        let tx = self.tx.clone();
+        let offline = self.offline.load(Ordering::Relaxed);
+        crate::app::runtime().spawn(async move {
+            let Some(dbs) = crate::app::dbs() else { return };
+            let result = async {
+                let id = crate::download_command::resolve_named_id(
+                    &dbs,
+                    crate::ui::ipc_command::DownloadScope::Album,
+                    &query,
+                )
+                .await?;
+                crate::queue::album_shuffle_json(&dbs, &id, offline).await
+            }
+            .await;
+            emit_queue(&tx, result, 0, "Could not shuffle the album");
+        });
+    }
+
+    /// Named shuffle target: resolve via search, then reuse the id path.
+    pub fn shuffle_artist_query(&self, query: String) {
+        let tx = self.tx.clone();
+        let offline = self.offline.load(Ordering::Relaxed);
+        crate::app::runtime().spawn(async move {
+            let Some(dbs) = crate::app::dbs() else { return };
+            let result = async {
+                let id = crate::download_command::resolve_named_id(
+                    &dbs,
+                    crate::ui::ipc_command::DownloadScope::Artist,
+                    &query,
+                )
+                .await?;
+                crate::queue::artist_shuffle_json(&dbs, &id, offline).await
+            }
+            .await;
+            emit_queue(&tx, result, 0, "Could not shuffle the artist");
+        });
+    }
+}

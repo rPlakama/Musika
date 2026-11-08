@@ -15,33 +15,33 @@ impl AppRoot {
                 let ids = queue.iter().map(|track| track.id.clone()).collect();
                 self.bridge.shuffle_queue(ids);
             }
-            ShuffleTarget::Album(id) => {
-                let id = id.or_else(|| {
-                    self.page
-                        .as_ref()
-                        .filter(|page| page.descriptor.kind == state::PageKind::Album)
-                        .map(|page| page.descriptor.id.clone())
-                });
+            ShuffleTarget::Album(Some(query)) => self.bridge.shuffle_album_query(query),
+            ShuffleTarget::Album(None) => {
+                let id = self
+                    .page
+                    .as_ref()
+                    .filter(|page| page.descriptor.kind == state::PageKind::Album)
+                    .map(|page| page.descriptor.id.clone());
                 match id {
                     Some(id) => self.bridge.shuffle_album(id),
                     None => self.push_toast(
-                        "Open an album or pass an album id.".to_string(),
+                        "Open an album or pass an album name.".to_string(),
                         ToastKind::Error,
                         None,
                     ),
                 }
             }
-            ShuffleTarget::Artist(id) => {
-                let id = id.or_else(|| {
-                    self.page
-                        .as_ref()
-                        .filter(|page| page.descriptor.kind == state::PageKind::Artist)
-                        .map(|page| page.descriptor.id.clone())
-                });
+            ShuffleTarget::Artist(Some(query)) => self.bridge.shuffle_artist_query(query),
+            ShuffleTarget::Artist(None) => {
+                let id = self
+                    .page
+                    .as_ref()
+                    .filter(|page| page.descriptor.kind == state::PageKind::Artist)
+                    .map(|page| page.descriptor.id.clone());
                 match id {
                     Some(id) => self.bridge.shuffle_artist(id),
                     None => self.push_toast(
-                        "Open an artist or pass an artist id.".to_string(),
+                        "Open an artist or pass an artist name.".to_string(),
                         ToastKind::Error,
                         None,
                     ),
@@ -52,30 +52,57 @@ impl AppRoot {
 
     pub(in crate::ui) fn execute_radio(&mut self, seed: RadioSeed) {
         let play = |kind: &'static str, id: String| (kind, id);
-        let selected = match seed {
-            RadioSeed::Current => self
+        match seed {
+            RadioSeed::Album(Some(query)) => {
+                self.bridge.play_radio_query("album".to_string(), query, 0)
+            }
+            RadioSeed::Song(Some(query)) => {
+                self.bridge.play_radio_query("song".to_string(), query, 0)
+            }
+            RadioSeed::Current => match self
                 .player
                 .current()
-                .map(|track| play("song", track.id.clone())),
-            RadioSeed::Album(id) => id
-                .map(|id| play("album", id))
-                .or_else(|| self.current_album_id().map(|id| play("album", id))),
-            RadioSeed::Song(id) => id
-                .map(|id| play("song", id))
-                .or_else(|| self.current_song_id().map(|id| play("song", id)))
-                .or_else(|| {
+                .map(|track| play("song", track.id.clone()))
+            {
+                Some((kind, id)) => self.bridge.play_radio(kind.to_string(), id, 0),
+                None => self.push_toast(
+                    "Nothing is playing to start radio from.".to_string(),
+                    ToastKind::Error,
+                    None,
+                ),
+            },
+            RadioSeed::Album(None) => {
+                let id = self
+                    .page
+                    .as_ref()
+                    .filter(|page| page.descriptor.kind == state::PageKind::Album)
+                    .map(|page| page.descriptor.id.clone())
+                    .or_else(|| self.current_album_id());
+                match id {
+                    Some(id) => self.bridge.play_radio("album".to_string(), id, 0),
+                    None => self.push_toast(
+                        "Open an album or pass an album name.".to_string(),
+                        ToastKind::Error,
+                        None,
+                    ),
+                }
+            }
+            RadioSeed::Song(None) => {
+                let id = self.current_song_id().or_else(|| {
                     self.player
                         .current()
-                        .map(|track| play("song", track.id.clone()))
-                }),
-        };
-        match selected {
-            Some((kind, id)) => self.bridge.play_radio(kind.to_string(), id, 0),
-            None => self.push_toast(
-                "No song or album is selected for radio.".to_string(),
-                ToastKind::Error,
-                None,
-            ),
+                        .map(|track| track.id.clone())
+                        .filter(|id| !id.is_empty())
+                });
+                match id {
+                    Some(id) => self.bridge.play_radio("song".to_string(), id, 0),
+                    None => self.push_toast(
+                        "Select a song or pass a song name.".to_string(),
+                        ToastKind::Error,
+                        None,
+                    ),
+                }
+            }
         }
     }
 

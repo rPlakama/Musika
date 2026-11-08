@@ -1,0 +1,38 @@
+[musika/debug] db.init: 5.14 ms
+[musika/debug] idle.enter at 106.18 ms
+[musika/debug] qml.completed: 156.40 ms
+[musika/debug] qml.loaded: 156.95 ms
+[musika/debug] DRM card1: amdgpu (1002:1114)
+[musika/debug] /dev/dri/renderD128: read-write access ok
+login: offline mode — showing downloaded music only
+login: online mode — server available
+[musika/debug] frontend.ready: 234.03 ms
+[musika/debug] idle.leave at 252.82 ms
+queue: published 20 rows
+[musika/debug] downloads: 20 of 30 visible songs cached; 0 of 0 albums fully cached; 0 in flight
+index: library updated: 109 artists, 570 albums, 6433 songs, 54 lyrics, 645 playlists
+player-debug: state=Paused index=0/20 title=Some("Ordinary Man") url=Some("https://navidrome.moontier.online/rest/stream.view?u=rPlakama&t=b6f78e2b07fa0c31dc0f68369837d267&s=18e553e8a8183a90&v=1.16.1&c=musika&f=json&id=1dOYx80v8R1ueUc71Boy5x") last_error=None native=ready loading=true failed=None ended=false position=32.06 duration=210.01 sink_failed=0 played_frames=80896
+[musika/debug] downloads: 0 of 0 visible songs cached; 0 of 20 albums fully cached; 0 in flight
+[musika/debug] downloads: 0 of 12 visible songs cached; 0 of 0 albums fully cached; 0 in flight
+[musika/debug] downloads: 0 of 0 visible songs cached; 0 of 20 albums fully cached; 0 in flight
+[musika/debug] downloads: 0 of 12 visible songs cached; 0 of 0 albums fully cached; 0 in flight
+queue: published 20 rows
+[musika/debug] downloads: 20 of 42 visible songs cached; 0 of 20 albums fully cached; 0 in flight
+queue: published 20 rows
+[musika/debug] downloads: 20 of 42 visible songs cached; 0 of 20 albums fully cached; 0 in flight
+[musika/debug] downloads: 0 of 12 visible songs cached; 0 of 0 albums fully cached; 0 in flight
+[musika/debug] downloads: 20 of 20 visible songs cached; 0 of 0 albums fully cached; 0 in flight
+queue: published 20 rows
+[musika/debug] downloads: 20 of 20 visible songs cached; 0 of 0 albums fully cached; 0 in flight
+queue: published 20 rows
+[musika/debug] downloads: 20 of 20 visible songs cached; 0 of 0 albums fully cached; 0 in flight
+queue: published 19 rows
+[musika/debug] downloads: 19 of 19 visible songs cached; 0 of 0 albums fully cached; 0 in flight
+[musika/debug] downloads: 20 of 32 visible songs cached; 0 of 20 albums fully cached; 0 in flight
+[musika/debug] Result reached 6.96 ms
+[musika/debug] downloads: 0 of 7 visible songs cached; 0 of 0 albums fully cached; 0 in flight
+[musika/debug] Result reached 9.38 ms
+[musika/debug] downloads: 0 of 7 visible songs cached; 0 of 0 albums fully cached; 0 in flight
+player-debug: state=Playing index=0/19 title=Some("Meanwhile") url=Some("https://navidrome.moontier.online/rest/stream.view?u=rPlakama&t=ae9eaeb359142125c2aa8e8339191ac8&s=18e553e8a819687e&v=1.16.1&c=musika&f=json&id=5a236qnm1SPoRrmd0k04JH") last_error=None native=ready loading=false failed=None ended=false position=17.02 duration=280.18 sink_failed=0 played_frames=784384
+player-debug: state=Playing index=0/19 title=Some("Meanwhile") url=Some("https://navidrome.moontier.online/rest/stream.view?u=rPlakama&t=ae9eaeb359142125c2aa8e8339191ac8&s=18e553e8a819687e&v=1.16.1&c=musika&f=json&id=5a236qnm1SPoRrmd0k04JH") last_error=None native=ready loading=false failed=None ended=false position=20.67 duration=280.18 sink_failed=0 played_frames=959488
+player-debug: state=Playing index=0/19 title=Some("Meanwhile") url=Some("https://navidrome.moontier.online/rest/stream.view?u=rPlakama&t=ae9eaeb359142125c2aa8e8339191ac8&s=18e553e8a819687e&v=1.16.1&c=musika&f=json&id=5a236qnm1SPoRrmd0k04JH") last_error=None native=ready loading=false failed=None ended=false position=24.30 duration=280.18 sink_failed=0 played_frames=1133568

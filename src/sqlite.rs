@@ -25,6 +25,7 @@ pub struct Credentials {
     pub server_url: String,
     /// Server implementation from the ping envelope (`navidrome`, `subsonic`, …).
     pub server_type: String,
+    pub created_at: i64,
 }
 
 pub async fn save_credentials(
@@ -75,8 +76,30 @@ pub async fn load_credentials(pool: &SqlitePool) -> Result<Option<Credentials>> 
                 password,
                 server_url,
                 server_type,
+                created_at: 0,
             }))
         }
         None => Ok(None),
     }
+}
+
+/// All saved legacy credentials, newest last. Used only for the first
+/// multi-account migration; the account registry owns credentials afterwards.
+pub async fn all_credentials(pool: &SqlitePool) -> Result<Vec<Credentials>> {
+    let rows: Vec<(i64, String, String, String, String)> = sqlx::query_as(
+        "SELECT id, username, password, serverURL, server_type FROM users ORDER BY id ASC",
+    )
+    .fetch_all(pool)
+    .await?;
+    let mut out = Vec::with_capacity(rows.len());
+    for (id, username, encrypted_password, server_url, server_type) in rows {
+        out.push(Credentials {
+            username,
+            password: crypto::decrypt_password(&encrypted_password)?,
+            server_url,
+            server_type,
+            created_at: id,
+        });
+    }
+    Ok(out)
 }

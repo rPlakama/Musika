@@ -63,6 +63,9 @@ mod db;
 
 mod download;
 
+#[cfg(feature = "gpuui")]
+mod download_command;
+
 mod fanout;
 
 mod hex;

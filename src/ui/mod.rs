@@ -36,7 +36,7 @@ mod command_line;
 mod covers;
 #[cfg(debug_assertions)]
 mod debug;
-mod ipc_command;
+pub(crate) mod ipc_command;
 mod line_search;
 mod lyrics_layout;
 mod metrics;
@@ -303,7 +303,14 @@ impl AltTarget {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LoginMode {
+    SignIn,
+    AddAccount,
+}
+
 struct LoginState {
+    mode: LoginMode,
     server: TextModal,
     username: TextModal,
     password: TextModal,
@@ -513,7 +520,7 @@ fn page_actions(page: &PageBarState, artist_tool: bool) -> Vec<TopBarAction> {
 
 fn topbar_actions_for(mode: SuperiorMode, page: Option<&PageBarState>) -> Vec<TopBarAction> {
     match mode {
-        SuperiorMode::Home => vec![TopBarAction::Sync, TopBarAction::Wipe],
+        SuperiorMode::Home => vec![TopBarAction::Sync],
         SuperiorMode::Album => page
             .map(|page| page_actions(page, false))
             .unwrap_or_default(),

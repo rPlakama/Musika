@@ -18,11 +18,12 @@
 // You should have received a copy of the GNU General Public License
 // along with this program; if not, see <https://www.gnu.org/licenses/>.
 
+mod accounts;
 mod api;
 mod app;
+mod artist_user;
 #[cfg(feature = "gpuui")]
 mod auth;
-mod artist_user;
 mod browse;
 mod cache;
 mod colors;
@@ -36,6 +37,8 @@ mod debug;
 mod debug_info;
 mod digest;
 mod download;
+#[cfg(feature = "gpuui")]
+mod download_command;
 mod fanout;
 mod hex;
 mod http_client;
@@ -47,14 +50,14 @@ mod library;
 mod linux;
 mod lyrics;
 mod media;
+mod media_actions;
 mod mpris;
 mod offline;
 mod player;
 mod playlists;
 mod queue;
-mod media_actions;
-mod rows;
 mod radio;
+mod rows;
 mod scroll_memory;
 mod search;
 mod session;
@@ -217,9 +220,17 @@ fn main() {
     crate::startup::trace("main");
 
     crate::player::warm_native();
-    crate::db::warm_startup();
-
     load_dotenv();
+
+    let data_root = match crate::accounts::startup_data_root() {
+        Ok(root) => root,
+        Err(err) => {
+            eprintln!("accounts: failed to select data root: {err:#}");
+            std::process::exit(1);
+        }
+    };
+    crate::db::set_data_root(data_root);
+    crate::db::warm_startup();
 
     let dbs = match crate::app::runtime().block_on(db::init()) {
         Ok(dbs) => dbs,
@@ -230,6 +241,9 @@ fn main() {
     };
     crate::startup::trace("db.init");
 
+    if let Err(err) = crate::app::runtime().block_on(crate::accounts::migrate_legacy(&dbs)) {
+        eprintln!("accounts: legacy migration failed: {err:#}");
+    }
     // GPUI is the only front end.
     crate::app::set_dbs(dbs);
     crate::startup::trace("app.gpuui");

@@ -39,6 +39,20 @@ impl AppRoot {
                 }
             }
             IpcCommand::WipeDatabases => self.open_wipe_menu(),
+            IpcCommand::Logout => self.bridge.logout(),
+            IpcCommand::AddAccount => {
+                if self.login.is_none() {
+                    self.login = Some(Self::login_state(LoginMode::AddAccount, false));
+                }
+            }
+            IpcCommand::RemoveAccount { keep_data } => self.bridge.remove_account(keep_data),
+            IpcCommand::CreatePlaylist { name, offline } => match self.selected_song_ids() {
+                Ok(ids) => self.bridge.create_playlist(name, ids, offline),
+                Err(error) => self.push_toast(error, ToastKind::Error, None),
+            },
+            IpcCommand::Shuffle { target } => self.execute_shuffle(target),
+            IpcCommand::Radio { seed } => self.execute_radio(seed),
+            IpcCommand::Download { request } => self.execute_download(request),
             IpcCommand::Refresh => self.on_refresh(&Refresh, window, cx),
             IpcCommand::Top => self.on_top(&Top, window, cx),
             IpcCommand::Bottom => self.on_bottom(&Bottom, window, cx),

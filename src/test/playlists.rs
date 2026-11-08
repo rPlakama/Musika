@@ -6,18 +6,28 @@ async fn memory_pool() -> SqlitePool {
 }
 
 fn test_dbs(pools: &SqlitePool, playlist: &SqlitePool) -> Dbs {
+    test_dbs_with_credentials(pools, pools, playlist)
+}
+
+/// A `Dbs` whose credential pool is distinct from the library pool (the
+/// remote-create test saves a server URL there).
+fn test_dbs_with_credentials(
+    credentials: &SqlitePool,
+    library: &SqlitePool,
+    playlist: &SqlitePool,
+) -> Dbs {
     Dbs {
-        credentials: pools.clone(),
-        library: pools.clone(),
-        sync: pools.clone(),
-        search: pools.clone(),
-        covers: pools.clone(),
-        media: pools.clone(),
-        lyrics: pools.clone(),
-        colors: pools.clone(),
-        status: pools.clone(),
-        artist_user: pools.clone(),
-        download: pools.clone(),
+        credentials: credentials.clone(),
+        library: library.clone(),
+        sync: library.clone(),
+        search: library.clone(),
+        covers: library.clone(),
+        media: library.clone(),
+        lyrics: library.clone(),
+        colors: library.clone(),
+        status: library.clone(),
+        artist_user: library.clone(),
+        download: library.clone(),
         playlist: playlist.clone(),
     }
 }
@@ -288,4 +298,251 @@ async fn saved_radio_writes_a_local_m3u_and_resolves_ids() {
             .unwrap();
     assert_eq!(ids, vec![Some("s1".into()), Some("s2".into()), None]);
     let _ = std::fs::remove_dir_all(dir);
+}
+
+/// ARC-44: creating from a selection writes one unique app-owned M3U, keeps
+/// the selection order (and duplicates) and leaves the playlist visible in
+/// the index immediately.
+#[tokio::test]
+async fn create_local_writes_a_unique_m3u_and_scans_it() {
+    let library = memory_pool().await;
+    sqlx::migrate!("./migrations_library")
+        .run(&library)
+        .await
+        .unwrap();
+    sqlx::query(
+        "INSERT INTO songs (id, title, artist, album, duration, path) VALUES
+             ('s1', 'First', 'Artist', 'Album', 100, 'Music/first.flac'),
+             ('s2', 'Second', 'Artist', 'Album', 200, 'Music/second.flac')",
+    )
+    .execute(&library)
+    .await
+    .unwrap();
+    let playlist = memory_pool().await;
+    sqlx::migrate!("./migrations_playlist")
+        .run(&playlist)
+        .await
+        .unwrap();
+    let dbs = test_dbs(&library, &playlist);
+
+    // `create_local` uses the active data root; point it at a disposable
+    // folder so the test never touches the real playlist directory. No other
+    // test resolves the m3u folder, so the process-wide root is safe here.
+    let root = std::env::temp_dir().join(format!("musika-create-local-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    crate::db::set_data_root(root.clone());
+
+    let ids = vec!["s2".to_string(), "s1".to_string(), "s2".to_string()];
+    let first = create_local(&dbs, "Road Trip", &ids).await.unwrap();
+    assert!(first.is_file());
+    assert_eq!(first.parent().unwrap(), root.join("playlists"));
+
+    // The same name does not overwrite the first file.
+    let second = create_local(&dbs, "Road Trip", &ids).await.unwrap();
+    assert!(second.is_file());
+    assert_ne!(second, first);
+    assert!(
+        second
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .starts_with("Road Trip ")
+    );
+
+    let entries = parse_m3u(&std::fs::read_to_string(&first).unwrap());
+    assert_eq!(
+        entries
+            .iter()
+            .map(|entry| entry.path.as_str())
+            .collect::<Vec<_>>(),
+        vec!["Music/second.flac", "Music/first.flac", "Music/second.flac"]
+    );
+    assert_eq!(entries[0].artist.as_deref(), Some("Artist"));
+    assert_eq!(entries[0].title.as_deref(), Some("Second"));
+
+    let json = list_json(&dbs).await.unwrap();
+    let lists: serde_json::Value = serde_json::from_str(&json).unwrap();
+    let lists = lists.as_array().unwrap();
+    assert_eq!(lists.len(), 2, "both unique files are playlists");
+    assert!(lists.iter().any(|list| {
+        list["name"] == "Road Trip.m3u" && list["song_count"] == 3 && list["source"] == "m3u"
+    }));
+
+    // The second (timestamped) file has its own rows; check the first one.
+    let stored: Vec<Option<String>> = sqlx::query_scalar(
+        "SELECT song_id FROM playlist_song WHERE playlist_id = 'm3u:Road Trip.m3u'
+         ORDER BY position",
+    )
+    .fetch_all(&playlist)
+    .await
+    .unwrap();
+    assert_eq!(
+        stored,
+        vec![Some("s2".into()), Some("s1".into()), Some("s2".into())]
+    );
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[tokio::test]
+async fn create_rejects_empty_names_and_empty_song_lists() {
+    let library = memory_pool().await;
+    let playlist = memory_pool().await;
+    let dbs = test_dbs(&library, &playlist);
+
+    assert!(create_local(&dbs, "", &["s1".into()]).await.is_err());
+    assert!(create_local(&dbs, "   ", &["s1".into()]).await.is_err());
+    assert!(create_local(&dbs, "Mix", &[]).await.is_err());
+    assert!(create_local(&dbs, "Mix", &["  ".into()]).await.is_err());
+
+    // Validation happens before the session lookup, so no credentials and no
+    // server are needed here.
+    assert!(create_remote(&dbs, "", &["s1".into()]).await.is_err());
+    assert!(create_remote(&dbs, "Mix", &[]).await.is_err());
+}
+
+/// The text helper keeps duplicates/order and decorates only ids the local
+/// library knows; unknown (or path-less) ids use the app-owned id convention.
+#[tokio::test]
+async fn m3u_text_keeps_order_duplicates_and_id_fallbacks() {
+    let library = memory_pool().await;
+    sqlx::migrate!("./migrations_library")
+        .run(&library)
+        .await
+        .unwrap();
+    sqlx::query(
+        "INSERT INTO songs (id, title, artist, duration, path) VALUES
+             ('s1', 'First', 'Artist', 100, '/music/first.flac'),
+             ('s2', 'Second', NULL, 200, NULL)",
+    )
+    .execute(&library)
+    .await
+    .unwrap();
+    let playlist = memory_pool().await;
+    let dbs = test_dbs(&library, &playlist);
+
+    let ids = ["s1", "missing", "s1", "s2"].map(String::from).to_vec();
+    let text = m3u_text(&dbs, &ids).await.unwrap();
+    assert!(text.starts_with("#EXTM3U\n"));
+
+    let entries = parse_m3u(&text);
+    assert_eq!(
+        entries
+            .iter()
+            .map(|entry| entry.path.as_str())
+            .collect::<Vec<_>>(),
+        vec![
+            "/music/first.flac",
+            "musika:song:missing",
+            "/music/first.flac",
+            "musika:song:s2"
+        ]
+    );
+    assert_eq!(entries[0].artist.as_deref(), Some("Artist"));
+    assert_eq!(entries[0].duration, Some(100));
+    // Unknown ids stay plain path lines (no fabricated EXTINF).
+    assert_eq!(entries[1].duration, None);
+    assert_eq!(entries[1].artist, None);
+    // A known id without a filesystem path still keeps its cheap metadata.
+    assert_eq!(entries[3].title.as_deref(), Some("Second"));
+    assert_eq!(entries[3].duration, Some(200));
+}
+
+/// The remote half posts the ordered ids, then refreshes `getPlaylists` into
+/// the local index — the same lazy-identity model as a normal sync.
+#[tokio::test]
+async fn create_remote_posts_songs_then_refreshes_the_list() {
+    use std::io::{Read, Write};
+
+    let credentials = memory_pool().await;
+    sqlx::migrate!("./migrations")
+        .run(&credentials)
+        .await
+        .unwrap();
+    // Keep the credential round-trip on the pinned test key instead of the
+    // config directory.
+    crate::crypto::use_test_key();
+
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind loopback");
+    let addr = listener.local_addr().expect("local addr");
+    listener.set_nonblocking(true).unwrap();
+    let server = std::thread::spawn(move || {
+        let mut requests: Vec<String> = Vec::new();
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while requests.len() < 2 && Instant::now() < deadline {
+            let (mut socket, _) = match listener.accept() {
+                Ok(pair) => pair,
+                Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {
+                    std::thread::sleep(Duration::from_millis(10));
+                    continue;
+                }
+                Err(_) => break,
+            };
+            socket.set_read_timeout(Some(Duration::from_secs(5))).ok();
+            let mut buffer = [0u8; 8192];
+            let read = socket.read(&mut buffer).unwrap_or(0);
+            let request = String::from_utf8_lossy(&buffer[..read]).to_string();
+
+            let body = if request.starts_with("GET /rest/getPlaylists.view") {
+                r#"{"subsonic-response":{"status":"ok","version":"1.16.1","playlists":{"playlist":[{"id":"pl1","name":"Mix","songCount":2,"duration":300}]}}}"#
+            } else {
+                r#"{"subsonic-response":{"status":"ok","version":"1.16.1"}}"#
+            };
+            let head = format!(
+                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nContent-Type: application/json\r\nConnection: close\r\n\r\n",
+                body.len()
+            );
+            socket.write_all(head.as_bytes()).expect("head");
+            socket.write_all(body.as_bytes()).expect("body");
+            socket.flush().expect("flush");
+            requests.push(request);
+        }
+        requests
+    });
+
+    let server_url = format!("http://{addr}");
+    crate::sqlite::save_credentials(&credentials, "alice", "secret", &server_url, "navidrome")
+        .await
+        .unwrap();
+
+    let library = memory_pool().await;
+    let playlist = memory_pool().await;
+    sqlx::migrate!("./migrations_playlist")
+        .run(&playlist)
+        .await
+        .unwrap();
+    let dbs = test_dbs_with_credentials(&credentials, &library, &playlist);
+
+    let ids = vec!["s1".to_string(), "s2".to_string()];
+    create_remote(&dbs, "Mix", &ids).await.unwrap();
+
+    let requests = server.join().expect("server thread");
+    assert_eq!(requests.len(), 2, "create + list refresh: {requests:?}");
+    let create = requests
+        .iter()
+        .find(|request| request.contains("createPlaylist.view"))
+        .expect("createPlaylist request");
+    assert!(create.starts_with("GET "));
+    assert!(create.contains("name=Mix"));
+    let first = create.find("songId=s1").expect("first song");
+    let second = create.find("songId=s2").expect("second song");
+    assert!(first < second, "song ids keep selection order: {create}");
+    assert!(
+        requests
+            .iter()
+            .any(|request| request.contains("getPlaylists.view")),
+        "the cached list is refreshed: {requests:?}"
+    );
+
+    let name: String = sqlx::query_scalar("SELECT name FROM playlist WHERE id = 'pl1'")
+        .fetch_one(&playlist)
+        .await
+        .unwrap();
+    let count: i64 = sqlx::query_scalar("SELECT song_count FROM playlist WHERE id = 'pl1'")
+        .fetch_one(&playlist)
+        .await
+        .unwrap();
+    assert_eq!(name, "Mix");
+    assert_eq!(count, 2);
 }

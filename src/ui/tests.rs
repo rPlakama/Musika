@@ -38,10 +38,7 @@ mod contextual_bar_tests {
     #[test]
     fn contexts_pick_the_right_action_matrix() {
         use TopBarAction::*;
-        assert_eq!(
-            topbar_actions_for(SuperiorMode::Home, None),
-            vec![Sync, Wipe]
-        );
+        assert_eq!(topbar_actions_for(SuperiorMode::Home, None), vec![Sync]);
         assert!(topbar_actions_for(SuperiorMode::Playlist, None).is_empty());
         assert_eq!(topbar_actions_for(SuperiorMode::Radio, None), vec![Tool]);
 

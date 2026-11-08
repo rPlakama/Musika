@@ -28,6 +28,13 @@ pub enum IpcCommand {
     Sync(SyncMode),
     Wipe(WipeScope),
     WipeDatabases,
+    Logout,
+    AddAccount,
+    RemoveAccount { keep_data: bool },
+    CreatePlaylist { name: String, offline: bool },
+    Shuffle { target: ShuffleTarget },
+    Radio { seed: RadioSeed },
+    Download { request: DownloadRequest },
     Refresh,
     Top,
     Bottom,
@@ -91,6 +98,70 @@ pub enum IpcCommand {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ShuffleTarget {
+    Queue,
+    Album(Option<String>),
+    Artist(Option<String>),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RadioSeed {
+    Current,
+    Album(Option<String>),
+    Song(Option<String>),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DownloadScope {
+    Artist,
+    Album,
+    Track,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DownloadMode {
+    Current,
+    Direct {
+        scope: DownloadScope,
+        query: String,
+    },
+    Path {
+        artist: String,
+        album: Option<String>,
+        track: Option<String>,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DownloadRequest {
+    pub remove: bool,
+    pub mode: DownloadMode,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CurrentTrack {
+    pub id: String,
+    pub title: String,
+    pub artist: String,
+    pub album: String,
+    pub album_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ContextRow {
+    pub kind: &'static str,
+    pub id: String,
+    pub title: String,
+    pub subtitle: String,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SuggestionContext {
+    pub current: Option<CurrentTrack>,
+    pub rows: Vec<ContextRow>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CommandError(pub String);
 
 impl fmt::Display for CommandError {
@@ -141,6 +212,48 @@ pub const COMMANDS: &[CommandSpec] = &[
         usage: "wipe_databases",
         description: "Open the destructive wipe chooser",
         args: ArgSpec::None,
+    },
+    CommandSpec {
+        name: "logout",
+        usage: "logout",
+        description: "Log out of the current account",
+        args: ArgSpec::None,
+    },
+    CommandSpec {
+        name: "add_account",
+        usage: "add_account",
+        description: "Open the login screen to add an account",
+        args: ArgSpec::None,
+    },
+    CommandSpec {
+        name: "remove_account",
+        usage: "remove_account [--keep-data]",
+        description: "Remove the current account",
+        args: ArgSpec::OptionalEnum(&["--keep-data"]),
+    },
+    CommandSpec {
+        name: "create_playlist",
+        usage: "create_playlist <name> [--offline]",
+        description: "Create a playlist from selected songs",
+        args: ArgSpec::Text("<name> [--offline]"),
+    },
+    CommandSpec {
+        name: "shuffle",
+        usage: "shuffle <queue|album|artist> [id]",
+        description: "Shuffle the queue, an album, or an artist",
+        args: ArgSpec::Enum(&["queue", "album", "artist"]),
+    },
+    CommandSpec {
+        name: "radio",
+        usage: "radio [current|album|song] [id]",
+        description: "Start radio from the current context or an explicit seed",
+        args: ArgSpec::OptionalEnum(&["current", "album", "song"]),
+    },
+    CommandSpec {
+        name: "download",
+        usage: "download [rm] [artist|album|track] <names...>",
+        description: "Download the current track or a searched artist/album/track",
+        args: ArgSpec::Text("[rm] <artist> [album] [track]"),
     },
     CommandSpec {
         name: "refresh",
@@ -600,6 +713,66 @@ pub fn parse(input: &str) -> Result<IpcCommand, CommandError> {
             other => Err(CommandError(format!("unknown wipe scope: {other}"))),
         },
         "wipe_databases" => Ok(IpcCommand::WipeDatabases),
+        "logout" => Ok(IpcCommand::Logout),
+        "add_account" => Ok(IpcCommand::AddAccount),
+        "remove_account" => match rest {
+            "" => Ok(IpcCommand::RemoveAccount { keep_data: false }),
+            "--keep-data" => Ok(IpcCommand::RemoveAccount { keep_data: true }),
+            _ => Err(CommandError(
+                "usage: remove_account [--keep-data]".to_string(),
+            )),
+        },
+        "create_playlist" => {
+            let (name, offline) = parse_playlist_rest(rest)?;
+            Ok(IpcCommand::CreatePlaylist { name, offline })
+        }
+        "shuffle" => match split_quoted_args(rest)?.as_slice() {
+            [] => Err(CommandError(
+                "usage: shuffle <queue|album|artist> [id]".to_string(),
+            )),
+            [target] if target == "queue" => Ok(IpcCommand::Shuffle {
+                target: ShuffleTarget::Queue,
+            }),
+            [target] if target == "album" => Ok(IpcCommand::Shuffle {
+                target: ShuffleTarget::Album(None),
+            }),
+            [target] if target == "artist" => Ok(IpcCommand::Shuffle {
+                target: ShuffleTarget::Artist(None),
+            }),
+            [target, id] if target == "album" => Ok(IpcCommand::Shuffle {
+                target: ShuffleTarget::Album(Some(id.clone())),
+            }),
+            [target, id] if target == "artist" => Ok(IpcCommand::Shuffle {
+                target: ShuffleTarget::Artist(Some(id.clone())),
+            }),
+            _ => Err(CommandError(
+                "usage: shuffle <queue|album|artist> [id]".to_string(),
+            )),
+        },
+        "radio" => match split_quoted_args(rest)?.as_slice() {
+            [] => Ok(IpcCommand::Radio {
+                seed: RadioSeed::Current,
+            }),
+            [target] if target == "current" => Ok(IpcCommand::Radio {
+                seed: RadioSeed::Current,
+            }),
+            [target] if target == "album" => Ok(IpcCommand::Radio {
+                seed: RadioSeed::Album(None),
+            }),
+            [target] if target == "song" => Ok(IpcCommand::Radio {
+                seed: RadioSeed::Song(None),
+            }),
+            [target, id] if target == "album" => Ok(IpcCommand::Radio {
+                seed: RadioSeed::Album(Some(id.clone())),
+            }),
+            [target, id] if target == "song" => Ok(IpcCommand::Radio {
+                seed: RadioSeed::Song(Some(id.clone())),
+            }),
+            _ => Err(CommandError(
+                "usage: radio [current|album|song] [id]".to_string(),
+            )),
+        },
+        "download" => parse_download(rest),
         "refresh" => Ok(IpcCommand::Refresh),
         "top" => Ok(IpcCommand::Top),
         "bottom" => Ok(IpcCommand::Bottom),
@@ -705,6 +878,190 @@ pub fn needs_argument(name: &str) -> bool {
         .is_some_and(|spec| !matches!(spec.args, ArgSpec::None))
 }
 
+/// Shell-like argument splitting for commands whose names contain spaces.
+/// Quotes group words; backslash escapes the next character.
+fn split_quoted_args(input: &str) -> Result<Vec<String>, CommandError> {
+    let mut out = Vec::new();
+    let mut current = String::new();
+    let mut quote: Option<char> = None;
+    let mut escaped = false;
+    let mut in_word = false;
+    for ch in input.chars() {
+        if escaped {
+            current.push(ch);
+            escaped = false;
+            in_word = true;
+            continue;
+        }
+        if ch == '\\' && quote != Some('\'') {
+            escaped = true;
+            continue;
+        }
+        if let Some(q) = quote {
+            if ch == q {
+                quote = None;
+            } else {
+                current.push(ch);
+            }
+            in_word = true;
+            continue;
+        }
+        match ch {
+            '"' | '\'' => {
+                quote = Some(ch);
+                in_word = true;
+            }
+            c if c.is_whitespace() => {
+                if in_word {
+                    out.push(std::mem::take(&mut current));
+                    in_word = false;
+                }
+            }
+            c => {
+                current.push(c);
+                in_word = true;
+            }
+        }
+    }
+    if quote.is_some() {
+        return Err(CommandError("unterminated quoted argument".to_string()));
+    }
+    if escaped {
+        current.push('\\');
+    }
+    if in_word {
+        out.push(current);
+    }
+    Ok(out)
+}
+
+fn parse_download(rest: &str) -> Result<IpcCommand, CommandError> {
+    let mut tokens = split_quoted_args(rest)?;
+    let remove = tokens.first().is_some_and(|token| token == "rm");
+    if remove {
+        tokens.remove(0);
+    }
+    if tokens.is_empty() || tokens[0] == "current" {
+        if tokens.len() > 1 {
+            return Err(CommandError(
+                "usage: download [rm] [current|artist|album|track] <names...>".to_string(),
+            ));
+        }
+        return Ok(IpcCommand::Download {
+            request: DownloadRequest {
+                remove,
+                mode: DownloadMode::Current,
+            },
+        });
+    }
+    let direct = match tokens[0].as_str() {
+        "artist" => Some(DownloadScope::Artist),
+        "album" => Some(DownloadScope::Album),
+        "track" | "song" => Some(DownloadScope::Track),
+        _ => None,
+    };
+    if let Some(scope) = direct {
+        let query = tokens[1..].join(" ");
+        if query.trim().is_empty() {
+            return Err(CommandError(
+                "usage: download [rm] [artist|album|track] <names...>".to_string(),
+            ));
+        }
+        return Ok(IpcCommand::Download {
+            request: DownloadRequest {
+                remove,
+                mode: DownloadMode::Direct { scope, query },
+            },
+        });
+    }
+    let mut positional = Vec::new();
+    for token in tokens {
+        if (token == "album" || token == "track") && !positional.is_empty() && positional.len() < 3
+        {
+            continue;
+        }
+        positional.push(token);
+    }
+    if positional.is_empty()
+        || positional.len() > 3
+        || positional.iter().any(|p| p.trim().is_empty())
+    {
+        return Err(CommandError(
+            "usage: download [rm] <artist> [album] [track]".to_string(),
+        ));
+    }
+    let mut positional = positional.into_iter();
+    Ok(IpcCommand::Download {
+        request: DownloadRequest {
+            remove,
+            mode: DownloadMode::Path {
+                artist: positional.next().unwrap_or_default(),
+                album: positional.next(),
+                track: positional.next(),
+            },
+        },
+    })
+}
+
+fn parse_playlist_rest(rest: &str) -> Result<(String, bool), CommandError> {
+    let mut text = rest.trim();
+    let offline = text.strip_suffix("--offline").is_some_and(|prefix| {
+        text = prefix.trim_end();
+        true
+    });
+    if text.is_empty() {
+        return Err(CommandError(
+            "usage: create_playlist <name> [--offline]".to_string(),
+        ));
+    }
+    Ok((text.to_string(), offline))
+}
+
+fn quote_arg(value: &str) -> String {
+    if value.is_empty() || value.chars().any(char::is_whitespace) || value.contains('"') {
+        format!("\"{}\"", value.replace('"', "\\\""))
+    } else {
+        value.to_string()
+    }
+}
+
+fn canonical_download(request: &DownloadRequest) -> String {
+    let mut out = String::from("download");
+    if request.remove {
+        out.push_str(" rm");
+    }
+    match &request.mode {
+        DownloadMode::Current => out.push_str(" current"),
+        DownloadMode::Direct { scope, query } => {
+            out.push(' ');
+            out.push_str(match scope {
+                DownloadScope::Artist => "artist",
+                DownloadScope::Album => "album",
+                DownloadScope::Track => "track",
+            });
+            out.push(' ');
+            out.push_str(&quote_arg(query));
+        }
+        DownloadMode::Path {
+            artist,
+            album,
+            track,
+        } => {
+            out.push(' ');
+            out.push_str(&quote_arg(artist));
+            if let Some(album) = album {
+                out.push_str(" album ");
+                out.push_str(&quote_arg(album));
+            }
+            if let Some(track) = track {
+                out.push_str(" track ");
+                out.push_str(&quote_arg(track));
+            }
+        }
+    }
+    out
+}
+
 pub fn canonical_string(command: &IpcCommand) -> String {
     use IpcCommand::*;
     match command {
@@ -715,6 +1072,49 @@ pub fn canonical_string(command: &IpcCommand) -> String {
         Wipe(WipeScope::Lyrics) => "wipe lyrics".to_string(),
         Wipe(WipeScope::Covers) => "wipe covers".to_string(),
         WipeDatabases => "wipe_databases".to_string(),
+        Logout => "logout".to_string(),
+        AddAccount => "add_account".to_string(),
+        RemoveAccount { keep_data: false } => "remove_account".to_string(),
+        RemoveAccount { keep_data: true } => "remove_account --keep-data".to_string(),
+        CreatePlaylist {
+            name,
+            offline: false,
+        } => format!("create_playlist {name}"),
+        CreatePlaylist {
+            name,
+            offline: true,
+        } => format!("create_playlist {name} --offline"),
+        Shuffle {
+            target: ShuffleTarget::Queue,
+        } => "shuffle queue".to_string(),
+        Shuffle {
+            target: ShuffleTarget::Album(None),
+        } => "shuffle album".to_string(),
+        Shuffle {
+            target: ShuffleTarget::Album(Some(id)),
+        } => format!("shuffle album {id}"),
+        Shuffle {
+            target: ShuffleTarget::Artist(None),
+        } => "shuffle artist".to_string(),
+        Shuffle {
+            target: ShuffleTarget::Artist(Some(id)),
+        } => format!("shuffle artist {id}"),
+        Radio {
+            seed: RadioSeed::Current,
+        } => "radio current".to_string(),
+        Radio {
+            seed: RadioSeed::Album(None),
+        } => "radio album".to_string(),
+        Radio {
+            seed: RadioSeed::Album(Some(id)),
+        } => format!("radio album {id}"),
+        Radio {
+            seed: RadioSeed::Song(None),
+        } => "radio song".to_string(),
+        Radio {
+            seed: RadioSeed::Song(Some(id)),
+        } => format!("radio song {id}"),
+        Download { request } => canonical_download(request),
         Refresh => "refresh".to_string(),
         Top => "top".to_string(),
         Bottom => "bottom".to_string(),
@@ -828,6 +1228,14 @@ fn token_at(input: &str, cursor: usize) -> (usize, usize, usize) {
 }
 
 pub fn suggestions(input: &str, cursor: usize) -> Vec<Suggestion> {
+    suggestions_with(input, cursor, &SuggestionContext::default())
+}
+
+pub fn suggestions_with(
+    input: &str,
+    cursor: usize,
+    context: &SuggestionContext,
+) -> Vec<Suggestion> {
     let (start, end, index) = token_at(input, cursor);
     let prefix = &input[start..end];
     if index == 0 {
@@ -849,6 +1257,9 @@ pub fn suggestions(input: &str, cursor: usize) -> Vec<Suggestion> {
     let Some(spec) = COMMANDS.iter().find(|spec| spec.name == name) else {
         return Vec::new();
     };
+    if name == "download" {
+        return download_suggestions(input, cursor, start, end, context);
+    }
     if index != 1 {
         return Vec::new();
     }
@@ -879,6 +1290,98 @@ pub fn suggestions(input: &str, cursor: usize) -> Vec<Suggestion> {
             completion: Some((*arg).to_string()),
         })
         .collect()
+}
+
+/// Completion for the download grammar. The command line context is a
+/// snapshot, so suggestions stay synchronous; execution resolves live search.
+fn download_suggestions(
+    input: &str,
+    cursor: usize,
+    start: usize,
+    end: usize,
+    context: &SuggestionContext,
+) -> Vec<Suggestion> {
+    let _ = cursor;
+    let prefix = input[start..end].trim_matches(['"', '\'']);
+    let before = input[..start].trim_end();
+    let args: Vec<&str> = before.split_whitespace().skip(1).collect();
+    let args: Vec<&str> = args.into_iter().filter(|arg| *arg != "rm").collect();
+    let mut out = Vec::new();
+    let mut push = |label: String, description: &str, completion: Option<String>| {
+        out.push(Suggestion {
+            start,
+            end,
+            label,
+            description: description.to_string(),
+            completion,
+        });
+    };
+    if args.is_empty() {
+        if let Some(current) = context.current.as_ref() {
+            let path = current_download_path(current);
+            push(
+                format!("current track: {path}"),
+                "Download the currently playing track (or add album/track scopes)",
+                Some(path),
+            );
+        }
+        for (value, description) in [
+            ("current", "Use the currently playing track"),
+            ("rm", "Remove a download instead"),
+            ("artist", "Search and download an artist"),
+            ("album", "Search and download an album"),
+            ("track", "Search and download a track"),
+        ] {
+            if value.starts_with(prefix) {
+                push(value.to_string(), description, Some(value.to_string()));
+            }
+        }
+        return out;
+    }
+    let scope = args.iter().rev().find_map(|arg| match *arg {
+        "artist" => Some(("artist", DownloadScope::Artist)),
+        "album" => Some(("album", DownloadScope::Album)),
+        "track" | "song" => Some(("track", DownloadScope::Track)),
+        _ => None,
+    });
+    if let Some((kind, _)) = scope {
+        if let Some(current) = context.current.as_ref()
+            && kind == "track"
+        {
+            let path = current_download_path(current);
+            if path.to_lowercase().contains(&prefix.to_lowercase()) {
+                push(
+                    format!("current track: {path}"),
+                    "Use the currently playing track",
+                    Some(path),
+                );
+            }
+        }
+        for row in context.rows.iter().filter(|row| row.kind == kind) {
+            if !prefix.is_empty() && !row.title.to_lowercase().starts_with(&prefix.to_lowercase()) {
+                continue;
+            }
+            push(
+                row.title.clone(),
+                &row.subtitle,
+                Some(quote_arg(&row.title)),
+            );
+        }
+    }
+    out
+}
+
+fn current_download_path(current: &CurrentTrack) -> String {
+    let mut path = quote_arg(&current.artist);
+    if !current.album.is_empty() {
+        path.push_str(" album ");
+        path.push_str(&quote_arg(&current.album));
+    }
+    if !current.title.is_empty() {
+        path.push_str(" track ");
+        path.push_str(&quote_arg(&current.title));
+    }
+    path
 }
 
 #[cfg(test)]
@@ -922,6 +1425,160 @@ mod tests {
             Ok(IpcCommand::Search {
                 query: "http://example.test/a:b".into()
             })
+        );
+    }
+
+    #[test]
+    fn parses_shuffle_radio_and_download() {
+        assert_eq!(
+            parse("shuffle queue"),
+            Ok(IpcCommand::Shuffle {
+                target: ShuffleTarget::Queue
+            })
+        );
+        assert_eq!(
+            parse("shuffle album"),
+            Ok(IpcCommand::Shuffle {
+                target: ShuffleTarget::Album(None)
+            })
+        );
+        assert_eq!(
+            parse("shuffle artist a1"),
+            Ok(IpcCommand::Shuffle {
+                target: ShuffleTarget::Artist(Some("a1".into()))
+            })
+        );
+        assert!(parse("shuffle").is_err());
+        assert!(parse("shuffle album extra nope").is_err());
+        assert_eq!(
+            parse("radio"),
+            Ok(IpcCommand::Radio {
+                seed: RadioSeed::Current
+            })
+        );
+        assert_eq!(
+            parse("radio song s1"),
+            Ok(IpcCommand::Radio {
+                seed: RadioSeed::Song(Some("s1".into()))
+            })
+        );
+        assert!(parse("radio artist").is_err());
+        assert_eq!(
+            parse("download"),
+            Ok(IpcCommand::Download {
+                request: DownloadRequest {
+                    remove: false,
+                    mode: DownloadMode::Current
+                }
+            })
+        );
+        assert_eq!(
+            parse("download rm"),
+            Ok(IpcCommand::Download {
+                request: DownloadRequest {
+                    remove: true,
+                    mode: DownloadMode::Current
+                }
+            })
+        );
+        assert_eq!(
+            parse("download track \"Fat Old Sun\""),
+            Ok(IpcCommand::Download {
+                request: DownloadRequest {
+                    remove: false,
+                    mode: DownloadMode::Direct {
+                        scope: DownloadScope::Track,
+                        query: "Fat Old Sun".into()
+                    }
+                }
+            })
+        );
+        assert_eq!(
+            parse("download \"Pink Floyd\" album \"Atom Heart Mother\" \"Fat Old Sun\""),
+            Ok(IpcCommand::Download {
+                request: DownloadRequest {
+                    remove: false,
+                    mode: DownloadMode::Path {
+                        artist: "Pink Floyd".into(),
+                        album: Some("Atom Heart Mother".into()),
+                        track: Some("Fat Old Sun".into())
+                    }
+                }
+            })
+        );
+        assert_eq!(
+            parse("download rm \"Pink Floyd\""),
+            Ok(IpcCommand::Download {
+                request: DownloadRequest {
+                    remove: true,
+                    mode: DownloadMode::Path {
+                        artist: "Pink Floyd".into(),
+                        album: None,
+                        track: None
+                    }
+                }
+            })
+        );
+        assert!(parse("download \"unterminated").is_err());
+        assert!(parse("download a b c d").is_err());
+    }
+
+    #[test]
+    fn suggests_the_current_track_for_download() {
+        let context = SuggestionContext {
+            current: Some(CurrentTrack {
+                id: "s1".into(),
+                title: "Fat Old Sun".into(),
+                artist: "Pink Floyd".into(),
+                album: "Atom Heart Mother".into(),
+                album_id: "al1".into(),
+            }),
+            rows: vec![ContextRow {
+                kind: "album",
+                id: "al1".into(),
+                title: "Atom Heart Mother".into(),
+                subtitle: "Pink Floyd".into(),
+            }],
+        };
+        let suggestions = suggestions_with("download ", 9, &context);
+        assert!(suggestions.iter().any(|s| s.completion.as_deref()
+            == Some("\"Pink Floyd\" album \"Atom Heart Mother\" track \"Fat Old Sun\"")));
+        let scopes = suggestions_with("download album ", 15, &context);
+        assert!(scopes.iter().any(|s| s.label == "Atom Heart Mother"));
+    }
+
+    #[test]
+    fn parses_account_and_playlist_commands() {
+        assert_eq!(parse("logout"), Ok(IpcCommand::Logout));
+        assert_eq!(parse("add_account"), Ok(IpcCommand::AddAccount));
+        assert_eq!(
+            parse("remove_account"),
+            Ok(IpcCommand::RemoveAccount { keep_data: false })
+        );
+        assert_eq!(
+            parse("remove_account --keep-data"),
+            Ok(IpcCommand::RemoveAccount { keep_data: true })
+        );
+        assert_eq!(
+            parse("create_playlist Road trip"),
+            Ok(IpcCommand::CreatePlaylist {
+                name: "Road trip".into(),
+                offline: false
+            })
+        );
+        assert_eq!(
+            parse("create_playlist Road trip --offline"),
+            Ok(IpcCommand::CreatePlaylist {
+                name: "Road trip".into(),
+                offline: true
+            })
+        );
+        assert!(parse("create_playlist").is_err());
+        assert!(parse("create_playlist   --offline").is_err());
+        assert!(parse("create_playlist a --offline extra").is_ok());
+        assert_eq!(
+            canonical_string(&parse("create_playlist Mix --offline").unwrap()),
+            "create_playlist Mix --offline"
         );
     }
 
@@ -980,6 +1637,28 @@ mod tests {
             "wipe lyrics",
             "wipe covers",
             "wipe_databases",
+            "logout",
+            "add_account",
+            "remove_account",
+            "remove_account --keep-data",
+            "create_playlist Road Trip",
+            "create_playlist Road Trip --offline",
+            "shuffle queue",
+            "shuffle album",
+            "shuffle album a1",
+            "shuffle artist",
+            "shuffle artist ar1",
+            "radio current",
+            "radio album",
+            "radio album al1",
+            "radio song",
+            "radio song s1",
+            "download current",
+            "download rm current",
+            "download track \"Fat Old Sun\"",
+            "download \"Pink Floyd\"",
+            "download \"Pink Floyd\" album \"Atom Heart Mother\"",
+            "download \"Pink Floyd\" album \"Atom Heart Mother\" track \"Fat Old Sun\"",
             "refresh",
             "top",
             "bottom",

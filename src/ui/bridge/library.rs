@@ -7,24 +7,23 @@ impl Bridge {
         let tx = self.tx.clone();
         crate::app::runtime().spawn(async move {
             let event = match crate::app::dbs() {
-                Some(dbs) => match crate::sqlite::load_credentials(&dbs.credentials).await {
-                    Ok(Some(credentials)) => {
+                Some(dbs) => match crate::accounts::active_account() {
+                    Some(account) => {
                         let status = crate::library::status(&dbs.library).await.ok();
                         Event::Header {
-                            server_url: credentials.server_url,
-                            username: credentials.username,
-                            server_type: credentials.server_type,
+                            server_url: account.server_url,
+                            username: account.username,
+                            server_type: account.server_type,
                             last_sync: status.as_ref().and_then(|status| status.last_sync.clone()),
                             counts: status
                                 .map(|status| (status.artists, status.albums, status.songs))
                                 .unwrap_or((0, 0, 0)),
                         }
                     }
-                    Ok(None) => {
+                    None => {
                         let offline_available = crate::auth::downloaded_available().await;
                         return send_event(&tx, Event::LoginRequired { offline_available });
                     }
-                    Err(err) => Event::Error(format!("Could not read credentials: {err:#}")),
                 },
                 None => Event::Error("The library is not initialised".to_string()),
             };

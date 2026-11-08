@@ -16,7 +16,7 @@
 
 //! ARC-44 M0: the local half of the playlist index — the m3u folder.
 //!
-//! `config_dir()/playlists/*.m3u` (`MUSIKA_PLAYLISTS_DIR` overrides) is
+//! `<account data root>/playlists/*.m3u` (`MUSIKA_PLAYLISTS_DIR` overrides) is
 //! scanned into `playlist.db` with `source = 'm3u'`; the files stay the
 //! source of truth, so a scan rewrites their rows wholesale and playlists
 //! whose file vanished are purged. Entries resolve against `library.db` by
@@ -47,7 +47,188 @@ pub fn m3u_dir() -> Result<PathBuf> {
     {
         return Ok(PathBuf::from(dir));
     }
-    Ok(crate::db::config_dir()?.join("playlists"))
+    Ok(crate::db::data_root()?.join("playlists"))
+}
+
+/// Validates the name/ids shared by both creation halves: the name is trimmed,
+/// blank ids are dropped and at least one real song must remain. Order and
+/// duplicates among the real ids are kept.
+fn checked_playlist<'a>(name: &'a str, song_ids: &[String]) -> Result<(&'a str, Vec<String>)> {
+    let name = name.trim();
+    if name.is_empty() {
+        anyhow::bail!("a playlist needs a name");
+    }
+    let ids: Vec<String> = song_ids
+        .iter()
+        .filter(|id| !id.trim().is_empty())
+        .cloned()
+        .collect();
+    if ids.is_empty() {
+        anyhow::bail!("a playlist needs at least one song");
+    }
+    Ok((name, ids))
+}
+
+/// One local library row as the M3U writer needs it.
+struct M3uSong {
+    title: String,
+    artist: Option<String>,
+    duration: Option<i64>,
+    path: Option<String>,
+}
+
+/// The `songs` projection for [`m3u_text`] (a named row keeps the query and
+/// its tuple out of the function body).
+#[derive(sqlx::FromRow)]
+struct M3uSongRow {
+    id: String,
+    title: String,
+    artist: Option<String>,
+    duration: Option<i64>,
+    path: Option<String>,
+}
+
+/// The M3U body for `song_ids`, preserving their order and duplicates. Local
+/// library paths are used when known (the scan resolves those exactly, by
+/// basename or by their `#EXTINF` names); anything else falls back to the
+/// app-owned `musika:song:<id>` entry [`Matcher`] resolves by song id. One
+/// cheap library query decorates every known id, so server-only picks stay
+/// plain path lines without extra calls.
+pub async fn m3u_text(dbs: &Dbs, song_ids: &[String]) -> Result<String> {
+    let ids: Vec<String> = song_ids
+        .iter()
+        .map(|id| id.trim().to_string())
+        .filter(|id| !id.is_empty())
+        .collect();
+
+    let mut songs: HashMap<String, M3uSong> = HashMap::new();
+    if !ids.is_empty() {
+        let mut builder = sqlx::QueryBuilder::new(
+            "SELECT id, title, artist, duration, path FROM songs WHERE id IN (",
+        );
+        {
+            let mut separated = builder.separated(", ");
+            for id in &ids {
+                separated.push_bind(id);
+            }
+            separated.push_unseparated(")");
+        }
+        let rows: Vec<M3uSongRow> = builder.build_query_as().fetch_all(&dbs.library).await?;
+        for row in rows {
+            songs.insert(
+                row.id,
+                M3uSong {
+                    title: row.title,
+                    artist: row.artist,
+                    duration: row.duration,
+                    path: row.path,
+                },
+            );
+        }
+    }
+
+    let mut text = String::from("#EXTM3U\n");
+    for id in &ids {
+        let song = songs.get(id);
+        if let Some(song) = song {
+            let artist = song.artist.as_deref().unwrap_or_default();
+            let display = if artist.is_empty() {
+                song.title.clone()
+            } else {
+                format!("{artist} - {}", song.title)
+            };
+            text.push_str(&format!(
+                "#EXTINF:{},{}\n",
+                song.duration.unwrap_or(0),
+                m3u_line(&display)
+            ));
+        }
+        let path = song
+            .and_then(|song| song.path.as_deref())
+            .map(str::trim)
+            .filter(|path| !path.is_empty())
+            .map(str::to_string)
+            .unwrap_or_else(|| format!("musika:song:{id}"));
+        text.push_str(&m3u_line(&path));
+        text.push('\n');
+    }
+    Ok(text)
+}
+
+/// A path/display line with embedded newlines flattened (an m3u line break
+/// would turn one entry into two).
+fn m3u_line(value: &str) -> String {
+    value.replace(['\r', '\n'], " ").trim().to_string()
+}
+
+/// A unique, list-friendly file name inside `dir`. The sanitization and the
+/// collision behavior mirror the saved-radio saver (`radio.rs`): unsafe
+/// characters collapse to one `-`, and saving the same name twice appends a
+/// nanosecond stamp instead of overwriting the first file.
+fn m3u_filename(dir: &Path, name: &str) -> String {
+    let mut safe = String::new();
+    for ch in name.chars() {
+        if ch.is_alphanumeric() || matches!(ch, ' ' | '-' | '_' | '(' | ')' | '&' | '\'' | '·') {
+            safe.push(ch);
+        } else if !safe.ends_with('-') {
+            safe.push('-');
+        }
+    }
+    let safe = safe.trim().trim_end_matches('-').trim();
+    let safe = if safe.is_empty() { "Playlist" } else { safe };
+    let candidate = format!("{safe}.m3u");
+    if dir.join(&candidate).is_file() {
+        format!("{safe} {}.m3u", crate::consts::now_nanos())
+    } else {
+        candidate
+    }
+}
+
+/// Creates a local playlist from selected song ids: writes a unique M3U under
+/// [`m3u_dir`] and scans that folder into `playlist.db` so the list is live
+/// immediately. An empty (or all-blank) name/id list is rejected. Returns the
+/// M3U path that was written.
+pub async fn create_local(dbs: &Dbs, name: &str, song_ids: &[String]) -> Result<PathBuf> {
+    let (name, ids) = checked_playlist(name, song_ids)?;
+    let dir = m3u_dir()?;
+    std::fs::create_dir_all(&dir)
+        .with_context(|| format!("creating the playlist folder {}", dir.display()))?;
+    let text = m3u_text(dbs, &ids).await?;
+    let path = dir.join(m3u_filename(&dir, name));
+    std::fs::write(&path, text).with_context(|| format!("writing {}", path.display()))?;
+    scan_dir(dbs, &dir).await?;
+    Ok(path)
+}
+
+/// Creates the playlist on the Subsonic server and refreshes the cached list
+/// right away. Order and duplicates are preserved because `createPlaylist`
+/// repeats `songId` once per entry. An empty (or all-blank) name/id list is
+/// rejected before any network call.
+pub async fn create_remote(dbs: &Dbs, name: &str, song_ids: &[String]) -> Result<()> {
+    let (name, ids) = checked_playlist(name, song_ids)?;
+    let client = crate::session::client(dbs)
+        .await
+        .context("creating a server playlist needs a signed-in server")?;
+    client
+        .create_playlist(name, &ids)
+        .await
+        .context("creating the server playlist")?;
+    refresh_subsonic(dbs, &client)
+        .await
+        .context("refreshing the server playlist list")?;
+    Ok(())
+}
+
+/// One call for both sources: always writes the app-owned local M3U, then
+/// mirrors it to the server when online. Following the saved-radio rule, a
+/// failed server copy is logged rather than discarding the local playlist
+/// (the returned path is the local file that survived).
+pub async fn create(dbs: &Dbs, name: &str, song_ids: &[String], offline: bool) -> Result<PathBuf> {
+    let path = create_local(dbs, name, song_ids).await?;
+    if !offline && let Err(err) = create_remote(dbs, name, song_ids).await {
+        eprintln!("playlists: saved locally, server copy failed: {err:#}");
+    }
+    Ok(path)
 }
 
 /// The segment refresh: the m3u scan plus the Subsonic list. A server hit

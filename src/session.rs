@@ -72,20 +72,14 @@ pub(crate) async fn install(server_url: &str, username: &str, password: &str) {
 }
 
 #[cfg(not(test))]
-pub(crate) async fn client(dbs: &crate::db::Dbs) -> anyhow::Result<SubsonicClient> {
+pub(crate) async fn client(_dbs: &crate::db::Dbs) -> anyhow::Result<SubsonicClient> {
     let cache = CLIENT_CACHE.get_or_init(|| tokio::sync::Mutex::new(None));
     if let Some(cached) = cache.lock().await.as_ref() {
         return Ok(cached.client.clone());
     }
-    let credentials = crate::sqlite::load_credentials(&dbs.credentials)
-        .await?
-        .ok_or_else(|| anyhow::anyhow!("no saved credentials"))?;
-    install(
-        &credentials.server_url,
-        &credentials.username,
-        &credentials.password,
-    )
-    .await;
+    let account =
+        crate::accounts::active_account().ok_or_else(|| anyhow::anyhow!("no active account"))?;
+    install(&account.server_url, &account.username, &account.password).await;
     let client = cache
         .lock()
         .await

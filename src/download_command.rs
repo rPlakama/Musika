@@ -1,0 +1,350 @@
+//! Scoped download/removal command backend.
+//!
+//! The textual `download` command describes a scope by name; this module
+//! resolves that description to library ids and then either hands every song
+//! to the media downloader or removes the local marks/blobs. Removal is
+//! device-local by design: it never calls a server delete endpoint.
+
+use anyhow::{Context, Result, anyhow, bail};
+use serde_json::Value;
+
+use crate::db::Dbs;
+use crate::ui::ipc_command::{CurrentTrack, DownloadMode, DownloadRequest, DownloadScope};
+
+/// Name resolution only needs the best few search hits, not a full page.
+const RESOLVE_LIMIT: usize = 50;
+
+const ARTIST_ID_KEYS: &[&str] = &["id", "artistId"];
+const ARTIST_LABEL_KEYS: &[&str] = &["name", "title"];
+const ALBUM_ID_KEYS: &[&str] = &["id", "albumId"];
+const ALBUM_LABEL_KEYS: &[&str] = &["title", "name"];
+const SONG_ID_KEYS: &[&str] = &["id", "songId"];
+const SONG_LABEL_KEYS: &[&str] = &["title", "name"];
+
+/// The concrete library ids a request resolved to.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum ResolvedIds {
+    Track(String),
+    Album {
+        album_id: String,
+        song_ids: Vec<String>,
+    },
+    Artist {
+        artist_id: String,
+        song_ids: Vec<String>,
+    },
+}
+
+impl ResolvedIds {
+    fn song_ids(&self) -> &[String] {
+        match self {
+            Self::Track(id) => std::slice::from_ref(id),
+            Self::Album { song_ids, .. } | Self::Artist { song_ids, .. } => song_ids,
+        }
+    }
+}
+
+/// One candidate from a search payload or a library list.
+struct Candidate {
+    id: String,
+    label: String,
+}
+
+/// Resolve and execute one download/removal request.
+pub(crate) async fn execute(
+    dbs: &Dbs,
+    request: &DownloadRequest,
+    current: Option<&CurrentTrack>,
+) -> Result<()> {
+    let resolved = resolve_ids(dbs, request, current).await?;
+    if request.remove {
+        remove(dbs, resolved).await
+    } else {
+        download(dbs, resolved).await
+    }
+}
+
+/// Resolve a request to the library ids it targets.
+///
+/// Exposed to the crate so the resolver can be tested without performing any
+/// download or removal work.
+pub(crate) async fn resolve_ids(
+    dbs: &Dbs,
+    request: &DownloadRequest,
+    current: Option<&CurrentTrack>,
+) -> Result<ResolvedIds> {
+    match &request.mode {
+        DownloadMode::Current => {
+            let current = current.ok_or_else(|| anyhow!("No current track is playing."))?;
+            if current.id.trim().is_empty() {
+                bail!("No current track is playing.");
+            }
+            Ok(ResolvedIds::Track(current.id.clone()))
+        }
+        DownloadMode::Direct { scope, query } => resolve_direct(dbs, *scope, query).await,
+        DownloadMode::Path {
+            artist,
+            album,
+            track,
+        } => {
+            if track.is_some() && album.is_none() {
+                bail!("A track needs an album name.");
+            }
+            resolve_path(dbs, artist, album.as_deref(), track.as_deref()).await
+        }
+    }
+}
+
+/// Direct scope: ask the unified search for names, then match the requested
+/// phrase within the returned scope.
+async fn resolve_direct(dbs: &Dbs, scope: DownloadScope, query: &str) -> Result<ResolvedIds> {
+    // Resolution is always against the local catalog: resolving a download
+    // target must see the full library even while playback is offline.
+    let json = crate::browse::search_json(dbs, query, false, RESOLVE_LIMIT)
+        .await
+        .context("Could not search the library")?;
+    let payload: Value =
+        serde_json::from_str(&json).context("Could not parse the search results")?;
+    let id = search_match_id(&payload, scope, query).ok_or_else(|| no_match(scope, query))?;
+    resolve_id(dbs, scope, id).await
+}
+
+/// Path scope: artist by phrase, then album within that artist, then track
+/// within that album.
+async fn resolve_path(
+    dbs: &Dbs,
+    artist: &str,
+    album: Option<&str>,
+    track: Option<&str>,
+) -> Result<ResolvedIds> {
+    let (artists, _) =
+        crate::library::search_artists_albums(&dbs.library, artist, RESOLVE_LIMIT as i64).await?;
+    let artists: Vec<Candidate> = artists
+        .into_iter()
+        .map(|artist| Candidate {
+            id: artist.id,
+            label: artist.name,
+        })
+        .collect();
+    let artist_id = best_match(&artists, artist, false)
+        .map(|artist| artist.id.clone())
+        .ok_or_else(|| no_match(DownloadScope::Artist, artist))?;
+
+    let Some(album) = album else {
+        let song_ids = crate::library::artist_song_ids(&dbs.library, &artist_id).await?;
+        return Ok(ResolvedIds::Artist {
+            artist_id,
+            song_ids,
+        });
+    };
+
+    let albums = crate::library::artist_albums(&dbs.library, &artist_id, "Name").await?;
+    let albums: Vec<Candidate> = albums
+        .into_iter()
+        .map(|album| Candidate {
+            id: album.id,
+            label: album.title,
+        })
+        .collect();
+    let album_id = best_match(&albums, album, false)
+        .map(|album| album.id.clone())
+        .ok_or_else(|| no_match(DownloadScope::Album, album))?;
+
+    let Some(track) = track else {
+        let song_ids = crate::library::album_song_ids(&dbs.library, &album_id).await?;
+        return Ok(ResolvedIds::Album { album_id, song_ids });
+    };
+
+    let songs = crate::library::album_songs(&dbs.library, &album_id).await?;
+    let songs: Vec<Candidate> = songs
+        .into_iter()
+        .map(|song| Candidate {
+            id: song.id,
+            label: song.title,
+        })
+        .collect();
+    let track_id = best_match(&songs, track, false)
+        .map(|song| song.id.clone())
+        .ok_or_else(|| no_match(DownloadScope::Track, track))?;
+    Ok(ResolvedIds::Track(track_id))
+}
+
+/// Turn one already-matched scope id into its concrete download/removal set.
+async fn resolve_id(dbs: &Dbs, scope: DownloadScope, id: String) -> Result<ResolvedIds> {
+    match scope {
+        DownloadScope::Artist => {
+            let song_ids = crate::library::artist_song_ids(&dbs.library, &id).await?;
+            Ok(ResolvedIds::Artist {
+                artist_id: id,
+                song_ids,
+            })
+        }
+        DownloadScope::Album => {
+            let song_ids = crate::library::album_song_ids(&dbs.library, &id).await?;
+            Ok(ResolvedIds::Album {
+                album_id: id,
+                song_ids,
+            })
+        }
+        DownloadScope::Track => Ok(ResolvedIds::Track(id)),
+    }
+}
+
+/// Stable best match: exact (case-insensitive), then prefix, then contains.
+/// Ties keep the earlier candidate.
+///
+/// `fallback_first` is for search hits: a fuzzy engine can return a relevant
+/// row with no textual match, so its first row stays the deterministic
+/// fallback. Local lists (an artist's albums, an album's tracks) are complete,
+/// so an absent name is a real no-match instead of an arbitrary first row.
+fn best_match<'a>(
+    candidates: &'a [Candidate],
+    query: &str,
+    fallback_first: bool,
+) -> Option<&'a Candidate> {
+    let query = query.trim().to_lowercase();
+    if query.is_empty() && !fallback_first {
+        return None;
+    }
+    let mut best: Option<(u8, &'a Candidate)> = None;
+    for candidate in candidates {
+        let label = candidate.label.to_lowercase();
+        let rank = if label == query {
+            0
+        } else if label.starts_with(&query) {
+            1
+        } else if label.contains(&query) {
+            2
+        } else {
+            continue;
+        };
+        if best.is_none_or(|(best_rank, _)| rank < best_rank) {
+            best = Some((rank, candidate));
+        }
+    }
+    best.map(|(_, candidate)| candidate).or_else(|| {
+        // A search hit can be relevant without a textual match (fuzzy
+        // ranking, typo tolerance); the engine's first row stays the
+        // deterministic fallback.
+        if fallback_first {
+            candidates.first()
+        } else {
+            None
+        }
+    })
+}
+
+/// Pick the id of the best matching row in one search-payload column.
+pub(crate) fn search_match_id(
+    payload: &Value,
+    scope: DownloadScope,
+    query: &str,
+) -> Option<String> {
+    let (column, id_keys, label_keys): (&str, &[&str], &[&str]) = match scope {
+        DownloadScope::Artist => ("artists", ARTIST_ID_KEYS, ARTIST_LABEL_KEYS),
+        DownloadScope::Album => ("albums", ALBUM_ID_KEYS, ALBUM_LABEL_KEYS),
+        DownloadScope::Track => ("songs", SONG_ID_KEYS, SONG_LABEL_KEYS),
+    };
+    let rows = payload.get(column)?.as_array()?;
+    let candidates: Vec<Candidate> = rows
+        .iter()
+        .filter_map(|row| {
+            let id = first_string(row, id_keys)?;
+            let label = first_string(row, label_keys).unwrap_or(id);
+            Some(Candidate {
+                id: id.to_string(),
+                label: label.to_string(),
+            })
+        })
+        .collect();
+    best_match(&candidates, query, true).map(|candidate| candidate.id.clone())
+}
+
+fn first_string<'a>(row: &'a Value, keys: &[&str]) -> Option<&'a str> {
+    keys.iter().find_map(|key| {
+        row.get(*key)
+            .and_then(Value::as_str)
+            .filter(|value| !value.is_empty())
+    })
+}
+
+fn no_match(scope: DownloadScope, query: &str) -> anyhow::Error {
+    match scope {
+        DownloadScope::Artist => anyhow!("No artist matched “{query}”"),
+        DownloadScope::Album => anyhow!("No album matched “{query}”"),
+        DownloadScope::Track => anyhow!("No track matched “{query}”"),
+    }
+}
+
+/// Download every resolved song. All songs are attempted even after a
+/// failure; the first error is reported with a success/failure summary.
+async fn download(dbs: &Dbs, resolved: ResolvedIds) -> Result<()> {
+    let song_ids = resolved.song_ids();
+    if song_ids.is_empty() {
+        bail!("No songs matched the download request.");
+    }
+    let total = song_ids.len();
+    let mut failures = 0usize;
+    let mut first_failure: Option<(String, anyhow::Error)> = None;
+    for song_id in song_ids {
+        if let Err(err) = crate::media_actions::download_one(dbs, song_id).await {
+            failures += 1;
+            if first_failure.is_none() {
+                first_failure = Some((song_id.clone(), err));
+            }
+        }
+    }
+    let Some((song_id, err)) = first_failure else {
+        return Ok(());
+    };
+
+    let succeeded = total - failures;
+    if succeeded == 0 {
+        bail!("No songs were downloaded ({failures}/{total} failed); {song_id}: {err:#}");
+    }
+    bail!("Downloaded {succeeded} of {total} songs; {song_id}: {err:#}");
+}
+
+/// Remove only the local side of a request: marks and cached media. Server
+/// library entries are never deleted.
+async fn remove(dbs: &Dbs, resolved: ResolvedIds) -> Result<()> {
+    match resolved {
+        ResolvedIds::Track(id) => remove_songs(dbs, std::slice::from_ref(&id)).await,
+        ResolvedIds::Album { album_id, song_ids } => {
+            crate::media_actions::album_container_off(dbs, &album_id).await;
+            remove_songs(dbs, &song_ids).await
+        }
+        ResolvedIds::Artist {
+            artist_id,
+            song_ids,
+        } => {
+            let album_ids = crate::library::artist_album_ids(&dbs.library, &artist_id).await?;
+            for album_id in &album_ids {
+                crate::media_actions::album_container_off(dbs, album_id).await;
+            }
+            remove_songs(dbs, &song_ids).await
+        }
+    }
+}
+
+/// Drop every song's ledger mark and its config-tier blobs. Every operation
+/// is attempted; the first error is returned after the batch finished.
+async fn remove_songs(dbs: &Dbs, song_ids: &[String]) -> Result<()> {
+    let mut first_error = None;
+    for song_id in song_ids {
+        if let Err(err) = crate::download::unmark(&dbs.download, song_id).await
+            && first_error.is_none()
+        {
+            first_error = Some(err);
+        }
+    }
+    if let Err(err) = crate::media::remove_songs_media(&dbs.media, song_ids).await
+        && first_error.is_none()
+    {
+        first_error = Some(err);
+    }
+    match first_error {
+        Some(err) => Err(err),
+        None => Ok(()),
+    }
+}

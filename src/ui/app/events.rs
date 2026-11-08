@@ -441,41 +441,70 @@ impl AppRoot {
                 }
             }
             Event::LoginRequired { offline_available } => {
-                self.login = Some(LoginState {
-                    server: TextModal::new(),
-                    username: TextModal::new(),
-                    password: TextModal::new(),
-                    field: 0,
-                    busy: false,
-                    error: None,
-                    offline_available,
-                });
+                self.login = Some(Self::login_state(LoginMode::SignIn, offline_available));
             }
             Event::LoggedIn {
                 server_url,
                 username,
                 offline,
             } => {
+                self.reset_for_account();
                 self.login = None;
                 self.header = Some(Header {
                     server_url: server_url.clone(),
                     username: username.clone(),
                     server_type: String::new(),
                     last_sync: None,
-                    counts: self
-                        .header
-                        .as_ref()
-                        .map(|header| header.counts)
-                        .unwrap_or((0, 0, 0)),
+                    counts: (0, 0, 0),
                 });
                 self.error = Some(if offline {
                     "Offline mode".to_string()
                 } else {
                     "Logged in".to_string()
                 });
-                self.reload();
+                self.bridge.load_library(self.view.scope, self.view.order);
                 if !offline {
                     self.bridge.refresh_header();
+                }
+            }
+            Event::LoggedOut => {
+                self.reset_for_account();
+                self.login = Some(Self::login_state(LoginMode::SignIn, false));
+                self.header = None;
+                self.error = Some("Logged out".to_string());
+            }
+            Event::PlaylistSaved {
+                name,
+                offline,
+                error,
+            } => {
+                if let Some(error) = error {
+                    self.push_toast(
+                        format!("Could not create “{name}”: {error}"),
+                        ToastKind::Error,
+                        None,
+                    );
+                } else if offline {
+                    self.push_toast(format!("Saved “{name}” locally"), ToastKind::Notice, None);
+                } else {
+                    self.push_toast(format!("Created “{name}”"), ToastKind::Notice, None);
+                }
+                if self.page.is_none() && self.view.scope == Scope::Playlists {
+                    self.reload();
+                }
+            }
+            Event::AccountRemoved { label, next } => {
+                if next.is_some() {
+                    self.reset_for_account();
+                    self.login = None;
+                    self.error = Some(format!("Removed {label}"));
+                    self.bridge.refresh_header();
+                    self.bridge.load_library(self.view.scope, self.view.order);
+                } else {
+                    self.reset_for_account();
+                    self.login = Some(Self::login_state(LoginMode::SignIn, false));
+                    self.header = None;
+                    self.error = Some(format!("Removed {label}"));
                 }
             }
             Event::AuthError(message) => {
@@ -629,5 +658,67 @@ impl AppRoot {
                 self.push_toast(message, kind, retry);
             }
         }
+    }
+}
+
+impl AppRoot {
+    pub(in crate::ui) fn login_state(mode: LoginMode, offline_available: bool) -> LoginState {
+        LoginState {
+            mode,
+            server: TextModal::new(),
+            username: TextModal::new(),
+            password: TextModal::new(),
+            field: 0,
+            busy: false,
+            error: None,
+            offline_available,
+        }
+    }
+
+    fn reset_for_account(&mut self) {
+        self.player.load_paused(Vec::new(), 0);
+        self.playback_error = None;
+        self.view = ViewState::default();
+        self.generation = 0;
+        self.page = None;
+        self.page_generation = 0;
+        self.search = None;
+        self.search_open = false;
+        self.search_loading_since = None;
+        self.queue_open = false;
+        self.queue_cursor = 0;
+        self.queue_selection.clear();
+        self.visual_mode = false;
+        self.fullscreen = false;
+        self.fullscreen_anim = anim::Behavior::new(0.0);
+        self.fullscreen_album = None;
+        self.fullscreen_album_requested = None;
+        self.lyrics = None;
+        self.lyrics_requested = None;
+        self.lyrics_overlay = false;
+        self.lyrics_overlay_wanted = false;
+        self.lyrics_layout = None;
+        self.lyrics_active_line = None;
+        self.line_search.close();
+        self.command_line.close();
+        self.pending_ipc.clear();
+        self.alt.dismiss();
+        self.alt_menu = None;
+        self.alt_target = None;
+        self.alt_held = false;
+        self.alt_was_typing = false;
+        self.marks = MarksState::default();
+        self.warm.clear();
+        self.display_covers.clear();
+        self.display_requested.clear();
+        self.display_retry.clear();
+        self.restored = false;
+        self.header = None;
+        self.notes = None;
+        self.status_focus = None;
+        self.library_scroll = scroll_modal::ScrollModal::new(scroll_modal::LIBRARY);
+        self.page_scroll_modal = scroll_modal::ScrollModal::new(scroll_modal::ALBUM);
+        self.queue_scroll_modal = scroll_modal::ScrollModal::new(scroll_modal::QUEUE);
+        self.search_scroll = scroll_modal::ScrollModal::new(scroll_modal::SEARCH);
     }
 }

@@ -334,6 +334,11 @@ impl AppRoot {
             _ => &mut login.password,
         };
         match key {
+            "escape" if login.mode == LoginMode::AddAccount => {
+                self.login = None;
+                cx.notify();
+                return;
+            }
             "tab" => login.field = (login.field + 1) % 3,
             "backtab" => login.field = (login.field + 2) % 3,
             "enter" => {

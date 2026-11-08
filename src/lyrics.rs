@@ -557,7 +557,7 @@ fn override_document(song_id: &str) -> Option<Document> {
 }
 
 fn override_dir() -> Option<PathBuf> {
-    crate::db::config_dir().ok().map(|dir| dir.join("lyrics"))
+    crate::db::data_root().ok().map(|dir| dir.join("lyrics"))
 }
 
 /// Keeps the override file name safe: ids with separators are ignored.

@@ -22,6 +22,7 @@ mod maintenance;
 mod marks;
 mod page;
 mod playback;
+mod playlists;
 mod radio;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -41,6 +42,16 @@ pub enum Event {
         offline: bool,
     },
     AuthError(String),
+    LoggedOut,
+    AccountRemoved {
+        label: String,
+        next: Option<String>,
+    },
+    PlaylistSaved {
+        name: String,
+        offline: bool,
+        error: Option<String>,
+    },
     LibraryCount {
         generation: u64,
         scope: super::state::Scope,

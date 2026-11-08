@@ -323,9 +323,57 @@ impl AppRoot {
 
     pub(in crate::ui) fn open_command_line(&mut self) {
         self.command_line.open();
+        self.command_line
+            .set_context(self.command_suggestion_context());
         self.clock.tick();
         self.command_line_anim
             .target(1.0, anim::STANDARD_MS, anim::Curve::Decelerate, &self.clock);
+    }
+
+    fn command_suggestion_context(&self) -> ipc_command::SuggestionContext {
+        use ipc_command::{ContextRow, CurrentTrack, SuggestionContext};
+        let current = self.player.current().map(|track| CurrentTrack {
+            id: track.id.clone(),
+            title: track.title.clone(),
+            artist: track.artist.clone(),
+            album: track.album.clone(),
+            album_id: track.album_id.clone(),
+        });
+        let kind_name = |kind: RowKind| match kind {
+            RowKind::Song => "track",
+            RowKind::Album => "album",
+            RowKind::Artist => "artist",
+            RowKind::Playlist => "playlist",
+        };
+        let mut rows = Vec::new();
+        if let Some(page) = self.page.as_ref() {
+            for row in page.rows.iter().take(32) {
+                rows.push(ContextRow {
+                    kind: kind_name(row.kind),
+                    id: row.id.clone(),
+                    title: row.title.clone(),
+                    subtitle: row.subtitle.clone(),
+                });
+            }
+        } else {
+            for index in self.view.rows.live_start
+                ..self
+                    .view
+                    .rows
+                    .live_start
+                    .saturating_add(self.view.rows.live.len())
+            {
+                if let Some(row) = self.view.rows.row(index) {
+                    rows.push(ContextRow {
+                        kind: kind_name(row.kind),
+                        id: row.id.clone(),
+                        title: row.title.clone(),
+                        subtitle: row.subtitle.clone(),
+                    });
+                }
+            }
+        }
+        SuggestionContext { current, rows }
     }
 
     pub(in crate::ui) fn close_command_line(&mut self) {

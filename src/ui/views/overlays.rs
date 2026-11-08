@@ -580,7 +580,9 @@ impl AppRoot {
                             .text_size(px(14.0))
                             .text_color(rgb(palette::on_primary_container()))
                             .child(if login.busy {
-                                "Logging in…"
+                                "Working…"
+                            } else if login.mode == LoginMode::AddAccount {
+                                "Add account"
                             } else {
                                 "Log in"
                             }),
@@ -609,7 +611,9 @@ impl AppRoot {
                             .text_center()
                             .whitespace_normal()
                             .child(login.error.clone().unwrap_or_else(|| {
-                                if login.offline_available {
+                                if login.mode == LoginMode::AddAccount {
+                                    "Tab moves · Enter adds account · Esc cancels".to_string()
+                                } else if login.offline_available {
                                     "Tab moves · Enter logs in · F2 offline".to_string()
                                 } else {
                                     "Tab moves · Enter logs in".to_string()

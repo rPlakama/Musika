@@ -33,6 +33,26 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 use sqlx::sqlite::{SqliteJournalMode, SqlitePool, SqlitePoolOptions, SqliteSynchronous};
+use std::sync::{OnceLock, RwLock};
+
+/// Active account data root. All databases, caches and user playlists resolve
+/// under it; `accounts.json`, the encryption key and the IPC socket stay in the
+/// global config dir.
+static DATA_ROOT: OnceLock<RwLock<Option<PathBuf>>> = OnceLock::new();
+
+pub fn set_data_root(path: PathBuf) {
+    let slot = DATA_ROOT.get_or_init(|| RwLock::new(None));
+    *slot.write().unwrap_or_else(|e| e.into_inner()) = Some(path);
+}
+
+pub fn data_root() -> Result<PathBuf> {
+    if let Some(slot) = DATA_ROOT.get()
+        && let Some(path) = slot.read().unwrap_or_else(|e| e.into_inner()).clone()
+    {
+        return Ok(path);
+    }
+    config_dir()
+}
 
 /// The two physical databases, with the logical pools kept as aliases.
 #[derive(Clone)]
@@ -395,13 +415,19 @@ pub async fn wipe_files(dbs: &Dbs) -> Result<()> {
     for pool in [&dbs.library, &dbs.media] {
         pool.clone().close().await;
     }
-    let dir = config_dir()?;
+    let dir = data_root()?;
+    let global = config_dir()?;
     let socket = crate::ipc::socket_path();
     let entries =
         std::fs::read_dir(&dir).with_context(|| format!("failed to list {}", dir.display()))?;
     for entry in entries.flatten() {
         let path = entry.path();
-        if path == socket {
+        if path == socket
+            || path == global.join("accounts.json")
+            || path == global.join("accounts")
+            || path == global.join("key")
+            || path == global.join("accounts.json.tmp")
+        {
             continue;
         }
         let result = if path.is_dir() {
@@ -610,7 +636,7 @@ macro_rules! db_path {
     ($($func:ident: $file:literal, $env:literal);* $(;)?) => {
         $(
             pub fn $func() -> Result<PathBuf> {
-                dir_from_env($env, || Ok(config_dir()?.join($file)))
+                dir_from_env($env, || Ok(data_root()?.join($file)))
             }
         )*
     };
@@ -634,20 +660,20 @@ db_path! {
 
 /// Directory holding the cached cover-art blobs.
 pub fn covers_dir() -> Result<PathBuf> {
-    dir_from_env("MUSIKA_COVERS_DIR", || Ok(config_dir()?.join("covers")))
+    dir_from_env("MUSIKA_COVERS_DIR", || Ok(data_root()?.join("covers")))
 }
 
 /// Directory holding permanent/rule media blobs (CACHE-1): config root, never
 /// auto-removed below the permanent/rule tiers.
 pub fn media_dir() -> Result<PathBuf> {
-    dir_from_env("MUSIKA_MEDIA_DIR", || Ok(config_dir()?.join("media")))
+    dir_from_env("MUSIKA_MEDIA_DIR", || Ok(data_root()?.join("media")))
 }
 
 /// Directory holding playback/rolling media blobs (CACHE-1): XDG cache,
 /// purgeable without losing user data.
 pub fn playback_dir() -> Result<PathBuf> {
     dir_from_env("MUSIKA_MEDIA_CACHE_DIR", || {
-        Ok(cache_dir()?.join("musika").join("media"))
+        Ok(data_root()?.join("playback"))
     })
 }
 

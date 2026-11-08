@@ -22,6 +22,7 @@ pub struct CommandLineState {
     pub editor: TextModal,
     pub suggestions: Vec<Suggestion>,
     pub selected: usize,
+    context: ipc_command::SuggestionContext,
     cycle: Option<CompletionCycle>,
     denied_at: Option<f64>,
     pub denied_text: String,
@@ -69,8 +70,14 @@ impl CommandLineState {
     }
 
     pub fn refresh(&mut self) {
-        self.suggestions = ipc_command::suggestions(&self.editor.text, self.editor.cursor);
+        self.suggestions =
+            ipc_command::suggestions_with(&self.editor.text, self.editor.cursor, &self.context);
         self.selected = 0;
+    }
+
+    pub fn set_context(&mut self, context: ipc_command::SuggestionContext) {
+        self.context = context;
+        self.refresh();
     }
 
     pub fn reset_completion(&mut self) {

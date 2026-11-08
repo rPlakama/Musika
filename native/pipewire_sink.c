@@ -29,7 +29,10 @@
 
 #define MUSIKA_RATE 48000
 #define MUSIKA_CHANNELS 2
-#define RING_FRAMES (1u << 15)
+/* Playback read-ahead reference: the loading spinner clears once this much
+ * decoded audio is buffered (paused or playing). 2 MiB at S16 stereo 48 kHz. */
+#define MUSIKA_BUFFER_BYTES (2u * 1024u * 1024u)
+#define RING_FRAMES (MUSIKA_BUFFER_BYTES / (MUSIKA_CHANNELS * sizeof(int16_t)))
 
 typedef struct MusikaSink {
     struct pw_thread_loop *loop;
@@ -352,6 +355,15 @@ void musika_sink_close_writes(MusikaSink *sink)
 uint64_t musika_sink_played_frames(MusikaSink *sink)
 {
     return sink ? atomic_load_explicit(&sink->played_frames, memory_order_relaxed) : 0;
+}
+
+uint64_t musika_sink_buffered_frames(MusikaSink *sink)
+{
+    if (!sink)
+        return 0;
+    size_t write = atomic_load_explicit(&sink->write_pos, memory_order_acquire);
+    size_t read = atomic_load_explicit(&sink->read_pos, memory_order_acquire);
+    return (uint64_t)(write - read);
 }
 
 void musika_sink_reset_played(MusikaSink *sink)

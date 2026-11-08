@@ -46,6 +46,7 @@ unsafe extern "C" {
     fn musika_sink_set_volume(sink: *mut MusikaSink, volume: f32);
     fn musika_sink_failed(sink: *mut MusikaSink) -> c_int;
     fn musika_sink_played_frames(sink: *mut MusikaSink) -> u64;
+    fn musika_sink_buffered_frames(sink: *mut MusikaSink) -> u64;
     fn musika_sink_reset_played(sink: *mut MusikaSink);
     fn musika_sink_flush(sink: *mut MusikaSink);
     fn musika_sink_reset(sink: *mut MusikaSink);
@@ -288,8 +289,14 @@ impl Native {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         let played_frames = unsafe { musika_sink_played_frames(self.sink) };
+        let buffered_frames = unsafe { musika_sink_buffered_frames(self.sink) };
         status.position = origin + played_frames as f64 / 48_000.0;
-        if status.loading && playing && played_frames > 0 {
+        // 2 MiB of decoded audio is enough to leave the fetching state. This
+        // also works while paused: the stream can fill the ring without any
+        // played frames.
+        const BUFFER_BYTES: u64 = 2 * 1024 * 1024;
+        let buffered_bytes = buffered_frames * 4;
+        if status.loading && (buffered_bytes >= BUFFER_BYTES || (playing && played_frames > 0)) {
             status.loading = false;
             self.lock_status().loading = false;
         }

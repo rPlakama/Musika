@@ -190,11 +190,21 @@ impl AppRoot {
                 }
                 self.push_toast("Library synced".to_string(), ToastKind::Notice, None);
             }
-            Event::RadioSaved { name, remote_error } => {
+            Event::RadioSaved {
+                name,
+                offline,
+                remote_error,
+            } => {
                 if let Some(error) = remote_error {
                     self.push_toast(
                         format!("Saved “{name}” locally; server save failed: {error}"),
                         ToastKind::Error,
+                        None,
+                    );
+                } else if offline {
+                    self.push_toast(
+                        format!("Saved radio “{name}” locally"),
+                        ToastKind::Notice,
                         None,
                     );
                 } else {
@@ -476,18 +486,22 @@ impl AppRoot {
             Event::PlaylistSaved {
                 name,
                 offline,
+                created,
                 error,
             } => {
+                let verb = if created { "create" } else { "update" };
                 if let Some(error) = error {
                     self.push_toast(
-                        format!("Could not create “{name}”: {error}"),
+                        format!("Could not {verb} “{name}”: {error}"),
                         ToastKind::Error,
                         None,
                     );
                 } else if offline {
                     self.push_toast(format!("Saved “{name}” locally"), ToastKind::Notice, None);
-                } else {
+                } else if created {
                     self.push_toast(format!("Created “{name}”"), ToastKind::Notice, None);
+                } else {
+                    self.push_toast(format!("Added to “{name}”"), ToastKind::Notice, None);
                 }
                 if self.page.is_none() && self.view.scope == Scope::Playlists {
                     self.reload();

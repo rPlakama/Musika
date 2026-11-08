@@ -624,8 +624,7 @@ impl AppRoot {
                         .map(|page| page.header.title.trim().to_string())
                         .filter(|title| !title.is_empty())
                         .unwrap_or_else(|| "Radio".to_string());
-                    let name = format!("{title} · Radio");
-                    self.bridge.save_radio(seed_kind, seed_id, name);
+                    self.bridge.save_radio(seed_kind, seed_id, title);
                 }
                 QuickVerb::ShuffleRadio => self.bridge.shuffle_radio(seed_kind, seed_id),
                 QuickVerb::DownloadRadio => self.bridge.download_radio(seed_kind, seed_id),

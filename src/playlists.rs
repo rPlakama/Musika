@@ -23,7 +23,7 @@
 //! exact path, then basename, then the `#EXTINF` "Artist - Title" — an
 //! unresolved entry keeps `song_id` NULL (rendered dimmed, skipped on play).
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, anyhow};
 use sqlx::SqlitePool;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -161,11 +161,10 @@ fn m3u_line(value: &str) -> String {
     value.replace(['\r', '\n'], " ").trim().to_string()
 }
 
-/// A unique, list-friendly file name inside `dir`. The sanitization and the
-/// collision behavior mirror the saved-radio saver (`radio.rs`): unsafe
-/// characters collapse to one `-`, and saving the same name twice appends a
-/// nanosecond stamp instead of overwriting the first file.
-fn m3u_filename(dir: &Path, name: &str) -> String {
+/// A list-friendly file name inside `dir`. The sanitized playlist name is the
+/// file identity: saving the same name again overwrites that mix instead of
+/// creating a near-duplicate with a timestamp suffix.
+fn m3u_filename(_dir: &Path, name: &str) -> String {
     let mut safe = String::new();
     for ch in name.chars() {
         if ch.is_alphanumeric() || matches!(ch, ' ' | '-' | '_' | '(' | ')' | '&' | '\'' | '·') {
@@ -176,18 +175,13 @@ fn m3u_filename(dir: &Path, name: &str) -> String {
     }
     let safe = safe.trim().trim_end_matches('-').trim();
     let safe = if safe.is_empty() { "Playlist" } else { safe };
-    let candidate = format!("{safe}.m3u");
-    if dir.join(&candidate).is_file() {
-        format!("{safe} {}.m3u", crate::consts::now_nanos())
-    } else {
-        candidate
-    }
+    format!("{safe}.m3u")
 }
 
-/// Creates a local playlist from selected song ids: writes a unique M3U under
-/// [`m3u_dir`] and scans that folder into `playlist.db` so the list is live
-/// immediately. An empty (or all-blank) name/id list is rejected. Returns the
-/// M3U path that was written.
+/// Creates or replaces a local playlist from song ids: writes the named M3U
+/// under [`m3u_dir`] and scans that folder into `playlist.db` so the list is
+/// live immediately. An empty (or all-blank) name/id list is rejected.
+/// Returns the M3U path that was written.
 pub async fn create_local(dbs: &Dbs, name: &str, song_ids: &[String]) -> Result<PathBuf> {
     let (name, ids) = checked_playlist(name, song_ids)?;
     let dir = m3u_dir()?;
@@ -921,4 +915,88 @@ pub async fn search_rows(dbs: &Dbs, query: &str, limit: i64) -> Result<Vec<serde
     .fetch_all(&dbs.playlist)
     .await?;
     Ok(rows.iter().map(playlist_row).collect())
+}
+
+/// Add free-form targets to an existing playlist. The final argument resolves
+/// by id or name; M3U playlists are edited locally, Subsonic playlists are
+/// updated through `updatePlaylist`.
+pub async fn add_to_playlist(
+    dbs: &Dbs,
+    targets: &[String],
+    playlist_query: &str,
+) -> Result<String> {
+    let playlist_query = playlist_query.trim();
+    let name_key = format!("{playlist_query}.m3u");
+    let row: Option<(String, String, String, Option<String>)> = sqlx::query_as(
+        "SELECT id, name, source, path FROM playlist
+         WHERE id = ?1
+            OR lower(name) = lower(?2)
+            OR lower(name) = lower(?3)
+         ORDER BY CASE source WHEN 'm3u' THEN 0 ELSE 1 END
+         LIMIT 1",
+    )
+    .bind(playlist_query)
+    .bind(playlist_query)
+    .bind(&name_key)
+    .fetch_optional(&dbs.playlist)
+    .await?;
+    let Some((id, name, source, path)) = row else {
+        return Err(anyhow!("No playlist matched “{playlist_query}”"));
+    };
+    if targets.is_empty() {
+        return Err(anyhow!("Select at least one target to add."));
+    }
+    let mut song_ids = Vec::new();
+    for target in targets {
+        let ids = crate::download_command::resolve_target_song_ids(dbs, target).await?;
+        if ids.is_empty() {
+            return Err(anyhow!("“{target}” resolved to no songs"));
+        }
+        song_ids.extend(ids);
+    }
+    if song_ids.is_empty() {
+        return Err(anyhow!("No songs matched the playlist targets."));
+    }
+
+    if source == "m3u" {
+        let path = path
+            .map(PathBuf::from)
+            .or_else(|| Some(m3u_dir().ok()?.join(&name)))
+            .ok_or_else(|| anyhow!("The playlist file path is missing"))?;
+        append_local_m3u(dbs, &path, &song_ids).await?;
+    } else {
+        let client = crate::session::client(dbs)
+            .await
+            .context("adding to a server playlist needs a signed-in server")?;
+        client
+            .update_playlist_add(&id, &song_ids)
+            .await
+            .context("updating the server playlist")?;
+        refresh_subsonic(dbs, &client)
+            .await
+            .context("refreshing the server playlist list")?;
+    }
+    Ok(name
+        .strip_suffix(".m3u")
+        .or_else(|| name.strip_suffix(".m3u8"))
+        .unwrap_or(&name)
+        .to_string())
+}
+
+/// Append entries to an existing app-owned M3U and rescan its folder.
+async fn append_local_m3u(dbs: &Dbs, path: &Path, song_ids: &[String]) -> Result<()> {
+    let existing = std::fs::read_to_string(path)
+        .with_context(|| format!("reading the playlist file {}", path.display()))?;
+    let body = m3u_text(dbs, song_ids).await?;
+    let entries = body.strip_prefix("#EXTM3U\n").unwrap_or(&body);
+    let mut out = existing;
+    if !out.ends_with('\n') {
+        out.push('\n');
+    }
+    out.push_str(entries);
+    std::fs::write(path, out)
+        .with_context(|| format!("writing the playlist file {}", path.display()))?;
+    let dir = path.parent().unwrap_or(Path::new("."));
+    scan_dir(dbs, dir).await?;
+    Ok(())
 }

@@ -30,11 +30,29 @@ pub enum IpcCommand {
     WipeDatabases,
     Logout,
     AddAccount,
-    RemoveAccount { keep_data: bool },
-    CreatePlaylist { name: String, offline: bool },
-    Shuffle { target: ShuffleTarget },
-    Radio { seed: RadioSeed },
-    Download { request: DownloadRequest },
+    RemoveAccount {
+        keep_data: bool,
+    },
+    PlaylistCreate {
+        name: String,
+        offline: bool,
+    },
+    PlaylistAdd {
+        targets: Vec<String>,
+        playlist: String,
+    },
+    Shuffle {
+        target: ShuffleTarget,
+    },
+    Radio {
+        seed: RadioSeed,
+    },
+    RadioSave {
+        offline: bool,
+    },
+    Download {
+        request: DownloadRequest,
+    },
     Refresh,
     Top,
     Bottom,
@@ -64,9 +82,15 @@ pub enum IpcCommand {
     RepeatCycle,
     ToggleFullscreen,
     LyricsOverlay,
-    PaneCycle { backward: bool },
-    Search { query: String },
-    InsertMode { query: String },
+    PaneCycle {
+        backward: bool,
+    },
+    Search {
+        query: String,
+    },
+    InsertMode {
+        query: String,
+    },
     SearchNext,
     SearchPrev,
     SearchScopeNext,
@@ -92,7 +116,9 @@ pub enum IpcCommand {
     DownloadSong(String),
     QuickHold(bool),
     QuickAim(QuickDirection),
-    QuickCycle { next: bool },
+    QuickCycle {
+        next: bool,
+    },
     QuickCancel,
     Quit,
 }
@@ -232,10 +258,10 @@ pub const COMMANDS: &[CommandSpec] = &[
         args: ArgSpec::OptionalEnum(&["--keep-data"]),
     },
     CommandSpec {
-        name: "create_playlist",
-        usage: "create_playlist <name> [--offline]",
-        description: "Create a playlist from selected songs",
-        args: ArgSpec::Text("<name> [--offline]"),
+        name: "playlist",
+        usage: "playlist <create|add> ...",
+        description: "Create a playlist from the current track or add targets",
+        args: ArgSpec::Enum(&["create", "add"]),
     },
     CommandSpec {
         name: "shuffle",
@@ -247,7 +273,7 @@ pub const COMMANDS: &[CommandSpec] = &[
         name: "radio",
         usage: "radio [current|album|song] [id]",
         description: "Start radio from the current context or an explicit seed",
-        args: ArgSpec::OptionalEnum(&["current", "album", "song"]),
+        args: ArgSpec::OptionalEnum(&["save", "current", "album", "song"]),
     },
     CommandSpec {
         name: "download",
@@ -722,10 +748,7 @@ pub fn parse(input: &str) -> Result<IpcCommand, CommandError> {
                 "usage: remove_account [--keep-data]".to_string(),
             )),
         },
-        "create_playlist" => {
-            let (name, offline) = parse_playlist_rest(rest)?;
-            Ok(IpcCommand::CreatePlaylist { name, offline })
-        }
+        "playlist" => parse_playlist(rest),
         "shuffle" => match split_quoted_args(rest)?.as_slice() {
             [] => Err(CommandError(
                 "usage: shuffle <queue|album|artist> [id]".to_string(),
@@ -753,6 +776,10 @@ pub fn parse(input: &str) -> Result<IpcCommand, CommandError> {
             [] => Ok(IpcCommand::Radio {
                 seed: RadioSeed::Current,
             }),
+            [target] if target == "save" => Ok(IpcCommand::RadioSave { offline: false }),
+            [target, flag] if target == "save" && flag == "--offline" => {
+                Ok(IpcCommand::RadioSave { offline: true })
+            }
             [target] if target == "current" => Ok(IpcCommand::Radio {
                 seed: RadioSeed::Current,
             }),
@@ -1003,18 +1030,46 @@ fn parse_download(rest: &str) -> Result<IpcCommand, CommandError> {
     })
 }
 
-fn parse_playlist_rest(rest: &str) -> Result<(String, bool), CommandError> {
-    let mut text = rest.trim();
-    let offline = text.strip_suffix("--offline").is_some_and(|prefix| {
-        text = prefix.trim_end();
-        true
-    });
-    if text.is_empty() {
-        return Err(CommandError(
-            "usage: create_playlist <name> [--offline]".to_string(),
-        ));
+fn parse_playlist(rest: &str) -> Result<IpcCommand, CommandError> {
+    let tokens = split_quoted_args(rest)?;
+    let Some(subcommand) = tokens.first().map(String::as_str) else {
+        return Err(CommandError("usage: playlist <create|add> ...".to_string()));
+    };
+    match subcommand {
+        "create" => {
+            let mut values = tokens[1..].to_vec();
+            let offline = values.last().is_some_and(|value| value == "--offline");
+            if offline {
+                values.pop();
+            }
+            let name = values.join(" ").trim().trim_matches(',').trim().to_string();
+            if name.is_empty() {
+                return Err(CommandError(
+                    "usage: playlist create <name> [--offline]".to_string(),
+                ));
+            }
+            Ok(IpcCommand::PlaylistCreate { name, offline })
+        }
+        "add" => {
+            let mut values: Vec<String> = tokens[1..]
+                .iter()
+                .flat_map(|value| value.split(','))
+                .map(|value| value.trim().to_string())
+                .filter(|value| !value.is_empty())
+                .collect();
+            if values.len() < 2 {
+                return Err(CommandError(
+                    "usage: playlist add <target...> <playlist>".to_string(),
+                ));
+            }
+            let playlist = values.pop().unwrap_or_default();
+            Ok(IpcCommand::PlaylistAdd {
+                targets: values,
+                playlist,
+            })
+        }
+        _ => Err(CommandError("usage: playlist <create|add> ...".to_string())),
     }
-    Ok((text.to_string(), offline))
 }
 
 fn quote_arg(value: &str) -> String {
@@ -1076,14 +1131,24 @@ pub fn canonical_string(command: &IpcCommand) -> String {
         AddAccount => "add_account".to_string(),
         RemoveAccount { keep_data: false } => "remove_account".to_string(),
         RemoveAccount { keep_data: true } => "remove_account --keep-data".to_string(),
-        CreatePlaylist {
+        PlaylistCreate {
             name,
             offline: false,
-        } => format!("create_playlist {name}"),
-        CreatePlaylist {
+        } => format!("playlist create {name}"),
+        PlaylistCreate {
             name,
             offline: true,
-        } => format!("create_playlist {name} --offline"),
+        } => format!("playlist create {name} --offline"),
+        PlaylistAdd { targets, playlist } => {
+            let mut out = String::from("playlist add");
+            for target in targets {
+                out.push(' ');
+                out.push_str(&quote_arg(target));
+            }
+            out.push(' ');
+            out.push_str(&quote_arg(playlist));
+            out
+        }
         Shuffle {
             target: ShuffleTarget::Queue,
         } => "shuffle queue".to_string(),
@@ -1114,6 +1179,8 @@ pub fn canonical_string(command: &IpcCommand) -> String {
         Radio {
             seed: RadioSeed::Song(Some(id)),
         } => format!("radio song {id}"),
+        RadioSave { offline: false } => "radio save".to_string(),
+        RadioSave { offline: true } => "radio save --offline".to_string(),
         Download { request } => canonical_download(request),
         Refresh => "refresh".to_string(),
         Top => "top".to_string(),
@@ -1548,7 +1615,7 @@ mod tests {
     }
 
     #[test]
-    fn parses_account_and_playlist_commands() {
+    fn parses_account_playlist_and_radio_save_commands() {
         assert_eq!(parse("logout"), Ok(IpcCommand::Logout));
         assert_eq!(parse("add_account"), Ok(IpcCommand::AddAccount));
         assert_eq!(
@@ -1560,26 +1627,54 @@ mod tests {
             Ok(IpcCommand::RemoveAccount { keep_data: true })
         );
         assert_eq!(
-            parse("create_playlist Road trip"),
-            Ok(IpcCommand::CreatePlaylist {
+            parse("playlist create Road trip"),
+            Ok(IpcCommand::PlaylistCreate {
                 name: "Road trip".into(),
                 offline: false
             })
         );
         assert_eq!(
-            parse("create_playlist Road trip --offline"),
-            Ok(IpcCommand::CreatePlaylist {
+            parse("playlist create \"Road trip\" --offline"),
+            Ok(IpcCommand::PlaylistCreate {
                 name: "Road trip".into(),
                 offline: true
             })
         );
-        assert!(parse("create_playlist").is_err());
-        assert!(parse("create_playlist   --offline").is_err());
-        assert!(parse("create_playlist a --offline extra").is_ok());
+        assert!(parse("playlist create").is_err());
+        assert!(parse("playlist create --offline").is_err());
         assert_eq!(
-            canonical_string(&parse("create_playlist Mix --offline").unwrap()),
-            "create_playlist Mix --offline"
+            parse("playlist add \"Pink Floyd\", \"King Crimson\" \"Model Man\" \"Road Trip\""),
+            Ok(IpcCommand::PlaylistAdd {
+                targets: vec![
+                    "Pink Floyd".into(),
+                    "King Crimson".into(),
+                    "Model Man".into()
+                ],
+                playlist: "Road Trip".into()
+            })
         );
+        assert_eq!(
+            parse("playlist add \"Pink Floyd\",\"King Crimson\" \"Road Trip\""),
+            Ok(IpcCommand::PlaylistAdd {
+                targets: vec!["Pink Floyd".into(), "King Crimson".into()],
+                playlist: "Road Trip".into()
+            })
+        );
+        assert!(parse("playlist add \"Pink Floyd\"").is_err());
+        assert!(parse("playlist nope").is_err());
+        assert_eq!(
+            canonical_string(&parse("playlist add \"Pink Floyd\" \"Road Trip\"").unwrap()),
+            "playlist add \"Pink Floyd\" \"Road Trip\""
+        );
+        assert_eq!(
+            parse("radio save"),
+            Ok(IpcCommand::RadioSave { offline: false })
+        );
+        assert_eq!(
+            parse("radio save --offline"),
+            Ok(IpcCommand::RadioSave { offline: true })
+        );
+        assert!(parse("radio save extra").is_err());
     }
 
     #[test]
@@ -1641,8 +1736,11 @@ mod tests {
             "add_account",
             "remove_account",
             "remove_account --keep-data",
-            "create_playlist Road Trip",
-            "create_playlist Road Trip --offline",
+            "playlist create Road Trip",
+            "playlist create Road Trip --offline",
+            "playlist add \"Pink Floyd\" \"King Crimson\" \"Road Trip\"",
+            "radio save",
+            "radio save --offline",
             "shuffle queue",
             "shuffle album",
             "shuffle album a1",

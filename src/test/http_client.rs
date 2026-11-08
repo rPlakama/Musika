@@ -144,3 +144,37 @@ async fn create_playlist_posts_repeated_song_ids() {
     assert!(request.contains("songId=s1"));
     assert!(request.contains("songId=s2"));
 }
+
+#[tokio::test]
+async fn update_playlist_posts_repeated_song_id_to_add() {
+    use std::io::{Read, Write};
+
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind loopback");
+    let addr = listener.local_addr().expect("local addr");
+    let server = std::thread::spawn(move || {
+        let (mut socket, _) = listener.accept().expect("accept");
+        let mut request = [0u8; 4096];
+        let n = socket.read(&mut request).expect("request");
+        let request = String::from_utf8_lossy(&request[..n]).to_string();
+        let body = r#"{"subsonic-response":{"status":"ok","version":"1.16.1"}}"#;
+        let head = format!(
+            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nContent-Type: application/json\r\nConnection: close\r\n\r\n",
+            body.len()
+        );
+        socket.write_all(head.as_bytes()).expect("head");
+        socket.write_all(body.as_bytes()).expect("body");
+        socket.flush().expect("flush");
+        request
+    });
+
+    let client = SubsonicClient::new(&format!("http://{addr}"), "alice", "secret");
+    client
+        .update_playlist_add("pl1", &["s1".into(), "s2".into()])
+        .await
+        .expect("update playlist");
+    let request = server.join().expect("server thread");
+    assert!(request.contains("/rest/updatePlaylist.view"));
+    assert!(request.contains("playlistId=pl1"));
+    assert!(request.contains("songIdToAdd=s1"));
+    assert!(request.contains("songIdToAdd=s2"));
+}

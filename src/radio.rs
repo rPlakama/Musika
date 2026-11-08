@@ -332,6 +332,31 @@ pub async fn save_radio(
     })
 }
 
+/// Save the radio only as an app-owned local M3U (`radio save --offline`).
+pub async fn save_radio_local(
+    dbs: &crate::db::Dbs,
+    seed_kind: &str,
+    seed_id: &str,
+    name: &str,
+) -> Result<SavedRadio> {
+    let rows = radio_rows(dbs, seed_kind, seed_id).await?;
+    if rows.is_empty() {
+        return Err(anyhow!("this radio has no songs to save"));
+    }
+    let name = if name.trim().is_empty() {
+        "Radio".to_string()
+    } else {
+        name.trim().to_string()
+    };
+    let dir = crate::playlists::m3u_dir()?;
+    let path = write_radio_m3u(dbs, &dir, &name, &rows).await?;
+    Ok(SavedRadio {
+        name,
+        path,
+        remote_error: None,
+    })
+}
+
 /// Writes one saved-radio M3U and refreshes the local playlist index. Split
 /// from [`save_radio`] so the file/scan half is testable without a server.
 pub(crate) async fn write_radio_m3u(
@@ -355,16 +380,14 @@ pub(crate) async fn write_radio_m3u(
 /// Library paths for the saved M3U. Server-only tracks fall back to the
 /// app-owned `musika:song:<id>` entry that [`crate::playlists::Matcher`]
 /// resolves back to `song_id` when the track is in the local library.
-async fn song_paths(
-    dbs: &crate::db::Dbs,
-    ids: &[String],
-) -> Result<HashMap<String, String>> {
+async fn song_paths(dbs: &crate::db::Dbs, ids: &[String]) -> Result<HashMap<String, String>> {
     if ids.is_empty() {
         return Ok(HashMap::new());
     }
     let mut builder = sqlx::QueryBuilder::new("SELECT id, path FROM songs WHERE id IN (");
     crate::cache::push_in_list(&mut builder, ids);
-    let rows: Vec<(String, Option<String>)> = builder.build_query_as().fetch_all(&dbs.library).await?;
+    let rows: Vec<(String, Option<String>)> =
+        builder.build_query_as().fetch_all(&dbs.library).await?;
     Ok(rows
         .into_iter()
         .filter_map(|(id, path)| path.filter(|path| !path.is_empty()).map(|path| (id, path)))
@@ -400,14 +423,12 @@ fn m3u_text(rows: &[SongRow], paths: &HashMap<String, String>) -> String {
 }
 
 /// A local M3U name that also reads well in the Playlists segment (the m3u
-/// scanner uses the file name as the playlist name). A timestamp is added only
-/// when the same radio title is saved twice.
-fn m3u_filename(dir: &std::path::Path, name: &str) -> String {
+/// scanner uses the file name as the playlist name). The same radio title
+/// overwrites its existing mix rather than creating timestamped duplicates.
+fn m3u_filename(_dir: &std::path::Path, name: &str) -> String {
     let mut safe = String::new();
     for ch in name.chars() {
-        if ch.is_alphanumeric()
-            || matches!(ch, ' ' | '-' | '_' | '(' | ')' | '&' | '\'' | '·')
-        {
+        if ch.is_alphanumeric() || matches!(ch, ' ' | '-' | '_' | '(' | ')' | '&' | '\'' | '·') {
             safe.push(ch);
         } else if !safe.ends_with('-') {
             safe.push('-');
@@ -415,12 +436,7 @@ fn m3u_filename(dir: &std::path::Path, name: &str) -> String {
     }
     let safe = safe.trim().trim_end_matches('-').trim();
     let safe = if safe.is_empty() { "Radio" } else { safe };
-    let candidate = format!("{safe}.m3u");
-    if dir.join(&candidate).is_file() {
-        format!("{safe} {}.m3u", crate::consts::now_nanos())
-    } else {
-        candidate
-    }
+    format!("{safe}.m3u")
 }
 
 #[cfg(test)]
@@ -455,7 +471,10 @@ mod tests {
         assert!(text.contains("#EXTINF:42,Artist - a\nMusic/a.flac\n"));
         assert!(text.contains("musika:song:b\n"));
         assert_eq!(
-            m3u_filename(std::path::Path::new("/nonexistent"), "A Beginner's Mind · Radio"),
+            m3u_filename(
+                std::path::Path::new("/nonexistent"),
+                "A Beginner's Mind · Radio"
+            ),
             "A Beginner's Mind · Radio.m3u"
         );
     }

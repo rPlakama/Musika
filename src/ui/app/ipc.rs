@@ -46,10 +46,44 @@ impl AppRoot {
                 }
             }
             IpcCommand::RemoveAccount { keep_data } => self.bridge.remove_account(keep_data),
-            IpcCommand::CreatePlaylist { name, offline } => match self.selected_song_ids() {
-                Ok(ids) => self.bridge.create_playlist(name, ids, offline),
-                Err(error) => self.push_toast(error, ToastKind::Error, None),
-            },
+            IpcCommand::PlaylistCreate { name, offline } => {
+                match self.player.current().map(|track| track.id.clone()) {
+                    Some(id) => self.bridge.create_playlist(name, vec![id], offline),
+                    None => self.push_toast(
+                        "Nothing is playing; playlist create needs a current track.".to_string(),
+                        ToastKind::Error,
+                        None,
+                    ),
+                }
+            }
+            IpcCommand::PlaylistAdd { targets, playlist } => {
+                self.bridge.playlist_add(targets, playlist)
+            }
+            IpcCommand::RadioSave { offline } => {
+                let radio = self.page.as_ref().and_then(|page| {
+                    (page.descriptor.kind == state::PageKind::Radio).then(|| {
+                        (
+                            page.descriptor.radio_seed_kind.clone().unwrap_or_default(),
+                            page.descriptor.id.clone(),
+                            page.header.title.trim().to_string(),
+                        )
+                    })
+                });
+                match radio {
+                    Some((kind, id, name)) if !kind.is_empty() => {
+                        if offline {
+                            self.bridge.save_radio_local(kind, id, name);
+                        } else {
+                            self.bridge.save_radio(kind, id, name);
+                        }
+                    }
+                    _ => self.push_toast(
+                        "Open a radio page before saving it.".to_string(),
+                        ToastKind::Error,
+                        None,
+                    ),
+                }
+            }
             IpcCommand::Shuffle { target } => self.execute_shuffle(target),
             IpcCommand::Radio { seed } => self.execute_radio(seed),
             IpcCommand::Download { request } => self.execute_download(request),

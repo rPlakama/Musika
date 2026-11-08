@@ -1,6 +1,10 @@
 use super::common::*;
 use crate::playlists::*;
 
+/// `create_local`/`add_to_playlist` resolve the process-wide data root. The two
+/// folder-writing tests must not race each other's root.
+static PLAYLIST_FOLDER_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
 async fn memory_pool() -> SqlitePool {
     crate::test::memory_pool(None).await
 }
@@ -300,11 +304,12 @@ async fn saved_radio_writes_a_local_m3u_and_resolves_ids() {
     let _ = std::fs::remove_dir_all(dir);
 }
 
-/// ARC-44: creating from a selection writes one unique app-owned M3U, keeps
-/// the selection order (and duplicates) and leaves the playlist visible in
-/// the index immediately.
+/// ARC-44: creating from a selection writes one named app-owned M3U, keeps
+/// the selection order (and duplicates), overwrites an existing mix of the
+/// same name, and leaves it visible in the index immediately.
 #[tokio::test]
-async fn create_local_writes_a_unique_m3u_and_scans_it() {
+async fn create_local_writes_a_named_m3u_and_scans_it() {
+    let _guard = PLAYLIST_FOLDER_LOCK.lock().await;
     let library = memory_pool().await;
     sqlx::migrate!("./migrations_library")
         .run(&library)
@@ -338,17 +343,11 @@ async fn create_local_writes_a_unique_m3u_and_scans_it() {
     assert!(first.is_file());
     assert_eq!(first.parent().unwrap(), root.join("playlists"));
 
-    // The same name does not overwrite the first file.
+    // The same name overwrites the same mix instead of timestamping a copy.
     let second = create_local(&dbs, "Road Trip", &ids).await.unwrap();
     assert!(second.is_file());
-    assert_ne!(second, first);
-    assert!(
-        second
-            .file_name()
-            .unwrap()
-            .to_string_lossy()
-            .starts_with("Road Trip ")
-    );
+    assert_eq!(second, first);
+    assert_eq!(second.file_name().unwrap(), "Road Trip.m3u");
 
     let entries = parse_m3u(&std::fs::read_to_string(&first).unwrap());
     assert_eq!(
@@ -364,12 +363,11 @@ async fn create_local_writes_a_unique_m3u_and_scans_it() {
     let json = list_json(&dbs).await.unwrap();
     let lists: serde_json::Value = serde_json::from_str(&json).unwrap();
     let lists = lists.as_array().unwrap();
-    assert_eq!(lists.len(), 2, "both unique files are playlists");
+    assert_eq!(lists.len(), 1, "same-name save replaces the mix");
     assert!(lists.iter().any(|list| {
         list["name"] == "Road Trip.m3u" && list["song_count"] == 3 && list["source"] == "m3u"
     }));
 
-    // The second (timestamped) file has its own rows; check the first one.
     let stored: Vec<Option<String>> = sqlx::query_scalar(
         "SELECT song_id FROM playlist_song WHERE playlist_id = 'm3u:Road Trip.m3u'
          ORDER BY position",
@@ -545,4 +543,62 @@ async fn create_remote_posts_songs_then_refreshes_the_list() {
         .unwrap();
     assert_eq!(name, "Mix");
     assert_eq!(count, 2);
+}
+
+/// `playlist add` resolves free-form targets (artist/song names) and appends
+/// their songs to the existing named M3U, preserving target order.
+#[tokio::test]
+async fn add_to_playlist_appends_resolved_targets() {
+    let _guard = PLAYLIST_FOLDER_LOCK.lock().await;
+    let library = memory_pool().await;
+    sqlx::migrate!("./migrations_library")
+        .run(&library)
+        .await
+        .unwrap();
+    sqlx::raw_sql(
+        "INSERT INTO artists (id, name, album_count) VALUES ('ar1', 'Artist', 1);
+         INSERT INTO albums (id, artist_id, name, artist, song_count)
+             VALUES ('al1', 'ar1', 'Album', 'Artist', 2);
+         INSERT INTO songs
+             (id, album_id, artist_id, title, artist, album, track, disc_number, duration, path)
+         VALUES
+             ('s1', 'al1', 'ar1', 'First', 'Artist', 'Album', 1, 1, 100, 'Music/first.flac'),
+             ('s2', 'al1', 'ar1', 'Second', 'Artist', 'Album', 2, 1, 200, 'Music/second.flac');",
+    )
+    .execute(&library)
+    .await
+    .unwrap();
+    let playlist = memory_pool().await;
+    sqlx::migrate!("./migrations_playlist")
+        .run(&playlist)
+        .await
+        .unwrap();
+    let dbs = test_dbs(&library, &playlist);
+    let root = std::env::temp_dir().join(format!("musika-add-playlist-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    crate::db::set_data_root(root.clone());
+
+    let path = create_local(&dbs, "Rated R Mix", &["s1".into()])
+        .await
+        .unwrap();
+    let name = add_to_playlist(&dbs, &["Artist".into(), "Second".into()], "Rated R Mix")
+        .await
+        .unwrap();
+    assert_eq!(name, "Rated R Mix");
+    let entries = parse_m3u(&std::fs::read_to_string(&path).unwrap());
+    assert_eq!(
+        entries
+            .iter()
+            .map(|entry| entry.path.as_str())
+            .collect::<Vec<_>>(),
+        vec![
+            "Music/first.flac",
+            "Music/first.flac",
+            "Music/second.flac",
+            "Music/second.flac"
+        ]
+    );
+
+    let _ = std::fs::remove_dir_all(root);
 }

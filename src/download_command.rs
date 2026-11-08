@@ -348,3 +348,62 @@ async fn remove_songs(dbs: &Dbs, song_ids: &[String]) -> Result<()> {
         None => Ok(()),
     }
 }
+
+/// Resolve one free-form playlist-add target (`"Pink Floyd"`, `"Model Man"`)
+/// to song ids. The search payload is authoritative for names; a fuzzy hit
+/// still provides a deterministic fallback when no row matches textually.
+pub(crate) async fn resolve_target_song_ids(dbs: &Dbs, target: &str) -> Result<Vec<String>> {
+    let json = crate::browse::search_json(dbs, target, false, RESOLVE_LIMIT)
+        .await
+        .context("Could not search the library")?;
+    let payload: Value = serde_json::from_str(&json).context("Could not parse search results")?;
+    let mut candidates: Vec<(u8, u8, String, u8)> = Vec::new();
+    // kind priority for equal textual rank: song, album, artist.
+    let query = target.trim().to_lowercase();
+    if query.is_empty() {
+        bail!("An empty playlist target cannot be resolved.");
+    }
+    let mut add = |column: &str, id_keys: &[&str], label_keys: &[&str], kind: u8| {
+        if let Some(rows) = payload.get(column).and_then(Value::as_array) {
+            for (index, row) in rows.iter().enumerate() {
+                let Some(id) = first_string(row, id_keys) else {
+                    continue;
+                };
+                let label = first_string(row, label_keys).unwrap_or(id).to_lowercase();
+                let rank = if label == query {
+                    0
+                } else if label.starts_with(&query) {
+                    1
+                } else if label.contains(&query) {
+                    2
+                } else {
+                    3
+                };
+                candidates.push((rank, kind, id.to_string(), index as u8));
+            }
+        }
+    };
+    add("songs", SONG_ID_KEYS, SONG_LABEL_KEYS, 0);
+    add("albums", ALBUM_ID_KEYS, ALBUM_LABEL_KEYS, 1);
+    add("artists", ARTIST_ID_KEYS, ARTIST_LABEL_KEYS, 2);
+    let best_rank = candidates.iter().map(|(rank, ..)| *rank).min();
+    candidates.sort_by_key(|(rank, kind, _, index)| {
+        // Exact/prefix/contains hits prefer the most specific row; a wholly
+        // fuzzy hit falls back to artists first, matching the search payload.
+        let kind_priority = if *rank == 3 { 2 - *kind } else { *kind };
+        (*rank, kind_priority, *index)
+    });
+    let Some((rank, kind, id, _)) = candidates.first().cloned() else {
+        bail!("No playlist target matched “{target}”");
+    };
+    debug_assert_eq!(Some(rank), best_rank);
+    if rank == 3 {
+        // Search fuzzy hits still count; use the first row's kind below.
+        eprintln!("download: playlist target {target:?} used a fuzzy search hit");
+    }
+    match kind {
+        0 => Ok(vec![id]),
+        1 => crate::library::album_song_ids(&dbs.library, &id).await,
+        _ => crate::library::artist_song_ids(&dbs.library, &id).await,
+    }
+}

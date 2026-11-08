@@ -50,6 +50,7 @@ pub enum Event {
     PlaylistSaved {
         name: String,
         offline: bool,
+        created: bool,
         error: Option<String>,
     },
     LibraryCount {
@@ -111,6 +112,7 @@ pub enum Event {
     LibrarySynced,
     RadioSaved {
         name: String,
+        offline: bool,
         remote_error: Option<String>,
     },
     SyncProgress {

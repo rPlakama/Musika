@@ -31,6 +31,7 @@ impl Bridge {
                 Ok(saved) => {
                     let _ = tx.send(Event::RadioSaved {
                         name: saved.name,
+                        offline: false,
                         remote_error: saved.remote_error,
                     });
                 }
@@ -154,6 +155,28 @@ impl Bridge {
                 row_kind,
                 row_id: album_id,
             });
+        });
+    }
+}
+
+impl Bridge {
+    /// `radio save --offline`: write only the app-owned local M3U.
+    pub fn save_radio_local(&self, seed_kind: String, seed_id: String, name: String) {
+        let tx = self.tx.clone();
+        crate::app::runtime().spawn(async move {
+            let Some(dbs) = crate::app::dbs() else { return };
+            match crate::radio::save_radio_local(&dbs, &seed_kind, &seed_id, &name).await {
+                Ok(saved) => {
+                    let _ = tx.send(Event::RadioSaved {
+                        name: saved.name,
+                        offline: true,
+                        remote_error: None,
+                    });
+                }
+                Err(err) => {
+                    let _ = tx.send(Event::Error(format!("Could not save radio: {err:#}")));
+                }
+            }
         });
     }
 }

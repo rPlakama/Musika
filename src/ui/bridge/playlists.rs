@@ -22,11 +22,13 @@ impl Bridge {
                 Ok(()) => Event::PlaylistSaved {
                     name,
                     offline,
+                    created: true,
                     error: None,
                 },
                 Err(err) => Event::PlaylistSaved {
                     name,
                     offline,
+                    created: true,
                     error: Some(format!("{err:#}")),
                 },
             };
@@ -51,6 +53,35 @@ impl Bridge {
                 }
                 Err(err) => {
                     let _ = tx.send(Event::Error(format!("Download command failed: {err:#}")));
+                }
+            }
+        });
+    }
+}
+
+impl Bridge {
+    /// Append targets to an existing local/server playlist. Target phrases are
+    /// resolved by the playlist backend, which mirrors the download search.
+    pub fn playlist_add(&self, targets: Vec<String>, playlist: String) {
+        let tx = self.tx.clone();
+        crate::app::runtime().spawn(async move {
+            let Some(dbs) = crate::app::dbs() else { return };
+            match crate::playlists::add_to_playlist(&dbs, &targets, &playlist).await {
+                Ok(name) => {
+                    let _ = tx.send(Event::PlaylistSaved {
+                        name,
+                        offline: false,
+                        created: false,
+                        error: None,
+                    });
+                }
+                Err(err) => {
+                    let _ = tx.send(Event::PlaylistSaved {
+                        name: playlist,
+                        offline: false,
+                        created: false,
+                        error: Some(format!("{err:#}")),
+                    });
                 }
             }
         });

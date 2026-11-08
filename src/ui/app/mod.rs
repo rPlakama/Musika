@@ -9,7 +9,6 @@ pub mod ipc;
 pub mod line_command;
 pub mod lyrics;
 pub mod navigation;
-pub mod playlist;
 pub mod search;
 pub mod shell;
 pub mod sync;

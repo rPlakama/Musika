@@ -156,7 +156,35 @@ impl AppRoot {
                                                             palette::on_surface_variant(),
                                                             true,
                                                         )),
-                                                ),
+                                                )
+                                                .when(
+                                                    this.marks
+                                                        .downloaded(&track.id, &track.album_id),
+                                                    |this| {
+                                                        this.child(RetainedIcon::new(
+                                                            "retained-queue-download",
+                                                            index,
+                                                            format!(
+                                                                "{}/icons/outline-download.svg",
+                                                                asset_root()
+                                                            ),
+                                                            12.0,
+                                                            palette::primary(),
+                                                        ))
+                                                    },
+                                                )
+                                                .when(track.favorite, |this| {
+                                                    this.child(RetainedIcon::new(
+                                                        "retained-queue-favorite",
+                                                        index,
+                                                        format!(
+                                                            "{}/icons/baseline-favorite.svg",
+                                                            asset_root()
+                                                        ),
+                                                        11.0,
+                                                        0xFFD54F,
+                                                    ))
+                                                }),
                                         );
                                     }
                                     items

@@ -279,6 +279,11 @@ impl MarksState {
         (!song_id.is_empty() && self.songs_done.contains(song_id))
             || (!album_id.is_empty() && self.albums_done.contains(album_id))
     }
+
+    fn pending(&self, song_id: &str, album_id: &str) -> bool {
+        (!song_id.is_empty() && self.pending.contains(song_id))
+            || (!album_id.is_empty() && self.pending.contains(album_id))
+    }
 }
 
 #[derive(Clone)]

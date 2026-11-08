@@ -293,6 +293,7 @@ impl AppRoot {
                 self.player.append(tracks);
             }
             Event::DownloadSettled => {
+                self.push_toast("Download updated.".to_string(), ToastKind::Notice, None);
                 self.marks.requested = None;
                 self.ensure_marks();
                 if let Some((kind, id)) = self.page.as_ref().and_then(|page| {

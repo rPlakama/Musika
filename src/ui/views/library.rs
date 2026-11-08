@@ -279,6 +279,7 @@ impl AppRoot {
             )));
         body = body.child(cells);
         let downloaded = self.marks.downloaded(&row.song_id, &row.album_id) || row.downloaded;
+        let downloading = self.marks.pending(&row.song_id, &row.album_id);
         let mut trailing = div().flex().items_center().gap_2();
         if paint.flags.show_length && !row.meta.is_empty() {
             trailing = trailing.child(
@@ -292,6 +293,15 @@ impl AppRoot {
                         current,
                     )),
             );
+        }
+        if downloading {
+            trailing = trailing.child(RetainedIcon::new(
+                "retained-download-pending",
+                paint.index,
+                format!("{}/icons/reload-ui-2-svgrepo-com.svg", asset_root()),
+                12.0,
+                palette::primary(),
+            ));
         }
         if downloaded {
             trailing = trailing.child(RetainedIcon::new(

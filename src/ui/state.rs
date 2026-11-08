@@ -9,7 +9,12 @@ pub enum Scope {
 }
 
 impl Scope {
-    pub const ALL: [Scope; 4] = [Scope::Albums, Scope::Songs, Scope::Artists, Scope::Playlists];
+    pub const ALL: [Scope; 4] = [
+        Scope::Albums,
+        Scope::Songs,
+        Scope::Artists,
+        Scope::Playlists,
+    ];
 
     pub fn key(self) -> &'static str {
         match self {
@@ -196,7 +201,8 @@ impl ViewState {
                 crate::library::ORDERS[self.order.min(crate::library::ORDERS.len() - 1)]
             }
             Scope::Artists => {
-                crate::library::ARTIST_ORDERS[self.order.min(crate::library::ARTIST_ORDERS.len() - 1)]
+                crate::library::ARTIST_ORDERS
+                    [self.order.min(crate::library::ARTIST_ORDERS.len() - 1)]
             }
             Scope::Playlists => "Name",
         }
@@ -290,21 +296,24 @@ mod tests {
         window.install_count(7, 50);
         assert_eq!(window.len(), 50);
         assert!(window.row(0).is_none());
-        window.install_window(10, vec![Row {
-            track: String::new(),
-            id: "ten".into(),
-            kind: RowKind::Album,
-            title: "Ten".into(),
-            subtitle: String::new(),
-            meta: String::new(),
-            cover_url: String::new(),
-            cover_remote: String::new(),
-            song_id: String::new(),
-            album_id: "ten".into(),
-            starred: false,
-            rating: 0,
-            downloaded: false,
-        }]);
+        window.install_window(
+            10,
+            vec![Row {
+                track: String::new(),
+                id: "ten".into(),
+                kind: RowKind::Album,
+                title: "Ten".into(),
+                subtitle: String::new(),
+                meta: String::new(),
+                cover_url: String::new(),
+                cover_remote: String::new(),
+                song_id: String::new(),
+                album_id: "ten".into(),
+                starred: false,
+                rating: 0,
+                downloaded: false,
+            }],
+        );
         assert!(window.row(9).is_none());
         assert_eq!(window.row(10).map(|row| row.id.as_str()), Some("ten"));
         assert!(window.row(11).is_none());
@@ -442,6 +451,9 @@ pub struct Travel {
 
 impl Travel {
     pub fn open(&mut self, descriptor: PageDescriptor) {
+        if self.current() == Some(&descriptor) {
+            return;
+        }
         self.places.truncate(self.position.saturating_add(1));
         self.places.push(descriptor);
         if self.places.len() > 32 {
@@ -500,6 +512,16 @@ mod page_tests {
     }
 
     #[test]
+    fn travel_skips_a_duplicate_consecutive_page() {
+        let mut travel = Travel::default();
+        let album = PageDescriptor::new(PageKind::Album, "same");
+        travel.open(album.clone());
+        travel.open(album.clone());
+        assert_eq!(travel.places.len(), 1);
+        assert!(travel.back().is_none());
+    }
+
+    #[test]
     fn travel_truncates_forward_history_on_open() {
         let mut travel = Travel::default();
         for id in ["a", "b", "c"] {
@@ -534,7 +556,7 @@ mod page_kind_tests {
             album_id: "a".into(),
             starred: false,
             rating: 0,
-                    downloaded: false,
+            downloaded: false,
         }];
         page.select(9);
         assert_eq!(page.cursor, 0);

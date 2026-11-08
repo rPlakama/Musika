@@ -194,6 +194,12 @@ impl Bridge {
             };
             let result = async {
                 let id = crate::download_command::resolve_named_id(&dbs, scope, &query).await?;
+                let _ = tx.send(Event::OpenPage {
+                    descriptor: super::super::state::PageDescriptor::radio(
+                        kind.clone(),
+                        id.clone(),
+                    ),
+                });
                 crate::radio::tracks_json(&dbs, &kind, &id, start_index as i64)
                     .await
                     .map(|(json, start)| (json, start as usize))

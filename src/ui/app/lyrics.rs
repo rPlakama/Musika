@@ -248,6 +248,8 @@ impl AppRoot {
             {
                 self.lyrics_overlay_wanted = !self.lyrics_overlay_wanted;
                 self.refresh_lyrics_overlay();
+            } else {
+                self.push_toast("There is no lyrics.".to_string(), ToastKind::Error, None);
             }
         } else if self.page.as_ref().is_some_and(|page| {
             self.notes

@@ -64,7 +64,10 @@ impl AppRoot {
                 .current()
                 .map(|track| play("song", track.id.clone()))
             {
-                Some((kind, id)) => self.bridge.play_radio(kind.to_string(), id, 0),
+                Some((kind, id)) => {
+                    self.open_descriptor(PageDescriptor::radio(kind, id.clone()));
+                    self.bridge.play_radio(kind.to_string(), id, 0);
+                }
                 None => self.push_toast(
                     "Nothing is playing to start radio from.".to_string(),
                     ToastKind::Error,
@@ -79,7 +82,10 @@ impl AppRoot {
                     .map(|page| page.descriptor.id.clone())
                     .or_else(|| self.current_album_id());
                 match id {
-                    Some(id) => self.bridge.play_radio("album".to_string(), id, 0),
+                    Some(id) => {
+                        self.open_descriptor(PageDescriptor::radio("album", id.clone()));
+                        self.bridge.play_radio("album".to_string(), id, 0);
+                    }
                     None => self.push_toast(
                         "Open an album or pass an album name.".to_string(),
                         ToastKind::Error,
@@ -95,7 +101,10 @@ impl AppRoot {
                         .filter(|id| !id.is_empty())
                 });
                 match id {
-                    Some(id) => self.bridge.play_radio("song".to_string(), id, 0),
+                    Some(id) => {
+                        self.open_descriptor(PageDescriptor::radio("song", id.clone()));
+                        self.bridge.play_radio("song".to_string(), id, 0);
+                    }
                     None => self.push_toast(
                         "Select a song or pass a song name.".to_string(),
                         ToastKind::Error,

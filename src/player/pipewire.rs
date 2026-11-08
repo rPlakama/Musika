@@ -363,12 +363,14 @@ pub(crate) unsafe extern "C" fn musika_stream_read(
     }
 }
 
-/// Reader thread: fills the 64 KB channel from `url` without buffering the
-/// whole track. Local `file://` paths are read incrementally; other URLs
+/// Reader thread: fills the bounded 32 MiB read-ahead channel from `url`
+/// without buffering the whole track. Local `file://` paths are read incrementally; other URLs
 /// are streamed via `reqwest` blocking? No: playback is URL-only.
 fn spawn_stream_reader(url: &str, stop: Arc<AtomicBool>) -> std::sync::mpsc::Receiver<Vec<u8>> {
     use std::io::Read;
-    let (tx, rx) = std::sync::mpsc::channel::<Vec<u8>>();
+    // 512 x 64 KiB = 32 MiB of read-ahead. Bounded so a slow decoder cannot
+    // grow the in-flight buffer without limit.
+    let (tx, rx) = std::sync::mpsc::sync_channel::<Vec<u8>>(512);
     let url = url.to_string();
     std::thread::spawn(move || {
         // Local files: incremental read, no whole-file Vec.

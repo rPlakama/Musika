@@ -469,6 +469,7 @@ impl AppRoot {
                     }
                     Err(error) => {
                         let now = self.clock.now;
+                        self.push_toast(error.to_string(), ToastKind::Error, None);
                         self.command_line.deny(now, error.to_string());
                     }
                 }

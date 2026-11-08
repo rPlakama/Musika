@@ -52,7 +52,7 @@ for f in src/icons/*.svg; do
 done
 
 # 2. Every reference resolves.
-refs=$(grep -rhoE '"[A-Za-z0-9._-]+\.svg"' src --include='*.rs' | tr -d '"' | sort -u)
+refs=$(grep -rhoE '[A-Za-z0-9._-]+\.svg' src --include='*.rs' | sort -u)
 for ref in $refs; do
     name=$ref
     if [ ! -f "src/icons/$name" ]; then

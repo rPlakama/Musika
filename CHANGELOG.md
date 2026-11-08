@@ -3,6 +3,28 @@
 All notable changes to Musika, newest first. `TASKLISTMAJOR.md` tracks the
 open work; this file is the release history.
 
+## 0.6.5 - _Better streaming insights and internals_
+
+- Show a rotating loading spinner in the player bar and fullscreen transport
+  while a stream opens and buffers. End loading once a song-size-based
+  read-ahead is available instead of waiting for playback to start.
+- Raise network read-ahead to a bounded 32 MiB and use a 2 MiB decoded-audio
+  ring, with a 2 MiB minimum reference for unknown stream lengths.
+- Fix seeking in downloaded tracks by using FFmpeg's native seekable file I/O.
+- Make radio pages and their playback queue share one cached expansion, so the
+  row order stays consistent. Opening radio from a command now shows its page
+  immediately, and radio collages reuse cached high-resolution covers.
+- Add multi-select Alt actions in the queue, downloaded/favorite markers, a
+  pending-download indicator in library rows, and clearer download/lyrics
+  feedback toasts.
+- Let `playlist add` suggest and accept `current` plus mixed playlist, track,
+  album, and artist targets. Skip duplicate consecutive page entries so Back
+  does not appear stuck.
+- Glide lyric centering with the phrase rhythm instead of front-loading the
+  motion, and snap search scrolling to the active row during keyboard repeat.
+- Split keybind and command/IPC documentation into dedicated guides, with
+  corrected radio and account command details.
+
 ## 0.6.4 - _Everything Is A Command_
 
 - Add multi-account/multi-server storage: a global account registry, isolated

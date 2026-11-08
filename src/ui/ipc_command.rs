@@ -191,6 +191,8 @@ pub enum SuggestScope {
     Artist,
     Album,
     Track,
+    /// Mixed artist/album/track/playlist results for playlist targets.
+    Any,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1334,6 +1336,12 @@ pub fn suggestion_request(input: &str, cursor: usize) -> Option<SuggestRequest> 
             Some("song") => (SuggestScope::Track, 2),
             _ => return None,
         },
+        "playlist" => {
+            if args.get(1).map(String::as_str) != Some("add") {
+                return None;
+            }
+            (SuggestScope::Any, args.len())
+        }
         "download" => {
             let (scope, index) =
                 args.iter()
@@ -1404,6 +1412,9 @@ pub fn suggestions_with(
     if name == "download" {
         return download_suggestions(input, cursor, start, end, context);
     }
+    if name == "playlist" {
+        return playlist_suggestions(input, start, end, context);
+    }
     if index != 1 {
         return Vec::new();
     }
@@ -1434,6 +1445,45 @@ pub fn suggestions_with(
             completion: Some((*arg).to_string()),
         })
         .collect()
+}
+
+/// Completion for `playlist add`: the special `current` target plus playlist
+/// names from the command-line context. Search hits arrive asynchronously and
+/// replace this list after the debounce.
+fn playlist_suggestions(
+    input: &str,
+    start: usize,
+    end: usize,
+    context: &SuggestionContext,
+) -> Vec<Suggestion> {
+    let before = input[..start].split_whitespace().collect::<Vec<_>>();
+    if before.get(1).copied() != Some("add") {
+        return Vec::new();
+    }
+    let prefix = input[start..end].trim_matches(['"', '\'']);
+    let mut out = Vec::new();
+    if "current".starts_with(prefix) {
+        out.push(Suggestion {
+            start,
+            end,
+            label: "current".to_string(),
+            description: "Add the currently playing track".to_string(),
+            completion: Some("current".to_string()),
+        });
+    }
+    for row in context.rows.iter().filter(|row| row.kind == "playlist") {
+        if !prefix.is_empty() && !row.title.to_lowercase().starts_with(&prefix.to_lowercase()) {
+            continue;
+        }
+        out.push(Suggestion {
+            start,
+            end,
+            label: row.title.clone(),
+            description: row.subtitle.clone(),
+            completion: Some(quote_arg(&row.title)),
+        });
+    }
+    out
 }
 
 /// Completion for the download grammar. The command line context is a
@@ -1682,6 +1732,25 @@ mod tests {
         assert_eq!(request.scope, SuggestScope::Album);
         assert_eq!(request.query, "A");
         assert!(suggestion_request("shuffle queue", 13).is_none());
+    }
+
+    #[test]
+    fn playlist_add_suggests_current_and_playlist_names() {
+        let context = SuggestionContext {
+            current: None,
+            rows: vec![ContextRow {
+                kind: "playlist",
+                id: "pl1".into(),
+                title: "Road Trip".into(),
+                subtitle: "3 songs".into(),
+            }],
+        };
+        let request = suggestion_request("playlist add P", 16).expect("mixed scope");
+        assert_eq!(request.scope, SuggestScope::Any);
+        assert_eq!(request.query, "P");
+        let suggestions = suggestions_with("playlist add ", 14, &context);
+        assert!(suggestions.iter().any(|s| s.label == "current"));
+        assert!(suggestions.iter().any(|s| s.label == "Road Trip"));
     }
 
     #[test]

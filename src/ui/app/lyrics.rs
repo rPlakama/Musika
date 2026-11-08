@@ -200,10 +200,12 @@ impl AppRoot {
                 anim::Curve::Standard,
                 &self.clock,
             );
+            // The phrase transition owns the rhythm: centering glides with
+            // the same duration/easing instead of front-loading the motion.
             self.lyrics_shift.target(
                 0.0,
-                self.visuals.motion.lyrics_scroll_ms,
-                anim::Curve::OutCubic,
+                self.visuals.motion.lyrics_line_ms,
+                anim::Curve::Standard,
                 &self.clock,
             );
         } else {

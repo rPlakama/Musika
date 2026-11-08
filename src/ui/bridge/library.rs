@@ -221,27 +221,48 @@ impl Bridge {
             let Ok(payload) = serde_json::from_str::<serde_json::Value>(&json) else {
                 return;
             };
-            let column = match scope {
-                crate::ui::ipc_command::SuggestScope::Artist => "artists",
-                crate::ui::ipc_command::SuggestScope::Album => "albums",
-                crate::ui::ipc_command::SuggestScope::Track => "songs",
+            let columns: &[(&str, &str)] = match scope {
+                crate::ui::ipc_command::SuggestScope::Artist => &[("artists", "Artist")],
+                crate::ui::ipc_command::SuggestScope::Album => &[("albums", "Album")],
+                crate::ui::ipc_command::SuggestScope::Track => &[("songs", "Track")],
+                crate::ui::ipc_command::SuggestScope::Any => &[
+                    ("songs", "Track"),
+                    ("albums", "Album"),
+                    ("artists", "Artist"),
+                    ("playlists", "Playlist"),
+                ],
             };
             let mut rows = Vec::new();
-            if let Some(array) = payload.get(column).and_then(serde_json::Value::as_array) {
-                for row in array.iter().take(8) {
+            for (column, kind) in columns {
+                let Some(array) = payload.get(*column).and_then(serde_json::Value::as_array) else {
+                    continue;
+                };
+                for row in array.iter() {
+                    if rows.len() >= 8 {
+                        break;
+                    }
                     let title = row
                         .get("name")
                         .or_else(|| row.get("title"))
                         .and_then(serde_json::Value::as_str)
                         .unwrap_or_default();
-                    let subtitle = row
+                    let detail = row
                         .get("artist")
                         .and_then(serde_json::Value::as_str)
                         .or_else(|| row.get("subtitle").and_then(serde_json::Value::as_str))
                         .unwrap_or_default();
-                    if !title.is_empty() {
-                        rows.push((title.to_string(), subtitle.to_string()));
+                    if title.is_empty() {
+                        continue;
                     }
+                    let subtitle = if detail.is_empty() {
+                        (*kind).to_string()
+                    } else {
+                        format!("{kind} · {detail}")
+                    };
+                    rows.push((title.to_string(), subtitle));
+                }
+                if rows.len() >= 8 {
+                    break;
                 }
             }
             let _ = tx.send(Event::CommandSuggestions {

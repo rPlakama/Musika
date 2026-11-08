@@ -924,6 +924,7 @@ pub async fn add_to_playlist(
     dbs: &Dbs,
     targets: &[String],
     playlist_query: &str,
+    current_song_id: Option<&str>,
 ) -> Result<String> {
     let playlist_query = playlist_query.trim();
     let name_key = format!("{playlist_query}.m3u");
@@ -948,6 +949,13 @@ pub async fn add_to_playlist(
     }
     let mut song_ids = Vec::new();
     for target in targets {
+        if target.eq_ignore_ascii_case("current") {
+            let current = current_song_id
+                .filter(|id| !id.is_empty())
+                .ok_or_else(|| anyhow!("Nothing is currently playing."))?;
+            song_ids.push(current.to_string());
+            continue;
+        }
         let ids = crate::download_command::resolve_target_song_ids(dbs, target).await?;
         if ids.is_empty() {
             return Err(anyhow!("“{target}” resolved to no songs"));

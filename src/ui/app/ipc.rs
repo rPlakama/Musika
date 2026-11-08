@@ -57,7 +57,8 @@ impl AppRoot {
                 }
             }
             IpcCommand::PlaylistAdd { targets, playlist } => {
-                self.bridge.playlist_add(targets, playlist)
+                let current = self.player.current().map(|track| track.id.clone());
+                self.bridge.playlist_add(targets, playlist, current)
             }
             IpcCommand::RadioSave { offline } => {
                 let radio = self.page.as_ref().and_then(|page| {

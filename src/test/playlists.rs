@@ -582,9 +582,14 @@ async fn add_to_playlist_appends_resolved_targets() {
     let path = create_local(&dbs, "Rated R Mix", &["s1".into()])
         .await
         .unwrap();
-    let name = add_to_playlist(&dbs, &["Artist".into(), "Second".into()], "Rated R Mix")
-        .await
-        .unwrap();
+    let name = add_to_playlist(
+        &dbs,
+        &["Artist".into(), "Second".into()],
+        "Rated R Mix",
+        None,
+    )
+    .await
+    .unwrap();
     assert_eq!(name, "Rated R Mix");
     let entries = parse_m3u(&std::fs::read_to_string(&path).unwrap());
     assert_eq!(
@@ -599,6 +604,14 @@ async fn add_to_playlist_appends_resolved_targets() {
             "Music/second.flac"
         ]
     );
+
+    // The special `current` target uses the supplied playing song id.
+    let name = add_to_playlist(&dbs, &["current".into()], "Rated R Mix", Some("s2"))
+        .await
+        .unwrap();
+    assert_eq!(name, "Rated R Mix");
+    let entries = parse_m3u(&std::fs::read_to_string(&path).unwrap());
+    assert_eq!(entries.last().unwrap().path, "Music/second.flac");
 
     let _ = std::fs::remove_dir_all(root);
 }

@@ -33,8 +33,9 @@ impl AppRoot {
                     }
                     let marquee_due = perf::take_marquee_due(now);
                     let demand = this.frame_demand();
+                    let changed = perf::demand_changed(&demand);
                     let decision = perf::decide(now, demand, perf::last_notify());
-                    if decision.notify || marquee_due {
+                    if decision.notify || marquee_due || changed {
                         perf::note_notify(now);
                         cx.notify();
                     }
@@ -56,6 +57,8 @@ impl AppRoot {
         perf::Demand {
             playing: self.player.state() == crate::player::State::Playing,
             inactive: !perf::window_active(),
+            loading: self.player.is_loading(),
+            syncing: self.syncing,
             marquee_at: perf::marquee_deadline(),
         }
     }

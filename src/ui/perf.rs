@@ -227,6 +227,10 @@ pub(crate) struct Demand {
     pub playing: bool,
     /// The window is not focused: only slow progress upkeep is needed.
     pub inactive: bool,
+    /// A stream is opening/buffering: the spinner needs a steady cadence.
+    pub loading: bool,
+    /// A library sync is running: the sync spinner/progress moves.
+    pub syncing: bool,
     /// Next time a marquee needs a frame (perf clock, seconds), if any.
     pub marquee_at: Option<f64>,
 }
@@ -243,8 +247,8 @@ pub(crate) struct Decision {
 const PLAYING_INTERVAL: f64 = 0.1;
 /// Inactive windows only need the clock to keep moving.
 const INACTIVE_INTERVAL: f64 = 1.0;
-/// Marquee travel advances at most 30 times a second.
-const MARQUEE_INTERVAL: f64 = 1.0 / 30.0;
+/// Spinners and marquee travel advance at most 30 times a second.
+const ACTIVE_INTERVAL: f64 = 1.0 / 30.0;
 /// Never sleep longer than this, so input/events are picked up promptly.
 const MAX_SLEEP_MS: u64 = 250;
 
@@ -261,8 +265,8 @@ pub(crate) fn decide(now: f64, demand: Demand, last_notify: f64) -> Decision {
     } else {
         None
     };
-    if demand.marquee_at.is_some() && !demand.inactive {
-        interval = Some(interval.map_or(MARQUEE_INTERVAL, |current| current.min(MARQUEE_INTERVAL)));
+    if (demand.marquee_at.is_some() || demand.loading || demand.syncing) && !demand.inactive {
+        interval = Some(interval.map_or(ACTIVE_INTERVAL, |current| current.min(ACTIVE_INTERVAL)));
     }
 
     let mut sleep_ms = match interval {
@@ -297,6 +301,27 @@ thread_local! {
     static LAST_NOTIFY: std::cell::Cell<f64> = const { std::cell::Cell::new(f64::NEG_INFINITY) };
     static LAST_PUMP: std::cell::Cell<f64> = const { std::cell::Cell::new(f64::NEG_INFINITY) };
     static MARQUEE_AT: std::cell::Cell<f64> = const { std::cell::Cell::new(f64::INFINITY) };
+    static LAST_FLAGS: std::cell::Cell<u8> = const { std::cell::Cell::new(0) };
+}
+
+/// The state categories that change the repaint cadence, as a bit set.
+pub(crate) fn demand_flags(demand: &Demand) -> u8 {
+    (demand.playing as u8)
+        | (demand.loading as u8) << 1
+        | (demand.syncing as u8) << 2
+        | (demand.inactive as u8) << 3
+        | (demand.marquee_at.is_some() as u8) << 4
+}
+
+/// Returns true when a source turned on or off since the previous call, so the
+/// ticker can render the edge immediately (e.g. hide the loading spinner).
+pub(crate) fn demand_changed(demand: &Demand) -> bool {
+    let flags = demand_flags(demand);
+    LAST_FLAGS.with(|slot| {
+        let changed = slot.get() != flags;
+        slot.set(flags);
+        changed
+    })
 }
 
 /// Publishes when a marquee next needs a frame (`now + delay`, or now while it
@@ -413,6 +438,30 @@ mod tests {
     }
 
     #[test]
+    fn loading_and_sync_run_at_thirty_fps() {
+        let loading = Demand {
+            loading: true,
+            ..Demand::default()
+        };
+        let decision = decide(1.0, loading, 0.0);
+        assert!(decision.notify);
+        assert_eq!(decision.sleep_ms, 34);
+        let syncing = Demand {
+            syncing: true,
+            ..Demand::default()
+        };
+        assert!(decide(1.0, syncing, 0.0).notify);
+        assert_eq!(decide(1.0, syncing, 0.5).sleep_ms, 34);
+        // Inactive wins: no spinner cadence in the background.
+        let inactive = Demand {
+            loading: true,
+            inactive: true,
+            ..Demand::default()
+        };
+        assert_eq!(decide(1.0, inactive, 0.0).sleep_ms, MAX_SLEEP_MS);
+    }
+
+    #[test]
     fn marquee_waites_for_its_deadline_instead_of_spinning() {
         let travel = Demand {
             marquee_at: Some(10.02),
@@ -436,6 +485,26 @@ mod tests {
         let decision = decide(10.0, both, 9.99);
         // Marquee travel wants 33 ms even while the transport only needs 100.
         assert_eq!(decision.sleep_ms, 34);
+    }
+
+    #[test]
+    fn demand_edges_force_one_notification() {
+        let idle = Demand::default();
+        let playing = Demand {
+            playing: true,
+            ..Demand::default()
+        };
+        // The first observation of a flag set counts as a change.
+        let _ = demand_changed(&idle);
+        assert!(demand_changed(&playing));
+        assert!(!demand_changed(&playing));
+        let loading = Demand {
+            playing: true,
+            loading: true,
+            ..Demand::default()
+        };
+        assert!(demand_changed(&loading));
+        assert!(demand_changed(&playing));
     }
 
     #[test]

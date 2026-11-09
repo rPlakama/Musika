@@ -314,14 +314,11 @@ impl Render for AppRoot {
         {
             perf::request_frame(window, "lyrics-behaviors");
         }
-        if self.player.is_loading() {
-            perf::request_frame(window, "loading");
-        }
-        if self.syncing
-            || !self.sync_settle.settled(&self.clock)
-            || !self.sync_fill.settled(&self.clock)
-        {
-            perf::request_frame(window, "sync");
+        // Loading and sync spinners are driven by the repaint ticker at 30 fps
+        // (perf::Demand); only the short settle/fill animations still need a
+        // self-requested frame chain.
+        if !self.sync_settle.settled(&self.clock) || !self.sync_fill.settled(&self.clock) {
+            perf::request_frame(window, "sync-settle");
         }
         let status = self.player_bar();
         #[cfg(debug_assertions)]

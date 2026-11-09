@@ -61,7 +61,8 @@ On a playlist page, `y`/`Y` yank its song rows, `p` inserts the row clipboard
 below the cursor and `P` above it (local M3U files insert exactly; server
 playlists rebuild their order because `updatePlaylist` cannot insert), and
 `d d` deletes the selected rows or the cursor row. `Ctrl-Shift-K` /
-`Ctrl-Shift-J` move the cursor entry up / down, like the queue drawer.
+`Ctrl-Shift-J` move the cursor entry up / down, or the whole visual selection
+as one block, like the queue drawer.
 
 On album and artist pages, `Tab` cycles the page header stops. `?`, or Enter/click
 on the inline description, opens the shared full-window description reader:
@@ -77,7 +78,7 @@ album wall and the artist's full track list.
 | `j` / `k`, `g g` / `G`, `Ctrl-D` / `Ctrl-U`, `PageDown` / `PageUp` | Move through the queue |
 | `↑` / `↓`, `Ctrl-J` / `Ctrl-K` | Move through the queue |
 | `Enter` | Jump to the cursor track |
-| `Ctrl-Shift-J` / `Ctrl-Shift-K` | Move the track down / up |
+| `Ctrl-Shift-J` / `Ctrl-Shift-K` | Move the track, or the whole selected block, down / up |
 | `d d` | Remove the cursor track, or the whole visual range |
 | `v` / `V`, `Shift-arrows` | Select rows / select all |
 | `y` / `Y`, `p` / `P` | Yank the range or row / paste below or above |

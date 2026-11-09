@@ -574,7 +574,9 @@ impl AppRoot {
         cx: &mut Context<Self>,
     ) {
         if self.queue_open {
-            if self.queue_cursor > 0 {
+            if self.queue_selection.active() {
+                self.move_queue_block(-1, cx);
+            } else if self.queue_cursor > 0 {
                 self.player
                     .move_item(self.queue_cursor, self.queue_cursor - 1);
                 self.queue_cursor -= 1;
@@ -583,26 +585,52 @@ impl AppRoot {
             }
             return;
         }
-        self.move_playlist_row(-1, cx);
+        self.move_playlist_rows(-1, cx);
     }
 
-    /// Playlist-page `Ctrl-Shift-K`: move the cursor entry one position up.
-    fn move_playlist_row(&mut self, delta: i32, cx: &mut Context<Self>) {
+    /// Queue `Ctrl-Shift-K/J` with a visual selection: move the whole block.
+    fn move_queue_block(&mut self, delta: i32, cx: &mut Context<Self>) {
+        let anchor = self.queue_selection.anchor().unwrap_or(self.queue_cursor);
+        let start = anchor.min(self.queue_cursor);
+        let end = anchor.max(self.queue_cursor);
+        let len = end - start + 1;
+        if !self.player.move_block(start, len, delta) {
+            return;
+        }
+        self.queue_cursor = (self.queue_cursor as i64 + i64::from(delta)) as usize;
+        self.queue_selection.shift(delta);
+        self.follow_queue(true);
+        cx.notify();
+    }
+
+    /// Playlist-page `Ctrl-Shift-K/J`: move the cursor entry or the whole
+    /// selected block one position.
+    fn move_playlist_rows(&mut self, delta: i32, cx: &mut Context<Self>) {
         let Some(page) = self.page.as_mut() else {
             return;
         };
         if page.descriptor.kind != PageKind::Playlist {
             return;
         }
-        let from = page.cursor;
-        let Some(to) = (from as i64 + i64::from(delta)).try_into().ok().filter(|to: &usize| *to < page.rows.len()) else {
+        let indices = page.selection.indices(page.cursor, false);
+        let Some(&start) = indices.first() else {
             return;
         };
-        page.cursor = to;
-        page.selection.clear();
+        let len = indices.len();
+        let new_start = start as i64 + i64::from(delta);
+        if new_start < 0 || new_start as usize + len > page.rows.len() || new_start as usize == start
+        {
+            return;
+        }
+        let cursor = (page.cursor as i64 + i64::from(delta)) as usize;
+        if page.selection.active() {
+            page.selection.shift(delta);
+        }
+        page.cursor = cursor;
         let playlist_id = page.descriptor.id.clone();
-        self.visual_mode = false;
-        self.bridge.move_playlist_row(playlist_id, from, to);
+        self.visual_mode = page.selection.active();
+        self.bridge
+            .move_playlist_block(playlist_id, start, len, delta, cursor);
         cx.notify();
     }
 
@@ -613,7 +641,9 @@ impl AppRoot {
         cx: &mut Context<Self>,
     ) {
         if self.queue_open {
-            if self.queue_cursor + 1 < self.player.len() {
+            if self.queue_selection.active() {
+                self.move_queue_block(1, cx);
+            } else if self.queue_cursor + 1 < self.player.len() {
                 self.player
                     .move_item(self.queue_cursor, self.queue_cursor + 1);
                 self.queue_cursor += 1;
@@ -622,7 +652,7 @@ impl AppRoot {
             }
             return;
         }
-        self.move_playlist_row(1, cx);
+        self.move_playlist_rows(1, cx);
     }
 
     pub(in crate::ui) fn on_play_pause(

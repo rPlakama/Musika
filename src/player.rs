@@ -629,6 +629,40 @@ impl Player {
         }
     }
 
+    /// Moves a contiguous block of `len` rows starting at `start` by `delta`
+    /// positions (a visual-selection reorder). Internal order is preserved and
+    /// the playhead follows its track. Returns false at the queue boundary.
+    pub fn move_block(&mut self, start: usize, len: usize, delta: i32) -> bool {
+        if len == 0 || delta == 0 || start >= self.queue.len() {
+            return false;
+        }
+        let end = (start + len).min(self.queue.len());
+        let block_len = end - start;
+        let new_start = start as i64 + i64::from(delta);
+        if new_start < 0 || new_start as usize + block_len > self.queue.len() {
+            return false;
+        }
+        let new_start = new_start as usize;
+        if new_start == start {
+            return false;
+        }
+        let old_index = self.index;
+        let block: Vec<Track> = self.queue_mut().drain(start..end).collect();
+        self.queue_mut().splice(new_start..new_start, block);
+        self.revision += 1;
+
+        self.index = if old_index >= start && old_index < end {
+            (old_index as i64 + i64::from(delta)) as usize
+        } else if delta < 0 && old_index >= new_start && old_index < start {
+            old_index + block_len
+        } else if delta > 0 && old_index >= end && old_index < new_start + block_len {
+            old_index - block_len
+        } else {
+            old_index
+        };
+        true
+    }
+
     /// Seeks to an absolute position (seconds).
     pub fn seek(&mut self, seconds: f64) {
         let seconds = seconds.max(0.0);
@@ -712,6 +746,28 @@ mod navigation_tests {
         player.move_item(0, 7);
         assert_eq!(player.index(), 4);
         assert_eq!(player.loads, 0);
+    }
+
+    #[test]
+    fn block_move_preserves_order_and_the_playhead() {
+        let mut player = player(6);
+        player.index = 1;
+        // rows 0..3 move down by one: [1,2,3,0,4,5]? no: block [0,1,2] -> start 1
+        assert!(player.move_block(0, 3, 1));
+        let ids: Vec<&str> = player.queue().iter().map(|track| track.id.as_str()).collect();
+        assert_eq!(ids, vec!["song-3", "song-0", "song-1", "song-2", "song-4", "song-5"]);
+        assert_eq!(player.index(), 2, "the playing row moves with its block");
+        assert!(!player.move_block(0, 2, -1), "top boundary is a no-op");
+        assert!(!player.move_block(4, 2, 1), "bottom boundary is a no-op");
+    }
+
+    #[test]
+    fn block_move_repositions_rows_around_the_playhead() {
+        let mut player = player(5);
+        player.index = 2;
+        // Move [0,1] down one: [2,0,1,3,4]; the playhead row shifts up.
+        assert!(player.move_block(0, 2, 1));
+        assert_eq!(player.index(), 0);
     }
 
     #[test]

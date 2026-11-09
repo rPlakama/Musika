@@ -1193,6 +1193,21 @@ async fn insert_and_move_local_playlist_entries() {
             .is_err()
     );
 
+    // A visual block moves as one bundle, preserving internal order.
+    move_playlist_block(&dbs, "Move Mix", 0, 2, 1)
+        .await
+        .unwrap();
+    assert_eq!(
+        paths(&std::fs::read_to_string(&path).unwrap()),
+        vec!["Music/first.flac", "Music/first.flac", "Music/second.flac"]
+    );
+    assert!(
+        move_playlist_block(&dbs, "Move Mix", 0, 2, -1)
+            .await
+            .is_err(),
+        "top boundary is a no-op"
+    );
+
     let _ = std::fs::remove_dir_all(root);
 }
 

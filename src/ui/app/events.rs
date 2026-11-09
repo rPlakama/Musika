@@ -452,15 +452,18 @@ impl AppRoot {
                 page.rebuild_covers();
                 page.loading = false;
                 page.error = None;
-                if let Some((id, row)) = self.pending_playlist_cursor.as_ref()
+                if let Some((id, row, keep_selection)) = self.pending_playlist_cursor.as_ref()
                     && page.descriptor.kind == PageKind::Playlist
                     && &page.descriptor.id == id
                 {
                     let row = *row;
+                    let keep_selection = *keep_selection;
                     self.pending_playlist_cursor = None;
                     page.cursor = row.min(page.rows.len().saturating_sub(1));
-                    page.selection.clear();
-                    self.visual_mode = false;
+                    if !keep_selection {
+                        page.selection.clear();
+                        self.visual_mode = false;
+                    }
                 }
                 page.cursor = page.cursor.min(page.rows.len().saturating_sub(1));
                 let reveal_index = self.pending_page_reveal.as_ref().and_then(|pending| {
@@ -609,7 +612,7 @@ impl AppRoot {
                             && page.descriptor.id == id
                     })
                 {
-                    self.pending_playlist_cursor = Some((id, row));
+                    self.pending_playlist_cursor = Some((id, row, moved));
                 }
                 if let Some(descriptor) = self
                     .page

@@ -17,7 +17,9 @@ open work; this file is the release history.
 - **Playlist row editing:** on a playlist page `d d` deletes the selected rows
   or cursor row (exact local-M3U positions, `songIdToRemove` for server
   playlists), `p` inserts the yanked rows below the cursor and `P` above it,
-  and `Ctrl-Shift-K` / `Ctrl-Shift-J` reorder the cursor entry like the queue.
+  and `Ctrl-Shift-K` / `Ctrl-Shift-J` reorder the cursor entry like the queue —
+  with a visual selection both the queue and playlist pages move the whole
+  range as one block, preserving its internal order.
   Local M3U files are edited by position; server playlists rebuild their order
   through `updatePlaylist` (remove + add) and reload the entries. All paths
   reload the open page so rows, count and collage stay in sync, with the

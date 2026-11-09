@@ -726,6 +726,17 @@ impl Selection {
 
     /// The inclusive indices this selection covers, ascending. `row_only`
     /// and an inactive selection both mean just the cursor row.
+    /// Shift an active range anchor (a block move keeps the range selected).
+    pub fn shift(&mut self, delta: i32) {
+        let Some(anchor) = self.anchor else {
+            return;
+        };
+        let next = anchor as i64 + i64::from(delta);
+        if next >= 0 {
+            self.anchor = Some(next as usize);
+        }
+    }
+
     pub fn indices(&self, cursor: usize, row_only: bool) -> Vec<usize> {
         let Some(anchor) = self.anchor else {
             return vec![cursor];
@@ -753,6 +764,19 @@ mod selection_tests {
         assert_eq!(selection.indices(8, true), vec![8]);
         selection.clear();
         assert_eq!(selection.indices(3, false), vec![3]);
+    }
+
+    #[test]
+    fn shifting_keeps_a_block_selection_in_sync() {
+        let mut selection = Selection::default();
+        selection.start(3);
+        selection.shift(-1);
+        assert_eq!(selection.anchor(), Some(2));
+        selection.shift(1);
+        assert_eq!(selection.anchor(), Some(3));
+        selection.clear();
+        selection.shift(1);
+        assert!(!selection.active());
     }
 
     #[test]

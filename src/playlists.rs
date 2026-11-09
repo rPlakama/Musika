@@ -1248,6 +1248,61 @@ pub async fn move_playlist_entry(
     Ok(display_playlist_name(&playlist.name))
 }
 
+/// Move a contiguous block of playlist rows by `delta` positions (visual
+/// selection reorder). Local M3U files splice the block; server playlists use
+/// the same remove/re-add order rebuild as single moves.
+pub async fn move_playlist_block(
+    dbs: &Dbs,
+    playlist_query: &str,
+    start: usize,
+    len: usize,
+    delta: i32,
+) -> Result<String> {
+    let playlist = resolve_playlist(dbs, playlist_query).await?;
+    if len == 0 || delta == 0 {
+        return Err(anyhow!("Nothing to move."));
+    }
+    if playlist.source == "m3u" {
+        let path = local_playlist_path(&playlist)?;
+        let text = std::fs::read_to_string(&path)
+            .with_context(|| format!("reading the playlist file {}", path.display()))?;
+        let mut entries = parse_m3u(&text);
+        let end = (start + len).min(entries.len());
+        let block_len = end.saturating_sub(start);
+        let new_start = start as i64 + i64::from(delta);
+        if block_len == 0
+            || new_start < 0
+            || new_start as usize + block_len > entries.len()
+            || new_start as usize == start
+        {
+            return Err(anyhow!("The playlist row is out of date."));
+        }
+        let new_start = new_start as usize;
+        let block: Vec<M3uEntry> = entries.drain(start..end).collect();
+        entries.splice(new_start..new_start, block);
+        write_m3u_entries(&path, &entries)?;
+        let dir = path.parent().unwrap_or(Path::new("."));
+        scan_dir(dbs, dir).await?;
+    } else {
+        let mut ordered = cached_playlist_song_ids(dbs, &playlist.id).await?;
+        let end = (start + len).min(ordered.len());
+        let block_len = end.saturating_sub(start);
+        let new_start = start as i64 + i64::from(delta);
+        if block_len == 0
+            || new_start < 0
+            || new_start as usize + block_len > ordered.len()
+            || new_start as usize == start
+        {
+            return Err(anyhow!("The playlist row is out of date."));
+        }
+        let new_start = new_start as usize;
+        let block: Vec<String> = ordered.drain(start..end).collect();
+        ordered.splice(new_start..new_start, block);
+        rebuild_server_playlist(dbs, &playlist, &ordered).await?;
+    }
+    Ok(display_playlist_name(&playlist.name))
+}
+
 /// The cached ordered song ids of a playlist (server rows only; M3U entries
 /// always resolve through the file).
 async fn cached_playlist_song_ids(dbs: &Dbs, playlist_id: &str) -> Result<Vec<String>> {

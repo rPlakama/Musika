@@ -268,6 +268,50 @@ impl Bridge {
         });
     }
 
+    /// Move a block of playlist rows (a visual selection reorder). `cursor` is
+    /// the reordered cursor position to reveal after the reload.
+    pub fn move_playlist_block(
+        &self,
+        playlist_id: String,
+        start: usize,
+        len: usize,
+        delta: i32,
+        cursor: usize,
+    ) {
+        let tx = self.tx.clone();
+        crate::app::runtime().spawn(async move {
+            let Some(dbs) = crate::app::dbs() else { return };
+            match crate::playlists::move_playlist_block(&dbs, &playlist_id, start, len, delta).await {
+                Ok(name) => {
+                    let _ = tx.send(Event::PlaylistSaved {
+                        name,
+                        offline: false,
+                        created: false,
+                        removed: false,
+                        moved: true,
+                        rows: 0,
+                        playlist_id: Some(playlist_id),
+                        cursor: Some(cursor),
+                        error: None,
+                    });
+                }
+                Err(err) => {
+                    let _ = tx.send(Event::PlaylistSaved {
+                        name: playlist_id,
+                        offline: false,
+                        created: false,
+                        removed: false,
+                        moved: false,
+                        rows: 0,
+                        playlist_id: None,
+                        cursor: None,
+                        error: Some(format!("{err:#}")),
+                    });
+                }
+            }
+        });
+    }
+
     /// Delete playlist entries by position (the playlist page `d d` path).
     pub fn delete_playlist_positions(&self, playlist_id: String, positions: Vec<usize>) {
         let tx = self.tx.clone();

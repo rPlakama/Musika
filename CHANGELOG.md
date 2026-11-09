@@ -3,6 +3,25 @@
 All notable changes to Musika, newest first. `TASKLISTMAJOR.md` tracks the
 open work; this file is the release history.
 
+## Unreleased
+
+- **Navigation:** Backing out of a page now returns Home even after another
+  page was opened in between. Reaching Home clears the travel log (account
+  resets do too), so `q` from the new page cannot resurrect the previous trip's
+  back target.
+- **Playlist command:** `playlist add` accepts the cutoff form
+  `playlist add <target...>; <playlist>`. The first unquoted semicolon splits
+  the additions from the destination, so a multi-word playlist name needs no
+  quotes and a quoted target may contain `;`. The legacy last-argument form is
+  still accepted, and the canonical/echoed command uses the cutoff form.
+- **Playlist suggestions:** before the `;` the command line suggests `current`
+  plus search hits for targets; after it, only existing playlist names are
+  suggested (DB-backed via a new playlist scope), and Tab replaces the whole
+  typed name region (`; Road T` -> `; "Road Trip"`). See `docs/Commands.md`.
+- **Docs:** `docs/Commands.md` documents the cutoff grammar, suggestion
+  behaviour and updated automation examples; `docs/Keybinds.md` records that
+  Home ends the travel session.
+
 ## 0.6.6 - _Perf upgrades_
 
 - Replace the per-frame playback repaint chain with a ticker: playback repaints

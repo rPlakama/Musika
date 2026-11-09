@@ -22,9 +22,9 @@ work, including the command line.
 | `Shift-Enter` | Toggle the fullscreen player |
 | `Ctrl-Q` | Toggle the queue drawer |
 | `?` | Toggle the lyrics overlay in fullscreen, or the page description overlay on album/artist pages |
-| `[b` / `]b` | Previous / next place in the travel log |
+| `[b` / `]b` | Previous / next place in the travel log (cleared on reaching Home) |
 | `Shift-Q` | Home: close overlays, leave fullscreen and pop every page |
-| `q` | Back; at Home press it twice to quit |
+| `q` | Back; reaching Home ends the travel session (press twice at Home to quit) |
 | `Esc` / `Ctrl-[` | Cancel and hierarchical Back |
 | `1`–`9` prefix | Count for the next motion or action |
 | `Ctrl-J` / `Ctrl-K` | Move down / up in the current list or text selector |
@@ -51,6 +51,11 @@ work, including the command line.
 | Mouse click | Place the cursor and open/play the row |
 | `Shift` + click | Extend the visual selection to the row |
 | Mouse Back / Forward | Previous / next place in the travel log |
+
+Each page visit is a place in the travel log (`[b` / `]b`, mouse Back/Forward).
+Backing out of the last page reaches Home and clears the log: opening another
+page from Home starts a fresh trip, so its Back returns Home rather than the
+previous page.
 
 On album and artist pages, `Tab` cycles the page header stops. `?`, or Enter/click
 on the inline description, opens the shared full-window description reader:

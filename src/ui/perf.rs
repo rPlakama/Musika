@@ -277,7 +277,11 @@ pub(crate) fn decide(now: f64, demand: Demand, last_notify: f64) -> Decision {
     } else {
         None
     };
-    if (demand.marquee_at.is_some() || demand.loading || demand.syncing) && live {
+    // Horizontal marquee travel is a deliberate motion independent of window
+    // focus; never let the idle/inactive cadence freeze it.
+    if demand.marquee_at.is_some() {
+        interval = Some(interval.map_or(ACTIVE_INTERVAL, |current| current.min(ACTIVE_INTERVAL)));
+    } else if (demand.loading || demand.syncing) && live {
         interval = Some(interval.map_or(ACTIVE_INTERVAL, |current| current.min(ACTIVE_INTERVAL)));
     }
 
@@ -307,7 +311,7 @@ pub(crate) fn decide(now: f64, demand: Demand, last_notify: f64) -> Decision {
         if at <= now {
             notify = true;
             sleep_ms = sleep_ms.min(5);
-        } else if !demand.inactive {
+        } else {
             let wake = ((at - now) * 1000.0).ceil() as u64;
             sleep_ms = sleep_ms.min(wake.max(5));
         }
@@ -564,6 +568,23 @@ mod tests {
         let decision = decide(10.0, both, 9.99);
         // Marquee travel wants 33 ms even while the transport only needs 100.
         assert_eq!(decision.sleep_ms, 34);
+    }
+
+    #[test]
+    fn inactive_marquee_keeps_moving() {
+        let inactive = Demand {
+            inactive: true,
+            marquee_at: Some(10.02),
+            ..Demand::default()
+        };
+        // Even when the window is idle, a scrolling label gets the 30 Hz
+        // travel cadence and its exact wake deadline.
+        let decision = decide(10.0, inactive, 9.99);
+        assert!(!decision.notify);
+        assert_eq!(decision.sleep_ms, 20);
+        let due = decide(10.02, inactive, 9.99);
+        assert!(due.notify);
+        assert_eq!(due.sleep_ms, 5);
     }
 
     #[test]

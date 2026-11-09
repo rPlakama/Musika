@@ -5,6 +5,9 @@ open work; this file is the release history.
 
 ## Unreleased
 
+- Let the horizontal marquee labels keep their 30 Hz travel cadence even when
+  the window is unfocused/idle; the idle 1 Hz policy no longer freezes scrolling
+  text. The exact wake schedule still holds through the initial/end pauses.
 - Keep the bottom player bar's cover mounted across skips within the same
   album: the cover source is cached by album id (album/artist fallback for
   queue rows without one), and the fade/reload is skipped when the identity

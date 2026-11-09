@@ -194,7 +194,7 @@ impl Element for MarqueeText {
                 Some(cache) if cache.key == key => cache,
                 _ => MarqueeCache::shape(key, window),
             };
-            if cache.overflow > 0.0 && perf::window_active() {
+            if cache.overflow > 0.0 {
                 perf::note_marquee(f64::from(cache.next_change_in(now)));
             }
             (

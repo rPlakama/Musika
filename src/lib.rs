@@ -24,6 +24,7 @@ mod app;
 mod artist_user;
 #[cfg(feature = "gpuui")]
 mod auth;
+mod bridge;
 mod browse;
 mod cache;
 mod colors;
@@ -46,11 +47,13 @@ mod index;
 #[cfg(feature = "io-uring")]
 mod io_uring_read;
 mod ipc;
+mod ipc_command;
 mod library;
 mod linux;
 mod lyrics;
 mod media;
 mod media_actions;
+mod model;
 mod mpris;
 mod offline;
 mod player;

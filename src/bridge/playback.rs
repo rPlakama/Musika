@@ -96,8 +96,8 @@ impl Bridge {
                             .unwrap_or(0);
                         let _ = tx.send(Event::Queue { tracks, start });
                         let _ = tx.send(Event::OpenPage {
-                            descriptor: super::super::state::PageDescriptor::new(
-                                super::super::state::PageKind::Album,
+                            descriptor: crate::model::PageDescriptor::new(
+                                crate::model::PageKind::Album,
                                 album_id,
                             ),
                         });

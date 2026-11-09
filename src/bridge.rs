@@ -8,7 +8,7 @@ use std::collections::{BTreeMap, HashSet};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
-use super::state::PageHeader;
+use crate::model::PageHeader;
 use tokio::sync::mpsc::UnboundedSender;
 
 mod helpers;
@@ -25,13 +25,14 @@ mod playback;
 mod playlists;
 mod radio;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum SyncMode {
     Incremental,
     All,
     Repair,
 }
 
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub enum Event {
     LoginRequired {
         offline_available: bool,
@@ -76,28 +77,28 @@ pub enum Event {
     },
     LibraryCount {
         generation: u64,
-        scope: super::state::Scope,
+        scope: crate::model::Scope,
         order: usize,
         count: usize,
     },
     LibraryWindow {
         generation: u64,
-        scope: super::state::Scope,
+        scope: crate::model::Scope,
         order: usize,
         start: usize,
-        rows: Vec<super::state::Row>,
+        rows: Vec<crate::model::Row>,
     },
     Library {
         generation: u64,
-        scope: super::state::Scope,
+        scope: crate::model::Scope,
         order: usize,
-        rows: Vec<super::state::Row>,
+        rows: Vec<crate::model::Row>,
     },
     Page {
         generation: u64,
-        descriptor: super::state::PageDescriptor,
-        header: super::state::PageHeader,
-        rows: Vec<super::state::Row>,
+        descriptor: crate::model::PageDescriptor,
+        header: crate::model::PageHeader,
+        rows: Vec<crate::model::Row>,
     },
     Notes {
         album_id: String,
@@ -108,10 +109,10 @@ pub enum Event {
         result: crate::download::MarkWindowResult,
     },
     Preload {
-        scope: super::state::Scope,
+        scope: crate::model::Scope,
         order: usize,
         count: usize,
-        rows: Vec<super::state::Row>,
+        rows: Vec<crate::model::Row>,
     },
     DisplayCover {
         key: String,
@@ -120,7 +121,7 @@ pub enum Event {
         path: Option<std::path::PathBuf>,
     },
     RowsPatched {
-        kind: super::state::RowKind,
+        kind: crate::model::RowKind,
         id: String,
         starred: Option<bool>,
         rating: Option<u8>,
@@ -142,7 +143,7 @@ pub enum Event {
         total: usize,
     },
     PageContainerState {
-        kind: super::state::PageKind,
+        kind: crate::model::PageKind,
         id: String,
         cached: bool,
         starred: bool,
@@ -167,11 +168,11 @@ pub enum Event {
         cover_art: String,
     },
     OpenPage {
-        descriptor: super::state::PageDescriptor,
+        descriptor: crate::model::PageDescriptor,
     },
     OpenPageReveal {
-        descriptor: super::state::PageDescriptor,
-        row_kind: super::state::RowKind,
+        descriptor: crate::model::PageDescriptor,
+        row_kind: crate::model::RowKind,
         row_id: String,
     },
     Command(String),
@@ -195,7 +196,7 @@ pub enum Event {
     Search {
         generation: u64,
         query: String,
-        rows: Vec<super::state::Row>,
+        rows: Vec<crate::model::Row>,
         most_played: bool,
     },
     Header {
@@ -260,5 +261,23 @@ pub(crate) fn albums_label(count: i64) -> String {
         "1 album".to_string()
     } else {
         format!("{count} albums")
+    }
+}
+
+#[cfg(test)]
+mod serde_tests {
+    use super::*;
+
+    #[test]
+    fn bridge_events_round_trip_json() {
+        let event = Event::OpenPage {
+            descriptor: crate::model::PageDescriptor::new(
+                crate::model::PageKind::Album,
+                "al1",
+            ),
+        };
+        let json = serde_json::to_string(&event).unwrap();
+        let back: Event = serde_json::from_str(&json).unwrap();
+        assert_eq!(serde_json::to_string(&back).unwrap(), json);
     }
 }

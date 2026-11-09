@@ -1,6 +1,6 @@
 //! Socket / `:` command context resolution for shuffle, radio and download.
 
-use super::super::ipc_command::{self, RadioSeed, ShuffleTarget};
+use crate::ipc_command::{self, RadioSeed, ShuffleTarget};
 use super::super::*;
 
 impl AppRoot {

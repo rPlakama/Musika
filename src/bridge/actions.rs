@@ -43,9 +43,9 @@ impl Bridge {
                 return;
             }
             let row_kind = match kind.as_str() {
-                "song" => super::super::state::RowKind::Song,
-                "album" => super::super::state::RowKind::Album,
-                _ => super::super::state::RowKind::Artist,
+                "song" => crate::model::RowKind::Song,
+                "album" => crate::model::RowKind::Album,
+                _ => crate::model::RowKind::Artist,
             };
             let _ = tx.send(Event::RowsPatched {
                 kind: row_kind,
@@ -75,9 +75,9 @@ impl Bridge {
                 return;
             }
             let row_kind = if kind == "artist" {
-                super::super::state::RowKind::Artist
+                crate::model::RowKind::Artist
             } else {
-                super::super::state::RowKind::Album
+                crate::model::RowKind::Album
             };
             let _ = tx.send(Event::RowsPatched {
                 kind: row_kind,
@@ -195,8 +195,8 @@ impl Bridge {
                 return;
             };
             let _ = tx.send(Event::OpenPage {
-                descriptor: super::super::state::PageDescriptor::new(
-                    super::super::state::PageKind::Artist,
+                descriptor: crate::model::PageDescriptor::new(
+                    crate::model::PageKind::Artist,
                     artist_id,
                 ),
             });
@@ -258,7 +258,7 @@ impl Bridge {
             let result = async {
                 let id = crate::download_command::resolve_named_id(
                     &dbs,
-                    crate::ui::ipc_command::DownloadScope::Album,
+                    crate::ipc_command::DownloadScope::Album,
                     &query,
                 )
                 .await?;
@@ -278,7 +278,7 @@ impl Bridge {
             let result = async {
                 let id = crate::download_command::resolve_named_id(
                     &dbs,
-                    crate::ui::ipc_command::DownloadScope::Artist,
+                    crate::ipc_command::DownloadScope::Artist,
                     &query,
                 )
                 .await?;

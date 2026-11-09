@@ -2,23 +2,23 @@
 
 use super::*;
 
-pub(crate) fn order_name(scope: super::super::state::Scope, order: usize) -> String {
+pub(crate) fn order_name(scope: crate::model::Scope, order: usize) -> String {
     match scope {
-        super::super::state::Scope::Albums | super::super::state::Scope::Songs => {
+        crate::model::Scope::Albums | crate::model::Scope::Songs => {
             crate::library::ORDERS[order.min(crate::library::ORDERS.len() - 1)].to_string()
         }
-        super::super::state::Scope::Artists => crate::library::ARTIST_ORDERS
+        crate::model::Scope::Artists => crate::library::ARTIST_ORDERS
             [order.min(crate::library::ARTIST_ORDERS.len() - 1)]
         .to_string(),
-        super::super::state::Scope::Playlists => "Name".to_string(),
+        crate::model::Scope::Playlists => "Name".to_string(),
     }
 }
 
 pub(crate) fn row_from_json(
-    scope: super::super::state::Scope,
+    scope: crate::model::Scope,
     value: &serde_json::Value,
-) -> super::super::state::Row {
-    use super::super::state::{Row, RowKind, Scope};
+) -> crate::model::Row {
+    use crate::model::{Row, RowKind, Scope};
     let text = |key: &str| value[key].as_str().unwrap_or_default().to_string();
     let kind = match scope {
         Scope::Albums => RowKind::Album,
@@ -44,10 +44,10 @@ pub(crate) fn row_from_json(
 }
 
 pub(crate) async fn library_rows(
-    scope: super::super::state::Scope,
+    scope: crate::model::Scope,
     order: usize,
-) -> anyhow::Result<Vec<super::super::state::Row>> {
-    use super::super::state::{Row, RowKind, Scope};
+) -> anyhow::Result<Vec<crate::model::Row>> {
+    use crate::model::{Row, RowKind, Scope};
     let dbs = crate::app::dbs().ok_or_else(|| anyhow::anyhow!("databases not ready"))?;
     match scope {
         Scope::Albums => {
@@ -197,13 +197,13 @@ pub(crate) fn songs_label(count: i64) -> String {
 }
 
 pub(crate) async fn page_data(
-    descriptor: &super::super::state::PageDescriptor,
+    descriptor: &crate::model::PageDescriptor,
     offline: bool,
 ) -> anyhow::Result<(
-    super::super::state::PageHeader,
-    Vec<super::super::state::Row>,
+    crate::model::PageHeader,
+    Vec<crate::model::Row>,
 )> {
-    use super::super::state::{PageHeader, PageKind, Row, RowKind};
+    use crate::model::{PageHeader, PageKind, Row, RowKind};
     let dbs = crate::app::dbs().ok_or_else(|| anyhow::anyhow!("databases not ready"))?;
     match descriptor.kind {
         PageKind::Album => {
@@ -417,8 +417,8 @@ pub(crate) async fn search_rows(
     query: &str,
     offline: bool,
     limit: usize,
-) -> anyhow::Result<(Vec<super::super::state::Row>, bool)> {
-    use super::super::state::{Row, RowKind};
+) -> anyhow::Result<(Vec<crate::model::Row>, bool)> {
+    use crate::model::{Row, RowKind};
 
     let dbs = crate::app::dbs().ok_or_else(|| anyhow::anyhow!("databases not ready"))?;
     let json = crate::browse::search_json(&dbs, query, offline, limit.max(1)).await?;

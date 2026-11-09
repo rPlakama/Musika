@@ -43,7 +43,7 @@ impl Bridge {
                 return;
             }
             let event =
-                match search_rows(&query, offline, super::super::state::SEARCH_FETCH_ROWS).await {
+                match search_rows(&query, offline, crate::model::SEARCH_FETCH_ROWS).await {
                     Ok((rows, most_played)) => {
                         crate::debug_log!("GPUI: search {:?} {} rows", query, rows.len());
                         Event::Search {
@@ -59,11 +59,11 @@ impl Bridge {
         });
     }
 
-    pub fn load_library(&self, scope: super::super::state::Scope, order: usize) -> u64 {
+    pub fn load_library(&self, scope: crate::model::Scope, order: usize) -> u64 {
         let generation = self.generation.fetch_add(1, Ordering::SeqCst) + 1;
         let tx = self.tx.clone();
         let offline = self.offline.load(Ordering::Relaxed);
-        if scope == super::super::state::Scope::Playlists {
+        if scope == crate::model::Scope::Playlists {
             crate::app::runtime().spawn(async move {
                 let event = match library_rows(scope, order).await {
                     Ok(rows) => {
@@ -107,7 +107,7 @@ impl Bridge {
     pub fn request_library_window(
         &self,
         generation: u64,
-        scope: super::super::state::Scope,
+        scope: crate::model::Scope,
         order: usize,
         start: usize,
         count: usize,
@@ -152,7 +152,7 @@ impl Bridge {
         });
     }
 
-    pub fn preload_library(&self, scope: super::super::state::Scope, order: usize) {
+    pub fn preload_library(&self, scope: crate::model::Scope, order: usize) {
         let tx = self.tx.clone();
         let offline = self.offline.load(Ordering::Relaxed);
         crate::app::runtime().spawn(async move {
@@ -199,7 +199,7 @@ impl Bridge {
     pub fn request_command_suggestions(
         &self,
         generation: u64,
-        scope: crate::ui::ipc_command::SuggestScope,
+        scope: crate::ipc_command::SuggestScope,
         query: String,
         start: usize,
         end: usize,
@@ -222,16 +222,16 @@ impl Bridge {
                 return;
             };
             let columns: &[(&str, &str)] = match scope {
-                crate::ui::ipc_command::SuggestScope::Artist => &[("artists", "Artist")],
-                crate::ui::ipc_command::SuggestScope::Album => &[("albums", "Album")],
-                crate::ui::ipc_command::SuggestScope::Track => &[("songs", "Track")],
-                crate::ui::ipc_command::SuggestScope::Any => &[
+                crate::ipc_command::SuggestScope::Artist => &[("artists", "Artist")],
+                crate::ipc_command::SuggestScope::Album => &[("albums", "Album")],
+                crate::ipc_command::SuggestScope::Track => &[("songs", "Track")],
+                crate::ipc_command::SuggestScope::Any => &[
                     ("songs", "Track"),
                     ("albums", "Album"),
                     ("artists", "Artist"),
                     ("playlists", "Playlist"),
                 ],
-                crate::ui::ipc_command::SuggestScope::Playlist => &[("playlists", "Playlist")],
+                crate::ipc_command::SuggestScope::Playlist => &[("playlists", "Playlist")],
             };
             let mut rows = Vec::new();
             for (column, kind) in columns {

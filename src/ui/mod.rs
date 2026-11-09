@@ -30,13 +30,13 @@
 
 mod anim;
 mod app;
-mod bridge;
+pub(crate) use crate::bridge;
 mod collage;
 mod command_line;
 mod covers;
 #[cfg(debug_assertions)]
 mod debug;
-pub(crate) mod ipc_command;
+pub(crate) use crate::ipc_command;
 mod line_search;
 mod lyrics_layout;
 mod metrics;
@@ -70,7 +70,7 @@ use gpui::{
     WindowOptions, actions, div, img, prelude::*, px, relative, rgb, size, svg, uniform_list,
 };
 
-use bridge::{Event, SyncMode};
+use crate::bridge::{Event, SyncMode};
 use quick_actions::{AltGesture, Direction, QuickKind, QuickMenu, QuickVerb};
 use state::{
     PageDescriptor, PageKind, PageState, Row, RowKind, RowWindow, Scope, Travel, ViewState,

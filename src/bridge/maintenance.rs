@@ -78,12 +78,12 @@ impl Bridge {
     }
 
     /// Download coverage + favourite/rating for an Album or Artist page.
-    pub fn request_container_state(&self, kind: super::super::state::PageKind, id: String) {
+    pub fn request_container_state(&self, kind: crate::model::PageKind, id: String) {
         let tx = self.tx.clone();
         crate::app::runtime().spawn(async move {
             let Some(dbs) = crate::app::dbs() else { return };
             let (cached, starred, rating) = match kind {
-                super::super::state::PageKind::Album => {
+                crate::model::PageKind::Album => {
                     let cached =
                         crate::download::window_state(&dbs, &[], std::slice::from_ref(&id))
                             .await
@@ -97,7 +97,7 @@ impl Bridge {
                             .unwrap_or((false, 0));
                     (cached, state.0, state.1.clamp(0, 5) as u8)
                 }
-                super::super::state::PageKind::Artist => {
+                crate::model::PageKind::Artist => {
                     let albums = crate::library::artist_album_ids(&dbs.library, &id)
                         .await
                         .unwrap_or_default();

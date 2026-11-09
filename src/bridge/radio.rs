@@ -116,8 +116,8 @@ impl Bridge {
                 return;
             };
             let _ = tx.send(Event::OpenPage {
-                descriptor: super::super::state::PageDescriptor::new(
-                    super::super::state::PageKind::Album,
+                descriptor: crate::model::PageDescriptor::new(
+                    crate::model::PageKind::Album,
                     album_id,
                 ),
             });
@@ -135,19 +135,19 @@ impl Bridge {
                 .flatten();
             let (descriptor, row_kind) = match artist_id {
                 Some(artist_id) => (
-                    super::super::state::PageDescriptor::new(
-                        super::super::state::PageKind::Artist,
+                    crate::model::PageDescriptor::new(
+                        crate::model::PageKind::Artist,
                         artist_id,
                     ),
-                    super::super::state::RowKind::Album,
+                    crate::model::RowKind::Album,
                 ),
                 // No artist mapping: keep the album reachable.
                 None => (
-                    super::super::state::PageDescriptor::new(
-                        super::super::state::PageKind::Album,
+                    crate::model::PageDescriptor::new(
+                        crate::model::PageKind::Album,
                         album_id.clone(),
                     ),
-                    super::super::state::RowKind::Album,
+                    crate::model::RowKind::Album,
                 ),
             };
             let _ = tx.send(Event::OpenPageReveal {
@@ -188,14 +188,14 @@ impl Bridge {
         crate::app::runtime().spawn(async move {
             let Some(dbs) = crate::app::dbs() else { return };
             let scope = if kind == "album" {
-                crate::ui::ipc_command::DownloadScope::Album
+                crate::ipc_command::DownloadScope::Album
             } else {
-                crate::ui::ipc_command::DownloadScope::Track
+                crate::ipc_command::DownloadScope::Track
             };
             let result = async {
                 let id = crate::download_command::resolve_named_id(&dbs, scope, &query).await?;
                 let _ = tx.send(Event::OpenPage {
-                    descriptor: super::super::state::PageDescriptor::radio(
+                    descriptor: crate::model::PageDescriptor::radio(
                         kind.clone(),
                         id.clone(),
                     ),

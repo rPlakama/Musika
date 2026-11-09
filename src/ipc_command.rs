@@ -6,7 +6,7 @@
 
 use std::fmt;
 
-use super::bridge::SyncMode;
+use crate::bridge::SyncMode;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WipeScope {

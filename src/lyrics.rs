@@ -49,7 +49,7 @@ pub const SYNC_BACKFILL_LIMIT: usize = 64;
 pub(crate) const UNSYNCED_TTL_SECS: i64 = 24 * 60 * 60;
 
 /// A cached (or freshly fetched) lyric document.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Document {
     pub song_id: String,
     /// `lrc` | `subsonic` | `legacy` | `none`.
@@ -62,7 +62,7 @@ pub struct Document {
 }
 
 /// One rendered lyric line; `start_ms` is `None` for plain lyrics.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Line {
     pub start_ms: Option<i64>,
     pub value: String,

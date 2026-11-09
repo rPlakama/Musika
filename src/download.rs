@@ -158,7 +158,7 @@ pub async fn pending_ids_of(pool: &SqlitePool, ids: &[String]) -> Result<Vec<Str
 /// songs of the rows a surface can show, together with the deduped window
 /// that was queried (callers rewrite exactly those ids and leave the rest of
 /// the ledger alone).
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct MarkWindowResult {
     pub songs_done: Vec<String>,
     pub albums_done: Vec<String>,

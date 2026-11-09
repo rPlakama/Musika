@@ -51,8 +51,8 @@ impl Bridge {
     /// Resolve and run a scoped download/removal request off the UI thread.
     pub fn download_request(
         &self,
-        request: crate::ui::ipc_command::DownloadRequest,
-        current: Option<crate::ui::ipc_command::CurrentTrack>,
+        request: crate::ipc_command::DownloadRequest,
+        current: Option<crate::ipc_command::CurrentTrack>,
     ) {
         let tx = self.tx.clone();
         crate::app::runtime().spawn(async move {

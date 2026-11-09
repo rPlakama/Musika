@@ -126,9 +126,9 @@ mod contextual_bar_tests {
 
     #[test]
     fn album_counts_are_pluralized() {
-        assert_eq!(crate::ui::bridge::albums_label(0), "0 albums");
-        assert_eq!(crate::ui::bridge::albums_label(1), "1 album");
-        assert_eq!(crate::ui::bridge::albums_label(4), "4 albums");
+        assert_eq!(crate::bridge::albums_label(0), "0 albums");
+        assert_eq!(crate::bridge::albums_label(1), "1 album");
+        assert_eq!(crate::bridge::albums_label(4), "4 albums");
     }
 
     #[test]

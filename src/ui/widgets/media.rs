@@ -1,7 +1,7 @@
 //! Shared icon, cover and text/presentation helpers.
 
 use super::super::*;
-use gpui::StyledImage as _;
+use gpui::{SharedString, StyledImage as _};
 
 pub(crate) fn transport_button(
     icon_name: &str,
@@ -212,6 +212,54 @@ pub(crate) fn cover_source_with_remote(url: &str, remote: &str) -> Option<CoverS
         Some(source) => Some(source.with_remote_fallback(remote)),
         None => remote_cover(remote).map(CoverSource::Remote),
     }
+}
+
+/// Resolve a batch of row covers while holding the shared cover store once.
+///
+/// `Row` values keep their provider URLs; the resolved [`CoverSource`] is built
+/// when the row window/page payload is installed, not per frame.
+pub(crate) fn cover_sources<'a, I>(rows: I) -> Vec<Option<std::sync::Arc<CoverSource>>>
+where
+    I: Iterator<Item = (&'a str, &'a str)>,
+{
+    let mut store = COVERS
+        .get_or_init(|| std::sync::Mutex::new(covers::CoverStore::new(768)))
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    rows.map(|(url, remote)| {
+        let source = match store.row_path(url) {
+            Some(path) => Some(CoverSource::Path(path).with_remote_fallback(remote)),
+            None => remote_cover(remote).map(CoverSource::Remote),
+        };
+        source.map(std::sync::Arc::new)
+    })
+    .collect()
+}
+
+fn cached_icon(
+    cell: &'static std::sync::OnceLock<SharedString>,
+    name: &'static str,
+) -> SharedString {
+    cell.get_or_init(|| format!("{}/icons/{name}", asset_root()).into())
+        .clone()
+}
+
+/// Row mark: a download is in flight.
+pub(crate) fn icon_download_pending() -> SharedString {
+    static CELL: std::sync::OnceLock<SharedString> = std::sync::OnceLock::new();
+    cached_icon(&CELL, "reload-ui-2-svgrepo-com.svg")
+}
+
+/// Row mark: downloaded.
+pub(crate) fn icon_downloaded() -> SharedString {
+    static CELL: std::sync::OnceLock<SharedString> = std::sync::OnceLock::new();
+    cached_icon(&CELL, "outline-download.svg")
+}
+
+/// Row mark: favourite.
+pub(crate) fn icon_favorite() -> SharedString {
+    static CELL: std::sync::OnceLock<SharedString> = std::sync::OnceLock::new();
+    cached_icon(&CELL, "baseline-favorite.svg")
 }
 
 /// Playlist/Radio mosaic: golden-ratio panes for any number of distinct

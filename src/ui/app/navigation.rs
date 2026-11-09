@@ -11,6 +11,7 @@ impl AppRoot {
         }
         self.view.loading = true;
         self.view.rows.clear();
+        self.view.covers.clear();
         self.marks.signature = None;
         self.generation = self.bridge.load_library(self.view.scope, self.view.order);
     }
@@ -292,7 +293,7 @@ impl AppRoot {
                 albums.push(track.album_id.clone());
             }
         }
-        let mut push = |row: &Row, songs: &mut Vec<String>, albums: &mut Vec<String>| {
+        let push = |row: &Row, songs: &mut Vec<String>, albums: &mut Vec<String>| {
             if !row.song_id.is_empty() {
                 songs.push(row.song_id.clone());
             }
@@ -420,6 +421,7 @@ impl AppRoot {
             self.view.clear_for(scope);
             self.view.rows = RowWindow::full(rows);
             self.view.rows.count = count;
+            self.view.rebuild_covers();
             self.view.loading = false;
             self.generation = self.bridge.load_library(scope, 0);
         } else {

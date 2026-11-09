@@ -58,7 +58,8 @@ impl AppRoot {
                                         let cover = cover_source_with_remote(
                                             &track.cover_url,
                                             &track.cover_remote,
-                                        );
+                                        )
+                                        .map(std::sync::Arc::new);
                                         let active = index == cursor;
                                         let selected = this.selected_id.as_deref()
                                             == Some(track.id.as_str())
@@ -177,10 +178,7 @@ impl AppRoot {
                                                     this.child(RetainedIcon::new(
                                                         "retained-queue-favorite",
                                                         index,
-                                                        format!(
-                                                            "{}/icons/baseline-favorite.svg",
-                                                            asset_root()
-                                                        ),
+                                                        icon_favorite(),
                                                         11.0,
                                                         0xFFD54F,
                                                     ))

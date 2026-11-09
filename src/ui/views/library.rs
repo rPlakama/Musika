@@ -102,10 +102,12 @@ impl AppRoot {
                     count,
                     cx.processor(move |this, range: std::ops::Range<usize>, window, cx| {
                         let row_h = this.library_scroll.row_h;
+                        let selected_id = this.selected_id.as_deref();
+                        let line_query: gpui::SharedString = this.line_search.query().to_string().into();
                         let mut items = Vec::with_capacity(range.len());
                         for index in range {
                             let selected = this.view.rows.get(index).is_some_and(|row| {
-                                this.selected_id.as_deref() == Some(row.id.as_str())
+                                selected_id == Some(row.id.as_str())
                             }) || index == this.view.cursor
                                 || this.view.selection.contains(this.view.cursor, index);
                             let hovered = this.hovered_row == Some(index);
@@ -202,6 +204,8 @@ impl AppRoot {
                                     }))
                                     .child(this.row_content(
                                         row,
+                                        this.view.cover(index),
+                                        &line_query,
                                         RowPaint {
                                             flags: LIBRARY_ROW_FLAGS,
                                             surface: LineSurface::Library,
@@ -230,13 +234,20 @@ impl AppRoot {
 
     /// One row body for every list surface. The data lives in `Row`; the
     /// surface supplies the flags that decide which cells are materialized.
-    pub(in crate::ui) fn row_content(&self, row: &state::Row, paint: RowPaint) -> gpui::Div {
+    /// The cover is resolved by the row window/page payload, and `query` is
+    /// hoisted to one `SharedString` per frame (not one per row).
+    pub(in crate::ui) fn row_content(
+        &self,
+        row: &state::Row,
+        cover: Option<&std::sync::Arc<CoverSource>>,
+        query: &gpui::SharedString,
+        paint: RowPaint,
+    ) -> gpui::Div {
         let emphasis = paint.emphasis;
         let fonts = self.visuals.fonts;
         let current = self.line_search_current(paint.surface, paint.index);
         let mut body = div().flex().items_center().min_w_0().flex_1();
         if paint.flags.show_cover {
-            let cover = cover_source_with_remote(&row.cover_url, &row.cover_remote);
             let id_name = match paint.surface {
                 LineSurface::Library => "retained-cover-library",
                 LineSurface::Page => "retained-cover-page",
@@ -245,7 +256,7 @@ impl AppRoot {
             body = body.child(div().mr_3().child(RetainedCover::new(
                 id_name,
                 paint.index,
-                cover,
+                cover.cloned(),
                 self.image_cache.clone(),
                 paint.height * 0.78,
                 paint.cover_scale,
@@ -267,7 +278,7 @@ impl AppRoot {
                 paint.index,
                 row.title.clone().into(),
                 row.subtitle.clone().into(),
-                self.line_search.query().to_string().into(),
+                query.clone(),
                 current,
                 paint.selected,
                 fonts.row_title(paint.flags.compact) * emphasis,
@@ -298,7 +309,7 @@ impl AppRoot {
             trailing = trailing.child(RetainedIcon::new(
                 "retained-download-pending",
                 paint.index,
-                format!("{}/icons/reload-ui-2-svgrepo-com.svg", asset_root()),
+                icon_download_pending(),
                 12.0,
                 palette::primary(),
             ));
@@ -307,7 +318,7 @@ impl AppRoot {
             trailing = trailing.child(RetainedIcon::new(
                 "retained-download-mark",
                 paint.index,
-                format!("{}/icons/outline-download.svg", asset_root()),
+                icon_downloaded(),
                 12.0,
                 palette::primary(),
             ));
@@ -316,7 +327,7 @@ impl AppRoot {
             trailing = trailing.child(RetainedIcon::new(
                 "retained-star-mark",
                 paint.index,
-                format!("{}/icons/baseline-favorite.svg", asset_root()),
+                icon_favorite(),
                 11.0,
                 0xFFD54F,
             ));

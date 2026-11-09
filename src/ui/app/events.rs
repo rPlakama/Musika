@@ -64,6 +64,7 @@ impl AppRoot {
                     return;
                 }
                 self.view.rows.install_window(start, rows);
+                self.view.rebuild_covers();
                 self.view.loading = false;
                 self.view.error = None;
                 self.ensure_marks();
@@ -83,6 +84,7 @@ impl AppRoot {
                 self.generation = generation;
                 self.view.rows = RowWindow::full(rows);
                 self.view.rows.generation = generation;
+                self.view.rebuild_covers();
                 self.view.loading = false;
                 self.ensure_marks();
                 self.view.error = None;
@@ -429,6 +431,7 @@ impl AppRoot {
                 );
                 page.header = header;
                 page.rows = rows;
+                page.rebuild_covers();
                 page.loading = false;
                 page.error = None;
                 page.cursor = page.cursor.min(page.rows.len().saturating_sub(1));

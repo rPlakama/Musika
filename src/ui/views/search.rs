@@ -79,7 +79,8 @@ impl AppRoot {
         let fonts = self.visuals.fonts;
         let emphasis = self.visuals.search_text_emphasis(text_scale);
         let cover_scale = self.visuals.search_cover_scale(scale);
-        let cover = cover_source_with_remote(&row.cover_url, &row.cover_remote);
+        let cover =
+            cover_source_with_remote(&row.cover_url, &row.cover_remote).map(std::sync::Arc::new);
         div()
             .id(("search-row", index))
             .flex()

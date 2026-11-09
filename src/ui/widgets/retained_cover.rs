@@ -31,7 +31,7 @@ thread_local! {
 pub(crate) struct RetainedCover {
     id_name: &'static str,
     index: usize,
-    source: Option<CoverSource>,
+    source: Option<Arc<CoverSource>>,
     cache: Entity<RetainAllImageCache>,
     size: f32,
     scale: f32,
@@ -42,7 +42,7 @@ impl RetainedCover {
     pub(crate) fn new(
         id_name: &'static str,
         index: usize,
-        source: Option<CoverSource>,
+        source: Option<Arc<CoverSource>>,
         cache: Entity<RetainAllImageCache>,
         size: f32,
         scale: f32,
@@ -101,7 +101,7 @@ impl Element for RetainedCover {
         window: &mut Window,
         cx: &mut App,
     ) {
-        let Some(source) = self.source.as_ref() else {
+        let Some(source) = self.source.as_deref() else {
             return;
         };
         let stats = cover_stats_enabled();

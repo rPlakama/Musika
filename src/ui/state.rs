@@ -1,5 +1,9 @@
 // Musika — GPUUI shell/list state (M1 first slice).
 
+use std::sync::Arc;
+
+use crate::ui::widgets::media::{CoverSource, cover_sources};
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Scope {
     Albums,
@@ -175,6 +179,9 @@ pub struct ViewState {
     /// Container state for the superior bar's contextual chips (Album/Artist).
     pub container_cached: bool,
     pub container_downloading: bool,
+    /// Resolved cover per live row (offset by `rows.live_start`), built when a
+    /// window/payload is installed instead of per frame.
+    pub covers: Vec<Option<Arc<CoverSource>>>,
 }
 
 impl Default for ViewState {
@@ -190,6 +197,7 @@ impl Default for ViewState {
             selection: Selection::default(),
             container_cached: false,
             container_downloading: false,
+            covers: Vec::new(),
         }
     }
 }
@@ -221,10 +229,27 @@ impl ViewState {
         self.scope = scope;
         self.order = 0;
         self.rows.clear();
+        self.covers.clear();
         self.cursor = 0;
         self.scroll = 0.0;
         self.loading = true;
         self.error = None;
+    }
+
+    /// Resolve the live row covers once, when the row window lands.
+    pub fn rebuild_covers(&mut self) {
+        self.covers = cover_sources(
+            self.rows
+                .live
+                .iter()
+                .map(|row| (row.cover_url.as_str(), row.cover_remote.as_str())),
+        );
+    }
+
+    /// Cover for an absolute row index; `None` outside the live window.
+    pub fn cover(&self, index: usize) -> Option<&Arc<CoverSource>> {
+        let offset = index.checked_sub(self.rows.live_start)?;
+        self.covers.get(offset).and_then(|cover| cover.as_ref())
     }
 
     pub fn select(&mut self, index: usize) {
@@ -406,6 +431,8 @@ pub struct PageState {
     /// Container state for the superior bar's contextual chips (Album/Artist).
     pub container_cached: bool,
     pub container_downloading: bool,
+    /// Resolved cover per row, rebuilt when the page payload lands.
+    pub covers: Vec<Option<Arc<CoverSource>>>,
 }
 
 impl PageState {
@@ -433,7 +460,20 @@ impl PageState {
             selection: Selection::default(),
             container_cached: false,
             container_downloading: false,
+            covers: Vec::new(),
         }
+    }
+
+    pub fn rebuild_covers(&mut self) {
+        self.covers = cover_sources(
+            self.rows
+                .iter()
+                .map(|row| (row.cover_url.as_str(), row.cover_remote.as_str())),
+        );
+    }
+
+    pub fn cover(&self, index: usize) -> Option<&Arc<CoverSource>> {
+        self.covers.get(index).and_then(|cover| cover.as_ref())
     }
 
     pub fn select(&mut self, index: usize) {
@@ -503,6 +543,44 @@ mod page_tests {
             PageDescriptor::new(PageKind::Album, "x").radio_seed_kind,
             None
         );
+    }
+
+    fn test_row() -> Row {
+        Row {
+            track: String::new(),
+            id: "r".into(),
+            kind: RowKind::Song,
+            title: String::new(),
+            subtitle: String::new(),
+            meta: String::new(),
+            cover_url: String::new(),
+            cover_remote: String::new(),
+            song_id: String::new(),
+            album_id: String::new(),
+            starred: false,
+            rating: 0,
+            downloaded: false,
+        }
+    }
+
+    #[test]
+    fn view_cover_cache_follows_the_live_window_offset() {
+        let mut view = ViewState::default();
+        view.rows.install_window(10, vec![test_row(), test_row()]);
+        view.rebuild_covers();
+        assert_eq!(view.covers.len(), 2);
+        assert!(view.cover(9).is_none(), "before the live window");
+        assert!(view.cover(12).is_none(), "past the live window");
+        assert!(view.cover(10).is_none(), "no cover url resolves to none");
+    }
+
+    #[test]
+    fn page_cover_cache_is_indexed_by_row() {
+        let mut page = PageState::new(PageDescriptor::new(PageKind::Album, "a"));
+        page.rows = vec![test_row(), test_row(), test_row()];
+        page.rebuild_covers();
+        assert_eq!(page.covers.len(), 3);
+        assert!(page.cover(3).is_none());
     }
 
     #[test]

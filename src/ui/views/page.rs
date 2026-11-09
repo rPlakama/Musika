@@ -132,24 +132,21 @@ impl AppRoot {
                             cx.processor(
                                 move |this, range: std::ops::Range<usize>, _window, cx| {
                                     let row_h = this.page_scroll_modal.row_h;
+                                    let selected_id = this.selected_id.as_deref();
+                                    let line_query: gpui::SharedString =
+                                        this.line_search.query().to_string().into();
                                     let mut items = Vec::with_capacity(range.len());
                                     for index in range {
-                                        let selected_id = this.selected_id.clone();
-                                        let Some((row, selected)) =
-                                            this.page.as_ref().and_then(|page| {
-                                                page.rows.get(index).map(|row| {
-                                                    let selected = selected_id.as_deref()
-                                                        == Some(row.id.as_str())
-                                                        || index == page.cursor
-                                                        || page
-                                                            .selection
-                                                            .contains(page.cursor, index);
-                                                    (row.clone(), selected)
-                                                })
-                                            })
-                                        else {
+                                        let Some(page) = this.page.as_ref() else {
                                             break;
                                         };
+                                        let Some(row) = page.rows.get(index) else {
+                                            break;
+                                        };
+                                        let selected = selected_id == Some(row.id.as_str())
+                                            || index == page.cursor
+                                            || page.selection.contains(page.cursor, index);
+                                        let cover = page.cover(index);
                                         let hovered = this.hovered_page == Some(index);
                                         let page_base = if index % 2 != 0 {
                                             palette::surface_container_lowest()
@@ -228,7 +225,9 @@ impl AppRoot {
                                                     cx.notify();
                                                 }))
                                                 .child(this.row_content(
-                                                    &row,
+                                                    row,
+                                                    cover,
+                                                    &line_query,
                                                     RowPaint {
                                                         flags: row_flags,
                                                         surface: LineSurface::Page,

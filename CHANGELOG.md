@@ -11,9 +11,10 @@ open work; this file is the release history.
   talks JSON-lines IPC over `daemon.sock` and exits when closed. Closing the
   window now leaves the core playing in the tray; launching `musika` again or
   left-clicking the tray icon reopens the window against the live queue/page.
-  The tray menu has Shuffle (current queue), Radio (current track) and Random
-  (random album from `library.db`). `qq` at Home/`quit` remains the true quit;
-  add the core-safe `show` and `random` IPC commands and docs/Daemon.md.
+  The tray menu has Shuffle (current queue), Radio (current track), Random
+  (random album from `library.db`) and Quit (stop the core). `qq` at Home and
+  `quit` over IPC remain the true quit; add the core-safe `show` and `random`
+  IPC commands and docs/Daemon.md.
 - Align idle frame pacing with the retired QML runner
   (`idleBehavior = !active && !nowPlayingVisible`): only an unfocused window
   drops to the 1 Hz upkeep cadence, and the fullscreen player / lyrics overlay

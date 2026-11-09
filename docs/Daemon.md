@@ -64,7 +64,8 @@ freedesktop watcher:
 
 - left click → `show` (spawn/raise `musika-ui`);
 - menu: **Shuffle** = `shuffle queue`, **Radio** = `radio current`,
-  **Random** = play a random non-empty album from `library.db`.
+  **Random** = play a random non-empty album from `library.db`,
+  **Quit** = `quit` (flush status, close the UI child and stop the core).
 
 Without a tray host the core still runs; the next `musika` launch opens the
 window. Under niri the UI also asks niri to focus its own window on an explicit

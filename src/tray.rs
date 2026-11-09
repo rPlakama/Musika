@@ -43,6 +43,7 @@ impl ksni::Tray for MusikaTray {
             item("Shuffle", "shuffle queue"),
             item("Radio", "radio current"),
             item("Random", "random"),
+            item("Quit", "quit"),
         ]
     }
 }

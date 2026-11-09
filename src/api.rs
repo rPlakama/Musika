@@ -425,6 +425,12 @@ impl SubsonicClient {
         self.call_ok("createPlaylist", &params).await
     }
 
+    /// `deletePlaylist` — remove a whole server playlist.
+    pub async fn delete_playlist(&self, id: &str) -> Result<()> {
+        let params = query(&[("id", Some(id.to_string()))]);
+        self.call_ok("deletePlaylist", &params).await
+    }
+
     /// `updatePlaylist` — append songs to an existing server playlist.
     /// OpenSubsonic/Subsonic use repeated `songIdToAdd` parameters.
     pub async fn update_playlist_add(&self, id: &str, song_ids: &[String]) -> Result<()> {

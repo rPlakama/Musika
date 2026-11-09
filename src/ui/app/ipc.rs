@@ -64,6 +64,7 @@ impl AppRoot {
                 let current = self.player.current().map(|track| track.id.clone());
                 self.bridge.playlist_remove(targets, playlist, current)
             }
+            IpcCommand::PlaylistDelete { playlist } => self.bridge.delete_playlist(playlist),
             IpcCommand::RadioSave { offline } => {
                 let radio = self.page.as_ref().and_then(|page| {
                     (page.descriptor.kind == state::PageKind::Radio).then(|| {

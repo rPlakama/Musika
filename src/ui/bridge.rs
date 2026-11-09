@@ -53,6 +53,11 @@ pub enum Event {
         end: usize,
         rows: Vec<(String, String)>,
     },
+    PlaylistDeleted {
+        id: String,
+        name: String,
+        error: Option<String>,
+    },
     PlaylistSaved {
         name: String,
         offline: bool,

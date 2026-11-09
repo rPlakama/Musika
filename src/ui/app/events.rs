@@ -623,6 +623,35 @@ impl AppRoot {
                     self.bridge.load_page(descriptor);
                 }
             }
+            Event::PlaylistDeleted { id, name, error } => {
+                if let Some(error) = error {
+                    self.push_toast(
+                        format!("Could not delete playlist “{name}”: {error}"),
+                        ToastKind::Error,
+                        None,
+                    );
+                } else {
+                    self.push_toast(
+                        format!("Deleted playlist “{name}”"),
+                        ToastKind::Notice,
+                        None,
+                    );
+                    if self
+                        .page
+                        .as_ref()
+                        .is_some_and(|page| {
+                            page.descriptor.kind == PageKind::Playlist
+                                && page.descriptor.id == id
+                        })
+                    {
+                        self.page = None;
+                        self.travel.clear();
+                    }
+                    if self.view.scope == Scope::Playlists {
+                        self.reload();
+                    }
+                }
+            }
             Event::AccountRemoved { label, next } => {
                 if next.is_some() {
                     self.reset_for_account();

@@ -173,6 +173,32 @@ impl Bridge {
 }
 
 impl Bridge {
+    /// Delete a whole playlist (local M3U file or server playlist).
+    pub fn delete_playlist(&self, playlist: String) {
+        let tx = self.tx.clone();
+        crate::app::runtime().spawn(async move {
+            let Some(dbs) = crate::app::dbs() else { return };
+            match crate::playlists::delete_playlist(&dbs, &playlist).await {
+                Ok((id, name)) => {
+                    let _ = tx.send(Event::PlaylistDeleted {
+                        id,
+                        name,
+                        error: None,
+                    });
+                }
+                Err(err) => {
+                    let _ = tx.send(Event::PlaylistDeleted {
+                        id: String::new(),
+                        name: playlist,
+                        error: Some(format!("{err:#}")),
+                    });
+                }
+            }
+        });
+    }
+}
+
+impl Bridge {
     /// Paste the row clipboard into a playlist page at `position` (the row
     /// below/above the cursor). Resolves every clipboard id to its songs
     /// (album/artist expand), then inserts the song ids.

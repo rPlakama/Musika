@@ -1176,6 +1176,32 @@ async fn append_local_m3u(dbs: &Dbs, path: &Path, song_ids: &[String]) -> Result
     Ok(())
 }
 
+/// Delete a whole playlist (local M3U file or server playlist). Returns the
+/// resolved id and display name.
+pub async fn delete_playlist(dbs: &Dbs, playlist_query: &str) -> Result<(String, String)> {
+    let playlist = resolve_playlist(dbs, playlist_query).await?;
+    let name = display_playlist_name(&playlist.name);
+    if playlist.source == "m3u" {
+        let path = local_playlist_path(&playlist)?;
+        std::fs::remove_file(&path)
+            .with_context(|| format!("removing the playlist file {}", path.display()))?;
+        let dir = path.parent().unwrap_or(Path::new("."));
+        scan_dir(dbs, dir).await?;
+    } else {
+        let client = crate::session::client(dbs)
+            .await
+            .context("deleting a server playlist needs a signed-in server")?;
+        client
+            .delete_playlist(&playlist.id)
+            .await
+            .context("deleting the server playlist")?;
+        refresh_subsonic(dbs, &client)
+            .await
+            .context("refreshing the server playlist list")?;
+    }
+    Ok((playlist.id, name))
+}
+
 /// Insert already-resolved song ids at a playlist position (the playlist page
 /// `p`/`P` path). Local M3U files keep unresolved neighbours; server playlists
 /// are rebuilt in order because `updatePlaylist` has no insert-position call.

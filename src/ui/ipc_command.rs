@@ -45,6 +45,9 @@ pub enum IpcCommand {
         targets: Vec<String>,
         playlist: String,
     },
+    PlaylistDelete {
+        playlist: String,
+    },
     Shuffle {
         target: ShuffleTarget,
     },
@@ -287,7 +290,7 @@ pub const COMMANDS: &[CommandSpec] = &[
     CommandSpec {
         name: "playlist",
         usage: "playlist <create|add|rm> ...",
-        description: "Create a playlist, add targets or remove them (playlist <add|rm> <target...>; <name>)",
+        description: "Create, add/remove targets or delete a playlist (playlist rm <target...>; <name>, playlist rm <name>)",
         args: ArgSpec::Enum(&["create", "add", "rm"]),
     },
     CommandSpec {
@@ -1161,6 +1164,13 @@ fn parse_playlist(rest: &str) -> Result<IpcCommand, CommandError> {
                 .map(|value| value.trim().to_string())
                 .filter(|value| !value.is_empty())
                 .collect();
+            // `playlist rm <name>` with no target list deletes the playlist
+            // itself; the legacy two-argument form below keeps removing songs.
+            if subcommand == "rm" && playlist_tail.is_none() && targets.len() == 1 {
+                return Ok(IpcCommand::PlaylistDelete {
+                    playlist: targets.pop().unwrap_or_default(),
+                });
+            }
             let playlist = if let Some(tail) = playlist_tail {
                 let values = split_quoted_args(tail)?;
                 values.join(" ").trim().trim_matches(',').trim().to_string()
@@ -1264,6 +1274,7 @@ pub fn canonical_string(command: &IpcCommand) -> String {
             out.push_str(&quote_arg(playlist));
             out
         }
+        PlaylistDelete { playlist } => format!("playlist rm {}", quote_arg(playlist)),
         PlaylistRemove { targets, playlist } => {
             let mut out = String::from("playlist rm");
             for target in targets {

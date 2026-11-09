@@ -1325,3 +1325,129 @@ async fn insert_song_ids_at_rebuilds_a_server_playlist_order() {
     assert!(s1 < s3 && s3 < s2, "new order: {added}");
     assert!(requests.iter().any(|request| request.contains("getPlaylist.view")));
 }
+
+/// `playlist rm <name>` deletes a local M3U file and purges its row.
+#[tokio::test]
+async fn delete_playlist_removes_a_local_file_and_its_row() {
+    let _guard = PLAYLIST_FOLDER_LOCK.lock().await;
+    let library = memory_pool().await;
+    sqlx::migrate!("./migrations_library")
+        .run(&library)
+        .await
+        .unwrap();
+    let playlist = memory_pool().await;
+    sqlx::migrate!("./migrations_playlist")
+        .run(&playlist)
+        .await
+        .unwrap();
+    let dbs = test_dbs(&library, &playlist);
+    let root = std::env::temp_dir().join(format!("musika-delpl-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    crate::db::set_data_root(root.clone());
+
+    let path = create_local(&dbs, "Delete Me", &["s1".into()])
+        .await
+        .unwrap();
+    assert!(path.exists());
+    let (id, name) = delete_playlist(&dbs, "Delete Me").await.unwrap();
+    assert_eq!(name, "Delete Me");
+    assert!(!id.is_empty());
+    assert!(!path.exists(), "the M3U file is removed");
+    let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM playlist")
+        .fetch_one(&playlist)
+        .await
+        .unwrap();
+    assert_eq!(count, 0, "the scanned playlist row is gone");
+    assert!(delete_playlist(&dbs, "Delete Me").await.is_err());
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
+/// Server playlist deletion calls deletePlaylist and refreshes the list.
+#[tokio::test]
+async fn delete_playlist_removes_a_server_playlist() {
+    use std::io::{Read, Write};
+    use std::time::{Duration, Instant};
+
+    let credentials = memory_pool().await;
+    sqlx::migrate!("./migrations")
+        .run(&credentials)
+        .await
+        .unwrap();
+    crate::crypto::use_test_key();
+
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind loopback");
+    let addr = listener.local_addr().expect("local addr");
+    listener.set_nonblocking(true).unwrap();
+    let server = std::thread::spawn(move || {
+        let mut requests: Vec<String> = Vec::new();
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while requests.len() < 2 && Instant::now() < deadline {
+            let (mut socket, _) = match listener.accept() {
+                Ok(pair) => pair,
+                Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {
+                    std::thread::sleep(Duration::from_millis(10));
+                    continue;
+                }
+                Err(_) => break,
+            };
+            socket.set_read_timeout(Some(Duration::from_secs(5))).ok();
+            let mut buffer = [0u8; 8192];
+            let read = socket.read(&mut buffer).unwrap_or(0);
+            let request = String::from_utf8_lossy(&buffer[..read]).to_string();
+            let body = if request.contains("getPlaylists.view") {
+                r#"{"subsonic-response":{"status":"ok","version":"1.16.1","playlists":{"playlist":[]}}}"#
+            } else {
+                r#"{"subsonic-response":{"status":"ok","version":"1.16.1"}}"#
+            };
+            let head = format!(
+                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nContent-Type: application/json\r\nConnection: close\r\n\r\n",
+                body.len()
+            );
+            socket.write_all(head.as_bytes()).expect("head");
+            socket.write_all(body.as_bytes()).expect("body");
+            socket.flush().expect("flush");
+            requests.push(request);
+        }
+        requests
+    });
+
+    let server_url = format!("http://{addr}");
+    crate::sqlite::save_credentials(&credentials, "alice", "secret", &server_url, "navidrome")
+        .await
+        .unwrap();
+
+    let library = memory_pool().await;
+    let playlist = memory_pool().await;
+    sqlx::migrate!("./migrations_playlist")
+        .run(&playlist)
+        .await
+        .unwrap();
+    sqlx::query(
+        "INSERT INTO playlist (id, source, name, song_count, fetched_at)
+         VALUES ('pl1', 'subsonic', 'Gone', 2, 0)",
+    )
+    .execute(&playlist)
+    .await
+    .unwrap();
+    let dbs = test_dbs_with_credentials(&credentials, &library, &playlist);
+
+    let (id, name) = delete_playlist(&dbs, "pl1").await.unwrap();
+    assert_eq!((id.as_str(), name.as_str()), ("pl1", "Gone"));
+    let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM playlist")
+        .fetch_one(&playlist)
+        .await
+        .unwrap();
+    assert_eq!(count, 0, "the refreshed list purges the deleted playlist");
+
+    let requests = server.join().expect("server thread");
+    assert!(
+        requests.iter().any(|request| request.contains("deletePlaylist.view")),
+        "{requests:?}"
+    );
+    assert!(
+        requests.iter().any(|request| request.contains("getPlaylists.view")),
+        "{requests:?}"
+    );
+}

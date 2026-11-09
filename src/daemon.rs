@@ -44,6 +44,10 @@ enum UiStateEvent {
 }
 
 pub fn run() -> ! {
+    let Some(_instance_lock) = acquire_instance_lock() else {
+        eprintln!("musika: the core daemon is already running");
+        std::process::exit(0);
+    };
     if crate::ipc::daemon_is_running() {
         eprintln!("musika: the core daemon is already running");
         std::process::exit(0);
@@ -53,6 +57,26 @@ pub fn run() -> ! {
     }
     crate::app::runtime().block_on(run_async());
     std::process::exit(0)
+}
+
+/// Single-instance lock. The socket probe alone has a launch race: two
+/// simultaneous `musika` invocations could both decide to spawn a daemon and
+/// the second would unlink the live UI socket. The flock is held for the
+/// daemon's whole lifetime.
+fn acquire_instance_lock() -> Option<std::fs::File> {
+    use std::os::fd::AsRawFd;
+    let dir = crate::db::config_dir().ok()?;
+    let _ = std::fs::create_dir_all(&dir);
+    let path = dir.join("daemon.lock");
+    let file = std::fs::OpenOptions::new()
+        .create(true)
+        .read(true)
+        .write(true)
+        .open(path)
+        .ok()?;
+    // SAFETY: flock only borrows the valid file descriptor.
+    let locked = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
+    (locked == 0).then_some(file)
 }
 
 async fn run_async() {

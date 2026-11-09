@@ -57,13 +57,17 @@
           pkgs.makeWrapper
           pkgs.librsvg # rsvg-convert for the hicolor PNG sizes
           pkgs.desktop-file-utils # desktop-file-validate
+          pkgs.llvmPackages.clang
+          pkgs.llvmPackages.libclang
         ];
+
+        # pipewire-sys/ffmpeg-sys-next generate bindings with bindgen.
+        LIBCLANG_PATH = "${pkgs.llvmPackages.libclang.lib}/lib";
 
         buildInputs = [
           pkgs.openssl
           pkgs.pipewire
           pkgs.ffmpeg
-          pkgs.liburing
           pkgs.sqlite
           pkgs.libglvnd
           # GPUI display/font/Vulkan dependencies.
@@ -157,7 +161,11 @@
       devShells.${system}.default = pkgs.mkShell {
         nativeBuildInputs = with pkgs; [
           pkg-config
+          llvmPackages.clang
+          llvmPackages.libclang
         ];
+
+        LIBCLANG_PATH = "${pkgs.llvmPackages.libclang.lib}/lib";
 
         # Should be a proper way to organize this, perhaps when in build time to actually adjust
         # the shell, since it exposes all, in case which can, or cannot, be used at all.
@@ -170,7 +178,6 @@
           sqls
           rustfmt
           libglvnd
-          liburing
           pipewire
           ffmpeg
           openssl

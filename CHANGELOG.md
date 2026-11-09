@@ -5,6 +5,15 @@ open work; this file is the release history.
 
 ## Unreleased
 
+- Replace the first-party playback C with Rust: the FFmpeg decode/resample
+  orchestration, PipeWire stream/process callback, PCM ring and io_uring batch
+  reader now live in Rust (`src/player/pipewire/`, `src/io_uring_read.rs`).
+  The sink wakes its producer with an eventfd instead of a 1 ms sleep-poll, the
+  decode and preload workers live for the whole transport (no thread-per-track
+  or `malloc_trim` churn), predecode arms early and for unknown-duration streams,
+  and the gapless track/position boundary now follows frames actually played by
+  the sink. System PipeWire/FFmpeg remain the external C libraries; no Musika
+  C source is compiled. See docs/Playback.md.
 - Split Musika into a headless core daemon (`musika`) and a disposable GPUI
   child (`musika-ui`): databases, playback, sync, MPRIS, the external IPC socket
   and the StatusNotifierItem tray live in the core; the window is a child that

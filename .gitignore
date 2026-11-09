@@ -11,6 +11,7 @@ noctalia/
 !docs/Keybinds.md
 !docs/Commands.md
 !docs/Daemon.md
+!docs/Playback.md
 DankMaterialShell/
 
 # Runtime databases (never tracked; the app creates them under ~/.config/musika)

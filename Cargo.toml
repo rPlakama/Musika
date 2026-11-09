@@ -26,18 +26,24 @@ sqlx = { version = "0.9", features = [ "sqlite", "runtime-tokio" ] }
 tokio = { version = "1.53.2", features = [ "rt", "macros", "rt-multi-thread", "fs", "io-util", "net", "sync", "time" ] }
 zbus = { version = "5", default-features = false, features = ["tokio"] }
 
+# Rust-owned audio engine (system PipeWire/FFmpeg libraries via Rust bindings).
+pipewire = { version = "0.10.1", features = ["v0_3_50"] }
+ffmpeg-next = { version = "9.0.0", default-features = false, features = [
+  "format",
+  "codec",
+  "software-resampling",
+] }
+io-uring = { version = "0.7", optional = true }
+
 # GPUI (Zed): hybrid immediate/retained, GPU-accelerated UI framework.
 libc = "0.2"
 gpui = { version = "0.2.2", optional = true, default-features = false, features = ["wayland", "x11", "font-kit"] }
 
 [features]
 default = ["gpuui"]
-io-uring = []
+io-uring = ["dep:io-uring"]
 # GPUI port (gpui.rs): opt-in front end on the same backend.
 gpuui = ["dep:gpui"]
-
-[build-dependencies]
-cc = "1"
 
 # GPUI 0.2.2 pulls zed-async-tar -> xattr 0.2.3, which references the
 # macOS-only libc::ENOATTR on Linux. Vendored one-line ENODATA shim until a

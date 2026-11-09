@@ -14,7 +14,7 @@ Musika is a Keyboard driven Navidrome/Subsonic Client made with AI assistance. W
 
 3 - Search -- `/` searches the surface in front of you (literal, smartcase, viewport-scoped) with in-place match blocks and `[i/N]` counts; Enter jumps, Esc abandons. The global overlay uses a hybrid search (ARC-SEARCH): the in-process Nucleo fuzzy index answers first, and SQLite FTS5 fills any column that comes back short. `MUSIKA_SEARCH_ENGINE=nucleo` or `fts` pins one engine. The fuzzy catalog is held to a memory budget (`MUSIKA_SEARCH_INDEX_BUDGET_MIB`, 64 MiB by default); a library past it is searched by FTS instead, and `0` restores the old unlimited catalog.
 
-4 - Playback -- a native libpipewire sink and raw FFmpeg decoder FFI drive playback: queue order, repeat, seek/volume, native MPRIS, stream-error advance, and synced lyrics (OpenSubsonic) that ride the shared scroll body. The current track is buffered in memory before decoding, so streaming seeks stay in RAM instead of reconnecting to the server.
+4 - Playback -- a Rust-owned audio engine drives playback through PipeWire and FFmpeg bindings: queue order, repeat, seek/volume, MPRIS, stream-error advance, gapless predecode and synced lyrics (OpenSubsonic) that ride the shared scroll body. The decoder streams through FFmpeg's URL AVIO with a 32 MiB read-ahead; the sink uses an eventfd-backed PCM ring, so there is no first-party C in the playback path.
 
 5 - Covers, lyrics and palettes are each cached in their own DB and purged on sync — nothing derived is fetched twice.
 
@@ -32,7 +32,7 @@ musika        core daemon: databases, native audio, library/network/sync,
 
 Closing the window leaves `musika` playing in the tray; running `musika` again
 (or left-clicking the tray icon) reopens a window against the live queue and
-page. `qq` at Home is the true quit. See [docs/Daemon.md](docs/Daemon.md) for
+page. `qq` at Home is the true quit. See [docs/Daemon.md](docs/Daemon.md) and [docs/Playback.md](docs/Playback.md) for
 the process lifecycle, sockets and systemd sample.
 
 # Installation

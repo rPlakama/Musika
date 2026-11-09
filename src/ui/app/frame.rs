@@ -52,13 +52,29 @@ impl AppRoot {
         .detach();
     }
 
-    /// What can move right now. Extended by the toast/marquee/spinner tasks.
+    /// What can move right now.
     fn frame_demand(&self) -> perf::Demand {
+        let inactive = !perf::window_active();
+        // Toasts use the animation clock for `created_at`; compare on the same
+        // origin. The fade starts at age 6.0 s and the toast is removed at 6.32.
+        let now = self.clock.peek();
+        let mut fade_in: Option<f64> = None;
+        if !inactive {
+            for toast in &self.toasts {
+                let age = now - toast.created_at;
+                if age < 6.0 {
+                    let remaining = 6.0 - age;
+                    fade_in = Some(fade_in.map_or(remaining, |current: f64| current.min(remaining)));
+                }
+            }
+        }
         perf::Demand {
             playing: self.player.state() == crate::player::State::Playing,
-            inactive: !perf::window_active(),
+            inactive,
             loading: self.player.is_loading(),
             syncing: self.syncing,
+            toast_active: !self.toasts.is_empty(),
+            toast_fade_in: fade_in,
             marquee_at: perf::marquee_deadline(),
         }
     }

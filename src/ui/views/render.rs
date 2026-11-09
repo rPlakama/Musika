@@ -222,11 +222,13 @@ impl Render for AppRoot {
         });
         self.toasts
             .retain(|toast| self.clock.now - toast.created_at < 6.320);
-        if self
-            .toasts
-            .iter()
-            .any(|toast| self.clock.now - toast.created_at < 6.320)
-        {
+        // The 6 s hold has no visual change: only the fade windows need a
+        // frame chain. The ticker wakes exactly at the 6.0 s boundary.
+        let fading = self.toasts.iter().any(|toast| {
+            let age = self.clock.now - toast.created_at;
+            age < 0.120 || age >= 6.0
+        });
+        if fading {
             perf::request_frame(window, "toast");
         }
         let toast_overlay = (!self.toasts.is_empty()).then(|| self.toast_overlay(&*cx));

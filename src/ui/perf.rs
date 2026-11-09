@@ -231,6 +231,10 @@ pub(crate) struct Demand {
     pub loading: bool,
     /// A library sync is running: the sync spinner/progress moves.
     pub syncing: bool,
+    /// At least one toast is on screen (forces an edge render on create/expiry).
+    pub toast_active: bool,
+    /// Seconds until the next toast fade starts (the 6 s hold end).
+    pub toast_fade_in: Option<f64>,
     /// Next time a marquee needs a frame (perf clock, seconds), if any.
     pub marquee_at: Option<f64>,
 }
@@ -277,6 +281,18 @@ pub(crate) fn decide(now: f64, demand: Demand, last_notify: f64) -> Decision {
     const EPSILON: f64 = 1e-9;
     let mut notify = interval.is_some_and(|interval| now - last_notify + EPSILON >= interval);
 
+    // A toast holds for 6 s with no visual change; wake exactly when its fade
+    // starts instead of rendering the whole hold.
+    if let Some(remaining) = demand.toast_fade_in {
+        if remaining <= 0.0 {
+            notify = true;
+            sleep_ms = sleep_ms.min(5);
+        } else if !demand.inactive {
+            let wake = ((remaining * 1000.0).ceil() as u64).max(5);
+            sleep_ms = sleep_ms.min(wake);
+        }
+    }
+
     // A marquee wake is exact: sleep until the next travel/pause boundary
     // instead of spinning at 30 Hz through a static hold.
     if let Some(at) = demand.marquee_at {
@@ -311,6 +327,7 @@ pub(crate) fn demand_flags(demand: &Demand) -> u8 {
         | (demand.syncing as u8) << 2
         | (demand.inactive as u8) << 3
         | (demand.marquee_at.is_some() as u8) << 4
+        | (demand.toast_active as u8) << 5
 }
 
 /// Returns true when a source turned on or off since the previous call, so the
@@ -459,6 +476,36 @@ mod tests {
             ..Demand::default()
         };
         assert_eq!(decide(1.0, inactive, 0.0).sleep_ms, MAX_SLEEP_MS);
+    }
+
+    #[test]
+    fn toast_hold_sleeps_until_its_fade() {
+        let holding = Demand {
+            toast_active: true,
+            toast_fade_in: Some(2.0),
+            ..Demand::default()
+        };
+        let decision = decide(1.0, holding, 0.9);
+        assert!(!decision.notify);
+        assert_eq!(decision.sleep_ms, MAX_SLEEP_MS);
+        let near = Demand {
+            toast_fade_in: Some(0.12),
+            ..holding
+        };
+        assert_eq!(decide(1.0, near, 0.9).sleep_ms, 120);
+        let due = Demand {
+            toast_fade_in: Some(0.0),
+            ..holding
+        };
+        let decision = decide(1.0, due, 0.9);
+        assert!(decision.notify);
+        assert_eq!(decision.sleep_ms, 5);
+        // Inactive windows do not chase the fade.
+        let inactive = Demand {
+            inactive: true,
+            ..near
+        };
+        assert_eq!(decide(1.0, inactive, 0.9).sleep_ms, MAX_SLEEP_MS);
     }
 
     #[test]

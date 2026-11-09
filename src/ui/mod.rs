@@ -640,6 +640,9 @@ struct AppRoot {
     /// In-app row clipboard (VI-8a): kind + ids in yank order, duplicates kept.
     clipboard_kind: Option<RowKind>,
     clipboard_ids: Vec<String>,
+    /// Clipboard taken by an in-flight paste; restored only if that paste
+    /// fails and nothing newer was yanked meanwhile.
+    paste_backup: Option<(RowKind, Vec<String>)>,
     last_player_index: usize,
     visuals: Visuals,
     image_cache: gpui::Entity<gpui::RetainAllImageCache>,
@@ -791,6 +794,7 @@ impl AppRoot {
             queue_selection: state::Selection::default(),
             clipboard_kind: None,
             clipboard_ids: Vec::new(),
+            paste_backup: None,
             last_player_index: 0,
             visuals: Visuals::default(),
             image_cache: gpui::RetainAllImageCache::new(cx),

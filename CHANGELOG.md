@@ -11,6 +11,9 @@ open work; this file is the release history.
   expand to their tracks, matching Add-to-Queue), landing the cursor on the
   first pasted track. A selection on the queue makes `d d` remove the whole
   range, matching the documented behavior.
+- **One-shot paste:** pasting consumes the row clipboard, so the same yanked
+  rows cannot be pasted repeatedly and duplicate the queue/playlist. Yank
+  again to paste again; a failed paste restores the clipboard for a retry.
 - **Playlist row editing:** on a playlist page `d d` deletes the selected rows
   or cursor row (exact local-M3U positions, `songIdToRemove` for server
   playlists), and `p`/`P` append the yanked rows to the playlist. Both paths

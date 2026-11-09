@@ -40,7 +40,7 @@ work, including the command line.
 | `v` / `V` | Toggle visual selection / select all rows |
 | `Shift-↑` `Shift-↓` `Shift-←` `Shift-→` | Extend the visual selection |
 | `y` / `Y` | Yank the visual range (or cursor row) / the cursor row |
-| `p` / `P` | Paste the row clipboard below / above the queue cursor; on a playlist page, append the yanked rows |
+| `p` / `P` | Paste the row clipboard below / above the queue cursor; on a playlist page, append the yanked rows (paste consumes the clipboard — yank again to paste again) |
 | `Ctrl-V` | Paste text into the focused search field |
 | `Enter` | Open/play the row, confirm, or use the focused control |
 | `Tab` / `Shift-Tab` | Walk panes, header stops and status-bar actions |

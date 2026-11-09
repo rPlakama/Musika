@@ -296,6 +296,7 @@ impl AppRoot {
                 self.player.append(tracks);
             }
             Event::QueuePaste { tracks, at } => {
+                self.paste_backup = None;
                 if tracks.is_empty() {
                     return;
                 }
@@ -524,6 +525,17 @@ impl AppRoot {
                 error,
             } => {
                 let failed = error.is_some();
+                if !failed && !removed && rows > 0 {
+                    self.paste_backup = None;
+                }
+                if failed
+                    && self.clipboard_kind.is_none()
+                    && self.clipboard_ids.is_empty()
+                    && let Some((kind, ids)) = self.paste_backup.take()
+                {
+                    self.clipboard_kind = Some(kind);
+                    self.clipboard_ids = ids;
+                }
                 let verb = if removed {
                     "remove from"
                 } else if created {
@@ -711,6 +723,13 @@ impl AppRoot {
                 }
             }
             Event::Error(message) => {
+                if self.clipboard_kind.is_none()
+                    && self.clipboard_ids.is_empty()
+                    && let Some((kind, ids)) = self.paste_backup.take()
+                {
+                    self.clipboard_kind = Some(kind);
+                    self.clipboard_ids = ids;
+                }
                 self.finish_sync();
                 let reconcile = self
                     .page
@@ -781,6 +800,7 @@ impl AppRoot {
         self.queue_selection.clear();
         self.clipboard_kind = None;
         self.clipboard_ids.clear();
+        self.paste_backup = None;
         self.visual_mode = false;
         self.fullscreen = false;
         self.fullscreen_anim = anim::Behavior::new(0.0);

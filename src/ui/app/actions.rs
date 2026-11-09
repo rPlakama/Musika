@@ -422,46 +422,49 @@ impl AppRoot {
             return;
         }
         let Some(kind) = self.clipboard_kind else {
-            self.push_toast(
-                "Row clipboard is empty".to_string(),
-                ToastKind::Notice,
-                None,
-            );
-            cx.notify();
             return;
         };
         let Some(kind_str) = kind.queue_kind() else {
             return;
         };
-        let ids = self.clipboard_ids.clone();
+        let ids = std::mem::take(&mut self.clipboard_ids);
         if ids.is_empty() {
-            self.push_toast(
-                "Row clipboard is empty".to_string(),
-                ToastKind::Notice,
-                None,
-            );
-            cx.notify();
+            self.clipboard_kind = None;
             return;
         }
-        if self.queue_open {
-            let at = paste_at(self.queue_cursor, above);
-            self.queue_selection.clear();
-            self.visual_mode = false;
-            self.bridge.paste_queue(kind_str.to_string(), ids, at);
-        } else if let Some(playlist_id) = self
-            .page
-            .as_ref()
-            .filter(|page| page.descriptor.kind == PageKind::Playlist)
-            .map(|page| page.descriptor.id.clone())
-        {
-            self.bridge
-                .paste_playlist(playlist_id, kind_str.to_string(), ids);
+        let target = if self.queue_open {
+            Some(PasteTarget::Queue(paste_at(self.queue_cursor, above)))
         } else {
+            self.page
+                .as_ref()
+                .filter(|page| page.descriptor.kind == PageKind::Playlist)
+                .map(|page| PasteTarget::Playlist(page.descriptor.id.clone()))
+        };
+        let Some(target) = target else {
+            // No valid target: keep the clipboard for the next attempt.
+            self.clipboard_ids = ids;
             self.push_toast(
                 "Open the queue or a playlist page to paste".to_string(),
                 ToastKind::Notice,
                 None,
             );
+            cx.notify();
+            return;
+        };
+        // One-shot clipboard: the same yanked rows cannot be pasted twice.
+        // Keep a backup so a failed paste can restore it (Event::Error).
+        self.clipboard_kind = None;
+        self.paste_backup = Some((kind, ids.clone()));
+        match target {
+            PasteTarget::Queue(at) => {
+                self.queue_selection.clear();
+                self.visual_mode = false;
+                self.bridge.paste_queue(kind_str.to_string(), ids, at);
+            }
+            PasteTarget::Playlist(playlist_id) => {
+                self.bridge
+                    .paste_playlist(playlist_id, kind_str.to_string(), ids);
+            }
         }
         cx.notify();
     }
@@ -1066,6 +1069,11 @@ impl AppRoot {
         let step = self.description_viewport() * DESCRIPTION_PAGE_RATIO;
         self.scroll_description(if down { step } else { -step });
     }
+}
+
+enum PasteTarget {
+    Queue(usize),
+    Playlist(String),
 }
 
 /// Collect clipboard ids from already-materialized rows. The first supported

@@ -713,6 +713,7 @@ impl AppRoot {
         self.generation = 0;
         self.page = None;
         self.page_generation = 0;
+        self.travel.clear();
         self.search = None;
         self.search_open = false;
         self.search_loading_since = None;

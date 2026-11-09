@@ -531,7 +531,12 @@ impl AppRoot {
                 self.bridge.load_page(descriptor);
                 self.follow_page(false);
             }
-            None => self.page = None,
+            None => {
+                self.page = None;
+                // Arriving Home ends the travel session; a later page must not
+                // inherit places from before the trip to Home.
+                self.travel.clear();
+            }
         }
     }
 

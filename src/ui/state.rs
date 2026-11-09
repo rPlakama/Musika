@@ -506,6 +506,12 @@ impl Travel {
         self.position = self.places.len().saturating_sub(1);
     }
 
+    /// Ends the travel session (arriving at Home starts a fresh one).
+    pub fn clear(&mut self) {
+        self.places.clear();
+        self.position = 0;
+    }
+
     pub fn back(&mut self) -> Option<PageDescriptor> {
         if self.position == 0 {
             return None;
@@ -581,6 +587,21 @@ mod page_tests {
         page.rebuild_covers();
         assert_eq!(page.covers.len(), 3);
         assert!(page.cover(3).is_none());
+    }
+
+    #[test]
+    fn home_clear_prevents_stale_back_targets() {
+        let a = PageDescriptor::new(PageKind::Album, "a");
+        let b = PageDescriptor::new(PageKind::Album, "b");
+        let mut travel = Travel::default();
+        travel.open(a.clone());
+        // Back from A reaches Home (no entry); the app then clears the log.
+        assert!(travel.back().is_none());
+        travel.clear();
+        travel.open(b);
+        // Back from B must reach Home, not the previous session's A.
+        assert!(travel.back().is_none());
+        assert_eq!(travel.places.len(), 1);
     }
 
     #[test]

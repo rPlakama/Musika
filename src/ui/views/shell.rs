@@ -13,19 +13,25 @@ impl AppRoot {
         let slot = action.slot();
         let focused = self.status_focus == Some(slot);
         let (icon_el, opacity) = match action {
-            TopBarAction::Sync => (
-                icon_rotated(
-                    "loading-loop.svg",
-                    18.0,
-                    if self.syncing {
-                        palette::on_surface_variant()
-                    } else {
-                        palette::on_surface()
-                    },
-                    self.sync_angle(),
-                ),
-                if self.syncing { 0.38 } else { 0.85 },
-            ),
+            TopBarAction::Sync => {
+                // The spinner is a sync-in-progress affordance only: it spins
+                // while the sync runs (and while the settle bounce finishes),
+                // then retracts to the static sync glyph.
+                let color = if self.syncing {
+                    palette::on_surface_variant()
+                } else {
+                    palette::on_surface()
+                };
+                let opacity = if self.syncing { 0.38 } else { 0.85 };
+                if self.syncing || !self.sync_settle.settled(&self.clock) {
+                    (
+                        icon_rotated("loading-loop.svg", 18.0, color, self.sync_angle()),
+                        opacity,
+                    )
+                } else {
+                    (icon("reload-ui-2-svgrepo-com.svg", 18.0, color), opacity)
+                }
+            }
             TopBarAction::Wipe => (icon("delete-outline.svg", 18.0, palette::on_surface()), 1.0),
             TopBarAction::Download => {
                 let cached = page.is_some_and(|page| page.cached);

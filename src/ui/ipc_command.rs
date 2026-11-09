@@ -1164,12 +1164,21 @@ fn parse_playlist(rest: &str) -> Result<IpcCommand, CommandError> {
                 .map(|value| value.trim().to_string())
                 .filter(|value| !value.is_empty())
                 .collect();
-            // `playlist rm <name>` with no target list deletes the playlist
-            // itself; the legacy two-argument form below keeps removing songs.
-            if subcommand == "rm" && playlist_tail.is_none() && targets.len() == 1 {
-                return Ok(IpcCommand::PlaylistDelete {
-                    playlist: targets.pop().unwrap_or_default(),
-                });
+            // `playlist rm ; <playlist>` (an explicit cutoff with no targets)
+            // deletes the playlist itself. The `;` is also what switches the
+            // command-line suggestions to playlist names.
+            if subcommand == "rm"
+                && targets.is_empty()
+                && let Some(tail) = playlist_tail
+            {
+                let values = split_quoted_args(tail)?;
+                let playlist = values.join(" ").trim().trim_matches(',').trim().to_string();
+                if playlist.is_empty() {
+                    return Err(CommandError(
+                        "usage: playlist rm; <playlist>".to_string(),
+                    ));
+                }
+                return Ok(IpcCommand::PlaylistDelete { playlist });
             }
             let playlist = if let Some(tail) = playlist_tail {
                 let values = split_quoted_args(tail)?;
@@ -1274,7 +1283,7 @@ pub fn canonical_string(command: &IpcCommand) -> String {
             out.push_str(&quote_arg(playlist));
             out
         }
-        PlaylistDelete { playlist } => format!("playlist rm {}", quote_arg(playlist)),
+        PlaylistDelete { playlist } => format!("playlist rm; {}", quote_arg(playlist)),
         PlaylistRemove { targets, playlist } => {
             let mut out = String::from("playlist rm");
             for target in targets {
@@ -1985,6 +1994,29 @@ mod tests {
         let suggestions = suggestions_with(input, input.len(), &context);
         assert!(suggestions.iter().any(|s| s.label == "Road Trip"));
         assert!(!suggestions.iter().any(|s| s.label == "current"));
+    }
+
+    #[test]
+    fn playlist_rm_semicolon_asks_for_playlist_name_suggestions() {
+        let context = SuggestionContext {
+            current: None,
+            rows: vec![ContextRow {
+                kind: "playlist",
+                id: "p1".into(),
+                title: "Soft Songs".into(),
+                subtitle: "Playlist · 6 songs".into(),
+            }],
+        };
+        let input = "playlist rm ; ";
+        let request = suggestion_request(input, input.len()).expect("playlist scope");
+        assert_eq!(request.scope, SuggestScope::Playlist);
+        assert_eq!(request.query, "");
+        let suggestions = suggestions_with(input, input.len(), &context);
+        assert!(suggestions.iter().any(|s| s.label == "Soft Songs"));
+        assert!(
+            !suggestions.iter().any(|s| s.label == "current"),
+            "deleting a playlist does not offer the current-track target"
+        );
     }
 
     #[test]

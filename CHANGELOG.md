@@ -5,11 +5,13 @@ open work; this file is the release history.
 
 ## Unreleased
 
-- **Delete playlists:** `playlist rm <playlist>` (no target list) now deletes a
-  whole playlist — the local M3U file is removed and rescanned, server
-  playlists use `deletePlaylist` + list refresh. A deleted playlist's open page
-  closes, the Playlists scope reloads and a “Deleted playlist” toast is shown.
-  The target form (`playlist rm <target...>; <playlist>`) still removes songs.
+- **Delete playlists:** `playlist rm; <playlist>` (an explicit cutoff with no
+  targets) deletes a whole playlist — the `;` declares the playlist part and
+  switches command-line suggestions to playlist names. Local M3U files are
+  removed and rescanned, server playlists use `deletePlaylist` + list refresh.
+  A deleted playlist's open page closes, the Playlists scope reloads and a
+  “Deleted playlist” toast is shown. The target form
+  (`playlist rm <target...>; <playlist>`) still removes songs.
 - **Search scope reverse:** `Shift-Tab` now reliably moves to the previous
   search scope (including wrapping from Songs around to Playlists). Some
   platforms report Shift-Tab as `tab` with the shift modifier rather than

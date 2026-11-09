@@ -75,7 +75,7 @@ mpris_position:5000000
 | --- | --- |
 | `playlist create` | `playlist create <name> [--offline]` |
 | `playlist add` | `playlist add <target>...; <playlist>` |
-| `playlist rm` | `playlist rm <target>...; <playlist>` or `playlist rm <playlist>` |
+| `playlist rm` | `playlist rm <target>...; <playlist>` or `playlist rm; <playlist>` |
 
 `playlist create` creates a playlist containing the currently playing track.
 By default it is posted to the server; `--offline` writes only the account-local
@@ -117,10 +117,11 @@ with the server's `updatePlaylist` endpoint and refreshed afterwards. Local mix
 files use the sanitized origin/playlist name (`<name>.m3u`) and overwrite an
 existing mix of the same name instead of creating timestamped duplicates.
 
-`playlist rm <playlist>` (a single argument, no target list) deletes the whole
-playlist: local M3U files are removed and the folder rescanned, server
-playlists use `deletePlaylist` and refresh the list. The open playlist page
-closes and the Playlists scope reloads.
+`playlist rm; <playlist>` (the cutoff with no targets before it) deletes the
+whole playlist. The `;` is the declaration that what follows is a playlist, so
+the command line suggests playlist names after it. Local M3U files are removed
+and the folder rescanned; server playlists use `deletePlaylist` and refresh the
+list. The open playlist page closes and the Playlists scope reloads.
 
 `playlist rm` with targets mirrors `playlist add`: it accepts exactly the same targets
 (`current`, artist, album, track) and the same `;` cutoff / legacy grammar. M3U

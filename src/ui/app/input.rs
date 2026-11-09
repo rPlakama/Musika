@@ -111,6 +111,12 @@ impl AppRoot {
                     }
                     cx.notify();
                 }
+                // VI-8a: normal mode yanks the current scope; typing keeps y
+                // as ordinary text input.
+                "y" => {
+                    self.yank_search(shift);
+                    cx.notify();
+                }
                 "enter" => {
                     if let Some(search) = self.search.as_mut() {
                         search.selection.clear();

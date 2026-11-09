@@ -65,6 +65,18 @@ pub enum RowKind {
     Playlist,
 }
 
+impl RowKind {
+    /// The queue/track-clipboard kind string; playlists are not row-yankable.
+    pub fn queue_kind(self) -> Option<&'static str> {
+        match self {
+            Self::Song => Some("song"),
+            Self::Album => Some("album"),
+            Self::Artist => Some("artist"),
+            Self::Playlist => None,
+        }
+    }
+}
+
 /// Number of search results a scope can paint; also the backend query cap.
 pub const SEARCH_VISIBLE_ROWS: usize = 5;
 /// Rows requested from the backend; the overlay scrolls beyond the visible 5.
@@ -711,11 +723,37 @@ impl Selection {
             .map(|anchor| anchor.abs_diff(cursor) + 1)
             .unwrap_or(0)
     }
+
+    /// The inclusive indices this selection covers, ascending. `row_only`
+    /// and an inactive selection both mean just the cursor row.
+    pub fn indices(&self, cursor: usize, row_only: bool) -> Vec<usize> {
+        let Some(anchor) = self.anchor else {
+            return vec![cursor];
+        };
+        if row_only {
+            return vec![cursor];
+        }
+        let lo = anchor.min(cursor);
+        let hi = anchor.max(cursor);
+        (lo..=hi).collect()
+    }
 }
 
 #[cfg(test)]
 mod selection_tests {
     use super::*;
+
+    #[test]
+    fn selection_indices_are_ascending_and_row_only_short_circuits() {
+        let mut selection = Selection::default();
+        assert_eq!(selection.indices(7, false), vec![7]);
+        selection.start(5);
+        assert_eq!(selection.indices(8, false), vec![5, 6, 7, 8]);
+        assert_eq!(selection.indices(2, false), vec![2, 3, 4, 5]);
+        assert_eq!(selection.indices(8, true), vec![8]);
+        selection.clear();
+        assert_eq!(selection.indices(3, false), vec![3]);
+    }
 
     #[test]
     fn visual_range_tracks_both_cursor_directions() {

@@ -295,6 +295,22 @@ impl AppRoot {
             Event::QueueAppend { tracks } => {
                 self.player.append(tracks);
             }
+            Event::QueuePaste { tracks, at } => {
+                if tracks.is_empty() {
+                    return;
+                }
+                let count = tracks.len();
+                self.player.insert_many(at, tracks);
+                self.queue_cursor = at.min(self.player.len().saturating_sub(1));
+                self.queue_selection.clear();
+                self.visual_mode = false;
+                self.follow_queue(true);
+                self.push_toast(
+                    format!("Pasted {count} {}", if count == 1 { "track" } else { "tracks" }),
+                    ToastKind::Notice,
+                    None,
+                );
+            }
             Event::DownloadSettled => {
                 self.push_toast("Download updated.".to_string(), ToastKind::Notice, None);
                 self.marks.signature = None;
@@ -504,6 +520,7 @@ impl AppRoot {
                 offline,
                 created,
                 removed,
+                rows,
                 error,
             } => {
                 let failed = error.is_some();
@@ -524,8 +541,26 @@ impl AppRoot {
                     self.push_toast(format!("Saved “{name}” locally"), ToastKind::Notice, None);
                 } else if created {
                     self.push_toast(format!("Created “{name}”"), ToastKind::Notice, None);
+                } else if removed && rows > 0 {
+                    self.push_toast(
+                        format!(
+                            "Deleted {rows} {} from “{name}”",
+                            if rows == 1 { "row" } else { "rows" }
+                        ),
+                        ToastKind::Notice,
+                        None,
+                    );
                 } else if removed {
                     self.push_toast(format!("Removed from “{name}”"), ToastKind::Notice, None);
+                } else if rows > 0 {
+                    self.push_toast(
+                        format!(
+                            "Added {rows} {} to “{name}”",
+                            if rows == 1 { "track" } else { "tracks" }
+                        ),
+                        ToastKind::Notice,
+                        None,
+                    );
                 } else {
                     self.push_toast(format!("Added to “{name}”"), ToastKind::Notice, None);
                 }
@@ -744,6 +779,8 @@ impl AppRoot {
         self.queue_open = false;
         self.queue_cursor = 0;
         self.queue_selection.clear();
+        self.clipboard_kind = None;
+        self.clipboard_ids.clear();
         self.visual_mode = false;
         self.fullscreen = false;
         self.fullscreen_anim = anim::Behavior::new(0.0);

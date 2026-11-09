@@ -270,10 +270,288 @@ impl AppRoot {
         cx: &mut Context<Self>,
     ) {
         if self.queue_open {
-            self.player.remove(self.queue_cursor);
-            self.queue_cursor = self.queue_cursor.min(self.player.len().saturating_sub(1));
-            self.follow_queue(true);
+            self.delete_queue_range(cx);
+        }
+    }
+
+    fn rows_word(count: usize) -> &'static str {
+        if count == 1 { "row" } else { "rows" }
+    }
+
+    /// Replace the row clipboard from a row list, preserving order and
+    /// duplicates. Returns the number of ids stored; an unsupported row kind
+    /// (playlists) or an empty id skips that row.
+    fn clipboard_from_rows(&mut self, rows: Vec<Row>) -> usize {
+        let Some((kind, ids)) = clipboard_ids_from_rows(rows) else {
+            return 0;
+        };
+        let count = ids.len();
+        self.clipboard_kind = Some(kind);
+        self.clipboard_ids = ids;
+        count
+    }
+
+    fn clipboard_from_song_ids(&mut self, ids: Vec<String>) -> usize {
+        let ids: Vec<String> = ids
+            .into_iter()
+            .filter(|id| !id.is_empty())
+            .collect();
+        if ids.is_empty() {
+            return 0;
+        }
+        let count = ids.len();
+        self.clipboard_kind = Some(RowKind::Song);
+        self.clipboard_ids = ids;
+        count
+    }
+
+    fn announce_yank(&mut self, count: usize, missing: usize) {
+        if count == 0 {
+            self.push_toast(
+                "Nothing to yank".to_string(),
+                ToastKind::Notice,
+                None,
+            );
+            return;
+        }
+        let suffix = if missing > 0 {
+            format!(" ({missing} not loaded)")
+        } else {
+            String::new()
+        };
+        self.push_toast(
+            format!("Yanked {count} {}{suffix}", Self::rows_word(count)),
+            ToastKind::Notice,
+            None,
+        );
+    }
+
+    /// `y` (range or cursor) / `Y` (cursor only) against the active surface.
+    fn yank_surface(&mut self, row_only: bool) -> usize {
+        if self.fullscreen || self.login.is_some() || self.command_line.is_open() {
+            return 0;
+        }
+        if self.queue_open {
+            let queue = self.player.queue_snapshot();
+            let indices = self.queue_selection.indices(self.queue_cursor, row_only);
+            let ids: Vec<String> = indices
+                .iter()
+                .filter_map(|index| queue.get(*index).map(|track| track.id.clone()))
+                .collect();
+            let count = self.clipboard_from_song_ids(ids);
+            self.queue_selection.clear();
+            self.visual_mode = false;
+            self.announce_yank(count, 0);
+            return count;
+        }
+        let page_rows = self.page.as_ref().map(|page| {
+            let indices = page.selection.indices(page.cursor, row_only);
+            indices
+                .iter()
+                .filter_map(|index| page.rows.get(*index).cloned())
+                .collect::<Vec<Row>>()
+        });
+        if let Some(rows) = page_rows {
+            let count = self.clipboard_from_rows(rows);
+            if let Some(page) = self.page.as_mut() {
+                page.selection.clear();
+            }
+            self.visual_mode = false;
+            self.announce_yank(count, 0);
+            return count;
+        }
+        let indices = self.view.selection.indices(self.view.cursor, row_only);
+        let selected = indices.len();
+        let rows: Vec<Row> = indices
+            .iter()
+            .filter_map(|index| self.view.rows.get(*index).cloned())
+            .collect();
+        let missing = selected.saturating_sub(rows.len());
+        let count = self.clipboard_from_rows(rows);
+        self.view.selection.clear();
+        self.visual_mode = false;
+        self.announce_yank(count, missing);
+        count
+    }
+
+    pub(in crate::ui) fn on_yank(
+        &mut self,
+        _: &Yank,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.yank_surface(false);
+        cx.notify();
+    }
+
+    pub(in crate::ui) fn on_yank_row(
+        &mut self,
+        _: &YankRow,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.yank_surface(true);
+        cx.notify();
+    }
+
+    /// Yank from the floating search's current scope (normal mode only; the
+    /// typing mode keeps `y` as text input).
+    pub(in crate::ui) fn yank_search(&mut self, row_only: bool) -> usize {
+        let Some(search) = self.search.as_ref() else {
+            return 0;
+        };
+        let rows = search.scoped().into_iter().cloned().collect::<Vec<Row>>();
+        let indices = search.selection.indices(search.cursor(), row_only);
+        let selected = indices.len();
+        let picked: Vec<Row> = indices
+            .iter()
+            .filter_map(|index| rows.get(*index).cloned())
+            .collect();
+        let missing = selected.saturating_sub(picked.len());
+        let count = self.clipboard_from_rows(picked);
+        if let Some(search) = self.search.as_mut() {
+            search.selection.clear();
+        }
+        self.visual_mode = false;
+        self.announce_yank(count, missing);
+        count
+    }
+
+    fn paste_clipboard(&mut self, above: bool, cx: &mut Context<Self>) {
+        if self.fullscreen || self.login.is_some() {
+            return;
+        }
+        let Some(kind) = self.clipboard_kind else {
+            self.push_toast(
+                "Row clipboard is empty".to_string(),
+                ToastKind::Notice,
+                None,
+            );
             cx.notify();
+            return;
+        };
+        let Some(kind_str) = kind.queue_kind() else {
+            return;
+        };
+        let ids = self.clipboard_ids.clone();
+        if ids.is_empty() {
+            self.push_toast(
+                "Row clipboard is empty".to_string(),
+                ToastKind::Notice,
+                None,
+            );
+            cx.notify();
+            return;
+        }
+        if self.queue_open {
+            let at = paste_at(self.queue_cursor, above);
+            self.queue_selection.clear();
+            self.visual_mode = false;
+            self.bridge.paste_queue(kind_str.to_string(), ids, at);
+        } else if let Some(playlist_id) = self
+            .page
+            .as_ref()
+            .filter(|page| page.descriptor.kind == PageKind::Playlist)
+            .map(|page| page.descriptor.id.clone())
+        {
+            self.bridge
+                .paste_playlist(playlist_id, kind_str.to_string(), ids);
+        } else {
+            self.push_toast(
+                "Open the queue or a playlist page to paste".to_string(),
+                ToastKind::Notice,
+                None,
+            );
+        }
+        cx.notify();
+    }
+
+    pub(in crate::ui) fn on_paste_below(
+        &mut self,
+        _: &PasteBelow,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.paste_clipboard(false, cx);
+    }
+
+    pub(in crate::ui) fn on_paste_above(
+        &mut self,
+        _: &PasteAbove,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.paste_clipboard(true, cx);
+    }
+
+    fn delete_queue_range(&mut self, cx: &mut Context<Self>) {
+        let indices: Vec<usize> = self
+            .queue_selection
+            .indices(self.queue_cursor, false)
+            .into_iter()
+            .filter(|index| *index < self.player.len())
+            .collect();
+        if indices.is_empty() {
+            return;
+        }
+        let first = indices[0];
+        let count = self.player.remove_many(&indices);
+        self.queue_cursor = first.min(self.player.len().saturating_sub(1));
+        self.queue_selection.clear();
+        self.visual_mode = false;
+        self.follow_queue(true);
+        self.push_toast(
+            format!("Deleted {count} {}", Self::rows_word(count)),
+            ToastKind::Notice,
+            None,
+        );
+        cx.notify();
+    }
+
+    fn delete_playlist_range(&mut self, cx: &mut Context<Self>) {
+        let Some(page) = self.page.as_mut() else {
+            return;
+        };
+        let indices: Vec<usize> = page
+            .selection
+            .indices(page.cursor, false)
+            .into_iter()
+            .filter(|index| *index < page.rows.len())
+            .collect();
+        if indices.is_empty() {
+            return;
+        }
+        let first = indices[0];
+        page.cursor = first;
+        page.selection.clear();
+        let playlist_id = page.descriptor.id.clone();
+        self.visual_mode = false;
+        self.bridge
+            .delete_playlist_positions(playlist_id, indices);
+        cx.notify();
+    }
+
+    /// `d d`: the queue range wins when the drawer is open, otherwise the
+    /// playlist page edits its entries; other surfaces are inert.
+    pub(in crate::ui) fn on_delete_row(
+        &mut self,
+        _: &DeleteRow,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.fullscreen || self.login.is_some() {
+            return;
+        }
+        if self.queue_open {
+            self.delete_queue_range(cx);
+            return;
+        }
+        if self
+            .page
+            .as_ref()
+            .is_some_and(|page| page.descriptor.kind == PageKind::Playlist)
+        {
+            self.delete_playlist_range(cx);
         }
     }
 
@@ -787,5 +1065,106 @@ impl AppRoot {
     fn page_description(&mut self, down: bool) {
         let step = self.description_viewport() * DESCRIPTION_PAGE_RATIO;
         self.scroll_description(if down { step } else { -step });
+    }
+}
+
+/// Collect clipboard ids from already-materialized rows. The first supported
+/// row fixes the kind; ids keep row order and duplicates. Playlist rows and
+/// empty ids are skipped.
+fn clipboard_ids_from_rows(rows: Vec<Row>) -> Option<(RowKind, Vec<String>)> {
+    let mut kind = None;
+    let mut ids = Vec::new();
+    for row in rows {
+        if row.kind.queue_kind().is_none() {
+            continue;
+        }
+        let id = if row.kind == RowKind::Song {
+            if row.song_id.is_empty() {
+                row.id
+            } else {
+                row.song_id
+            }
+        } else {
+            row.id
+        };
+        if id.is_empty() {
+            continue;
+        }
+        match kind {
+            None => {
+                kind = Some(row.kind);
+                ids.push(id);
+            }
+            Some(seen) if seen == row.kind => ids.push(id),
+            _ => {}
+        }
+    }
+    kind.map(|kind| (kind, ids))
+}
+
+/// `p` below / `P` above the queue cursor.
+fn paste_at(cursor: usize, above: bool) -> usize {
+    cursor.saturating_add(usize::from(!above))
+}
+
+#[cfg(test)]
+mod clipboard_tests {
+    use super::*;
+
+    fn row(kind: RowKind, id: &str, song_id: &str) -> Row {
+        Row {
+            id: id.to_string(),
+            kind,
+            title: String::new(),
+            subtitle: String::new(),
+            meta: String::new(),
+            track: String::new(),
+            cover_url: String::new(),
+            cover_remote: String::new(),
+            song_id: song_id.to_string(),
+            album_id: String::new(),
+            starred: false,
+            rating: 0,
+            downloaded: false,
+        }
+    }
+
+    #[test]
+    fn clipboard_keeps_order_duplicates_and_song_ids() {
+        let rows = vec![
+            row(RowKind::Song, "a", "s1"),
+            row(RowKind::Song, "b", "s1"),
+            row(RowKind::Song, "c", ""),
+        ];
+        assert_eq!(
+            clipboard_ids_from_rows(rows),
+            Some((RowKind::Song, vec!["s1".to_string(), "s1".to_string(), "c".to_string()]))
+        );
+    }
+
+    #[test]
+    fn clipboard_uses_album_ids_and_rejects_playlists() {
+        let rows = vec![
+            row(RowKind::Album, "al1", ""),
+            row(RowKind::Album, "al2", ""),
+        ];
+        assert_eq!(
+            clipboard_ids_from_rows(rows),
+            Some((RowKind::Album, vec!["al1".to_string(), "al2".to_string()]))
+        );
+        assert_eq!(
+            clipboard_ids_from_rows(vec![row(RowKind::Playlist, "p1", "")]),
+            None
+        );
+        assert_eq!(clipboard_ids_from_rows(Vec::new()), None);
+    }
+
+    #[test]
+    fn paste_at_is_below_or_above_the_cursor() {
+        assert_eq!(paste_at(0, false), 1);
+        assert_eq!(paste_at(0, true), 0);
+        assert_eq!(paste_at(3, false), 4);
+        assert_eq!(paste_at(3, true), 3);
+        assert_eq!(paste_at(usize::MAX, false), usize::MAX);
     }
 }

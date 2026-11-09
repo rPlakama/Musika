@@ -1015,16 +1015,40 @@ pub async fn add_to_playlist(
     if song_ids.is_empty() {
         return Err(anyhow!("No songs matched the playlist targets."));
     }
+    append_resolved(dbs, &playlist, &song_ids).await?;
+    Ok(display_playlist_name(&playlist.name))
+}
 
+/// Append already-resolved song ids to a playlist (the row-clipboard paste
+/// path). Same local/server split as [`add_to_playlist`].
+pub async fn add_song_ids_to_playlist(
+    dbs: &Dbs,
+    playlist_query: &str,
+    song_ids: &[String],
+) -> Result<String> {
+    let playlist = resolve_playlist(dbs, playlist_query).await?;
+    let song_ids: Vec<String> = song_ids
+        .iter()
+        .map(|id| id.trim().to_string())
+        .filter(|id| !id.is_empty())
+        .collect();
+    if song_ids.is_empty() {
+        return Err(anyhow!("No songs selected to add."));
+    }
+    append_resolved(dbs, &playlist, &song_ids).await?;
+    Ok(display_playlist_name(&playlist.name))
+}
+
+async fn append_resolved(dbs: &Dbs, playlist: &PlaylistRef, song_ids: &[String]) -> Result<()> {
     if playlist.source == "m3u" {
-        let path = local_playlist_path(&playlist)?;
-        append_local_m3u(dbs, &path, &song_ids).await?;
+        let path = local_playlist_path(playlist)?;
+        append_local_m3u(dbs, &path, song_ids).await?;
     } else {
         let client = crate::session::client(dbs)
             .await
             .context("adding to a server playlist needs a signed-in server")?;
         client
-            .update_playlist_add(&playlist.id, &song_ids)
+            .update_playlist_add(&playlist.id, song_ids)
             .await
             .context("updating the server playlist")?;
         // The list refresh only carries counts; reload the ordered entries so
@@ -1036,7 +1060,7 @@ pub async fn add_to_playlist(
             .await
             .context("refreshing the server playlist list")?;
     }
-    Ok(display_playlist_name(&playlist.name))
+    Ok(())
 }
 
 /// Remove free-form targets from an existing playlist, mirroring
@@ -1062,6 +1086,61 @@ pub async fn remove_from_playlist(
         let path = local_playlist_path(&playlist)?;
         remove_local_m3u(dbs, &path, &song_ids, &playlist.name).await?;
     } else {
+        let client = crate::session::client(dbs)
+            .await
+            .context("removing from a server playlist needs a signed-in server")?;
+        client
+            .update_playlist_remove(&playlist.id, &song_ids)
+            .await
+            .context("updating the server playlist")?;
+        load_subsonic_songs(dbs, &client, &playlist.id)
+            .await
+            .context("refreshing the server playlist songs")?;
+        refresh_subsonic(dbs, &client)
+            .await
+            .context("refreshing the server playlist list")?;
+    }
+    Ok(display_playlist_name(&playlist.name))
+}
+
+/// Remove playlist entries by zero-based position (the playlist page `d d`
+/// path). Positions are exact for local M3U files; server playlists map the
+/// cached positions to song ids and use `songIdToRemove`.
+pub async fn remove_playlist_positions(
+    dbs: &Dbs,
+    playlist_query: &str,
+    positions: &[usize],
+) -> Result<String> {
+    let playlist = resolve_playlist(dbs, playlist_query).await?;
+    if positions.is_empty() {
+        return Err(anyhow!("Select at least one row to delete."));
+    }
+    let positions: std::collections::HashSet<usize> = positions.iter().copied().collect();
+
+    if playlist.source == "m3u" {
+        let path = local_playlist_path(&playlist)?;
+        remove_positions_local_m3u(dbs, &path, &positions, &playlist.name).await?;
+    } else {
+        let mut builder = sqlx::QueryBuilder::new(
+            "SELECT song_id FROM playlist_song WHERE playlist_id = ",
+        );
+        builder.push_bind(&playlist.id);
+        builder.push(" AND position IN (");
+        let mut separated = builder.separated(", ");
+        for position in &positions {
+            separated.push_bind(*position as i64);
+        }
+        separated.push_unseparated(")");
+        let song_ids: Vec<Option<String>> = builder.build_query_scalar().fetch_all(&dbs.playlist).await?;
+        let song_ids: Vec<String> = song_ids
+            .into_iter()
+            .flatten()
+            .map(|id| id.trim().to_string())
+            .filter(|id| !id.is_empty())
+            .collect();
+        if song_ids.is_empty() {
+            return Err(anyhow!("No playlist entries to remove."));
+        }
         let client = crate::session::client(dbs)
             .await
             .context("removing from a server playlist needs a signed-in server")?;
@@ -1131,6 +1210,37 @@ async fn remove_local_m3u(
     }
     std::fs::write(path, out)
         .with_context(|| format!("writing the playlist file {}", path.display()))?;
+    scan_dir(dbs, dir).await?;
+    Ok(())
+}
+
+/// Rewrite an app-owned M3U without the entries at `positions` (0-based order
+/// of the parsed file), preserving every other row including duplicates.
+async fn remove_positions_local_m3u(
+    dbs: &Dbs,
+    path: &Path,
+    positions: &std::collections::HashSet<usize>,
+    playlist_name: &str,
+) -> Result<()> {
+    let text = std::fs::read_to_string(path)
+        .with_context(|| format!("reading the playlist file {}", path.display()))?;
+    let entries = parse_m3u(&text);
+
+    let mut out = String::from("#EXTM3U\n");
+    let mut removed = 0usize;
+    for (index, entry) in entries.iter().enumerate() {
+        if positions.contains(&index) {
+            removed += 1;
+            continue;
+        }
+        push_m3u_entry(&mut out, entry);
+    }
+    if removed == 0 {
+        return Err(anyhow!("No matching rows in “{playlist_name}”"));
+    }
+    std::fs::write(path, out)
+        .with_context(|| format!("writing the playlist file {}", path.display()))?;
+    let dir = path.parent().unwrap_or(Path::new("."));
     scan_dir(dbs, dir).await?;
     Ok(())
 }

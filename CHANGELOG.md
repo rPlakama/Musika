@@ -5,6 +5,16 @@ open work; this file is the release history.
 
 ## Unreleased
 
+- **Row clipboard:** `y`/`Y` yank the visual range or cursor row from the
+  queue, library lists, page rows and floating search into an in-app clipboard;
+  `p`/`P` paste it below/above the queue cursor (album/artist clipboard rows
+  expand to their tracks, matching Add-to-Queue), landing the cursor on the
+  first pasted track. A selection on the queue makes `d d` remove the whole
+  range, matching the documented behavior.
+- **Playlist row editing:** on a playlist page `d d` deletes the selected rows
+  or cursor row (exact local-M3U positions, `songIdToRemove` for server
+  playlists), and `p`/`P` append the yanked rows to the playlist. Both paths
+  reload the open page so rows, count and collage stay in sync.
 - **Navigation:** Backing out of a page now returns Home even after another
   page was opened in between. Reaching Home clears the travel log (account
   resets do too), so `q` from the new page cannot resurrect the previous trip's

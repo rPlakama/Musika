@@ -40,7 +40,7 @@ work, including the command line.
 | `v` / `V` | Toggle visual selection / select all rows |
 | `Shift-↑` `Shift-↓` `Shift-←` `Shift-→` | Extend the visual selection |
 | `y` / `Y` | Yank the visual range (or cursor row) / the cursor row |
-| `p` / `P` | Paste the row clipboard below / above the queue cursor |
+| `p` / `P` | Paste the row clipboard below / above the queue cursor; on a playlist page, append the yanked rows |
 | `Ctrl-V` | Paste text into the focused search field |
 | `Enter` | Open/play the row, confirm, or use the focused control |
 | `Tab` / `Shift-Tab` | Walk panes, header stops and status-bar actions |
@@ -57,6 +57,11 @@ Backing out of the last page reaches Home and clears the log: opening another
 page from Home starts a fresh trip, so its Back returns Home rather than the
 previous page.
 
+On a playlist page, `y`/`Y` yank its song rows, `p`/`P` append the row
+clipboard to the playlist (existing entries are kept) and `d d` deletes the
+selected rows or the cursor row — local M3U entries are removed by position,
+server playlists by `songIdToRemove`.
+
 On album and artist pages, `Tab` cycles the page header stops. `?`, or Enter/click
 on the inline description, opens the shared full-window description reader:
 `j`/`k` scroll it a line at a time, `Ctrl-D`/`Ctrl-U` and `PageDown`/`PageUp`
@@ -72,7 +77,7 @@ album wall and the artist's full track list.
 | `↑` / `↓`, `Ctrl-J` / `Ctrl-K` | Move through the queue |
 | `Enter` | Jump to the cursor track |
 | `Ctrl-Shift-J` / `Ctrl-Shift-K` | Move the track down / up |
-| `d d` | Remove the cursor track (removes the whole range in visual mode) |
+| `d d` | Remove the cursor track, or the whole visual range |
 | `v` / `V`, `Shift-arrows` | Select rows / select all |
 | `y` / `Y`, `p` / `P` | Yank the range or row / paste below or above |
 | `q` or `Ctrl-Q` | Close the drawer |

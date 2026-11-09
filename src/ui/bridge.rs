@@ -58,6 +58,9 @@ pub enum Event {
         offline: bool,
         created: bool,
         removed: bool,
+        /// Number of rows added/removed by a page paste/delete; 0 for the
+        /// command-driven create/add/rm toasts.
+        rows: usize,
         error: Option<String>,
     },
     LibraryCount {
@@ -139,6 +142,10 @@ pub enum Event {
     },
     QueueAppend {
         tracks: Vec<crate::player::Track>,
+    },
+    QueuePaste {
+        tracks: Vec<crate::player::Track>,
+        at: usize,
     },
     DownloadSettled,
     Palette {

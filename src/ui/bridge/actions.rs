@@ -157,6 +157,34 @@ impl Bridge {
         });
     }
 
+    /// VI-8a: resolve the row clipboard and insert it at `at` in the live
+    /// queue (paste below/above the queue cursor).
+    pub fn paste_queue(&self, kind: String, ids: Vec<String>, at: usize) {
+        let tx = self.tx.clone();
+        let offline = self.offline.load(Ordering::Relaxed);
+        crate::app::runtime().spawn(async move {
+            let Some(dbs) = crate::app::dbs() else { return };
+            match crate::queue::quick_tracks_json_many(&dbs, &kind, &ids, offline).await {
+                Ok(json) => match serde_json::from_str::<Vec<crate::player::Track>>(&json) {
+                    Ok(tracks) if tracks.is_empty() => {
+                        let _ = tx.send(Event::Error(
+                            "Could not paste: no tracks matched the row clipboard".to_string(),
+                        ));
+                    }
+                    Ok(tracks) => {
+                        let _ = tx.send(Event::QueuePaste { tracks, at });
+                    }
+                    Err(err) => {
+                        let _ = tx.send(Event::Error(format!("Could not paste: {err:#}")));
+                    }
+                },
+                Err(err) => {
+                    let _ = tx.send(Event::Error(format!("Could not paste: {err:#}")));
+                }
+            }
+        });
+    }
+
     pub fn quick_go_artist(&self, album_id: String) {
         let tx = self.tx.clone();
         crate::app::runtime().spawn(async move {

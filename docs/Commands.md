@@ -74,7 +74,7 @@ mpris_position:5000000
 | Command | Usage |
 | --- | --- |
 | `playlist create` | `playlist create <name> [--offline]` |
-| `playlist add` | `playlist add <target>... <playlist>` |
+| `playlist add` | `playlist add <target>...; <playlist>` |
 
 `playlist create` creates a playlist containing the currently playing track.
 By default it is posted to the server; `--offline` writes only the account-local
@@ -93,13 +93,22 @@ resolved through the same search engine as the Search overlay:
 - a track adds that one song;
 - the literal `current` adds the currently playing track.
 
-The final argument is the destination playlist name or id. Wrap multiword names
-in quotes; comma-separated and whitespace-separated targets are both accepted.
+The destination playlist name or id comes after the first unquoted `;`; it may
+be unquoted even when it has spaces. Before the `;` sits the target list
+(comma-separated and whitespace-separated targets are both accepted; a quoted
+target may itself contain `;`). The legacy form without a cutoff — playlist is
+the last argument — is still accepted.
+
+Command-line suggestions follow the cutoff: before `;` you get `current` plus
+search hits for the targets, after `;` only existing playlist names (matched
+against the name typed so far, so a two-word name completes in one Tab).
 
 ```text
+playlist add current; "Rated R Mix"
+playlist add "Pink Floyd", "King Crimson"; Road Trip
+playlist add "Rated R" "Leg of Lamb"; Rated R Mix
+# legacy form, still accepted:
 playlist add current "Rated R Mix"
-playlist add "Pink Floyd", "King Crimson" "Model Man" "Road Trip"
-playlist add "Rated R" "Leg of Lamb" "Rated R Mix"
 ```
 
 Local M3U playlists are appended to and rescanned. Server playlists are updated
@@ -262,7 +271,7 @@ socket="${MUSIKA_IPC_SOCKET:-$HOME/.config/musika/ipc.sock}"
 
 printf 'shuffle album "Rated R"\n' | nc -U "$socket"
 printf 'radio album "Kid A"\n' | nc -U "$socket"
-printf 'playlist add current "Road Trip"\n' | nc -U "$socket"
+printf 'playlist add current; "Road Trip"\n' | nc -U "$socket"
 printf 'playlist create "Road Trip" --offline\n' | nc -U "$socket"
 printf 'radio save --offline\n' | nc -U "$socket"
 printf 'download "Pink Floyd" album "Atom Heart Mother"\n' | nc -U "$socket"

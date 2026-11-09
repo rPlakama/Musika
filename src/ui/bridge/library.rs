@@ -231,6 +231,7 @@ impl Bridge {
                     ("artists", "Artist"),
                     ("playlists", "Playlist"),
                 ],
+                crate::ui::ipc_command::SuggestScope::Playlist => &[("playlists", "Playlist")],
             };
             let mut rows = Vec::new();
             for (column, kind) in columns {

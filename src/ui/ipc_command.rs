@@ -193,6 +193,8 @@ pub enum SuggestScope {
     Track,
     /// Mixed artist/album/track/playlist results for playlist targets.
     Any,
+    /// Playlist names only (the part after `playlist add ...;`).
+    Playlist,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -276,7 +278,7 @@ pub const COMMANDS: &[CommandSpec] = &[
     CommandSpec {
         name: "playlist",
         usage: "playlist <create|add> ...",
-        description: "Create a playlist from the current track or add targets",
+        description: "Create a playlist or add targets (playlist add <target...>; <name>)",
         args: ArgSpec::Enum(&["create", "add"]),
     },
     CommandSpec {
@@ -1046,13 +1048,55 @@ fn parse_download(rest: &str) -> Result<IpcCommand, CommandError> {
     })
 }
 
+/// Byte index of the first unquoted `;` in `input`. Used by the `playlist add`
+/// grammar to cut the target list from the playlist name.
+fn unquoted_semicolon(input: &str) -> Option<usize> {
+    let mut quote: Option<char> = None;
+    let mut escaped = false;
+    for (index, ch) in input.char_indices() {
+        if escaped {
+            escaped = false;
+            continue;
+        }
+        if ch == '\\' && quote != Some('\'') {
+            escaped = true;
+            continue;
+        }
+        if let Some(active) = quote {
+            if ch == active {
+                quote = None;
+            }
+            continue;
+        }
+        match ch {
+            '"' | '\'' => quote = Some(ch),
+            ';' => return Some(index),
+            _ => {}
+        }
+    }
+    None
+}
+
 fn parse_playlist(rest: &str) -> Result<IpcCommand, CommandError> {
-    let tokens = split_quoted_args(rest)?;
+    // New syntax: `playlist add <target...>; <playlist name>` — the first
+    // unquoted semicolon cuts the target list from the playlist name. The old
+    // `playlist add <target...> <playlist>` form (playlist = last token) is
+    // still accepted.
+    let (head, playlist_tail) = match unquoted_semicolon(rest) {
+        Some(index) => (&rest[..index], Some(&rest[index + 1..])),
+        None => (rest, None),
+    };
+    let tokens = split_quoted_args(head)?;
     let Some(subcommand) = tokens.first().map(String::as_str) else {
         return Err(CommandError("usage: playlist <create|add> ...".to_string()));
     };
     match subcommand {
         "create" => {
+            if playlist_tail.is_some() {
+                return Err(CommandError(
+                    "usage: playlist create <name> [--offline]".to_string(),
+                ));
+            }
             let mut values = tokens[1..].to_vec();
             let offline = values.last().is_some_and(|value| value == "--offline");
             if offline {
@@ -1067,22 +1111,29 @@ fn parse_playlist(rest: &str) -> Result<IpcCommand, CommandError> {
             Ok(IpcCommand::PlaylistCreate { name, offline })
         }
         "add" => {
-            let mut values: Vec<String> = tokens[1..]
+            let mut targets: Vec<String> = tokens[1..]
                 .iter()
                 .flat_map(|value| value.split(','))
                 .map(|value| value.trim().to_string())
                 .filter(|value| !value.is_empty())
                 .collect();
-            if values.len() < 2 {
+            let playlist = if let Some(tail) = playlist_tail {
+                let values = split_quoted_args(tail)?;
+                values.join(" ").trim().trim_matches(',').trim().to_string()
+            } else {
+                if targets.len() < 2 {
+                    return Err(CommandError(
+                        "usage: playlist add <target...>; <playlist>".to_string(),
+                    ));
+                }
+                targets.pop().unwrap_or_default()
+            };
+            if targets.is_empty() || playlist.is_empty() {
                 return Err(CommandError(
-                    "usage: playlist add <target...> <playlist>".to_string(),
+                    "usage: playlist add <target...>; <playlist>".to_string(),
                 ));
             }
-            let playlist = values.pop().unwrap_or_default();
-            Ok(IpcCommand::PlaylistAdd {
-                targets: values,
-                playlist,
-            })
+            Ok(IpcCommand::PlaylistAdd { targets, playlist })
         }
         _ => Err(CommandError("usage: playlist <create|add> ...".to_string())),
     }
@@ -1161,7 +1212,7 @@ pub fn canonical_string(command: &IpcCommand) -> String {
                 out.push(' ');
                 out.push_str(&quote_arg(target));
             }
-            out.push(' ');
+            out.push_str("; ");
             out.push_str(&quote_arg(playlist));
             out
         }
@@ -1340,6 +1391,31 @@ pub fn suggestion_request(input: &str, cursor: usize) -> Option<SuggestRequest> 
             if args.get(1).map(String::as_str) != Some("add") {
                 return None;
             }
+            // After the target cutoff only playlist names make sense; the
+            // query is the name typed so far (empty lists all playlists).
+            if let Some(cut) = unquoted_semicolon(&input[..end]) {
+                let mut query = if cut < start {
+                    split_quoted_args(&input[cut + 1..start])
+                        .unwrap_or_default()
+                        .join(" ")
+                } else {
+                    String::new()
+                };
+                let typed = input[start..end].trim_matches(['"', '\'']).trim();
+                if !typed.is_empty() {
+                    if !query.is_empty() {
+                        query.push(' ');
+                    }
+                    query.push_str(typed);
+                }
+                let suggestion_start = if cut < start { start } else { cut + 1 };
+                return Some(SuggestRequest {
+                    scope: SuggestScope::Playlist,
+                    query: query.trim().to_string(),
+                    start: suggestion_start,
+                    end,
+                });
+            }
             (SuggestScope::Any, args.len())
         }
         "download" => {
@@ -1447,9 +1523,13 @@ pub fn suggestions_with(
         .collect()
 }
 
-/// Completion for `playlist add`: the special `current` target plus playlist
-/// names from the command-line context. Search hits arrive asynchronously and
-/// replace this list after the debounce.
+/// Completion for `playlist add`.
+///
+/// - before the `;` cutoff the surface offers the `current` target plus the
+///   visible rows (playlists included: a playlist is a valid target);
+/// - after the cutoff only playlist names are offered, and the whole typed
+///   name region is replaced (so a two-word query completes in one Tab).
+/// Async search hits replace the list after the debounce.
 fn playlist_suggestions(
     input: &str,
     start: usize,
@@ -1460,9 +1540,31 @@ fn playlist_suggestions(
     if before.get(1).copied() != Some("add") {
         return Vec::new();
     }
-    let prefix = input[start..end].trim_matches(['"', '\'']);
+    let cutoff = unquoted_semicolon(&input[..end]);
+    let playlist_only = cutoff.is_some();
+    let (start, end, prefix) = match cutoff {
+        Some(cut) => {
+            // Replace from the first non-space after the cutoff through the
+            // current token, so `; Road T` completes as `; "Road Trip"`.
+            let mut region = cut + 1;
+            while region < end && input.as_bytes()[region].is_ascii_whitespace() {
+                region += 1;
+            }
+            let prefix = input[region..end]
+                .trim_matches(['"', '\''])
+                .trim()
+                .to_string();
+            (region.min(end), end, prefix)
+        }
+        None => (
+            start,
+            end,
+            input[start..end].trim_matches(['"', '\'']).to_string(),
+        ),
+    };
+    let prefix_lower = prefix.to_lowercase();
     let mut out = Vec::new();
-    if "current".starts_with(prefix) {
+    if !playlist_only && "current".starts_with(&prefix_lower) {
         out.push(Suggestion {
             start,
             end,
@@ -1472,7 +1574,7 @@ fn playlist_suggestions(
         });
     }
     for row in context.rows.iter().filter(|row| row.kind == "playlist") {
-        if !prefix.is_empty() && !row.title.to_lowercase().starts_with(&prefix.to_lowercase()) {
+        if !prefix_lower.is_empty() && !row.title.to_lowercase().starts_with(&prefix_lower) {
             continue;
         }
         out.push(Suggestion {
@@ -1754,6 +1856,56 @@ mod tests {
     }
 
     #[test]
+    fn playlist_add_after_cutoff_suggests_only_playlist_names() {
+        let context = SuggestionContext {
+            current: None,
+            rows: vec![ContextRow {
+                kind: "playlist",
+                id: "p1".into(),
+                title: "Road Trip".into(),
+                subtitle: "Playlist · 4 songs".into(),
+            }],
+        };
+        // Right after the cutoff with an empty name: async playlist scope,
+        // empty query (all playlists), and only playlist rows locally.
+        let empty = "playlist add current; ";
+        let request = suggestion_request(empty, empty.len()).expect("playlist scope");
+        assert_eq!(request.scope, SuggestScope::Playlist);
+        assert_eq!(request.query, "");
+        let suggestions = suggestions_with(empty, empty.len(), &context);
+        assert!(suggestions.iter().any(|s| s.label == "Road Trip"));
+        assert!(!suggestions.iter().any(|s| s.label == "current"));
+
+        // A typed name filters to playlist names and replaces the whole name
+        // region, so a multi-word name completes in one Tab.
+        let typed = "playlist add current; Road T";
+        let request = suggestion_request(typed, typed.len()).expect("playlist scope");
+        assert_eq!(request.scope, SuggestScope::Playlist);
+        assert_eq!(request.query, "Road T");
+        let suggestions = suggestions_with(typed, typed.len(), &context);
+        let road = suggestions
+            .iter()
+            .find(|s| s.label == "Road Trip")
+            .expect("playlist name suggested");
+        assert_eq!(road.completion.as_deref(), Some("\"Road Trip\""));
+        let region = &typed[road.start..road.end];
+        assert_eq!(region, "Road T", "the whole typed name is replaced");
+        assert!(!suggestions.iter().any(|s| s.label == "current"));
+    }
+
+    #[test]
+    fn playlist_add_before_cutoff_keeps_target_suggestions() {
+        let context = SuggestionContext {
+            current: None,
+            rows: Vec::new(),
+        };
+        let input = "playlist add Pin";
+        let request = suggestion_request(input, input.len()).expect("target scope");
+        assert_eq!(request.scope, SuggestScope::Any);
+        assert_eq!(request.query, "Pin");
+    }
+
+    #[test]
     fn suggests_the_current_track_for_download() {
         let context = SuggestionContext {
             current: Some(CurrentTrack {
@@ -1827,7 +1979,40 @@ mod tests {
         assert!(parse("playlist nope").is_err());
         assert_eq!(
             canonical_string(&parse("playlist add \"Pink Floyd\" \"Road Trip\"").unwrap()),
-            "playlist add \"Pink Floyd\" \"Road Trip\""
+            "playlist add \"Pink Floyd\"; \"Road Trip\""
+        );
+        // New cutoff syntax: targets before `;`, playlist name after it.
+        assert_eq!(
+            parse("playlist add current; \"Road Trip\""),
+            Ok(IpcCommand::PlaylistAdd {
+                targets: vec!["current".into()],
+                playlist: "Road Trip".into()
+            })
+        );
+        assert_eq!(
+            parse("playlist add \"Pink Floyd\", \"King Crimson\"; Road Trip"),
+            Ok(IpcCommand::PlaylistAdd {
+                targets: vec!["Pink Floyd".into(), "King Crimson".into()],
+                playlist: "Road Trip".into()
+            })
+        );
+        assert_eq!(
+            parse("playlist add \"A;B\"; \"P\""),
+            Ok(IpcCommand::PlaylistAdd {
+                targets: vec!["A;B".into()],
+                playlist: "P".into()
+            }),
+            "a semicolon inside a quoted target must not cut the list"
+        );
+        assert!(parse("playlist add current;").is_err());
+        assert!(parse("playlist add ; \"P\"").is_err());
+        // The legacy last-token form still parses.
+        assert_eq!(
+            parse("playlist add current \"Road Trip\""),
+            Ok(IpcCommand::PlaylistAdd {
+                targets: vec!["current".into()],
+                playlist: "Road Trip".into()
+            })
         );
         assert_eq!(
             parse("radio save"),

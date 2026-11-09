@@ -506,6 +506,7 @@ impl AppRoot {
                 removed,
                 error,
             } => {
+                let failed = error.is_some();
                 let verb = if removed {
                     "remove from"
                 } else if created {
@@ -528,8 +529,22 @@ impl AppRoot {
                 } else {
                     self.push_toast(format!("Added to “{name}”"), ToastKind::Notice, None);
                 }
+                if failed {
+                    return;
+                }
                 if self.page.is_none() && self.view.scope == Scope::Playlists {
                     self.reload();
+                }
+                // The backend refreshed the playlist's cached entries before
+                // sending this event; reload an open playlist page so the rows
+                // and count match what was just added or removed.
+                if let Some(descriptor) = self
+                    .page
+                    .as_ref()
+                    .filter(|page| page.descriptor.kind == PageKind::Playlist)
+                    .map(|page| page.descriptor.clone())
+                {
+                    self.bridge.load_page(descriptor);
                 }
             }
             Event::AccountRemoved { label, next } => {

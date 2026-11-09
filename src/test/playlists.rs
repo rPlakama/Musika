@@ -697,3 +697,250 @@ async fn remove_from_playlist_drops_matching_m3u_entries() {
 
     let _ = std::fs::remove_dir_all(root);
 }
+
+/// A playlist page whose cached entries disagree with the list's song_count
+/// must refetch the ordered entries from the server; otherwise additions made
+/// elsewhere show a header count different from the row list (the 1-vs-3 bug).
+#[tokio::test]
+async fn page_json_refreshes_a_stale_subsonic_cache() {
+    use std::io::{Read, Write};
+    use std::time::{Duration, Instant};
+
+    let credentials = memory_pool().await;
+    sqlx::migrate!("./migrations")
+        .run(&credentials)
+        .await
+        .unwrap();
+    crate::crypto::use_test_key();
+
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind loopback");
+    let addr = listener.local_addr().expect("local addr");
+    listener.set_nonblocking(true).unwrap();
+    let server = std::thread::spawn(move || {
+        let mut requests: Vec<String> = Vec::new();
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while requests.len() < 1 && Instant::now() < deadline {
+            let (mut socket, _) = match listener.accept() {
+                Ok(pair) => pair,
+                Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {
+                    std::thread::sleep(Duration::from_millis(10));
+                    continue;
+                }
+                Err(_) => break,
+            };
+            socket.set_read_timeout(Some(Duration::from_secs(5))).ok();
+            let mut buffer = [0u8; 8192];
+            let read = socket.read(&mut buffer).unwrap_or(0);
+            let request = String::from_utf8_lossy(&buffer[..read]).to_string();
+            let body = r#"{"subsonic-response":{"status":"ok","version":"1.16.1","playlist":{"entry":[{"id":"s1","title":"Too Much","artist":"Sufjan Stevens","album":"The Age Of Adz","duration":406},{"id":"s2","title":"The Waxen Pith","artist":"Aphex Twin","album":"...I Care Because You Do","duration":290},{"id":"s3","title":"Mr. Blue Sky","artist":"Electric Light Orchestra","album":"Out Of The Blue","duration":304}]}}}"#;
+            let head = format!(
+                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nContent-Type: application/json\r\nConnection: close\r\n\r\n",
+                body.len()
+            );
+            socket.write_all(head.as_bytes()).expect("head");
+            socket.write_all(body.as_bytes()).expect("body");
+            socket.flush().expect("flush");
+            requests.push(request);
+        }
+        requests
+    });
+
+    let server_url = format!("http://{addr}");
+    crate::sqlite::save_credentials(&credentials, "alice", "secret", &server_url, "navidrome")
+        .await
+        .unwrap();
+
+    let library = memory_pool().await;
+    sqlx::migrate!("./migrations_library")
+        .run(&library)
+        .await
+        .unwrap();
+    sqlx::raw_sql(
+        "INSERT INTO artists (id, name, album_count) VALUES ('ar1', 'Artist', 1);
+         INSERT INTO albums (id, artist_id, name, artist, song_count)
+             VALUES ('al1', 'ar1', 'Album', 'Artist', 3);
+         INSERT INTO songs
+             (id, album_id, artist_id, title, artist, album, track, disc_number, duration, path)
+         VALUES
+             ('s1', 'al1', 'ar1', 'Too Much', 'Sufjan Stevens', 'The Age Of Adz', 1, 1, 406, 'Music/a.flac'),
+             ('s2', 'al1', 'ar1', 'The Waxen Pith', 'Aphex Twin', '...I Care Because You Do', 2, 1, 290, 'Music/b.flac'),
+             ('s3', 'al1', 'ar1', 'Mr. Blue Sky', 'Electric Light Orchestra', 'Out Of The Blue', 3, 1, 304, 'Music/c.flac');",
+    )
+    .execute(&library)
+    .await
+    .unwrap();
+    // `page_json` resolves cover URLs through the covers pool (aliased to the
+    // library pool in tests): give it the empty table it expects.
+    sqlx::raw_sql(
+        "CREATE TABLE covers (
+             id TEXT PRIMARY KEY, file TEXT NOT NULL, hash TEXT, content_type TEXT,
+             size INTEGER, etag TEXT, last_modified TEXT, fetched_at TEXT NOT NULL);",
+    )
+    .execute(&library)
+    .await
+    .unwrap();
+
+    let playlist = memory_pool().await;
+    sqlx::migrate!("./migrations_playlist")
+        .run(&playlist)
+        .await
+        .unwrap();
+    sqlx::query(
+        "INSERT INTO playlist (id, source, name, song_count, duration, fetched_at)
+         VALUES ('pl1', 'subsonic', 'Too Much', 3, 1000, 0)",
+    )
+    .execute(&playlist)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO playlist_song (playlist_id, position, song_id, title)
+         VALUES ('pl1', 0, 's1', 'Stale entry')",
+    )
+    .execute(&playlist)
+    .await
+    .unwrap();
+
+    let dbs = test_dbs_with_credentials(&credentials, &library, &playlist);
+    let json = page_json(&dbs, "pl1", false).await.unwrap();
+    let value: serde_json::Value = serde_json::from_str(&json).unwrap();
+    let songs = value["songs"].as_array().expect("songs");
+    assert_eq!(songs.len(), 3, "the page must show every server entry");
+    assert_eq!(songs[0]["title"], "Too Much");
+    assert_eq!(songs[2]["title"], "Mr. Blue Sky");
+    assert!(
+        songs.iter().all(|song| song["title"] != "Stale entry"),
+        "the stale cache row must be replaced"
+    );
+    let count: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM playlist_song WHERE playlist_id = 'pl1'")
+            .fetch_one(&playlist)
+            .await
+            .unwrap();
+    assert_eq!(count, 3);
+
+    let requests = server.join().expect("server thread");
+    assert!(
+        requests.iter().any(|request| request.contains("getPlaylist.view")),
+        "the stale page refetches getPlaylist: {requests:?}"
+    );
+}
+
+/// A successful server add must reload the ordered `playlist_song` rows (not
+/// just the list count) so an already-open page cannot keep showing the old
+/// entries.
+#[tokio::test]
+async fn add_to_playlist_refreshes_the_server_entries() {
+    use std::io::{Read, Write};
+    use std::time::{Duration, Instant};
+
+    let credentials = memory_pool().await;
+    sqlx::migrate!("./migrations")
+        .run(&credentials)
+        .await
+        .unwrap();
+    crate::crypto::use_test_key();
+
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind loopback");
+    let addr = listener.local_addr().expect("local addr");
+    listener.set_nonblocking(true).unwrap();
+    let server = std::thread::spawn(move || {
+        let mut requests: Vec<String> = Vec::new();
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while requests.len() < 3 && Instant::now() < deadline {
+            let (mut socket, _) = match listener.accept() {
+                Ok(pair) => pair,
+                Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {
+                    std::thread::sleep(Duration::from_millis(10));
+                    continue;
+                }
+                Err(_) => break,
+            };
+            socket.set_read_timeout(Some(Duration::from_secs(5))).ok();
+            let mut buffer = [0u8; 8192];
+            let read = socket.read(&mut buffer).unwrap_or(0);
+            let request = String::from_utf8_lossy(&buffer[..read]).to_string();
+            let body = if request.contains("getPlaylist.view") {
+                r#"{"subsonic-response":{"status":"ok","version":"1.16.1","playlist":{"entry":[{"id":"s1","title":"First","artist":"Artist"},{"id":"s2","title":"Second","artist":"Artist"}]}}}"#
+            } else if request.contains("getPlaylists.view") {
+                r#"{"subsonic-response":{"status":"ok","version":"1.16.1","playlists":{"playlist":[{"id":"pl1","name":"Mix","songCount":2,"duration":500}]}}}"#
+            } else {
+                r#"{"subsonic-response":{"status":"ok","version":"1.16.1"}}"#
+            };
+            let head = format!(
+                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nContent-Type: application/json\r\nConnection: close\r\n\r\n",
+                body.len()
+            );
+            socket.write_all(head.as_bytes()).expect("head");
+            socket.write_all(body.as_bytes()).expect("body");
+            socket.flush().expect("flush");
+            requests.push(request);
+        }
+        requests
+    });
+
+    let server_url = format!("http://{addr}");
+    crate::sqlite::save_credentials(&credentials, "alice", "secret", &server_url, "navidrome")
+        .await
+        .unwrap();
+
+    let library = memory_pool().await;
+    let playlist = memory_pool().await;
+    sqlx::migrate!("./migrations_playlist")
+        .run(&playlist)
+        .await
+        .unwrap();
+    sqlx::query(
+        "INSERT INTO playlist (id, source, name, song_count, duration, fetched_at)
+         VALUES ('pl1', 'subsonic', 'Mix', 1, 100, 0)",
+    )
+    .execute(&playlist)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO playlist_song (playlist_id, position, song_id, title)
+         VALUES ('pl1', 0, 's1', 'Old only')",
+    )
+    .execute(&playlist)
+    .await
+    .unwrap();
+    let dbs = test_dbs_with_credentials(&credentials, &library, &playlist);
+
+    add_to_playlist(&dbs, &["current".into()], "Mix", Some("s2"))
+        .await
+        .unwrap();
+
+    let rows: Vec<(i64, Option<String>, String)> = sqlx::query_as(
+        "SELECT position, song_id, title FROM playlist_song WHERE playlist_id = 'pl1' ORDER BY position",
+    )
+    .fetch_all(&playlist)
+    .await
+    .unwrap();
+    assert_eq!(
+        rows,
+        vec![
+            (0, Some("s1".to_string()), "First".to_string()),
+            (1, Some("s2".to_string()), "Second".to_string()),
+        ],
+        "the cached entries are reloaded after the update"
+    );
+    let count: i64 =
+        sqlx::query_scalar("SELECT song_count FROM playlist WHERE id = 'pl1'")
+            .fetch_one(&playlist)
+            .await
+            .unwrap();
+    assert_eq!(count, 2, "the list count is refreshed too");
+
+    let requests = server.join().expect("server thread");
+    assert!(
+        requests.iter().any(|request| request.contains("updatePlaylist.view")),
+        "updatePlaylist is posted: {requests:?}"
+    );
+    assert!(
+        requests.iter().any(|request| request.contains("getPlaylist.view")),
+        "entries are reloaded: {requests:?}"
+    );
+    assert!(
+        requests.iter().any(|request| request.contains("getPlaylists.view")),
+        "the list is refreshed: {requests:?}"
+    );
+}

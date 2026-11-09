@@ -787,8 +787,13 @@ pub async fn page_json(dbs: &Dbs, playlist_id: &str, offline: bool) -> Result<St
             .bind(playlist_id)
             .fetch_one(&dbs.playlist)
             .await?;
-    if playlist.source == "subsonic"
-        && existing == 0
+    // The list refresh only updates `song_count`; additions/removals made
+    // elsewhere (the server UI, another client) leave `playlist_song` stale.
+    // An empty page always fetches; a count mismatch fetches again so the page
+    // cannot show fewer songs than its own header claims.
+    let stale = playlist.source == "subsonic"
+        && (existing == 0 || existing != playlist.song_count);
+    if stale
         && let Ok(client) = crate::session::client(dbs).await
         && let Err(err) = load_subsonic_songs(dbs, &client, playlist_id).await
     {
@@ -1022,6 +1027,11 @@ pub async fn add_to_playlist(
             .update_playlist_add(&playlist.id, &song_ids)
             .await
             .context("updating the server playlist")?;
+        // The list refresh only carries counts; reload the ordered entries so
+        // an open playlist page (and the next one) shows the new songs.
+        load_subsonic_songs(dbs, &client, &playlist.id)
+            .await
+            .context("refreshing the server playlist songs")?;
         refresh_subsonic(dbs, &client)
             .await
             .context("refreshing the server playlist list")?;
@@ -1059,6 +1069,9 @@ pub async fn remove_from_playlist(
             .update_playlist_remove(&playlist.id, &song_ids)
             .await
             .context("updating the server playlist")?;
+        load_subsonic_songs(dbs, &client, &playlist.id)
+            .await
+            .context("refreshing the server playlist songs")?;
         refresh_subsonic(dbs, &client)
             .await
             .context("refreshing the server playlist list")?;

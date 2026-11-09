@@ -18,6 +18,13 @@ open work; this file is the release history.
   plus search hits for targets; after it, only existing playlist names are
   suggested (DB-backed via a new playlist scope), and Tab replaces the whole
   typed name region (`; Road T` -> `; "Road Trip"`). See `docs/Commands.md`.
+- **Playlist page freshness:** a playlist page now refetches its ordered
+  entries when the cached rows disagree with the list's `song_count`, so a
+  playlist edited elsewhere (or by an earlier add) cannot show a header count
+  of 3 with only 1 row. Server `playlist add`/`rm` also reload the cached
+  entries (not just the list count) before the event, and an open playlist page
+  is reloaded after a successful add/rm, keeping rows, collage and count in
+  sync with the server and library.db.
 - **Playlist removal:** `playlist rm <target...>; <playlist>` mirrors
   `playlist add` — same target resolution (`current`, artist, album, track),
   same cutoff/legacy grammar, and the same playlist-name suggestions after the

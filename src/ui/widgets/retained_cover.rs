@@ -4,7 +4,10 @@
 //! This element keeps the decoded image in the app-owned image cache and paints
 //! the same cover at the row's current origin.
 
+use std::cell::RefCell;
+use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::Instant;
 
 use gpui::{
     App, Bounds, Corners, Element, ElementId, Entity, GlobalElementId, InspectorElementId,
@@ -12,6 +15,18 @@ use gpui::{
 };
 
 use crate::ui::widgets::media::CoverSource;
+
+/// Opt-in cover-load latency log (`MUSIKA_COVER_STATS=1`): row decode latency is
+/// measured from the first prepaint that requested the image to the frame that
+/// first has it, per cover key.
+fn cover_stats_enabled() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var("MUSIKA_COVER_STATS").as_deref() == Ok("1"))
+}
+
+thread_local! {
+    static ROW_REQUESTS: RefCell<HashMap<String, Instant>> = RefCell::new(HashMap::new());
+}
 
 pub(crate) struct RetainedCover {
     id_name: &'static str,
@@ -89,6 +104,8 @@ impl Element for RetainedCover {
         let Some(source) = self.source.as_ref() else {
             return;
         };
+        let stats = cover_stats_enabled();
+        let key = stats.then(|| source.key());
         let resource = source.resource();
         let loaded = self
             .cache
@@ -102,6 +119,27 @@ impl Element for RetainedCover {
             }),
             None => None,
         };
+        // Arm only while the image is still loading; a cached image logs
+        // nothing (it did not cost a load).
+        if let (Some(key), true) = (key.as_ref(), stats) {
+            ROW_REQUESTS.with(|requests| {
+                if self.image.is_some() {
+                    if let Some(started) = requests.borrow_mut().remove(key) {
+                        eprintln!(
+                            "[musika/cover] row {}:{} load_ms={:.2} source={key}",
+                            self.id_name,
+                            self.index,
+                            started.elapsed().as_secs_f64() * 1000.0,
+                        );
+                    }
+                } else {
+                    requests
+                        .borrow_mut()
+                        .entry(key.clone())
+                        .or_insert_with(Instant::now);
+                }
+            });
+        }
     }
 
     fn paint(

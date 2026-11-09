@@ -146,7 +146,7 @@ pub(crate) enum CoverSource {
 }
 
 impl CoverSource {
-    fn key(&self) -> String {
+    pub(crate) fn key(&self) -> String {
         match self {
             Self::Path(path) => path.display().to_string(),
             Self::Remote(url) => url.clone(),

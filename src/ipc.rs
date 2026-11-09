@@ -36,7 +36,17 @@ use std::io::{BufRead, BufReader};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 
-/// Path of the IPC socket (`MUSIKA_IPC_SOCKET` overrides).
+/// Path of the core/UI control socket (`MUSIKA_DAEMON_SOCKET` overrides).
+pub fn daemon_socket_path() -> PathBuf {
+    if let Ok(path) = std::env::var("MUSIKA_DAEMON_SOCKET")
+        && !path.is_empty()
+    {
+        return PathBuf::from(path);
+    }
+    crate::db::config_socket("daemon.sock")
+}
+
+/// Path of the core/UI control socket (`MUSIKA_IPC_SOCKET` overrides).
 pub fn socket_path() -> PathBuf {
     if let Ok(path) = std::env::var("MUSIKA_IPC_SOCKET")
         && !path.is_empty()

@@ -58,6 +58,7 @@ mod model;
 mod mpris;
 mod offline;
 mod player;
+mod protocol;
 mod playlists;
 mod queue;
 mod radio;

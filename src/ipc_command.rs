@@ -8,14 +8,14 @@ use std::fmt;
 
 use crate::bridge::SyncMode;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum WipeScope {
     Album,
     Lyrics,
     Covers,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum QuickDirection {
     North,
     South,
@@ -137,28 +137,28 @@ pub enum IpcCommand {
     Quit,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum ShuffleTarget {
     Queue,
     Album(Option<String>),
     Artist(Option<String>),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum RadioSeed {
     Current,
     Album(Option<String>),
     Song(Option<String>),
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum DownloadScope {
     Artist,
     Album,
     Track,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum DownloadMode {
     Current,
     Direct {
@@ -172,13 +172,13 @@ pub enum DownloadMode {
     },
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct DownloadRequest {
     pub remove: bool,
     pub mode: DownloadMode,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct CurrentTrack {
     pub id: String,
     pub title: String,
@@ -200,7 +200,7 @@ pub struct SuggestionContext {
     pub current: Option<CurrentTrack>,
     pub rows: Vec<ContextRow>,
 }
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum SuggestScope {
     Artist,
     Album,

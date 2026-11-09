@@ -200,6 +200,10 @@ impl Player {
     pub fn state(&self) -> State {
         self.state
     }
+
+    pub fn repeat(&self) -> Repeat {
+        self.repeat
+    }
     pub fn index(&self) -> usize {
         self.index
     }

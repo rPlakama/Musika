@@ -3,7 +3,7 @@
 All notable changes to Musika, newest first. `TASKLISTMAJOR.md` tracks the
 open work; this file is the release history.
 
-## Unreleased
+## 0.6.8 - _Under the hood polish_
 
 - Let the horizontal marquee labels keep their 30 Hz travel cadence even when
   the window is unfocused/idle; the idle 1 Hz policy no longer freezes scrolling

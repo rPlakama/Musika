@@ -194,7 +194,7 @@ impl AppRoot {
             Event::LibrarySynced => {
                 self.sync_progress = 1.0;
                 self.finish_sync();
-                self.marks.requested = None;
+                self.marks.signature = None;
                 self.bridge.refresh_header();
                 self.reload();
                 if let Some(page) = self.page.as_ref() {
@@ -228,7 +228,7 @@ impl AppRoot {
                 }
             }
             Event::Wiped { scope } => {
-                self.marks.requested = None;
+                self.marks.signature = None;
                 match scope.as_str() {
                     "covers" => {
                         if let Some(covers) = COVERS.get()
@@ -295,7 +295,7 @@ impl AppRoot {
             }
             Event::DownloadSettled => {
                 self.push_toast("Download updated.".to_string(), ToastKind::Notice, None);
-                self.marks.requested = None;
+                self.marks.signature = None;
                 self.ensure_marks();
                 if let Some((kind, id)) = self.page.as_ref().and_then(|page| {
                     matches!(page.descriptor.kind, PageKind::Album | PageKind::Artist)
@@ -373,11 +373,9 @@ impl AppRoot {
                 self.warm.insert((scope, order), (count, rows));
             }
             Event::Marks { generation, result } => {
+                // The next render re-checks the window signature; while the
+                // player/fullscreen surfaces render every frame this is enough.
                 self.marks.update(generation, result);
-                if self.marks.dirty {
-                    self.marks.dirty = false;
-                    self.ensure_marks();
-                }
             }
             Event::Restore {
                 volume,
@@ -456,7 +454,7 @@ impl AppRoot {
                 if let Some(index) = reveal_index {
                     self.land_page(index);
                 }
-                self.marks.requested = None;
+                self.marks.signature = None;
                 self.ensure_marks();
                 if let Some((kind, id)) = self.page.as_ref().and_then(|page| {
                     matches!(page.descriptor.kind, PageKind::Album | PageKind::Artist)

@@ -259,9 +259,10 @@ struct MarksState {
     songs_done: std::collections::HashSet<String>,
     albums_done: std::collections::HashSet<String>,
     pending: std::collections::HashSet<String>,
-    requested: Option<(Vec<String>, Vec<String>)>,
+    /// Hash of the window (player ids + visible row ids) last requested.
+    /// `None` forces a new request after a library/page/wipe change.
+    signature: Option<u64>,
     inflight: bool,
-    dirty: bool,
 }
 
 impl MarksState {

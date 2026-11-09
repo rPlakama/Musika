@@ -11,7 +11,7 @@ impl AppRoot {
         }
         self.view.loading = true;
         self.view.rows.clear();
-        self.marks.requested = None;
+        self.marks.signature = None;
         self.generation = self.bridge.load_library(self.view.scope, self.view.order);
     }
 
@@ -228,34 +228,75 @@ impl AppRoot {
         let Some(_viewport) = measured else { return };
         let reference = (self.win_h - 100.0).max(1.0);
         if self.page_scroll_modal.ensure_metrics_ref(reference) {
-            self.marks.requested = None;
+            self.marks.signature = None;
             self.follow_page(false);
         }
     }
 
+    /// Stable hash of the marks window: the current track ids plus the ids of
+    /// the visible rows. An unchanged window therefore costs a hash per frame
+    /// and no allocation; a scroll, page change, track change or explicit
+    /// invalidation (`signature = None`) triggers one request.
+    fn marks_signature(&self) -> u64 {
+        let player = self
+            .player
+            .current()
+            .map(|track| (track.id.as_str(), track.album_id.as_str()));
+        if let Some(page) = self.page.as_ref() {
+            let (top, viewport) = {
+                let state = self.page_scroll_modal.handle.0.borrow();
+                let top = state.base_handle.logical_scroll_top().0;
+                let viewport = state
+                    .last_item_size
+                    .map(|size| f32::from(size.item.height))
+                    .unwrap_or(600.0);
+                (top, viewport)
+            };
+            let visible = ((viewport / self.page_scroll_modal.row_h).ceil() as usize).max(1);
+            let lo = top.saturating_sub(10);
+            let hi = (top + visible + 10).min(page.rows.len().saturating_sub(1));
+            let rows = page
+                .rows
+                .get(lo..=hi)
+                .unwrap_or_default()
+                .iter()
+                .map(|row| (row.song_id.as_str(), row.album_id.as_str()));
+            marks_signature(1, player, rows)
+        } else {
+            marks_signature(
+                0,
+                player,
+                self.view
+                    .rows
+                    .live
+                    .iter()
+                    .map(|row| (row.song_id.as_str(), row.album_id.as_str())),
+            )
+        }
+    }
+
     pub(in crate::ui) fn ensure_marks(&mut self) {
-        if self.marks.inflight {
-            self.marks.dirty = true;
+        let signature = self.marks_signature();
+        if self.marks.signature == Some(signature) || self.marks.inflight {
             return;
         }
-        let mut songs = Vec::new();
-        let mut albums = Vec::new();
-        let mut seen = std::collections::HashSet::new();
+        let mut songs: Vec<String> = Vec::new();
+        let mut albums: Vec<String> = Vec::new();
         // The fullscreen title shows the current track's marks even when it is
         // not part of the visible list window.
         if let Some(track) = self.player.current() {
-            if !track.id.is_empty() && seen.insert(format!("s:{}", track.id)) {
+            if !track.id.is_empty() {
                 songs.push(track.id.clone());
             }
-            if !track.album_id.is_empty() && seen.insert(format!("a:{}", track.album_id)) {
+            if !track.album_id.is_empty() {
                 albums.push(track.album_id.clone());
             }
         }
         let mut push = |row: &Row, songs: &mut Vec<String>, albums: &mut Vec<String>| {
-            if !row.song_id.is_empty() && seen.insert(format!("s:{}", row.song_id)) {
+            if !row.song_id.is_empty() {
                 songs.push(row.song_id.clone());
             }
-            if !row.album_id.is_empty() && seen.insert(format!("a:{}", row.album_id)) {
+            if !row.album_id.is_empty() {
                 albums.push(row.album_id.clone());
             }
         };
@@ -280,13 +321,14 @@ impl AppRoot {
                 push(row, &mut songs, &mut albums);
             }
         }
+        songs.sort_unstable();
+        songs.dedup();
+        albums.sort_unstable();
+        albums.dedup();
         if songs.is_empty() && albums.is_empty() {
             return;
         }
-        if self.marks.requested.as_ref() == Some(&(songs.clone(), albums.clone())) {
-            return;
-        }
-        self.marks.requested = Some((songs.clone(), albums.clone()));
+        self.marks.signature = Some(signature);
         self.marks.inflight = true;
         if self.trace {
             crate::debug_log!(
@@ -591,5 +633,58 @@ impl AppRoot {
             return;
         }
         self.open_row_page(row);
+    }
+}
+
+/// Hash of one marks window. Split out so the "unchanged window is a no-op"
+/// contract has a unit test without a window.
+fn marks_signature<'a, I>(domain: u8, player: Option<(&'a str, &'a str)>, rows: I) -> u64
+where
+    I: Iterator<Item = (&'a str, &'a str)>,
+{
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    domain.hash(&mut hasher);
+    match player {
+        Some((song, album)) => {
+            song.hash(&mut hasher);
+            album.hash(&mut hasher);
+        }
+        None => u8::MAX.hash(&mut hasher),
+    }
+    for (song, album) in rows {
+        song.hash(&mut hasher);
+        album.hash(&mut hasher);
+    }
+    hasher.finish()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::marks_signature;
+
+    fn rows<'a>(ids: &'a [(&'a str, &'a str)]) -> impl Iterator<Item = (&'a str, &'a str)> + 'a {
+        ids.iter().copied()
+    }
+
+    #[test]
+    fn identical_windows_hash_equal() {
+        let a = [("s1", "a1"), ("s2", "a2")];
+        let b = [("s1", "a1"), ("s2", "a2")];
+        assert_eq!(
+            marks_signature(0, Some(("p1", "pa")), rows(&a)),
+            marks_signature(0, Some(("p1", "pa")), rows(&b)),
+        );
+    }
+
+    #[test]
+    fn changed_rows_player_or_domain_hash_differently() {
+        let window = [("s1", "a1"), ("s2", "a2")];
+        let scrolled = [("s2", "a2"), ("s3", "a3")];
+        let base = marks_signature(0, Some(("p1", "pa")), rows(&window));
+        assert_ne!(base, marks_signature(0, Some(("p1", "pa")), rows(&scrolled)));
+        assert_ne!(base, marks_signature(0, Some(("p2", "pa")), rows(&window)));
+        assert_ne!(base, marks_signature(0, None, rows(&window)));
+        assert_ne!(base, marks_signature(1, Some(("p1", "pa")), rows(&window)));
     }
 }

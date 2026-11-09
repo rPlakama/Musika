@@ -11,8 +11,6 @@ use gpui::{
     Pixels, ShapedLine, SharedString, Style, TextRun, Window, point, px,
 };
 
-use super::super::perf;
-
 const INITIAL_PAUSE: f32 = 0.8;
 const END_PAUSE: f32 = 1.0;
 const SPEED: f32 = 36.0;
@@ -73,12 +71,6 @@ impl MarqueeCache {
             overflow,
             started: Instant::now(),
         }
-    }
-
-    /// Seconds until the marquee needs another frame: 1/30 s while travelling,
-    /// the remainder of the pause while holding. `INFINITY` when it fits.
-    fn next_change_in(&self, now: Instant) -> f32 {
-        next_change_in(self.overflow, self.started, now)
     }
 
     fn offset_at(&self, now: Instant) -> f32 {
@@ -195,7 +187,7 @@ impl Element for MarqueeText {
                 _ => MarqueeCache::shape(key, window),
             };
             if cache.overflow > 0.0 {
-                perf::note_marquee(f64::from(cache.next_change_in(now)));
+                window.request_animation_frame();
             }
             (
                 MarqueePaint {
@@ -223,71 +215,5 @@ impl Element for MarqueeText {
             bounds.origin.y + (bounds.size.height - line_height) * 0.5,
         );
         paint.line.paint(origin, line_height, window, cx).ok();
-    }
-}
-
-/// Time until the next marquee frame is due. Split from `MarqueeCache` so the
-/// cycle arithmetic is unit-testable without a window.
-fn next_change_in(overflow: f32, started: Instant, now: Instant) -> f32 {
-    if overflow <= 0.0 {
-        return f32::INFINITY;
-    }
-    let travel = overflow / SPEED;
-    let cycle = INITIAL_PAUSE + travel + END_PAUSE + travel;
-    if cycle <= 0.0 {
-        return f32::INFINITY;
-    }
-    let phase = now.saturating_duration_since(started).as_secs_f32() % cycle;
-    let travel_end = INITIAL_PAUSE + travel;
-    let end_pause_end = travel_end + END_PAUSE;
-    if phase < INITIAL_PAUSE {
-        INITIAL_PAUSE - phase
-    } else if phase < travel_end {
-        1.0 / 30.0
-    } else if phase < end_pause_end {
-        end_pause_end - phase
-    } else {
-        1.0 / 30.0
-    }
-}
-
-#[cfg(test)]
-mod timing_tests {
-    use super::*;
-    use std::time::Duration;
-
-    fn at(started: Instant, elapsed: f32) -> Instant {
-        started + Duration::from_secs_f32(elapsed)
-    }
-
-    #[test]
-    fn no_overflow_never_wakes() {
-        let started = Instant::now();
-        assert_eq!(next_change_in(0.0, started, started), f32::INFINITY);
-    }
-
-    #[test]
-    fn initial_pause_waits_for_its_end() {
-        let started = Instant::now();
-        let next = next_change_in(12.0, started, started);
-        assert!((next - INITIAL_PAUSE).abs() < 1e-4, "next={next}");
-    }
-
-    #[test]
-    fn travel_wakes_at_thirty_fps_and_end_pause_waits() {
-        let started = Instant::now();
-        // 12 px of overflow at 36 px/s = 1/3 s of travel.
-        let travel = 12.0 / SPEED;
-        let mut now = at(started, INITIAL_PAUSE + travel / 2.0);
-        assert!((next_change_in(12.0, started, now) - 1.0 / 30.0).abs() < 1e-4);
-
-        // 0.1 s into the end pause: wake at its end, not every frame.
-        now = at(started, INITIAL_PAUSE + travel + 0.1);
-        let next = next_change_in(12.0, started, now);
-        assert!((next - (END_PAUSE - 0.1)).abs() < 1e-4, "next={next}");
-
-        // Return travel wakes at 30 fps again.
-        now = at(started, INITIAL_PAUSE + travel + END_PAUSE + travel / 2.0);
-        assert!((next_change_in(12.0, started, now) - 1.0 / 30.0).abs() < 1e-4);
     }
 }

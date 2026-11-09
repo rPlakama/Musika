@@ -803,10 +803,8 @@ impl AppRoot {
                             this.repeat = this.player.repeat();
                         }
                         UiUpdate::Tick(tick) => {
-                            // Position ticks only refresh the mirror. The frame
-                            // ticker decides when a playing window repaints, so
-                            // an unfocused plain window stays at its idle cadence
-                            // instead of waking the renderer at 10 Hz.
+                            // Position ticks only refresh the mirror; the
+                            // playing render requests its own next frame.
                             let old_state = this.player.state();
                             let old_index = this.player.index();
                             let old_loading = this.player.is_loading();
@@ -1007,7 +1005,6 @@ impl AppRoot {
         {
             app.open_descriptor(descriptor);
         }
-        AppRoot::spawn_frame_ticker(cx);
         app
     }
 

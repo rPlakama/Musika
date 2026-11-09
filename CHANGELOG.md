@@ -3,6 +3,14 @@
 All notable changes to Musika, newest first. `TASKLISTMAJOR.md` tracks the
 open work; this file is the release history.
 
+## Unreleased
+
+- Remove the idle repaint ticker and its 10 Hz/1 Hz/30 Hz demand throttle now
+  that playback lives in the headless core. The UI requests the next frame for
+  moving transport, loaders, sync, toasts and marquee/wrapping text itself, so
+  animation runs at the renderer's rate regardless of focus or idle state;
+  idle windows that have nothing moving stop repainting entirely.
+
 ## 0.6.8 - _Under the hood polish_
 
 - Let the horizontal marquee labels keep their 30 Hz travel cadence even when

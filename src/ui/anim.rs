@@ -70,12 +70,6 @@ impl Clock {
         }
     }
 
-    /// Current clock reading without advancing `dt` (used by the frame ticker,
-    /// which must not disturb the per-frame delta).
-    pub fn peek(&self) -> f64 {
-        self.start.elapsed().as_secs_f64()
-    }
-
     pub fn tick(&mut self) -> f32 {
         let now = self.start.elapsed().as_secs_f64();
         let dt = (now - self.now) as f32;

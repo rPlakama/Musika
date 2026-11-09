@@ -13,6 +13,7 @@ impl Render for AppRoot {
         self.win_w = viewport_w;
         self.win_h = viewport_h;
         self.scale_factor = window.scale_factor();
+        perf::set_window_active(window.is_window_active());
         self.refresh_lyrics_overlay();
         if self.trace && self.frames.is_multiple_of(120) {
             crate::debug_log!("GPUI trace: frame {}", self.frames);
@@ -26,7 +27,7 @@ impl Render for AppRoot {
         if resized {
             // The list lays the new viewport out during this frame; re-center
             // on the next available frame instead of after a fixed delay.
-            window.request_animation_frame();
+            perf::request_frame(window, "resize");
         }
         if recenter {
             self.recenter_after_resize();
@@ -35,7 +36,7 @@ impl Render for AppRoot {
         self.frame_hud.observe(self.clock.dt);
         palette::publish(self.palette_motion.value(&self.clock));
         if !self.palette_motion.settled(&self.clock) {
-            window.request_animation_frame();
+            perf::request_frame(window, "palette");
         }
         self.sync_palette();
         let playback_index = self.player.index();
@@ -73,14 +74,6 @@ impl Render for AppRoot {
         for command in pending {
             self.execute_ipc_command(command, window, cx);
         }
-        if self.player.state() != crate::player::State::Stopped
-            && let Some(message) = self.player.pump()
-        {
-            self.playback_error = Some(message);
-        }
-        if self.player.state() == crate::player::State::Playing {
-            window.request_animation_frame();
-        }
         let progress = self.search_anim.target(
             if self.search_open { 1.0 } else { 0.0 },
             anim::STANDARD_MS,
@@ -95,12 +88,12 @@ impl Render for AppRoot {
             self.search = None;
         }
         if self.search.is_some() && !self.search_anim.settled(&self.clock) {
-            window.request_animation_frame();
+            perf::request_frame(window, "search-anim");
         }
         if self.search.as_ref().is_some_and(|search| search.loading)
             || self.search_denied_opacity() > 0.0
         {
-            window.request_animation_frame();
+            perf::request_frame(window, "search-loading");
         }
         let line_progress = self.line_search_anim.target(
             if self.line_search.open { 1.0 } else { 0.0 },
@@ -113,7 +106,7 @@ impl Render for AppRoot {
             &self.clock,
         );
         if !self.line_search_anim.settled(&self.clock) || self.line_search_denied_opacity() > 0.0 {
-            window.request_animation_frame();
+            perf::request_frame(window, "line-search");
         }
         let line_overlay = (self.line_search.open || line_progress > 0.001)
             .then(|| self.line_search_overlay(window, line_progress));
@@ -126,14 +119,14 @@ impl Render for AppRoot {
         if !self.command_line_anim.settled(&self.clock)
             || self.command_line.denied_opacity(self.clock.now) > 0.0
         {
-            window.request_animation_frame();
+            perf::request_frame(window, "command-line");
         }
         let command_overlay = (self.command_line.is_open() || command_progress > 0.001)
             .then(|| self.command_line_overlay(window, command_progress));
         self.animate_alt(if self.alt.armed { 1.0 } else { 0.0 });
         let alt_progress = self.alt_spawn.value(&self.clock);
         if !self.alt_spawn.settled(&self.clock) {
-            window.request_animation_frame();
+            perf::request_frame(window, "alt");
         }
         if !self.alt.armed && alt_progress <= 0.001 {
             self.alt_menu = None;
@@ -152,7 +145,7 @@ impl Render for AppRoot {
             &self.clock,
         );
         if !self.queue_anim.settled(&self.clock) {
-            window.request_animation_frame();
+            perf::request_frame(window, "queue");
         }
         let fullscreen_progress = self.fullscreen_anim.target(
             if self.fullscreen { 1.0 } else { 0.0 },
@@ -165,7 +158,7 @@ impl Render for AppRoot {
             &self.clock,
         );
         if !self.fullscreen_anim.settled(&self.clock) {
-            window.request_animation_frame();
+            perf::request_frame(window, "fullscreen");
         }
         if self.fullscreen {
             self.request_current_lyrics();
@@ -219,7 +212,7 @@ impl Render for AppRoot {
             &self.clock,
         );
         if !self.lyrics_overlay_anim.settled(&self.clock) {
-            window.request_animation_frame();
+            perf::request_frame(window, "lyrics-overlay");
         }
         let fullscreen_overlay = (self.fullscreen || fullscreen_progress > 0.001)
             .then(|| self.fullscreen_overlay(fullscreen_progress, cx));
@@ -234,7 +227,7 @@ impl Render for AppRoot {
             .iter()
             .any(|toast| self.clock.now - toast.created_at < 6.320)
         {
-            window.request_animation_frame();
+            perf::request_frame(window, "toast");
         }
         let toast_overlay = (!self.toasts.is_empty()).then(|| self.toast_overlay(&*cx));
         let queue_overlay = (self.queue_open || queue_progress > 0.001)
@@ -245,7 +238,7 @@ impl Render for AppRoot {
             .map(|search| self.search_overlay(window, &*cx, search, progress));
         let description_overlay = self.description_overlay(&*cx);
         if let Some(started) = self.exiting {
-            window.request_animation_frame();
+            perf::request_frame(window, "exiting");
             if self.clock.now - started >= 0.200 {
                 self.flush_status();
                 window.remove_window();
@@ -289,7 +282,7 @@ impl Render for AppRoot {
             | self.queue_scroll_modal.apply(self.clock.now)
             | self.search_scroll.apply(self.clock.now);
         if following {
-            window.request_animation_frame();
+            perf::request_frame(window, "follow");
         }
         let top = self.top_bar(&*cx);
         let body = if self.page.is_some() {
@@ -302,7 +295,7 @@ impl Render for AppRoot {
         }) || !self.library_hover_fill.settled(&self.clock)
             || !self.page_hover_fill.settled(&self.clock)
         {
-            window.request_animation_frame();
+            perf::request_frame(window, "row-emphasis");
         }
         if !self.lyrics_shift.settled(&self.clock)
             || !self.lyrics_track_fade.settled(&self.clock)
@@ -319,16 +312,16 @@ impl Render for AppRoot {
                 .values()
                 .any(|color| !color.settled(&self.clock))
         {
-            window.request_animation_frame();
+            perf::request_frame(window, "lyrics-behaviors");
         }
         if self.player.is_loading() {
-            window.request_animation_frame();
+            perf::request_frame(window, "loading");
         }
         if self.syncing
             || !self.sync_settle.settled(&self.clock)
             || !self.sync_fill.settled(&self.clock)
         {
-            window.request_animation_frame();
+            perf::request_frame(window, "sync");
         }
         let status = self.player_bar();
         #[cfg(debug_assertions)]
@@ -435,6 +428,7 @@ impl Render for AppRoot {
                 Some(o) => o,
                 None => div().into_any_element(),
             });
+        perf::note_notify(self.clock.now);
         perf::record_frame(frame_started, &*self);
         #[cfg(debug_assertions)]
         let root = root.child(frame_hud);

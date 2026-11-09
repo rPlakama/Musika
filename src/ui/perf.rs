@@ -27,6 +27,7 @@ struct Stats {
     len: usize,
     since_report: usize,
     last_shapes: u64,
+    last_raf: std::collections::HashMap<&'static str, u64>,
 }
 
 impl Default for Stats {
@@ -38,6 +39,7 @@ impl Default for Stats {
             len: 0,
             since_report: 0,
             last_shapes: 0,
+            last_raf: std::collections::HashMap::new(),
         }
     }
 }
@@ -123,6 +125,16 @@ pub(crate) fn record_frame(started: Instant, root: &AppRoot) {
         intervals_sorted.sort_by(f32::total_cmp);
         let mut render_sorted = render.clone();
         render_sorted.sort_by(f32::total_cmp);
+        let raf_now = RAF_SITES.with(|sites| sites.borrow().clone());
+        let mut raf_delta: Vec<(&'static str, u64)> = raf_now
+            .iter()
+            .map(|(site, count)| {
+                (*site, count.saturating_sub(*stats.last_raf.get(site).unwrap_or(&0)))
+            })
+            .filter(|(_, delta)| *delta > 0)
+            .collect();
+        raf_delta.sort_by(|a, b| b.1.cmp(&a.1));
+        stats.last_raf = raf_now;
         Some((
             since_report,
             mean(&intervals),
@@ -130,9 +142,18 @@ pub(crate) fn record_frame(started: Instant, root: &AppRoot) {
             mean(&render),
             percentile(&render_sorted, 0.95),
             shapes_delta,
+            raf_delta,
         ))
     });
-    let Some((frames, mean_interval, p95_interval, mean_render, p95_render, shapes_delta)) = report
+    let Some((
+        frames,
+        mean_interval,
+        p95_interval,
+        mean_render,
+        p95_render,
+        shapes_delta,
+        raf_delta,
+    )) = report
     else {
         return;
     };
@@ -157,6 +178,115 @@ pub(crate) fn record_frame(started: Instant, root: &AppRoot) {
         super::perf::window_active() as u8,
         rss_mib(),
     );
+    let raf: Vec<String> = raf_delta
+        .iter()
+        .map(|(site, count)| format!("{site}:{count}"))
+        .collect();
+    if !raf.is_empty() {
+        eprintln!("[musika/raf] {}", raf.join(" "));
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Animation-frame call sites. Every `request_animation_frame` in the UI goes
+// through here so `MUSIKA_FRAME_STATS` can attribute a runaway repaint chain to
+// the site that caused it.
+// ---------------------------------------------------------------------------
+
+thread_local! {
+    static RAF_SITES: RefCell<std::collections::HashMap<&'static str, u64>> =
+        RefCell::new(std::collections::HashMap::new());
+}
+
+#[cfg(test)]
+pub(crate) fn reset_raf_sites() {
+    RAF_SITES.with(|sites| sites.borrow_mut().clear());
+}
+
+/// Requests one frame, attributing it to `site` for the frame summary.
+pub(crate) fn request_frame(window: &mut gpui::Window, site: &'static str) {
+    if enabled() {
+        RAF_SITES.with(|sites| {
+            *sites.borrow_mut().entry(site).or_insert(0) += 1;
+        });
+    }
+    window.request_animation_frame();
+}
+
+// ---------------------------------------------------------------------------
+// Frame pacing: the app requests repaints from one ticker instead of asking
+// for a frame on every render (the GPUI request itself is a full-tree redraw).
+// ---------------------------------------------------------------------------
+
+/// Sources that can keep the UI moving. Built by the ticker from live state.
+#[derive(Debug, Clone, Copy, Default)]
+pub(crate) struct Demand {
+    /// Transport is playing: the progress bar and time label move.
+    pub playing: bool,
+    /// The window is not focused: only slow progress upkeep is needed.
+    pub inactive: bool,
+}
+
+/// One ticker decision: whether to notify the root view now, and how long to
+/// sleep before the next check.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct Decision {
+    pub notify: bool,
+    pub sleep_ms: u64,
+}
+
+/// Full rate while playing (~10 Hz is sub-pixel on a normal progress bar).
+const PLAYING_INTERVAL: f64 = 0.1;
+/// Inactive windows only need the clock to keep moving.
+const INACTIVE_INTERVAL: f64 = 1.0;
+/// Never sleep longer than this, so input/events are picked up promptly.
+const MAX_SLEEP_MS: u64 = 250;
+
+/// Pure pacing decision. `last_notify` is the last render/notify timestamp on
+/// the same clock as `now` (seconds).
+pub(crate) fn decide(now: f64, demand: Demand, last_notify: f64) -> Decision {
+    if !demand.playing {
+        return Decision {
+            notify: false,
+            sleep_ms: MAX_SLEEP_MS,
+        };
+    }
+    let interval = if demand.inactive {
+        INACTIVE_INTERVAL
+    } else {
+        PLAYING_INTERVAL
+    };
+    // Tolerate float noise in accumulated timestamps (e.g. 10.1 - 10.0).
+    const EPSILON: f64 = 1e-9;
+    let due = now - last_notify + EPSILON >= interval;
+    let sleep_ms = ((interval * 1000.0).ceil() as u64).clamp(5, MAX_SLEEP_MS);
+    Decision {
+        notify: due,
+        sleep_ms,
+    }
+}
+
+thread_local! {
+    static LAST_NOTIFY: std::cell::Cell<f64> = const { std::cell::Cell::new(f64::NEG_INFINITY) };
+    static LAST_PUMP: std::cell::Cell<f64> = const { std::cell::Cell::new(f64::NEG_INFINITY) };
+}
+
+pub(crate) fn last_notify() -> f64 {
+    LAST_NOTIFY.with(|slot| slot.get())
+}
+
+/// Records that a render (or a ticker notify) happened at `now`.
+pub(crate) fn note_notify(now: f64) {
+    LAST_NOTIFY.with(|slot| slot.set(now));
+}
+
+/// At most one pump per 100 ms, independent of render cadence.
+pub(crate) fn pump_due(now: f64) -> bool {
+    if now - LAST_PUMP.with(|slot| slot.get()) < PLAYING_INTERVAL {
+        return false;
+    }
+    LAST_PUMP.with(|slot| slot.set(now));
+    true
 }
 
 // ---------------------------------------------------------------------------
@@ -186,6 +316,41 @@ mod tests {
         assert_eq!(percentile(&values, 0.5), 3.0);
         assert_eq!(percentile(&values, 1.0), 5.0);
         assert_eq!(percentile(&[], 0.5), 0.0);
+    }
+
+    #[test]
+    fn playing_repaints_at_ten_hz_and_idles_otherwise() {
+        let playing = Demand {
+            playing: true,
+            inactive: false,
+        };
+        // First frame after playback started: notify immediately.
+        let first = decide(10.0, playing, f64::NEG_INFINITY);
+        assert!(first.notify);
+        assert_eq!(first.sleep_ms, 100);
+        // 50 ms later: not due yet.
+        let early = decide(10.05, playing, 10.0);
+        assert!(!early.notify);
+        // 100 ms later: due.
+        let due = decide(10.1, playing, 10.0);
+        assert!(due.notify);
+        // Stopped: no notifications, but keep waking up.
+        let idle = decide(20.0, Demand::default(), 10.2);
+        assert!(!idle.notify);
+        assert_eq!(idle.sleep_ms, MAX_SLEEP_MS);
+    }
+
+    #[test]
+    fn inactive_window_falls_back_to_one_hz() {
+        let inactive = Demand {
+            playing: true,
+            inactive: true,
+        };
+        let first = decide(1.0, inactive, 0.9);
+        assert!(!first.notify);
+        let due = decide(1.0, inactive, 0.0);
+        assert!(due.notify);
+        assert_eq!(due.sleep_ms, MAX_SLEEP_MS);
     }
 
     #[test]

@@ -907,6 +907,7 @@ impl AppRoot {
         {
             app.open_descriptor(descriptor);
         }
+        AppRoot::spawn_frame_ticker(cx);
         app
     }
 

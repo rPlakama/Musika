@@ -87,6 +87,11 @@ fn is_eagain(error: Error) -> bool {
     matches!(error, Error::Other { errno } if errno == ffmpeg::error::EAGAIN)
 }
 
+fn seek_trim(target: f64, start: f64, produced: usize) -> Option<usize> {
+    let drop = ((target - start) * f64::from(TARGET_RATE)).round().max(0.0) as usize;
+    (drop < produced).then_some(drop)
+}
+
 /// Open an input with the fast HTTP/stream options, falling back once to
 /// FFmpeg defaults. The interrupt callback latches on `stop`, so a stalled
 /// network open or read aborts promptly and the open error is not retried.
@@ -165,6 +170,7 @@ pub(crate) struct Decoder {
     resampler_flushed: bool,
     /// Terminal state until `seek` clears it.
     eof: bool,
+    seek_target: Option<f64>,
 }
 
 impl Decoder {
@@ -249,6 +255,7 @@ impl Decoder {
             decoder_eof: false,
             resampler_flushed: false,
             eof: false,
+            seek_target: None,
         })
     }
 
@@ -313,6 +320,7 @@ impl Decoder {
         self.decoder_eof = false;
         self.resampler_flushed = false;
         self.eof = false;
+        self.seek_target = Some(seconds);
         self.unref_decoded();
         self.unref_packet();
 
@@ -410,9 +418,25 @@ impl Decoder {
                         self.unref_decoded();
                         continue;
                     }
+                    let trim = self.seek_target.and_then(|target| {
+                        let timestamp = self.decoded.timestamp()?;
+                        let time_base = self.stream_time_base;
+                        let start = timestamp as f64 * f64::from(time_base.numerator())
+                            / f64::from(time_base.denominator());
+                        Some((target, start))
+                    });
                     let produced = self.resample_decoded();
                     self.unref_decoded();
                     let produced = produced?;
+                    if let Some((target, start)) = trim {
+                        if let Some(drop) = seek_trim(target, start, produced) {
+                            self.pending_frames = produced;
+                            self.pending_offset = drop;
+                            self.seek_target = None;
+                            return Ok(true);
+                        }
+                        continue;
+                    }
                     if produced > 0 {
                         self.pending_frames = produced;
                         self.pending_offset = 0;
@@ -778,6 +802,15 @@ mod tests {
                 .any(|frame| frame[0] != frame[1]),
             "stereo channels must stay interleaved, not collapsed to mono"
         );
+    }
+
+    #[test]
+    fn seek_trim_skips_whole_frames_before_the_target() {
+        assert_eq!(super::seek_trim(7.5, 7.4935, 960), Some(312));
+        assert_eq!(super::seek_trim(7.5, 7.5, 960), Some(0));
+        assert_eq!(super::seek_trim(7.5, 7.51, 960), Some(0));
+        assert_eq!(super::seek_trim(7.5, 7.0, 960), None);
+        assert_eq!(super::seek_trim(7.5, 7.0, 0), None);
     }
 
     #[test]

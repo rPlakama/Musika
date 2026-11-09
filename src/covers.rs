@@ -483,17 +483,53 @@ async fn remove_orphans(pool: &SqlitePool, dir: &std::path::Path) -> Result<()> 
         .await?;
     let kept: HashSet<String> = kept.into_iter().collect();
     let kept_thumbs: HashSet<String> = kept.iter().map(|file| thumb_name(file)).collect();
+    // The display tier (`<stem>_<edge>x<edge>.<ext>`, generated on demand for
+    // page heroes) is also derived from a kept blob. The sweep used to delete
+    // it, forcing a raw re-decode on every album page until the next request.
+    let kept_stems: HashSet<String> = kept
+        .iter()
+        .filter_map(|file| {
+            Path::new(file)
+                .file_stem()
+                .and_then(|stem| stem.to_str())
+                .map(str::to_string)
+        })
+        .collect();
 
     let Ok(entries) = std::fs::read_dir(dir) else {
         return Ok(());
     };
     for entry in entries.flatten() {
         let name = entry.file_name().to_string_lossy().to_string();
-        if name.ends_with(".tmp") || (!kept.contains(&name) && !kept_thumbs.contains(&name)) {
+        if name.ends_with(".tmp")
+            || (!kept.contains(&name)
+                && !kept_thumbs.contains(&name)
+                && !is_display_copy(&name, &kept_stems))
+        {
             let _ = std::fs::remove_file(entry.path());
         }
     }
     Ok(())
+}
+
+/// True for a generated display copy of a kept cover
+/// (`<stem>_<edge>x<edge>.<ext>`); `kept_stems` holds the stem of every blob in
+/// the covers index.
+fn is_display_copy(name: &str, kept_stems: &HashSet<String>) -> bool {
+    if name.ends_with(".tmp") {
+        return false;
+    }
+    let Some((base, _extension)) = name.rsplit_once('.') else {
+        return false;
+    };
+    let Some((stem, suffix)) = base.rsplit_once('_') else {
+        return false;
+    };
+    let Some((width, height)) = suffix.split_once('x') else {
+        return false;
+    };
+    let digits = |value: &str| !value.is_empty() && value.bytes().all(|byte| byte.is_ascii_digit());
+    digits(width) && digits(height) && kept_stems.contains(stem)
 }
 
 pub(crate) fn extension(content_type: Option<&str>) -> &'static str {
@@ -755,8 +791,9 @@ pub async fn url_map_of(dbs: &crate::db::Dbs, ids: &[String]) -> Result<HashMap<
         return Ok(map);
     };
     for id in &missing {
-        if let Ok(url) = client.endpoint_url("getCoverArt", &[("id", id.clone())]) {
-            map.insert(id.clone(), url.to_string());
+        let url = row_cover_url(&client, id);
+        if !url.is_empty() {
+            map.insert(id.clone(), url);
         }
     }
 
@@ -792,6 +829,22 @@ pub(crate) fn provider_cover_url(client: &SubsonicClient, id: &str) -> String {
     }
     client
         .endpoint_url("getCoverArt", &[("id", id.to_string())])
+        .map(|url| url.to_string())
+        .unwrap_or_default()
+}
+
+/// The provider URL a *row* should stream when the local cache is cold.
+///
+/// Rows paint at most ~90 logical pixels, so requesting the provider's
+/// row-sized variant avoids downloading and decoding the original (median
+/// ~0.7 MB, p90 3-6 MB) just to show a thumbnail. Hero/fallback callers keep
+/// using [`provider_cover_url`], which has no `size` parameter.
+pub(crate) fn row_cover_url(client: &SubsonicClient, id: &str) -> String {
+    client
+        .endpoint_url(
+            "getCoverArt",
+            &[("id", id.to_string()), ("size", "320".to_string())],
+        )
         .map(|url| url.to_string())
         .unwrap_or_default()
 }
@@ -1016,4 +1069,79 @@ async fn cached_urls(pool: &SqlitePool, ids: &[String]) -> Result<HashMap<String
         });
     }
     Ok(map)
+}
+
+#[cfg(test)]
+mod orphan_tests {
+    use super::*;
+    use std::str::FromStr;
+
+    fn memory_pool() -> SqlitePool {
+        let options = sqlx::sqlite::SqliteConnectOptions::from_str("sqlite::memory:").unwrap();
+        let pool = sqlx::sqlite::SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect_with(options);
+        crate::app::runtime().block_on(async {
+            let pool = pool.await.unwrap();
+            sqlx::migrate!("./migrations_covers")
+                .run(&pool)
+                .await
+                .unwrap();
+            pool
+        })
+    }
+
+    #[test]
+    fn display_copy_names_are_recognised() {
+        let stems: HashSet<String> = ["raw-abc".to_string()].into();
+        assert!(is_display_copy("raw-abc_1024x1024.jpg", &stems));
+        assert!(is_display_copy("raw-abc_256x256.webp", &stems));
+        assert!(!is_display_copy("raw-abc.jpg", &stems));
+        assert!(!is_display_copy("raw-abc.thumb.jpg", &stems));
+        assert!(!is_display_copy("raw-other_1024x1024.jpg", &stems));
+        assert!(!is_display_copy("raw-abc_1024x1024.tmp", &stems));
+        assert!(!is_display_copy("raw-abc_axb.jpg", &stems));
+    }
+
+    #[test]
+    fn sweep_keeps_display_copies_and_removes_unknown_blobs() {
+        let dir = std::env::temp_dir().join(format!(
+            "musika-covers-sweep-{}-{:?}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        for name in [
+            "raw-abc.jpg",
+            "raw-abc.thumb.jpg",
+            "raw-abc_1024x1024.jpg",
+            "raw-abc_256x256.jpg",
+            "stray.jpg",
+        ] {
+            std::fs::write(dir.join(name), b"x").unwrap();
+        }
+        let pool = memory_pool();
+        crate::app::runtime().block_on(async {
+            sqlx::query("INSERT INTO covers (id, file, fetched_at) VALUES ('abc', 'raw-abc.jpg', '0')")
+                .execute(&pool)
+                .await
+                .unwrap();
+            remove_orphans(&pool, &dir).await.unwrap();
+        });
+        assert!(dir.join("raw-abc.jpg").exists(), "raw blob removed");
+        assert!(dir.join("raw-abc.thumb.jpg").exists(), "thumb removed");
+        assert!(
+            dir.join("raw-abc_1024x1024.jpg").exists(),
+            "display copy must survive the sweep"
+        );
+        assert!(
+            dir.join("raw-abc_256x256.jpg").exists(),
+            "other display bucket removed"
+        );
+        assert!(!dir.join("stray.jpg").exists(), "unknown blob kept");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

@@ -21,6 +21,26 @@ fn endpoint_url_has_auth_and_extra_params() {
 }
 
 #[test]
+fn row_cover_fallback_requests_the_row_size_variant() {
+    let client = SubsonicClient::new("navidrome.example.com/", "alice", "secret");
+    let url = crate::covers::row_cover_url(&client, "al-1");
+    let parsed = reqwest::Url::parse(&url).expect("row cover url");
+    let query: std::collections::HashMap<_, _> = parsed.query_pairs().into_owned().collect();
+    assert_eq!(query.get("id").unwrap(), "al-1");
+    assert_eq!(
+        query.get("size").unwrap(),
+        "320",
+        "rows should stream the row-sized variant, not the original"
+    );
+    assert_eq!(parsed.path(), "/rest/getCoverArt.view");
+
+    // The hero fallback keeps the sizeless provider URL on purpose.
+    let hero = crate::covers::provider_cover_url(&client, "al-1");
+    let hero = reqwest::Url::parse(&hero).expect("hero cover url");
+    assert!(!hero.query_pairs().any(|(key, _)| key == "size"));
+}
+
+#[test]
 fn token_is_md5_of_password_plus_salt() {
     let expected = openssl::hash::hash(MessageDigest::md5(), b"secretabc").unwrap();
     assert_eq!(

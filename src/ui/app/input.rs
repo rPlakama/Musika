@@ -124,7 +124,11 @@ impl AppRoot {
                     self.activate_search_result(cx);
                 }
                 "tab" | "l" | "right" => {
-                    self.on_search_scope_next(&SearchScopeNext, _window, cx);
+                    if search_scope_backward(key, shift) {
+                        self.on_search_scope_prev(&SearchScopePrev, _window, cx);
+                    } else {
+                        self.on_search_scope_next(&SearchScopeNext, _window, cx);
+                    }
                 }
                 "backtab" | "h" | "left" => {
                     self.on_search_scope_prev(&SearchScopePrev, _window, cx);
@@ -243,12 +247,12 @@ impl AppRoot {
                 self.activate_search_result(cx);
                 return;
             }
-            "tab" => {
-                self.on_search_scope_next(&SearchScopeNext, _window, cx);
-                return;
-            }
-            "backtab" => {
-                self.on_search_scope_prev(&SearchScopePrev, _window, cx);
+            "tab" | "backtab" => {
+                if search_scope_backward(key, shift) {
+                    self.on_search_scope_prev(&SearchScopePrev, _window, cx);
+                } else {
+                    self.on_search_scope_next(&SearchScopeNext, _window, cx);
+                }
                 return;
             }
             "up" | "ctrl-p" | "ctrl-k" => {
@@ -430,5 +434,24 @@ impl AppRoot {
             }
         }
         cx.notify();
+    }
+}
+
+/// Shift+Tab may arrive as `backtab` or as `tab` with the shift modifier
+/// depending on the platform; both reverse the search scope cycle.
+fn search_scope_backward(key: &str, shift: bool) -> bool {
+    key == "backtab" || shift
+}
+
+#[cfg(test)]
+mod search_scope_tests {
+    use super::search_scope_backward;
+
+    #[test]
+    fn tab_forward_and_shift_tab_reverse() {
+        assert!(!search_scope_backward("tab", false));
+        assert!(search_scope_backward("tab", true));
+        assert!(search_scope_backward("backtab", false));
+        assert!(search_scope_backward("backtab", true));
     }
 }

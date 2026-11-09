@@ -5,6 +5,11 @@ open work; this file is the release history.
 
 ## Unreleased
 
+- **Search scope reverse:** `Shift-Tab` now reliably moves to the previous
+  search scope (including wrapping from Songs around to Playlists). Some
+  platforms report Shift-Tab as `tab` with the shift modifier rather than
+  `backtab`; the search key handler treats both as reverse. Normal-mode
+  `h`/`←` stay reverse and `l`/`→` forward.
 - **Row clipboard:** `y`/`Y` yank the visual range or cursor row from the
   queue, library lists, page rows and floating search into an in-app clipboard;
   `p`/`P` paste it below/above the queue cursor (album/artist clipboard rows

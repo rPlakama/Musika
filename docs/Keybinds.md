@@ -106,7 +106,7 @@ the wheel scrolls it as well.
 | Mode | Keys | Action |
 | --- | --- | --- |
 | Typing | text | Filter the current scope |
-| Typing | `Ctrl-H` / `Ctrl-L`, `Tab` / `Shift-Tab`, `Ctrl-Backspace` | Previous / next scope |
+| Typing | `Ctrl-H` / `Ctrl-L`, `Tab` / `Shift-Tab`, `Ctrl-Backspace` | Previous / next scope (wraps: Shift-Tab from Songs goes to Playlists) |
 | Typing | `↑` / `↓`, `Ctrl-P` / `Ctrl-N`, `Ctrl-K` / `Ctrl-J` | Previous / next result row |
 | Typing | `Enter` | Open/play the result |
 | Typing | `Ctrl-W` | Delete the previous word |

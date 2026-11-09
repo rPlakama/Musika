@@ -55,7 +55,7 @@ impl AppRoot {
 
         if self.view.rows.is_empty() {
             if self.view.loading {
-                window.request_animation_frame();
+                perf::request_frame(window, "library-loading");
                 return div()
                     .flex()
                     .flex_col()
@@ -100,7 +100,7 @@ impl AppRoot {
                 uniform_list(
                     "library",
                     count,
-                    cx.processor(move |this, range: std::ops::Range<usize>, _window, cx| {
+                    cx.processor(move |this, range: std::ops::Range<usize>, window, cx| {
                         let row_h = this.library_scroll.row_h;
                         let mut items = Vec::with_capacity(range.len());
                         for index in range {
@@ -113,7 +113,7 @@ impl AppRoot {
                             let Some(row) = this.view.rows.get(index) else {
                                 // RowWindow blank slot: a waving grey placeholder
                                 // until the live window lands.
-                                _window.request_animation_frame();
+                                perf::request_frame(window, "library-window-hole");
                                 items.push(
                                     div()
                                         .id(index)

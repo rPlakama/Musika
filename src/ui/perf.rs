@@ -167,9 +167,11 @@ pub(crate) fn record_frame(started: Instant, root: &AppRoot) {
     let scales = root.row_scales.borrow().len();
     let toasts = root.toasts.len();
     eprintln!(
-        "[musika/frame] frames={frames} fps={fps:.1} interval_ms(mean={mean_interval:.2} p95={p95_interval:.2}) render_ms(mean={mean_render:.2} p95={p95_render:.2}) rows={rows} live_start={} count={} page_rows={page_rows} scales={scales} toasts={toasts} shapes+={shapes_delta} state={:?} loading={} syncing={} queue={} fullscreen={} active={} rss={:.0}MiB",
+        "[musika/frame] frames={frames} fps={fps:.1} interval_ms(mean={mean_interval:.2} p95={p95_interval:.2}) render_ms(mean={mean_render:.2} p95={p95_render:.2}) rows={rows} live_start={} count={} page_rows={page_rows} scales={scales} toasts={toasts} shapes+={shapes_delta} win={:.0}x{:.0} state={:?} loading={} syncing={} queue={} fullscreen={} active={} rss={:.0}MiB",
         root.view.rows.live_start,
         root.view.rows.count,
+        root.win_w,
+        root.win_h,
         root.player.state(),
         root.player.is_loading(),
         root.syncing,
@@ -225,6 +227,8 @@ pub(crate) struct Demand {
     pub playing: bool,
     /// The window is not focused: only slow progress upkeep is needed.
     pub inactive: bool,
+    /// Next time a marquee needs a frame (perf clock, seconds), if any.
+    pub marquee_at: Option<f64>,
 }
 
 /// One ticker decision: whether to notify the root view now, and how long to
@@ -239,36 +243,90 @@ pub(crate) struct Decision {
 const PLAYING_INTERVAL: f64 = 0.1;
 /// Inactive windows only need the clock to keep moving.
 const INACTIVE_INTERVAL: f64 = 1.0;
+/// Marquee travel advances at most 30 times a second.
+const MARQUEE_INTERVAL: f64 = 1.0 / 30.0;
 /// Never sleep longer than this, so input/events are picked up promptly.
 const MAX_SLEEP_MS: u64 = 250;
 
 /// Pure pacing decision. `last_notify` is the last render/notify timestamp on
 /// the same clock as `now` (seconds).
 pub(crate) fn decide(now: f64, demand: Demand, last_notify: f64) -> Decision {
-    if !demand.playing {
-        return Decision {
-            notify: false,
-            sleep_ms: MAX_SLEEP_MS,
-        };
-    }
-    let interval = if demand.inactive {
-        INACTIVE_INTERVAL
+    // The shortest active source wins.
+    let mut interval = if demand.playing {
+        Some(if demand.inactive {
+            INACTIVE_INTERVAL
+        } else {
+            PLAYING_INTERVAL
+        })
     } else {
-        PLAYING_INTERVAL
+        None
+    };
+    if demand.marquee_at.is_some() && !demand.inactive {
+        interval = Some(interval.map_or(MARQUEE_INTERVAL, |current| current.min(MARQUEE_INTERVAL)));
+    }
+
+    let mut sleep_ms = match interval {
+        Some(interval) => ((interval * 1000.0).ceil() as u64).clamp(5, MAX_SLEEP_MS),
+        None => MAX_SLEEP_MS,
     };
     // Tolerate float noise in accumulated timestamps (e.g. 10.1 - 10.0).
     const EPSILON: f64 = 1e-9;
-    let due = now - last_notify + EPSILON >= interval;
-    let sleep_ms = ((interval * 1000.0).ceil() as u64).clamp(5, MAX_SLEEP_MS);
-    Decision {
-        notify: due,
-        sleep_ms,
+    let mut notify = interval.is_some_and(|interval| now - last_notify + EPSILON >= interval);
+
+    // A marquee wake is exact: sleep until the next travel/pause boundary
+    // instead of spinning at 30 Hz through a static hold.
+    if let Some(at) = demand.marquee_at {
+        if at <= now {
+            notify = true;
+            sleep_ms = sleep_ms.min(5);
+        } else if !demand.inactive {
+            let wake = ((at - now) * 1000.0).ceil() as u64;
+            sleep_ms = sleep_ms.min(wake.max(5));
+        }
     }
+    Decision { notify, sleep_ms }
+}
+
+/// Monotonic clock shared by the ticker and the marquee elements.
+pub(crate) fn now() -> f64 {
+    static ORIGIN: OnceLock<Instant> = OnceLock::new();
+    ORIGIN.get_or_init(Instant::now).elapsed().as_secs_f64()
 }
 
 thread_local! {
     static LAST_NOTIFY: std::cell::Cell<f64> = const { std::cell::Cell::new(f64::NEG_INFINITY) };
     static LAST_PUMP: std::cell::Cell<f64> = const { std::cell::Cell::new(f64::NEG_INFINITY) };
+    static MARQUEE_AT: std::cell::Cell<f64> = const { std::cell::Cell::new(f64::INFINITY) };
+}
+
+/// Publishes when a marquee next needs a frame (`now + delay`, or now while it
+/// is travelling). Multiple marquees keep the earliest deadline.
+pub(crate) fn note_marquee(delay: f64) {
+    let at = now() + delay.max(1.0 / 60.0);
+    MARQUEE_AT.with(|slot| {
+        let current = slot.get();
+        if current <= now() || at < current {
+            slot.set(at);
+        }
+    });
+}
+
+/// Earliest marquee deadline, if any.
+pub(crate) fn marquee_deadline() -> Option<f64> {
+    let at = MARQUEE_AT.with(|slot| slot.get());
+    at.is_finite().then_some(at)
+}
+
+/// Returns true when a marquee wake is due and re-arms it for the next paint.
+pub(crate) fn take_marquee_due(now: f64) -> bool {
+    MARQUEE_AT.with(|slot| {
+        if slot.get() <= now {
+            slot.set(f64::INFINITY);
+            true
+        } else {
+            false
+        }
+    })
 }
 
 pub(crate) fn last_notify() -> f64 {
@@ -322,7 +380,7 @@ mod tests {
     fn playing_repaints_at_ten_hz_and_idles_otherwise() {
         let playing = Demand {
             playing: true,
-            inactive: false,
+            ..Demand::default()
         };
         // First frame after playback started: notify immediately.
         let first = decide(10.0, playing, f64::NEG_INFINITY);
@@ -345,12 +403,39 @@ mod tests {
         let inactive = Demand {
             playing: true,
             inactive: true,
+            ..Demand::default()
         };
         let first = decide(1.0, inactive, 0.9);
         assert!(!first.notify);
         let due = decide(1.0, inactive, 0.0);
         assert!(due.notify);
         assert_eq!(due.sleep_ms, MAX_SLEEP_MS);
+    }
+
+    #[test]
+    fn marquee_waites_for_its_deadline_instead_of_spinning() {
+        let travel = Demand {
+            marquee_at: Some(10.02),
+            ..Demand::default()
+        };
+        let decision = decide(10.0, travel, 9.99);
+        assert!(!decision.notify);
+        assert_eq!(decision.sleep_ms, 20);
+        let due = decide(10.02, travel, 9.99);
+        assert!(due.notify);
+        assert_eq!(due.sleep_ms, 5);
+    }
+
+    #[test]
+    fn playing_and_marquee_use_the_faster_cadence() {
+        let both = Demand {
+            playing: true,
+            marquee_at: Some(100.0),
+            ..Demand::default()
+        };
+        let decision = decide(10.0, both, 9.99);
+        // Marquee travel wants 33 ms even while the transport only needs 100.
+        assert_eq!(decision.sleep_ms, 34);
     }
 
     #[test]

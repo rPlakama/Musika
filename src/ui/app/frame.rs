@@ -21,7 +21,7 @@ impl AppRoot {
         cx.spawn(async move |this, cx| {
             loop {
                 let decision = this.update(cx, |this, cx| {
-                    let now = this.clock.peek();
+                    let now = perf::now();
                     // The transport advances without a render: pump on a fixed
                     // cadence, and surface a playback error immediately.
                     if this.player.state() != crate::player::State::Stopped
@@ -31,9 +31,10 @@ impl AppRoot {
                         this.playback_error = Some(message);
                         cx.notify();
                     }
+                    let marquee_due = perf::take_marquee_due(now);
                     let demand = this.frame_demand();
                     let decision = perf::decide(now, demand, perf::last_notify());
-                    if decision.notify {
+                    if decision.notify || marquee_due {
                         perf::note_notify(now);
                         cx.notify();
                     }
@@ -55,6 +56,7 @@ impl AppRoot {
         perf::Demand {
             playing: self.player.state() == crate::player::State::Playing,
             inactive: !perf::window_active(),
+            marquee_at: perf::marquee_deadline(),
         }
     }
 }

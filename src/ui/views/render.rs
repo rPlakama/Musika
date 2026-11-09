@@ -428,7 +428,7 @@ impl Render for AppRoot {
                 Some(o) => o,
                 None => div().into_any_element(),
             });
-        perf::note_notify(self.clock.now);
+        perf::note_notify(perf::now());
         perf::record_frame(frame_started, &*self);
         #[cfg(debug_assertions)]
         let root = root.child(frame_hud);

@@ -88,10 +88,14 @@ Functional checks:
 - `cargo test` 397 passed / 16 ignored; `cargo test --features io-uring`
   401 passed / 16 ignored; final `nix build` succeeds.
 
-Quantitative first-PCM/seek/RSS comparisons are kept in the run logs; the
-engine no longer runs `malloc_trim(0)` and does not create a thread per track,
-so the old allocator-stall/thread-churn class is removed by construction.
-Targets retained: no >5 % first-PCM/seek regression, stable thread count, no
+Local WAV fixtures reached `first.pcm.written` in 9–27 ms; a streamed seek
+landed at the requested position (20 s request while paused, 30.08 s after a
+seek during playback) and pause froze MPRIS position. The old per-track
+`malloc_trim(0)` calls and thread creation are gone by construction. A full
+first-PCM/seek/RSS p50/p95 comparison against the retired C engine was not
+captured in this pass; the context-switch table and the functional/audio-capture
+checks above are the measured evidence. Targets retained for a follow-up
+measurement run: no >5 % first-PCM/seek regression, stable thread count, no
 underruns in the skip/seek/gapless loop.
 
 ## Verification commands

@@ -75,6 +75,7 @@ async fn run_async() {
     let mut player = Player::new();
     let mut page = LastPage::default();
     let mut header: Option<Event> = None;
+    let mut auth: Option<Event> = None;
     let mut ui_writer: Option<mpsc::UnboundedSender<CoreMessage>> = None;
     let mut ui_conn: u64 = 0;
     let mut ui_child: Option<std::process::Child> = None;
@@ -89,8 +90,13 @@ async fn run_async() {
     while !quit {
         tokio::select! {
             Some(event) = event_rx.recv() => {
-                if matches!(event, Event::Header { .. }) {
-                    header = Some(event.clone());
+                match &event {
+                    Event::Header { .. } => header = Some(event.clone()),
+                    Event::LoginRequired { .. }
+                    | Event::LoggedIn { .. }
+                    | Event::LoggedOut
+                    | Event::AccountRemoved { .. } => auth = Some(event.clone()),
+                    _ => {}
                 }
                 let forward = !matches!(
                     event,
@@ -114,7 +120,15 @@ async fn run_async() {
                         ensure_ui_child(&mut ui_child);
                     }
                 } else {
-                    quit = handle_command(&mut player, &bridge, &line).await;
+                    let core = matches!(
+                        ipc_command::parse(&line),
+                        Ok(command) if is_core_command(&command)
+                    );
+                    if core || ui_writer.is_none() {
+                        quit = handle_command(&mut player, &bridge, &line).await;
+                    } else {
+                        send_ui(&ui_writer, CoreMessage::Bridge(Event::Command(line)));
+                    }
                 }
             }
             Some(incoming) = ui_in_rx.recv() => {
@@ -122,7 +136,7 @@ async fn run_async() {
                     match incoming.message {
                         UiMessage::Hello { version } => {
                             eprintln!("daemon: UI hello v{version}");
-                            let messages = bootstrap_messages(version, header.as_ref(), &player, &page);
+                            let messages = bootstrap_messages(version, header.as_ref(), auth.as_ref(), &player, &page);
                             for message in messages {
                                 send_ui(&ui_writer, message);
                             }
@@ -305,7 +319,7 @@ async fn handle_command(player: &mut Player, bridge: &Bridge, line: &str) -> boo
     };
     match command {
         IpcCommand::Quit => return true,
-        IpcCommand::Show => eprintln!("daemon: show requested before the UI split is wired"),
+        IpcCommand::Show => {}
         IpcCommand::PlayPause => player.toggle(),
         IpcCommand::Play => player.resume(),
         IpcCommand::Pause => player.pause(),
@@ -433,6 +447,7 @@ fn send_ui(writer: &Option<mpsc::UnboundedSender<CoreMessage>>, message: CoreMes
 fn bootstrap_messages(
     version: u32,
     header: Option<&Event>,
+    auth: Option<&Event>,
     player: &Player,
     page: &LastPage,
 ) -> Vec<CoreMessage> {
@@ -445,6 +460,9 @@ fn bootstrap_messages(
     messages.push(CoreMessage::Ready);
     if let Some(header) = header {
         messages.push(CoreMessage::Bridge(header.clone()));
+    }
+    if let Some(auth) = auth {
+        messages.push(CoreMessage::Bridge(auth.clone()));
     }
     messages.push(CoreMessage::PlayerFull(snapshot(player)));
     let page_kind = match page.kind.as_str() {
@@ -875,6 +893,36 @@ fn dispatch_bridge(bridge: &Bridge, method: &str, args: &serde_json::Value) {
     }
 }
 
+/// Commands the core executes even while a UI is attached. Everything else is
+/// forwarded to the UI so presentation/navigation behavior stays identical to
+/// the old single-process IPC path.
+fn is_core_command(command: &IpcCommand) -> bool {
+    matches!(
+        command,
+        IpcCommand::Quit
+            | IpcCommand::PlayPause
+            | IpcCommand::Play
+            | IpcCommand::Pause
+            | IpcCommand::Stop
+            | IpcCommand::NextTrack
+            | IpcCommand::PrevTrack
+            | IpcCommand::Mute
+            | IpcCommand::VolumeUp
+            | IpcCommand::VolumeDown
+            | IpcCommand::SetVolume(_)
+            | IpcCommand::SeekBack
+            | IpcCommand::SeekForward
+            | IpcCommand::Seek(_)
+            | IpcCommand::SeekRelative(_)
+            | IpcCommand::RepeatCycle
+            | IpcCommand::Shuffle { .. }
+            | IpcCommand::Radio { .. }
+            | IpcCommand::RandomAlbum
+            | IpcCommand::Sync(_)
+            | IpcCommand::Refresh
+    )
+}
+
 fn ensure_ui_child(child: &mut Option<std::process::Child>) {
     if let Some(child) = child.as_mut() {
         if child.try_wait().ok().flatten().is_none() {
@@ -965,5 +1013,36 @@ async fn serve_ui(
             }
             let _ = state.send(UiStateEvent::Gone(conn));
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn core(line: &str) -> bool {
+        match ipc_command::parse(line) {
+            Ok(command) => is_core_command(&command),
+            Err(error) => panic!("{line}: {error}"),
+        }
+    }
+
+    #[test]
+    fn playback_commands_stay_in_the_core() {
+        assert!(core("play_pause"));
+        assert!(core("set_volume 42"));
+        assert!(core("shuffle queue"));
+        assert!(core("radio current"));
+        assert!(core("random"));
+        assert!(core("quit"));
+    }
+
+    #[test]
+    fn presentation_commands_forward_to_the_ui() {
+        assert!(!core("home"));
+        assert!(!core("move_down"));
+        assert!(!core("search pink"));
+        assert!(!core("queue_toggle"));
+        assert!(!core("play_song abc"));
     }
 }

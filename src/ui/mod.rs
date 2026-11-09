@@ -602,6 +602,37 @@ struct CoverLoadTrace {
     thumb_logged: bool,
 }
 
+/// Wayland/GPUI cannot activate an application on Linux (the platform
+/// implementation is a no-op and xdg_activation tokens are rejected without a
+/// real input serial). Under niri, use its IPC to focus our window on an
+/// explicit `show` request; elsewhere this is a harmless best effort.
+fn activate_niri_window() {
+    if std::env::var_os("NIRI_SOCKET").is_none() {
+        return;
+    }
+    let pid = std::process::id();
+    let Ok(output) = std::process::Command::new("niri")
+        .args(["msg", "-j", "windows"])
+        .output()
+    else {
+        return;
+    };
+    let Ok(windows) = serde_json::from_slice::<Vec<serde_json::Value>>(&output.stdout) else {
+        return;
+    };
+    let Some(id) = windows
+        .iter()
+        .find(|window| window.get("pid").and_then(|pid| pid.as_u64()) == Some(pid as u64))
+        .and_then(|window| window.get("id").and_then(|id| id.as_u64()))
+    else {
+        return;
+    };
+    crate::debug_log!("GPUI: niri activate window {id}");
+    let _ = std::process::Command::new("niri")
+        .args(["msg", "action", "focus-window", "--id", &id.to_string()])
+        .output();
+}
+
 fn unix_ms() -> u128 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -760,6 +791,7 @@ impl AppRoot {
         cx.spawn(async move |this, cx| {
             while let Some(update) = updates.recv().await {
                 let keep = this.update(cx, |this, cx| {
+                    let mut notify = true;
                     match update {
                         UiUpdate::Event(Event::Command(command)) => {
                             this.handle_command(&command, cx);
@@ -770,16 +802,34 @@ impl AppRoot {
                             this.repeat = this.player.repeat();
                         }
                         UiUpdate::Tick(tick) => {
+                            // Position ticks only refresh the mirror. The frame
+                            // ticker decides when a playing window repaints, so
+                            // an unfocused plain window stays at its idle cadence
+                            // instead of waking the renderer at 10 Hz.
+                            let old_state = this.player.state();
+                            let old_index = this.player.index();
+                            let old_loading = this.player.is_loading();
                             this.player.apply_tick(tick);
                             this.repeat = this.player.repeat();
+                            notify = old_state != this.player.state()
+                                || old_index != this.player.index()
+                                || old_loading != this.player.is_loading();
                         }
-                        UiUpdate::Activate => cx.activate(true),
+                        UiUpdate::Activate => {
+                            // Linux/GPUI activate() is a no-op and the Wayland
+                            // activation token is rejected without a real input
+                            // serial; use the compositor IPC fallback instead.
+                            cx.activate(true);
+                            activate_niri_window();
+                        }
                         UiUpdate::Shutdown => {
                             cx.quit();
                             return false;
                         }
                     }
-                    cx.notify();
+                    if notify {
+                        cx.notify();
+                    }
                     true
                 });
                 if !matches!(keep, Ok(true)) {

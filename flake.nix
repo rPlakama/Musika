@@ -90,25 +90,30 @@
         # Wrap by hand: add the app font and certificate paths.
 
         postInstall = ''
-          wrapProgram $out/bin/musika \
-            --prefix XDG_DATA_DIRS : ${fontDataDirs} \
-            --prefix LD_LIBRARY_PATH : ${
-              pkgs.lib.makeLibraryPath [
-                pkgs.wayland
-                pkgs.libxkbcommon
-                pkgs.libx11
-                pkgs.libxcursor
-                pkgs.libxrandr
-                pkgs.libxi
-                pkgs.libxcb
-                pkgs.fontconfig
-                pkgs.freetype
-                pkgs.libglvnd
-                pkgs.vulkan-loader
-              ]
-            } \
-            --set-default SSL_CERT_FILE ${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt \
-            --set-default MUSIKA_ASSET_DIR $out/share/musika
+          # The core daemon and its GPUI child share the runtime environment.
+          # musika-ui is spawned by the daemon as a sibling binary, so it needs
+          # the same wayland/vulkan/font/cert/asset wrapper as musika.
+          for bin in musika musika-ui; do
+            wrapProgram $out/bin/$bin \
+              --prefix XDG_DATA_DIRS : ${fontDataDirs} \
+              --prefix LD_LIBRARY_PATH : ${
+                pkgs.lib.makeLibraryPath [
+                  pkgs.wayland
+                  pkgs.libxkbcommon
+                  pkgs.libx11
+                  pkgs.libxcursor
+                  pkgs.libxrandr
+                  pkgs.libxi
+                  pkgs.libxcb
+                  pkgs.fontconfig
+                  pkgs.freetype
+                  pkgs.libglvnd
+                  pkgs.vulkan-loader
+                ]
+              } \
+              --set-default SSL_CERT_FILE ${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt \
+              --set-default MUSIKA_ASSET_DIR $out/share/musika
+          done
 
           # Runtime SVG assets: icons resolve through MUSIKA_ASSET_DIR/icons,
           # not through the build directory.

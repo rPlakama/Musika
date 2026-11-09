@@ -24,6 +24,22 @@ or, with the default config location:
 printf 'shuffle queue\n' | nc -U ~/.config/musika/ipc.sock
 ```
 
+## Window and daemon
+
+Musika's core daemon keeps playing after the window closes. These commands are
+routed by the core and work even with no window open:
+
+| Command | Usage | What it does |
+| --- | --- | --- |
+| `show` | `show` | Spawn the `musika-ui` child window, or raise it if it is already open. |
+| `random` | `random` | Pick a random non-empty album from `library.db` and play it in album order. |
+| `quit` | `quit` | True quit: flush the session, close the UI child, remove sockets and stop the core. |
+
+The transport/volume/shuffle/radio/sync commands below execute in the core.
+Presentation commands (navigation, search, queue overlay, ...) are forwarded to
+the attached `musika-ui`; without a UI they are ignored. See `docs/Daemon.md`
+for the process and socket architecture.
+
 ## Syntax
 
 - Command names are case-sensitive and use the canonical names below.
@@ -225,6 +241,8 @@ Rules:
 | `seek_relative` | `seek_relative <±seconds>` | Seek relative to the playhead. |
 | `toggle_fullscreen` | `toggle_fullscreen` | Toggle fullscreen playback (`fullscreen`). |
 | `lyrics_overlay` | `lyrics_overlay` | Toggle the fullscreen lyrics overlay (`lyrics`). |
+| `show` | `show` | Spawn/raise the GPUI window (core keeps running headless). |
+| `random` | `random` | Play a random album from `library.db`. |
 
 ## Navigation and selection
 
@@ -284,7 +302,7 @@ Rules:
 | `quick_aim` | `quick_aim <north|south|east|west>` | Aim a quick-action slot. |
 | `quick_cycle` | `quick_cycle <next|prev>` | Cycle the aimed slot's verbs. |
 | `quick_cancel` | `quick_cancel` | Cancel the quick-action menu. |
-| `quit` | `quit` | Quit Musika. |
+| `quit` | `quit` | True quit: stop the core daemon and its UI child. |
 
 ## Automation examples
 

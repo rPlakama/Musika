@@ -20,6 +20,21 @@ Musika is a Keyboard driven Navidrome/Subsonic Client made with AI assistance. W
 
 6 - GPUUI -- the interface runs on GPUI, Zed's GPU-accelerated hybrid immediate/retained UI framework. The Qt/QML front end is gone; the shell, library and entry pages, search, queue, fullscreen player, lyrics, overlays, Alt actions and session restore were all ported to the GPU renderer.
 
+# Architecture
+
+Musika is a headless core plus a disposable GPU window:
+
+```
+musika        core daemon: databases, native audio, library/network/sync,
+              MPRIS, tray and the external IPC socket
+  └─ musika-ui   GPUI child: renders state and sends IPC requests
+```
+
+Closing the window leaves `musika` playing in the tray; running `musika` again
+(or left-clicking the tray icon) reopens a window against the live queue and
+page. `qq` at Home is the true quit. See [docs/Daemon.md](docs/Daemon.md) for
+the process lifecycle, sockets and systemd sample.
+
 # Installation
 
 Currently, it's a nix flake based installation; However, I plan in the future to provide another packaging schemes for MUSIKA. The flake installation follows as below:

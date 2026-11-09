@@ -24,7 +24,7 @@ work, including the command line.
 | `?` | Toggle the lyrics overlay in fullscreen, or the page description overlay on album/artist pages |
 | `[b` / `]b` | Previous / next place in the travel log (cleared on reaching Home) |
 | `Shift-Q` | Home: close overlays, leave fullscreen and pop every page |
-| `q` | Back; reaching Home ends the travel session (press twice at Home to quit) |
+| `q` | Back; reaching Home ends the travel session. Press twice at Home for `qq`, the true quit (closing the window only closes the UI and leaves the core daemon playing in the tray). |
 | `Esc` / `Ctrl-[` | Cancel and hierarchical Back |
 | `1`–`9` prefix | Count for the next motion or action |
 | `Ctrl-J` / `Ctrl-K` | Move down / up in the current list or text selector |

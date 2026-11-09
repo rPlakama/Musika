@@ -71,7 +71,7 @@ mod startup;
 mod status;
 mod tray;
 #[cfg(feature = "gpuui")]
-mod ui;
+pub mod ui;
 
 #[cfg(test)]
 mod test;

@@ -56,6 +56,12 @@ pub fn socket_path() -> PathBuf {
     crate::db::config_socket("ipc.sock")
 }
 
+/// True when a live core already owns the command socket. Probing the
+/// control socket would register a fake UI connection, so use the IPC one.
+pub fn daemon_is_running() -> bool {
+    UnixStream::connect(socket_path()).is_ok()
+}
+
 /// Sends one command line to the running IPC socket, if any. Blocking but
 /// bounded (connect + write only); tray/launcher callers use it as a cheap
 /// hand-off into the core command queue.

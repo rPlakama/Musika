@@ -30,10 +30,10 @@
 
 mod anim;
 mod app;
-pub(crate) use crate::bridge;
 mod collage;
 mod command_line;
 mod covers;
+mod daemon_client;
 #[cfg(debug_assertions)]
 mod debug;
 pub(crate) use crate::ipc_command;
@@ -71,6 +71,7 @@ use gpui::{
 };
 
 use crate::bridge::{Event, SyncMode};
+use daemon_client::{Client, PlayerMirror, RemoteBridge, UiUpdate};
 use quick_actions::{AltGesture, Direction, QuickKind, QuickMenu, QuickVerb};
 use state::{
     PageDescriptor, PageKind, PageState, Row, RowKind, RowWindow, Scope, Travel, ViewState,
@@ -610,7 +611,7 @@ fn unix_ms() -> u128 {
 
 struct AppRoot {
     focus: FocusHandle,
-    bridge: bridge::Bridge,
+    bridge: RemoteBridge,
     view: ViewState,
     header: Option<Header>,
     error: Option<String>,
@@ -653,7 +654,7 @@ struct AppRoot {
         std::cell::RefCell<std::collections::HashMap<(LineSurface, usize, usize), RowEmphasis>>,
     library_hover_fill: anim::ColorBehavior,
     page_hover_fill: anim::ColorBehavior,
-    player: crate::player::Player,
+    player: PlayerMirror,
     playback_error: Option<String>,
     queue_open: bool,
     queue_cursor: usize,
@@ -746,25 +747,44 @@ impl AppRoot {
         focus.focus(window);
 
         crate::scroll_memory::hydrate();
-        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
-        let command_tx = tx.clone();
-        let bridge = bridge::Bridge::new(tx);
-        crate::ipc::serve(crate::ipc::socket_path(), move |command| {
-            let _ = command_tx.send(Event::Command(command));
+        let (client, mut updates) = Client::connect().unwrap_or_else(|error| {
+            eprintln!("musika-ui: could not connect to the core daemon: {error}");
+            std::process::exit(1);
         });
+        let bridge = RemoteBridge::new(client.clone());
+        let player = PlayerMirror::new(client);
         let mut view = ViewState::default();
         bridge.load_library(view.scope, view.order);
         view.loading = true;
 
         cx.spawn(async move |this, cx| {
-            while let Some(event) = rx.recv().await {
-                let _ = this.update(cx, |this, cx| {
-                    match event {
-                        Event::Command(command) => this.handle_command(&command, cx),
-                        event => this.apply(event),
+            while let Some(update) = updates.recv().await {
+                let keep = this.update(cx, |this, cx| {
+                    match update {
+                        UiUpdate::Event(Event::Command(command)) => {
+                            this.handle_command(&command, cx);
+                        }
+                        UiUpdate::Event(event) => this.apply(event),
+                        UiUpdate::Full(snapshot) => {
+                            this.player.apply_full(snapshot);
+                            this.repeat = this.player.repeat();
+                        }
+                        UiUpdate::Tick(tick) => {
+                            this.player.apply_tick(tick);
+                            this.repeat = this.player.repeat();
+                        }
+                        UiUpdate::Activate => cx.activate(true),
+                        UiUpdate::Shutdown => {
+                            cx.quit();
+                            return false;
+                        }
                     }
                     cx.notify();
+                    true
                 });
+                if !matches!(keep, Ok(true)) {
+                    break;
+                }
             }
         })
         .detach();
@@ -808,7 +828,7 @@ impl AppRoot {
             row_scales: std::cell::RefCell::new(std::collections::HashMap::new()),
             library_hover_fill: anim::ColorBehavior::new(palette::surface()),
             page_hover_fill: anim::ColorBehavior::new(palette::surface()),
-            player: crate::player::Player::new(),
+            player,
             playback_error: None,
             queue_open: false,
             queue_cursor: 0,

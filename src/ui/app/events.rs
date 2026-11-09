@@ -23,7 +23,6 @@ impl AppRoot {
                 self.error = None;
                 if !self.restored {
                     self.restored = true;
-                    self.bridge.restore();
                 }
             }
             Event::LibraryCount {
@@ -843,7 +842,7 @@ impl AppRoot {
     }
 
     fn reset_for_account(&mut self) {
-        self.player.load_paused(Vec::new(), 0);
+        self.player.clear();
         self.playback_error = None;
         self.view = ViewState::default();
         self.generation = 0;

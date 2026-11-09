@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 
 use serde::de::DeserializeOwned;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-use tokio::net::{UnixListener, UnixStream};
+use tokio::net::UnixListener;
 use tokio::sync::mpsc;
 use tokio::time::MissedTickBehavior;
 
@@ -44,6 +44,10 @@ enum UiStateEvent {
 }
 
 pub fn run() -> ! {
+    if crate::ipc::daemon_is_running() {
+        eprintln!("musika: the core daemon is already running");
+        std::process::exit(0);
+    }
     if !crate::entry::init_backend() {
         std::process::exit(1);
     }
@@ -94,9 +98,6 @@ async fn run_async() {
                         | Event::QueueAppend { .. }
                         | Event::QueuePaste { .. }
                         | Event::Restore { .. }
-                        | Event::LoginRequired { .. }
-                        | Event::LoggedOut
-                        | Event::AccountRemoved { .. }
                 );
                 apply_event(&mut player, &mut page, event.clone());
                 if forward
@@ -252,9 +253,18 @@ fn apply_event(player: &mut Player, page: &mut LastPage, event: Event) {
         }
         Event::LoginRequired { .. } | Event::LoggedOut => {
             player.load_paused(Vec::new(), 0);
+            page.kind.clear();
+            page.id.clear();
+        }
+        Event::LoggedIn { .. } => {
+            player.load_paused(Vec::new(), 0);
+            page.kind.clear();
+            page.id.clear();
         }
         Event::AccountRemoved { .. } => {
             player.load_paused(Vec::new(), 0);
+            page.kind.clear();
+            page.id.clear();
         }
         Event::OpenPage { descriptor } => {
             page.kind = match descriptor.kind {
@@ -589,6 +599,11 @@ fn dispatch_bridge(bridge: &Bridge, method: &str, args: &serde_json::Value) {
         "request_container_state" => {
             if let (Some(kind), Some(id)) = (arg::<PageKind>(args, "kind"), arg(args, "id")) {
                 bridge.request_container_state(kind, id);
+            }
+        }
+        "request_album_state" => {
+            if let Some(album_id) = arg(args, "album_id") {
+                bridge.request_album_state(album_id);
             }
         }
         "request_colors" => {

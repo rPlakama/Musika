@@ -22,15 +22,8 @@ impl AppRoot {
             loop {
                 let decision = this.update(cx, |this, cx| {
                     let now = perf::now();
-                    // The transport advances without a render: pump on a fixed
-                    // cadence, and surface a playback error immediately.
-                    if this.player.state() != crate::player::State::Stopped
-                        && perf::pump_due(now)
-                        && let Some(message) = this.player.pump()
-                    {
-                        this.playback_error = Some(message);
-                        cx.notify();
-                    }
+                    // The core pumps the transport and streams position ticks;
+                    // the UI ticker only schedules repaints.
                     let marquee_due = perf::take_marquee_due(now);
                     let demand = this.frame_demand();
                     let changed = perf::demand_changed(&demand);

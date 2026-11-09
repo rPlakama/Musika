@@ -255,7 +255,7 @@ impl Render for AppRoot {
         if let Some(started) = self.exiting {
             perf::request_frame(window, "exiting");
             if self.clock.now - started >= 0.200 {
-                self.flush_status();
+                self.bridge.shutdown_core();
                 window.remove_window();
             }
         }

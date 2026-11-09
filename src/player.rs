@@ -167,6 +167,9 @@ pub struct Player {
     pub(crate) native: Option<pipewire::Native>,
     /// Next queue index the native decoder is already predecoding.
     gapless_next: Option<usize>,
+    /// UI-side mirror: queue ops stay local for optimistic rendering and never
+    /// touch a decoder/audio device. Snapshots from the core overwrite it.
+    mirror: bool,
     #[cfg(test)]
     pub(crate) loads: u32,
 }
@@ -192,9 +195,18 @@ impl Player {
             revision: 0,
             native: None,
             gapless_next: None,
+            mirror: false,
             #[cfg(test)]
             loads: 0,
         }
+    }
+
+    /// A UI-side projection of the daemon player: reads/mutations work for
+    /// rendering and optimistic updates, but no native audio is ever created.
+    pub fn mirror() -> Self {
+        let mut player = Self::new();
+        player.mirror = true;
+        player
     }
 
     pub fn state(&self) -> State {
@@ -371,6 +383,9 @@ impl Player {
 
     /// (Re)starts the current track from the beginning.
     pub fn play_current(&mut self) {
+        if self.mirror {
+            return;
+        }
         if self.queue.is_empty() {
             self.state = State::Stopped;
             return;

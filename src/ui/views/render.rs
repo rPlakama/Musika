@@ -22,19 +22,14 @@ impl Render for AppRoot {
             (width - viewport_w).abs() > 0.5 || (height - viewport_h).abs() > 0.5
         });
         self.resize_last_size = Some((viewport_w, viewport_h));
+        let recenter = resize_recenter_now(resized, &mut self.resize_recenter);
         if resized {
-            // The list has not laid out the new viewport yet. Recenter after
-            // it settles, not on the intermediate resize events themselves.
-            self.resize_settle_at = Some(self.clock.now + 0.1);
+            // The list lays the new viewport out during this frame; re-center
+            // on the next available frame instead of after a fixed delay.
             window.request_animation_frame();
         }
-        if let Some(settle_at) = self.resize_settle_at {
-            if self.clock.now >= settle_at {
-                self.resize_settle_at = None;
-                self.recenter_after_resize();
-            } else {
-                window.request_animation_frame();
-            }
+        if recenter {
+            self.recenter_after_resize();
         }
         #[cfg(debug_assertions)]
         self.frame_hud.observe(self.clock.dt);
@@ -444,5 +439,47 @@ impl Render for AppRoot {
         #[cfg(debug_assertions)]
         let root = root.child(frame_hud);
         root.into_any_element()
+    }
+}
+
+/// One-frame resize settlement: returns `true` on the first stable frame after
+/// a width/height change, so the view can re-center with the new layout.
+///
+/// `pending` is set on a resize frame (a follow-up frame is requested by the
+/// caller) and cleared when that stable frame is rendered. Bursts of resize
+/// events coalesce onto the last one.
+pub(in crate::ui) fn resize_recenter_now(resized: bool, pending: &mut bool) -> bool {
+    if resized {
+        *pending = true;
+        false
+    } else {
+        std::mem::take(pending)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::resize_recenter_now;
+
+    #[test]
+    fn resize_settles_on_the_next_stable_frame() {
+        let mut pending = false;
+        // Resize frame: arm, do not re-center yet.
+        assert!(!resize_recenter_now(true, &mut pending));
+        assert!(pending);
+        // Next stable frame: re-center exactly once.
+        assert!(resize_recenter_now(false, &mut pending));
+        assert!(!pending);
+        assert!(!resize_recenter_now(false, &mut pending));
+    }
+
+    #[test]
+    fn resize_burst_coalesces() {
+        let mut pending = false;
+        assert!(!resize_recenter_now(true, &mut pending));
+        assert!(!resize_recenter_now(true, &mut pending));
+        assert!(!resize_recenter_now(true, &mut pending));
+        assert!(resize_recenter_now(false, &mut pending));
+        assert!(!resize_recenter_now(false, &mut pending));
     }
 }

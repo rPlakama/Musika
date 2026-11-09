@@ -3,68 +3,40 @@
 All notable changes to Musika, newest first. `TASKLISTMAJOR.md` tracks the
 open work; this file is the release history.
 
-## Unreleased
+## 0.6.7 - _Better commands internals and better UIX_
 
-- **Delete playlists:** `playlist rm; <playlist>` (an explicit cutoff with no
-  targets) deletes a whole playlist — the `;` declares the playlist part and
-  switches command-line suggestions to playlist names. Local M3U files are
-  removed and rescanned, server playlists use `deletePlaylist` + list refresh.
-  A deleted playlist's open page closes, the Playlists scope reloads and a
-  “Deleted playlist” toast is shown. The target form
-  (`playlist rm <target...>; <playlist>`) still removes songs.
-- **Search scope reverse:** `Shift-Tab` now reliably moves to the previous
-  search scope (including wrapping from Songs around to Playlists). Some
-  platforms report Shift-Tab as `tab` with the shift modifier rather than
-  `backtab`; the search key handler treats both as reverse. Normal-mode
-  `h`/`←` stay reverse and `l`/`→` forward.
-- **Row clipboard:** `y`/`Y` yank the visual range or cursor row from the
-  queue, library lists, page rows and floating search into an in-app clipboard;
-  `p`/`P` paste it below/above the queue cursor (album/artist clipboard rows
-  expand to their tracks, matching Add-to-Queue), landing the cursor on the
-  first pasted track. A selection on the queue makes `d d` remove the whole
-  range, matching the documented behavior.
-- **One-shot paste:** pasting consumes the row clipboard, so the same yanked
-  rows cannot be pasted repeatedly and duplicate the queue/playlist. Yank
-  again to paste again; a failed paste restores the clipboard for a retry.
-- **Playlist row editing:** on a playlist page `d d` deletes the selected rows
-  or cursor row (exact local-M3U positions, `songIdToRemove` for server
-  playlists), `p` inserts the yanked rows below the cursor and `P` above it,
-  and `Ctrl-Shift-K` / `Ctrl-Shift-J` reorder the cursor entry like the queue —
-  with a visual selection both the queue and playlist pages move the whole
-  range as one block, preserving its internal order.
-  Local M3U files are edited by position; server playlists rebuild their order
-  through `updatePlaylist` (remove + add) and reload the entries. All paths
-  reload the open page so rows, count and collage stay in sync, with the
-  cursor parked on the edited row.
-- **Navigation:** Backing out of a page now returns Home even after another
-  page was opened in between. Reaching Home clears the travel log (account
-  resets do too), so `q` from the new page cannot resurrect the previous trip's
-  back target.
-- **Playlist command:** `playlist add` accepts the cutoff form
-  `playlist add <target...>; <playlist>`. The first unquoted semicolon splits
-  the additions from the destination, so a multi-word playlist name needs no
-  quotes and a quoted target may contain `;`. The legacy last-argument form is
-  still accepted, and the canonical/echoed command uses the cutoff form.
-- **Playlist suggestions:** before the `;` the command line suggests `current`
-  plus search hits for targets; after it, only existing playlist names are
-  suggested (DB-backed via a new playlist scope), and Tab replaces the whole
-  typed name region (`; Road T` -> `; "Road Trip"`). See `docs/Commands.md`.
-- **Playlist page freshness:** a playlist page now refetches its ordered
-  entries when the cached rows disagree with the list's `song_count`, so a
-  playlist edited elsewhere (or by an earlier add) cannot show a header count
-  of 3 with only 1 row. Server `playlist add`/`rm` also reload the cached
-  entries (not just the list count) before the event, and an open playlist page
-  is reloaded after a successful add/rm, keeping rows, collage and count in
-  sync with the server and library.db.
-- **Playlist removal:** `playlist rm <target...>; <playlist>` mirrors
-  `playlist add` — same target resolution (`current`, artist, album, track),
-  same cutoff/legacy grammar, and the same playlist-name suggestions after the
-  cutoff. Local M3U entries resolving to the target songs are dropped and
-  rescanned; server playlists are updated with repeated `songIdToRemove`
-  parameters; removing a target that is not present reports an error.
-- **Docs:** `docs/Commands.md` documents the cutoff grammar, suggestions,
-  `playlist rm` and updated automation examples; `docs/Keybinds.md` records
-  that Home ends the travel session.
+- Add the row clipboard: `y`/`Y` yank the visual range or cursor row from the
+  queue, library lists, page rows and floating search; `p`/`P` paste it below
+  or above the queue cursor, expanding album/artist clipboard rows into their
+  tracks exactly like Add to Queue. Pasting consumes the clipboard, so the same
+  yanked rows cannot duplicate the queue, and a failed paste restores it for a
+  retry. On the queue a visual selection makes `d d` remove the whole range.
+- Make playlist pages editable in place: `p`/`P` insert the clipboard below or
+  above the cursor, `d d` deletes the selected rows or cursor row, and
+  `Ctrl-Shift-K`/`Ctrl-Shift-J` reorder the cursor entry — or the whole visual
+  selection as one block. Local M3U files are edited by position; server
+  playlists rebuild their order through `updatePlaylist` and reload the entries.
+  The page keeps its selection and parks the cursor on the edited row.
+- Rework the playlist command grammar around the `;` cutoff:
+  `playlist add <target...>; <playlist>` and
+  `playlist rm <target...>; <playlist>` make multi-word names quote-free, keep
+  the legacy last-argument form, and switch command-line suggestions to
+  playlist names after the cutoff. `playlist rm; <playlist>` deletes a whole
+  playlist (local file removal or server `deletePlaylist`), closing its open
+  page and toasting the deletion.
+- Keep playlist pages honest after edits made elsewhere: a cached row count
+  that disagrees with the list's `song_count` triggers a `getPlaylist` refetch,
+  and server add/rm now reload the ordered entries before refreshing the list,
+  so the header count, rows and collage cannot drift apart.
+- Backing out of a page now returns Home even after another page was opened in
+  between: reaching Home clears the travel log, so `q` from the new page cannot
+  resurrect the previous trip's back target.
+- Fix `Shift-Tab` in search to reverse the scope cycle on platforms that report
+  it as `tab` with the shift modifier; the cycle wraps, so Songs → Playlists.
+- Document the cutoff grammar, playlist editing keys and one-shot clipboard in
+  `docs/Commands.md` and `docs/Keybinds.md`; the new row clipboard and playlist
+  row edits are also available as the `yank`, `yank_row`, `paste_below`,
+  `paste_above` and `delete_row` IPC commands for automation.
 
 ## 0.6.6 - _Perf upgrades_
 

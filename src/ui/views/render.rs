@@ -4,6 +4,7 @@ use super::super::*;
 
 impl Render for AppRoot {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let frame_started = std::time::Instant::now();
         self.frames = self.frames.wrapping_add(1);
         let viewport = window.viewport_size();
         let viewport_w = f32::from(viewport.width);
@@ -70,7 +71,7 @@ impl Render for AppRoot {
                 .size_full()
                 .child(self.login_view(window));
             #[cfg(debug_assertions)]
-            let login = login.child(self.frame_hud.view());
+            let login = login.child(debug::hud_enabled().then(|| self.frame_hud.view()).unwrap_or_else(|| div().into_any_element()));
             return login.into_any_element();
         }
         let pending = std::mem::take(&mut self.pending_ipc);
@@ -336,7 +337,9 @@ impl Render for AppRoot {
         }
         let status = self.player_bar();
         #[cfg(debug_assertions)]
-        let frame_hud = self.frame_hud.view();
+        let frame_hud = debug::hud_enabled()
+            .then(|| self.frame_hud.view())
+            .unwrap_or_else(|| div().into_any_element());
         let root = div()
             .track_focus(&self.focus)
             .key_context(if self.command_line.is_open() {
@@ -437,6 +440,7 @@ impl Render for AppRoot {
                 Some(o) => o,
                 None => div().into_any_element(),
             });
+        perf::record_frame(frame_started, &*self);
         #[cfg(debug_assertions)]
         let root = root.child(frame_hud);
         root.into_any_element()

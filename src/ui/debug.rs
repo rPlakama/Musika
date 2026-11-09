@@ -21,6 +21,12 @@ pub struct Stats {
     pub delay_ms: f32,
 }
 
+/// The debug HUD is on in debug builds unless `MUSIKA_FRAME_HUD=0`.
+pub fn hud_enabled() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var("MUSIKA_FRAME_HUD").map_or(true, |value| value != "0"))
+}
+
 pub struct FrameStats {
     ring: [f32; SAMPLE_WINDOW],
     head: usize,

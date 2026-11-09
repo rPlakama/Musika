@@ -42,6 +42,7 @@ mod lyrics_layout;
 mod metrics;
 mod page_profile;
 mod palette;
+mod perf;
 mod quick_actions;
 mod remote_images;
 mod scroll_modal;

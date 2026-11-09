@@ -279,8 +279,17 @@ impl RetainedText {
     }
 }
 
-#[cfg(debug_assertions)]
 static SHAPES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// Total calls into `shape_text` since process start (diagnostics).
+pub(crate) fn shape_count() -> u64 {
+    SHAPES.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+fn text_trace() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("MUSIKA_TEXT_TRACE").is_some())
+}
 
 fn shape_text(
     text: SharedString,
@@ -294,12 +303,9 @@ fn shape_text(
     if text.is_empty() {
         return None;
     }
-    #[cfg(debug_assertions)]
-    {
-        let count = SHAPES.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
-        if std::env::var_os("MUSIKA_TEXT_TRACE").is_some() && count.is_multiple_of(100) {
-            eprintln!("retained-text: shape calls={count}");
-        }
+    let count = SHAPES.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+    if count.is_multiple_of(100) && text_trace() {
+        eprintln!("retained-text: shape calls={count}");
     }
     if compact {
         let font = runs.first()?.font.clone();

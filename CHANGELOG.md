@@ -3,6 +3,15 @@
 All notable changes to Musika, newest first. `TASKLISTMAJOR.md` tracks the
 open work; this file is the release history.
 
+## Unreleased
+
+- Align idle frame pacing with the retired QML runner
+  (`idleBehavior = !active && !nowPlayingVisible`): only an unfocused window
+  drops to the 1 Hz upkeep cadence, and the fullscreen player / lyrics overlay
+  keeps the normal playing cadence even while another compositor window has
+  focus. Window activation changes are observed immediately instead of waiting
+  for the next incidental render.
+
 ## 0.6.7 - _Better commands internals and better UIX_
 
 - Add the row clipboard: `y`/`Y` yank the visual range or cursor row from the

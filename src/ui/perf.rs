@@ -229,6 +229,11 @@ pub(crate) struct Demand {
     pub inactive: bool,
     /// A stream is opening/buffering: the spinner needs a steady cadence.
     pub loading: bool,
+    /// The now-playing surface (fullscreen player / lyrics overlay) is
+    /// visible. Mirrors the legacy UI's `idleBehavior = !active &&
+    /// !nowPlayingVisible`: that surface keeps the normal cadence even when
+    /// the window is not focused.
+    pub now_playing: bool,
     /// A library sync is running: the sync spinner/progress moves.
     pub syncing: bool,
     /// At least one toast is on screen (forces an edge render on create/expiry).
@@ -259,9 +264,12 @@ const MAX_SLEEP_MS: u64 = 250;
 /// Pure pacing decision. `last_notify` is the last render/notify timestamp on
 /// the same clock as `now` (seconds).
 pub(crate) fn decide(now: f64, demand: Demand, last_notify: f64) -> Decision {
-    // The shortest active source wins.
+    // The shortest active source wins. The now-playing surface is the one
+    // visual source that must keep the normal cadence while the window is
+    // unfocused (legacy UI: idle only when !active && !nowPlayingVisible).
+    let live = demand.now_playing || !demand.inactive;
     let mut interval = if demand.playing {
-        Some(if demand.inactive {
+        Some(if demand.inactive && !demand.now_playing {
             INACTIVE_INTERVAL
         } else {
             PLAYING_INTERVAL
@@ -269,7 +277,7 @@ pub(crate) fn decide(now: f64, demand: Demand, last_notify: f64) -> Decision {
     } else {
         None
     };
-    if (demand.marquee_at.is_some() || demand.loading || demand.syncing) && !demand.inactive {
+    if (demand.marquee_at.is_some() || demand.loading || demand.syncing) && live {
         interval = Some(interval.map_or(ACTIVE_INTERVAL, |current| current.min(ACTIVE_INTERVAL)));
     }
 
@@ -328,6 +336,7 @@ pub(crate) fn demand_flags(demand: &Demand) -> u8 {
         | (demand.inactive as u8) << 3
         | (demand.marquee_at.is_some() as u8) << 4
         | (demand.toast_active as u8) << 5
+        | (demand.now_playing as u8) << 6
 }
 
 /// Returns true when a source turned on or off since the previous call, so the
@@ -452,6 +461,29 @@ mod tests {
         let due = decide(1.0, inactive, 0.0);
         assert!(due.notify);
         assert_eq!(due.sleep_ms, MAX_SLEEP_MS);
+    }
+
+    #[test]
+    fn inactive_now_playing_keeps_the_playing_cadence() {
+        let now_playing = Demand {
+            playing: true,
+            inactive: true,
+            now_playing: true,
+            ..Demand::default()
+        };
+        let due = decide(10.1, now_playing, 10.0);
+        assert!(due.notify);
+        assert_eq!(
+            due.sleep_ms, 100,
+            "the now-playing surface bypasses the 1 Hz inactive step"
+        );
+        let loading = Demand {
+            loading: true,
+            inactive: true,
+            now_playing: true,
+            ..Demand::default()
+        };
+        assert_eq!(decide(10.1, loading, 10.0).sleep_ms, 34);
     }
 
     #[test]

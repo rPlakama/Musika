@@ -733,6 +733,9 @@ struct AppRoot {
     cover_trace: Option<CoverLoadTrace>,
     trace: bool,
     frames: u64,
+    /// The window activation observer is installed on the first render (the
+    /// entity does not exist yet while `new` runs).
+    activation_observed: bool,
     #[cfg(debug_assertions)]
     frame_hud: debug::FrameHud,
 }
@@ -888,6 +891,7 @@ impl AppRoot {
             cover_trace: None,
             trace: std::env::var_os("MUSIKA_GPUUI_TRACE").is_some(),
             frames: 0,
+            activation_observed: false,
             #[cfg(debug_assertions)]
             frame_hud: debug::FrameHud::default(),
         };

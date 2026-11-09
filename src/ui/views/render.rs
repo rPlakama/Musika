@@ -14,6 +14,15 @@ impl Render for AppRoot {
         self.win_h = viewport_h;
         self.scale_factor = window.scale_factor();
         perf::set_window_active(window.is_window_active());
+        if !self.activation_observed {
+            self.activation_observed = true;
+            cx.observe_window_activation(window, |this, window, cx| {
+                perf::set_window_active(window.is_window_active());
+                this.refresh_lyrics_overlay();
+                cx.notify();
+            })
+            .detach();
+        }
         self.refresh_lyrics_overlay();
         if self.trace && self.frames.is_multiple_of(120) {
             crate::debug_log!("GPUI trace: frame {}", self.frames);

@@ -68,9 +68,14 @@ impl AppRoot {
                 }
             }
         }
+        // Legacy runner.qml `idleBehavior = !active && !nowPlayingVisible`:
+        // the expanded player (fullscreen / lyrics overlay) must keep moving
+        // even when another compositor window has focus.
+        let now_playing = self.fullscreen || self.lyrics_overlay;
         perf::Demand {
             playing: self.player.state() == crate::player::State::Playing,
             inactive,
+            now_playing,
             loading: self.player.is_loading(),
             syncing: self.syncing,
             toast_active: !self.toasts.is_empty(),

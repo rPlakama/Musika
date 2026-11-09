@@ -2,6 +2,49 @@
 
 use super::super::*;
 
+/// Bottom-bar cover identity cache: the same album must keep the same cover
+/// source (and skip the fade/reload) across its tracks.
+#[derive(Default)]
+pub(in crate::ui) struct PlayerBarCover {
+    key: Option<String>,
+    source: Option<CoverSource>,
+    changed: bool,
+}
+
+impl PlayerBarCover {
+    /// Returns the cover and whether the album/cover identity changed. A
+    /// repeated key reuses the source and never re-runs the resolver.
+    pub(in crate::ui) fn resolve(
+        &mut self,
+        key: String,
+        resolve: impl FnOnce() -> Option<CoverSource>,
+    ) -> Option<CoverSource> {
+        if self.key.as_deref() == Some(key.as_str()) {
+            self.changed = false;
+            return self.source.clone();
+        }
+        let source = resolve();
+        self.key = Some(key);
+        self.source = source.clone();
+        self.changed = true;
+        source
+    }
+
+    pub(in crate::ui) fn source(&self) -> Option<CoverSource> {
+        self.source.clone()
+    }
+
+    pub(in crate::ui) fn changed(&self) -> bool {
+        self.changed
+    }
+
+    pub(in crate::ui) fn clear(&mut self) {
+        self.key = None;
+        self.source = None;
+        self.changed = false;
+    }
+}
+
 impl AppRoot {
     pub(in crate::ui) fn topbar_action_chip(
         &self,
@@ -357,6 +400,27 @@ impl AppRoot {
             )
     }
 
+    /// Refreshes the bottom-bar cover identity once per render, before any
+    /// immutable view borrows. Same-album skips reuse the previous source and
+    /// do not replay the fade animation.
+    pub(in crate::ui) fn refresh_player_bar_cover(&mut self) {
+        let Some(track) = self.player.current().cloned() else {
+            self.player_bar_cover.clear();
+            return;
+        };
+        let key = if !track.album_id.is_empty() {
+            format!("album:{}", track.album_id)
+        } else if !track.album.is_empty() {
+            format!("album-name:{}|{}", track.album, track.artist)
+        } else {
+            format!("cover:{}|{}", track.cover_url, track.cover_remote)
+        };
+        let url = track.cover_url.clone();
+        let remote = track.cover_remote.clone();
+        self.player_bar_cover
+            .resolve(key, || cover_source_with_remote(&url, &remote));
+    }
+
     pub(in crate::ui) fn player_bar(&self) -> impl IntoElement {
         let track = self.player.current().cloned();
         let state = self.player.state();
@@ -369,13 +433,11 @@ impl AppRoot {
         } else {
             0.0
         };
-        let (title, artist, cover) = match &track {
-            Some(track) => (
-                track.title.clone(),
-                track.artist.clone(),
-                cover_source_with_remote(&track.cover_url, &track.cover_remote),
-            ),
-            None => ("Nothing playing".to_string(), String::new(), None),
+        let cover = self.player_bar_cover.source();
+        let cover_changed = self.player_bar_cover.changed();
+        let (title, artist) = match &track {
+            Some(track) => (track.title.clone(), track.artist.clone()),
+            None => ("Nothing playing".to_string(), String::new()),
         };
         let m = metrics::PlayerBarMetrics::new(self.win_w, self.win_h);
         div()
@@ -413,7 +475,7 @@ impl AppRoot {
                             .flex_1()
                             .min_w_0()
                             .overflow_hidden()
-                            .child(art(cover, m.cover_side))
+                            .child(cover_element(cover, m.cover_side, cover_changed))
                             .child(
                                 div()
                                     .flex()
@@ -586,5 +648,46 @@ impl AppRoot {
                     )
                 }
             })
+    }
+}
+
+#[cfg(test)]
+mod cover_cache_tests {
+    use super::*;
+
+    fn source(path: &str) -> CoverSource {
+        CoverSource::Path(std::path::PathBuf::from(path))
+    }
+
+    #[test]
+    fn same_album_reuses_cover_without_resolving() {
+        let mut cache = PlayerBarCover::default();
+        let mut calls = 0;
+        let first = cache.resolve("album:a".into(), || {
+            calls += 1;
+            Some(source("/a.jpg"))
+        });
+        assert!(cache.changed());
+        assert_eq!(first.as_ref().map(CoverSource::key), Some("/a.jpg".into()));
+        let second = cache.resolve("album:a".into(), || {
+            calls += 1;
+            Some(source("/different.jpg"))
+        });
+        assert!(!cache.changed());
+        assert_eq!(second.as_ref().map(CoverSource::key), Some("/a.jpg".into()));
+        assert_eq!(calls, 1);
+    }
+
+    #[test]
+    fn new_album_fades_and_clears() {
+        let mut cache = PlayerBarCover::default();
+        let _ = cache.resolve("album:a".into(), || Some(source("/a.jpg")));
+        let b = cache.resolve("album:b".into(), || Some(source("/b.jpg")));
+        assert!(cache.changed());
+        assert_eq!(b.as_ref().map(CoverSource::key), Some("/b.jpg".into()));
+        cache.clear();
+        assert!(!cache.changed());
+        let _ = cache.resolve("album:b".into(), || Some(source("/b.jpg")));
+        assert!(cache.changed());
     }
 }

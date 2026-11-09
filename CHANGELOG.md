@@ -5,6 +5,10 @@ open work; this file is the release history.
 
 ## Unreleased
 
+- Keep the bottom player bar's cover mounted across skips within the same
+  album: the cover source is cached by album id (album/artist fallback for
+  queue rows without one), and the fade/reload is skipped when the identity
+  did not change.
 - Replace the first-party playback C with Rust: the FFmpeg decode/resample
   orchestration, PipeWire stream/process callback, PCM ring and io_uring batch
   reader now live in Rust (`src/player/pipewire/`, `src/io_uring_read.rs`).

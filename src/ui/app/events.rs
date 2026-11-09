@@ -843,6 +843,7 @@ impl AppRoot {
 
     fn reset_for_account(&mut self) {
         self.player.clear();
+        self.player_bar_cover.clear();
         self.playback_error = None;
         self.view = ViewState::default();
         self.generation = 0;

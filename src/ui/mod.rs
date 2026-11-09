@@ -55,10 +55,10 @@ mod widgets;
 use self::text_modal::TextModal;
 use self::widgets::marquee::MarqueeText;
 use self::widgets::media::{
-    CoverSource, art, asset_root, collage_art_from_sources, cover_source_with_remote, format_time,
-    highlighted_text, icon, icon_downloaded, icon_download_pending, icon_favorite, icon_rotated,
-    loading_placeholder, loading_skeleton, page_key, remote_cover, repeat_label, transport_button,
-    transport_loading_button,
+    CoverSource, art, asset_root, collage_art_from_sources, cover_element, cover_source_with_remote,
+    format_time, highlighted_text, icon, icon_downloaded, icon_download_pending, icon_favorite,
+    icon_rotated, loading_placeholder, loading_skeleton, page_key, remote_cover, repeat_label,
+    transport_button, transport_loading_button,
 };
 use self::widgets::retained_cover::RetainedCover;
 use self::widgets::retained_icon::RetainedIcon;
@@ -686,6 +686,7 @@ struct AppRoot {
     library_hover_fill: anim::ColorBehavior,
     page_hover_fill: anim::ColorBehavior,
     player: PlayerMirror,
+    player_bar_cover: views::shell::PlayerBarCover,
     playback_error: Option<String>,
     queue_open: bool,
     queue_cursor: usize,
@@ -879,6 +880,7 @@ impl AppRoot {
             library_hover_fill: anim::ColorBehavior::new(palette::surface()),
             page_hover_fill: anim::ColorBehavior::new(palette::surface()),
             player,
+            player_bar_cover: views::shell::PlayerBarCover::default(),
             playback_error: None,
             queue_open: false,
             queue_cursor: 0,

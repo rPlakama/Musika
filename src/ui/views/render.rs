@@ -48,6 +48,7 @@ impl Render for AppRoot {
             perf::request_frame(window, "palette");
         }
         self.sync_palette();
+        self.refresh_player_bar_cover();
         let playback_index = self.player.index();
         if playback_index != self.last_player_index {
             self.last_player_index = playback_index;

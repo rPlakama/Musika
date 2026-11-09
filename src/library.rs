@@ -606,6 +606,16 @@ pub async fn albums(pool: &SqlitePool, artist: Option<&str>, order: &str) -> Res
     albums_limited(pool, artist, order, 0).await
 }
 
+/// One random non-empty album id from the local catalog (tray `random`).
+pub async fn random_album_id(pool: &SqlitePool) -> Result<Option<String>> {
+    let id: Option<String> = sqlx::query_scalar(
+        "SELECT id FROM albums WHERE song_count > 0 ORDER BY random() LIMIT 1",
+    )
+    .fetch_optional(pool)
+    .await?;
+    Ok(id)
+}
+
 /// The first `limit` albums of [`albums`]; `limit <= 0` means all.
 pub async fn albums_limited(
     pool: &SqlitePool,

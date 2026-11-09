@@ -6,7 +6,7 @@ use crate::ui::widgets::media::{CoverSource, cover_sources};
 
 pub use crate::model::{PageDescriptor, PageHeader, PageKind, Row, RowKind, Scope};
 
-pub use crate::model::{SEARCH_FETCH_ROWS, SEARCH_VISIBLE_ROWS};
+pub use crate::model::SEARCH_VISIBLE_ROWS;
 
 /// The legacy UI `RowWindow` contract: a count plus only the rows inside the live
 /// window. The UI never materializes the whole library.

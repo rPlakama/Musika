@@ -132,6 +132,8 @@ pub enum IpcCommand {
         next: bool,
     },
     QuickCancel,
+    Show,
+    RandomAlbum,
     Quit,
 }
 
@@ -696,6 +698,18 @@ pub const COMMANDS: &[CommandSpec] = &[
         args: ArgSpec::None,
     },
     CommandSpec {
+        name: "show",
+        usage: "show",
+        description: "Show or raise the Musika window",
+        args: ArgSpec::None,
+    },
+    CommandSpec {
+        name: "random",
+        usage: "random",
+        description: "Play a random album from the library",
+        args: ArgSpec::None,
+    },
+    CommandSpec {
         name: "quit",
         usage: "quit",
         description: "Quit Musika",
@@ -957,6 +971,8 @@ pub fn parse(input: &str) -> Result<IpcCommand, CommandError> {
             next: one_arg(rest, spec.usage)? == "next",
         }),
         "quick_cancel" => Ok(IpcCommand::QuickCancel),
+        "show" => Ok(IpcCommand::Show),
+        "random" => Ok(IpcCommand::RandomAlbum),
         "quit" => Ok(IpcCommand::Quit),
         _ => Err(CommandError(format!("unknown command: {name}"))),
     }
@@ -1397,6 +1413,8 @@ pub fn canonical_string(command: &IpcCommand) -> String {
         QuickCycle { next: true } => "quick_cycle next".to_string(),
         QuickCycle { next: false } => "quick_cycle prev".to_string(),
         QuickCancel => "quick_cancel".to_string(),
+        Show => "show".to_string(),
+        RandomAlbum => "random".to_string(),
         Quit => "quit".to_string(),
     }
 }
@@ -2021,10 +2039,6 @@ mod tests {
 
     #[test]
     fn playlist_add_before_cutoff_keeps_target_suggestions() {
-        let context = SuggestionContext {
-            current: None,
-            rows: Vec::new(),
-        };
         let input = "playlist add Pin";
         let request = suggestion_request(input, input.len()).expect("target scope");
         assert_eq!(request.scope, SuggestScope::Any);
@@ -2300,6 +2314,8 @@ mod tests {
             "quick_cycle next",
             "quick_cycle prev",
             "quick_cancel",
+            "show",
+            "random",
             "quit",
         ];
         for sample in samples {

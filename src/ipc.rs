@@ -46,6 +46,19 @@ pub fn socket_path() -> PathBuf {
     crate::db::config_socket("ipc.sock")
 }
 
+/// Sends one command line to the running IPC socket, if any. Blocking but
+/// bounded (connect + write only); tray/launcher callers use it as a cheap
+/// hand-off into the core command queue.
+pub fn send_line(line: &str) -> bool {
+    use std::io::Write;
+    use std::time::Duration;
+    let Ok(mut stream) = UnixStream::connect(socket_path()) else {
+        return false;
+    };
+    let _ = stream.set_write_timeout(Some(Duration::from_millis(100)));
+    writeln!(stream, "{}", line.trim()).is_ok()
+}
+
 pub fn remove_stale_socket(path: &Path) {
     let _ = std::fs::remove_file(path);
 }

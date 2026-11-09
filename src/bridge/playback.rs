@@ -73,6 +73,57 @@ impl Bridge {
     }
 
     /// IPC `play_song_in_album`: load the song's album queue at that song.
+    /// Tray `random`: pick a random non-empty album from `library.db` and
+    /// start it in album order, opening the album page.
+    pub fn play_random_album(&self) {
+        let tx = self.tx.clone();
+        let offline = self.offline.load(Ordering::Relaxed);
+        crate::app::runtime().spawn(async move {
+            let Some(dbs) = crate::app::dbs() else { return };
+            let id = match crate::library::random_album_id(&dbs.library).await {
+                Ok(Some(id)) => id,
+                Ok(None) => {
+                    let _ = tx.send(Event::Error("The library has no albums to pick.".to_string()));
+                    return;
+                }
+                Err(err) => {
+                    let _ = tx.send(Event::Error(format!(
+                        "Could not pick a random album: {err:#}"
+                    )));
+                    return;
+                }
+            };
+            match crate::queue::album_tracks_json(&dbs, &id, offline).await {
+                Ok(json) => match serde_json::from_str::<Vec<crate::player::Track>>(&json) {
+                    Ok(tracks) if !tracks.is_empty() => {
+                        let _ = tx.send(Event::Queue { tracks, start: 0 });
+                        let _ = tx.send(Event::OpenPage {
+                            descriptor: super::super::model::PageDescriptor::new(
+                                super::super::model::PageKind::Album,
+                                id,
+                            ),
+                        });
+                    }
+                    Ok(_) => {
+                        let _ = tx.send(Event::Error(
+                            "The random album has no playable tracks.".to_string(),
+                        ));
+                    }
+                    Err(err) => {
+                        let _ = tx.send(Event::Error(format!(
+                            "Could not read the random album: {err:#}"
+                        )));
+                    }
+                },
+                Err(err) => {
+                    let _ = tx.send(Event::Error(format!(
+                        "Could not load the random album: {err:#}"
+                    )));
+                }
+            }
+        });
+    }
+
     pub fn play_song_in_album(&self, song_id: String) {
         let tx = self.tx.clone();
         let offline = self.offline.load(Ordering::Relaxed);

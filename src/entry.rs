@@ -24,9 +24,7 @@ fn load_dotenv() {
 }
 
 pub fn run() {
-    // Keep glibc from creating a new arena per decoder thread. Each arena
-    // retains its whole-track download buffer pages after the thread exits,
-    // so skipping tracks grows RSS until the arena cap is one.
+    // Keep glibc from creating a new arena per decoder thread.
     #[cfg(target_os = "linux")]
     unsafe {
         unsafe extern "C" {
@@ -36,8 +34,8 @@ pub fn run() {
         let _ = mallopt(M_ARENA_MAX, 1);
     }
 
-    // CLI probe before any Qt/database work, so `musika --version` also
-    // works on a headless host.
+    // CLI probe before any database work, so `musika --version` also works
+    // on a headless host.
     if std::env::args()
         .skip(1)
         .any(|arg| arg == "--version" || arg == "-V")
@@ -46,9 +44,26 @@ pub fn run() {
         return;
     }
 
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    if args.iter().any(|arg| arg == "--daemon") {
+        crate::daemon::run();
+    }
+    if args.iter().any(|arg| arg == "--ui") {
+        eprintln!("musika --ui: the daemon split is not implemented yet");
+        std::process::exit(1);
+    }
+
+    if !init_backend() {
+        std::process::exit(1);
+    }
+    crate::ui::run();
+}
+
+/// Initializes the shared backend: startup instrumentation, native audio
+/// warm-up, dotenv, the account data root, and the database set.
+pub(crate) fn init_backend() -> bool {
     crate::startup::start();
     crate::startup::trace("main");
-
     crate::player::warm_native();
     load_dotenv();
 
@@ -56,7 +71,7 @@ pub fn run() {
         Ok(root) => root,
         Err(err) => {
             eprintln!("accounts: failed to select data root: {err:#}");
-            std::process::exit(1);
+            return false;
         }
     };
     crate::db::set_data_root(data_root);
@@ -66,17 +81,13 @@ pub fn run() {
         Ok(dbs) => dbs,
         Err(err) => {
             eprintln!("database: failed to initialise: {err:#}");
-            std::process::exit(1);
+            return false;
         }
     };
     crate::startup::trace("db.init");
-
     if let Err(err) = crate::app::runtime().block_on(crate::accounts::migrate_legacy(&dbs)) {
         eprintln!("accounts: legacy migration failed: {err:#}");
     }
-    // GPUI is the only front end.
     crate::app::set_dbs(dbs);
-    crate::startup::trace("app.gpuui");
-    crate::ui::run();
+    true
 }
-

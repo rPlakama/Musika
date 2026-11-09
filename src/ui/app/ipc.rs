@@ -232,6 +232,8 @@ impl AppRoot {
                 self.alt_target = None;
                 self.animate_alt(0.0);
             }
+            IpcCommand::Show => window.activate_window(),
+            IpcCommand::RandomAlbum => self.bridge.play_random_album(),
             IpcCommand::Quit => self.on_quit(&Quit, window, cx),
         }
         cx.notify();

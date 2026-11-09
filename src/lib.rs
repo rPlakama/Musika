@@ -31,6 +31,7 @@ mod colors;
 mod consts;
 mod covers;
 mod crypto;
+mod daemon;
 mod db;
 mod debug;
 #[cfg(any(debug_assertions, test))]
@@ -67,6 +68,7 @@ mod session;
 mod sqlite;
 mod startup;
 mod status;
+mod tray;
 #[cfg(feature = "gpuui")]
 mod ui;
 

@@ -590,3 +590,26 @@ fn bench_existing_song_ids() {
         "the derived-only lookup must not load the whole catalog"
     );
 }
+
+#[tokio::test]
+async fn random_album_id_skips_empty_albums() {
+    let pool = memory_pool().await;
+    sqlx::raw_sql(
+        "INSERT INTO artists (id, name, album_count) VALUES ('ar1', 'Artist', 2);
+         INSERT INTO albums (id, artist_id, name, artist, song_count) VALUES
+             ('empty', 'ar1', 'Empty', 'Artist', 0),
+             ('full', 'ar1', 'Full', 'Artist', 3);",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    for _ in 0..8 {
+        assert_eq!(random_album_id(&pool).await.unwrap().as_deref(), Some("full"));
+    }
+
+    sqlx::query("DELETE FROM albums")
+        .execute(&pool)
+        .await
+        .unwrap();
+    assert_eq!(random_album_id(&pool).await.unwrap(), None);
+}

@@ -297,6 +297,7 @@ impl AppRoot {
             }
             Event::QueuePaste { tracks, at } => {
                 self.paste_backup = None;
+        self.pending_playlist_cursor = None;
                 if tracks.is_empty() {
                     return;
                 }
@@ -451,6 +452,16 @@ impl AppRoot {
                 page.rebuild_covers();
                 page.loading = false;
                 page.error = None;
+                if let Some((id, row)) = self.pending_playlist_cursor.as_ref()
+                    && page.descriptor.kind == PageKind::Playlist
+                    && &page.descriptor.id == id
+                {
+                    let row = *row;
+                    self.pending_playlist_cursor = None;
+                    page.cursor = row.min(page.rows.len().saturating_sub(1));
+                    page.selection.clear();
+                    self.visual_mode = false;
+                }
                 page.cursor = page.cursor.min(page.rows.len().saturating_sub(1));
                 let reveal_index = self.pending_page_reveal.as_ref().and_then(|pending| {
                     if page.descriptor.kind != pending.page_kind
@@ -521,12 +532,16 @@ impl AppRoot {
                 offline,
                 created,
                 removed,
+                moved,
                 rows,
+                playlist_id,
+                cursor,
                 error,
             } => {
                 let failed = error.is_some();
                 if !failed && !removed && rows > 0 {
                     self.paste_backup = None;
+        self.pending_playlist_cursor = None;
                 }
                 if failed
                     && self.clipboard_kind.is_none()
@@ -564,6 +579,8 @@ impl AppRoot {
                     );
                 } else if removed {
                     self.push_toast(format!("Removed from “{name}”"), ToastKind::Notice, None);
+                } else if moved {
+                    // Reordering is visible in the list; no toast to spam.
                 } else if rows > 0 {
                     self.push_toast(
                         format!(
@@ -584,7 +601,16 @@ impl AppRoot {
                 }
                 // The backend refreshed the playlist's cached entries before
                 // sending this event; reload an open playlist page so the rows
-                // and count match what was just added or removed.
+                // and count match what was just added or removed, and park the
+                // cursor on the edited row for the reload.
+                if let (Some(id), Some(row)) = (playlist_id, cursor)
+                    && self.page.as_ref().is_some_and(|page| {
+                        page.descriptor.kind == PageKind::Playlist
+                            && page.descriptor.id == id
+                    })
+                {
+                    self.pending_playlist_cursor = Some((id, row));
+                }
                 if let Some(descriptor) = self
                     .page
                     .as_ref()
@@ -801,6 +827,7 @@ impl AppRoot {
         self.clipboard_kind = None;
         self.clipboard_ids.clear();
         self.paste_backup = None;
+        self.pending_playlist_cursor = None;
         self.visual_mode = false;
         self.fullscreen = false;
         self.fullscreen_anim = anim::Behavior::new(0.0);

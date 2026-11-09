@@ -57,10 +57,11 @@ Backing out of the last page reaches Home and clears the log: opening another
 page from Home starts a fresh trip, so its Back returns Home rather than the
 previous page.
 
-On a playlist page, `y`/`Y` yank its song rows, `p`/`P` append the row
-clipboard to the playlist (existing entries are kept) and `d d` deletes the
-selected rows or the cursor row — local M3U entries are removed by position,
-server playlists by `songIdToRemove`.
+On a playlist page, `y`/`Y` yank its song rows, `p` inserts the row clipboard
+below the cursor and `P` above it (local M3U files insert exactly; server
+playlists rebuild their order because `updatePlaylist` cannot insert), and
+`d d` deletes the selected rows or the cursor row. `Ctrl-Shift-K` /
+`Ctrl-Shift-J` move the cursor entry up / down, like the queue drawer.
 
 On album and artist pages, `Tab` cycles the page header stops. `?`, or Enter/click
 on the inline description, opens the shared full-window description reader:

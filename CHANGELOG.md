@@ -16,8 +16,12 @@ open work; this file is the release history.
   again to paste again; a failed paste restores the clipboard for a retry.
 - **Playlist row editing:** on a playlist page `d d` deletes the selected rows
   or cursor row (exact local-M3U positions, `songIdToRemove` for server
-  playlists), and `p`/`P` append the yanked rows to the playlist. Both paths
-  reload the open page so rows, count and collage stay in sync.
+  playlists), `p` inserts the yanked rows below the cursor and `P` above it,
+  and `Ctrl-Shift-K` / `Ctrl-Shift-J` reorder the cursor entry like the queue.
+  Local M3U files are edited by position; server playlists rebuild their order
+  through `updatePlaylist` (remove + add) and reload the entries. All paths
+  reload the open page so rows, count and collage stay in sync, with the
+  cursor parked on the edited row.
 - **Navigation:** Backing out of a page now returns Home even after another
   page was opened in between. Reaching Home clears the travel log (account
   resets do too), so `q` from the new page cannot resurrect the previous trip's

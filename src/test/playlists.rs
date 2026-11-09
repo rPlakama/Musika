@@ -1129,3 +1129,184 @@ async fn remove_playlist_positions_updates_a_server_playlist() {
     assert!(requests.iter().any(|request| request.contains("getPlaylist.view")));
     assert!(requests.iter().any(|request| request.contains("getPlaylists.view")));
 }
+
+/// Playlist-page paste/reorder backend on a local M3U: insert at an exact
+/// position and move an entry, preserving order after each rescans.
+#[tokio::test]
+async fn insert_and_move_local_playlist_entries() {
+    let _guard = PLAYLIST_FOLDER_LOCK.lock().await;
+    let library = memory_pool().await;
+    sqlx::migrate!("./migrations_library")
+        .run(&library)
+        .await
+        .unwrap();
+    sqlx::raw_sql(
+        "INSERT INTO artists (id, name, album_count) VALUES ('ar1', 'Artist', 1);
+         INSERT INTO albums (id, artist_id, name, artist, song_count)
+             VALUES ('al1', 'ar1', 'Album', 'Artist', 2);
+         INSERT INTO songs
+             (id, album_id, artist_id, title, artist, album, track, disc_number, duration, path)
+         VALUES
+             ('s1', 'al1', 'ar1', 'First', 'Artist', 'Album', 1, 1, 100, 'Music/first.flac'),
+             ('s2', 'al1', 'ar1', 'Second', 'Artist', 'Album', 2, 1, 200, 'Music/second.flac');",
+    )
+    .execute(&library)
+    .await
+    .unwrap();
+    let playlist = memory_pool().await;
+    sqlx::migrate!("./migrations_playlist")
+        .run(&playlist)
+        .await
+        .unwrap();
+    let dbs = test_dbs(&library, &playlist);
+    let root = std::env::temp_dir().join(format!("musika-movepl-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    crate::db::set_data_root(root.clone());
+
+    let path = create_local(&dbs, "Move Mix", &["s1".into(), "s2".into()])
+        .await
+        .unwrap();
+    let paths = |text: &str| {
+        parse_m3u(text)
+            .into_iter()
+            .map(|entry| entry.path)
+            .collect::<Vec<_>>()
+    };
+    insert_song_ids_at(&dbs, "Move Mix", 1, &["s1".into()])
+        .await
+        .unwrap();
+    assert_eq!(
+        paths(&std::fs::read_to_string(&path).unwrap()),
+        vec!["Music/first.flac", "Music/first.flac", "Music/second.flac"]
+    );
+
+    move_playlist_entry(&dbs, "Move Mix", 0, 2).await.unwrap();
+    assert_eq!(
+        paths(&std::fs::read_to_string(&path).unwrap()),
+        vec!["Music/first.flac", "Music/second.flac", "Music/first.flac"]
+    );
+    assert!(move_playlist_entry(&dbs, "Move Mix", 0, 9).await.is_err());
+    assert!(
+        insert_song_ids_at(&dbs, "Move Mix", 0, &[])
+            .await
+            .is_err()
+    );
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
+/// Server insert-at-position rebuilds the order through updatePlaylist
+/// (remove every cached id, then add the new ordered list) and reloads.
+#[tokio::test]
+async fn insert_song_ids_at_rebuilds_a_server_playlist_order() {
+    use std::io::{Read, Write};
+    use std::time::{Duration, Instant};
+
+    let credentials = memory_pool().await;
+    sqlx::migrate!("./migrations")
+        .run(&credentials)
+        .await
+        .unwrap();
+    crate::crypto::use_test_key();
+
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind loopback");
+    let addr = listener.local_addr().expect("local addr");
+    listener.set_nonblocking(true).unwrap();
+    let server = std::thread::spawn(move || {
+        let mut requests: Vec<String> = Vec::new();
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while requests.len() < 4 && Instant::now() < deadline {
+            let (mut socket, _) = match listener.accept() {
+                Ok(pair) => pair,
+                Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {
+                    std::thread::sleep(Duration::from_millis(10));
+                    continue;
+                }
+                Err(_) => break,
+            };
+            socket.set_read_timeout(Some(Duration::from_secs(5))).ok();
+            let mut buffer = [0u8; 8192];
+            let read = socket.read(&mut buffer).unwrap_or(0);
+            let request = String::from_utf8_lossy(&buffer[..read]).to_string();
+            let body = if request.contains("getPlaylist.view") {
+                r#"{"subsonic-response":{"status":"ok","version":"1.16.1","playlist":{"entry":[{"id":"s1","title":"First"},{"id":"s3","title":"Third"},{"id":"s2","title":"Second"}]}}}"#
+            } else if request.contains("getPlaylists.view") {
+                r#"{"subsonic-response":{"status":"ok","version":"1.16.1","playlists":{"playlist":[{"id":"pl1","name":"Mix","songCount":3,"duration":600}]}}}"#
+            } else {
+                r#"{"subsonic-response":{"status":"ok","version":"1.16.1"}}"#
+            };
+            let head = format!(
+                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nContent-Type: application/json\r\nConnection: close\r\n\r\n",
+                body.len()
+            );
+            socket.write_all(head.as_bytes()).expect("head");
+            socket.write_all(body.as_bytes()).expect("body");
+            socket.flush().expect("flush");
+            requests.push(request);
+        }
+        requests
+    });
+
+    let server_url = format!("http://{addr}");
+    crate::sqlite::save_credentials(&credentials, "alice", "secret", &server_url, "navidrome")
+        .await
+        .unwrap();
+
+    let library = memory_pool().await;
+    let playlist = memory_pool().await;
+    sqlx::migrate!("./migrations_playlist")
+        .run(&playlist)
+        .await
+        .unwrap();
+    sqlx::query(
+        "INSERT INTO playlist (id, source, name, song_count, duration, fetched_at)
+         VALUES ('pl1', 'subsonic', 'Mix', 2, 300, 0)",
+    )
+    .execute(&playlist)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO playlist_song (playlist_id, position, song_id, title) VALUES
+             ('pl1', 0, 's1', 'First'),
+             ('pl1', 1, 's2', 'Second')",
+    )
+    .execute(&playlist)
+    .await
+    .unwrap();
+    let dbs = test_dbs_with_credentials(&credentials, &library, &playlist);
+
+    insert_song_ids_at(&dbs, "pl1", 1, &["s3".into()])
+        .await
+        .unwrap();
+
+    let rows: Vec<(i64, String)> = sqlx::query_as(
+        "SELECT position, title FROM playlist_song WHERE playlist_id = 'pl1' ORDER BY position",
+    )
+    .fetch_all(&playlist)
+    .await
+    .unwrap();
+    assert_eq!(
+        rows,
+        vec![
+            (0, "First".to_string()),
+            (1, "Third".to_string()),
+            (2, "Second".to_string())
+        ]
+    );
+
+    let requests = server.join().expect("server thread");
+    let updates: Vec<&String> = requests
+        .iter()
+        .filter(|request| request.contains("updatePlaylist.view"))
+        .collect();
+    assert_eq!(updates.len(), 2, "remove + add: {requests:?}");
+    assert!(updates[0].contains("songIdToRemove=s1"), "{updates:?}");
+    assert!(updates[0].contains("songIdToRemove=s2"), "{updates:?}");
+    let added = updates[1];
+    let s1 = added.find("songIdToAdd=s1").expect("s1 add");
+    let s3 = added.find("songIdToAdd=s3").expect("s3 add");
+    let s2 = added.find("songIdToAdd=s2").expect("s2 add");
+    assert!(s1 < s3 && s3 < s2, "new order: {added}");
+    assert!(requests.iter().any(|request| request.contains("getPlaylist.view")));
+}

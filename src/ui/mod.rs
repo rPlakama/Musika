@@ -635,6 +635,8 @@ struct AppRoot {
     hovered_page: Option<usize>,
     selected_id: Option<String>,
     pending_page_reveal: Option<PendingReveal>,
+    /// (playlist id, cursor row) to apply when an edited playlist page reloads.
+    pending_playlist_cursor: Option<(String, usize)>,
     visual_mode: bool,
     queue_selection: state::Selection,
     /// In-app row clipboard (VI-8a): kind + ids in yank order, duplicates kept.
@@ -790,6 +792,7 @@ impl AppRoot {
             hovered_page: None,
             selected_id: None,
             pending_page_reveal: None,
+            pending_playlist_cursor: None,
             visual_mode: false,
             queue_selection: state::Selection::default(),
             clipboard_kind: None,

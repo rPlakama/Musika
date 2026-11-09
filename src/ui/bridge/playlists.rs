@@ -24,7 +24,10 @@ impl Bridge {
                     offline,
                     created: true,
                     removed: false,
+                    moved: false,
                     rows: 0,
+                    playlist_id: None,
+                    cursor: None,
                     error: None,
                 },
                 Err(err) => Event::PlaylistSaved {
@@ -32,7 +35,10 @@ impl Bridge {
                     offline,
                     created: true,
                     removed: false,
+                    moved: false,
                     rows: 0,
+                    playlist_id: None,
+                    cursor: None,
                     error: Some(format!("{err:#}")),
                 },
             };
@@ -89,7 +95,10 @@ impl Bridge {
                         offline: false,
                         created: false,
                         removed: false,
+                        moved: false,
                         rows: 0,
+                        playlist_id: None,
+                        cursor: None,
                         error: None,
                     });
                 }
@@ -99,7 +108,10 @@ impl Bridge {
                         offline: false,
                         created: false,
                         removed: false,
+                        moved: false,
                         rows: 0,
+                        playlist_id: None,
+                        cursor: None,
                         error: Some(format!("{err:#}")),
                     });
                 }
@@ -135,7 +147,10 @@ impl Bridge {
                         offline: false,
                         created: false,
                         removed: true,
+                        moved: false,
                         rows: 0,
+                        playlist_id: None,
+                        cursor: None,
                         error: None,
                     });
                 }
@@ -145,7 +160,10 @@ impl Bridge {
                         offline: false,
                         created: false,
                         removed: true,
+                        moved: false,
                         rows: 0,
+                        playlist_id: None,
+                        cursor: None,
                         error: Some(format!("{err:#}")),
                     });
                 }
@@ -155,10 +173,16 @@ impl Bridge {
 }
 
 impl Bridge {
-    /// Paste the row clipboard into a playlist page: resolve every clipboard id
-    /// to its songs (album/artist expand), then append the song ids. Empty
-    /// resolution reports an error instead of silently doing nothing.
-    pub fn paste_playlist(&self, playlist_id: String, kind: String, ids: Vec<String>) {
+    /// Paste the row clipboard into a playlist page at `position` (the row
+    /// below/above the cursor). Resolves every clipboard id to its songs
+    /// (album/artist expand), then inserts the song ids.
+    pub fn paste_playlist(
+        &self,
+        playlist_id: String,
+        kind: String,
+        ids: Vec<String>,
+        position: usize,
+    ) {
         let tx = self.tx.clone();
         crate::app::runtime().spawn(async move {
             let Some(dbs) = crate::app::dbs() else { return };
@@ -176,14 +200,18 @@ impl Bridge {
                 ));
                 return;
             }
-            match crate::playlists::add_song_ids_to_playlist(&dbs, &playlist_id, &song_ids).await {
+            let rows = song_ids.len();
+            match crate::playlists::insert_song_ids_at(&dbs, &playlist_id, position, &song_ids).await {
                 Ok(name) => {
                     let _ = tx.send(Event::PlaylistSaved {
                         name,
                         offline: false,
                         created: false,
                         removed: false,
-                        rows: song_ids.len(),
+                        moved: false,
+                        rows,
+                        playlist_id: Some(playlist_id),
+                        cursor: Some(position),
                         error: None,
                     });
                 }
@@ -193,7 +221,46 @@ impl Bridge {
                         offline: false,
                         created: false,
                         removed: false,
+                        moved: false,
                         rows: 0,
+                        playlist_id: None,
+                        cursor: None,
+                        error: Some(format!("{err:#}")),
+                    });
+                }
+            }
+        });
+    }
+
+    /// Move one playlist entry (the page `Ctrl-Shift-J/K` path).
+    pub fn move_playlist_row(&self, playlist_id: String, from: usize, to: usize) {
+        let tx = self.tx.clone();
+        crate::app::runtime().spawn(async move {
+            let Some(dbs) = crate::app::dbs() else { return };
+            match crate::playlists::move_playlist_entry(&dbs, &playlist_id, from, to).await {
+                Ok(name) => {
+                    let _ = tx.send(Event::PlaylistSaved {
+                        name,
+                        offline: false,
+                        created: false,
+                        removed: false,
+                        moved: true,
+                        rows: 0,
+                        playlist_id: Some(playlist_id),
+                        cursor: Some(to),
+                        error: None,
+                    });
+                }
+                Err(err) => {
+                    let _ = tx.send(Event::PlaylistSaved {
+                        name: playlist_id,
+                        offline: false,
+                        created: false,
+                        removed: false,
+                        moved: false,
+                        rows: 0,
+                        playlist_id: None,
+                        cursor: None,
                         error: Some(format!("{err:#}")),
                     });
                 }
@@ -205,6 +272,7 @@ impl Bridge {
     pub fn delete_playlist_positions(&self, playlist_id: String, positions: Vec<usize>) {
         let tx = self.tx.clone();
         let rows = positions.len();
+        let cursor = positions.first().copied();
         crate::app::runtime().spawn(async move {
             let Some(dbs) = crate::app::dbs() else { return };
             match crate::playlists::remove_playlist_positions(&dbs, &playlist_id, &positions).await {
@@ -214,7 +282,10 @@ impl Bridge {
                         offline: false,
                         created: false,
                         removed: true,
+                        moved: false,
                         rows,
+                        playlist_id: Some(playlist_id),
+                        cursor,
                         error: None,
                     });
                 }
@@ -224,7 +295,10 @@ impl Bridge {
                         offline: false,
                         created: false,
                         removed: true,
+                        moved: false,
                         rows: 0,
+                        playlist_id: None,
+                        cursor: None,
                         error: Some(format!("{err:#}")),
                     });
                 }

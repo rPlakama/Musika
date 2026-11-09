@@ -58,9 +58,15 @@ pub enum Event {
         offline: bool,
         created: bool,
         removed: bool,
+        /// A playlist-page reorder; success is silent (no add/remove toast).
+        moved: bool,
         /// Number of rows added/removed by a page paste/delete; 0 for the
         /// command-driven create/add/rm toasts.
         rows: usize,
+        /// Playlist page the edit targeted (None for command-driven saves).
+        playlist_id: Option<String>,
+        /// Cursor row to reveal when the page reloads (Some for page edits).
+        cursor: Option<usize>,
         error: Option<String>,
     },
     LibraryCount {

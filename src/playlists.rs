@@ -1176,6 +1176,144 @@ async fn append_local_m3u(dbs: &Dbs, path: &Path, song_ids: &[String]) -> Result
     Ok(())
 }
 
+/// Insert already-resolved song ids at a playlist position (the playlist page
+/// `p`/`P` path). Local M3U files keep unresolved neighbours; server playlists
+/// are rebuilt in order because `updatePlaylist` has no insert-position call.
+pub async fn insert_song_ids_at(
+    dbs: &Dbs,
+    playlist_query: &str,
+    position: usize,
+    song_ids: &[String],
+) -> Result<String> {
+    let playlist = resolve_playlist(dbs, playlist_query).await?;
+    let song_ids: Vec<String> = song_ids
+        .iter()
+        .map(|id| id.trim().to_string())
+        .filter(|id| !id.is_empty())
+        .collect();
+    if song_ids.is_empty() {
+        return Err(anyhow!("No songs selected to paste."));
+    }
+    if playlist.source == "m3u" {
+        let path = local_playlist_path(&playlist)?;
+        let text = std::fs::read_to_string(&path)
+            .with_context(|| format!("reading the playlist file {}", path.display()))?;
+        let mut entries = parse_m3u(&text);
+        let inserted = m3u_entries_for_ids(dbs, &song_ids).await?;
+        let position = position.min(entries.len());
+        entries.splice(position..position, inserted);
+        write_m3u_entries(&path, &entries)?;
+        let dir = path.parent().unwrap_or(Path::new("."));
+        scan_dir(dbs, dir).await?;
+    } else {
+        let mut ordered = cached_playlist_song_ids(dbs, &playlist.id).await?;
+        let position = position.min(ordered.len());
+        ordered.splice(position..position, song_ids);
+        rebuild_server_playlist(dbs, &playlist, &ordered).await?;
+    }
+    Ok(display_playlist_name(&playlist.name))
+}
+
+/// Move one playlist entry to another position (the playlist page
+/// `Ctrl-Shift-J/K` path).
+pub async fn move_playlist_entry(
+    dbs: &Dbs,
+    playlist_query: &str,
+    from: usize,
+    to: usize,
+) -> Result<String> {
+    let playlist = resolve_playlist(dbs, playlist_query).await?;
+    if playlist.source == "m3u" {
+        let path = local_playlist_path(&playlist)?;
+        let text = std::fs::read_to_string(&path)
+            .with_context(|| format!("reading the playlist file {}", path.display()))?;
+        let mut entries = parse_m3u(&text);
+        if from >= entries.len() || to >= entries.len() {
+            return Err(anyhow!("The playlist row is out of date."));
+        }
+        let entry = entries.remove(from);
+        entries.insert(to, entry);
+        write_m3u_entries(&path, &entries)?;
+        let dir = path.parent().unwrap_or(Path::new("."));
+        scan_dir(dbs, dir).await?;
+    } else {
+        let mut ordered = cached_playlist_song_ids(dbs, &playlist.id).await?;
+        if from >= ordered.len() || to >= ordered.len() {
+            return Err(anyhow!("The playlist row is out of date."));
+        }
+        let id = ordered.remove(from);
+        ordered.insert(to, id);
+        rebuild_server_playlist(dbs, &playlist, &ordered).await?;
+    }
+    Ok(display_playlist_name(&playlist.name))
+}
+
+/// The cached ordered song ids of a playlist (server rows only; M3U entries
+/// always resolve through the file).
+async fn cached_playlist_song_ids(dbs: &Dbs, playlist_id: &str) -> Result<Vec<String>> {
+    let rows: Vec<Option<String>> = sqlx::query_scalar(
+        "SELECT song_id FROM playlist_song WHERE playlist_id = ?1 ORDER BY position",
+    )
+    .bind(playlist_id)
+    .fetch_all(&dbs.playlist)
+    .await?;
+    Ok(rows
+        .into_iter()
+        .flatten()
+        .map(|id| id.trim().to_string())
+        .filter(|id| !id.is_empty())
+        .collect())
+}
+
+/// Parse the M3U body for `song_ids` back into entries for local insertion.
+async fn m3u_entries_for_ids(dbs: &Dbs, song_ids: &[String]) -> Result<Vec<M3uEntry>> {
+    let body = m3u_text(dbs, song_ids).await?;
+    Ok(parse_m3u(&body))
+}
+
+fn write_m3u_entries(path: &Path, entries: &[M3uEntry]) -> Result<()> {
+    let mut out = String::from("#EXTM3U\n");
+    for entry in entries {
+        push_m3u_entry(&mut out, entry);
+    }
+    std::fs::write(path, out)
+        .with_context(|| format!("writing the playlist file {}", path.display()))?;
+    Ok(())
+}
+
+/// Rebuild a server playlist in the given order. The API can only append and
+/// remove, so removing every cached id and re-adding the new order is the only
+/// way to insert/move; the ordered entries are reloaded from the server after.
+async fn rebuild_server_playlist(
+    dbs: &Dbs,
+    playlist: &PlaylistRef,
+    ordered_ids: &[String],
+) -> Result<()> {
+    let client = crate::session::client(dbs)
+        .await
+        .context("editing a server playlist needs a signed-in server")?;
+    let current = cached_playlist_song_ids(dbs, &playlist.id).await?;
+    if !current.is_empty() {
+        client
+            .update_playlist_remove(&playlist.id, &current)
+            .await
+            .context("clearing the server playlist order")?;
+    }
+    if !ordered_ids.is_empty() {
+        client
+            .update_playlist_add(&playlist.id, ordered_ids)
+            .await
+            .context("writing the server playlist order")?;
+    }
+    load_subsonic_songs(dbs, &client, &playlist.id)
+        .await
+        .context("refreshing the server playlist songs")?;
+    refresh_subsonic(dbs, &client)
+        .await
+        .context("refreshing the server playlist list")?;
+    Ok(())
+}
+
 /// Rewrite an app-owned M3U without entries resolving to `remove_ids`, then
 /// rescan the folder. Unresolved entries (plain path lines) are preserved.
 async fn remove_local_m3u(

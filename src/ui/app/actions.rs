@@ -438,7 +438,12 @@ impl AppRoot {
             self.page
                 .as_ref()
                 .filter(|page| page.descriptor.kind == PageKind::Playlist)
-                .map(|page| PasteTarget::Playlist(page.descriptor.id.clone()))
+                .map(|page| {
+                    PasteTarget::Playlist(
+                        page.descriptor.id.clone(),
+                        paste_at(page.cursor, above),
+                    )
+                })
         };
         let Some(target) = target else {
             // No valid target: keep the clipboard for the next attempt.
@@ -461,9 +466,13 @@ impl AppRoot {
                 self.visual_mode = false;
                 self.bridge.paste_queue(kind_str.to_string(), ids, at);
             }
-            PasteTarget::Playlist(playlist_id) => {
-                self.bridge
-                    .paste_playlist(playlist_id, kind_str.to_string(), ids);
+            PasteTarget::Playlist(playlist_id, position) => {
+                self.bridge.paste_playlist(
+                    playlist_id,
+                    kind_str.to_string(),
+                    ids,
+                    position,
+                );
             }
         }
         cx.notify();
@@ -564,13 +573,37 @@ impl AppRoot {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.queue_open && self.queue_cursor > 0 {
-            self.player
-                .move_item(self.queue_cursor, self.queue_cursor - 1);
-            self.queue_cursor -= 1;
-            self.follow_queue(true);
-            cx.notify();
+        if self.queue_open {
+            if self.queue_cursor > 0 {
+                self.player
+                    .move_item(self.queue_cursor, self.queue_cursor - 1);
+                self.queue_cursor -= 1;
+                self.follow_queue(true);
+                cx.notify();
+            }
+            return;
         }
+        self.move_playlist_row(-1, cx);
+    }
+
+    /// Playlist-page `Ctrl-Shift-K`: move the cursor entry one position up.
+    fn move_playlist_row(&mut self, delta: i32, cx: &mut Context<Self>) {
+        let Some(page) = self.page.as_mut() else {
+            return;
+        };
+        if page.descriptor.kind != PageKind::Playlist {
+            return;
+        }
+        let from = page.cursor;
+        let Some(to) = (from as i64 + i64::from(delta)).try_into().ok().filter(|to: &usize| *to < page.rows.len()) else {
+            return;
+        };
+        page.cursor = to;
+        page.selection.clear();
+        let playlist_id = page.descriptor.id.clone();
+        self.visual_mode = false;
+        self.bridge.move_playlist_row(playlist_id, from, to);
+        cx.notify();
     }
 
     pub(in crate::ui) fn on_queue_down(
@@ -579,13 +612,17 @@ impl AppRoot {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.queue_open && self.queue_cursor + 1 < self.player.len() {
-            self.player
-                .move_item(self.queue_cursor, self.queue_cursor + 1);
-            self.queue_cursor += 1;
-            self.follow_queue(true);
-            cx.notify();
+        if self.queue_open {
+            if self.queue_cursor + 1 < self.player.len() {
+                self.player
+                    .move_item(self.queue_cursor, self.queue_cursor + 1);
+                self.queue_cursor += 1;
+                self.follow_queue(true);
+                cx.notify();
+            }
+            return;
         }
+        self.move_playlist_row(1, cx);
     }
 
     pub(in crate::ui) fn on_play_pause(
@@ -1073,7 +1110,7 @@ impl AppRoot {
 
 enum PasteTarget {
     Queue(usize),
-    Playlist(String),
+    Playlist(String, usize),
 }
 
 /// Collect clipboard ids from already-materialized rows. The first supported

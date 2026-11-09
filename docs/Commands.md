@@ -246,9 +246,9 @@ Rules:
 | --- | --- |
 | `queue_toggle` | Open/close the queue drawer. |
 | `queue_remove` / `delete_row` | Remove the queue cursor row or the selected range; on a playlist page, delete the selected entries. |
-| `queue_up` / `queue_down` | Move the queue row up/down. |
+| `queue_up` / `queue_down` | Move the queue row up/down, or the playlist-page cursor entry up/down. |
 | `yank` / `yank_row` | Yank the visual range (or cursor row) / the cursor row into the row clipboard. |
-| `paste_below` / `paste_above` | Paste the row clipboard below/above the queue cursor, or append it to an open playlist page. |
+| `paste_below` / `paste_above` | Paste the row clipboard below/above the queue cursor, or insert it below/above the cursor on an open playlist page. |
 | `repeat_cycle` | Cycle repeat mode (off → all → one). |
 
 ## Search

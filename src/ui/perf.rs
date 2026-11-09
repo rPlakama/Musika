@@ -133,7 +133,7 @@ pub(crate) fn record_frame(started: Instant, root: &AppRoot) {
             })
             .filter(|(_, delta)| *delta > 0)
             .collect();
-        raf_delta.sort_by(|a, b| b.1.cmp(&a.1));
+        raf_delta.sort_by_key(|(_, count)| std::cmp::Reverse(*count));
         stats.last_raf = raf_now;
         Some((
             since_report,

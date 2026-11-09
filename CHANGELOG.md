@@ -3,6 +3,32 @@
 All notable changes to Musika, newest first. `TASKLISTMAJOR.md` tracks the
 open work; this file is the release history.
 
+## 0.6.6 - _Perf upgrades_
+
+- Replace the per-frame playback repaint chain with a ticker: playback repaints
+  and native pumps run at 10 Hz while playing, 1 Hz when inactive, with a
+  250 ms idle poll. Marquee frames follow their travel/pause timeline, loading
+  and sync spinners run at 30 Hz, and toasts request frames only during their
+  fades.
+- Add `MUSIKA_FRAME_STATS` frame counters with per-site request attribution and
+  gate the debug HUD behind the environment.
+- Resolve row covers once per visible window/page instead of every frame,
+  sharing cached cover sources behind an `Arc` and taking one store lock per
+  batch. Gate the marks window on a content hash so unchanged windows do not
+  rebuild requests.
+- Keep generated hero display copies through the orphan sweep, avoiding a cold
+  re-encode after synchronisation, and request row-size `size=320` provider
+  fallbacks instead of decoding full-size art. Add `MUSIKA_COVER_STATS` for
+  first-paint cover latency.
+- Re-center on the first stable frame after a resize instead of forcing a
+  100 ms settle, and hide the top-bar sync spinner as soon as no sync is
+  running.
+- Shuffle the live queue in place and restart from its new head, without a
+  database round-trip that could drop or reorder rows.
+- Add manual lyric and description-reader scrolling with `j`/`k`, page motions,
+  `g g`/`G`, and the wheel; the lyrics pane returns to following playback after
+  a short hold and the keybind guide documents the full grammar.
+
 ## 0.6.5 - _Better streaming insights and internals_
 
 - Show a rotating loading spinner in the player bar and fullscreen transport

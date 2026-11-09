@@ -67,7 +67,11 @@ impl Render for AppRoot {
                 .size_full()
                 .child(self.login_view(window));
             #[cfg(debug_assertions)]
-            let login = login.child(debug::hud_enabled().then(|| self.frame_hud.view()).unwrap_or_else(|| div().into_any_element()));
+            let login = if debug::hud_enabled() {
+                login.child(self.frame_hud.view())
+            } else {
+                login
+            };
             return login.into_any_element();
         }
         let pending = std::mem::take(&mut self.pending_ipc);
@@ -324,9 +328,11 @@ impl Render for AppRoot {
         }
         let status = self.player_bar();
         #[cfg(debug_assertions)]
-        let frame_hud = debug::hud_enabled()
-            .then(|| self.frame_hud.view())
-            .unwrap_or_else(|| div().into_any_element());
+        let frame_hud = if debug::hud_enabled() {
+            self.frame_hud.view()
+        } else {
+            div().into_any_element()
+        };
         let root = div()
             .track_focus(&self.focus)
             .key_context(if self.command_line.is_open() {

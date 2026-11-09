@@ -41,6 +41,10 @@ pub enum IpcCommand {
         targets: Vec<String>,
         playlist: String,
     },
+    PlaylistRemove {
+        targets: Vec<String>,
+        playlist: String,
+    },
     Shuffle {
         target: ShuffleTarget,
     },
@@ -277,9 +281,9 @@ pub const COMMANDS: &[CommandSpec] = &[
     },
     CommandSpec {
         name: "playlist",
-        usage: "playlist <create|add> ...",
-        description: "Create a playlist or add targets (playlist add <target...>; <name>)",
-        args: ArgSpec::Enum(&["create", "add"]),
+        usage: "playlist <create|add|rm> ...",
+        description: "Create a playlist, add targets or remove them (playlist <add|rm> <target...>; <name>)",
+        args: ArgSpec::Enum(&["create", "add", "rm"]),
     },
     CommandSpec {
         name: "shuffle",
@@ -1110,7 +1114,7 @@ fn parse_playlist(rest: &str) -> Result<IpcCommand, CommandError> {
             }
             Ok(IpcCommand::PlaylistCreate { name, offline })
         }
-        "add" => {
+        "add" | "rm" => {
             let mut targets: Vec<String> = tokens[1..]
                 .iter()
                 .flat_map(|value| value.split(','))
@@ -1122,20 +1126,24 @@ fn parse_playlist(rest: &str) -> Result<IpcCommand, CommandError> {
                 values.join(" ").trim().trim_matches(',').trim().to_string()
             } else {
                 if targets.len() < 2 {
-                    return Err(CommandError(
-                        "usage: playlist add <target...>; <playlist>".to_string(),
-                    ));
+                    return Err(CommandError(format!(
+                        "usage: playlist {subcommand} <target...>; <playlist>"
+                    )));
                 }
                 targets.pop().unwrap_or_default()
             };
             if targets.is_empty() || playlist.is_empty() {
-                return Err(CommandError(
-                    "usage: playlist add <target...>; <playlist>".to_string(),
-                ));
+                return Err(CommandError(format!(
+                    "usage: playlist {subcommand} <target...>; <playlist>"
+                )));
             }
-            Ok(IpcCommand::PlaylistAdd { targets, playlist })
+            if subcommand == "rm" {
+                Ok(IpcCommand::PlaylistRemove { targets, playlist })
+            } else {
+                Ok(IpcCommand::PlaylistAdd { targets, playlist })
+            }
         }
-        _ => Err(CommandError("usage: playlist <create|add> ...".to_string())),
+        _ => Err(CommandError("usage: playlist <create|add|rm> ...".to_string())),
     }
 }
 
@@ -1208,6 +1216,16 @@ pub fn canonical_string(command: &IpcCommand) -> String {
         } => format!("playlist create {name} --offline"),
         PlaylistAdd { targets, playlist } => {
             let mut out = String::from("playlist add");
+            for target in targets {
+                out.push(' ');
+                out.push_str(&quote_arg(target));
+            }
+            out.push_str("; ");
+            out.push_str(&quote_arg(playlist));
+            out
+        }
+        PlaylistRemove { targets, playlist } => {
+            let mut out = String::from("playlist rm");
             for target in targets {
                 out.push(' ');
                 out.push_str(&quote_arg(target));
@@ -1388,7 +1406,7 @@ pub fn suggestion_request(input: &str, cursor: usize) -> Option<SuggestRequest> 
             _ => return None,
         },
         "playlist" => {
-            if args.get(1).map(String::as_str) != Some("add") {
+            if !matches!(args.get(1).map(String::as_str), Some("add" | "rm")) {
                 return None;
             }
             // After the target cutoff only playlist names make sense; the
@@ -1537,7 +1555,7 @@ fn playlist_suggestions(
     context: &SuggestionContext,
 ) -> Vec<Suggestion> {
     let before = input[..start].split_whitespace().collect::<Vec<_>>();
-    if before.get(1).copied() != Some("add") {
+    if !matches!(before.get(1).copied(), Some("add" | "rm")) {
         return Vec::new();
     }
     let cutoff = unquoted_semicolon(&input[..end]);
@@ -1890,6 +1908,26 @@ mod tests {
         assert_eq!(road.completion.as_deref(), Some("\"Road Trip\""));
         let region = &typed[road.start..road.end];
         assert_eq!(region, "Road T", "the whole typed name is replaced");
+        assert!(!suggestions.iter().any(|s| s.label == "current"));
+    }
+
+    #[test]
+    fn playlist_rm_uses_the_same_cutoff_suggestions() {
+        let context = SuggestionContext {
+            current: None,
+            rows: vec![ContextRow {
+                kind: "playlist",
+                id: "p1".into(),
+                title: "Road Trip".into(),
+                subtitle: "Playlist · 4 songs".into(),
+            }],
+        };
+        let input = "playlist rm current; Ro";
+        let request = suggestion_request(input, input.len()).expect("playlist scope");
+        assert_eq!(request.scope, SuggestScope::Playlist);
+        assert_eq!(request.query, "Ro");
+        let suggestions = suggestions_with(input, input.len(), &context);
+        assert!(suggestions.iter().any(|s| s.label == "Road Trip"));
         assert!(!suggestions.iter().any(|s| s.label == "current"));
     }
 

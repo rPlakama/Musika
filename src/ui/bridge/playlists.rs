@@ -23,12 +23,14 @@ impl Bridge {
                     name,
                     offline,
                     created: true,
+                    removed: false,
                     error: None,
                 },
                 Err(err) => Event::PlaylistSaved {
                     name,
                     offline,
                     created: true,
+                    removed: false,
                     error: Some(format!("{err:#}")),
                 },
             };
@@ -84,6 +86,7 @@ impl Bridge {
                         name,
                         offline: false,
                         created: false,
+                        removed: false,
                         error: None,
                     });
                 }
@@ -92,6 +95,51 @@ impl Bridge {
                         name: playlist,
                         offline: false,
                         created: false,
+                        removed: false,
+                        error: Some(format!("{err:#}")),
+                    });
+                }
+            }
+        });
+    }
+}
+
+impl Bridge {
+    /// Remove targets from an existing local/server playlist, mirroring
+    /// [`Self::playlist_add`]; targets resolve through the same playlists
+    /// backend (`playlist rm <target...>; <playlist>`).
+    pub fn playlist_remove(
+        &self,
+        targets: Vec<String>,
+        playlist: String,
+        current_song_id: Option<String>,
+    ) {
+        let tx = self.tx.clone();
+        crate::app::runtime().spawn(async move {
+            let Some(dbs) = crate::app::dbs() else { return };
+            match crate::playlists::remove_from_playlist(
+                &dbs,
+                &targets,
+                &playlist,
+                current_song_id.as_deref(),
+            )
+            .await
+            {
+                Ok(name) => {
+                    let _ = tx.send(Event::PlaylistSaved {
+                        name,
+                        offline: false,
+                        created: false,
+                        removed: true,
+                        error: None,
+                    });
+                }
+                Err(err) => {
+                    let _ = tx.send(Event::PlaylistSaved {
+                        name: playlist,
+                        offline: false,
+                        created: false,
+                        removed: true,
                         error: Some(format!("{err:#}")),
                     });
                 }

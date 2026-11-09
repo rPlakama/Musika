@@ -503,9 +503,16 @@ impl AppRoot {
                 name,
                 offline,
                 created,
+                removed,
                 error,
             } => {
-                let verb = if created { "create" } else { "update" };
+                let verb = if removed {
+                    "remove from"
+                } else if created {
+                    "create"
+                } else {
+                    "update"
+                };
                 if let Some(error) = error {
                     self.push_toast(
                         format!("Could not {verb} “{name}”: {error}"),
@@ -516,6 +523,8 @@ impl AppRoot {
                     self.push_toast(format!("Saved “{name}” locally"), ToastKind::Notice, None);
                 } else if created {
                     self.push_toast(format!("Created “{name}”"), ToastKind::Notice, None);
+                } else if removed {
+                    self.push_toast(format!("Removed from “{name}”"), ToastKind::Notice, None);
                 } else {
                     self.push_toast(format!("Added to “{name}”"), ToastKind::Notice, None);
                 }

@@ -917,15 +917,15 @@ pub async fn search_rows(dbs: &Dbs, query: &str, limit: i64) -> Result<Vec<serde
     Ok(rows.iter().map(playlist_row).collect())
 }
 
-/// Add free-form targets to an existing playlist. The final argument resolves
-/// by id or name; M3U playlists are edited locally, Subsonic playlists are
-/// updated through `updatePlaylist`.
-pub async fn add_to_playlist(
-    dbs: &Dbs,
-    targets: &[String],
-    playlist_query: &str,
-    current_song_id: Option<&str>,
-) -> Result<String> {
+/// One resolved playlist row (local M3U or server).
+struct PlaylistRef {
+    id: String,
+    name: String,
+    source: String,
+    path: Option<String>,
+}
+
+async fn resolve_playlist(dbs: &Dbs, playlist_query: &str) -> Result<PlaylistRef> {
     let playlist_query = playlist_query.trim();
     let name_key = format!("{playlist_query}.m3u");
     let row: Option<(String, String, String, Option<String>)> = sqlx::query_as(
@@ -944,9 +944,21 @@ pub async fn add_to_playlist(
     let Some((id, name, source, path)) = row else {
         return Err(anyhow!("No playlist matched “{playlist_query}”"));
     };
-    if targets.is_empty() {
-        return Err(anyhow!("Select at least one target to add."));
-    }
+    Ok(PlaylistRef {
+        id,
+        name,
+        source,
+        path,
+    })
+}
+
+/// Resolve the free-form targets shared by add/remove (`current`, an artist, an
+/// album or a song name) to one flat song-id list.
+async fn playlist_target_song_ids(
+    dbs: &Dbs,
+    targets: &[String],
+    current_song_id: Option<&str>,
+) -> Result<Vec<String>> {
     let mut song_ids = Vec::new();
     for target in targets {
         if target.eq_ignore_ascii_case("current") {
@@ -962,33 +974,96 @@ pub async fn add_to_playlist(
         }
         song_ids.extend(ids);
     }
+    Ok(song_ids)
+}
+
+fn display_playlist_name(name: &str) -> String {
+    name.strip_suffix(".m3u")
+        .or_else(|| name.strip_suffix(".m3u8"))
+        .unwrap_or(name)
+        .to_string()
+}
+
+fn local_playlist_path(playlist: &PlaylistRef) -> Result<PathBuf> {
+    playlist
+        .path
+        .clone()
+        .map(PathBuf::from)
+        .or_else(|| Some(m3u_dir().ok()?.join(&playlist.name)))
+        .ok_or_else(|| anyhow!("The playlist file path is missing"))
+}
+
+/// Add free-form targets to an existing playlist. The final argument resolves
+/// by id or name; M3U playlists are edited locally, Subsonic playlists are
+/// updated through `updatePlaylist`.
+pub async fn add_to_playlist(
+    dbs: &Dbs,
+    targets: &[String],
+    playlist_query: &str,
+    current_song_id: Option<&str>,
+) -> Result<String> {
+    let playlist = resolve_playlist(dbs, playlist_query).await?;
+    if targets.is_empty() {
+        return Err(anyhow!("Select at least one target to add."));
+    }
+    let song_ids = playlist_target_song_ids(dbs, targets, current_song_id).await?;
     if song_ids.is_empty() {
         return Err(anyhow!("No songs matched the playlist targets."));
     }
 
-    if source == "m3u" {
-        let path = path
-            .map(PathBuf::from)
-            .or_else(|| Some(m3u_dir().ok()?.join(&name)))
-            .ok_or_else(|| anyhow!("The playlist file path is missing"))?;
+    if playlist.source == "m3u" {
+        let path = local_playlist_path(&playlist)?;
         append_local_m3u(dbs, &path, &song_ids).await?;
     } else {
         let client = crate::session::client(dbs)
             .await
             .context("adding to a server playlist needs a signed-in server")?;
         client
-            .update_playlist_add(&id, &song_ids)
+            .update_playlist_add(&playlist.id, &song_ids)
             .await
             .context("updating the server playlist")?;
         refresh_subsonic(dbs, &client)
             .await
             .context("refreshing the server playlist list")?;
     }
-    Ok(name
-        .strip_suffix(".m3u")
-        .or_else(|| name.strip_suffix(".m3u8"))
-        .unwrap_or(&name)
-        .to_string())
+    Ok(display_playlist_name(&playlist.name))
+}
+
+/// Remove free-form targets from an existing playlist, mirroring
+/// [`add_to_playlist`] (`playlist rm <target...>; <playlist>`). M3U files are
+/// rewritten without the matching entries; server playlists use
+/// `songIdToRemove`.
+pub async fn remove_from_playlist(
+    dbs: &Dbs,
+    targets: &[String],
+    playlist_query: &str,
+    current_song_id: Option<&str>,
+) -> Result<String> {
+    let playlist = resolve_playlist(dbs, playlist_query).await?;
+    if targets.is_empty() {
+        return Err(anyhow!("Select at least one target to remove."));
+    }
+    let song_ids = playlist_target_song_ids(dbs, targets, current_song_id).await?;
+    if song_ids.is_empty() {
+        return Err(anyhow!("No songs matched the playlist targets."));
+    }
+
+    if playlist.source == "m3u" {
+        let path = local_playlist_path(&playlist)?;
+        remove_local_m3u(dbs, &path, &song_ids, &playlist.name).await?;
+    } else {
+        let client = crate::session::client(dbs)
+            .await
+            .context("removing from a server playlist needs a signed-in server")?;
+        client
+            .update_playlist_remove(&playlist.id, &song_ids)
+            .await
+            .context("updating the server playlist")?;
+        refresh_subsonic(dbs, &client)
+            .await
+            .context("refreshing the server playlist list")?;
+    }
+    Ok(display_playlist_name(&playlist.name))
 }
 
 /// Append entries to an existing app-owned M3U and rescan its folder.
@@ -1007,4 +1082,58 @@ async fn append_local_m3u(dbs: &Dbs, path: &Path, song_ids: &[String]) -> Result
     let dir = path.parent().unwrap_or(Path::new("."));
     scan_dir(dbs, dir).await?;
     Ok(())
+}
+
+/// Rewrite an app-owned M3U without entries resolving to `remove_ids`, then
+/// rescan the folder. Unresolved entries (plain path lines) are preserved.
+async fn remove_local_m3u(
+    dbs: &Dbs,
+    path: &Path,
+    remove_ids: &[String],
+    playlist_name: &str,
+) -> Result<()> {
+    let text = std::fs::read_to_string(path)
+        .with_context(|| format!("reading the playlist file {}", path.display()))?;
+    let entries = parse_m3u(&text);
+    let songs = load_songs(&dbs.library).await?;
+    let matcher = Matcher::new(&songs);
+    let dir = path.parent().unwrap_or(Path::new("."));
+    let remove: std::collections::HashSet<&str> =
+        remove_ids.iter().map(String::as_str).collect();
+
+    let mut out = String::from("#EXTM3U\n");
+    let mut removed = 0usize;
+    for entry in &entries {
+        let song_id = matcher.resolve(entry, dir).map(|index| songs[index].id.as_str());
+        if song_id.is_some_and(|id| remove.contains(id)) {
+            removed += 1;
+            continue;
+        }
+        push_m3u_entry(&mut out, entry);
+    }
+    if removed == 0 {
+        return Err(anyhow!(
+            "None of the targets are in “{playlist_name}”"
+        ));
+    }
+    std::fs::write(path, out)
+        .with_context(|| format!("writing the playlist file {}", path.display()))?;
+    scan_dir(dbs, dir).await?;
+    Ok(())
+}
+
+/// Re-emit one parsed M3U entry, keeping its EXTINF display and path.
+fn push_m3u_entry(out: &mut String, entry: &M3uEntry) {
+    let display = match (&entry.artist, &entry.title) {
+        (Some(artist), Some(title)) if !artist.is_empty() && !title.is_empty() => {
+            Some(format!("{artist} - {title}"))
+        }
+        (_, Some(title)) if !title.is_empty() => Some(title.clone()),
+        _ => None,
+    };
+    if let (Some(duration), Some(display)) = (entry.duration, display) {
+        out.push_str(&format!("#EXTINF:{duration},{}\n", m3u_line(&display)));
+    }
+    out.push_str(&m3u_line(&entry.path));
+    out.push('\n');
 }

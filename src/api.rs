@@ -436,6 +436,17 @@ impl SubsonicClient {
         self.call_ok("updatePlaylist", &params).await
     }
 
+    /// `updatePlaylist` — remove songs from an existing server playlist.
+    /// OpenSubsonic/Subsonic use repeated `songIdToRemove` parameters.
+    pub async fn update_playlist_remove(&self, id: &str, song_ids: &[String]) -> Result<()> {
+        if song_ids.is_empty() {
+            return Ok(());
+        }
+        let mut params: Vec<(&str, String)> = vec![("playlistId", id.to_string())];
+        push_all(&mut params, "songIdToRemove", song_ids);
+        self.call_ok("updatePlaylist", &params).await
+    }
+
     /// `getArtist` — artist details including albums.
     pub async fn get_artist(&self, id: &str) -> Result<ArtistWithAlbumsID3> {
         let params = query(&[("id", Some(id.to_string()))]);

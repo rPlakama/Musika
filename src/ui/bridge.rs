@@ -57,6 +57,7 @@ pub enum Event {
         name: String,
         offline: bool,
         created: bool,
+        removed: bool,
         error: Option<String>,
     },
     LibraryCount {

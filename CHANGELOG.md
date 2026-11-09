@@ -18,9 +18,15 @@ open work; this file is the release history.
   plus search hits for targets; after it, only existing playlist names are
   suggested (DB-backed via a new playlist scope), and Tab replaces the whole
   typed name region (`; Road T` -> `; "Road Trip"`). See `docs/Commands.md`.
-- **Docs:** `docs/Commands.md` documents the cutoff grammar, suggestion
-  behaviour and updated automation examples; `docs/Keybinds.md` records that
-  Home ends the travel session.
+- **Playlist removal:** `playlist rm <target...>; <playlist>` mirrors
+  `playlist add` — same target resolution (`current`, artist, album, track),
+  same cutoff/legacy grammar, and the same playlist-name suggestions after the
+  cutoff. Local M3U entries resolving to the target songs are dropped and
+  rescanned; server playlists are updated with repeated `songIdToRemove`
+  parameters; removing a target that is not present reports an error.
+- **Docs:** `docs/Commands.md` documents the cutoff grammar, suggestions,
+  `playlist rm` and updated automation examples; `docs/Keybinds.md` records
+  that Home ends the travel session.
 
 ## 0.6.6 - _Perf upgrades_
 

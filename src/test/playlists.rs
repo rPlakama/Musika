@@ -615,3 +615,85 @@ async fn add_to_playlist_appends_resolved_targets() {
 
     let _ = std::fs::remove_dir_all(root);
 }
+
+/// `playlist rm` mirrors add: targets resolve the same way and matching M3U
+/// entries are dropped, including the special `current` target.
+#[tokio::test]
+async fn remove_from_playlist_drops_matching_m3u_entries() {
+    let _guard = PLAYLIST_FOLDER_LOCK.lock().await;
+    let library = memory_pool().await;
+    sqlx::migrate!("./migrations_library")
+        .run(&library)
+        .await
+        .unwrap();
+    sqlx::raw_sql(
+        "INSERT INTO artists (id, name, album_count) VALUES ('ar1', 'Artist', 1);
+         INSERT INTO albums (id, artist_id, name, artist, song_count)
+             VALUES ('al1', 'ar1', 'Album', 'Artist', 2);
+         INSERT INTO songs
+             (id, album_id, artist_id, title, artist, album, track, disc_number, duration, path)
+         VALUES
+             ('s1', 'al1', 'ar1', 'First', 'Artist', 'Album', 1, 1, 100, 'Music/first.flac'),
+             ('s2', 'al1', 'ar1', 'Second', 'Artist', 'Album', 2, 1, 200, 'Music/second.flac');",
+    )
+    .execute(&library)
+    .await
+    .unwrap();
+    let playlist = memory_pool().await;
+    sqlx::migrate!("./migrations_playlist")
+        .run(&playlist)
+        .await
+        .unwrap();
+    let dbs = test_dbs(&library, &playlist);
+    let root = std::env::temp_dir().join(format!("musika-rm-playlist-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    crate::db::set_data_root(root.clone());
+
+    let path = create_local(&dbs, "Rated R Mix", &["s1".into()])
+        .await
+        .unwrap();
+    add_to_playlist(&dbs, &["Second".into()], "Rated R Mix", None)
+        .await
+        .unwrap();
+    let paths = |text: &str| {
+        parse_m3u(text)
+            .into_iter()
+            .map(|entry| entry.path)
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        paths(&std::fs::read_to_string(&path).unwrap()),
+        vec!["Music/first.flac", "Music/second.flac"]
+    );
+
+    let name = remove_from_playlist(&dbs, &["First".into()], "Rated R Mix", None)
+        .await
+        .unwrap();
+    assert_eq!(name, "Rated R Mix");
+    assert_eq!(
+        paths(&std::fs::read_to_string(&path).unwrap()),
+        vec!["Music/second.flac"]
+    );
+
+    // `current` mirrors add's special target.
+    remove_from_playlist(&dbs, &["current".into()], "Rated R Mix", Some("s2"))
+        .await
+        .unwrap();
+    assert!(parse_m3u(&std::fs::read_to_string(&path).unwrap()).is_empty());
+    // Nothing matches any more: the command reports it instead of rewriting.
+    assert!(
+        remove_from_playlist(&dbs, &["Second".into()], "Rated R Mix", None)
+            .await
+            .is_err()
+    );
+    let count: (i64,) = sqlx::query_as(
+        "SELECT song_count FROM playlist WHERE name IN ('Rated R Mix', 'Rated R Mix.m3u')",
+    )
+    .fetch_one(&playlist)
+    .await
+    .unwrap();
+    assert_eq!(count.0, 0, "the rescan must reflect the emptied file");
+
+    let _ = std::fs::remove_dir_all(root);
+}

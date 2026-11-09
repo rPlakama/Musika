@@ -75,6 +75,7 @@ mpris_position:5000000
 | --- | --- |
 | `playlist create` | `playlist create <name> [--offline]` |
 | `playlist add` | `playlist add <target>...; <playlist>` |
+| `playlist rm` | `playlist rm <target>...; <playlist>` |
 
 `playlist create` creates a playlist containing the currently playing track.
 By default it is posted to the server; `--offline` writes only the account-local
@@ -115,6 +116,19 @@ Local M3U playlists are appended to and rescanned. Server playlists are updated
 with the server's `updatePlaylist` endpoint and refreshed afterwards. Local mix
 files use the sanitized origin/playlist name (`<name>.m3u`) and overwrite an
 existing mix of the same name instead of creating timestamped duplicates.
+
+`playlist rm` mirrors `playlist add`: it accepts exactly the same targets
+(`current`, artist, album, track) and the same `;` cutoff / legacy grammar. M3U
+entries resolving to the target songs are dropped and the file is rescanned;
+server playlists are updated with repeated `songIdToRemove` parameters and
+refreshed afterwards. Removing a target that is not present reports an error
+instead of rewriting the playlist.
+
+```text
+playlist rm current; "Rated R Mix"
+playlist rm "Pink Floyd"; Road Trip
+playlist rm "Rated R"; Rated R Mix
+```
 
 ### Radio
 

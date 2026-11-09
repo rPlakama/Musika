@@ -194,6 +194,9 @@ impl AppRoot {
             subtitle: page.header.subtitle.clone(),
             body: notes,
         });
+        // A freshly opened reader starts at the top of the note.
+        self.description_scroll
+            .set_offset(gpui::point(px(0.0), px(0.0)));
     }
 
     pub(in crate::ui) fn search_denied_opacity(&self) -> f32 {

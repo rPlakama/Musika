@@ -53,10 +53,11 @@ work, including the command line.
 | Mouse Back / Forward | Previous / next place in the travel log |
 
 On album and artist pages, `Tab` cycles the page header stops. `?`, or Enter/click
-on the inline description, opens the shared full-window description reader;
-`j`/`k` then move through the rows (tracks for album/playlist/radio pages,
-albums for artist pages). On an artist page, `Shift-J`/`Shift-K` switches
-between the album wall and the artist's full track list.
+on the inline description, opens the shared full-window description reader:
+`j`/`k` scroll it a line at a time, `Ctrl-D`/`Ctrl-U` and `PageDown`/`PageUp`
+page it, `g g`/`G` jump to the start/end, and `Esc`/`q` closes it. The wheel
+scrolls it too. On an artist page, `Shift-J`/`Shift-K` switches between the
+album wall and the artist's full track list.
 
 ## Queue drawer
 
@@ -77,11 +78,16 @@ between the album wall and the artist's full track list.
 | Keys | Action |
 | --- | --- |
 | `Tab` / `Shift-Tab` | Cycle the album and lyrics panes (lyrics is skipped while hidden) |
-| `j` / `k`, `Ctrl-D` / `Ctrl-U`, `PageDown` / `PageUp` | Scroll the lyrics pane |
+| `j` / `k`, `Ctrl-D` / `Ctrl-U`, `PageDown` / `PageUp` | Scroll the lyrics pane (and the floating overlay when it is open) |
+| `g g` / `G` | Jump to the first / last lyric |
 | `h` / `l` | Move between the lyrics and album panes |
 | `Enter` | Open the current album or track actions |
-| `?` | Toggle the floating lyrics overlay |
+| `?` | Toggle the floating lyrics overlay (its body scrolls with the same grammar) |
 | `Esc` / `Ctrl-[` | Close the lyrics overlay, otherwise leave fullscreen |
+
+The lyrics pane/overlay scrolls by hand for a few seconds and then returns to
+following the played line (5 s when the lyrics are in focus, 2 s otherwise);
+the wheel scrolls it as well.
 
 ## Floating search
 

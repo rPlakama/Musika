@@ -2,6 +2,16 @@
 
 use super::super::*;
 
+/// Description reader steps (legacy QML `DescriptionOverlay` grammar): `j`/`k`
+/// move one text line, the page motions move 90% of the viewport.
+const DESCRIPTION_LINE_STEP: f32 = 22.0;
+const DESCRIPTION_PAGE_RATIO: f32 = 0.9;
+
+/// The next description reader offset, clamped into `0..=max`.
+pub(in crate::ui) fn description_offset(current: f32, delta: f32, max: f32) -> f32 {
+    (current + delta).clamp(0.0, max.max(0.0))
+}
+
 impl AppRoot {
     pub(in crate::ui) fn on_quit(
         &mut self,
@@ -24,12 +34,22 @@ impl AppRoot {
             cx.notify();
             return;
         }
+        if self.description.is_some() {
+            self.scroll_description(DESCRIPTION_LINE_STEP);
+            cx.notify();
+            return;
+        }
         if self.queue_open {
             self.queue_cursor = self
                 .queue_cursor
                 .saturating_add(1)
                 .min(self.player.len().saturating_sub(1));
             self.follow_queue(true);
+            cx.notify();
+            return;
+        }
+        if self.lyrics_scroll_focused() {
+            self.scroll_lyrics_by(self.lyrics_line_step(), cx);
             cx.notify();
             return;
         }
@@ -58,9 +78,19 @@ impl AppRoot {
             cx.notify();
             return;
         }
+        if self.description.is_some() {
+            self.scroll_description(-DESCRIPTION_LINE_STEP);
+            cx.notify();
+            return;
+        }
         if self.queue_open {
             self.queue_cursor = self.queue_cursor.saturating_sub(1);
             self.follow_queue(true);
+            cx.notify();
+            return;
+        }
+        if self.lyrics_scroll_focused() {
+            self.scroll_lyrics_by(-self.lyrics_line_step(), cx);
             cx.notify();
             return;
         }
@@ -78,7 +108,11 @@ impl AppRoot {
     }
 
     pub(in crate::ui) fn on_top(&mut self, _: &Top, _window: &mut Window, cx: &mut Context<Self>) {
-        if self.queue_open {
+        if self.description.is_some() {
+            self.scroll_description(-f32::MAX);
+        } else if self.lyrics_scroll_focused() && !self.queue_open {
+            self.lyrics_top(cx);
+        } else if self.queue_open {
             self.land_queue(0);
         } else if self.page.is_some() {
             self.land_page(0);
@@ -94,7 +128,11 @@ impl AppRoot {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.queue_open {
+        if self.description.is_some() {
+            self.scroll_description(f32::MAX);
+        } else if self.lyrics_scroll_focused() && !self.queue_open {
+            self.lyrics_bottom(cx);
+        } else if self.queue_open {
             let last = self.player.len().saturating_sub(1);
             self.land_queue(last);
         } else if let Some(page) = self.page.as_ref() {
@@ -195,6 +233,8 @@ impl AppRoot {
             self.request_current_lyrics();
             self.ensure_marks();
             self.refresh_fullscreen_album_state();
+        } else {
+            self.release_lyrics_hold();
         }
         cx.notify();
     }
@@ -419,6 +459,16 @@ impl AppRoot {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.description.is_some() {
+            self.page_description(true);
+            cx.notify();
+            return;
+        }
+        if self.lyrics_scroll_focused() && !self.queue_open {
+            self.scroll_lyrics_by(self.lyrics_page_step(), cx);
+            cx.notify();
+            return;
+        }
         if let Some(page) = self.page.as_mut() {
             page.select(page.cursor.saturating_add(10));
             self.follow_page(true);
@@ -434,6 +484,16 @@ impl AppRoot {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.description.is_some() {
+            self.page_description(false);
+            cx.notify();
+            return;
+        }
+        if self.lyrics_scroll_focused() && !self.queue_open {
+            self.scroll_lyrics_by(-self.lyrics_page_step(), cx);
+            cx.notify();
+            return;
+        }
         if let Some(page) = self.page.as_mut() {
             page.select(page.cursor.saturating_sub(10));
             self.follow_page(true);
@@ -604,6 +664,7 @@ impl AppRoot {
         }
         if self.fullscreen || self.fullscreen_anim.value(&self.clock) > 0.01 {
             self.fullscreen = false;
+            self.release_lyrics_hold();
             cx.notify();
             return;
         }
@@ -692,10 +753,39 @@ impl AppRoot {
         self.fullscreen = false;
         self.lyrics_overlay = false;
         self.lyrics_overlay_wanted = false;
+        self.release_lyrics_hold();
         self.description = None;
         self.page = None;
         self.travel = Travel::default();
         self.view.selection.clear();
         cx.notify();
+    }
+
+    /// The painted height of the description reader's scroll body.
+    fn description_viewport(&self) -> f32 {
+        let height = f32::from(self.description_scroll.bounds().size.height);
+        if height > 1.0 {
+            height
+        } else {
+            (self.win_h * 0.6).max(1.0)
+        }
+    }
+
+    /// Scroll the description reader by `delta` pixels (positive = down),
+    /// clamped to the real content range tracked by the scroll handle.
+    fn scroll_description(&mut self, delta: f32) {
+        // The handle stores the offset negatively (content moved up); the
+        // tracked `max_offset` is the positive scroll range.
+        let current = -f32::from(self.description_scroll.offset().y);
+        let max = f32::from(self.description_scroll.max_offset().height);
+        let next = description_offset(current, delta, max);
+        self.description_scroll
+            .set_offset(gpui::point(px(0.0), px(-next)));
+    }
+
+    /// Page the description reader: 90% of the visible height per motion.
+    fn page_description(&mut self, down: bool) {
+        let step = self.description_viewport() * DESCRIPTION_PAGE_RATIO;
+        self.scroll_description(if down { step } else { -step });
     }
 }

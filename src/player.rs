@@ -322,6 +322,22 @@ impl Player {
         self.play_current();
     }
 
+    /// Shuffles the live queue in place and restarts it from the new head (the
+    /// `shuffle queue` command). The queue is a plain array, so every row is
+    /// reused as-is — no database round-trip that could drop rows which no
+    /// longer resolve (a radio queue) or reorder the old list back in place.
+    pub fn shuffle_queue(&mut self) {
+        if self.queue.is_empty() {
+            return;
+        }
+        let tracks = Arc::make_mut(&mut self.queue);
+        crate::queue::shuffle_slice(tracks, crate::consts::now_nanos());
+        self.repeat = Repeat::Off;
+        self.index = 0;
+        self.revision += 1;
+        self.play_current();
+    }
+
     /// Replaces the queue and loads `start` paused: a restored session waits
     /// for an explicit Space instead of autoplaying (P-6 S2).
     pub fn load_paused(&mut self, tracks: Vec<Track>, start: usize) {
@@ -392,7 +408,11 @@ impl Player {
             native.load_with_next(&track.url, next_url, paused);
             native.set_paused(paused);
         }
-        self.state = if paused { State::Paused } else { State::Playing };
+        self.state = if paused {
+            State::Paused
+        } else {
+            State::Playing
+        };
     }
 
     pub fn cycle_repeat(&mut self) -> Repeat {
@@ -738,5 +758,74 @@ mod repeat_tests {
         player.repeat = Repeat::One;
         player.jump(1);
         assert_eq!(player.repeat, Repeat::Off);
+    }
+}
+
+#[cfg(test)]
+mod queue_shuffle_tests {
+    use super::*;
+
+    fn tracks(count: usize) -> Vec<Track> {
+        (0..count)
+            .map(|index| Track {
+                id: format!("song-{index}"),
+                title: format!("Song {index}"),
+                artist: String::new(),
+                album: String::new(),
+                album_id: String::new(),
+                favorite: false,
+                duration: 0.0,
+                url: String::new(),
+                cover_art: String::new(),
+                cover_url: String::new(),
+                cover_remote: String::new(),
+            })
+            .collect()
+    }
+
+    fn ids(player: &Player) -> Vec<String> {
+        player
+            .queue()
+            .iter()
+            .map(|track| track.id.clone())
+            .collect()
+    }
+
+    fn sorted(ids: &[String]) -> Vec<String> {
+        let mut sorted = ids.to_vec();
+        sorted.sort();
+        sorted
+    }
+
+    #[test]
+    fn shuffle_permutes_the_live_queue_and_restarts_it() {
+        let mut player = Player::new();
+        player.queue = Arc::new(tracks(32));
+        player.index = 17;
+        player.repeat = Repeat::All;
+        player.state = State::Playing;
+        let before = ids(&player);
+
+        player.shuffle_queue();
+
+        let after = ids(&player);
+        assert_eq!(sorted(&before), sorted(&after), "every track survives once");
+        assert_ne!(before, after, "the order really changed (32! odds)");
+        assert_eq!(player.index(), 0, "restart from the shuffled head");
+        assert_eq!(player.repeat, Repeat::Off);
+        assert_eq!(player.loads, 1, "the new head is loaded once");
+    }
+
+    #[test]
+    fn shuffle_leaves_empty_and_single_queues_alone() {
+        let mut empty = Player::new();
+        empty.shuffle_queue();
+        assert_eq!(empty.len(), 0);
+
+        let mut single = Player::new();
+        single.queue = Arc::new(tracks(1));
+        single.shuffle_queue();
+        assert_eq!(ids(&single), ["song-0"]);
+        assert_eq!(single.index(), 0);
     }
 }

@@ -23,6 +23,9 @@ impl AppRoot {
                     this.description = None;
                     cx.notify();
                 }))
+                // The reader owns the wheel: the page behind it must not
+                // scroll while the note body is being read.
+                .on_scroll_wheel(cx.listener(|_, _, _, cx| cx.stop_propagation()))
                 .child(
                     div()
                         .w(relative(0.72))
@@ -56,12 +59,20 @@ impl AppRoot {
                             div()
                                 .id("description-body")
                                 .flex_1()
+                                .min_h_0()
                                 .w_full()
                                 .overflow_y_scroll()
+                                .track_scroll(&self.description_scroll)
                                 .text_size(px(14.0))
                                 .text_color(rgb(palette::on_surface()))
                                 .whitespace_normal()
                                 .child(description.body.clone()),
+                        )
+                        .child(
+                            div()
+                                .text_size(px(10.0))
+                                .text_color(rgb(palette::on_surface_variant()))
+                                .child("j/k scroll · Ctrl-D/U page · gg/G ends · Esc/Q close"),
                         ),
                 ),
         )

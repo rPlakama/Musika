@@ -223,3 +223,19 @@ mod contextual_bar_tests {
         assert!(state.rows.is_empty());
     }
 }
+
+#[cfg(test)]
+mod reading_tests {
+    use crate::ui::app::actions::description_offset;
+
+    #[test]
+    fn description_offsets_clamp_to_the_content_range() {
+        assert_eq!(description_offset(0.0, 22.0, 100.0), 22.0);
+        assert_eq!(description_offset(90.0, 22.0, 100.0), 100.0);
+        assert_eq!(description_offset(10.0, -22.0, 100.0), 0.0);
+        // A reader whose body fits the panel has no scroll range at all.
+        assert_eq!(description_offset(0.0, 22.0, -3.0), 0.0);
+        assert_eq!(description_offset(0.0, f32::MAX, 140.0), 140.0);
+        assert_eq!(description_offset(42.0, -f32::MAX, 140.0), 0.0);
+    }
+}

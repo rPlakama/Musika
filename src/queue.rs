@@ -238,10 +238,7 @@ pub async fn album_shuffle_json(
 }
 
 pub(crate) fn shuffle_songs(songs: &mut [crate::library::SongRow], seed: u128) {
-    let mut rng = SplitMix64((seed as u64) ^ ((seed >> 64) as u64));
-    for i in (1..songs.len()).rev() {
-        songs.swap(i, rng.below(i + 1));
-    }
+    shuffle_slice(songs, seed);
 }
 
 /// A seeded SplitMix64 — the shuffle's only randomness source. Deterministic
@@ -266,39 +263,20 @@ impl SplitMix64 {
 
 /// A proper array shuffle: Fisher–Yates (Knuth), in place. Every index is
 /// drawn exactly once, so the result is an unbiased permutation — the
-/// library order is not preserved, nor is the previous cycle's. `seed` is
-/// the clock; the caller passes `now()`.
+/// source order is not preserved, nor is the previous cycle's. `seed` is the
+/// clock; the caller passes `now()`.
 pub fn shuffle_units(units: &mut [String], seed: u128) {
-    let mut rng = SplitMix64((seed as u64) ^ ((seed >> 64) as u64));
-    for i in (1..units.len()).rev() {
-        units.swap(i, rng.below(i + 1));
-    }
+    shuffle_slice(units, seed);
 }
 
-/// The whole shuffle queue: every unit of the shuffled source (album ids
-/// when `kind` is "albums", song ids otherwise) resolves in one pass. The
-/// queue loads complete — nothing appends mid-session, so the models never
-/// republish rows while playing (a rolling window's republish was the
-/// queue-follow flicker).
-pub async fn shuffle_queue_json(
-    dbs: &crate::db::Dbs,
-    kind: &str,
-    units: &[String],
-    offline: bool,
-) -> anyhow::Result<String> {
-    let mut songs = if kind == "albums" {
-        let mut songs: Vec<crate::library::SongRow> = Vec::new();
-        for album in units {
-            songs.extend(crate::library::album_songs(&dbs.library, album).await?);
-        }
-        songs
-    } else {
-        // One bulk query, in the shuffled order (`songs_by_ids` preserves the
-        // input order), never a query per unit.
-        crate::library::songs_by_ids(&dbs.library, units).await?
-    };
-    crate::offline::retain_songs(dbs, offline, &mut songs).await?;
-    tracks_json(dbs, songs).await
+/// [`shuffle_units`] for any row type: the queue itself is just an array, so
+/// the in-memory queue can be permuted without a database round-trip (and
+/// without dropping rows that no longer resolve, e.g. a radio queue).
+pub fn shuffle_slice<T>(items: &mut [T], seed: u128) {
+    let mut rng = SplitMix64((seed as u64) ^ ((seed >> 64) as u64));
+    for i in (1..items.len()).rev() {
+        items.swap(i, rng.below(i + 1));
+    }
 }
 
 /// 0-based start row for the Songs-segment queue: the clicked song must exist

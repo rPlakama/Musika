@@ -248,6 +248,7 @@ impl AppRoot {
                         self.lyrics_overlay = false;
                         self.lyrics_overlay_wanted = false;
                         self.lyrics_layout = None;
+                        self.release_lyrics_hold();
                     }
                     "album" => {
                         if let Some(page) = self.page.as_ref()
@@ -567,6 +568,7 @@ impl AppRoot {
                     self.lyrics_line_emphasis.clear();
                     self.lyrics_line_color.clear();
                     self.lyrics_layout = None;
+                    self.release_lyrics_hold();
                     self.lyrics_track_fade
                         .target(0.0, 0.0, anim::Curve::Standard, &self.clock);
                     self.lyrics_track_fade
@@ -727,6 +729,7 @@ impl AppRoot {
         self.lyrics_overlay_wanted = false;
         self.lyrics_layout = None;
         self.lyrics_active_line = None;
+        self.release_lyrics_hold();
         self.line_search.close();
         self.command_line.close();
         self.pending_ipc.clear();

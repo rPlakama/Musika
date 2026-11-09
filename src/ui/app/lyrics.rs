@@ -177,19 +177,35 @@ impl AppRoot {
             .lyrics_active_line
             .unwrap_or(0)
             .min(lyrics.lines.len() - 1);
+        // A manual scroll holds the window on its own anchor; the playback
+        // highlight (and its emphasis) still tracks the played line.
+        let center = self
+            .lyrics_hold
+            .unwrap_or(active)
+            .min(lyrics.lines.len() - 1);
         let mut base = (height * 0.055).clamp(13.0, 22.0);
-        let mut layout =
-            lyrics_layout::layout(&lyrics.lines, active, width, height, base, |text, size| {
-                Self::lyric_wrap_count(window, text, size, width)
-            });
+        let mut layout = lyrics_layout::layout_windowed(
+            &lyrics.lines,
+            active,
+            center,
+            width,
+            height,
+            base,
+            |text, size| Self::lyric_wrap_count(window, text, size, width),
+        );
         // A single very long line can still be taller than the pane at the
         // nominal size. Step the type down until it fits, then keep it.
         while base > 13.0 && layout.rows.iter().any(|row| row.height > height) {
             base -= 1.0;
-            layout =
-                lyrics_layout::layout(&lyrics.lines, active, width, height, base, |text, size| {
-                    Self::lyric_wrap_count(window, text, size, width)
-                });
+            layout = lyrics_layout::layout_windowed(
+                &lyrics.lines,
+                active,
+                center,
+                width,
+                height,
+                base,
+                |text, size| Self::lyric_wrap_count(window, text, size, width),
+            );
         }
         let old_start = self.lyrics_window_start;
         if layout.start != old_start {
@@ -258,6 +274,149 @@ impl AppRoot {
         }) {
             self.toggle_description();
         }
+        cx.notify();
+    }
+
+    /// True when j/k (and the page motions) should scroll the lyrics body
+    /// rather than the surface behind the fullscreen player.
+    pub(in crate::ui) fn lyrics_scroll_focused(&self) -> bool {
+        self.fullscreen
+            && self
+                .lyrics
+                .as_ref()
+                .is_some_and(|lyrics| !lyrics.lines.is_empty())
+            && (self.lyrics_overlay
+                || (self.fullscreen_focus == FullscreenFocus::Lyrics && self.lyrics_inline()))
+    }
+
+    /// The line the pane is currently centred on.
+    fn lyrics_center_line(&self) -> Option<usize> {
+        let count = self.lyrics.as_ref()?.lines.len();
+        if count == 0 {
+            return None;
+        }
+        if let Some(anchor) = self.lyrics_hold {
+            return Some(anchor.min(count - 1));
+        }
+        if let Some(layout) = self.lyrics_layout.as_ref() {
+            return Some(layout.center.min(count - 1));
+        }
+        Some(self.lyrics_active_line.unwrap_or(0).min(count - 1))
+    }
+
+    /// One `j`/`k` step: 30% of the visible rows, the legacy UI lyric-scroll
+    /// grammar (`scrollLyricsBy` in the old NowPlaying pane).
+    pub(in crate::ui) fn lyrics_line_step(&self) -> i32 {
+        self.lyrics_layout
+            .as_ref()
+            .map(|layout| ((layout.rows.len() as f32 * 0.30).round() as i32).max(1))
+            .unwrap_or(1)
+    }
+
+    /// One page step: half the visible rows, like the legacy `page_down`.
+    pub(in crate::ui) fn lyrics_page_step(&self) -> i32 {
+        self.lyrics_layout
+            .as_ref()
+            .map(|layout| ((layout.rows.len() as f32 * 0.50).round() as i32).max(1))
+            .unwrap_or(1)
+    }
+
+    /// Release a manual lyric scroll: the next layout follows the played line
+    /// again. Superseded resume timers are retired by the generation bump.
+    pub(in crate::ui) fn release_lyrics_hold(&mut self) {
+        self.lyrics_hold = None;
+        self.lyrics_hold_generation = self.lyrics_hold_generation.wrapping_add(1);
+    }
+
+    /// Anchor the pane on `line` for a manual scroll and arm the idle resume
+    /// (LYR-8): the follow returns after 5 s with the pane focused, 2 s when
+    /// focus is elsewhere.
+    pub(in crate::ui) fn hold_lyrics_at(&mut self, line: usize, cx: &mut Context<Self>) {
+        let Some(count) = self
+            .lyrics
+            .as_ref()
+            .map(|lyrics| lyrics.lines.len())
+            .filter(|count| *count > 0)
+        else {
+            return;
+        };
+        let anchor = line.min(count - 1);
+        self.lyrics_hold = Some(anchor);
+        self.lyrics_hold_generation = self.lyrics_hold_generation.wrapping_add(1);
+        let generation = self.lyrics_hold_generation;
+        let focused = self.lyrics_overlay
+            || (self.fullscreen_focus == FullscreenFocus::Lyrics && self.lyrics_inline());
+        let resume_ms = if focused {
+            anim::LYRICS_RESUME_MS
+        } else {
+            anim::LYRICS_RESUME_UNFOCUSED_MS
+        };
+        cx.spawn(async move |this, cx| {
+            cx.background_executor()
+                .timer(std::time::Duration::from_millis(resume_ms))
+                .await;
+            let _ = this.update(cx, |this, cx| {
+                if this.lyrics_hold_generation == generation {
+                    this.lyrics_hold = None;
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
+    }
+
+    /// Scroll the lyric body by `lines` (positive = down).
+    pub(in crate::ui) fn scroll_lyrics_by(&mut self, lines: i32, cx: &mut Context<Self>) {
+        let Some(current) = self.lyrics_center_line() else {
+            return;
+        };
+        let Some(count) = self.lyrics.as_ref().map(|lyrics| lyrics.lines.len()) else {
+            return;
+        };
+        let next = (current as i64 + i64::from(lines)).clamp(0, count as i64 - 1) as usize;
+        self.hold_lyrics_at(next, cx);
+    }
+
+    /// `g g` in the lyric body: hold the first line.
+    pub(in crate::ui) fn lyrics_top(&mut self, cx: &mut Context<Self>) {
+        self.hold_lyrics_at(0, cx);
+    }
+
+    /// `G` in the lyric body: hold the last line.
+    pub(in crate::ui) fn lyrics_bottom(&mut self, cx: &mut Context<Self>) {
+        let last = self
+            .lyrics
+            .as_ref()
+            .map(|lyrics| lyrics.lines.len().saturating_sub(1))
+            .unwrap_or(0);
+        self.hold_lyrics_at(last, cx);
+    }
+
+    /// Mouse wheel over the lyrics body: convert the pixel delta into whole
+    /// rows and stop the event so the list behind the fullscreen player does
+    /// not scroll as well.
+    pub(in crate::ui) fn on_lyrics_wheel(
+        &mut self,
+        event: &gpui::ScrollWheelEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        cx.stop_propagation();
+        let Some(layout) = self.lyrics_layout.as_ref() else {
+            return;
+        };
+        let unit = (layout.text_height + layout.gap).max(1.0);
+        let delta = f32::from(event.delta.pixel_delta(window.line_height()).y);
+        if delta == 0.0 {
+            return;
+        }
+        // Wayland/X11 wheel-down is a negative pixel delta; lyric lines grow
+        // downward, so invert it.
+        let mut steps = (-delta / unit).round() as i32;
+        if steps == 0 {
+            steps = -delta.signum() as i32;
+        }
+        self.scroll_lyrics_by(steps, cx);
         cx.notify();
     }
 }

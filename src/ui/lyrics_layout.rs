@@ -13,6 +13,9 @@ pub struct LyricRow {
 #[derive(Debug, Clone, PartialEq)]
 pub struct LyricsLayout {
     pub start: usize,
+    /// The line the pane is centred on: the played line while the follow is
+    /// live, or the anchor of a manual scroll.
+    pub center: usize,
     pub rows: Vec<LyricRow>,
     pub gap: f32,
     pub base_size: f32,
@@ -24,6 +27,7 @@ impl LyricsLayout {
     pub fn empty(base_size: f32) -> Self {
         Self {
             start: 0,
+            center: 0,
             rows: Vec::new(),
             gap: base_size * 1.2,
             base_size,
@@ -35,9 +39,14 @@ impl LyricsLayout {
 
 /// Measure the number of wrapped lines for one lyric at `size` and `width`.
 /// The callback is the host's real text measurement (tests pass a cheap stub).
-pub fn layout<F>(
+///
+/// `active` is the line the playback highlight sits on; `center` is the line
+/// the pane is centred on (the follow target). They differ while a manual
+/// scroll holds the pane away from the played line.
+pub fn layout_windowed<F>(
     lines: &[(Option<i64>, String)],
     active: usize,
+    center: usize,
     width: f32,
     height: f32,
     base_size: f32,
@@ -53,6 +62,7 @@ where
         return LyricsLayout::empty(base);
     }
     let active = active.min(lines.len() - 1);
+    let center = center.min(lines.len() - 1);
 
     // Reserve the active emphasis on every row: moving the highlight can never
     // change the column's total height (QML reserves `emphasisPad` likewise).
@@ -64,15 +74,17 @@ where
         })
         .collect();
 
-    if heights[active] > height {
+    if heights[center] > height {
         // A single line cannot fit even at the minimum size; the host shrinks
-        // the base size and calls again. Keep it visible in the fallback.
+        // the base size and calls again. Keep the centred line visible in the
+        // fallback.
         return LyricsLayout {
-            start: active,
+            start: center,
+            center,
             rows: vec![LyricRow {
-                index: active,
-                height: heights[active],
-                active: true,
+                index: center,
+                height: heights[center],
+                active: center == active,
             }],
             gap,
             base_size: base,
@@ -81,11 +93,11 @@ where
         };
     }
 
-    // Grow outward from the active line, alternating sides so it stays
+    // Grow outward from the centred line, alternating sides so it stays
     // centred when possible. Both ends are clamped to the available height.
-    let mut start = active;
-    let mut end = active + 1;
-    let mut used = heights[active];
+    let mut start = center;
+    let mut end = center + 1;
+    let mut used = heights[center];
     let mut grow_forward = true;
     loop {
         if grow_forward {
@@ -126,12 +138,28 @@ where
         .collect();
     LyricsLayout {
         start,
+        center,
         rows,
         gap,
         base_size: base,
         text_height,
         width,
     }
+}
+
+/// The follow layout: centre the played line (the ordinary synced-lyrics mode).
+pub fn layout<F>(
+    lines: &[(Option<i64>, String)],
+    active: usize,
+    width: f32,
+    height: f32,
+    base_size: f32,
+    measure: F,
+) -> LyricsLayout
+where
+    F: Fn(&str, f32) -> usize,
+{
+    layout_windowed(lines, active, active, width, height, base_size, measure)
 }
 
 #[cfg(test)]
@@ -190,5 +218,40 @@ mod tests {
         assert!((small.gap - 13.0 * 1.2).abs() < 0.01);
         assert!((large.gap - 22.0 * 1.2).abs() < 0.01);
         assert!(small.rows.len() >= large.rows.len());
+    }
+
+    #[test]
+    fn follow_layout_centres_the_active_line() {
+        let layout = layout(&lines(100), 50, 500.0, 300.0, 18.0, char_lines);
+        assert_eq!(layout.center, 50);
+        assert!(layout.rows.iter().any(|row| row.active && row.index == 50));
+    }
+
+    #[test]
+    fn manual_window_centres_its_anchor_and_keeps_the_played_highlight_off_pane() {
+        let lines = lines(100);
+        // The played line stays 10 while a manual scroll holds the pane at 50.
+        let layout = layout_windowed(&lines, 10, 50, 500.0, 300.0, 18.0, char_lines);
+        assert_eq!(layout.center, 50);
+        assert!(layout.rows.iter().any(|row| row.index == 50));
+        assert!(!layout.rows.iter().any(|row| row.index == 10));
+        assert!(
+            !layout.rows.iter().any(|row| row.active),
+            "the played highlight is outside the held window"
+        );
+    }
+
+    #[test]
+    fn manual_window_clamps_the_anchor_at_both_ends() {
+        let lines = lines(20);
+        let top = layout_windowed(&lines, 10, 0, 500.0, 300.0, 18.0, char_lines);
+        assert_eq!(top.start, 0);
+        assert_eq!(top.center, 0);
+        let bottom = layout_windowed(&lines, 10, 19, 500.0, 300.0, 18.0, char_lines);
+        assert_eq!(bottom.center, 19);
+        assert!(bottom.rows.iter().any(|row| row.index == 19));
+        // Out-of-range anchors clamp instead of panicking.
+        let clamped = layout_windowed(&lines, 0, 999, 500.0, 300.0, 18.0, char_lines);
+        assert_eq!(clamped.center, 19);
     }
 }

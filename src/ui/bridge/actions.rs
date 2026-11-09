@@ -190,22 +190,6 @@ impl Bridge {
         });
     }
 
-    /// Shuffle the current queue in place: resolve the shuffled song order
-    /// and replace the queue with it.
-    pub fn shuffle_queue(&self, song_ids: Vec<String>) {
-        let tx = self.tx.clone();
-        let offline = self.offline.load(Ordering::Relaxed);
-        crate::app::runtime().spawn(async move {
-            let Some(dbs) = crate::app::dbs() else { return };
-            emit_queue(
-                &tx,
-                crate::queue::shuffle_queue_json(&dbs, "songs", &song_ids, offline).await,
-                0,
-                "Could not shuffle the queue",
-            );
-        });
-    }
-
     /// Replace the queue with one shuffled artist pass.
     pub fn shuffle_album(&self, album_id: String) {
         let tx = self.tx.clone();

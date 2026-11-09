@@ -7,13 +7,20 @@ impl AppRoot {
     pub(in crate::ui) fn execute_shuffle(&mut self, target: ShuffleTarget) {
         match target {
             ShuffleTarget::Queue => {
-                let queue = self.player.queue_snapshot();
-                if queue.is_empty() {
+                if self.player.len() == 0 {
                     self.push_toast("The queue is empty.".to_string(), ToastKind::Error, None);
                     return;
                 }
-                let ids = queue.iter().map(|track| track.id.clone()).collect();
-                self.bridge.shuffle_queue(ids);
+                // The queue is a plain in-memory array: permute it directly
+                // and restart from the shuffled head (docs/Commands.md).
+                self.player.shuffle_queue();
+                self.playback_error = None;
+                self.request_current_lyrics();
+                if self.queue_open {
+                    self.queue_selection.clear();
+                    self.visual_mode = false;
+                    self.land_queue(self.player.index());
+                }
             }
             ShuffleTarget::Album(Some(query)) => self.bridge.shuffle_album_query(query),
             ShuffleTarget::Album(None) => {

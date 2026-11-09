@@ -665,8 +665,14 @@ struct AppRoot {
     lyrics_line_color: std::collections::HashMap<usize, anim::ColorBehavior>,
     lyrics_layout: Option<lyrics_layout::LyricsLayout>,
     lyrics_window_start: usize,
+    /// LYR-8: while a manual scroll holds the pane, this is the line it is
+    /// centred on instead of the played line. The idle resume timer clears it;
+    /// `lyrics_hold_generation` retires timers of superseded holds.
+    lyrics_hold: Option<usize>,
+    lyrics_hold_generation: u64,
     lyrics_shift: anim::Behavior,
     lyrics_track_fade: anim::Behavior,
+    description_scroll: gpui::ScrollHandle,
     transport_press: [Option<f64>; 3],
     line_search: line_search::LineSearchState,
     line_search_anim: anim::Behavior,
@@ -813,8 +819,11 @@ impl AppRoot {
             lyrics_line_color: std::collections::HashMap::new(),
             lyrics_layout: None,
             lyrics_window_start: 0,
+            lyrics_hold: None,
+            lyrics_hold_generation: 0,
             lyrics_shift: anim::Behavior::new(0.0),
             lyrics_track_fade: anim::Behavior::new(1.0),
+            description_scroll: gpui::ScrollHandle::new(),
             transport_press: [None; 3],
             line_search: line_search::LineSearchState::new(),
             line_search_anim: anim::Behavior::new(0.0),

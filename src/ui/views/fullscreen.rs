@@ -58,7 +58,11 @@ impl AppRoot {
             .collect()
     }
 
-    pub(in crate::ui) fn lyrics_overlay_element(&self, progress: f32) -> gpui::AnyElement {
+    pub(in crate::ui) fn lyrics_overlay_element(
+        &self,
+        progress: f32,
+        cx: &Context<Self>,
+    ) -> gpui::AnyElement {
         if !self.lyrics_overlay && progress <= 0.001 {
             return div().into_any_element();
         }
@@ -77,6 +81,7 @@ impl AppRoot {
             .justify_center()
             .bg(gpui::black().opacity(self.visuals.motion.lyrics_scrim * progress))
             .opacity(progress.clamp(0.0, 1.0))
+            .on_scroll_wheel(cx.listener(Self::on_lyrics_wheel))
             .child(
                 div()
                     .w(relative(0.72))
@@ -96,14 +101,17 @@ impl AppRoot {
                         div()
                             .text_size(px(10.0))
                             .text_color(rgb(palette::on_surface_variant()))
-                            .child(format!("Lyrics · {} · ? closes", lyrics.source)),
+                            .child(format!(
+                                "Lyrics · {} · j/k scroll · ? closes",
+                                lyrics.source
+                            )),
                     )
                     .children(self.lyric_line_elements(layout, &lyrics.lines, lyrics.synced)),
             )
             .into_any_element()
     }
 
-    pub(in crate::ui) fn fullscreen_overlay(&self, progress: f32) -> gpui::Div {
+    pub(in crate::ui) fn fullscreen_overlay(&self, progress: f32, cx: &Context<Self>) -> gpui::Div {
         let track = self.player.current().cloned();
         let (title, artist, cover) = match &track {
             Some(track) => {
@@ -144,6 +152,9 @@ impl AppRoot {
             .unwrap_or_default();
         let lyrics_label = match lyrics {
             Some(lyrics) if lyrics.lines.is_empty() => "No lyrics".to_string(),
+            Some(lyrics) if lyrics_focus => {
+                format!("Lyrics · {} · j/k scroll", lyrics.source)
+            }
             Some(lyrics) => format!("Lyrics · {}", lyrics.source),
             None => "Loading lyrics…".to_string(),
         };
@@ -236,6 +247,7 @@ impl AppRoot {
                             .gap(px(lyric_gap))
                             .relative()
                             .top(px(self.lyrics_shift.value(&self.clock)))
+                            .on_scroll_wheel(cx.listener(Self::on_lyrics_wheel))
                             .child(
                                 div()
                                     .text_size(px(10.0))

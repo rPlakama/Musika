@@ -15,6 +15,12 @@ pub const EMPHASIZED_MS: f32 = 240.0;
 pub const ALT_MS: f32 = EMPHASIZED_MS * 0.7;
 pub const MICRO_MS: f32 = 80.0;
 
+/// LYR-8: a manual lyric scroll pauses the centre-follow for this idle window
+/// when the lyrics pane/overlay has focus, and for the shorter window when it
+/// does not (legacy UI `Theme.lyricsResume` / `lyricsResumeUnfocused`).
+pub const LYRICS_RESUME_MS: u64 = 5_000;
+pub const LYRICS_RESUME_UNFOCUSED_MS: u64 = 2_000;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Curve {
     Linear,

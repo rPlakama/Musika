@@ -368,59 +368,6 @@ async fn quick_actions_resolve_songs_albums_and_pages() {
     assert!(album_artist_page_json(&dbs, "al2").await.is_err());
 }
 
-#[tokio::test]
-async fn shuffle_queue_resolves_every_unit_in_order() {
-    let dbs = test_dbs().await;
-    for (id, album) in [("s1", "al1"), ("s2", "al1"), ("s3", "al2"), ("s4", "al2")] {
-        sqlx::query(
-            "INSERT INTO songs (id, title, artist, album, album_id, duration)
-                 VALUES (?1, ?1, 'A', 'X', ?2, 100)",
-        )
-        .bind(id)
-        .bind(album)
-        .execute(&dbs.library)
-        .await
-        .unwrap();
-    }
-    // Credentials exist so `tracks_json` can build stream URLs; the
-    // pinned test key keeps the encrypt/decrypt round-trip off the config
-    // dir (a sandbox `$HOME` is read-only).
-    crate::crypto::use_test_key();
-    crate::sqlite::save_credentials(&dbs.credentials, "u", "p", "http://s", "navidrome")
-        .await
-        .unwrap();
-
-    // Songs resolve one track per unit, in the given order.
-    let units: Vec<String> = ["s3", "s1", "s4", "s2"].map(String::from).to_vec();
-    let json = shuffle_queue_json(&dbs, "songs", &units, false)
-        .await
-        .unwrap();
-    let value: serde_json::Value = serde_json::from_str(&json).unwrap();
-    let ids: Vec<&str> = value
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|track| track["id"].as_str().unwrap())
-        .collect();
-    assert_eq!(ids, ["s3", "s1", "s4", "s2"]);
-
-    // Albums expand whole, in the given order: al2's songs lead.
-    let albums: Vec<String> = ["al2", "al1"].map(String::from).to_vec();
-    let json = shuffle_queue_json(&dbs, "albums", &albums, false)
-        .await
-        .unwrap();
-    let value: serde_json::Value = serde_json::from_str(&json).unwrap();
-    let ids: Vec<&str> = value
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|track| track["id"].as_str().unwrap())
-        .collect();
-    assert_eq!(ids.len(), 4);
-    assert!(ids[..2].contains(&"s3") && ids[..2].contains(&"s4"));
-    assert!(ids[2..].contains(&"s1") && ids[2..].contains(&"s2"));
-}
-
 #[test]
 fn shuffle_is_a_permutation_for_any_seed() {
     let source: Vec<String> = (0..64).map(|i| i.to_string()).collect();

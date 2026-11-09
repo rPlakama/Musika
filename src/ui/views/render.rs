@@ -226,7 +226,7 @@ impl Render for AppRoot {
             window.request_animation_frame();
         }
         let fullscreen_overlay = (self.fullscreen || fullscreen_progress > 0.001)
-            .then(|| self.fullscreen_overlay(fullscreen_progress));
+            .then(|| self.fullscreen_overlay(fullscreen_progress, cx));
         let exit_overlay = self.exiting.map(|started| {
             let progress = (((self.clock.now - started) / 0.200) as f32).clamp(0.0, 1.0);
             self.exit_overlay(progress)
@@ -404,7 +404,7 @@ impl Render for AppRoot {
                 Some(o) => o.into_any_element(),
                 None => div().into_any_element(),
             })
-            .child(self.lyrics_overlay_element(lyrics_overlay_progress))
+            .child(self.lyrics_overlay_element(lyrics_overlay_progress, cx))
             .child(match queue_overlay {
                 Some(o) => o.into_any_element(),
                 None => div().into_any_element(),

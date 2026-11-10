@@ -48,10 +48,13 @@ producer resumes, so stale writes can never leak across a load or seek.
   the graph without adding seek latency.
 - Loading clears when enough decoded audio is buffered (a twentieth of the
   stream size, capped to the ring) or playback starts.
-- Paused playback blocks the decoder on the eventfd and does not wake it.
+- For seekable streams, the decoder closes its HTTP response when the PCM ring
+  reaches roughly 9.5 s of queued audio. It opens a fresh response and seeks to
+  the decoded boundary when playback drains the ring to roughly 2 s, keeping
+  long tracks from depending on one idle HTTP connection.
 - Pausing interrupts and drops the active decoder/HTTP response after capturing
   the played position. Resume opens a fresh media request and seeks the new
-  decoder to that position, avoiding reuse of an idle or expired HTTP socket.
+  decoder to that position.
 
 ## Gapless and clock
 

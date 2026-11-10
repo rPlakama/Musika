@@ -11,7 +11,7 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 use super::decode::Decoder;
-use super::ring::RATE;
+use super::ring::{RATE, RING_FRAMES};
 use super::sink::Sink;
 use super::status::{Shared, Status};
 
@@ -23,7 +23,12 @@ pub(crate) enum Command {
         generation: u64,
     },
     Pause,
-    Resume { url: String, next_url: Option<String>, generation: u64, position: f64 },
+    Resume {
+        url: String,
+        next_url: Option<String>,
+        generation: u64,
+        position: f64,
+    },
     Seek(f64),
     Stop,
     Shutdown,
@@ -92,7 +97,10 @@ impl Worker {
             return;
         };
         let generation = self.shared.generation.fetch_add(1, Ordering::AcqRel) + 1;
-        *self.paused_request.lock().unwrap_or_else(std::sync::PoisonError::into_inner) =
+        *self
+            .paused_request
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) =
             Some((url.clone(), next_url.clone(), generation));
         {
             let mut status = self.shared.lock();
@@ -125,9 +133,14 @@ impl Worker {
     }
 
     pub(crate) fn set_paused(&self, paused: bool, position: f64) {
-        let Some(tx) = self.tx.as_ref() else { return; };
+        let Some(tx) = self.tx.as_ref() else {
+            return;
+        };
         if paused {
-            *self.paused_position.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = position.max(0.0);
+            *self
+                .paused_position
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner) = position.max(0.0);
             interrupt_current(&self.shared);
             self.sink.reset();
             self.sink.set_paused(true);
@@ -135,9 +148,22 @@ impl Worker {
         } else {
             self.sink.set_paused(false);
             self.shared.lock().loading = true;
-            if let Some((url, next_url, generation)) = self.paused_request.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clone() {
-                let position = *self.paused_position.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-                let _ = tx.send(Command::Resume { url, next_url, generation, position });
+            if let Some((url, next_url, generation)) = self
+                .paused_request
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .clone()
+            {
+                let position = *self
+                    .paused_position
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                let _ = tx.send(Command::Resume {
+                    url,
+                    next_url,
+                    generation,
+                    position,
+                });
             }
         }
     }
@@ -233,9 +259,12 @@ fn preload_thread(rx: Receiver<PreloadRequest>, results: Sender<PreloadResult>) 
 #[derive(Default)]
 struct Current {
     decoder: Option<Decoder>,
+    url: String,
     epoch: u64,
     generation: u64,
     written_frames: u64,
+    timeline_start: f64,
+    parked_url: Option<String>,
     next_url: Option<String>,
     preload_requested: bool,
     preload_token: u64,
@@ -293,8 +322,22 @@ fn worker_thread(
                     current.stop = None;
                     continue;
                 }
-                Command::Resume { url, next_url, generation, position } => {
-                    start_decoder(&mut current, url, next_url, generation, position, &shared, &sink);
+                Command::Resume {
+                    url,
+                    next_url,
+                    generation,
+                    position,
+                } => {
+                    start_decoder(
+                        &mut current,
+                        url,
+                        next_url,
+                        generation,
+                        position,
+                        false,
+                        &shared,
+                        &sink,
+                    );
                     continue;
                 }
                 Command::Seek(seconds) => {
@@ -303,6 +346,8 @@ fn worker_thread(
                         match decoder.seek(seconds) {
                             Ok(()) => {
                                 current.written_frames = 0;
+                                current.timeline_start = seconds.max(0.0);
+                                current.parked_url = None;
                                 current.first_pcm = true;
                                 shared
                                     .clock_start
@@ -329,7 +374,16 @@ fn worker_thread(
                     paused,
                     generation,
                 } => {
-                    start_decoder(&mut current, url, next_url, generation, 0.0, &shared, &sink);
+                    start_decoder(
+                        &mut current,
+                        url,
+                        next_url,
+                        generation,
+                        0.0,
+                        false,
+                        &shared,
+                        &sink,
+                    );
                     sink.set_paused(paused);
                     continue;
                 }
@@ -337,6 +391,23 @@ fn worker_thread(
         }
 
         let Some(decoder) = current.decoder.as_mut() else {
+            if let Some(url) = current.parked_url.clone()
+                && sink.ring().buffered_frames() <= (RATE as u64 * 2)
+            {
+                let target = current.timeline_start + current.written_frames as f64 / RATE as f64;
+                let next_url = current.next_url.clone();
+                let generation = current.generation;
+                start_decoder(
+                    &mut current,
+                    url,
+                    next_url,
+                    generation,
+                    target,
+                    true,
+                    &shared,
+                    &sink,
+                );
+            }
             continue;
         };
 
@@ -384,7 +455,8 @@ fn worker_thread(
                 shared.boundary_active.store(true, Ordering::Release);
                 shared.decode_done.store(false, Ordering::Release);
                 crate::startup::trace("gapless.next");
-                current.next_url = None;
+                current.url = current.next_url.take().unwrap_or_default();
+                current.timeline_start = 0.0;
                 current.preload_requested = false;
                 current.preload_token = current.preload_token.wrapping_add(1);
                 current.preload_stop = None;
@@ -411,6 +483,18 @@ fn worker_thread(
             continue;
         }
 
+        // The ring is the playback buffer. Once it is nearly full, close the
+        // current AVIO/HTTP response and let playback consume the buffered
+        // PCM. Reopen before it runs low, seeking to the decoded boundary.
+        if sink.ring().buffered_frames() >= RING_FRAMES as u64 * 7 / 8
+            && current.decoder.as_ref().is_some_and(Decoder::is_seekable)
+        {
+            current.parked_url = Some(current.url.clone());
+            current.decoder = None;
+            current.stop = None;
+            continue;
+        }
+
         seed_preload(&mut current, &shared, &sink, &preload_tx);
         drain_preload(&mut current, &preload_rx);
         if sink.ring().paused()
@@ -426,26 +510,48 @@ fn worker_thread(
     cancel_preload(&mut current);
 }
 
-fn start_decoder(current: &mut Current, url: String, next_url: Option<String>, generation: u64, position: f64, shared: &Shared, sink: &Sink) {
-    cancel_preload(current);
+fn start_decoder(
+    current: &mut Current,
+    url: String,
+    next_url: Option<String>,
+    generation: u64,
+    position: f64,
+    preserve_preload: bool,
+    shared: &Shared,
+    sink: &Sink,
+) {
+    if !preserve_preload {
+        cancel_preload(current);
+        current.preload = None;
+        current.preload_requested = false;
+        current.preload_token = 0;
+        current.preload_started = None;
+        current.next_url = next_url.clone();
+    }
     interrupt_stop(current);
     current.decoder = None;
+    current.url = url.clone();
     current.epoch = sink.epoch();
     current.generation = generation;
     current.written_frames = 0;
-    current.next_url = next_url;
-    current.preload = None;
-    current.preload_requested = false;
-    current.preload_token = 0;
-    current.preload_started = None;
+    current.timeline_start = position;
+    current.parked_url = None;
+    if !preserve_preload {
+        current.next_url = next_url;
+    }
     current.first_pcm = true;
     shared.decode_done.store(false, Ordering::Release);
     let stop = Arc::new(AtomicBool::new(false));
-    *shared.current_stop.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(Arc::clone(&stop));
+    *shared
+        .current_stop
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(Arc::clone(&stop));
     current.stop = Some(stop.clone());
     match Decoder::open(&url, stop) {
         Ok(mut decoder) => {
-            if position > 0.0 && let Err(error) = decoder.seek(position) {
+            if position > 0.0
+                && let Err(error) = decoder.seek(position)
+            {
                 fail(shared, error);
                 return;
             }
@@ -453,13 +559,30 @@ fn start_decoder(current: &mut Current, url: String, next_url: Option<String>, g
             current.decoder = Some(decoder);
             let mut status = shared.lock();
             status.loading = true;
-            status.duration = current.decoder.as_ref().map(Decoder::duration).unwrap_or(0.0);
-            status.stream_size = current.decoder.as_ref().map(|d| d.stream_size().max(0) as u64).unwrap_or(0);
+            status.duration = current
+                .decoder
+                .as_ref()
+                .map(Decoder::duration)
+                .unwrap_or(0.0);
+            status.stream_size = current
+                .decoder
+                .as_ref()
+                .map(|d| d.stream_size().max(0) as u64)
+                .unwrap_or(0);
             drop(status);
-            *shared.clock_origin.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = position;
-            shared.clock_start.store(sink.played_frames(), Ordering::Release);
+            *shared
+                .clock_origin
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner) = position;
+            shared
+                .clock_start
+                .store(sink.played_frames(), Ordering::Release);
         }
-        Err(error) => if !matches!(error.as_str(), "cancelled" | "stopped") { fail(shared, error); },
+        Err(error) => {
+            if !matches!(error.as_str(), "cancelled" | "stopped") {
+                fail(shared, error);
+            }
+        }
     }
 }
 

@@ -552,7 +552,9 @@ impl PlayerMirror {
     }
 
     pub fn apply_tick(&mut self, tick: PlayerTick) {
-        self.player.index = tick.index.min(self.player.len().saturating_sub(1));
+        let index = tick.index.min(self.player.len().saturating_sub(1));
+        let track_changed = index != self.player.index;
+        self.player.index = index;
         self.player.state = match tick.state {
             StateWire::Stopped => State::Stopped,
             StateWire::Playing => State::Playing,
@@ -564,7 +566,10 @@ impl PlayerMirror {
         self.player.fallback_duration = tick.duration;
         {
             let mut shared = self.player.shared();
-            shared.position = tick.position;
+            // A tick can straddle a track switch: its index may already name
+            // the new track while its sampled position still belongs to the
+            // previous one. Start the IPC mirror at zero on that boundary.
+            shared.position = if track_changed { 0.0 } else { tick.position };
             shared.duration = tick.duration;
         }
     }

@@ -67,9 +67,9 @@ fn signal_key_ignores_position_only_updates() {
 fn a_full_command_queue_drops_instead_of_blocking() {
     let (tx, mut rx) = mpsc::channel(2);
     queue_command(&tx, "mpris_play".to_string());
-    queue_command(&tx, "mpris_next".to_string());
-    queue_command(&tx, "mpris_previous".to_string());
+    queue_command(&tx, "track next".to_string());
+    queue_command(&tx, "track previous".to_string());
     assert_eq!(rx.try_recv().as_deref(), Ok("mpris_play"));
-    assert_eq!(rx.try_recv().as_deref(), Ok("mpris_next"));
+    assert_eq!(rx.try_recv().as_deref(), Ok("track next"));
     assert!(rx.try_recv().is_err(), "the excess command was dropped");
 }

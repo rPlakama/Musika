@@ -361,8 +361,8 @@ async fn handle_command(player: &mut Player, bridge: &Bridge, line: &str) -> boo
         IpcCommand::Play => player.resume(),
         IpcCommand::Pause => player.pause(),
         IpcCommand::Stop => player.stop(),
-        IpcCommand::NextTrack => player.next(),
-        IpcCommand::PrevTrack => player.previous(),
+        IpcCommand::Track(crate::ipc_command::TrackCommand::Next) => player.next(),
+        IpcCommand::Track(crate::ipc_command::TrackCommand::Previous) => player.previous(),
         IpcCommand::Mute => player.toggle_mute(),
         IpcCommand::VolumeUp => player.set_volume(player.volume() + 5.0),
         IpcCommand::VolumeDown => player.set_volume(player.volume() - 5.0),
@@ -948,8 +948,7 @@ fn is_core_command(command: &IpcCommand) -> bool {
             | IpcCommand::Play
             | IpcCommand::Pause
             | IpcCommand::Stop
-            | IpcCommand::NextTrack
-            | IpcCommand::PrevTrack
+            | IpcCommand::Track(_)
             | IpcCommand::Mute
             | IpcCommand::VolumeUp
             | IpcCommand::VolumeDown

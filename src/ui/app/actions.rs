@@ -814,6 +814,10 @@ impl AppRoot {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.handle_command("track next", cx);
+    }
+
+    pub(in crate::ui) fn execute_track_next(&mut self, cx: &mut Context<Self>) {
         self.press_transport(2);
         self.player.next();
         if self.queue_open {
@@ -828,6 +832,10 @@ impl AppRoot {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.handle_command("track previous", cx);
+    }
+
+    pub(in crate::ui) fn execute_track_previous(&mut self, cx: &mut Context<Self>) {
         self.press_transport(0);
         self.player.previous();
         if self.queue_open {

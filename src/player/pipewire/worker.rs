@@ -374,6 +374,12 @@ fn worker_thread(
                     paused,
                     generation,
                 } => {
+                    // A burst of skips can enqueue several loads while a
+                    // previous HTTP open is being interrupted. Only the
+                    // newest generation should reach Navidrome/FFmpeg.
+                    if generation != shared.generation.load(Ordering::Acquire) {
+                        continue;
+                    }
                     start_decoder(
                         &mut current,
                         url,
@@ -414,8 +420,16 @@ fn worker_thread(
         let frames = match decoder.read(&mut pcm, 1024) {
             Ok(frames) => frames,
             Err(error) => {
-                fail(&shared, error);
+                let superseded = current.generation != shared.generation.load(Ordering::Acquire)
+                    || current
+                        .stop
+                        .as_ref()
+                        .is_some_and(|stop| stop.load(Ordering::Acquire));
                 current.decoder = None;
+                current.stop = None;
+                if !superseded {
+                    fail(&shared, error);
+                }
                 continue;
             }
         };
@@ -547,12 +561,16 @@ fn start_decoder(
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(Arc::clone(&stop));
     current.stop = Some(stop.clone());
-    match Decoder::open(&url, stop) {
+    match Decoder::open(&url, Arc::clone(&stop)) {
         Ok(mut decoder) => {
             if position > 0.0
                 && let Err(error) = decoder.seek(position)
             {
-                fail(shared, error);
+                if generation == shared.generation.load(Ordering::Acquire)
+                    && !stop.load(Ordering::Acquire)
+                {
+                    fail(shared, error);
+                }
                 return;
             }
             crate::startup::trace("fetch.first_chunk");
@@ -579,7 +597,9 @@ fn start_decoder(
                 .store(sink.played_frames(), Ordering::Release);
         }
         Err(error) => {
-            if !matches!(error.as_str(), "cancelled" | "stopped") {
+            if generation == shared.generation.load(Ordering::Acquire)
+                && !stop.load(Ordering::Acquire)
+            {
                 fail(shared, error);
             }
         }

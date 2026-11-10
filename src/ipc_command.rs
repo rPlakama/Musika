@@ -23,6 +23,9 @@ pub enum QuickDirection {
     West,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TrackCommand { Next, Previous }
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum IpcCommand {
     Sync(SyncMode),
@@ -112,8 +115,7 @@ pub enum IpcCommand {
     Play,
     Pause,
     Stop,
-    NextTrack,
-    PrevTrack,
+    Track(TrackCommand),
     Mute,
     VolumeUp,
     VolumeDown,
@@ -251,6 +253,7 @@ const WIPE_ARGS: &[&str] = &["album", "lyrics", "covers"];
 const ON_OFF: &[&str] = &["on", "off"];
 const DIRECTIONS: &[&str] = &["north", "south", "east", "west"];
 const NEXT_PREV: &[&str] = &["next", "prev"];
+const TRACK_ACTIONS: &[&str] = &["next", "previous"];
 
 pub const COMMANDS: &[CommandSpec] = &[
     CommandSpec {
@@ -590,16 +593,10 @@ pub const COMMANDS: &[CommandSpec] = &[
         args: ArgSpec::None,
     },
     CommandSpec {
-        name: "next_track",
-        usage: "next_track",
-        description: "Skip to the next track",
-        args: ArgSpec::None,
-    },
-    CommandSpec {
-        name: "prev_track",
-        usage: "prev_track",
-        description: "Go to the previous track",
-        args: ArgSpec::None,
+        name: "track",
+        usage: "track <next|previous>",
+        description: "Control track playback",
+        args: ArgSpec::Enum(TRACK_ACTIONS),
     },
     CommandSpec {
         name: "mute",
@@ -720,9 +717,6 @@ pub const COMMANDS: &[CommandSpec] = &[
 fn canonical_name(first: &str) -> &str {
     match first {
         "cancel" => "back",
-        "next" => "next_track",
-        "prev" => "prev_track",
-        "previous" => "prev_track",
         "volume" => "set_volume",
         "fullscreen" => "toggle_fullscreen",
         "lyrics" => "lyrics_overlay",
@@ -732,8 +726,6 @@ fn canonical_name(first: &str) -> &str {
         "mpris_pause" => "pause",
         "mpris_play_pause" => "play_pause",
         "mpris_stop" => "stop",
-        "mpris_next" => "next_track",
-        "mpris_previous" => "prev_track",
         other => other,
     }
 }
@@ -800,6 +792,11 @@ pub fn parse(input: &str) -> Result<IpcCommand, CommandError> {
         return Err(CommandError(format!("unknown command: {name}")));
     };
     match name {
+        "track" => match one_arg(rest, spec.usage)? {
+            "next" => Ok(IpcCommand::Track(TrackCommand::Next)),
+            "previous" => Ok(IpcCommand::Track(TrackCommand::Previous)),
+            other => Err(CommandError(format!("unknown track command: {other}"))),
+        },
         "sync" => match rest {
             "" => Ok(IpcCommand::Sync(SyncMode::Incremental)),
             "all" => Ok(IpcCommand::Sync(SyncMode::All)),
@@ -928,8 +925,6 @@ pub fn parse(input: &str) -> Result<IpcCommand, CommandError> {
         "play" => Ok(IpcCommand::Play),
         "pause" => Ok(IpcCommand::Pause),
         "stop" => Ok(IpcCommand::Stop),
-        "next_track" => Ok(IpcCommand::NextTrack),
-        "prev_track" => Ok(IpcCommand::PrevTrack),
         "mute" => Ok(IpcCommand::Mute),
         "volume_up" => Ok(IpcCommand::VolumeUp),
         "volume_down" => Ok(IpcCommand::VolumeDown),
@@ -1390,8 +1385,8 @@ pub fn canonical_string(command: &IpcCommand) -> String {
         Play => "play".to_string(),
         Pause => "pause".to_string(),
         Stop => "stop".to_string(),
-        NextTrack => "next_track".to_string(),
-        PrevTrack => "prev_track".to_string(),
+        Track(TrackCommand::Next) => "track next".to_string(),
+        Track(TrackCommand::Previous) => "track previous".to_string(),
         Mute => "mute".to_string(),
         VolumeUp => "volume_up".to_string(),
         VolumeDown => "volume_down".to_string(),
@@ -1806,8 +1801,8 @@ mod tests {
 
     #[test]
     fn parses_aliases_and_numbers() {
-        assert_eq!(parse("next"), Ok(IpcCommand::NextTrack));
-        assert_eq!(parse("prev"), Ok(IpcCommand::PrevTrack));
+        assert_eq!(parse("track next"), Ok(IpcCommand::Track(TrackCommand::Next)));
+        assert_eq!(parse("track previous"), Ok(IpcCommand::Track(TrackCommand::Previous)));
         assert_eq!(parse("volume 40"), Ok(IpcCommand::SetVolume(40.0)));
         assert_eq!(parse("seek 30"), Ok(IpcCommand::Seek(30.0)));
         assert!(parse("set_volume 101").is_err());
@@ -2294,8 +2289,8 @@ mod tests {
             "play",
             "pause",
             "stop",
-            "next_track",
-            "prev_track",
+            "track next",
+            "track previous",
             "mute",
             "volume_up",
             "volume_down",
@@ -2332,9 +2327,6 @@ mod tests {
     #[test]
     fn parses_aliases_and_mpris_forms() {
         let samples = [
-            "next",
-            "prev",
-            "previous",
             "volume 40",
             "fullscreen",
             "lyrics",
@@ -2345,8 +2337,6 @@ mod tests {
             "mpris_pause",
             "mpris_play_pause",
             "mpris_stop",
-            "mpris_next",
-            "mpris_previous",
             "mpris_volume:40",
             "mpris_seek:5000000",
             "mpris_position:5000000",
@@ -2370,6 +2360,6 @@ mod tests {
             canonical_string(&IpcCommand::QuickCycle { next: false }),
             "quick_cycle prev"
         );
-        assert_eq!(canonical_string(&parse("next").unwrap()), "next_track");
+        assert_eq!(canonical_string(&parse("track next").unwrap()), "track next");
     }
 }

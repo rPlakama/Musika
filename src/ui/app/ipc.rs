@@ -19,7 +19,7 @@ impl AppRoot {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        use ipc_command::{IpcCommand, QuickDirection, WipeScope};
+        use ipc_command::{IpcCommand, QuickDirection, TrackCommand, WipeScope};
         match command {
             IpcCommand::Sync(mode) => self.start_sync(mode),
             IpcCommand::Wipe(scope) => {
@@ -180,8 +180,8 @@ impl AppRoot {
             IpcCommand::Play => self.player.resume(),
             IpcCommand::Pause => self.player.pause(),
             IpcCommand::Stop => self.player.stop(),
-            IpcCommand::NextTrack => self.on_next_track(&NextTrack, window, cx),
-            IpcCommand::PrevTrack => self.on_prev_track(&PrevTrack, window, cx),
+            IpcCommand::Track(TrackCommand::Next) => self.execute_track_next(cx),
+            IpcCommand::Track(TrackCommand::Previous) => self.execute_track_previous(cx),
             IpcCommand::Mute => self.on_mute(&Mute, window, cx),
             IpcCommand::VolumeUp => self.on_volume_up(&VolumeUp, window, cx),
             IpcCommand::VolumeDown => self.on_volume_down(&VolumeDown, window, cx),

@@ -52,8 +52,7 @@ for the process and socket architecture.
 - The command line (`:`) additionally offers `Tab` completion and scoped search
   suggestions for command arguments.
 
-Aliases are available where noted: `cancel` → `back`, `next` → `next_track`,
-`prev`/`previous` → `prev_track`, `volume` → `set_volume`,
+Aliases are available where noted: `cancel` → `back`, `volume` → `set_volume`,
 `fullscreen` → `toggle_fullscreen`, `lyrics` → `lyrics_overlay`,
 `insert` → `insert_mode`, `search_action` → `line_search`.
 
@@ -64,8 +63,6 @@ mpris_play
 mpris_pause
 mpris_play_pause
 mpris_stop
-mpris_next
-mpris_previous
 mpris_volume:40
 mpris_seek:5000000
 mpris_position:5000000
@@ -229,8 +226,7 @@ Rules:
 | `play` | `play` | Resume playback. |
 | `pause` | `pause` | Pause playback. |
 | `stop` | `stop` | Stop playback (`mpris_stop`). |
-| `next_track` | `next_track` | Skip to the next track (`next`). |
-| `prev_track` | `prev_track` | Previous track (`prev`, `previous`). |
+| `track` | `track <next\|previous>` | Move to the next or previous track. |
 | `mute` | `mute` | Toggle mute. |
 | `volume_up` | `volume_up` | Raise volume by 5. |
 | `volume_down` | `volume_down` | Lower volume by 5. |

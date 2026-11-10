@@ -43,6 +43,9 @@ producer resumes, so stale writes can never leak across a load or seek.
 
 - FFmpeg URL AVIO read-ahead: **32 MiB** (`buffer_size`), probe limited to
   1 MiB/1 s with a defaults retry for exotic files.
+- HTTP I/O uses persistent connections for repeated requests and a **120 s**
+  read/write timeout. Rapid skips discard superseded queued loads before they
+  open another stream.
 - Sink PCM ring: **2 MiB** = 524,288 frames = 10.9 s at 48 kHz stereo S16.
   This is intentionally unchanged; it decouples the network/decode jitter from
   the graph without adding seek latency.

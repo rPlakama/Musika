@@ -475,11 +475,11 @@ impl MprisPlayer {
     }
 
     fn next(&self) {
-        submit_action("next");
+        submit_action("track next");
     }
 
     fn previous(&self) {
-        submit_action("prev");
+        submit_action("track previous");
     }
 
     async fn seek(&self, offset: i64, #[zbus(signal_emitter)] emitter: SignalEmitter<'_>) {

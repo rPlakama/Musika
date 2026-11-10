@@ -45,6 +45,9 @@ const STREAM_BUFFER_SIZE: &str = "33554432";
 const STREAM_PROBE_SIZE: &str = "1048576";
 /// Microseconds of stream analysis during open.
 const STREAM_ANALYZE_DURATION: &str = "1000000";
+/// Keep HTTP operations bounded while allowing a stream connection to remain
+/// usable across FFmpeg's repeated requests (for example, range reads).
+const HTTP_RW_TIMEOUT_US: &str = "120000000";
 
 static INIT: Once = Once::new();
 
@@ -105,6 +108,8 @@ fn open_input(url: &str, stop: &Arc<AtomicBool>) -> Result<format::context::Inpu
     options.set("probesize", STREAM_PROBE_SIZE);
     options.set("analyzeduration", STREAM_ANALYZE_DURATION);
     options.set("fflags", "+fastseek");
+    options.set("multiple_requests", "1");
+    options.set("rw_timeout", HTTP_RW_TIMEOUT_US);
 
     let interrupt_stop = Arc::clone(stop);
     let first = input_with_interrupt_and_dictionary(

@@ -617,15 +617,12 @@ impl PlayerMirror {
         });
     }
     pub fn toggle(&mut self) {
-        self.player.toggle();
         self.client.player(PlayerCommand::PlayPause);
     }
     pub fn pause(&mut self) {
-        self.player.pause();
         self.client.player(PlayerCommand::Pause);
     }
     pub fn resume(&mut self) {
-        self.player.resume();
         self.client.player(PlayerCommand::Play);
     }
     pub fn stop(&mut self) {

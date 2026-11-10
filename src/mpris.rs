@@ -442,7 +442,7 @@ impl MprisPlayer {
     }
 
     fn play_pause(&self) {
-        submit_action("toggle");
+        submit_action("play_pause");
     }
 
     fn stop(&self) {

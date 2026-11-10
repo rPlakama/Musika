@@ -462,13 +462,16 @@ impl Player {
     }
 
     pub fn resume(&mut self) {
-        if self.state != State::Paused {
-            return;
+        match self.state {
+            State::Paused => {
+                if let Some(native) = self.native.as_ref() {
+                    native.set_paused(false);
+                }
+                self.state = State::Playing;
+            }
+            State::Stopped if !self.queue.is_empty() => self.play_current(),
+            State::Stopped | State::Playing => {}
         }
-        if let Some(native) = self.native.as_ref() {
-            native.set_paused(false);
-        }
-        self.state = State::Playing;
     }
 
     pub fn stop(&mut self) {

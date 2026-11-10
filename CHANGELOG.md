@@ -5,6 +5,16 @@ open work; this file is the release history.
 
 ## Unreleased
 
+- Load the restored queue paused without reporting `loading`, so opening the app
+  shows the transport as "Paused" immediately instead of spinning until the
+  decoder reports ready (which may never happen offline). Only a load that is
+  about to start audio sets the loading flag.
+- Show a 30% opacity ghost band on the progress bar while a seek key is held, so
+  the bar previews where the playhead will land before the release commits it.
+  It is drawn in the player bar and in the fullscreen progress bar.
+- Decouple the fullscreen lyrics's follow glide from the played-line highlight:
+  the column pan no longer runs while a manual scroll holds the pane, so the
+  highlight is no longer dragged along by the lyrics.
 - Show a live counter toast while a playback key is held: `,`/`.` and `-`/`+`
   refresh one bubble with the repeat count and the net distance or the
   resulting volume level (e.g. `Seek forward x3 (+15 s)`), which fades out a

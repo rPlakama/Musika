@@ -365,6 +365,7 @@ impl AppRoot {
                             )
                             .child(
                                 div()
+                                    .relative()
                                     .flex()
                                     .flex_1()
                                     .h(px(4.0))
@@ -376,7 +377,21 @@ impl AppRoot {
                                             .w(relative(progress_ratio))
                                             .rounded_full()
                                             .bg(rgb(palette::primary())),
-                                    ),
+                                    )
+                                    // Ghost band: where a held `,`/`.` lands.
+                                    .when_some(self.seek_preview(), |this, (start, length)| {
+                                        this.child(
+                                            div()
+                                                .absolute()
+                                                .top_0()
+                                                .left(relative(start))
+                                                .h_full()
+                                                .w(relative(length))
+                                                .rounded_full()
+                                                .bg(rgb(palette::primary()))
+                                                .opacity(0.30),
+                                        )
+                                    }),
                             )
                             .child(
                                 div()

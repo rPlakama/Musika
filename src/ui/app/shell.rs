@@ -84,6 +84,29 @@ impl AppRoot {
         }
     }
 
+    /// The band of the progress bar a pending seek hold will land on, as
+    /// `(start, length)` fractions of the track. `None` when no seek is held,
+    /// so the bar only grows a preview while `,`/`.` (or a `,.` spam) has not
+    /// been committed yet.
+    pub(in crate::ui) fn seek_preview(&self) -> Option<(f32, f32)> {
+        let hold = self
+            .playback_key_hold
+            .filter(|hold| hold.kind == HoldKind::Seek)?;
+        let duration = self.player.duration();
+        if duration <= 0.0 {
+            return None;
+        }
+        let position = self.player.position_now();
+        let target = (position + hold.delta).clamp(0.0, duration);
+        let (start, end) = if target < position {
+            (target, position)
+        } else {
+            (position, target)
+        };
+        let length = ((end - start) / duration) as f32;
+        (length > 0.0005).then(|| ((start / duration) as f32, length))
+    }
+
     /// Records one key-down of a held playback key and refreshes the counter
     /// bubble in place. Returns the folded hold.
     pub(in crate::ui) fn hold_playback_key(&mut self, key: char) -> KeyHold {

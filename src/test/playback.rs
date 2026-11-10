@@ -136,11 +136,22 @@ fn load_paused_keeps_the_transport_paused() {
     assert_eq!(load_url(&outcome), ("file:///1.flac", None, true));
     let snapshot = core.snapshot(1, SECOND);
     assert_eq!(snapshot.state, 2);
-    assert_ne!(
+    // A paused load never starts audio, so the transport must read "Paused"
+    // right away instead of spinning: this is the app-open restore path.
+    assert_eq!(
         snapshot.flags & STATE_FLAG_LOADING,
         0,
-        "a paused load is loading"
+        "a paused load is not loading"
     );
+}
+
+#[test]
+fn load_playing_reports_loading_until_the_first_pcm() {
+    let mut core = PlaybackCore::new();
+    let _ = core.load(tracks(1), 0, false);
+    assert_eq!(core.state(), State::Playing);
+    let snapshot = core.snapshot(1, SECOND);
+    assert_ne!(snapshot.flags & STATE_FLAG_LOADING, 0);
 }
 
 #[test]
@@ -802,7 +813,8 @@ fn snapshot_encodes_the_transport() {
     assert_eq!(snapshot.duration_ms, 100_000);
     assert_eq!(snapshot.position_ms, 0);
     assert_eq!(snapshot.reserved, 0);
-    assert_ne!(snapshot.flags & STATE_FLAG_LOADING, 0);
+    // Loaded paused: no spinner, and the following row is preloaded.
+    assert_eq!(snapshot.flags & STATE_FLAG_LOADING, 0);
     assert_ne!(snapshot.flags & STATE_FLAG_GAPLESS_ARMED, 0);
     // Round trip through the wire codec.
     let decoded = crate::ipc_protocol::PlaybackState::decode(&snapshot.encode()).expect("decode");

@@ -207,8 +207,13 @@ impl AppRoot {
                 |text, size| Self::lyric_wrap_count(window, text, size, width),
             );
         }
+        // The column pan and the played-line highlight are separate behaviours:
+        // the pan is the follow glide, the highlight is per-line emphasis. A
+        // manual scroll already moves the pane with the user's own gesture, so
+        // adding the glide on top is what dragged the highlight along with the
+        // lyrics; while a hold is active the new window is applied directly.
         let old_start = self.lyrics_window_start;
-        if layout.start != old_start {
+        if layout.start != old_start && self.lyrics_hold.is_none() {
             let unit = (layout.text_height + layout.gap).max(1.0);
             self.lyrics_shift.target(
                 (layout.start as f32 - old_start as f32) * unit,

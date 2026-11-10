@@ -63,7 +63,10 @@ producer resumes, so stale writes can never leak across a load or seek.
   This is intentionally unchanged; it decouples the network/decode jitter from
   the graph without adding seek latency.
 - Loading clears when enough decoded audio is buffered (a twentieth of the
-  stream size, capped to the ring) or the first PCM is written.
+  stream size, capped to the ring) or the first PCM is written. Only a load that
+  is going to start audio sets the loading flag: the startup restore loads the
+  saved queue paused, so the transport reads "Paused" from the first frame
+  instead of spinning until a decoder that may never come reports ready.
 - For seekable streams, the decoder closes its HTTP response when the PCM ring
   reaches roughly 7/8 (about 9.5 s of queued audio). It opens a fresh response
   and seeks to the decoded boundary when playback drains the ring to roughly

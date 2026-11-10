@@ -465,7 +465,20 @@ impl AppRoot {
                             .h_full()
                             .w(relative(progress))
                             .bg(rgb(palette::primary())),
-                    ),
+                    )
+                    // Ghost band: where a held `,`/`.` is going to land.
+                    .when_some(self.seek_preview(), |this, (start, length)| {
+                        this.child(
+                            div()
+                                .absolute()
+                                .top_0()
+                                .left(relative(start))
+                                .h_full()
+                                .w(relative(length))
+                                .bg(rgb(palette::primary()))
+                                .opacity(0.30),
+                        )
+                    }),
             )
             .child(
                 div()

@@ -612,7 +612,11 @@ impl PlaybackCore {
         self.duration = 0.0;
         self.stream_size = 0;
         self.seekable = false;
-        self.loading = true;
+        // A paused load is not going to start audio, so it must not claim the
+        // loading state: on app open the restored queue loads paused and the
+        // transport should read "Paused" immediately, not spin until the
+        // decoder reports ready (it may never, e.g. offline).
+        self.loading = !paused;
         self.failed = false;
         self.gapless_next = self.gapless_index();
         let next_url = self

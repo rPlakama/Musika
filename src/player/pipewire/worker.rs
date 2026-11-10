@@ -22,6 +22,8 @@ pub(crate) enum Command {
         paused: bool,
         generation: u64,
     },
+    Pause,
+    Resume { url: String, next_url: Option<String>, generation: u64, position: f64 },
     Seek(f64),
     Stop,
     Shutdown,
@@ -45,6 +47,8 @@ pub(crate) struct Worker {
     preload_join: Option<JoinHandle<()>>,
     shared: Arc<Shared>,
     sink: Arc<Sink>,
+    paused_request: std::sync::Mutex<Option<(String, Option<String>, u64)>>,
+    paused_position: std::sync::Mutex<f64>,
 }
 
 impl Worker {
@@ -78,6 +82,8 @@ impl Worker {
             preload_join: Some(preload_join),
             shared,
             sink,
+            paused_request: std::sync::Mutex::new(None),
+            paused_position: std::sync::Mutex::new(0.0),
         })
     }
 
@@ -86,6 +92,8 @@ impl Worker {
             return;
         };
         let generation = self.shared.generation.fetch_add(1, Ordering::AcqRel) + 1;
+        *self.paused_request.lock().unwrap_or_else(std::sync::PoisonError::into_inner) =
+            Some((url.clone(), next_url.clone(), generation));
         {
             let mut status = self.shared.lock();
             status.loading = true;
@@ -114,6 +122,24 @@ impl Worker {
             paused,
             generation,
         });
+    }
+
+    pub(crate) fn set_paused(&self, paused: bool, position: f64) {
+        let Some(tx) = self.tx.as_ref() else { return; };
+        if paused {
+            *self.paused_position.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = position.max(0.0);
+            interrupt_current(&self.shared);
+            self.sink.reset();
+            self.sink.set_paused(true);
+            let _ = tx.send(Command::Pause);
+        } else {
+            self.sink.set_paused(false);
+            self.shared.lock().loading = true;
+            if let Some((url, next_url, generation)) = self.paused_request.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clone() {
+                let position = *self.paused_position.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+                let _ = tx.send(Command::Resume { url, next_url, generation, position });
+            }
+        }
     }
 
     pub(crate) fn seek(&self, seconds: f64) {
@@ -260,6 +286,17 @@ fn worker_thread(
                     current.stop = None;
                     continue;
                 }
+                Command::Pause => {
+                    cancel_preload(&mut current);
+                    interrupt_stop(&mut current);
+                    current.decoder = None;
+                    current.stop = None;
+                    continue;
+                }
+                Command::Resume { url, next_url, generation, position } => {
+                    start_decoder(&mut current, url, next_url, generation, position, &shared, &sink);
+                    continue;
+                }
                 Command::Seek(seconds) => {
                     cancel_preload(&mut current);
                     if let Some(decoder) = current.decoder.as_mut() {
@@ -292,52 +329,8 @@ fn worker_thread(
                     paused,
                     generation,
                 } => {
-                    cancel_preload(&mut current);
-                    interrupt_stop(&mut current);
-                    current.decoder = None;
-                    current.epoch = sink.epoch();
-                    current.generation = generation;
-                    current.written_frames = 0;
-                    current.next_url = next_url;
-                    current.preload = None;
-                    current.preload_requested = false;
-                    current.preload_token = 0;
-                    current.preload_started = None;
-                    current.first_pcm = true;
-                    shared.decode_done.store(false, Ordering::Release);
-                    let stop = Arc::new(AtomicBool::new(false));
-                    *shared
-                        .current_stop
-                        .lock()
-                        .unwrap_or_else(std::sync::PoisonError::into_inner) =
-                        Some(Arc::clone(&stop));
-                    current.stop = Some(stop.clone());
-                    match Decoder::open(&url, stop) {
-                        Ok(decoder) => {
-                            crate::startup::trace("fetch.first_chunk");
-                            current.decoder = Some(decoder);
-                            {
-                                let mut status = shared.lock();
-                                status.loading = true;
-                                status.duration = current
-                                    .decoder
-                                    .as_ref()
-                                    .map(Decoder::duration)
-                                    .unwrap_or(0.0);
-                                status.stream_size = current
-                                    .decoder
-                                    .as_ref()
-                                    .map(|decoder| decoder.stream_size().max(0) as u64)
-                                    .unwrap_or(0);
-                            }
-                            sink.set_paused(paused);
-                        }
-                        Err(error) => {
-                            if !matches!(error.as_str(), "cancelled" | "stopped") {
-                                fail(&shared, error);
-                            }
-                        }
-                    }
+                    start_decoder(&mut current, url, next_url, generation, 0.0, &shared, &sink);
+                    sink.set_paused(paused);
                     continue;
                 }
             }
@@ -431,6 +424,43 @@ fn worker_thread(
     }
 
     cancel_preload(&mut current);
+}
+
+fn start_decoder(current: &mut Current, url: String, next_url: Option<String>, generation: u64, position: f64, shared: &Shared, sink: &Sink) {
+    cancel_preload(current);
+    interrupt_stop(current);
+    current.decoder = None;
+    current.epoch = sink.epoch();
+    current.generation = generation;
+    current.written_frames = 0;
+    current.next_url = next_url;
+    current.preload = None;
+    current.preload_requested = false;
+    current.preload_token = 0;
+    current.preload_started = None;
+    current.first_pcm = true;
+    shared.decode_done.store(false, Ordering::Release);
+    let stop = Arc::new(AtomicBool::new(false));
+    *shared.current_stop.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(Arc::clone(&stop));
+    current.stop = Some(stop.clone());
+    match Decoder::open(&url, stop) {
+        Ok(mut decoder) => {
+            if position > 0.0 && let Err(error) = decoder.seek(position) {
+                fail(shared, error);
+                return;
+            }
+            crate::startup::trace("fetch.first_chunk");
+            current.decoder = Some(decoder);
+            let mut status = shared.lock();
+            status.loading = true;
+            status.duration = current.decoder.as_ref().map(Decoder::duration).unwrap_or(0.0);
+            status.stream_size = current.decoder.as_ref().map(|d| d.stream_size().max(0) as u64).unwrap_or(0);
+            drop(status);
+            *shared.clock_origin.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = position;
+            shared.clock_start.store(sink.played_frames(), Ordering::Release);
+        }
+        Err(error) => if !matches!(error.as_str(), "cancelled" | "stopped") { fail(shared, error); },
+    }
 }
 
 fn seed_preload(

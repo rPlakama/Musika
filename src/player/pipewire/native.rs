@@ -45,7 +45,10 @@ impl Native {
     }
 
     pub(crate) fn set_paused(&self, paused: bool) {
-        self.sink.set_paused(paused);
+        let start = self.shared.clock_start.load(Ordering::Acquire);
+        let origin = *self.shared.clock_origin.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let position = origin + self.sink.played_frames().saturating_sub(start) as f64 / 48_000.0;
+        self.worker.set_paused(paused, position);
     }
 
     pub(crate) fn set_volume(&self, volume: f64) {

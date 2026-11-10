@@ -49,6 +49,9 @@ producer resumes, so stale writes can never leak across a load or seek.
 - Loading clears when enough decoded audio is buffered (a twentieth of the
   stream size, capped to the ring) or playback starts.
 - Paused playback blocks the decoder on the eventfd and does not wake it.
+- Pausing interrupts and drops the active decoder/HTTP response after capturing
+  the played position. Resume opens a fresh media request and seeks the new
+  decoder to that position, avoiding reuse of an idle or expired HTTP socket.
 
 ## Gapless and clock
 

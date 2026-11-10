@@ -427,6 +427,12 @@ fn publish_mpris(player: &Player) {
     };
     crate::mpris::publish(crate::mpris::Snapshot {
         playback_status: status.to_string(),
+        loop_status: match player.repeat() {
+            crate::player::Repeat::Off => "None",
+            crate::player::Repeat::One => "Track",
+            crate::player::Repeat::All => "Playlist",
+        }
+        .to_string(),
         title: current.map(|track| track.title.clone()).unwrap_or_default(),
         artist: current.map(|track| track.artist.clone()).unwrap_or_default(),
         album: current.map(|track| track.album.clone()).unwrap_or_default(),

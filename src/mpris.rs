@@ -50,6 +50,8 @@ const COMMAND_CAP: usize = 64;
 pub struct Snapshot {
     /// `Playing` | `Paused` | `Stopped`.
     pub playback_status: String,
+    /// `None` | `Track` | `Playlist`.
+    pub loop_status: String,
     pub title: String,
     pub artist: String,
     pub album: String,
@@ -67,8 +69,9 @@ impl Snapshot {
     /// Key for change detection: everything signalled except `Position`.
     pub(crate) fn signal_key(&self) -> String {
         format!(
-            "{}|{}|{}|{}|{}|{}|{}|{}|{}|{}",
+            "{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}",
             self.playback_status,
+            self.loop_status,
             self.title,
             self.artist,
             self.album,
@@ -346,11 +349,27 @@ impl MprisPlayer {
 
     #[zbus(property)]
     fn loop_status(&self) -> String {
-        "None".to_string()
+        snapshot().loop_status
     }
 
     #[zbus(property)]
-    fn set_loop_status(&mut self, _status: String) {}
+    fn set_loop_status(&mut self, status: String) {
+        let state = snapshot().loop_status;
+        let current = match state.as_str() {
+            "Track" => 1,
+            "Playlist" => 2,
+            _ => 0,
+        };
+        let target = match status.as_str() {
+            "None" => 0,
+            "Track" => 1,
+            "Playlist" => 2,
+            _ => return,
+        };
+        for _ in 0..(target + 3 - current) % 3 {
+            submit("repeat_cycle".to_string());
+        }
+    }
 
     #[zbus(property)]
     fn rate(&self) -> f64 {
@@ -366,7 +385,13 @@ impl MprisPlayer {
     }
 
     #[zbus(property)]
-    fn set_shuffle(&mut self, _shuffle: bool) {}
+    fn set_shuffle(&mut self, shuffle: bool) {
+        // The existing IPC shuffle command randomizes the queue in place; it
+        // has no persistent shuffle mode to disable.
+        if shuffle {
+            submit("shuffle queue".to_string());
+        }
+    }
 
     #[zbus(property)]
     fn metadata(&self) -> HashMap<String, OwnedValue> {

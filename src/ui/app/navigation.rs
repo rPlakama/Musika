@@ -492,6 +492,7 @@ impl AppRoot {
     }
 
     pub(in crate::ui) fn open_descriptor(&mut self, descriptor: PageDescriptor) {
+        self.retract_playback();
         self.status_focus = None;
         self.pending_page_reveal = None;
         let profile = page_profile::PageProfile::for_descriptor(&descriptor);
@@ -521,6 +522,7 @@ impl AppRoot {
     }
 
     pub(in crate::ui) fn back_page(&mut self) {
+        self.retract_playback();
         self.status_focus = None;
         self.remember_current();
         match self.travel.back() {
@@ -544,6 +546,7 @@ impl AppRoot {
         self.status_focus = None;
         self.remember_current();
         if let Some(descriptor) = self.travel.step(delta) {
+            self.retract_playback();
             self.page = Some(PageState::new(descriptor.clone()));
             self.page_generation = self.page_generation.wrapping_add(1);
             self.bridge.load_page(descriptor);

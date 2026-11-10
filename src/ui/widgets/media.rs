@@ -247,7 +247,7 @@ fn cached_icon(
 /// Row mark: a download is in flight.
 pub(crate) fn icon_download_pending() -> SharedString {
     static CELL: std::sync::OnceLock<SharedString> = std::sync::OnceLock::new();
-    cached_icon(&CELL, "reload-ui-2-svgrepo-com.svg")
+    cached_icon(&CELL, "loading-loop.svg")
 }
 
 /// Row mark: downloaded.

@@ -305,8 +305,8 @@ async fn saved_radio_writes_a_local_m3u_and_resolves_ids() {
 }
 
 /// ARC-44: creating from a selection writes one named app-owned M3U, keeps
-/// the selection order (and duplicates), overwrites an existing mix of the
-/// same name, and leaves it visible in the index immediately.
+/// the selection order but drops older duplicates, overwrites an existing mix
+/// of the same name, and leaves it visible in the index immediately.
 #[tokio::test]
 async fn create_local_writes_a_named_m3u_and_scans_it() {
     let _guard = PLAYLIST_FOLDER_LOCK.lock().await;
@@ -355,17 +355,17 @@ async fn create_local_writes_a_named_m3u_and_scans_it() {
             .iter()
             .map(|entry| entry.path.as_str())
             .collect::<Vec<_>>(),
-        vec!["Music/second.flac", "Music/first.flac", "Music/second.flac"]
+        vec!["Music/first.flac", "Music/second.flac"]
     );
     assert_eq!(entries[0].artist.as_deref(), Some("Artist"));
-    assert_eq!(entries[0].title.as_deref(), Some("Second"));
+    assert_eq!(entries[0].title.as_deref(), Some("First"));
 
     let json = list_json(&dbs).await.unwrap();
     let lists: serde_json::Value = serde_json::from_str(&json).unwrap();
     let lists = lists.as_array().unwrap();
     assert_eq!(lists.len(), 1, "same-name save replaces the mix");
     assert!(lists.iter().any(|list| {
-        list["name"] == "Road Trip.m3u" && list["song_count"] == 3 && list["source"] == "m3u"
+        list["name"] == "Road Trip.m3u" && list["song_count"] == 2 && list["source"] == "m3u"
     }));
 
     let stored: Vec<Option<String>> = sqlx::query_scalar(
@@ -375,10 +375,7 @@ async fn create_local_writes_a_named_m3u_and_scans_it() {
     .fetch_all(&playlist)
     .await
     .unwrap();
-    assert_eq!(
-        stored,
-        vec![Some("s2".into()), Some("s1".into()), Some("s2".into())]
-    );
+    assert_eq!(stored, vec![Some("s1".into()), Some("s2".into())]);
 
     let _ = std::fs::remove_dir_all(root);
 }
@@ -546,7 +543,8 @@ async fn create_remote_posts_songs_then_refreshes_the_list() {
 }
 
 /// `playlist add` resolves free-form targets (artist/song names) and appends
-/// their songs to the existing named M3U, preserving target order.
+/// their songs to the existing named M3U, preserving target order while
+/// collapsing duplicates (the newest occurrence wins).
 #[tokio::test]
 async fn add_to_playlist_appends_resolved_targets() {
     let _guard = PLAYLIST_FOLDER_LOCK.lock().await;
@@ -597,12 +595,7 @@ async fn add_to_playlist_appends_resolved_targets() {
             .iter()
             .map(|entry| entry.path.as_str())
             .collect::<Vec<_>>(),
-        vec![
-            "Music/first.flac",
-            "Music/first.flac",
-            "Music/second.flac",
-            "Music/second.flac"
-        ]
+        vec!["Music/first.flac", "Music/second.flac"]
     );
 
     // The special `current` target uses the supplied playing song id.
@@ -612,6 +605,7 @@ async fn add_to_playlist_appends_resolved_targets() {
     assert_eq!(name, "Rated R Mix");
     let entries = parse_m3u(&std::fs::read_to_string(&path).unwrap());
     assert_eq!(entries.last().unwrap().path, "Music/second.flac");
+    assert_eq!(entries.len(), 2, "adding an existing song moves it");
 
     let _ = std::fs::remove_dir_all(root);
 }
@@ -945,8 +939,8 @@ async fn add_to_playlist_refreshes_the_server_entries() {
     );
 }
 
-/// The row-clipboard backend: append resolved ids to a local M3U, then delete
-/// exact positions while preserving order and duplicate neighbours.
+/// The row-clipboard backend: append resolved ids to a local M3U without ever
+/// duplicating a song, then delete exact positions.
 #[tokio::test]
 async fn add_song_ids_and_remove_positions_edit_a_local_m3u() {
     let _guard = PLAYLIST_FOLDER_LOCK.lock().await;
@@ -990,22 +984,26 @@ async fn add_song_ids_and_remove_positions_edit_a_local_m3u() {
             .map(|entry| entry.path)
             .collect::<Vec<_>>()
     };
+    // Adding s1 again moves it to the end instead of keeping a second copy.
     assert_eq!(
         paths(&std::fs::read_to_string(&path).unwrap()),
-        vec!["Music/first.flac", "Music/second.flac", "Music/first.flac"]
+        vec!["Music/second.flac", "Music/first.flac"]
     );
 
-    // Delete the middle row only; the duplicated first entry stays.
-    let name = remove_playlist_positions(&dbs, "Clip Mix", &[1])
+    // Re-adding the last entry keeps a single copy.
+    add_song_ids_to_playlist(&dbs, "Clip Mix", &["s1".into()])
+        .await
+        .unwrap();
+    assert_eq!(
+        paths(&std::fs::read_to_string(&path).unwrap()),
+        vec!["Music/second.flac", "Music/first.flac"]
+    );
+
+    // Delete the first row only.
+    let name = remove_playlist_positions(&dbs, "Clip Mix", &[0])
         .await
         .unwrap();
     assert_eq!(name, "Clip Mix");
-    assert_eq!(
-        paths(&std::fs::read_to_string(&path).unwrap()),
-        vec!["Music/first.flac", "Music/first.flac"]
-    );
-    // A duplicate position removes exactly one occurrence.
-    remove_playlist_positions(&dbs, "Clip Mix", &[0]).await.unwrap();
     assert_eq!(
         paths(&std::fs::read_to_string(&path).unwrap()),
         vec!["Music/first.flac"]
@@ -1130,8 +1128,8 @@ async fn remove_playlist_positions_updates_a_server_playlist() {
     assert!(requests.iter().any(|request| request.contains("getPlaylists.view")));
 }
 
-/// Playlist-page paste/reorder backend on a local M3U: insert at an exact
-/// position and move an entry, preserving order after each rescans.
+/// Playlist-page paste/reorder backend on a local M3U: inserting an existing
+/// song moves it, and moves preserve order after each rescan.
 #[tokio::test]
 async fn insert_and_move_local_playlist_entries() {
     let _guard = PLAYLIST_FOLDER_LOCK.lock().await;
@@ -1176,15 +1174,16 @@ async fn insert_and_move_local_playlist_entries() {
     insert_song_ids_at(&dbs, "Move Mix", 1, &["s1".into()])
         .await
         .unwrap();
+    // s1 already exists, so the insert moves it instead of duplicating it.
     assert_eq!(
         paths(&std::fs::read_to_string(&path).unwrap()),
-        vec!["Music/first.flac", "Music/first.flac", "Music/second.flac"]
+        vec!["Music/second.flac", "Music/first.flac"]
     );
 
-    move_playlist_entry(&dbs, "Move Mix", 0, 2).await.unwrap();
+    move_playlist_entry(&dbs, "Move Mix", 0, 1).await.unwrap();
     assert_eq!(
         paths(&std::fs::read_to_string(&path).unwrap()),
-        vec!["Music/first.flac", "Music/second.flac", "Music/first.flac"]
+        vec!["Music/first.flac", "Music/second.flac"]
     );
     assert!(move_playlist_entry(&dbs, "Move Mix", 0, 9).await.is_err());
     assert!(
@@ -1194,15 +1193,15 @@ async fn insert_and_move_local_playlist_entries() {
     );
 
     // A visual block moves as one bundle, preserving internal order.
-    move_playlist_block(&dbs, "Move Mix", 0, 2, 1)
+    move_playlist_block(&dbs, "Move Mix", 0, 1, 1)
         .await
         .unwrap();
     assert_eq!(
         paths(&std::fs::read_to_string(&path).unwrap()),
-        vec!["Music/first.flac", "Music/first.flac", "Music/second.flac"]
+        vec!["Music/second.flac", "Music/first.flac"]
     );
     assert!(
-        move_playlist_block(&dbs, "Move Mix", 0, 2, -1)
+        move_playlist_block(&dbs, "Move Mix", 0, 1, -1)
             .await
             .is_err(),
         "top boundary is a no-op"

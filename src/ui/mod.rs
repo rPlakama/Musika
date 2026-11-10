@@ -297,6 +297,13 @@ impl MarksState {
         (!song_id.is_empty() && self.pending.contains(song_id))
             || (!album_id.is_empty() && self.pending.contains(album_id))
     }
+
+    /// Row-level pending check: rows without a song/album id (artists) still
+    /// show the loading glyph for their own id.
+    fn pending_row(&self, row: &crate::model::Row) -> bool {
+        self.pending(&row.song_id, &row.album_id)
+            || (!row.id.is_empty() && self.pending.contains(&row.id))
+    }
 }
 
 #[derive(Clone)]

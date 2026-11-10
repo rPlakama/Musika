@@ -177,10 +177,10 @@ fn radio_tool_has_all_four_container_actions() {
 }
 
 #[test]
-fn playlist_quadrants_leave_jumps_open() {
+fn playlist_quadrants_offer_play_queue_and_delete() {
     let menu = QuickMenu::playlist();
     assert!(menu.is_open(Direction::West));
-    assert!(menu.is_open(Direction::East));
+    assert!(!menu.is_open(Direction::East));
     assert_eq!(
         slot(&menu, Direction::North).actions,
         vec![QuickVerb::PlayPlaylist]
@@ -196,6 +196,12 @@ fn playlist_quadrants_leave_jumps_open() {
     );
     assert_eq!(slot(&menu, Direction::South).label, "Add to Queue");
     assert_eq!(slot(&menu, Direction::South).rating_target, None);
+    assert_eq!(
+        slot(&menu, Direction::East).actions,
+        vec![QuickVerb::DeletePlaylist]
+    );
+    assert_eq!(slot(&menu, Direction::East).label, "Delete Playlist");
+    assert_eq!(slot(&menu, Direction::East).icon, "delete-outline.svg");
 }
 
 #[test]
@@ -300,6 +306,11 @@ fn verb_labels_and_icons_are_legacy_file_names() {
             QuickVerb::PlayPlaylist,
             "Play Playlist",
             "play-1001-svgrepo-com.svg",
+        ),
+        (
+            QuickVerb::DeletePlaylist,
+            "Delete Playlist",
+            "delete-outline.svg",
         ),
         (QuickVerb::SaveRadio, "Save Radio", "save-outline.svg"),
         (QuickVerb::ShuffleRadio, "Shuffle", "outline-shuffle.svg"),
@@ -422,8 +433,8 @@ fn open_slots_cannot_be_aimed() {
     let playlist = QuickMenu::playlist();
     let mut gesture = armed(&playlist);
     assert!(!gesture.aim(Direction::West, &playlist, false));
-    assert!(!gesture.aim(Direction::East, &playlist, false));
-    assert_eq!(gesture.aimed, None);
+    assert!(gesture.aim(Direction::East, &playlist, false));
+    assert_eq!(gesture.aimed, Some(Direction::East));
 }
 
 #[test]

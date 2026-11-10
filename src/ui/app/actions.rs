@@ -239,6 +239,98 @@ impl AppRoot {
         cx.notify();
     }
 
+    /// Any navigation to another place retracts the fullscreen playback view
+    /// (and releases its lyrics hold).
+    pub(in crate::ui) fn retract_playback(&mut self) {
+        if self.fullscreen {
+            self.fullscreen = false;
+            self.release_lyrics_hold();
+        }
+    }
+
+    /// Optimistically apply the start of a download toggle so the row marks
+    /// react at once: a start shows the loading glyph, a removal drops the
+    /// downloaded glyph before the ledger read settles.
+    pub(in crate::ui) fn apply_download_started(&mut self, kind: &str, id: &str, on: bool) {
+        if id.is_empty() {
+            return;
+        }
+        let row_kind = match kind {
+            "song" => RowKind::Song,
+            "album" => RowKind::Album,
+            "artist" => RowKind::Artist,
+            _ => return,
+        };
+        let mut songs = std::collections::HashSet::new();
+        let mut albums = std::collections::HashSet::new();
+        let mut row_ids = std::collections::HashSet::new();
+        let mut patch = |row: &mut Row, container: bool| {
+            let hit = container
+                || row.id == id
+                || row.song_id == id
+                || (!row.album_id.is_empty() && row.album_id == id);
+            if !hit {
+                return;
+            }
+            if !on {
+                row.downloaded = false;
+            }
+            if !row.id.is_empty() {
+                row_ids.insert(row.id.clone());
+            }
+            if !row.song_id.is_empty() {
+                songs.insert(row.song_id.clone());
+            }
+            if !row.album_id.is_empty() {
+                albums.insert(row.album_id.clone());
+            }
+        };
+        for row in &mut self.view.rows.live {
+            patch(row, false);
+        }
+        if let Some(search) = self.search.as_mut() {
+            for row in &mut search.rows {
+                patch(row, false);
+            }
+        }
+        if let Some(page) = self.page.as_mut() {
+            let container = page.descriptor.id == id
+                && matches!(
+                    (page.descriptor.kind, row_kind),
+                    (PageKind::Album, RowKind::Album) | (PageKind::Artist, RowKind::Artist)
+                );
+            if container {
+                page.container_cached = on;
+                page.container_downloading = true;
+            }
+            for row in &mut page.rows {
+                patch(row, container);
+            }
+        }
+        drop(patch);
+        if on {
+            self.marks.pending.insert(id.to_string());
+            self.marks.pending.extend(songs);
+            self.marks.pending.extend(albums);
+            self.marks.pending.extend(row_ids);
+            return;
+        }
+        self.marks.songs_done.remove(id);
+        self.marks.albums_done.remove(id);
+        self.marks.pending.remove(id);
+        for song in &songs {
+            self.marks.songs_done.remove(song);
+            self.marks.pending.remove(song);
+        }
+        for album in &albums {
+            self.marks.albums_done.remove(album);
+            self.marks.pending.remove(album);
+        }
+        for row_id in &row_ids {
+            self.marks.pending.remove(row_id);
+        }
+    }
+
     pub(in crate::ui) fn on_repeat_cycle(
         &mut self,
         _: &RepeatCycle,

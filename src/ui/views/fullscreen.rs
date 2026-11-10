@@ -131,6 +131,9 @@ impl AppRoot {
             * metrics::width_scale(self.win_w))
         .clamp(18.0, 32.0);
         let favorite = track.as_ref().is_some_and(|track| track.favorite);
+        let pending = track
+            .as_ref()
+            .is_some_and(|track| self.marks.pending(&track.id, &track.album_id));
         let downloaded = track
             .as_ref()
             .is_some_and(|track| self.marks.downloaded(&track.id, &track.album_id));
@@ -323,7 +326,14 @@ impl AppRoot {
                                             0xFFD54F,
                                         ))
                                     })
-                                    .when(downloaded, |this| {
+                                    .when(pending, |this| {
+                                        this.child(icon(
+                                            "loading-loop.svg",
+                                            (title_size * 0.58).clamp(12.0, 18.0),
+                                            palette::primary(),
+                                        ))
+                                    })
+                                    .when(downloaded && !pending, |this| {
                                         this.child(icon(
                                             "outline-download.svg",
                                             (title_size * 0.58).clamp(12.0, 18.0),

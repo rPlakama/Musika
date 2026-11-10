@@ -728,6 +728,9 @@ impl AppRoot {
             QuickVerb::PlayPlaylist => {
                 self.bridge.quick_play_playlist(target.playlist_id.clone());
             }
+            QuickVerb::DeletePlaylist => {
+                self.bridge.delete_playlist(target.playlist_id.clone());
+            }
             QuickVerb::ShuffleArtist => {
                 self.bridge.shuffle_artist(target.id.clone());
             }

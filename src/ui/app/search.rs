@@ -118,7 +118,7 @@ impl AppRoot {
         self.dismiss_search_overlay();
         // A chosen result is a navigation: dismiss the surfaces the search was
         // floating over so the destination is visible.
-        self.fullscreen = false;
+        self.retract_playback();
         self.lyrics_overlay = false;
         self.lyrics_overlay_wanted = false;
         self.queue_open = false;

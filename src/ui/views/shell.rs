@@ -79,18 +79,25 @@ impl AppRoot {
             TopBarAction::Download => {
                 let cached = page.is_some_and(|page| page.cached);
                 let downloading = page.is_some_and(|page| page.downloading);
-                (
-                    icon(
-                        if cached {
-                            "baseline-download.svg"
-                        } else {
-                            "outline-download.svg"
-                        },
-                        18.0,
-                        palette::on_surface_variant(),
-                    ),
-                    if downloading { 0.38 } else { 1.0 },
-                )
+                if downloading {
+                    (
+                        icon("loading-loop.svg", 18.0, palette::on_surface_variant()),
+                        0.85,
+                    )
+                } else {
+                    (
+                        icon(
+                            if cached {
+                                "baseline-download.svg"
+                            } else {
+                                "outline-download.svg"
+                            },
+                            18.0,
+                            palette::on_surface_variant(),
+                        ),
+                        1.0,
+                    )
+                }
             }
             TopBarAction::Favorite => {
                 let starred = page.is_some_and(|page| page.starred);

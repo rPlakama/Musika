@@ -54,6 +54,7 @@ pub enum QuickVerb {
     GoToAlbum,
     Download { on: bool },
     PlayPlaylist,
+    DeletePlaylist,
     ShuffleArtist,
     ShuffleAlbum,
     SaveRadio,
@@ -79,6 +80,7 @@ impl QuickVerb {
             QuickVerb::Download { on: true } => "Download",
             QuickVerb::Download { on: false } => "Remove Download",
             QuickVerb::PlayPlaylist => "Play Playlist",
+            QuickVerb::DeletePlaylist => "Delete Playlist",
             QuickVerb::ShuffleArtist => "Shuffle Artist",
             QuickVerb::ShuffleAlbum => "Shuffle Album",
             QuickVerb::SaveRadio => "Save Radio",
@@ -103,6 +105,7 @@ impl QuickVerb {
             QuickVerb::Download { on: true } => "outline-download.svg",
             QuickVerb::Download { on: false } => "baseline-download.svg",
             QuickVerb::PlayPlaylist => "play-1001-svgrepo-com.svg",
+            QuickVerb::DeletePlaylist => "delete-outline.svg",
             QuickVerb::ShuffleArtist | QuickVerb::ShuffleAlbum | QuickVerb::ShuffleRadio => {
                 "outline-shuffle.svg"
             }
@@ -373,14 +376,14 @@ impl QuickMenu {
     }
 
     /// Playlist row/page (legacy UI `QuickActions.playlist`). Playlists have no
-    /// server star/rating in the Subsonic API, so only Play and Add to Queue
-    /// are offered and both jumps are open.
+    /// server star/rating in the Subsonic API, so only Play, Add to Queue and
+    /// Delete are offered and the west jump stays open.
     pub fn playlist() -> Self {
         Self {
             north: Some(single_slot(QuickVerb::PlayPlaylist)),
             south: Some(single_slot(QuickVerb::AddToQueue)),
             west: None,
-            east: None,
+            east: Some(single_slot(QuickVerb::DeletePlaylist)),
         }
     }
 

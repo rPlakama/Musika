@@ -160,6 +160,11 @@ pub enum Event {
         at: usize,
     },
     DownloadSettled,
+    DownloadStarted {
+        kind: String,
+        id: String,
+        on: bool,
+    },
     Palette {
         cover_art: String,
         roles: BTreeMap<String, String>,

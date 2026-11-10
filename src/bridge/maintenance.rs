@@ -135,6 +135,11 @@ impl Bridge {
         let tx = self.tx.clone();
         crate::app::runtime().spawn(async move {
             let Some(dbs) = crate::app::dbs() else { return };
+            let _ = tx.send(Event::DownloadStarted {
+                kind: "artist".to_string(),
+                id: artist_id.clone(),
+                on,
+            });
             let ids = crate::library::artist_song_ids(&dbs.library, &artist_id)
                 .await
                 .unwrap_or_default();

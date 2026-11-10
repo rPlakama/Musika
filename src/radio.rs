@@ -100,7 +100,14 @@ pub async fn radio_rows(
     }
     let seed = resolve_seed(dbs, seed_kind, seed_id).await?;
     let children = similar_songs(dbs, &seed).await?;
-    let rows = song_rows(&children);
+    let mut rows = song_rows(&children);
+    let song_ids: Vec<String> = rows.iter().map(|row| row.id.clone()).collect();
+    let album_covers = crate::library::song_cover_ids(&dbs.library, &song_ids).await?;
+    for row in &mut rows {
+        if let Some(cover) = album_covers.get(&row.id) {
+            row.cover_art = Some(cover.clone());
+        }
+    }
     remember_rows(seed_kind, seed_id, &rows);
     Ok(rows)
 }

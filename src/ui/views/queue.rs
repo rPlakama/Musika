@@ -69,6 +69,9 @@ impl AppRoot {
                                                 .queue_selection
                                                 .contains(this.queue_cursor, index);
                                         let playing = index == this.player.index();
+                                        let pending = this.marks.pending(&track.id, &track.album_id);
+                                        let downloaded =
+                                            this.marks.downloaded(&track.id, &track.album_id);
                                         let hovered = this.hovered_row == Some(index);
                                         let active = selected || hovered;
                                         let (scale, text_scale) =
@@ -158,22 +161,27 @@ impl AppRoot {
                                                             true,
                                                         )),
                                                 )
-                                                .when(
-                                                    this.marks
-                                                        .downloaded(&track.id, &track.album_id),
-                                                    |this| {
-                                                        this.child(RetainedIcon::new(
-                                                            "retained-queue-download",
-                                                            index,
-                                                            format!(
-                                                                "{}/icons/outline-download.svg",
-                                                                asset_root()
-                                                            ),
-                                                            12.0,
-                                                            palette::primary(),
-                                                        ))
-                                                    },
-                                                )
+                                                .when(pending, |this| {
+                                                    this.child(RetainedIcon::new(
+                                                        "retained-queue-download-pending",
+                                                        index,
+                                                        icon_download_pending(),
+                                                        12.0,
+                                                        palette::primary(),
+                                                    ))
+                                                })
+                                                .when(downloaded && !pending, |this| {
+                                                    this.child(RetainedIcon::new(
+                                                        "retained-queue-download",
+                                                        index,
+                                                        format!(
+                                                            "{}/icons/outline-download.svg",
+                                                            asset_root()
+                                                        ),
+                                                        12.0,
+                                                        palette::primary(),
+                                                    ))
+                                                })
                                                 .when(track.favorite, |this| {
                                                     this.child(RetainedIcon::new(
                                                         "retained-queue-favorite",

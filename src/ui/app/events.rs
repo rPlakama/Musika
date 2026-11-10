@@ -312,6 +312,9 @@ impl AppRoot {
                     None,
                 );
             }
+            Event::DownloadStarted { kind, id, on } => {
+                self.apply_download_started(&kind, &id, on);
+            }
             Event::DownloadSettled => {
                 self.push_toast("Download updated.".to_string(), ToastKind::Notice, None);
                 self.marks.signature = None;
@@ -801,6 +804,10 @@ impl AppRoot {
                 {
                     self.bridge.request_container_state(kind, id);
                 }
+                // A failed download/removal never sends `DownloadSettled`, so
+                // roll the optimistic row marks back from the ledger.
+                self.marks.signature = None;
+                self.ensure_marks();
                 if let Some(search) = self.search.as_mut() {
                     search.loading = false;
                 }

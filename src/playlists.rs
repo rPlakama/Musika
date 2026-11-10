@@ -51,8 +51,8 @@ pub fn m3u_dir() -> Result<PathBuf> {
 }
 
 /// Validates the name/ids shared by both creation halves: the name is trimmed,
-/// blank ids are dropped and at least one real song must remain. Order and
-/// duplicates among the real ids are kept.
+/// blank ids are dropped and at least one real song must remain. Playlists
+/// never hold duplicates, so only the newest occurrence of each id survives.
 fn checked_playlist<'a>(name: &'a str, song_ids: &[String]) -> Result<(&'a str, Vec<String>)> {
     let name = name.trim();
     if name.is_empty() {
@@ -63,10 +63,42 @@ fn checked_playlist<'a>(name: &'a str, song_ids: &[String]) -> Result<(&'a str, 
         .filter(|id| !id.trim().is_empty())
         .cloned()
         .collect();
+    let ids = dedup_keep_last(&ids);
     if ids.is_empty() {
         anyhow::bail!("a playlist needs at least one song");
     }
     Ok((name, ids))
+}
+
+/// Playlist entries are unique. Adding an existing song moves it, so the
+/// newest occurrence wins and every older copy is dropped.
+fn dedup_keep_last(ids: &[String]) -> Vec<String> {
+    let mut seen = std::collections::HashSet::new();
+    let mut out: Vec<String> = Vec::with_capacity(ids.len());
+    for id in ids.iter().rev() {
+        if seen.insert(id.as_str()) {
+            out.push(id.clone());
+        }
+    }
+    out.reverse();
+    out
+}
+
+/// Insert (or move) ids in an ordered playlist: existing occurrences are
+/// removed first, then the newest copies go in at `position` (clamped), so a
+/// duplicate add behaves like a position update.
+fn upsert_ids(ordered: &mut Vec<String>, position: usize, song_ids: &[String]) {
+    let incoming = dedup_keep_last(song_ids);
+    if incoming.is_empty() {
+        return;
+    }
+    let wanted: std::collections::HashSet<&str> =
+        incoming.iter().map(String::as_str).collect();
+    ordered.retain(|id| !wanted.contains(id.as_str()));
+    let at = position.min(ordered.len());
+    for (offset, id) in incoming.into_iter().enumerate() {
+        ordered.insert((at + offset).min(ordered.len()), id);
+    }
 }
 
 /// One local library row as the M3U writer needs it.
@@ -195,9 +227,9 @@ pub async fn create_local(dbs: &Dbs, name: &str, song_ids: &[String]) -> Result<
 }
 
 /// Creates the playlist on the Subsonic server and refreshes the cached list
-/// right away. Order and duplicates are preserved because `createPlaylist`
-/// repeats `songId` once per entry. An empty (or all-blank) name/id list is
-/// rejected before any network call.
+/// right away. Order is preserved and duplicate ids collapse to their newest
+/// occurrence because playlists never hold duplicates. An empty (or all-blank)
+/// name/id list is rejected before any network call.
 pub async fn create_remote(dbs: &Dbs, name: &str, song_ids: &[String]) -> Result<()> {
     let (name, ids) = checked_playlist(name, song_ids)?;
     let client = crate::session::client(dbs)
@@ -1040,15 +1072,32 @@ pub async fn add_song_ids_to_playlist(
 }
 
 async fn append_resolved(dbs: &Dbs, playlist: &PlaylistRef, song_ids: &[String]) -> Result<()> {
+    let song_ids = dedup_keep_last(song_ids);
+    if song_ids.is_empty() {
+        return Ok(());
+    }
     if playlist.source == "m3u" {
         let path = local_playlist_path(playlist)?;
-        append_local_m3u(dbs, &path, song_ids).await?;
+        upsert_local_m3u(dbs, &path, usize::MAX, &song_ids).await?;
     } else {
         let client = crate::session::client(dbs)
             .await
             .context("adding to a server playlist needs a signed-in server")?;
+        let existing = cached_playlist_song_ids(dbs, &playlist.id).await?;
+        let wanted: std::collections::HashSet<&str> =
+            song_ids.iter().map(String::as_str).collect();
+        let duplicates: Vec<String> = existing
+            .into_iter()
+            .filter(|id| wanted.contains(id.as_str()))
+            .collect();
+        if !duplicates.is_empty() {
+            client
+                .update_playlist_remove(&playlist.id, &duplicates)
+                .await
+                .context("clearing the duplicate server entries")?;
+        }
         client
-            .update_playlist_add(&playlist.id, song_ids)
+            .update_playlist_add(&playlist.id, &song_ids)
             .await
             .context("updating the server playlist")?;
         // The list refresh only carries counts; reload the ordered entries so
@@ -1158,22 +1207,60 @@ pub async fn remove_playlist_positions(
     Ok(display_playlist_name(&playlist.name))
 }
 
-/// Append entries to an existing app-owned M3U and rescan its folder.
-async fn append_local_m3u(dbs: &Dbs, path: &Path, song_ids: &[String]) -> Result<()> {
-    let existing = std::fs::read_to_string(path)
+/// Insert or move songs in an app-owned M3U. Existing entries that resolve to
+/// an incoming id are dropped before the new copies are written, so the
+/// playlist never gains a duplicate (an add is a position update).
+async fn upsert_local_m3u(
+    dbs: &Dbs,
+    path: &Path,
+    position: usize,
+    song_ids: &[String],
+) -> Result<()> {
+    let text = std::fs::read_to_string(path)
         .with_context(|| format!("reading the playlist file {}", path.display()))?;
-    let body = m3u_text(dbs, song_ids).await?;
-    let entries = body.strip_prefix("#EXTM3U\n").unwrap_or(&body);
-    let mut out = existing;
-    if !out.ends_with('\n') {
-        out.push('\n');
-    }
-    out.push_str(entries);
-    std::fs::write(path, out)
-        .with_context(|| format!("writing the playlist file {}", path.display()))?;
+    let entries = parse_m3u(&text);
+    let songs = if entries
+        .iter()
+        .any(|entry| !entry.path.starts_with("musika:song:"))
+    {
+        load_songs(&dbs.library).await?
+    } else {
+        Vec::new()
+    };
+    let matcher = Matcher::new(&songs);
     let dir = path.parent().unwrap_or(Path::new("."));
+    let incoming = dedup_keep_last(song_ids);
+    let wanted: std::collections::HashSet<&str> =
+        incoming.iter().map(String::as_str).collect();
+    let mut kept: Vec<M3uEntry> = entries
+        .into_iter()
+        .filter(|entry| {
+            entry_song_id(entry, &matcher, &songs, dir)
+                .is_none_or(|id| !wanted.contains(id))
+        })
+        .collect();
+    let at = position.min(kept.len());
+    let inserted = m3u_entries_for_ids(dbs, &incoming).await?;
+    kept.splice(at..at, inserted);
+    write_m3u_entries(path, &kept)?;
     scan_dir(dbs, dir).await?;
     Ok(())
+}
+
+/// The song id an M3U entry resolves to: an app-owned `musika:song:<id>` line
+/// or a local library match. Unresolved path-only entries stay `None`.
+fn entry_song_id<'a>(
+    entry: &'a M3uEntry,
+    matcher: &Matcher,
+    songs: &'a [SongRef],
+    dir: &Path,
+) -> Option<&'a str> {
+    if let Some(id) = entry.path.strip_prefix("musika:song:") {
+        return Some(id);
+    }
+    matcher
+        .resolve(entry, dir)
+        .map(|index| songs[index].id.as_str())
 }
 
 /// Delete a whole playlist (local M3U file or server playlist). Returns the
@@ -1203,8 +1290,9 @@ pub async fn delete_playlist(dbs: &Dbs, playlist_query: &str) -> Result<(String,
 }
 
 /// Insert already-resolved song ids at a playlist position (the playlist page
-/// `p`/`P` path). Local M3U files keep unresolved neighbours; server playlists
-/// are rebuilt in order because `updatePlaylist` has no insert-position call.
+/// `p`/`P` path). A song already in the playlist is moved instead of copied.
+/// Local M3U files keep unresolved neighbours; server playlists are rebuilt in
+/// order because `updatePlaylist` has no insert-position call.
 pub async fn insert_song_ids_at(
     dbs: &Dbs,
     playlist_query: &str,
@@ -1217,24 +1305,16 @@ pub async fn insert_song_ids_at(
         .map(|id| id.trim().to_string())
         .filter(|id| !id.is_empty())
         .collect();
+    let song_ids = dedup_keep_last(&song_ids);
     if song_ids.is_empty() {
         return Err(anyhow!("No songs selected to paste."));
     }
     if playlist.source == "m3u" {
         let path = local_playlist_path(&playlist)?;
-        let text = std::fs::read_to_string(&path)
-            .with_context(|| format!("reading the playlist file {}", path.display()))?;
-        let mut entries = parse_m3u(&text);
-        let inserted = m3u_entries_for_ids(dbs, &song_ids).await?;
-        let position = position.min(entries.len());
-        entries.splice(position..position, inserted);
-        write_m3u_entries(&path, &entries)?;
-        let dir = path.parent().unwrap_or(Path::new("."));
-        scan_dir(dbs, dir).await?;
+        upsert_local_m3u(dbs, &path, position, &song_ids).await?;
     } else {
         let mut ordered = cached_playlist_song_ids(dbs, &playlist.id).await?;
-        let position = position.min(ordered.len());
-        ordered.splice(position..position, song_ids);
+        upsert_ids(&mut ordered, position, &song_ids);
         rebuild_server_playlist(dbs, &playlist, &ordered).await?;
     }
     Ok(display_playlist_name(&playlist.name))

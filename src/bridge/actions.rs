@@ -92,6 +92,11 @@ impl Bridge {
         let tx = self.tx.clone();
         crate::app::runtime().spawn(async move {
             let Some(dbs) = crate::app::dbs() else { return };
+            let _ = tx.send(Event::DownloadStarted {
+                kind: kind.clone(),
+                id: id.clone(),
+                on,
+            });
             if !on {
                 let result = if kind == "album" {
                     crate::media_actions::album_container_off(&dbs, &id).await;

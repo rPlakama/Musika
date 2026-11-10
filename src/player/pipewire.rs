@@ -12,3 +12,4 @@ mod status;
 mod worker;
 
 pub(crate) use native::Native;
+pub(crate) use status::SinkState;

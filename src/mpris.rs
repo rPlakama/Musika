@@ -92,7 +92,6 @@ static NOTIFY: OnceLock<Notify> = OnceLock::new();
 /// buffer simply discards the excess (the newest panel intent matters, a
 /// stale `SetVolume`/`SetPosition` under a flood is harmless to lose).
 static COMMAND_TX: OnceLock<mpsc::Sender<String>> = OnceLock::new();
-static COMMAND_RX: OnceLock<Mutex<mpsc::Receiver<String>>> = OnceLock::new();
 
 fn snapshot() -> Snapshot {
     SNAPSHOT
@@ -136,28 +135,23 @@ fn put_nonempty(map: &mut HashMap<String, OwnedValue>, key: &str, value: &str) {
     }
 }
 
-/// Drains pending control commands (called from the player tick).
-pub fn drain() -> Vec<String> {
-    let Some(rx) = COMMAND_RX.get() else {
-        return Vec::new();
-    };
-    let Ok(mut rx) = rx.lock() else {
-        return Vec::new();
-    };
-    let mut commands = Vec::new();
-    while let Ok(command) = rx.try_recv() {
-        commands.push(command);
-    }
-    commands
-}
-
 /// Starts the service (idempotent; safe without a session bus).
-pub fn init() {
-    let (tx, rx) = mpsc::channel(COMMAND_CAP);
+///
+/// Control commands are pushed into `commands` (the daemon's command channel)
+/// as soon as the D-Bus task receives them: no polling tick, and the bounded
+/// queue keeps a panel flood from growing memory (FIX-8).
+pub fn init(commands: mpsc::UnboundedSender<String>) {
+    let (tx, mut rx) = mpsc::channel(COMMAND_CAP);
     let _ = COMMAND_TX.set(tx);
-    let _ = COMMAND_RX.set(Mutex::new(rx));
     let _ = SNAPSHOT.set(Mutex::new(Snapshot::default()));
     let _ = NOTIFY.set(Notify::new());
+    crate::app::runtime().spawn(async move {
+        while let Some(command) = rx.recv().await {
+            if commands.send(command).is_err() {
+                break;
+            }
+        }
+    });
     crate::app::runtime().spawn(serve());
 }
 

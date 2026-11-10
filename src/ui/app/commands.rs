@@ -22,7 +22,9 @@ impl AppRoot {
                     self.land_queue(self.player.index());
                 }
             }
-            ShuffleTarget::Album(Some(query)) => self.bridge.shuffle_album_query(query),
+            ShuffleTarget::Album(Some(query)) => {
+                self.bridge.shuffle_album_query(query);
+            }
             ShuffleTarget::Album(None) => {
                 let id = self
                     .page
@@ -30,7 +32,9 @@ impl AppRoot {
                     .filter(|page| page.descriptor.kind == state::PageKind::Album)
                     .map(|page| page.descriptor.id.clone());
                 match id {
-                    Some(id) => self.bridge.shuffle_album(id),
+                    Some(id) => {
+                        self.bridge.shuffle_album(id);
+                    }
                     None => self.push_toast(
                         "Open an album or pass an album name.".to_string(),
                         ToastKind::Error,
@@ -38,7 +42,9 @@ impl AppRoot {
                     ),
                 }
             }
-            ShuffleTarget::Artist(Some(query)) => self.bridge.shuffle_artist_query(query),
+            ShuffleTarget::Artist(Some(query)) => {
+                self.bridge.shuffle_artist_query(query);
+            }
             ShuffleTarget::Artist(None) => {
                 let id = self
                     .page
@@ -46,7 +52,9 @@ impl AppRoot {
                     .filter(|page| page.descriptor.kind == state::PageKind::Artist)
                     .map(|page| page.descriptor.id.clone());
                 match id {
-                    Some(id) => self.bridge.shuffle_artist(id),
+                    Some(id) => {
+                        self.bridge.shuffle_artist(id);
+                    }
                     None => self.push_toast(
                         "Open an artist or pass an artist name.".to_string(),
                         ToastKind::Error,
@@ -61,10 +69,10 @@ impl AppRoot {
         let play = |kind: &'static str, id: String| (kind, id);
         match seed {
             RadioSeed::Album(Some(query)) => {
-                self.bridge.play_radio_query("album".to_string(), query, 0)
+                self.bridge.play_radio_query("album".to_string(), query, 0);
             }
             RadioSeed::Song(Some(query)) => {
-                self.bridge.play_radio_query("song".to_string(), query, 0)
+                self.bridge.play_radio_query("song".to_string(), query, 0);
             }
             RadioSeed::Current => match self
                 .player

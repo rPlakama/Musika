@@ -14,10 +14,22 @@ impl Render for AppRoot {
         self.win_h = viewport_h;
         self.scale_factor = window.scale_factor();
         perf::set_window_active(window.is_window_active());
+        if self.awaiting_core {
+            // Startup could not reach the core: keep a minimal retry surface
+            // up until the supervisor reports `Connected` (it retries in the
+            // background, so the window appears immediately either way).
+            self.focus.focus(window);
+            return self.core_waiting_view().into_any_element();
+        }
         if !self.activation_observed {
             self.activation_observed = true;
             cx.observe_window_activation(window, |this, window, cx| {
                 perf::set_window_active(window.is_window_active());
+                if !window.is_window_active() {
+                    // A keyboard grab can swallow the key-up; drop the pending
+                    // hold so it cannot jump on the next tap.
+                    this.cancel_playback_hold();
+                }
                 this.refresh_lyrics_overlay();
                 cx.notify();
             })
@@ -243,7 +255,37 @@ impl Render for AppRoot {
         {
             perf::request_frame(window, "toast");
         }
-        let toast_overlay = (!self.toasts.is_empty()).then(|| self.toast_overlay(&*cx));
+        // The held-key counter refreshes itself on every repeat; its TTL is the
+        // only authority on when it goes away, so a lost key-up cannot strand it.
+        // It runs on `CLOCK_MONOTONIC` like the hold, because `clock.now` only
+        // advances while frames render and an idle window would expire it at once.
+        let now_ns = crate::linux::monotonic_ns();
+        if self
+            .hold_toast
+            .as_ref()
+            .is_some_and(|hold| hold.expired(now_ns))
+        {
+            self.hold_toast = None;
+        }
+        if self.hold_toast.is_some() {
+            perf::request_frame(window, "hold-toast");
+        }
+        let reconnect_banner = self.reconnecting.clone().map(|notice| {
+            div()
+                .absolute()
+                .top_0()
+                .left_0()
+                .right_0()
+                .px_3()
+                .py_1()
+                .bg(rgb(palette::surface_container_high()))
+                .text_size(px(11.0))
+                .text_color(rgb(palette::on_surface_variant()))
+                .child(notice)
+                .into_any_element()
+        });
+        let toast_overlay = (!self.toasts.is_empty() || self.hold_toast.is_some())
+            .then(|| self.toast_overlay(&*cx));
         let queue_overlay = (self.queue_open || queue_progress > 0.001)
             .then(|| self.queue_overlay(&*cx, queue_progress));
         let overlay = self
@@ -390,15 +432,12 @@ impl Render for AppRoot {
             .on_action(cx.listener(Self::on_queue_up))
             .on_action(cx.listener(Self::on_queue_down))
             .on_action(cx.listener(Self::on_mute))
-            .on_action(cx.listener(Self::on_volume_up))
-            .on_action(cx.listener(Self::on_volume_down))
-            .on_action(cx.listener(Self::on_seek_back))
-            .on_action(cx.listener(Self::on_seek_forward))
             .on_action(cx.listener(Self::on_next_track))
             .on_action(cx.listener(Self::on_prev_track))
             .on_action(cx.listener(Self::on_search_next))
             .on_action(cx.listener(Self::on_search_prev))
             .on_key_down(cx.listener(Self::on_key_down))
+            .on_key_up(cx.listener(Self::on_key_up))
             .on_modifiers_changed(cx.listener(Self::on_modifiers_changed))
             .on_action(cx.listener(Self::on_visual_all))
             .on_action(cx.listener(Self::on_page_down))
@@ -436,6 +475,10 @@ impl Render for AppRoot {
                 Some(o) => o.into_any_element(),
                 None => div().into_any_element(),
             })
+            .child(match reconnect_banner {
+                Some(o) => o,
+                None => div().into_any_element(),
+            })
             .child(match toast_overlay {
                 Some(o) => o.into_any_element(),
                 None => div().into_any_element(),
@@ -456,6 +499,36 @@ impl Render for AppRoot {
         #[cfg(debug_assertions)]
         let root = root.child(frame_hud);
         root.into_any_element()
+    }
+}
+
+impl AppRoot {
+    /// Minimal full-window surface shown when the core was not reachable at
+    /// startup; `UiUpdate::Connected` clears `awaiting_core` and the real UI
+    /// takes over.
+    fn core_waiting_view(&self) -> gpui::AnyElement {
+        let detail = self
+            .reconnecting
+            .clone()
+            .unwrap_or_else(|| "Waiting for the core daemon…".to_string());
+        div()
+            .track_focus(&self.focus)
+            .size_full()
+            .flex()
+            .flex_col()
+            .items_center()
+            .justify_center()
+            .gap(px(6.0))
+            .bg(rgb(palette::background()))
+            .text_color(rgb(palette::on_surface()))
+            .child(div().text_size(px(18.0)).child("Waiting for the core daemon"))
+            .child(
+                div()
+                    .text_size(px(12.0))
+                    .text_color(rgb(palette::on_surface_variant()))
+                    .child(detail),
+            )
+            .into_any_element()
     }
 }
 

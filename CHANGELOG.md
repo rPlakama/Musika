@@ -5,11 +5,43 @@ open work; this file is the release history.
 
 ## Unreleased
 
+- Show a live counter toast while a playback key is held: `,`/`.` and `-`/`+`
+  refresh one bubble with the repeat count and the accumulated distance or the
+  resulting volume level (e.g. `Seek forward x3 (+15 s)`), which fades out a
+  moment after the key is released. Repeats are now timed instead of read from
+  `KeyDownEvent::is_held`, which fixes held keys never accumulating on X11, and
+  a hold interrupted by a focus change is dropped instead of jumping on the
+  next tap.
 - Remove the idle repaint ticker and its 10 Hz/1 Hz/30 Hz demand throttle now
   that playback lives in the headless core. The UI requests the next frame for
   moving transport, loaders, sync, toasts and marquee/wrapping text itself, so
   animation runs at the renderer's rate regardless of focus or idle state;
   idle windows that have nothing moving stop repainting entirely.
+- Replace the daemon/UI JSON-lines protocol with framed IPC v2 over
+  `daemon.sock`: an 8-byte header, binary hot-path payloads (48-byte
+  anchor-based playback state, typed player requests/replies, queue deltas) and
+  JSON for the bridge surface and handshake. Versioned `Hello`/`Welcome`
+  rejects mismatched builds, every request is correlated by id, and each client
+  has a bounded writer queue where state frames coalesce while deltas, events
+  and replies are never silently dropped. A 5 s heartbeat plus a 50 ms → 1 s
+  reconnect/resync keeps the UI honest; `musika` and `musika-ui` must be built
+  together.
+- Make playback one event-driven `musika-playback` thread: `PlaybackCore` owns
+  the queue policy and the `Engine` actor owns the PipeWire sink and the FFmpeg
+  decode/preload workers, so the daemon no longer polls `Player::pump()` at
+  10 Hz. Gapless boundaries, EOF, decoder failures and PipeWire stream errors
+  arrive as engine events; a stream error rebuilds the sink and resumes the
+  current track at the same position instead of skipping it, and pause keeps
+  the decoder for seekable streams instead of reopening on resume. Volume/mute
+  stay a fixed-point gain in the RT callback and are mirrored to the PipeWire
+  node controls (`SPA_PROP_channelVolumes` / soft mute) so system mixers show
+  the app volume.
+- Add the read-only `status` and `queue` IPC commands: each answers with one
+  JSON line (state/index/queue revision/position/volume/current/last error, or
+  the queue ids), so scripts can query a headless core.
+- Make `musika-ui` a pure view: it drops the optimistic `Player` mirror, renders
+  only the `PlaybackState`/`QueueDelta`/event frames the core sends, and emits
+  typed requests for every transport and queue action.
 
 ## 0.6.8 - _Under the hood polish_
 

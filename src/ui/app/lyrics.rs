@@ -69,7 +69,7 @@ impl AppRoot {
             return;
         }
         let active = if lyrics.synced {
-            let ms = (self.player.position() * 1000.0) as i64;
+            let ms = (self.player.position_now() * 1000.0) as i64;
             lyrics
                 .lines
                 .iter()

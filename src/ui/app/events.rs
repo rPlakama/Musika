@@ -153,12 +153,9 @@ impl AppRoot {
                         page.header.rating = i64::from(rating);
                     }
                 }
-                if kind == RowKind::Song
-                    && let Some(starred) = starred
-                    && self.player.current().is_some_and(|track| track.id == id)
-                {
-                    self.player.set_track_favorite(&id, starred);
-                }
+                // The queue's favourite mark is owned by the core: it arrives
+                // as a `QueueDelta::Patch`, so echoing a `SetTrackFavorite`
+                // here would feed the mutation back into the core.
                 if kind == RowKind::Album
                     && let Some((album_id, album_starred, album_rating)) =
                         self.fullscreen_album.as_mut()
@@ -291,26 +288,15 @@ impl AppRoot {
                     }
                 }
             }
-            Event::QueueAppend { tracks } => {
-                self.player.append(tracks);
+            Event::QueueAppend { tracks: _ } => {
+                // Retired in IPC v2: the core streams `QueueDelta::Insert`.
             }
-            Event::QueuePaste { tracks, at } => {
+            Event::QueuePaste { tracks: _, at: _ } => {
+                // Retired in IPC v2: the core streams `QueueDelta::Insert` and
+                // the rows themselves; only the local clipboard bookkeeping
+                // stays here.
                 self.paste_backup = None;
-        self.pending_playlist_cursor = None;
-                if tracks.is_empty() {
-                    return;
-                }
-                let count = tracks.len();
-                self.player.insert_many(at, tracks);
-                self.queue_cursor = at.min(self.player.len().saturating_sub(1));
-                self.queue_selection.clear();
-                self.visual_mode = false;
-                self.follow_queue(true);
-                self.push_toast(
-                    format!("Pasted {count} {}", if count == 1 { "track" } else { "tracks" }),
-                    ToastKind::Notice,
-                    None,
-                );
+                self.pending_playlist_cursor = None;
             }
             Event::DownloadStarted { kind, id, on } => {
                 self.apply_download_started(&kind, &id, on);
@@ -399,34 +385,10 @@ impl AppRoot {
                 // player/fullscreen surfaces render every frame this is enough.
                 self.marks.update(generation, result);
             }
-            Event::Restore {
-                volume,
-                muted,
-                tracks,
-                start,
-                position,
-                page_kind,
-                page_id,
-            } => {
-                self.player.set_volume(volume);
-                self.player.set_muted(muted);
-                if !tracks.is_empty() {
-                    self.player.load_paused(tracks, start);
-                    if position > 0.0 {
-                        self.player.seek(position);
-                    }
-                }
-                if self.page.is_none() && !page_kind.is_empty() && !page_id.is_empty() {
-                    let kind = match page_kind.as_str() {
-                        "album" => Some(PageKind::Album),
-                        "artist" => Some(PageKind::Artist),
-                        "playlist" => Some(PageKind::Playlist),
-                        _ => None,
-                    };
-                    if let Some(kind) = kind {
-                        self.open_descriptor(PageDescriptor::new(kind, page_id));
-                    }
-                }
+            Event::Restore { .. } => {
+                // Retired in IPC v2: the core replays `PlaybackState` and the
+                // queue (Reset + rows) on connect, and sends `OpenPage` for the
+                // restored page itself.
             }
             Event::Page {
                 generation,
@@ -730,13 +692,10 @@ impl AppRoot {
                     self.palette_motion.reset(&self.clock);
                 }
             }
-            Event::Queue { tracks, start } => {
-                self.player.load(tracks, start);
+            Event::Queue { tracks: _, start: _ } => {
+                // Retired in IPC v2: `QueueDelta::Reset` + `QueueRows` replace
+                // the full queue payload.
                 self.playback_error = None;
-                self.request_current_lyrics();
-                if self.queue_open {
-                    self.land_queue(self.player.index());
-                }
             }
             Event::Search {
                 generation,
@@ -849,7 +808,8 @@ impl AppRoot {
     }
 
     fn reset_for_account(&mut self) {
-        self.player.clear();
+        // The queue and transport belong to the core; an account switch makes
+        // it replay a fresh state/queue rather than mutating the view here.
         self.player_bar_cover.clear();
         self.playback_error = None;
         self.view = ViewState::default();

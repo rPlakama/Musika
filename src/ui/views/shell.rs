@@ -431,7 +431,7 @@ impl AppRoot {
     pub(in crate::ui) fn player_bar(&self) -> impl IntoElement {
         let track = self.player.current().cloned();
         let state = self.player.state();
-        let position = self.player.position();
+        let position = self.player.position_now();
         let duration = self.player.duration();
         let volume = self.player.volume();
         let muted = self.player.muted();

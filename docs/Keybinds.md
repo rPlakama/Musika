@@ -14,8 +14,8 @@ work, including the command line.
 | --- | --- |
 | `Space` | Play/pause |
 | `Ctrl-N` / `Ctrl-P` | Next / previous track |
-| `,` / `.` | Seek back / forward 5 s |
-| `-` / `=` (`+`) | Volume down / up 5% |
+| `,` / `.` | Seek back / forward 5 s. Holding repeats; a toast counts the repeats and shows the accumulated distance (e.g. `Seek forward x3 (+15 s)`). |
+| `-` / `=` (`+`) | Volume down / up 5%, with the same held-key counter and the resulting level. |
 | `m` | Mute |
 | `Ctrl-R` | Cycle repeat (off → all → one) |
 | `r` | Sync the library |

@@ -142,7 +142,7 @@ impl AppRoot {
         let lyrics_focus = self.fullscreen_focus == FullscreenFocus::Lyrics;
         let cover_anchor_slot = self.fullscreen_anchors.clone();
         let title_anchor_slot = self.fullscreen_anchors.clone();
-        let position = self.player.position();
+        let position = self.player.position_now();
         let duration = self.player.duration();
         let progress_ratio = if duration > 0.0 {
             (position / duration).clamp(0.0, 1.0) as f32

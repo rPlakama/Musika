@@ -48,3 +48,30 @@ pub(crate) fn advise_willneed(path: &Path) -> std::io::Result<()> {
 pub(crate) fn advise_willneed(_path: &std::path::Path) -> std::io::Result<()> {
     Ok(())
 }
+
+/// `CLOCK_MONOTONIC` in nanoseconds, shared by the core and the UI process.
+///
+/// The core publishes playback clock anchors on this clock and `musika-ui`
+/// extrapolates between updates, so the two processes need the same time base.
+/// `CLOCK_MONOTONIC` is system-wide on Linux. On other targets fall back to the
+/// wall clock (the UI only uses it for short extrapolation windows).
+#[cfg(target_os = "linux")]
+pub(crate) fn monotonic_ns() -> u64 {
+    let mut ts = libc::timespec {
+        tv_sec: 0,
+        tv_nsec: 0,
+    };
+    // SAFETY: `ts` is a valid `timespec` and CLOCK_MONOTONIC is always supported.
+    let result = unsafe { libc::clock_gettime(libc::CLOCK_MONOTONIC, &mut ts) };
+    if result != 0 {
+        return 0;
+    }
+    (ts.tv_sec as u64)
+        .saturating_mul(1_000_000_000)
+        .saturating_add(ts.tv_nsec as u64)
+}
+
+#[cfg(not(target_os = "linux"))]
+pub(crate) fn monotonic_ns() -> u64 {
+    crate::consts::now_nanos() as u64
+}

@@ -44,6 +44,23 @@ impl AppRoot {
             self.on_alt_key(event, cx);
             return;
         }
+        let search_typing = self.search_open
+            && self
+                .search
+                .as_ref()
+                .is_some_and(|search| search.typing);
+        if !search_typing
+            && let Some(key) = batched_playback_key(event.keystroke.key.as_str())
+        {
+            // Repeats fold into one hold: the bubble counts them and the single
+            // absolute op is sent on release. `event.is_held` is not usable here
+            // because X11 auto-repeat arrives as a bare key-down (`is_held` is
+            // always false on that backend), so `KeyHold` times the repeats.
+            self.hold_playback_key(key);
+            cx.stop_propagation();
+            cx.notify();
+            return;
+        }
         if self.search.is_none() || !self.search_open {
             let key = event.keystroke.key.as_str();
             if key == ":" || key == "colon" || (key == ";" && event.keystroke.modifiers.shift) {
@@ -359,6 +376,61 @@ impl AppRoot {
         cx.notify();
     }
 
+    pub(in crate::ui) fn on_key_up(
+        &mut self,
+        event: &gpui::KeyUpEvent,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(key) = batched_playback_key(event.keystroke.key.as_str()) else {
+            return;
+        };
+        let Some(hold) = self.playback_key_hold else {
+            return;
+        };
+        if hold.key != key {
+            return;
+        }
+        self.playback_key_hold = None;
+        self.apply_playback_hold(hold);
+        cx.stop_propagation();
+        cx.notify();
+    }
+
+    /// Applies one held-key fold as a single absolute op. One absolute target
+    /// per key release: the core owns the playhead and the volume, so a held key
+    /// coalesces into a single `Seek`/`SetVolume`.
+    pub(in crate::ui) fn apply_playback_hold(&mut self, hold: KeyHold) {
+        let distance = f64::from(hold.count) * HOLD_STEP;
+        match hold.key {
+            ',' => {
+                let target = (self.player.position_now() - distance).max(0.0);
+                self.player.seek(target);
+            }
+            '.' => {
+                let target = self.player.position_now() + distance;
+                self.player.seek(target);
+            }
+            '-' => {
+                let target = (self.player.volume() - distance).max(0.0);
+                self.player.set_volume(target);
+            }
+            '+' => {
+                let target = (self.player.volume() + distance).min(100.0);
+                self.player.set_volume(target);
+            }
+            _ => unreachable!(),
+        }
+    }
+
+    /// Drops a pending hold without applying it and clears its counter bubble.
+    /// Runs when the window loses focus mid-hold, since the key-up then never
+    /// arrives.
+    pub(in crate::ui) fn cancel_playback_hold(&mut self) {
+        self.playback_key_hold = None;
+        self.hold_toast = None;
+    }
+
     pub(in crate::ui) fn login_key(&mut self, event: &gpui::KeyDownEvent, cx: &mut Context<Self>) {
         let Some(login) = self.login.as_mut() else {
             return;
@@ -434,6 +506,16 @@ impl AppRoot {
             }
         }
         cx.notify();
+    }
+}
+
+fn batched_playback_key(key: &str) -> Option<char> {
+    match key {
+        "," | "comma" => Some(','),
+        "." | "period" => Some('.'),
+        "-" | "minus" => Some('-'),
+        "+" | "=" | "equal" => Some('+'),
+        _ => None,
     }
 }
 

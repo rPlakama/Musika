@@ -651,7 +651,9 @@ impl AppRoot {
             let seed_kind = target.radio_seed_kind.clone();
             let seed_id = target.radio_seed_id.clone();
             match verb {
-                QuickVerb::AddToQueue => self.bridge.queue_add_radio(seed_kind, seed_id),
+                QuickVerb::AddToQueue => {
+                    self.bridge.queue_add_radio(seed_kind, seed_id);
+                }
                 QuickVerb::SaveRadio => {
                     let title = self
                         .page
@@ -661,8 +663,12 @@ impl AppRoot {
                         .unwrap_or_else(|| "Radio".to_string());
                     self.bridge.save_radio(seed_kind, seed_id, title);
                 }
-                QuickVerb::ShuffleRadio => self.bridge.shuffle_radio(seed_kind, seed_id),
-                QuickVerb::DownloadRadio => self.bridge.download_radio(seed_kind, seed_id),
+                QuickVerb::ShuffleRadio => {
+                    self.bridge.shuffle_radio(seed_kind, seed_id);
+                }
+                QuickVerb::DownloadRadio => {
+                    self.bridge.download_radio(seed_kind, seed_id);
+                }
                 _ => {}
             }
             return;

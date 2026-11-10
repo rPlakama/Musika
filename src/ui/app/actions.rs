@@ -337,7 +337,9 @@ impl AppRoot {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.repeat = self.player.cycle_repeat();
+        // The core owns the repeat mode; the next playback state updates the
+        // status bar badge.
+        self.player.cycle_repeat();
         cx.notify();
     }
 
@@ -600,7 +602,11 @@ impl AppRoot {
         }
         let first = indices[0];
         let count = self.player.remove_many(&indices);
-        self.queue_cursor = first.min(self.player.len().saturating_sub(1));
+        // The core is the authority: it shrinks `len()` when the delta lands.
+        // Clamp against the expected remaining length so the cursor never
+        // parks past the end in the meantime.
+        let remaining = self.player.len().saturating_sub(count);
+        self.queue_cursor = first.min(remaining.saturating_sub(1));
         self.queue_selection.clear();
         self.visual_mode = false;
         self.follow_queue(true);
@@ -774,8 +780,7 @@ impl AppRoot {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.player
-            .set_volume((self.player.volume() + 5.0).min(100.0));
+        self.player.volume_up();
         cx.notify();
     }
 
@@ -785,8 +790,7 @@ impl AppRoot {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.player
-            .set_volume((self.player.volume() - 5.0).max(0.0));
+        self.player.volume_down();
         cx.notify();
     }
 

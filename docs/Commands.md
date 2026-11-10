@@ -35,10 +35,31 @@ routed by the core and work even with no window open:
 | `random` | `random` | Pick a random non-empty album from `library.db` and play it in album order. |
 | `quit` | `quit` | True quit: flush the session, close the UI child, remove sockets and stop the core. |
 
-The transport/volume/shuffle/radio/sync commands below execute in the core.
-Presentation commands (navigation, search, queue overlay, ...) are forwarded to
-the attached `musika-ui`; without a UI they are ignored. See `docs/Daemon.md`
-for the process and socket architecture.
+The transport/volume/shuffle/radio/sync commands below execute in the core, and
+so do the status queries. Presentation commands (navigation, search, queue
+overlay, ...) are forwarded to the attached `musika-ui`; without a UI they are
+ignored. See `docs/Daemon.md` for the process and socket architecture.
+
+## Status queries
+
+Two read-only commands are answered by the core and work with no window open.
+Each returns exactly one JSON line on the same connection, so `nc -U` can read
+it back:
+
+```sh
+printf 'status\n' | nc -U ~/.config/musika/ipc.sock
+printf 'queue\n' | nc -U ~/.config/musika/ipc.sock
+```
+
+| Command | Answer (one JSON line) |
+| --- | --- |
+| `status` | `state` (`playing`/`paused`/`stopped`), `index`, `queue_rev`, `duration`, `position`, `volume`, `muted`, `loading`, `engine_available`, `current` (`{id,title,artist,album}` or `null`), `last_error` |
+| `queue` | `rev`, `index`, `len`, `ids` (queue ids in order) |
+
+Every other `ipc.sock` command stays fire-and-forget and writes no reply, which
+keeps the plain `printf ... | nc -U` snippets working unchanged. The core keeps
+the query connection open, so on an `nc` that waits for EOF add `-N` (or
+`-q 0`) to exit after the reply.
 
 ## Syntax
 

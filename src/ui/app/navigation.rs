@@ -13,7 +13,9 @@ impl AppRoot {
         self.view.rows.clear();
         self.view.covers.clear();
         self.marks.signature = None;
-        self.generation = self.bridge.load_library(self.view.scope, self.view.order);
+        // The core owns the generation counter; it arrives with the events.
+        self.generation = 0;
+        self.bridge.load_library(self.view.scope, self.view.order);
     }
 
     pub(in crate::ui) fn follow_library(&mut self, animated: bool) {
@@ -423,7 +425,8 @@ impl AppRoot {
             self.view.rows.count = count;
             self.view.rebuild_covers();
             self.view.loading = false;
-            self.generation = self.bridge.load_library(scope, 0);
+            self.generation = 0;
+            self.bridge.load_library(scope, 0);
         } else {
             self.view.clear_for(scope);
             self.reload();

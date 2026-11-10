@@ -1,13 +1,22 @@
 //! Rust transport façade: PipeWire sink + decode worker + sink-driven clock.
+//!
+//! [`Native`] is a thin, blocking wrapper around the worker and the sink. The
+//! event-driven engine (`crate::player::engine`) drives it through the
+//! `take_*` accessors below and sleeps on [`Native::wake_fd`] instead of
+//! polling.
 
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
-use crate::player::{Player, Ready, State};
-
 use super::sink::Sink;
-use super::status::{Shared, Status};
+use super::status::{Shared, SinkStatus};
 use super::worker::Worker;
+
+/// Buffered-byte thresholds for the loading-clear heuristic: a twentieth of the
+/// known stream size, clamped to the PCM ring.
+const MIN_LOADING_REFERENCE: u64 = 64 * 1024;
+const MAX_LOADING_REFERENCE: u64 = 2 * 1024 * 1024;
+const FALLBACK_LOADING_REFERENCE: u64 = 1024 * 1024;
 
 pub(crate) struct Native {
     sink: Arc<Sink>,
@@ -17,8 +26,8 @@ pub(crate) struct Native {
 
 impl Native {
     pub(crate) fn new() -> Result<Self, String> {
-        let sink = Arc::new(Sink::new()?);
         let shared = Arc::new(Shared::new());
+        let sink = Arc::new(Sink::new(Arc::clone(&shared))?);
         let worker = Worker::new(Arc::clone(&shared), Arc::clone(&sink))?;
         shared
             .clock_start
@@ -30,9 +39,18 @@ impl Native {
         })
     }
 
-    pub(crate) fn load_with_next(&mut self, url: &str, next_url: Option<String>, paused: bool) {
+    /// Loads `url` with the playback core's generation. A newer generation
+    /// supersedes any queued load that has not reached the decoder yet.
+    pub(crate) fn load_with_next_generation(
+        &mut self,
+        url: &str,
+        next_url: Option<String>,
+        paused: bool,
+        generation: u64,
+    ) {
         crate::startup::trace("play.requested");
-        self.worker.load(url.to_string(), next_url, paused);
+        self.worker
+            .load(url.to_string(), next_url, paused, generation);
     }
 
     pub(crate) fn stop(&mut self) {
@@ -46,7 +64,11 @@ impl Native {
 
     pub(crate) fn set_paused(&self, paused: bool) {
         let start = self.shared.clock_start.load(Ordering::Acquire);
-        let origin = *self.shared.clock_origin.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let origin = *self
+            .shared
+            .clock_origin
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let position = origin + self.sink.played_frames().saturating_sub(start) as f64 / 48_000.0;
         self.worker.set_paused(paused, position);
     }
@@ -59,13 +81,25 @@ impl Native {
         self.sink.set_muted(muted);
     }
 
-    pub(crate) fn take_boundary(&self) -> bool {
+    /// Descriptor the engine polls for boundary / stream-state / decoder
+    /// wakeups. `-1` when the shared eventfd could not be created.
+    pub(crate) fn wake_fd(&self) -> libc::c_int {
+        self.shared.wake_fd()
+    }
+
+    pub(crate) fn drain_wake(&self) {
+        self.shared.drain_wake();
+    }
+
+    /// Consumes a crossed gapless boundary, returning the next track's
+    /// duration and stream size.
+    pub(crate) fn take_boundary_event(&self) -> Option<(f64, u64)> {
         if !self.shared.boundary_active.load(Ordering::Acquire) {
-            return false;
+            return None;
         }
         let frame = self.shared.boundary_frame.load(Ordering::Acquire);
         if self.sink.played_frames() < frame {
-            return false;
+            return None;
         }
         self.shared.boundary_active.store(false, Ordering::Release);
         let duration = *self
@@ -86,244 +120,95 @@ impl Native {
             .clock_origin
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner) = 0.0;
+        Some((duration, stream_size))
+    }
+
+    /// True once for each decoder that opened since the last call.
+    pub(crate) fn take_loaded(&self) -> Option<(f64, u64, bool)> {
+        let mut status = self.shared.lock();
+        if !status.loaded {
+            return None;
+        }
+        status.loaded = false;
+        Some((status.duration, status.stream_size, status.seekable))
+    }
+
+    /// True once when the first PCM of the current load was written.
+    pub(crate) fn take_first_pcm(&self) -> bool {
+        self.shared.first_pcm.swap(false, Ordering::AcqRel)
+    }
+
+    /// Takes the decoder/track failure (if any).
+    pub(crate) fn take_failed(&self) -> Option<String> {
+        self.shared.lock().failed.take()
+    }
+
+    /// True once when the decoder reached EOF and the sink drained the ring.
+    pub(crate) fn take_ended(&self) -> bool {
+        if !self.shared.decode_done.load(Ordering::Acquire) || self.sink.buffered_frames() > 0 {
+            return false;
+        }
+        self.shared.decode_done.store(false, Ordering::Release);
+        self.shared.lock().loading = false;
         true
+    }
+
+    /// Consumes the latest PipeWire stream transition (state + error text).
+    pub(crate) fn take_sink_transition(&self) -> Option<SinkStatus> {
+        let seq = self.shared.sink_seq.load(Ordering::Acquire);
+        if seq == self.shared.sink_seen.load(Ordering::Acquire) {
+            return None;
+        }
+        let status = self
+            .shared
+            .sink
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
+        self.shared.sink_seen.store(seq, Ordering::Release);
+        Some(status)
+    }
+
+    /// Clears `loading` once enough audio is buffered or playback started.
+    /// Returns `true` on the transition only, so the engine can emit
+    /// `EngineEvent::LoadingCleared` exactly once.
+    pub(crate) fn loading_clear(&self, playing: bool) -> bool {
+        let loaded = {
+            let status = self.shared.lock();
+            if !status.loading {
+                return false;
+            }
+            status.stream_size
+        };
+        let reference = if loaded > 0 {
+            (loaded / 20).clamp(MIN_LOADING_REFERENCE, MAX_LOADING_REFERENCE)
+        } else {
+            FALLBACK_LOADING_REFERENCE
+        };
+        let buffered_bytes = self.sink.buffered_frames() * 4;
+        let start = self.shared.clock_start.load(Ordering::Acquire);
+        let played = self.sink.played_frames();
+        if buffered_bytes >= reference || (playing && played > start) {
+            self.shared.lock().loading = false;
+            true
+        } else {
+            false
+        }
     }
 
     pub(crate) fn loading(&self) -> bool {
         self.shared.lock().loading
     }
 
-    fn poll(&self, playing: bool) -> Status {
-        let start = self.shared.clock_start.load(Ordering::Acquire);
-        let origin = *self
-            .shared
-            .clock_origin
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let played = self.sink.played_frames();
-        let mut status = {
-            let status = self.shared.lock();
-            status.clone()
-        };
-        status.position = origin + played.saturating_sub(start) as f64 / 48_000.0;
-
-        const MIN_REFERENCE: u64 = 64 * 1024;
-        const MAX_REFERENCE: u64 = 2 * 1024 * 1024;
-        const FALLBACK_REFERENCE: u64 = 1024 * 1024;
-        let reference = if status.stream_size > 0 {
-            (status.stream_size / 20).clamp(MIN_REFERENCE, MAX_REFERENCE)
-        } else {
-            FALLBACK_REFERENCE
-        };
-        let buffered_bytes = self.sink.buffered_frames() * 4;
-        if status.loading && (buffered_bytes >= reference || (playing && played > start)) {
-            status.loading = false;
-            self.shared.lock().loading = false;
-        }
-
-        let failed = self.shared.lock().failed.take();
-        status.failed = failed;
-        if self.shared.decode_done.load(Ordering::Acquire) && self.sink.buffered_frames() == 0 {
-            self.shared.decode_done.store(false, Ordering::Release);
-            status.ended = true;
-            status.loading = false;
-        }
-        if status.ended {
-            self.shared.lock().ended = false;
-        }
-        if self.sink.failed() && status.failed.is_none() {
-            status.failed = Some("PipeWire stream stopped".to_string());
-        }
-        status
-    }
-}
-
-impl Player {
-    pub(crate) fn ensure_ready(&mut self) -> Ready {
-        if self.native.is_some() {
-            return Ready::Connected;
-        }
-        match crate::player::take_warm_native().unwrap_or_else(Native::new) {
-            Ok(native) => {
-                self.native = Some(native);
-                Ready::Connected
-            }
-            Err(err) => {
-                eprintln!("player: cannot initialise PipeWire: {err}");
-                self.last_error = Some(format!("cannot initialise PipeWire: {err}"));
-                Ready::Failed
-            }
-        }
+    pub(crate) fn played_frames(&self) -> u64 {
+        self.sink.played_frames()
     }
 
-    pub fn pump(&mut self) -> Option<String> {
-        if self.state == State::Stopped {
-            return None;
-        }
-        let crossed = self.native.as_ref().is_some_and(Native::take_boundary);
-        if crossed
-            && let Some(next) = self.gapless_next.take()
-            && next < self.queue.len()
-        {
-            self.index = next;
-            self.fallback_duration = self.queue[next].duration;
-        }
-        let status = self
-            .native
-            .as_ref()
-            .map(|native| native.poll(self.state == State::Playing))?;
-        {
-            let mut shared = self.shared();
-            shared.position = status.position;
-            shared.duration = status.duration;
-        }
-        if let Some(message) = status.failed {
-            let title = self
-                .current()
-                .map(|track| track.title.clone())
-                .unwrap_or_default();
-            let text = format!("{title}: {message}");
-            eprintln!("player: {text}");
-            self.last_error = Some(text.clone());
-            self.advance_after_error();
-            return Some(text);
-        }
-        if status.ended {
-            self.advance_after_error();
-        }
-        None
+    pub(crate) fn buffered_frames(&self) -> u64 {
+        self.sink.buffered_frames()
     }
 
-    /// IPC diagnostics: a one-line dump of the transport state and metrics.
-    pub fn debug_report(&self) -> String {
-        let track = self.current();
-        let mut report = format!(
-            "state={:?} index={}/{} title={:?} url={:?} last_error={:?}",
-            self.state,
-            self.index,
-            self.queue.len(),
-            track.map(|track| track.title.as_str()),
-            track.map(|track| track.url.as_str()),
-            self.last_error,
-        );
-        match self.native.as_ref() {
-            Some(native) => {
-                let status = native.shared.lock().clone();
-                report.push_str(&format!(
-                    " native=ready loading={} failed={:?} ended={} position={:.2} duration={:.2} sink_failed={} played_frames={} buffered_frames={}",
-                    status.loading,
-                    status.failed,
-                    status.ended,
-                    status.position,
-                    status.duration,
-                    native.sink.failed(),
-                    native.sink.played_frames(),
-                    native.sink.buffered_frames(),
-                ));
-            }
-            None => report.push_str(" native=none"),
-        }
-        report
-    }
-
-    fn advance_after_error(&mut self) {
-        if self.repeat == crate::player::Repeat::One {
-            self.play_current();
-        } else if self.index + 1 < self.queue.len() {
-            self.index += 1;
-            self.play_current();
-        } else if self.repeat == crate::player::Repeat::All && !self.queue.is_empty() {
-            self.index = 0;
-            self.play_current();
-        } else {
-            self.stop();
-        }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use crate::player::{Player, State, Track};
-
-    fn wav_bytes_for(frames: u32) -> Vec<u8> {
-        let data_len = frames * 2;
-        let mut out = Vec::with_capacity(44 + data_len as usize);
-        out.extend_from_slice(b"RIFF");
-        out.extend_from_slice(&(36 + data_len).to_le_bytes());
-        out.extend_from_slice(b"WAVEfmt ");
-        out.extend_from_slice(&16u32.to_le_bytes());
-        out.extend_from_slice(&1u16.to_le_bytes());
-        out.extend_from_slice(&1u16.to_le_bytes());
-        out.extend_from_slice(&48_000u32.to_le_bytes());
-        out.extend_from_slice(&(48_000u32 * 2).to_le_bytes());
-        out.extend_from_slice(&2u16.to_le_bytes());
-        out.extend_from_slice(&16u16.to_le_bytes());
-        out.extend_from_slice(b"data");
-        out.extend_from_slice(&data_len.to_le_bytes());
-        for index in 0..frames {
-            let value = (((index as f32 / frames as f32) * 20_000.0) as i16).to_le_bytes();
-            out.extend_from_slice(&value);
-        }
-        out
-    }
-
-    fn track(id: &str, path: &std::path::Path, duration: f64) -> Track {
-        Track {
-            id: id.to_string(),
-            title: id.to_string(),
-            artist: String::new(),
-            album: String::new(),
-            album_id: String::new(),
-            favorite: false,
-            duration,
-            url: format!("file://{}", path.display()),
-            cover_art: String::new(),
-            cover_url: String::new(),
-            cover_remote: String::new(),
-        }
-    }
-
-    #[test]
-    #[ignore = "requires a running PipeWire session"]
-    fn rust_player_plays_a_wav() {
-        let path = std::env::temp_dir().join(format!(
-            "musika-rust-player-{}-{}.wav",
-            std::process::id(),
-            crate::consts::now_nanos()
-        ));
-        std::fs::write(&path, wav_bytes_for(96_000)).expect("wav");
-        let mut player = Player::new();
-        player.load(vec![track("rust-test", &path, 2.0)], 0);
-        let started = std::time::Instant::now();
-        while started.elapsed() < std::time::Duration::from_secs(3) && player.position() <= 0.0 {
-            let _ = player.pump();
-            std::thread::sleep(std::time::Duration::from_millis(10));
-        }
-        assert_eq!(player.state(), State::Playing, "{}", player.debug_report());
-        assert!(player.position() > 0.0, "{}", player.debug_report());
-        player.stop();
-        let _ = std::fs::remove_file(path);
-    }
-
-    #[test]
-    #[ignore = "requires a running PipeWire session"]
-    fn rust_player_advances_into_predecoded_wav() {
-        let dir = std::env::temp_dir();
-        let first = dir.join(format!("musika-rust-gap-a-{}.wav", std::process::id()));
-        let second = dir.join(format!("musika-rust-gap-b-{}.wav", std::process::id()));
-        std::fs::write(&first, wav_bytes_for(96_000 * 3)).expect("first");
-        std::fs::write(&second, wav_bytes_for(96_000 * 2)).expect("second");
-        let mut player = Player::new();
-        player.load(vec![track("a", &first, 3.0), track("b", &second, 2.0)], 0);
-        let started = std::time::Instant::now();
-        while started.elapsed() < std::time::Duration::from_secs(8) && player.index() == 0 {
-            let _ = player.pump();
-            std::thread::sleep(std::time::Duration::from_millis(10));
-        }
-        assert_eq!(player.index(), 1, "gapless boundary was not crossed");
-        assert_eq!(player.state(), State::Playing);
-        player.stop();
-        let _ = std::fs::remove_file(first);
-        let _ = std::fs::remove_file(second);
+    pub(crate) fn failed(&self) -> bool {
+        self.sink.failed()
     }
 }

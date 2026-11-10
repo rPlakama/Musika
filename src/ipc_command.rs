@@ -137,6 +137,163 @@ pub enum IpcCommand {
     Show,
     RandomAlbum,
     Quit,
+    /// Read-only: one JSON line describing the playback state.
+    Status,
+    /// Read-only: one JSON line with the queue ids.
+    QueueQuery,
+}
+
+/// Where a command must run in the core/UI split. The classification is
+/// exhaustive by construction: every command names exactly one target, and a
+/// new variant cannot compile without landing in one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CommandTarget {
+    /// Playback/transport, executed by the core's playback service.
+    CorePlayback,
+    /// Core-owned data work (sync, downloads, playlists, radio, accounts).
+    CoreBridge,
+    /// Read-only telemetry answered by the core without a UI.
+    Query,
+    /// Presentation/navigation, forwarded to an attached UI.
+    Presentation,
+    /// Process lifecycle (quit/show), handled by the daemon itself.
+    Lifecycle,
+}
+
+impl IpcCommand {
+    pub fn target(&self) -> CommandTarget {
+        use CommandTarget as T;
+        match self {
+            // Playback and transport: the core owns the audio engine.
+            Self::PlayPause
+            | Self::Play
+            | Self::Pause
+            | Self::Stop
+            | Self::Track(_)
+            | Self::Mute
+            | Self::VolumeUp
+            | Self::VolumeDown
+            | Self::SetVolume(_)
+            | Self::SeekBack
+            | Self::SeekForward
+            | Self::Seek(_)
+            | Self::SeekRelative(_)
+            | Self::RepeatCycle => T::CorePlayback,
+            // `shuffle queue` is playback; album/artist shuffles build a queue
+            // from the library through the bridge.
+            Self::Shuffle {
+                target: ShuffleTarget::Queue,
+            } => T::CorePlayback,
+            Self::Shuffle { .. } => T::CoreBridge,
+
+            // Core-owned data work. PlaySong/PlaySongInAlbum/DownloadSong are
+            // core-side so the daemon stays drivable with no UI attached.
+            Self::Sync(_)
+            | Self::Wipe(_)
+            | Self::Logout
+            | Self::RemoveAccount { .. }
+            | Self::PlaylistCreate { .. }
+            | Self::PlaylistAdd { .. }
+            | Self::PlaylistRemove { .. }
+            | Self::PlaylistDelete { .. }
+            | Self::Radio { .. }
+            | Self::Download { .. }
+            | Self::Refresh
+            | Self::RandomAlbum
+            | Self::PlaySong(_)
+            | Self::PlaySongInAlbum(_)
+            | Self::DownloadSong(_) => T::CoreBridge,
+
+            // Read-only telemetry.
+            Self::Status | Self::QueueQuery => T::Query,
+
+            // Lifecycle.
+            Self::Quit | Self::Show => T::Lifecycle,
+
+            // Everything else is presentation and belongs to the UI process.
+            Self::Top
+            | Self::Bottom
+            | Self::MoveUp
+            | Self::MoveDown
+            | Self::ScrollUp
+            | Self::ScrollDown
+            | Self::PageUp
+            | Self::PageDown
+            | Self::MoveLeft
+            | Self::MoveRight
+            | Self::PrevPlace
+            | Self::NextPlace
+            | Self::Home
+            | Self::Back
+            | Self::Enter
+            | Self::ScopeNext
+            | Self::ScopePrev
+            | Self::OrderNext
+            | Self::OrderPrev
+            | Self::Visual
+            | Self::VisualAll
+            | Self::QueueToggle
+            | Self::QueueRemove
+            | Self::QueueUp
+            | Self::QueueDown
+            | Self::Yank
+            | Self::YankRow
+            | Self::PasteBelow
+            | Self::PasteAbove
+            | Self::DeleteRow
+            | Self::ToggleFullscreen
+            | Self::LyricsOverlay
+            | Self::PaneCycle { .. }
+            | Self::Search { .. }
+            | Self::InsertMode { .. }
+            | Self::SearchNext
+            | Self::SearchPrev
+            | Self::SearchScopeNext
+            | Self::SearchScopePrev
+            | Self::LineSearch
+            | Self::OpenSongAlbum(_)
+            | Self::QuickHold(_)
+            | Self::QuickAim(_)
+            | Self::QuickCycle { .. }
+            | Self::QuickCancel
+            // Commands that open a UI surface (login form, wipe chooser,
+            // radio-save page state) only make sense with a UI attached.
+            | Self::AddAccount
+            | Self::WipeDatabases
+            | Self::RadioSave { .. } => T::Presentation,
+        }
+    }
+}
+
+impl IpcCommand {
+    /// Translate a text playback command into the typed wire request. The core
+    /// owns the authoritative position/volume, so relative controls stay
+    /// relative instead of being resolved against a stale UI copy.
+    pub fn player_op(&self) -> Option<crate::ipc_protocol::PlayerOp> {
+        use crate::ipc_protocol::PlayerOp as P;
+        use IpcCommand as I;
+        Some(match self {
+            I::PlayPause => P::PlayPause,
+            I::Play => P::Play,
+            I::Pause => P::Pause,
+            I::Stop => P::Stop,
+            I::Track(TrackCommand::Next) => P::Next,
+            I::Track(TrackCommand::Previous) => P::Previous,
+            I::Mute => P::ToggleMute,
+            I::VolumeUp => P::VolumeUp,
+            I::VolumeDown => P::VolumeDown,
+            I::SetVolume(volume) => P::SetVolume(*volume),
+            I::Seek(seconds) => P::Seek(*seconds),
+            I::SeekBack => P::SeekRelative(-5.0),
+            I::SeekForward => P::SeekRelative(5.0),
+            I::SeekRelative(offset) => P::SeekRelative(*offset),
+            I::RepeatCycle => P::CycleRepeat,
+            I::Shuffle {
+                target: ShuffleTarget::Queue,
+            } => P::ShuffleQueue,
+            _ => return None,
+        })
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -320,6 +477,18 @@ pub const COMMANDS: &[CommandSpec] = &[
         name: "refresh",
         usage: "refresh",
         description: "Start an incremental sync",
+        args: ArgSpec::None,
+    },
+    CommandSpec {
+        name: "status",
+        usage: "status",
+        description: "Print the playback state as one JSON line",
+        args: ArgSpec::None,
+    },
+    CommandSpec {
+        name: "queue",
+        usage: "queue",
+        description: "Print the queue ids as one JSON line",
         args: ArgSpec::None,
     },
     CommandSpec {
@@ -969,6 +1138,8 @@ pub fn parse(input: &str) -> Result<IpcCommand, CommandError> {
         "show" => Ok(IpcCommand::Show),
         "random" => Ok(IpcCommand::RandomAlbum),
         "quit" => Ok(IpcCommand::Quit),
+        "status" => Ok(IpcCommand::Status),
+        "queue" => Ok(IpcCommand::QueueQuery),
         _ => Err(CommandError(format!("unknown command: {name}"))),
     }
 }
@@ -1411,6 +1582,8 @@ pub fn canonical_string(command: &IpcCommand) -> String {
         Show => "show".to_string(),
         RandomAlbum => "random".to_string(),
         Quit => "quit".to_string(),
+        Status => "status".to_string(),
+        QueueQuery => "queue".to_string(),
     }
 }
 

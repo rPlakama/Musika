@@ -19,7 +19,34 @@ impl AppRoot {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        use ipc_command::{IpcCommand, QuickDirection, TrackCommand, WipeScope};
+        use ipc_command::{IpcCommand, QuickDirection, WipeScope};
+        use crate::ipc_protocol::PlayerOp;
+        // The core resolves relative volume/seek and the queue itself; the UI
+        // only forwards the typed op (never a locally mutated value).
+        if let Some(op) = command.player_op() {
+            match op {
+                PlayerOp::PlayPause => {
+                    self.press_transport(1);
+                    self.player.toggle();
+                }
+                PlayerOp::Play => self.player.resume(),
+                PlayerOp::Pause => self.player.pause(),
+                PlayerOp::Stop => self.player.stop(),
+                PlayerOp::Next => self.execute_track_next(cx),
+                PlayerOp::Previous => self.execute_track_previous(cx),
+                PlayerOp::ToggleMute => self.player.toggle_mute(),
+                PlayerOp::VolumeUp => self.player.volume_up(),
+                PlayerOp::VolumeDown => self.player.volume_down(),
+                PlayerOp::SetVolume(volume) => self.player.set_volume(volume),
+                PlayerOp::Seek(seconds) => self.player.seek(seconds),
+                PlayerOp::SeekRelative(offset) => self.player.seek_relative(offset),
+                PlayerOp::CycleRepeat => self.player.cycle_repeat(),
+                PlayerOp::ShuffleQueue => self.player.shuffle_queue(),
+                _ => unreachable!("IPC playback mapping returned a non-playback op"),
+            }
+            cx.notify();
+            return;
+        }
         match command {
             IpcCommand::Sync(mode) => self.start_sync(mode),
             IpcCommand::Wipe(scope) => {
@@ -39,16 +66,22 @@ impl AppRoot {
                 }
             }
             IpcCommand::WipeDatabases => self.open_wipe_menu(),
-            IpcCommand::Logout => self.bridge.logout(),
+            IpcCommand::Logout => {
+                self.bridge.logout();
+            }
             IpcCommand::AddAccount => {
                 if self.login.is_none() {
                     self.login = Some(Self::login_state(LoginMode::AddAccount, false));
                 }
             }
-            IpcCommand::RemoveAccount { keep_data } => self.bridge.remove_account(keep_data),
+            IpcCommand::RemoveAccount { keep_data } => {
+                self.bridge.remove_account(keep_data);
+            }
             IpcCommand::PlaylistCreate { name, offline } => {
                 match self.player.current().map(|track| track.id.clone()) {
-                    Some(id) => self.bridge.create_playlist(name, vec![id], offline),
+                    Some(id) => {
+                        self.bridge.create_playlist(name, vec![id], offline);
+                    }
                     None => self.push_toast(
                         "Nothing is playing; playlist create needs a current track.".to_string(),
                         ToastKind::Error,
@@ -58,13 +91,15 @@ impl AppRoot {
             }
             IpcCommand::PlaylistAdd { targets, playlist } => {
                 let current = self.player.current().map(|track| track.id.clone());
-                self.bridge.playlist_add(targets, playlist, current)
+                self.bridge.playlist_add(targets, playlist, current);
             }
             IpcCommand::PlaylistRemove { targets, playlist } => {
                 let current = self.player.current().map(|track| track.id.clone());
-                self.bridge.playlist_remove(targets, playlist, current)
+                self.bridge.playlist_remove(targets, playlist, current);
             }
-            IpcCommand::PlaylistDelete { playlist } => self.bridge.delete_playlist(playlist),
+            IpcCommand::PlaylistDelete { playlist } => {
+                self.bridge.delete_playlist(playlist);
+            }
             IpcCommand::RadioSave { offline } => {
                 let radio = self.page.as_ref().and_then(|page| {
                     (page.descriptor.kind == state::PageKind::Radio).then(|| {
@@ -146,7 +181,7 @@ impl AppRoot {
             IpcCommand::DeleteRow => self.on_delete_row(&DeleteRow, window, cx),
             IpcCommand::QueueUp => self.on_queue_up(&QueueUp, window, cx),
             IpcCommand::QueueDown => self.on_queue_down(&QueueDown, window, cx),
-            IpcCommand::RepeatCycle => self.on_repeat_cycle(&RepeatCycle, window, cx),
+            IpcCommand::RepeatCycle => unreachable!("mapped above"),
             IpcCommand::ToggleFullscreen => {
                 self.on_toggle_fullscreen(&ToggleFullscreen, window, cx)
             }
@@ -176,31 +211,36 @@ impl AppRoot {
             IpcCommand::SearchScopeNext => self.on_search_scope_next(&SearchScopeNext, window, cx),
             IpcCommand::SearchScopePrev => self.on_search_scope_prev(&SearchScopePrev, window, cx),
             IpcCommand::LineSearch => self.on_line_search(&LineSearch, window, cx),
-            IpcCommand::PlayPause => self.on_play_pause(&PlayPause, window, cx),
-            IpcCommand::Play => self.player.resume(),
-            IpcCommand::Pause => self.player.pause(),
-            IpcCommand::Stop => self.player.stop(),
-            IpcCommand::Track(TrackCommand::Next) => self.execute_track_next(cx),
-            IpcCommand::Track(TrackCommand::Previous) => self.execute_track_previous(cx),
-            IpcCommand::Mute => self.on_mute(&Mute, window, cx),
-            IpcCommand::VolumeUp => self.on_volume_up(&VolumeUp, window, cx),
-            IpcCommand::VolumeDown => self.on_volume_down(&VolumeDown, window, cx),
-            IpcCommand::SetVolume(volume) => self.player.set_volume(volume),
-            IpcCommand::SeekBack => self.on_seek_back(&SeekBack, window, cx),
-            IpcCommand::SeekForward => self.on_seek_forward(&SeekForward, window, cx),
-            IpcCommand::Seek(position) => self.player.seek(position),
-            IpcCommand::SeekRelative(offset) => {
-                self.player.seek((self.player.position() + offset).max(0.0))
+            IpcCommand::PlayPause
+            | IpcCommand::Play
+            | IpcCommand::Pause
+            | IpcCommand::Stop
+            | IpcCommand::Track(_)
+            | IpcCommand::Mute
+            | IpcCommand::VolumeUp
+            | IpcCommand::VolumeDown
+            | IpcCommand::SetVolume(_)
+            | IpcCommand::SeekBack
+            | IpcCommand::SeekForward
+            | IpcCommand::Seek(_)
+            | IpcCommand::SeekRelative(_) => unreachable!("mapped above"),
+            // Read-only core queries; the daemon never forwards them here.
+            IpcCommand::Status | IpcCommand::QueueQuery => {
+                unreachable!("core-only query, never forwarded to the UI")
             }
             IpcCommand::PlaySong(id) => {
                 self.last_play = Some((id.clone(), self.view.order_label().to_string()));
                 self.bridge
                     .play_song(id, self.view.order_label().to_string());
             }
-            IpcCommand::PlaySongInAlbum(id) => self.bridge.play_song_in_album(id),
-            IpcCommand::OpenSongAlbum(id) => self.bridge.quick_go_album(id),
+            IpcCommand::PlaySongInAlbum(id) => {
+                self.bridge.play_song_in_album(id);
+            }
+            IpcCommand::OpenSongAlbum(id) => {
+                self.bridge.quick_go_album(id);
+            }
             IpcCommand::DownloadSong(id) => {
-                self.bridge.quick_download("song".to_string(), id, true)
+                self.bridge.quick_download("song".to_string(), id, true);
             }
             IpcCommand::QuickHold(true) => {
                 self.alt_held = true;
@@ -233,7 +273,9 @@ impl AppRoot {
                 self.animate_alt(0.0);
             }
             IpcCommand::Show => window.activate_window(),
-            IpcCommand::RandomAlbum => self.bridge.play_random_album(),
+            IpcCommand::RandomAlbum => {
+                self.bridge.play_random_album();
+            }
             IpcCommand::Quit => self.on_quit(&Quit, window, cx),
         }
         cx.notify();

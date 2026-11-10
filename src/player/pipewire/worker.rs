@@ -3,6 +3,15 @@
 //! One worker owns the current [`Decoder`]; a second persistent worker opens
 //! the next track ahead of the boundary. No thread is created per track and
 //! the old `malloc_trim`/reaper churn is gone.
+//!
+//! Pause keeps a seekable decoder alive: the loop stops reading/writing while
+//! `current.paused` is set (so a queued `Seek`/`Resume` is serviced
+//! immediately instead of waiting for the PCM ring to drain) and the ring keeps
+//! its buffered audio, so resume continues from the same sample without
+//! reopening or re-seeking. A pause longer than [`PAUSE_REOPEN_AFTER`] falls
+//! back to interrupt + reopen because an idle HTTP connection is not reliable.
+//! Non-seekable inputs always interrupt on pause and reopen at the paused
+//! position on resume.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -15,6 +24,10 @@ use super::ring::{RATE, RING_FRAMES};
 use super::sink::Sink;
 use super::status::{Shared, Status};
 
+/// A pause longer than this reopens the stream instead of resuming the decoder
+/// in memory: a long-idle HTTP response is not reliable.
+const PAUSE_REOPEN_AFTER: Duration = Duration::from_secs(30);
+
 pub(crate) enum Command {
     Load {
         url: String,
@@ -24,9 +37,6 @@ pub(crate) enum Command {
     },
     Pause,
     Resume {
-        url: String,
-        next_url: Option<String>,
-        generation: u64,
         position: f64,
     },
     Seek(f64),
@@ -52,8 +62,8 @@ pub(crate) struct Worker {
     preload_join: Option<JoinHandle<()>>,
     shared: Arc<Shared>,
     sink: Arc<Sink>,
-    paused_request: std::sync::Mutex<Option<(String, Option<String>, u64)>>,
     paused_position: std::sync::Mutex<f64>,
+    paused: AtomicBool,
 }
 
 impl Worker {
@@ -87,21 +97,41 @@ impl Worker {
             preload_join: Some(preload_join),
             shared,
             sink,
-            paused_request: std::sync::Mutex::new(None),
             paused_position: std::sync::Mutex::new(0.0),
+            paused: AtomicBool::new(false),
         })
     }
 
-    pub(crate) fn load(&self, url: String, next_url: Option<String>, paused: bool) {
+    /// Loads `url`, preloading `next_url` ahead of the gapless boundary.
+    ///
+    /// `generation` lets the playback core reject superseded opens: the worker
+    /// keeps the largest generation it has seen and drops any `Load` command
+    /// that does not match it. A value that is not newer than the internal
+    /// counter (legacy callers pass 0) falls back to that counter.
+    pub(crate) fn load(
+        &self,
+        url: String,
+        next_url: Option<String>,
+        paused: bool,
+        generation: u64,
+    ) {
         let Some(tx) = self.tx.as_ref() else {
             return;
         };
-        let generation = self.shared.generation.fetch_add(1, Ordering::AcqRel) + 1;
+        let generation = {
+            let current = self.shared.generation.load(Ordering::Acquire);
+            if generation > current {
+                self.shared.generation.store(generation, Ordering::Release);
+                generation
+            } else {
+                self.shared.generation.fetch_add(1, Ordering::AcqRel) + 1
+            }
+        };
+        self.paused.store(paused, Ordering::Release);
         *self
-            .paused_request
+            .paused_position
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) =
-            Some((url.clone(), next_url.clone(), generation));
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = 0.0;
         {
             let mut status = self.shared.lock();
             status.loading = true;
@@ -110,6 +140,9 @@ impl Worker {
             status.position = 0.0;
             status.duration = 0.0;
             status.stream_size = 0;
+            status.seekable = false;
+            status.decoder_live = false;
+            status.loaded = false;
         }
         self.shared
             .clock_start
@@ -121,6 +154,7 @@ impl Worker {
             .unwrap_or_else(std::sync::PoisonError::into_inner) = 0.0;
         self.shared.boundary_active.store(false, Ordering::Release);
         self.shared.decode_done.store(false, Ordering::Release);
+        self.shared.first_pcm.store(false, Ordering::Release);
         interrupt_current(&self.shared);
         self.sink.reset();
         self.sink.set_paused(paused);
@@ -136,35 +170,32 @@ impl Worker {
         let Some(tx) = self.tx.as_ref() else {
             return;
         };
+        self.paused.store(paused, Ordering::Release);
         if paused {
             *self
                 .paused_position
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner) = position.max(0.0);
-            interrupt_current(&self.shared);
-            self.sink.reset();
+            // Freeze the sink immediately: the RT callback stops consuming and
+            // fills silence, so audio stops on the next period.
             self.sink.set_paused(true);
+            // Only a non-seekable decoder needs to be interrupted right here;
+            // it can be blocked in a network read that would otherwise keep the
+            // pause from being observed. A seekable decoder is kept alive and
+            // the worker loop parks itself on the `Pause` command.
+            let seekable = self.shared.lock().seekable;
+            if !seekable {
+                interrupt_current(&self.shared);
+                self.sink.reset();
+            }
             let _ = tx.send(Command::Pause);
         } else {
             self.sink.set_paused(false);
-            self.shared.lock().loading = true;
-            if let Some((url, next_url, generation)) = self
-                .paused_request
+            let position = *self
+                .paused_position
                 .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .clone()
-            {
-                let position = *self
-                    .paused_position
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner);
-                let _ = tx.send(Command::Resume {
-                    url,
-                    next_url,
-                    generation,
-                    position,
-                });
-            }
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let _ = tx.send(Command::Resume { position });
         }
     }
 
@@ -172,6 +203,11 @@ impl Worker {
         let Some(tx) = self.tx.as_ref() else {
             return;
         };
+        let seconds = seconds.max(0.0);
+        *self
+            .paused_position
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = seconds;
         self.shared
             .clock_start
             .store(self.sink.played_frames(), Ordering::Release);
@@ -179,19 +215,23 @@ impl Worker {
             .shared
             .clock_origin
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) = seconds.max(0.0);
-        self.shared.lock().loading = true;
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = seconds;
+        // A seek while paused must not leave the engine reporting `loading`
+        // forever: nothing decodes until the worker is resumed.
+        self.shared.lock().loading = !self.paused.load(Ordering::Acquire);
         self.sink.flush();
-        let _ = tx.send(Command::Seek(seconds.max(0.0)));
+        let _ = tx.send(Command::Seek(seconds));
     }
 
     pub(crate) fn stop(&self) {
         let Some(tx) = self.tx.as_ref() else {
             return;
         };
+        self.paused.store(true, Ordering::Release);
         self.shared.generation.fetch_add(1, Ordering::AcqRel);
         self.shared.boundary_active.store(false, Ordering::Release);
         self.shared.decode_done.store(false, Ordering::Release);
+        self.shared.first_pcm.store(false, Ordering::Release);
         interrupt_current(&self.shared);
         {
             let mut status = self.shared.lock();
@@ -219,10 +259,8 @@ impl Drop for Worker {
             let _ = tx.send(Command::Shutdown);
         }
         if let Some(preload_tx) = self.preload_tx.take() {
-            // Dropping the receiver would leave a blocked open; send a
-            // shutdown sentinel by dropping the sender and waking the worker
-            // via its own receiver close is enough because it only blocks when
-            // no request is active.
+            // Dropping the sender lets the preload thread observe the closed
+            // channel and exit; a blocked open is interrupted by `stop`.
             drop(preload_tx);
         }
         if let Some(join) = self.join.take() {
@@ -273,6 +311,11 @@ struct Current {
     preload_started: Option<Instant>,
     first_pcm: bool,
     stop: Option<Arc<AtomicBool>>,
+    /// The decoder is kept open but not read: pause with a seekable input.
+    paused: bool,
+    paused_at: Option<Instant>,
+    /// The transport was stopped: a stale seek/resume must not reopen audio.
+    stopped: bool,
 }
 
 fn worker_thread(
@@ -282,12 +325,22 @@ fn worker_thread(
     shared: Arc<Shared>,
     sink: Arc<Sink>,
 ) {
-    let mut current = Current::default();
+    let mut current = Current {
+        // Nothing is loaded yet: a stale seek/resume before the first load must
+        // not reopen the (empty) URL.
+        stopped: true,
+        ..Current::default()
+    };
     let mut pcm = vec![0i16; 4096 * 2];
+    let mut pending_command = None;
     loop {
-        // A blocking wait is used only when there is no decoder to service;
-        // otherwise commands are polled between every decoded chunk.
-        let command = if current.decoder.is_some() {
+        // A blocking wait is used whenever the loop has nothing to decode:
+        // no decoder, or a paused one. Paused never produces PCM, so a queued
+        // seek/resume is serviced immediately instead of waiting for the ring
+        // to drain.
+        let command = if let Some(command) = pending_command.take() {
+            Some(command)
+        } else if current.decoder.is_some() && !current.paused {
             match rx.try_recv() {
                 Ok(command) => Some(command),
                 Err(TryRecvError::Empty) => None,
@@ -313,57 +366,160 @@ fn worker_thread(
                     interrupt_stop(&mut current);
                     current.decoder = None;
                     current.stop = None;
+                    current.parked_url = None;
+                    current.paused = false;
+                    current.paused_at = None;
+                    current.stopped = true;
+                    shared.lock().decoder_live = false;
                     continue;
                 }
                 Command::Pause => {
                     cancel_preload(&mut current);
-                    interrupt_stop(&mut current);
-                    current.decoder = None;
-                    current.stop = None;
+                    // A parked or live seekable decoder is kept: the ring keeps
+                    // its buffered audio and resume continues from it.
+                    let keep = current.parked_url.is_some()
+                        || current.decoder.as_ref().is_some_and(Decoder::is_seekable);
+                    if keep {
+                        current.paused = true;
+                        current.paused_at = Some(Instant::now());
+                        shared.lock().loading = false;
+                    } else {
+                        interrupt_stop(&mut current);
+                        current.decoder = None;
+                        current.stop = None;
+                        current.parked_url = None;
+                        current.paused = false;
+                        current.paused_at = None;
+                        sink.reset();
+                        let mut status = shared.lock();
+                        status.loading = false;
+                        status.decoder_live = false;
+                        status.seekable = false;
+                    }
                     continue;
                 }
-                Command::Resume {
-                    url,
-                    next_url,
-                    generation,
-                    position,
-                } => {
+                Command::Resume { position } => {
+                    let resume_at = position.max(0.0);
+                    let long_idle = current
+                        .paused_at
+                        .is_some_and(|at| at.elapsed() > PAUSE_REOPEN_AFTER);
+                    current.paused = false;
+                    current.paused_at = None;
+                    if current.decoder.is_some() {
+                        if long_idle {
+                            // The stream sat idle longer than an HTTP response
+                            // can be trusted: reopen and seek to the playhead.
+                            let (url, next_url, generation) = (
+                                current.url.clone(),
+                                current.next_url.clone(),
+                                current.generation,
+                            );
+                            cancel_preload(&mut current);
+                            interrupt_stop(&mut current);
+                            current.decoder = None;
+                            current.parked_url = None;
+                            sink.reset();
+                            start_decoder(
+                                &mut current,
+                                url,
+                                next_url,
+                                generation,
+                                resume_at,
+                                false,
+                                &shared,
+                                &sink,
+                            );
+                        } else {
+                            // Live decoder: keep it, do not re-seek.
+                            shared.lock().loading = false;
+                        }
+                        continue;
+                    }
+                    if current.parked_url.is_some() {
+                        // The parked reopen path resumes automatically as soon
+                        // as the ring drains; it seeks to the decoded boundary.
+                        shared.lock().loading = false;
+                        continue;
+                    }
+                    if current.stopped {
+                        continue;
+                    }
+                    // Interrupted at pause (non-seekable): reopen at the
+                    // paused position.
+                    let (url, next_url, generation) = (
+                        current.url.clone(),
+                        current.next_url.clone(),
+                        current.generation,
+                    );
                     start_decoder(
                         &mut current,
                         url,
                         next_url,
                         generation,
-                        position,
+                        resume_at,
                         false,
                         &shared,
                         &sink,
                     );
                     continue;
                 }
-                Command::Seek(seconds) => {
+                Command::Seek(mut seconds) => {
+                    // A newer skip supersedes queued older skips. Keep
+                    // command ordering by stopping at the first non-seek;
+                    // that command is handled before any later seek.
+                    while let Ok(command) = rx.try_recv() {
+                        match command {
+                            Command::Seek(newer) => seconds = newer,
+                            command => {
+                                pending_command = Some(command);
+                                break;
+                            }
+                        }
+                    }
+                    let seconds = seconds.max(0.0);
                     cancel_preload(&mut current);
                     if let Some(decoder) = current.decoder.as_mut() {
                         match decoder.seek(seconds) {
                             Ok(()) => {
                                 current.written_frames = 0;
-                                current.timeline_start = seconds.max(0.0);
+                                current.timeline_start = seconds;
                                 current.parked_url = None;
                                 current.first_pcm = true;
-                                shared
-                                    .clock_start
-                                    .store(sink.played_frames(), Ordering::Release);
-                                *shared
-                                    .clock_origin
-                                    .lock()
-                                    .unwrap_or_else(std::sync::PoisonError::into_inner) =
-                                    seconds.max(0.0);
+                                // The request path already published the
+                                // newest clock target. Do not write this
+                                // command's older target here: a later seek
+                                // may have arrived while decoder.seek ran.
                                 shared.decode_done.store(false, Ordering::Release);
-                                shared.lock().loading = true;
+                                let paused = current.paused;
+                                shared.lock().loading = !paused;
                             }
                             Err(error) => {
                                 fail(&shared, error);
                                 current.decoder = None;
+                                shared.lock().decoder_live = false;
                             }
+                        }
+                    } else if !current.stopped {
+                        // No live decoder (parked or interrupted by a pause):
+                        // reopen at the seek target so the position is honoured.
+                        current.parked_url = None;
+                        let (url, next_url, generation) = (
+                            current.url.clone(),
+                            current.next_url.clone(),
+                            current.generation,
+                        );
+                        start_decoder(
+                            &mut current,
+                            url,
+                            next_url,
+                            generation,
+                            seconds,
+                            false,
+                            &shared,
+                            &sink,
+                        );
+                        if current.paused {
+                            shared.lock().loading = false;
                         }
                     }
                     continue;
@@ -390,14 +546,24 @@ fn worker_thread(
                         &shared,
                         &sink,
                     );
+                    current.paused = paused;
+                    current.paused_at = None;
                     sink.set_paused(paused);
                     continue;
                 }
             }
         }
 
+        // Paused with a live decoder: wait for the next command instead of
+        // reading PCM. Reaching this branch without a command means the decode
+        // loop has nothing to do.
+        if current.paused {
+            continue;
+        }
+
         let Some(decoder) = current.decoder.as_mut() else {
             if let Some(url) = current.parked_url.clone()
+                && !sink.ring().paused()
                 && sink.ring().buffered_frames() <= (RATE as u64 * 2)
             {
                 let target = current.timeline_start + current.written_frames as f64 / RATE as f64;
@@ -427,6 +593,7 @@ fn worker_thread(
                         .is_some_and(|stop| stop.load(Ordering::Acquire));
                 current.decoder = None;
                 current.stop = None;
+                shared.lock().decoder_live = false;
                 if !superseded {
                     fail(&shared, error);
                 }
@@ -468,6 +635,14 @@ fn worker_thread(
                     .store(stream_size, Ordering::Release);
                 shared.boundary_active.store(true, Ordering::Release);
                 shared.decode_done.store(false, Ordering::Release);
+                {
+                    let mut status = shared.lock();
+                    status.duration = duration;
+                    status.stream_size = stream_size;
+                    status.seekable = current.decoder.as_ref().is_some_and(Decoder::is_seekable);
+                    status.loaded = true;
+                    status.decoder_live = true;
+                }
                 crate::startup::trace("gapless.next");
                 current.url = current.next_url.take().unwrap_or_default();
                 current.timeline_start = 0.0;
@@ -475,10 +650,13 @@ fn worker_thread(
                 current.preload_token = current.preload_token.wrapping_add(1);
                 current.preload_stop = None;
                 current.preload_started = None;
+                shared.signal();
                 continue;
             }
             crate::startup::trace("fetch.done");
             shared.decode_done.store(true, Ordering::Release);
+            shared.lock().decoder_live = false;
+            shared.signal();
             current.decoder = None;
             continue;
         }
@@ -486,6 +664,8 @@ fn worker_thread(
         current.written_frames += frames as u64;
         if current.first_pcm {
             current.first_pcm = false;
+            shared.first_pcm.store(true, Ordering::Release);
+            shared.signal();
             crate::startup::trace("first.pcm.written");
         }
         let epoch = current.epoch;
@@ -493,6 +673,7 @@ fn worker_thread(
         if sink_ring_closed(&sink) {
             // Load/stop replaced the epoch while the writer was blocked.
             current.decoder = None;
+            shared.lock().decoder_live = false;
             cancel_preload(&mut current);
             continue;
         }
@@ -506,6 +687,7 @@ fn worker_thread(
             current.parked_url = Some(current.url.clone());
             current.decoder = None;
             current.stop = None;
+            shared.lock().decoder_live = false;
             continue;
         }
 
@@ -554,6 +736,7 @@ fn start_decoder(
         current.next_url = next_url;
     }
     current.first_pcm = true;
+    current.stopped = false;
     shared.decode_done.store(false, Ordering::Release);
     let stop = Arc::new(AtomicBool::new(false));
     *shared
@@ -571,23 +754,29 @@ fn start_decoder(
                 {
                     fail(shared, error);
                 }
+                shared.lock().decoder_live = false;
                 return;
             }
             crate::startup::trace("fetch.first_chunk");
+            let seekable = decoder.is_seekable();
             current.decoder = Some(decoder);
-            let mut status = shared.lock();
-            status.loading = true;
-            status.duration = current
-                .decoder
-                .as_ref()
-                .map(Decoder::duration)
-                .unwrap_or(0.0);
-            status.stream_size = current
-                .decoder
-                .as_ref()
-                .map(|d| d.stream_size().max(0) as u64)
-                .unwrap_or(0);
-            drop(status);
+            {
+                let mut status = shared.lock();
+                status.loading = !current.paused;
+                status.duration = current
+                    .decoder
+                    .as_ref()
+                    .map(Decoder::duration)
+                    .unwrap_or(0.0);
+                status.stream_size = current
+                    .decoder
+                    .as_ref()
+                    .map(|d| d.stream_size().max(0) as u64)
+                    .unwrap_or(0);
+                status.seekable = seekable;
+                status.decoder_live = true;
+                status.loaded = true;
+            }
             *shared
                 .clock_origin
                 .lock()
@@ -595,8 +784,10 @@ fn start_decoder(
             shared
                 .clock_start
                 .store(sink.played_frames(), Ordering::Release);
+            shared.signal();
         }
         Err(error) => {
+            shared.lock().decoder_live = false;
             if generation == shared.generation.load(Ordering::Acquire)
                 && !stop.load(Ordering::Acquire)
             {
@@ -702,4 +893,6 @@ fn fail(shared: &Shared, message: String) {
     let mut status = shared.lock();
     status.loading = false;
     status.failed = Some(message);
+    drop(status);
+    shared.signal();
 }

@@ -474,48 +474,62 @@ impl AppRoot {
                 } else {
                     1.0
                 };
-                let retry = toast.retry;
-                div()
-                    .w(relative(0.42))
-                    .max_h(px(150.0))
-                    .px_4()
-                    .py_3()
-                    .rounded_lg()
-                    .border_1()
-                    .border_color(rgb(palette::outline_variant()))
-                    .bg(rgb(palette::surface_container()))
-                    .opacity(opacity)
-                    .flex()
-                    .items_center()
-                    .gap_3()
-                    .child(
-                        div()
-                            .flex()
-                            .flex_1()
-                            .text_size(px(12.0))
-                            .text_color(rgb(palette::on_surface()))
-                            .whitespace_normal()
-                            .child(toast.message.clone()),
-                    )
-                    .when_some(retry, |this, retry| {
-                        this.child(
-                            div()
-                                .id("toast-retry")
-                                .px_3()
-                                .py_1()
-                                .rounded_md()
-                                .bg(rgb(palette::primary_container()))
-                                .text_size(px(11.0))
-                                .text_color(rgb(palette::on_primary_container()))
-                                .cursor_pointer()
-                                .on_click(cx.listener(move |this, _, _, cx| {
-                                    this.retry(retry);
-                                    cx.notify();
-                                }))
-                                .child("Retry"),
-                        )
-                    })
+                self.toast_bubble(&toast.message, opacity, toast.retry, cx)
             }))
+            .when_some(self.hold_toast.as_ref(), |this, hold| {
+                this.child(self.toast_bubble(&hold.message, 1.0, None, cx))
+            })
+    }
+
+    /// One toast card. Shared by the queued toasts and the held-key counter so
+    /// both read as the same surface.
+    fn toast_bubble(
+        &self,
+        message: &str,
+        opacity: f32,
+        retry: Option<RetryAction>,
+        cx: &Context<Self>,
+    ) -> gpui::Div {
+        div()
+            .w(relative(0.42))
+            .max_h(px(150.0))
+            .px_4()
+            .py_3()
+            .rounded_lg()
+            .border_1()
+            .border_color(rgb(palette::outline_variant()))
+            .bg(rgb(palette::surface_container()))
+            .opacity(opacity)
+            .flex()
+            .items_center()
+            .gap_3()
+            .child(
+                div()
+                    .flex()
+                    .flex_1()
+                    .text_size(px(12.0))
+                    .text_color(rgb(palette::on_surface()))
+                    .whitespace_normal()
+                    .child(message.to_string()),
+            )
+            .when_some(retry, |this, retry| {
+                this.child(
+                    div()
+                        .id("toast-retry")
+                        .px_3()
+                        .py_1()
+                        .rounded_md()
+                        .bg(rgb(palette::primary_container()))
+                        .text_size(px(11.0))
+                        .text_color(rgb(palette::on_primary_container()))
+                        .cursor_pointer()
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.retry(retry);
+                            cx.notify();
+                        }))
+                        .child("Retry"),
+                )
+            })
     }
 
     pub(in crate::ui) fn login_view(&self, window: &gpui::Window) -> gpui::Div {

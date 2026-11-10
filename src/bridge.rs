@@ -241,6 +241,11 @@ impl Bridge {
         bridge
     }
 
+    /// Emits a user-facing error event (toast) for a core-side rejection.
+    pub fn error(&self, message: impl Into<String>) {
+        let _ = self.tx.send(Event::Error(message.into()));
+    }
+
     /// Fullscreen cover focus: fetch the playing album's favourite/rating.
     pub fn request_album_state(&self, album_id: String) {
         let tx = self.tx.clone();

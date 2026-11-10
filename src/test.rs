@@ -59,6 +59,8 @@ mod covers;
 
 mod crypto;
 
+mod daemon_ipc;
+
 mod db;
 
 mod download;
@@ -76,6 +78,10 @@ mod index;
 
 mod ipc;
 
+mod ipc_protocol;
+
+mod ui_view;
+
 mod library;
 
 mod library_paths;
@@ -85,6 +91,8 @@ mod lyrics;
 mod media;
 
 mod mpris;
+
+mod playback;
 
 mod playlists;
 

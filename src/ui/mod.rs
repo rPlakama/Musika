@@ -33,7 +33,7 @@ mod app;
 mod collage;
 mod command_line;
 mod covers;
-mod daemon_client;
+pub(crate) mod daemon_client;
 #[cfg(debug_assertions)]
 mod debug;
 pub(crate) use crate::ipc_command;
@@ -71,7 +71,7 @@ use gpui::{
 };
 
 use crate::bridge::{Event, SyncMode};
-use daemon_client::{Client, PlayerMirror, RemoteBridge, UiUpdate};
+use daemon_client::{AppPlayer, Client, RemoteBridge, UiUpdate};
 use quick_actions::{AltGesture, Direction, QuickKind, QuickMenu, QuickVerb};
 use state::{
     PageDescriptor, PageKind, PageState, Row, RowKind, RowWindow, Scope, Travel, ViewState,
@@ -174,11 +174,6 @@ pub fn run() {
                 KeyBinding::new("down", MoveDown, Some("main")),
                 KeyBinding::new("space", PlayPause, Some("main")),
                 KeyBinding::new("m", Mute, Some("main")),
-                KeyBinding::new("-", VolumeDown, Some("main")),
-                KeyBinding::new("=", VolumeUp, Some("main")),
-                KeyBinding::new("+", VolumeUp, Some("main")),
-                KeyBinding::new(",", SeekBack, Some("main")),
-                KeyBinding::new(".", SeekForward, Some("main")),
                 KeyBinding::new("ctrl-n", NextTrack, Some("main")),
                 KeyBinding::new("ctrl-p", PrevTrack, Some("main")),
                 KeyBinding::new("shift-v", VisualAll, Some("main")),
@@ -366,6 +361,80 @@ struct ToastState {
     kind: ToastKind,
     retry: Option<RetryAction>,
     created_at: f64,
+}
+
+/// The transient "held key" bubble (`,`, `.`, `-`, `+`). Every auto-repeat
+/// refreshes the message and `at_ns`, so it needs none of the normal toast rules:
+/// it never stacks, never dedupes and never enters the 3-item cap.
+#[derive(Debug, Clone)]
+struct HoldToast {
+    message: String,
+    /// `CLOCK_MONOTONIC` ns of the last refresh. Deliberately not `clock.now`:
+    /// that only advances while frames render, so an idle window would make the
+    /// first press look ancient and expire the bubble immediately.
+    at_ns: u64,
+}
+
+impl HoldToast {
+    fn new(message: String, now_ns: u64) -> Self {
+        Self {
+            message,
+            at_ns: now_ns,
+        }
+    }
+
+    /// Whether the bubble outlived its TTL after the last refresh.
+    fn expired(&self, now_ns: u64) -> bool {
+        now_ns.saturating_sub(self.at_ns) >= HOLD_TOAST_TTL_NS
+    }
+}
+
+/// One held playback key. Repeats fold into `count` until the key is released.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct KeyHold {
+    key: char,
+    count: u32,
+    /// `CLOCK_MONOTONIC` ns of the last key-down, for the stale-hold reset.
+    at_ns: u64,
+}
+
+/// A same-key key-down within this window (and without an intervening key-up)
+/// is a repeat. GPUI re-sends a bare key-down for X11 auto-repeat, so timing is
+/// the only portable signal; the window must outlast the auto-repeat *delay*
+/// (600-660 ms by default, up to ~1 s when tuned) or the first repeat would
+/// restart the count instead of incrementing it.
+const HOLD_STALE_NS: u64 = 1_500_000_000;
+
+/// Seek/volume step of one playback key tap; the core uses the same 5 s / 5 %.
+pub(in crate::ui) const HOLD_STEP: f64 = 5.0;
+
+/// How long the held-key counter stays up after its last refresh. A live hold
+/// refreshes it on every repeat, so this only bounds the fade-out and repairs a
+/// lost key-up (focus change) instead of leaving a stale bubble on screen. It
+/// must also outlast the auto-repeat delay so the bubble does not blink between
+/// the initial press and the first repeat.
+const HOLD_TOAST_TTL_NS: u64 = 1_200_000_000;
+
+impl KeyHold {
+    /// Folds one key-down into the hold. A repeat of the same key inside
+    /// [`HOLD_STALE_NS`] increments; a different key or a stale hold restarts
+    /// at 1.
+    fn record(previous: Option<KeyHold>, key: char, now_ns: u64) -> Self {
+        match previous {
+            Some(hold) if hold.key == key && now_ns.saturating_sub(hold.at_ns) < HOLD_STALE_NS => {
+                Self {
+                    key,
+                    count: hold.count.saturating_add(1),
+                    at_ns: now_ns,
+                }
+            }
+            _ => Self {
+                key,
+                count: 1,
+                at_ns: now_ns,
+            },
+        }
+    }
 }
 
 struct Assets;
@@ -692,7 +761,13 @@ struct AppRoot {
         std::cell::RefCell<std::collections::HashMap<(LineSurface, usize, usize), RowEmphasis>>,
     library_hover_fill: anim::ColorBehavior,
     page_hover_fill: anim::ColorBehavior,
-    player: PlayerMirror,
+    client: Client,
+    player: AppPlayer,
+    /// Startup-only: the core was not reachable after the initial connect
+    /// attempts, so the root renders a retry surface instead of the UI.
+    awaiting_core: bool,
+    /// Reconnect banner text (transport lost, reconnecting).
+    reconnecting: Option<String>,
     player_bar_cover: views::shell::PlayerBarCover,
     playback_error: Option<String>,
     queue_open: bool,
@@ -735,6 +810,10 @@ struct AppRoot {
     lyrics_track_fade: anim::Behavior,
     description_scroll: gpui::ScrollHandle,
     transport_press: [Option<f64>; 3],
+    playback_key_hold: Option<KeyHold>,
+    /// Live counter bubble for the held playback key; TTL-owned by the render
+    /// loop so a lost key-up cannot leave it behind.
+    hold_toast: Option<HoldToast>,
     line_search: line_search::LineSearchState,
     line_search_anim: anim::Behavior,
     command_line: command_line::CommandLineState,
@@ -786,12 +865,22 @@ impl AppRoot {
         focus.focus(window);
 
         crate::scroll_memory::hydrate();
-        let (client, mut updates) = Client::connect().unwrap_or_else(|error| {
-            eprintln!("musika-ui: could not connect to the core daemon: {error}");
-            std::process::exit(1);
-        });
+        // A dead/slow core must not kill the UI: start disconnected, show the
+        // retry surface, and let the supervisor connect when the core is back.
+        let (client, mut updates, startup_notice) = match Client::connect() {
+            Ok((client, updates)) => (client, updates, None),
+            Err(error) => {
+                let (client, updates) = Client::connect_when_available();
+                eprintln!("musika-ui: waiting for the core daemon: {error}");
+                (
+                    client,
+                    updates,
+                    Some(format!("Core daemon unavailable ({error}). Retrying…")),
+                )
+            }
+        };
         let bridge = RemoteBridge::new(client.clone());
-        let player = PlayerMirror::new(client);
+        let player = AppPlayer::new(client.clone());
         let mut view = ViewState::default();
         bridge.load_library(view.scope, view.order);
         view.loading = true;
@@ -805,25 +894,54 @@ impl AppRoot {
                             this.handle_command(&command, cx);
                         }
                         UiUpdate::Event(event) => this.apply(event),
-                        UiUpdate::Full(snapshot) => {
-                            this.player.apply_full(snapshot);
-                            this.repeat = this.player.repeat();
-                        }
-                        UiUpdate::Tick(tick) => {
-                            // Position ticks only refresh the mirror; the
-                            // playing render requests its own next frame.
+                        UiUpdate::State(state) => {
+                            // Playback frames arrive on transport changes only;
+                            // the anchor carries the position between them.
                             let old_state = this.player.state();
                             let old_index = this.player.index();
                             let old_loading = this.player.is_loading();
-                            this.player.apply_tick(tick);
+                            this.player.apply_state(state);
                             this.repeat = this.player.repeat();
+                            this.clamp_queue_cursor();
+                            this.drain_resync();
                             notify = old_state != this.player.state()
                                 || old_index != this.player.index()
                                 || old_loading != this.player.is_loading();
                         }
-                        UiUpdate::Seeked(position) => {
-                            this.player.apply_seeked(position);
-                            cx.notify();
+                        UiUpdate::QueueDelta(delta) => {
+                            this.player.apply_delta(delta);
+                            this.clamp_queue_cursor();
+                            this.drain_resync();
+                        }
+                        UiUpdate::QueueRows(rows) => {
+                            this.player.apply_rows(rows);
+                            this.clamp_queue_cursor();
+                            this.drain_resync();
+                        }
+                        UiUpdate::PlayerReply(reply) => {
+                            this.player.apply_player_reply(reply);
+                            this.drain_resync();
+                            if !reply.ok {
+                                this.push_toast(
+                                    format!(
+                                        "Core rejected a playback command ({:?}).",
+                                        reply.code
+                                    ),
+                                    ToastKind::Error,
+                                    None,
+                                );
+                            }
+                        }
+                        UiUpdate::Reply(reply) => {
+                            notify = false;
+                            if !reply.ok {
+                                crate::debug_log!(
+                                    "ipc: request {} failed ({:?}): {}",
+                                    reply.req,
+                                    reply.code,
+                                    reply.message.unwrap_or_default()
+                                );
+                            }
                         }
                         UiUpdate::Activate => {
                             // Linux/GPUI activate() is a no-op and the Wayland
@@ -831,6 +949,39 @@ impl AppRoot {
                             // serial; use the compositor IPC fallback instead.
                             cx.activate(true);
                             activate_niri_window();
+                        }
+                        UiUpdate::Connected { session } => {
+                            crate::debug_log!("musika-ui: connected to core session {session}");
+                            this.awaiting_core = false;
+                            this.reconnecting = None;
+                            this.repeat = this.player.repeat();
+                            // A (re)connect starts a fresh stream: rebuild the
+                            // bridge surfaces the core did not replay itself.
+                            this.bridge.refresh_header();
+                            this.bridge.load_library(this.view.scope, this.view.order);
+                            if let Some(page) = this.page.as_ref() {
+                                let descriptor = page.descriptor.clone();
+                                this.bridge.load_page(descriptor);
+                            }
+                            this.marks.signature = None;
+                        }
+                        UiUpdate::Reconnecting(reason) => {
+                            let message = match reason {
+                                Some(reason) => {
+                                    format!("Core connection lost ({reason}); reconnecting…")
+                                }
+                                None => "Core connection lost; reconnecting…".to_string(),
+                            };
+                            this.reconnecting = Some(message.clone());
+                            this.push_toast(message, ToastKind::Notice, None);
+                        }
+                        UiUpdate::Fatal(message) => {
+                            this.error = Some(message.clone());
+                            this.reconnecting = Some(message.clone());
+                            this.push_toast(message, ToastKind::Error, None);
+                            cx.notify();
+                            cx.quit();
+                            return false;
                         }
                         UiUpdate::Shutdown => {
                             cx.quit();
@@ -851,6 +1002,7 @@ impl AppRoot {
 
         let mut app = Self {
             focus,
+            client,
             bridge,
             view,
             header: None,
@@ -888,6 +1040,8 @@ impl AppRoot {
             row_scales: std::cell::RefCell::new(std::collections::HashMap::new()),
             library_hover_fill: anim::ColorBehavior::new(palette::surface()),
             page_hover_fill: anim::ColorBehavior::new(palette::surface()),
+            awaiting_core: startup_notice.is_some(),
+            reconnecting: startup_notice,
             player,
             player_bar_cover: views::shell::PlayerBarCover::default(),
             playback_error: None,
@@ -934,6 +1088,8 @@ impl AppRoot {
             lyrics_track_fade: anim::Behavior::new(1.0),
             description_scroll: gpui::ScrollHandle::new(),
             transport_press: [None; 3],
+            playback_key_hold: None,
+            hold_toast: None,
             line_search: line_search::LineSearchState::new(),
             line_search_anim: anim::Behavior::new(0.0),
             command_line: command_line::CommandLineState::new(),
@@ -1020,6 +1176,20 @@ impl AppRoot {
     }
 
     const SYNC_TURN_SECS: f64 = 1.05;
+
+    /// Answers the view's "my rows/transport are stale" flag with one resync
+    /// request: a `seq`/`rev` gap or a dropped row chunk means the projection
+    /// can only be repaired by replaying the core snapshot.
+    fn drain_resync(&mut self) {
+        if self.player.take_resync() {
+            self.client.request_resync();
+        }
+    }
+
+    /// Keeps the queue cursor inside the row window the core reported.
+    fn clamp_queue_cursor(&mut self) {
+        self.queue_cursor = self.queue_cursor.min(self.player.len().saturating_sub(1));
+    }
 }
 
 fn parse_page_spec(spec: &str) -> Option<PageDescriptor> {

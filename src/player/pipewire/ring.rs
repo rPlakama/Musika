@@ -177,15 +177,17 @@ impl Ring {
 
     fn wait_wake(&self) {
         // The process callback wakes us after consuming frames or on reset,
-        // pause/resume and shutdown. The timeout is only a safety net for a
-        // missed wake; it is not a poll loop.
+        // pause/resume and shutdown. The timeout is a safety net for a missed
+        // wake (and for a deactivated stream that will not service a pending
+        // reset until it is resumed): it guarantees the producer re-checks the
+        // epoch/closed/paused flags instead of parking forever.
         let mut pollfd = libc::pollfd {
             fd: self.wake_fd,
             events: libc::POLLIN,
             revents: 0,
         };
         unsafe {
-            let _ = libc::poll(&mut pollfd, 1, -1);
+            let _ = libc::poll(&mut pollfd, 1, 250);
         }
         self.drain_wake();
     }

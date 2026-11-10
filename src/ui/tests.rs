@@ -239,3 +239,78 @@ mod reading_tests {
         assert_eq!(description_offset(42.0, -f32::MAX, 140.0), 0.0);
     }
 }
+
+#[cfg(test)]
+mod hold_tests {
+    use crate::ui::app::shell::hold_message;
+    use crate::ui::{HOLD_STALE_NS, HOLD_STEP, HOLD_TOAST_TTL_NS, HoldToast, KeyHold};
+
+    #[test]
+    fn a_first_press_starts_a_hold() {
+        let hold = KeyHold::record(None, '.', 1_000_000_000);
+        assert_eq!(hold.key, '.');
+        assert_eq!(hold.count, 1);
+        assert_eq!(f64::from(hold.count) * HOLD_STEP, 5.0);
+    }
+
+    #[test]
+    fn repeats_fold_into_one_hold() {
+        let first = KeyHold::record(None, '.', 1_000_000_000);
+        let second = KeyHold::record(Some(first), '.', 1_030_000_000);
+        let third = KeyHold::record(Some(second), '.', 1_060_000_000);
+        assert_eq!(second.count, 2);
+        assert_eq!(third.count, 3);
+        assert_eq!(third.key, '.');
+    }
+
+    #[test]
+    fn a_different_key_restarts_the_hold() {
+        let hold = KeyHold::record(None, ',', 1_000_000_000);
+        let next = KeyHold::record(Some(hold), '.', 1_030_000_000);
+        assert_eq!(next.key, '.');
+        assert_eq!(next.count, 1);
+    }
+
+    #[test]
+    fn a_stale_hold_restarts_instead_of_jumping() {
+        // A key-up that never arrived must not turn the next tap into a big jump.
+        let hold = KeyHold::record(None, '.', 1_000_000_000);
+        let stale = KeyHold::record(Some(hold), '.', 1_000_000_000 + HOLD_STALE_NS);
+        assert_eq!(stale.count, 1);
+        let fresh = KeyHold::record(Some(hold), '.', 1_000_000_000 + HOLD_STALE_NS - 1);
+        assert_eq!(fresh.count, 2);
+    }
+
+    #[test]
+    fn the_first_auto_repeat_after_the_delay_still_counts() {
+        // X11/Wayland wait ~660 ms before the first repeat; it must increment
+        // the hold rather than restart it.
+        let first = KeyHold::record(None, '.', 1_000_000_000);
+        let repeat = KeyHold::record(Some(first), '.', 1_000_000_000 + 660_000_000);
+        assert_eq!(repeat.count, 2);
+    }
+
+    #[test]
+    fn the_bubble_outlives_the_auto_repeat_delay_but_not_forever() {
+        // The TTL must cover the press -> first repeat gap (~660 ms) or the
+        // bubble blinks, and must still expire after a lost key-up.
+        let hold = HoldToast::new("Seek forward (+5 s)".to_string(), 1_000_000_000);
+        assert!(!hold.expired(1_000_000_000));
+        assert!(!hold.expired(1_000_000_000 + 660_000_000));
+        assert!(hold.expired(1_000_000_000 + HOLD_TOAST_TTL_NS));
+    }
+
+    #[test]
+    fn the_bubble_counts_repeats_and_the_distance() {
+        assert_eq!(hold_message('.', 1, 0.0), "Seek forward (+5 s)");
+        assert_eq!(hold_message('.', 3, 0.0), "Seek forward x3 (+15 s)");
+        assert_eq!(hold_message(',', 2, 0.0), "Seek back x2 (-10 s)");
+    }
+
+    #[test]
+    fn the_bubble_reports_the_clamped_level() {
+        assert_eq!(hold_message('+', 1, 90.0), "Volume up (95%)");
+        assert_eq!(hold_message('+', 2, 90.0), "Volume up x2 (100%)");
+        assert_eq!(hold_message('-', 3, 10.0), "Volume down x3 (0%)");
+    }
+}

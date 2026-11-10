@@ -108,6 +108,7 @@ pub enum UiUpdate {
     Event(Event),
     Full(PlayerSnapshot),
     Tick(PlayerTick),
+    Seeked(f64),
     Activate,
     Shutdown,
 }
@@ -124,6 +125,7 @@ fn read_updates(stream: UnixStream, tx: UnboundedSender<UiUpdate>) {
             CoreMessage::Bridge(event) => UiUpdate::Event(event),
             CoreMessage::PlayerFull(snapshot) => UiUpdate::Full(snapshot),
             CoreMessage::PlayerTick(tick) => UiUpdate::Tick(tick),
+            CoreMessage::Seeked { position } => UiUpdate::Seeked(position),
             CoreMessage::Activate => UiUpdate::Activate,
             CoreMessage::Shutdown => UiUpdate::Shutdown,
             CoreMessage::Error(message) => UiUpdate::Event(Event::Error(message)),
@@ -567,6 +569,10 @@ impl PlayerMirror {
         }
     }
 
+    pub fn apply_seeked(&mut self, position: f64) {
+        self.player.shared().position = position;
+    }
+
     pub fn state(&self) -> State {
         self.player.state()
     }
@@ -649,6 +655,9 @@ impl PlayerMirror {
     pub fn seek(&mut self, seconds: f64) {
         self.player.seek(seconds);
         self.client.player(PlayerCommand::Seek { seconds });
+    }
+    pub fn seek_relative(&mut self, offset: f64) {
+        self.client.player(PlayerCommand::SeekRelative { offset });
     }
     pub fn jump(&mut self, index: usize) {
         self.player.jump(index);

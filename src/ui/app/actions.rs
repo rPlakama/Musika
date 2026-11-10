@@ -794,20 +794,18 @@ impl AppRoot {
         &mut self,
         _: &SeekBack,
         _window: &mut Window,
-        cx: &mut Context<Self>,
+        _cx: &mut Context<Self>,
     ) {
-        self.player.seek((self.player.position() - 5.0).max(0.0));
-        cx.notify();
+        self.player.seek_relative(-5.0);
     }
 
     pub(in crate::ui) fn on_seek_forward(
         &mut self,
         _: &SeekForward,
         _window: &mut Window,
-        cx: &mut Context<Self>,
+        _cx: &mut Context<Self>,
     ) {
-        self.player.seek(self.player.position() + 5.0);
-        cx.notify();
+        self.player.seek_relative(5.0);
     }
 
     pub(in crate::ui) fn on_next_track(

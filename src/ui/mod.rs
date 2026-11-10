@@ -821,6 +821,10 @@ impl AppRoot {
                                 || old_index != this.player.index()
                                 || old_loading != this.player.is_loading();
                         }
+                        UiUpdate::Seeked(position) => {
+                            this.player.apply_seeked(position);
+                            cx.notify();
+                        }
                         UiUpdate::Activate => {
                             // Linux/GPUI activate() is a no-op and the Wayland
                             // activation token is rejected without a real input

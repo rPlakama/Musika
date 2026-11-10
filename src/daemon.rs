@@ -178,7 +178,20 @@ async fn run_async() {
                         }
                         UiMessage::Ping => send_ui(&ui_writer, CoreMessage::Ready),
                         UiMessage::Bridge { method, args } => dispatch_bridge(&bridge, &method, &args),
-                        UiMessage::Player(command) => apply_player_command(&mut player, command),
+                        UiMessage::Player(command) => {
+                            match command {
+                                PlayerCommand::SeekRelative { offset } => {
+                                    player.seek((player.position() + offset).max(0.0));
+                                    send_ui(
+                                        &ui_writer,
+                                        CoreMessage::Seeked {
+                                            position: player.position(),
+                                        },
+                                    );
+                                }
+                                command => apply_player_command(&mut player, command),
+                            }
+                        }
                     }
                 }
             }
@@ -545,6 +558,7 @@ fn apply_player_command(player: &mut Player, command: PlayerCommand) {
         PlayerCommand::ToggleMute => player.toggle_mute(),
         PlayerCommand::SetMuted { muted } => player.set_muted(muted),
         PlayerCommand::Seek { seconds } => player.seek(seconds),
+        PlayerCommand::SeekRelative { offset } => player.seek((player.position() + offset).max(0.0)),
         PlayerCommand::Jump { index } => player.jump(index),
         PlayerCommand::Load { tracks, start } => player.load(tracks, start),
         PlayerCommand::LoadPaused { tracks, start } => player.load_paused(tracks, start),

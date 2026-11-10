@@ -22,8 +22,8 @@
 #   scripts/check-icons.sh --strict   # unreferenced assets fail too
 #
 # Rules:
-#   1. every glyph asset carries a baked white fill/stroke
-#      (run scripts/bake-icons-white.sh otherwise);
+#   1. every glyph asset carries a baked white fill/stroke or `currentColor`
+#      (GPUI tints `currentColor`; run scripts/bake-icons-white.sh otherwise);
 #   2. every `"<name>.svg"` reference in `src/` resolves to a file;
 #   3. every asset is referenced by the tree or listed as brand below.
 set -eu
@@ -45,7 +45,7 @@ warn=0
 for f in src/icons/*.svg; do
     name=${f##*/}
     case " $brand " in *" $name "*) continue ;; esac
-    if ! grep -qE '(fill|stroke)[=:]"?#FFFFFF' "$f"; then
+    if ! grep -qE '(fill|stroke)[=:]"?(#FFFFFF|currentColor)' "$f"; then
         echo "check-icons: $name has no baked white fill/stroke — run scripts/bake-icons-white.sh" >&2
         fail=1
     fi

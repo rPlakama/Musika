@@ -363,12 +363,57 @@ struct ToastState {
     created_at: f64,
 }
 
-/// The transient "held key" bubble (`,`, `.`, `-`, `+`). Every auto-repeat
-/// refreshes the message and `at_ns`, so it needs none of the normal toast rules:
-/// it never stacks, never dedupes and never enters the 3-item cap.
+/// Sticky mute bubble. Unlike [`HoldToast`] it has no TTL: it is cleared only
+/// when the core reports the mute state back as off, so it stays on screen for
+/// as long as the output is muted.
+#[derive(Debug, Clone)]
+struct MuteToast {
+    message: String,
+    /// `clock.now` of creation, used only for the fade-in.
+    created_at: f64,
+}
+
+/// Which accumulator a playback key feeds. `,`/`.` share the seek accumulator
+/// and `-`/`+` share the volume one, so alternating between the two keys of a
+/// pair keeps folding into a single bubble instead of restarting the count.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum HoldKind {
+    Seek,
+    Volume,
+}
+
+impl HoldKind {
+    /// Which accumulator a playback key feeds.
+    fn of(key: char) -> Option<Self> {
+        match key {
+            ',' | '.' => Some(Self::Seek),
+            '-' | '+' => Some(Self::Volume),
+            _ => None,
+        }
+    }
+
+    /// Signed step one tap contributes: seconds for seeks, volume points for
+    /// volume. Both use the same 5-unit magnitude.
+    fn step(self, key: char) -> Option<f64> {
+        let sign = match key {
+            ',' | '-' => -1.0,
+            '.' | '+' => 1.0,
+            _ => return None,
+        };
+        match self {
+            HoldKind::Seek | HoldKind::Volume => Some(sign * HOLD_STEP),
+        }
+    }
+}
+
+/// The transient "held key" bubble (`,`, `.`, `-`, `+`). Every repeat refreshes
+/// the message and `at_ns`, so it needs none of the normal toast rules: it never
+/// stacks, never dedupes and never enters the 3-item cap.
 #[derive(Debug, Clone)]
 struct HoldToast {
     message: String,
+    /// Chevron for the volume pair (`up-fill` / `down-fill`); seeks have none.
+    icon: Option<&'static str>,
     /// `CLOCK_MONOTONIC` ns of the last refresh. Deliberately not `clock.now`:
     /// that only advances while frames render, so an idle window would make the
     /// first press look ancient and expire the bubble immediately.
@@ -376,9 +421,10 @@ struct HoldToast {
 }
 
 impl HoldToast {
-    fn new(message: String, now_ns: u64) -> Self {
+    fn new(message: String, icon: Option<&'static str>, now_ns: u64) -> Self {
         Self {
             message,
+            icon,
             at_ns: now_ns,
         }
     }
@@ -389,10 +435,15 @@ impl HoldToast {
     }
 }
 
-/// One held playback key. Repeats fold into `count` until the key is released.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// One held playback key group. Repeats fold into `count` and a signed `delta`
+/// until the key is released.
+#[derive(Debug, Clone, Copy, PartialEq)]
 struct KeyHold {
-    key: char,
+    kind: HoldKind,
+    /// Signed accumulated distance: seconds for [`HoldKind::Seek`], volume
+    /// points for [`HoldKind::Volume`]. `,` cancels `.` and `-` cancels `+`, so
+    /// spamming a mixed pair nets out while the count still adds up.
+    delta: f64,
     count: u32,
     /// `CLOCK_MONOTONIC` ns of the last key-down, for the stale-hold reset.
     at_ns: u64,
@@ -416,20 +467,30 @@ pub(in crate::ui) const HOLD_STEP: f64 = 5.0;
 const HOLD_TOAST_TTL_NS: u64 = 1_200_000_000;
 
 impl KeyHold {
-    /// Folds one key-down into the hold. A repeat of the same key inside
-    /// [`HOLD_STALE_NS`] increments; a different key or a stale hold restarts
-    /// at 1.
+    /// Folds one key-down into the hold. A key of the same family inside
+    /// [`HOLD_STALE_NS`] accumulates; another family or a stale hold restarts.
     fn record(previous: Option<KeyHold>, key: char, now_ns: u64) -> Self {
+        let Some(kind) = HoldKind::of(key) else {
+            return Self {
+                kind: HoldKind::Seek,
+                delta: 0.0,
+                count: 0,
+                at_ns: now_ns,
+            };
+        };
+        let step = kind.step(key).unwrap_or(0.0);
         match previous {
-            Some(hold) if hold.key == key && now_ns.saturating_sub(hold.at_ns) < HOLD_STALE_NS => {
+            Some(hold) if hold.kind == kind && now_ns.saturating_sub(hold.at_ns) < HOLD_STALE_NS => {
                 Self {
-                    key,
+                    kind,
+                    delta: hold.delta + step,
                     count: hold.count.saturating_add(1),
                     at_ns: now_ns,
                 }
             }
             _ => Self {
-                key,
+                kind,
+                delta: step,
                 count: 1,
                 at_ns: now_ns,
             },
@@ -814,6 +875,11 @@ struct AppRoot {
     /// Live counter bubble for the held playback key; TTL-owned by the render
     /// loop so a lost key-up cannot leave it behind.
     hold_toast: Option<HoldToast>,
+    /// Sticky mute bubble; cleared only when the core reports mute off.
+    mute_toast: Option<MuteToast>,
+    /// Volume level remembered when mute was engaged, so the sticky bubble can
+    /// report the level that will come back on unmute.
+    mute_toast_level: Option<i64>,
     line_search: line_search::LineSearchState,
     line_search_anim: anim::Behavior,
     command_line: command_line::CommandLineState,
@@ -904,6 +970,7 @@ impl AppRoot {
                             this.repeat = this.player.repeat();
                             this.clamp_queue_cursor();
                             this.drain_resync();
+                            this.sync_mute_toast(this.player.muted());
                             notify = old_state != this.player.state()
                                 || old_index != this.player.index()
                                 || old_loading != this.player.is_loading();
@@ -1090,6 +1157,8 @@ impl AppRoot {
             transport_press: [None; 3],
             playback_key_hold: None,
             hold_toast: None,
+            mute_toast: None,
+            mute_toast_level: None,
             line_search: line_search::LineSearchState::new(),
             line_search_anim: anim::Behavior::new(0.0),
             command_line: command_line::CommandLineState::new(),

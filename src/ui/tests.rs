@@ -243,14 +243,18 @@ mod reading_tests {
 #[cfg(test)]
 mod hold_tests {
     use crate::ui::app::shell::hold_message;
-    use crate::ui::{HOLD_STALE_NS, HOLD_STEP, HOLD_TOAST_TTL_NS, HoldToast, KeyHold};
+    use crate::ui::{HOLD_STALE_NS, HOLD_STEP, HOLD_TOAST_TTL_NS, HoldKind, HoldToast, KeyHold};
+
+    fn message(hold: KeyHold, volume: f64) -> String {
+        hold_message(hold, volume).0
+    }
 
     #[test]
     fn a_first_press_starts_a_hold() {
         let hold = KeyHold::record(None, '.', 1_000_000_000);
-        assert_eq!(hold.key, '.');
+        assert_eq!(hold.kind, HoldKind::Seek);
         assert_eq!(hold.count, 1);
-        assert_eq!(f64::from(hold.count) * HOLD_STEP, 5.0);
+        assert_eq!(hold.delta, HOLD_STEP);
     }
 
     #[test]
@@ -260,15 +264,56 @@ mod hold_tests {
         let third = KeyHold::record(Some(second), '.', 1_060_000_000);
         assert_eq!(second.count, 2);
         assert_eq!(third.count, 3);
-        assert_eq!(third.key, '.');
+        assert_eq!(third.delta, 3.0 * HOLD_STEP);
     }
 
     #[test]
-    fn a_different_key_restarts_the_hold() {
+    fn alternating_the_pair_keeps_counting() {
+        // Spamming `,` and `.` must fold into one bubble instead of restarting,
+        // and the pair nets out while the count still adds up.
+        let hold = ['.', ',', '.', ',', '.', '.']
+            .into_iter()
+            .enumerate()
+            .fold(None, |previous, (step, key)| {
+                Some(KeyHold::record(
+                    previous,
+                    key,
+                    1_000_000_000 + step as u64 * 40_000_000,
+                ))
+            })
+            .expect("fold");
+        assert_eq!(hold.kind, HoldKind::Seek);
+        assert_eq!(hold.count, 6);
+        // four `.` (+20 s) against two `,` (-10 s).
+        assert_eq!(hold.delta, 2.0 * HOLD_STEP);
+        assert_eq!(message(hold, 0.0), "Seek forward x6 (+10 s)");
+    }
+
+    #[test]
+    fn a_net_zero_spam_still_reports_its_count() {
+        let hold = ['.', ',']
+            .into_iter()
+            .enumerate()
+            .fold(None, |previous, (step, key)| {
+                Some(KeyHold::record(
+                    previous,
+                    key,
+                    1_000_000_000 + step as u64 * 40_000_000,
+                ))
+            })
+            .expect("fold");
+        assert_eq!(hold.count, 2);
+        assert_eq!(hold.delta, 0.0);
+        assert_eq!(message(hold, 0.0), "Seek x2 (0 s)");
+    }
+
+    #[test]
+    fn the_other_family_restarts_the_hold() {
         let hold = KeyHold::record(None, ',', 1_000_000_000);
-        let next = KeyHold::record(Some(hold), '.', 1_030_000_000);
-        assert_eq!(next.key, '.');
+        let next = KeyHold::record(Some(hold), '+', 1_030_000_000);
+        assert_eq!(next.kind, HoldKind::Volume);
         assert_eq!(next.count, 1);
+        assert_eq!(next.delta, HOLD_STEP);
     }
 
     #[test]
@@ -294,7 +339,7 @@ mod hold_tests {
     fn the_bubble_outlives_the_auto_repeat_delay_but_not_forever() {
         // The TTL must cover the press -> first repeat gap (~660 ms) or the
         // bubble blinks, and must still expire after a lost key-up.
-        let hold = HoldToast::new("Seek forward (+5 s)".to_string(), 1_000_000_000);
+        let hold = HoldToast::new("Seek forward (+5 s)".to_string(), None, 1_000_000_000);
         assert!(!hold.expired(1_000_000_000));
         assert!(!hold.expired(1_000_000_000 + 660_000_000));
         assert!(hold.expired(1_000_000_000 + HOLD_TOAST_TTL_NS));
@@ -302,15 +347,35 @@ mod hold_tests {
 
     #[test]
     fn the_bubble_counts_repeats_and_the_distance() {
-        assert_eq!(hold_message('.', 1, 0.0), "Seek forward (+5 s)");
-        assert_eq!(hold_message('.', 3, 0.0), "Seek forward x3 (+15 s)");
-        assert_eq!(hold_message(',', 2, 0.0), "Seek back x2 (-10 s)");
+        let press = |key: char, count: u32| {
+            let mut hold = KeyHold::record(None, key, 1_000_000_000);
+            for step in 1..count {
+                hold = KeyHold::record(Some(hold), key, 1_000_000_000 + u64::from(step) * 30_000_000);
+            }
+            hold
+        };
+        assert_eq!(message(press('.', 1), 0.0), "Seek forward (+5 s)");
+        assert_eq!(message(press('.', 3), 0.0), "Seek forward x3 (+15 s)");
+        assert_eq!(message(press(',', 2), 0.0), "Seek back x2 (-10 s)");
     }
 
     #[test]
-    fn the_bubble_reports_the_clamped_level() {
-        assert_eq!(hold_message('+', 1, 90.0), "Volume up (95%)");
-        assert_eq!(hold_message('+', 2, 90.0), "Volume up x2 (100%)");
-        assert_eq!(hold_message('-', 3, 10.0), "Volume down x3 (0%)");
+    fn the_bubble_reports_the_clamped_level_and_its_chevron() {
+        let press = |key: char, count: u32| {
+            let mut hold = KeyHold::record(None, key, 1_000_000_000);
+            for step in 1..count {
+                hold = KeyHold::record(Some(hold), key, 1_000_000_000 + u64::from(step) * 30_000_000);
+            }
+            hold
+        };
+        assert_eq!(message(press('+', 1), 90.0), "Volume up (95%)");
+        assert_eq!(message(press('+', 2), 90.0), "Volume up x2 (100%)");
+        assert_eq!(message(press('-', 3), 10.0), "Volume down x3 (0%)");
+        let (_, icon) = hold_message(press('+', 1), 90.0);
+        assert_eq!(icon, Some("up-fill.svg"));
+        let (_, icon) = hold_message(press('-', 1), 90.0);
+        assert_eq!(icon, Some("down-fill.svg"));
+        let (_, icon) = hold_message(press('.', 1), 90.0);
+        assert_eq!(icon, None);
     }
 }

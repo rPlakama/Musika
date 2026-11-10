@@ -388,7 +388,9 @@ impl AppRoot {
         let Some(hold) = self.playback_key_hold else {
             return;
         };
-        if hold.key != key {
+        // Either key of a family releases the whole fold: `,.` spammed together
+        // is one accumulator, so the first release commits the net delta.
+        if HoldKind::of(key) != Some(hold.kind) {
             return;
         }
         self.playback_key_hold = None;
@@ -397,29 +399,19 @@ impl AppRoot {
         cx.notify();
     }
 
-    /// Applies one held-key fold as a single absolute op. One absolute target
+    /// Applies one held-key group as a single absolute op. One absolute target
     /// per key release: the core owns the playhead and the volume, so a held key
-    /// coalesces into a single `Seek`/`SetVolume`.
+    /// (or a rapidly alternating pair) coalesces into one `Seek`/`SetVolume`.
     pub(in crate::ui) fn apply_playback_hold(&mut self, hold: KeyHold) {
-        let distance = f64::from(hold.count) * HOLD_STEP;
-        match hold.key {
-            ',' => {
-                let target = (self.player.position_now() - distance).max(0.0);
+        match hold.kind {
+            HoldKind::Seek => {
+                let target = (self.player.position_now() + hold.delta).max(0.0);
                 self.player.seek(target);
             }
-            '.' => {
-                let target = self.player.position_now() + distance;
-                self.player.seek(target);
-            }
-            '-' => {
-                let target = (self.player.volume() - distance).max(0.0);
+            HoldKind::Volume => {
+                let target = (self.player.volume() + hold.delta).clamp(0.0, 100.0);
                 self.player.set_volume(target);
             }
-            '+' => {
-                let target = (self.player.volume() + distance).min(100.0);
-                self.player.set_volume(target);
-            }
-            _ => unreachable!(),
         }
     }
 

@@ -770,7 +770,11 @@ impl AppRoot {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        // Show the sticky bubble on the expected state immediately; the next
+        // state frame re-applies `sync_mute_toast` with the core's truth.
+        let muted = !self.player.muted();
         self.player.toggle_mute();
+        self.sync_mute_toast(muted);
         cx.notify();
     }
 

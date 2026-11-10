@@ -6,12 +6,18 @@ open work; this file is the release history.
 ## Unreleased
 
 - Show a live counter toast while a playback key is held: `,`/`.` and `-`/`+`
-  refresh one bubble with the repeat count and the accumulated distance or the
+  refresh one bubble with the repeat count and the net distance or the
   resulting volume level (e.g. `Seek forward x3 (+15 s)`), which fades out a
-  moment after the key is released. Repeats are now timed instead of read from
+  moment after the key is released. The two keys of a pair share one
+  accumulator, so spamming `,` and `.` together keeps counting instead of
+  restarting (a net-zero spam still reports its count). Volume bubbles carry an
+  up/down chevron, and the mute state leaves a sticky toast on screen until it
+  is turned off. Repeats are now timed instead of read from
   `KeyDownEvent::is_held`, which fixes held keys never accumulating on X11, and
   a hold interrupted by a focus change is dropped instead of jumping on the
   next tap.
+- Move the toast stack to the bottom-right corner so it no longer covers the
+  player bar and progress readout.
 - Remove the idle repaint ticker and its 10 Hz/1 Hz/30 Hz demand throttle now
   that playback lives in the headless core. The UI requests the next frame for
   moving transport, loaders, sync, toasts and marquee/wrapping text itself, so

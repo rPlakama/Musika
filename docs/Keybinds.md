@@ -14,9 +14,9 @@ work, including the command line.
 | --- | --- |
 | `Space` | Play/pause |
 | `Ctrl-N` / `Ctrl-P` | Next / previous track |
-| `,` / `.` | Seek back / forward 5 s. Holding repeats; a toast counts the repeats and shows the accumulated distance (e.g. `Seek forward x3 (+15 s)`). |
-| `-` / `=` (`+`) | Volume down / up 5%, with the same held-key counter and the resulting level. |
-| `m` | Mute |
+| `,` / `.` | Seek back / forward 5 s. Holding repeats, and alternating the pair keeps counting in one bubble: the toast shows the repeat count plus the net distance (e.g. `Seek forward x3 (+15 s)`, or `Seek x4 (0 s)` when a `,.` spam nets out). |
+| `-` / `=` (`+`) | Volume down / up 5%, with the same held-key counter, a direction chevron and the resulting level. |
+| `m` | Mute. A sticky toast stays on screen until you unmute. |
 | `Ctrl-R` | Cycle repeat (off → all → one) |
 | `r` | Sync the library |
 | `Shift-Enter` | Toggle the fullscreen player |

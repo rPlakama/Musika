@@ -459,11 +459,10 @@ impl AppRoot {
         div()
             .absolute()
             .bottom(px(88.0))
-            .left_0()
-            .right_0()
+            .right(px(16.0))
             .flex()
             .flex_col()
-            .items_center()
+            .items_end()
             .gap_2()
             .children(self.toasts.iter().map(|toast| {
                 let age = (self.clock.now - toast.created_at) as f32;
@@ -474,24 +473,36 @@ impl AppRoot {
                 } else {
                     1.0
                 };
-                self.toast_bubble(&toast.message, opacity, toast.retry, cx)
+                self.toast_bubble(&toast.message, None, opacity, toast.retry, cx)
             }))
             .when_some(self.hold_toast.as_ref(), |this, hold| {
-                this.child(self.toast_bubble(&hold.message, 1.0, None, cx))
+                this.child(self.toast_bubble(&hold.message, hold.icon, 1.0, None, cx))
+            })
+            .when_some(self.mute_toast.as_ref(), |this, mute| {
+                let age = (self.clock.now - mute.created_at) as f32;
+                let opacity = (age / 0.120).clamp(0.0, 1.0);
+                this.child(self.toast_bubble(
+                    &mute.message,
+                    Some("vol-mute-svgrepo-com.svg"),
+                    opacity,
+                    None,
+                    cx,
+                ))
             })
     }
 
-    /// One toast card. Shared by the queued toasts and the held-key counter so
-    /// both read as the same surface.
+    /// One toast card. Shared by the queued toasts, the held-key counter and the
+    /// sticky mute bubble so they all read as the same surface.
     fn toast_bubble(
         &self,
         message: &str,
+        icon_name: Option<&str>,
         opacity: f32,
         retry: Option<RetryAction>,
         cx: &Context<Self>,
     ) -> gpui::Div {
         div()
-            .w(relative(0.42))
+            .max_w(px(280.0))
             .max_h(px(150.0))
             .px_4()
             .py_3()
@@ -502,7 +513,10 @@ impl AppRoot {
             .opacity(opacity)
             .flex()
             .items_center()
-            .gap_3()
+            .gap_2()
+            .when_some(icon_name, |this, name| {
+                this.child(icon(name, 14.0, palette::on_surface_variant()))
+            })
             .child(
                 div()
                     .flex()

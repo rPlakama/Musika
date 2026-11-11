@@ -3,7 +3,7 @@
 All notable changes to Musika, newest first. `TASKLISTMAJOR.md` tracks the
 open work; this file is the release history.
 
-## Unreleased
+## 0.6.9 - _Engine rework and UI extras_
 
 - Load the restored queue paused without reporting `loading`, so opening the app
   shows the transport as "Paused" immediately instead of spinning until the
@@ -42,6 +42,9 @@ open work; this file is the release history.
   and replies are never silently dropped. A 5 s heartbeat plus a 50 ms → 1 s
   reconnect/resync keeps the UI honest; `musika` and `musika-ui` must be built
   together.
+- Make seeks land on the requested second: the FFmpeg decoder now trims the
+  samples between the previous keyframe and the target, so Opus/Ogg playback no
+  longer starts up to half a second before the displayed position.
 - Make playback one event-driven `musika-playback` thread: `PlaybackCore` owns
   the queue policy and the `Engine` actor owns the PipeWire sink and the FFmpeg
   decode/preload workers, so the daemon no longer polls `Player::pump()` at

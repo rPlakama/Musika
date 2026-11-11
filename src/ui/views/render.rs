@@ -97,8 +97,8 @@ impl Render for AppRoot {
             return login.into_any_element();
         }
         let pending = std::mem::take(&mut self.pending_ipc);
-        for command in pending {
-            self.execute_ipc_command(command, window, cx);
+        for pending in pending {
+            self.execute_ipc_command(pending.command, pending.announce, window, cx);
         }
         let progress = self.search_anim.target(
             if self.search_open { 1.0 } else { 0.0 },

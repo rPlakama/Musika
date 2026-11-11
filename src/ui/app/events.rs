@@ -6,6 +6,7 @@ impl AppRoot {
     pub(in crate::ui) fn apply(&mut self, event: Event) {
         match event {
             Event::Command(_) => {}
+            Event::IpcRan(command) => self.toast_ipc(&command),
             Event::Header {
                 server_url,
                 username,

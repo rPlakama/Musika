@@ -478,14 +478,7 @@ impl AppRoot {
             .when_some(self.mute_toast.as_ref(), |this, mute| {
                 let age = (self.clock.now - mute.created_at) as f32;
                 let (fade, rise) = anim::toast_entrance(age);
-                this.child(self.toast_bubble(
-                    &mute.message,
-                    Some("vol-mute-svgrepo-com.svg"),
-                    fade,
-                    rise,
-                    None,
-                    cx,
-                ))
+                this.child(self.toast_bubble(&mute.message, None, fade, rise, None, cx))
             })
     }
 

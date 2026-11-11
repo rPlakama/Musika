@@ -121,7 +121,7 @@ async fn run_async() {
     {
         let services = services.clone();
         crate::ipc::serve(crate::ipc::socket_path(), move |line| {
-            dispatch_text(&services, &line)
+            dispatch_text(&services, &line, true)
         });
     }
 
@@ -237,7 +237,10 @@ async fn run_async() {
                     let dead = broadcast_event(&ui_clients, &event);
                     drop_clients(&mut ui_clients, dead);
                 }
-                status_dirty = true;
+                // Echo-only events do not change the persisted session.
+                if !matches!(event, Event::IpcRan(_)) {
+                    status_dirty = true;
+                }
             }
             Some(lifecycle) = lifecycle_rx.recv() => match lifecycle {
                 Lifecycle::Quit => quit = true,
@@ -253,7 +256,8 @@ async fn run_async() {
                 }
             }
             Some(line) = mpris_rx.recv() => {
-                let _ = dispatch_text(&services, &line);
+                // MPRIS is not an IPC surface: no command echo toast.
+                let _ = dispatch_text(&services, &line, false);
             }
             Some(output) = playback_rx.recv() => {
                 handle_playback_output(&mut ui_clients, output, &playback_control, &mut status_dirty);
@@ -378,8 +382,9 @@ async fn restore_status(playback: &PlaybackControl, page: &mut LastPage) {
 }
 
 /// Executes one text command. Returns a reply for read-only query commands;
-/// everything else stays fire-and-forget.
-fn dispatch_text(services: &Services, line: &str) -> Option<String> {
+/// everything else stays fire-and-forget. `announce` echoes the canonical
+/// command to the attached UI as a toast (socket/tray calls; MPRIS opts out).
+fn dispatch_text(services: &Services, line: &str, announce: bool) -> Option<String> {
     let command = match ipc_command::parse(line) {
         Ok(command) => command,
         Err(error) => {
@@ -387,6 +392,11 @@ fn dispatch_text(services: &Services, line: &str) -> Option<String> {
             return None;
         }
     };
+    if announce {
+        services
+            .bridge
+            .ipc_ran(ipc_command::canonical_string(&command));
+    }
     match command.target() {
         CommandTarget::CorePlayback => {
             if let Some(op) = playback::command_for_text(&command) {

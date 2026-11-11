@@ -24,6 +24,13 @@ or, with the default config location:
 printf 'shuffle queue\n' | nc -U ~/.config/musika/ipc.sock
 ```
 
+With a window attached, every command that runs is echoed in the UI as a toast
+(`IPC · <canonical command>`): commands the core executes from `ipc.sock`
+(including the tray items, which go through the same socket) are announced to
+the attached window, and commands typed on the `:` line are echoed when they
+execute. Without a window there is nothing to toast. MPRIS controls are not IPC
+and stay silent.
+
 ## Window and daemon
 
 Musika's core daemon keeps playing after the window closes. These commands are
@@ -44,7 +51,8 @@ ignored. See `docs/Daemon.md` for the process and socket architecture.
 
 Two read-only commands are answered by the core and work with no window open.
 Each returns exactly one JSON line on the same connection, so `nc -U` can read
-it back:
+it back. Typing them on the `:` line also works: the window asks the same
+socket in the background and shows the reply in a toast.
 
 ```sh
 printf 'status\n' | nc -U ~/.config/musika/ipc.sock

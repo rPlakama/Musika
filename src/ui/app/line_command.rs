@@ -465,7 +465,12 @@ impl AppRoot {
                     Ok(command) => {
                         self.close_command_line();
                         self.dismiss_search_overlay();
-                        self.pending_ipc.push(command);
+                        // Typed IPC gets the same echo the core gives socket
+                        // calls; forwarded socket commands arrive pre-announced.
+                        self.pending_ipc.push(PendingIpc {
+                            command,
+                            announce: true,
+                        });
                     }
                     Err(error) => {
                         let now = self.clock.now;

@@ -58,7 +58,7 @@ use self::widgets::media::{
     CoverSource, art, asset_root, collage_art_from_sources, cover_element, cover_source_with_remote,
     format_time, highlighted_text, icon, icon_downloaded, icon_download_pending, icon_favorite,
     icon_rotated, loading_placeholder, loading_skeleton, page_key, remote_cover, repeat_label,
-    transport_button, transport_loading_button,
+    transport_button, transport_loading_button, volume_meter,
 };
 use self::widgets::retained_cover::RetainedCover;
 use self::widgets::retained_icon::RetainedIcon;
@@ -353,6 +353,14 @@ enum ToastKind {
     Error,
     Sync,
     Notice,
+}
+
+/// One queued IPC/`:` command plus whether the surface that queued it must
+/// echo it in a toast. The command line does; commands forwarded from the
+/// core were already announced there (and key presses are not IPC at all).
+struct PendingIpc {
+    command: ipc_command::IpcCommand,
+    announce: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -885,7 +893,7 @@ struct AppRoot {
     command_line: command_line::CommandLineState,
     command_line_anim: anim::Behavior,
     command_suggestions_generation: u64,
-    pending_ipc: Vec<ipc_command::IpcCommand>,
+    pending_ipc: Vec<PendingIpc>,
     line_search_snapshot: Vec<line_search::LineTarget>,
     line_search_surfaces: Vec<LineSurface>,
     status_focus: Option<usize>,

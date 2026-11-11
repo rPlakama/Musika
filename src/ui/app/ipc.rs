@@ -5,7 +5,12 @@ use super::super::*;
 impl AppRoot {
     pub(in crate::ui) fn handle_command(&mut self, command: &str, cx: &mut Context<Self>) {
         match ipc_command::parse(command) {
-            Ok(command) => self.pending_ipc.push(command),
+            // Forwarded socket commands were announced by the core already;
+            // this path also serves internal key helpers (track next/prev).
+            Ok(command) => self.pending_ipc.push(PendingIpc {
+                command,
+                announce: false,
+            }),
             Err(error) => crate::debug_log!("ipc: ignored {command:?}: {error}"),
         }
         cx.notify();
@@ -16,11 +21,18 @@ impl AppRoot {
     pub(in crate::ui) fn execute_ipc_command(
         &mut self,
         command: ipc_command::IpcCommand,
+        announce: bool,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         use ipc_command::{IpcCommand, QuickDirection, WipeScope};
         use crate::ipc_protocol::PlayerOp;
+        // Commands typed on the `:` line are echoed here (socket commands were
+        // announced by the core). Announce before dispatch so an early return
+        // cannot swallow it.
+        if announce {
+            self.toast_ipc(&ipc_command::canonical_string(&command));
+        }
         // The core resolves relative volume/seek and the queue itself; the UI
         // only forwards the typed op (never a locally mutated value).
         if let Some(op) = command.player_op() {
@@ -235,10 +247,10 @@ impl AppRoot {
             | IpcCommand::SeekForward
             | IpcCommand::Seek(_)
             | IpcCommand::SeekRelative(_) => unreachable!("mapped above"),
-            // Read-only core queries; the daemon never forwards them here.
-            IpcCommand::Status | IpcCommand::QueueQuery => {
-                unreachable!("core-only query, never forwarded to the UI")
-            }
+            // Read-only core queries: ask the core over its text socket (the
+            // UI thread stays free) and echo the reply in a toast.
+            IpcCommand::Status => self.query_ipc("status", cx),
+            IpcCommand::QueueQuery => self.query_ipc("queue", cx),
             IpcCommand::PlaySong(id) => {
                 self.last_play = Some((id.clone(), self.view.order_label().to_string()));
                 self.bridge
@@ -288,5 +300,31 @@ impl AppRoot {
             IpcCommand::Quit => self.on_quit(&Quit, window, cx),
         }
         cx.notify();
+    }
+
+    /// Runs a read-only text query (`status`/`queue`) against the core socket
+    /// off the UI thread and echoes the reply in a toast. The core does not
+    /// forward these commands, so `:` is the only UI surface that runs them.
+    fn query_ipc(&mut self, line: &'static str, cx: &mut Context<Self>) {
+        cx.spawn(async move |this, cx| {
+            let reply = cx
+                .background_executor()
+                .spawn(async move { crate::ipc::send_query(line) })
+                .await;
+            let _ = this.update(cx, |this, cx| {
+                match reply {
+                    Some(text) => {
+                        this.push_toast(format!("{line} · {text}"), ToastKind::Notice, None);
+                    }
+                    None => this.push_toast(
+                        format!("{line}: the core did not answer."),
+                        ToastKind::Error,
+                        None,
+                    ),
+                }
+                cx.notify();
+            });
+        })
+        .detach();
     }
 }

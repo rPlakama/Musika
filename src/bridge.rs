@@ -181,6 +181,9 @@ pub enum Event {
         row_id: String,
     },
     Command(String),
+    /// One parsed IPC/`:` command that ran (or is about to). The attached UI
+    /// echoes it in a toast so scripted calls are visible.
+    IpcRan(String),
     Restore {
         volume: f64,
         muted: bool,
@@ -246,6 +249,11 @@ impl Bridge {
         let _ = self.tx.send(Event::Error(message.into()));
     }
 
+    /// Echoes one executed IPC command to the attached UI (canonical text).
+    pub fn ipc_ran(&self, command: String) {
+        let _ = self.tx.send(Event::IpcRan(command));
+    }
+
     /// Fullscreen cover focus: fetch the playing album's favourite/rating.
     pub fn request_album_state(&self, album_id: String) {
         let tx = self.tx.clone();
@@ -280,14 +288,18 @@ mod serde_tests {
 
     #[test]
     fn bridge_events_round_trip_json() {
-        let event = Event::OpenPage {
-            descriptor: crate::model::PageDescriptor::new(
-                crate::model::PageKind::Album,
-                "al1",
-            ),
-        };
-        let json = serde_json::to_string(&event).unwrap();
-        let back: Event = serde_json::from_str(&json).unwrap();
-        assert_eq!(serde_json::to_string(&back).unwrap(), json);
+        for event in [
+            Event::OpenPage {
+                descriptor: crate::model::PageDescriptor::new(
+                    crate::model::PageKind::Album,
+                    "al1",
+                ),
+            },
+            Event::IpcRan("playlist add selected; \"Mix\"".to_string()),
+        ] {
+            let json = serde_json::to_string(&event).unwrap();
+            let back: Event = serde_json::from_str(&json).unwrap();
+            assert_eq!(serde_json::to_string(&back).unwrap(), json);
+        }
     }
 }

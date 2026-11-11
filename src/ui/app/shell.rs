@@ -107,6 +107,17 @@ impl AppRoot {
         (length > 0.0005).then(|| ((start / duration) as f32, length))
     }
 
+    /// Echoes one executed IPC/`:` command: the command line and the core both
+    /// route through here so the toast format cannot drift.
+    pub(in crate::ui) fn toast_ipc(&mut self, command: &str) {
+        self.push_toast(Self::ipc_toast_text(command), ToastKind::Notice, None);
+    }
+
+    /// The toast text for one executed IPC command.
+    pub(in crate::ui) fn ipc_toast_text(command: &str) -> String {
+        format!("IPC · {command}")
+    }
+
     /// Records one key-down of a held playback key and refreshes the counter
     /// bubble in place. Returns the folded hold.
     pub(in crate::ui) fn hold_playback_key(&mut self, key: char) -> KeyHold {

@@ -46,6 +46,12 @@ fire-and-forget, and the read-only `status`/`queue` commands answer with one
 JSON line. Lines are capped at 64 KiB, a client gets 30 s to send one, and each
 connection has its own reader thread.
 
+Every successfully parsed `ipc.sock` command is also echoed to the attached UI
+as an `IpcRan` bridge event, which the window turns into a toast
+(`IPC · <canonical command>`); the tray menu goes through the same socket, so
+tray actions are echoed too. MPRIS-driven commands are marked non-IPC and are
+not echoed, and with no UI attached the event is simply dropped.
+
 ## Core/UI protocol
 
 `daemon.sock` is framed, not JSON-lines, and both binaries must be the same

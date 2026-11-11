@@ -480,3 +480,43 @@ pub(crate) fn icon_rotated(name: &str, size: f32, color: u32, degrees: f32) -> g
         )))
         .into_any_element()
 }
+
+/// The flat volume meter shared by the player bar and the fullscreen transport.
+/// The caller sizes the returned bar (`.flex_1()` or a fixed width); the fill
+/// keeps the current level visible in grey while the output is muted.
+pub(crate) fn volume_meter(volume: f64, muted: bool) -> gpui::Div {
+    div()
+        .h(px(3.0))
+        .min_w_0()
+        .rounded_full()
+        .overflow_hidden()
+        .bg(rgb(palette::surface_container_high()))
+        .child(
+            div()
+                .h_full()
+                .w(relative((volume / 100.0).clamp(0.0, 1.0) as f32))
+                .rounded_full()
+                .bg(rgb(volume_fill_color(muted))),
+        )
+}
+
+/// Fill colour of a volume meter: primary normally, dimmed grey while muted.
+pub(crate) fn volume_fill_color(muted: bool) -> u32 {
+    if muted {
+        palette::outline()
+    } else {
+        palette::primary()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn volume_meter_greys_out_while_muted() {
+        assert_eq!(volume_fill_color(false), palette::primary());
+        assert_eq!(volume_fill_color(true), palette::outline());
+        assert_ne!(volume_fill_color(true), volume_fill_color(false));
+    }
+}

@@ -14,7 +14,9 @@ fn endpoint_url_has_auth_and_extra_params() {
     let query: std::collections::HashMap<_, _> = url.query_pairs().into_owned().collect();
     assert_eq!(query.get("u").unwrap(), "alice");
     assert_eq!(query.get("v").unwrap(), API_VERSION);
-    assert_eq!(query.get("c").unwrap(), CLIENT_NAME);
+    // The subsonic `c` flag is the client identification servers display.
+    assert_eq!(query.get("c").unwrap(), "MUSIKA");
+    assert_eq!(CLIENT_NAME, "MUSIKA");
     assert_eq!(query.get("f").unwrap(), "json");
     assert_eq!(query.get("musicFolderId").unwrap(), "1");
     assert!(query.contains_key("t") && query.contains_key("s"));

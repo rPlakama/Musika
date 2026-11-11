@@ -5,6 +5,24 @@ open work; this file is the release history.
 
 ## Unreleased
 
+- Identify Musika to Subsonic/Navidrome: every request (and the login `ping`)
+  now sends the client flag `c=MUSIKA`, so servers and panels show the app by
+  name.
+- Echo every IPC call in a toast: commands the core runs from `ipc.sock`
+  (including the tray items) are announced to the attached window, and `:`
+  commands are echoed as they execute (`IPC · <canonical command>`). Typing the
+  read-only `status`/`queue` queries on the `:` line now works too — the window
+  asks the core over the text socket in the background and shows the JSON reply
+  in a toast (it used to hit a core-only `unreachable!` path).
+- Slim the bottom player bar: drop the elapsed/total readout and the speaker
+  icon, stretch the volume meter across the freed space, and grey its fill
+  while the output is muted (the muted toast no longer shows a speaker icon
+  either). The now-unused volume icon assets are removed.
+- Squash the fullscreen playback block: the artist shares the title line, the
+  transport buttons, progress bar, times and a new volume meter share one
+  control row (the key-hints line is gone; the hints stay in
+  `docs/Keybinds.md`), and the volume meter greys out while muted like the
+  bottom bar's.
 - Make the core's tray icon a playback indicator: the panel shows the pause
   glyph while audio is playing and the play glyph while the core is paused or
   stopped. Both come from the transport's own assets, rasterized from the

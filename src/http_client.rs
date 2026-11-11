@@ -21,7 +21,9 @@ use serde::de::DeserializeOwned;
 use std::sync::OnceLock;
 
 pub(crate) const API_VERSION: &str = "1.16.1";
-pub(crate) const CLIENT_NAME: &str = "musika";
+/// Client identification reported to the server (`c=` on every call and
+/// the login `ping`). Uppercase on purpose: servers surface it verbatim.
+pub(crate) const CLIENT_NAME: &str = "MUSIKA";
 
 /// One process-wide reqwest client: every `SubsonicClient` shares its
 /// connection pool and TLS session cache. Cloning a reqwest client is a

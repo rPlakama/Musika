@@ -149,6 +149,8 @@ impl AppRoot {
         } else {
             0.0
         };
+        let volume = self.player.volume();
+        let muted = self.player.muted();
         let lyrics = self.lyrics.as_ref();
         let lines = lyrics
             .map(|lyrics| lyrics.lines.clone())
@@ -279,6 +281,9 @@ impl AppRoot {
                     .w_full()
                     .gap_2()
                     .child(
+                        // One identity line: the title keeps the focus border
+                        // and its Alt anchor, with the artist tucked beside it
+                        // before the favourite/pending/download marks.
                         div()
                             .w_full()
                             .rounded_md()
@@ -331,6 +336,23 @@ impl AppRoot {
                                             ),
                                         ),
                                     )
+                                    .child(
+                                        // The artist rides the title line so
+                                        // the block loses a whole row of height.
+                                        div()
+                                            .flex_none()
+                                            .w(relative(0.24))
+                                            .min_w(px(80.0))
+                                            .overflow_hidden()
+                                            .child(MarqueeText::new(
+                                                "fullscreen-artist",
+                                                0,
+                                                artist,
+                                                12.0,
+                                                400.0,
+                                                palette::on_surface_variant(),
+                                            )),
+                                    )
                                     .when(favorite, |this| {
                                         this.child(icon(
                                             "baseline-favorite.svg",
@@ -355,22 +377,57 @@ impl AppRoot {
                             ),
                     )
                     .child(
-                        div().w_full().overflow_hidden().child(MarqueeText::new(
-                            "fullscreen-artist",
-                            0,
-                            artist,
-                            13.0,
-                            400.0,
-                            palette::on_surface_variant(),
-                        )),
-                    )
-                    .child(
+                        // Squashed control strip: transport, seek, times and
+                        // the volume meter on one baseline (the old design had
+                        // a progress row, a centred transport row and a hints
+                        // line). Key hints live in docs/Keybinds.md.
                         div()
                             .flex()
                             .items_center()
                             .gap_3()
+                            .w_full()
                             .child(
                                 div()
+                                    .flex()
+                                    .flex_none()
+                                    .items_center()
+                                    .gap_1()
+                                    .child(transport_button(
+                                        "skip-previous-solid-svgrepo-com.svg",
+                                        22.0,
+                                        palette::on_surface(),
+                                        self.transport_scale(0),
+                                    ))
+                                    .child(if self.player.is_loading() {
+                                        transport_loading_button(
+                                            "loading-loop.svg",
+                                            28.0,
+                                            palette::on_surface(),
+                                            self.transport_scale(1),
+                                            self.stream_loading_angle(),
+                                        )
+                                    } else {
+                                        transport_button(
+                                            if self.player.state() == crate::player::State::Playing {
+                                                "pause-svgrepo-com.svg"
+                                            } else {
+                                                "play-1001-svgrepo-com.svg"
+                                            },
+                                            28.0,
+                                            palette::on_surface(),
+                                            self.transport_scale(1),
+                                        )
+                                    })
+                                    .child(transport_button(
+                                        "skip-next-circle-solid-svgrepo-com.svg",
+                                        22.0,
+                                        palette::on_surface(),
+                                        self.transport_scale(2),
+                                    )),
+                            )
+                            .child(
+                                div()
+                                    .flex_none()
                                     .text_size(px(10.0))
                                     .text_color(rgb(palette::on_surface_variant()))
                                     .child(format_time(position)),
@@ -380,6 +437,7 @@ impl AppRoot {
                                     .relative()
                                     .flex()
                                     .flex_1()
+                                    .min_w(px(80.0))
                                     .h(px(4.0))
                                     .rounded_full()
                                     .bg(rgb(palette::surface_container_high()))
@@ -407,46 +465,21 @@ impl AppRoot {
                             )
                             .child(
                                 div()
+                                    .flex_none()
                                     .text_size(px(10.0))
                                     .text_color(rgb(palette::on_surface_variant()))
                                     .child(format_time(duration)),
+                            )
+                            // Volume insight, greyed out while the output is
+                            // muted (the same rule as the bottom player bar).
+                            .child(
+                                div()
+                                    .w(relative(0.12))
+                                    .min_w(px(64.0))
+                                    .max_w(px(160.0))
+                                    .flex_none()
+                                    .child(volume_meter(volume, muted)),
                             ),
-                    )
-                    .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .gap_5()
-                            .child(transport_button("skip-previous-solid-svgrepo-com.svg", 22.0, palette::on_surface(), self.transport_scale(0)))
-                            .child(if self.player.is_loading() {
-                                transport_loading_button(
-                                    "loading-loop.svg",
-                                    28.0,
-                                    palette::on_surface(),
-                                    self.transport_scale(1),
-                                    self.stream_loading_angle(),
-                                )
-                            } else {
-                                transport_button(
-                                    if self.player.state() == crate::player::State::Playing {
-                                        "pause-svgrepo-com.svg"
-                                    } else {
-                                        "play-1001-svgrepo-com.svg"
-                                    },
-                                    28.0,
-                                    palette::on_surface(),
-                                    self.transport_scale(1),
-                                )
-                            })
-                            .child(transport_button("skip-next-circle-solid-svgrepo-com.svg", 22.0, palette::on_surface(), self.transport_scale(2))),
-                    )
-                    .child(
-                        div()
-                            .text_size(px(10.0))
-                            .text_color(rgb(palette::on_surface_variant()))
-                            .text_center()
-                            .child("Tab cover/title/lyrics · Alt actions · Shift-Enter/q closes · Space play/pause · Ctrl-Q queue"),
                     ),
             )
     }

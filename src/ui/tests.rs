@@ -379,3 +379,17 @@ mod hold_tests {
         assert_eq!(icon, None);
     }
 }
+
+#[cfg(test)]
+mod ipc_toast_tests {
+    use super::*;
+
+    #[test]
+    fn ipc_echo_names_the_canonical_command() {
+        assert_eq!(AppRoot::ipc_toast_text("volume_up"), "IPC · volume_up");
+        assert_eq!(
+            AppRoot::ipc_toast_text("playlist add selected; \"Mix\""),
+            "IPC · playlist add selected; \"Mix\""
+        );
+    }
+}

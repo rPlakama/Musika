@@ -152,10 +152,12 @@ impl AppRoot {
     pub(in crate::ui) fn sync_lyrics_layout(&mut self, window: &Window) {
         let Some(lyrics) = self.lyrics.as_ref() else {
             self.lyrics_layout = None;
+            self.lyrics_shift.snap(0.0);
             return;
         };
         if lyrics.lines.is_empty() {
             self.lyrics_layout = None;
+            self.lyrics_shift.snap(0.0);
             return;
         }
         let overlay = self.lyrics_overlay;
@@ -171,6 +173,7 @@ impl AppRoot {
             )
         } else {
             self.lyrics_layout = None;
+            self.lyrics_shift.snap(0.0);
             return;
         };
         let active = self
@@ -208,30 +211,44 @@ impl AppRoot {
             );
         }
         // The column pan and the played-line highlight are separate behaviours:
-        // the pan is the follow glide, the highlight is per-line emphasis. A
-        // manual scroll already moves the pane with the user's own gesture, so
-        // adding the glide on top is what dragged the highlight along with the
-        // lyrics; while a hold is active the new window is applied directly.
-        let old_start = self.lyrics_window_start;
-        if layout.start != old_start && self.lyrics_hold.is_none() {
-            let unit = (layout.text_height + layout.gap).max(1.0);
-            self.lyrics_shift.target(
-                (layout.start as f32 - old_start as f32) * unit,
-                0.0,
-                anim::Curve::Standard,
-                &self.clock,
-            );
-            // Softer than the phrase transition: a long, calm settle instead
-            // of a quick recenter.
-            self.lyrics_shift.target(
-                0.0,
-                self.visuals.motion.lyrics_scroll_ms,
-                anim::Curve::Standard,
-                &self.clock,
-            );
-        } else {
-            self.lyrics_shift
-                .target(0.0, 0.0, anim::Curve::Standard, &self.clock);
+        // the pan is the follow glide (a line shared with the previous layout
+        // keeps its painted position exactly, so wrapped rows of different
+        // heights cannot make the column — and the highlight inside it —
+        // jump), the highlight is per-line emphasis. A manual scroll moves the
+        // pane with the user's own gesture, so it snaps the glide off instead
+        // of letting an in-flight follow keep dragging the column.
+        if self.lyrics_layout.as_ref() != Some(&layout) {
+            if self.lyrics_hold.is_some() {
+                self.lyrics_shift.snap(0.0);
+            } else if let Some(previous) = self.lyrics_layout.take() {
+                let current = self.lyrics_shift.value(&self.clock);
+                let glide = layout
+                    .glide_shift(&previous, previous.center)
+                    .or_else(|| layout.glide_shift(&previous, layout.center));
+                match glide {
+                    Some(shift) => {
+                        self.lyrics_shift.target(
+                            current + shift,
+                            0.0,
+                            anim::Curve::Standard,
+                            &self.clock,
+                        );
+                        // Softer than the phrase transition: a long, calm
+                        // settle instead of a quick recenter.
+                        self.lyrics_shift.target(
+                            0.0,
+                            self.visuals.motion.lyrics_scroll_ms,
+                            anim::Curve::Standard,
+                            &self.clock,
+                        );
+                    }
+                    // A far seek shares no line with the previous window, so
+                    // there is no meaningful anchor to glide from.
+                    None => self.lyrics_shift.snap(0.0),
+                }
+            } else {
+                self.lyrics_shift.snap(0.0);
+            }
         }
         self.lyrics_window_start = layout.start;
         self.lyrics_layout = Some(layout);

@@ -639,6 +639,52 @@ fn rating_commit_consumes_the_dirty_flag() {
 }
 
 #[test]
+fn each_rating_step_flushes_and_the_release_does_not_repeat() {
+    let menu = QuickMenu::album_with(false, false, 2);
+    let mut gesture = armed(&menu);
+    assert!(gesture.aim(Direction::South, &menu, false));
+
+    // Increase: the host pushes the level right away so the star row follows
+    // every action instead of only the release.
+    assert!(gesture.cycle(1, &menu));
+    assert_eq!(
+        gesture.commit_rating(&menu),
+        Some(QuickVerb::RateAlbum { level: 3 })
+    );
+
+    // Decrease: another immediate push at the new level.
+    assert!(gesture.cycle(-1, &menu));
+    assert_eq!(
+        gesture.commit_rating(&menu),
+        Some(QuickVerb::RateAlbum { level: 2 })
+    );
+
+    // The release finds nothing pending: no duplicate call, and the favourite
+    // underneath the rating slot is not toggled either.
+    assert_eq!(gesture.confirm_plan(&menu), None);
+    assert_eq!(gesture.commit_rating(&menu), None);
+    assert!(gesture.rating_touched);
+}
+
+#[test]
+fn clamped_rating_step_is_discarded_without_a_call() {
+    let menu = QuickMenu::album_with(false, false, 5);
+    let mut gesture = armed(&menu);
+    assert!(gesture.aim(Direction::South, &menu, false));
+
+    // At the top the press is consumed but the level does not move, so the
+    // host drops the pending level instead of sending 5 again.
+    assert!(gesture.cycle(1, &menu));
+    assert_eq!(gesture.rating_value, 5);
+    gesture.discard_rating();
+    assert_eq!(gesture.commit_rating(&menu), None);
+    assert!(
+        gesture.rating_touched,
+        "the release still skips the favourite"
+    );
+}
+
+#[test]
 fn confirm_plan_returns_the_aimed_verb() {
     let menu = QuickMenu::song();
     let mut gesture = armed(&menu);

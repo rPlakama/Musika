@@ -52,6 +52,10 @@ work, including the command line.
 | `Shift` + click | Extend the visual selection to the row |
 | Mouse Back / Forward | Previous / next place in the travel log |
 
+Visual selections are also addressable from the command line and the IPC
+socket: `: playlist add selected; "Rated R Mix"` appends every selected row to
+a playlist, expanding album and artist rows to their songs.
+
 Each page visit is a place in the travel log (`[b` / `]b`, mouse Back/Forward).
 Backing out of the last page reaches Home and clears the log: opening another
 page from Home starts a fresh trip, so its Back returns Home rather than the
@@ -99,7 +103,9 @@ album wall and the artist's full track list.
 
 The lyrics pane/overlay scrolls by hand for a few seconds and then returns to
 following the played line (5 s when the lyrics are in focus, 2 s otherwise);
-the wheel scrolls it as well.
+the wheel scrolls it as well. Only the lyric column glides when the phrase
+changes: the highlighted (focused) pane stays fixed, and starting a manual
+scroll stops an in-flight follow glide instead of letting it drag the column.
 
 ## Floating search
 
@@ -168,6 +174,11 @@ overlay. The previous argument scopes them, for example:
 | `Shift-H` / `Shift-L` | Within an aimed slot: step the favourite's rating, or cycle its verbs (album/song N cycles Add to Queue → Start Radio) |
 | Release `Alt` | Fire the aimed action; release over the neutral centre cancels |
 | Click a tile / click outside | Fire a tile / cancel a sticky menu |
+
+Each rating increase/decrease is sent to the core as it happens (a clamped
+step at 0 or 5 sends nothing), so the header star row follows every step
+instead of updating only when the hold ends. A rating step owns the release:
+it does not also toggle the favourite underneath it.
 
 Single-song rows and album rows/cards seed **Start Radio** from that row; a
 visual selection keeps the range verbs (no radio).

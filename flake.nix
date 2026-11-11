@@ -139,6 +139,18 @@
               src/icons/musika.svg \
               -o $out/share/icons/hicolor/''${size}x''${size}/apps/musika.png
           done
+
+          # Tray glyph: the daemon rasterizes the same asset for the SNI
+          # `IconPixmap` fallback; install it as the `musika-tray` themed icon
+          # for the `IconName` path hosts that prefer theme lookups take.
+          install -Dm644 src/icons/musika-tray-icon.svg \
+            $out/share/icons/hicolor/scalable/apps/musika-tray.svg
+          for size in 16 22 24 32 48 64; do
+            install -d $out/share/icons/hicolor/''${size}x''${size}/apps
+            ${pkgs.librsvg}/bin/rsvg-convert -w $size -h $size \
+              src/icons/musika-tray-icon.svg \
+              -o $out/share/icons/hicolor/''${size}x''${size}/apps/musika-tray.png
+          done
         '';
 
         meta = {

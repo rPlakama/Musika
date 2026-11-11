@@ -3,6 +3,39 @@
 All notable changes to Musika, newest first. `TASKLISTMAJOR.md` tracks the
 open work; this file is the release history.
 
+## Unreleased
+
+- Give the core's system tray its own glyph: `src/icons/musika-tray-icon.svg`
+  (a record mark simplified from the wordmark ring) is rasterized from the
+  runtime asset dir into StatusNotifier `IconPixmap` sizes 16–64 px, instead of
+  leaving the panel to guess a themed icon; the package also installs the same
+  artwork as the `musika-tray` hicolor icon for name lookups. A missing or
+  broken asset is not fatal — the tray still registers.
+- Pop toast bubbles in with a slight bezier overshoot: the card fades in while
+  rising a few pixels on the `OutBack` curve and settles back (the sticky mute
+  bubble pops in the same way), instead of a linear alpha ramp. The queued
+  toasts still fade out at the end of their lifetime.
+- Keep the lyric highlight still while the lyrics move: the follow glide now
+  anchors on the previously painted line using the real row heights (and the
+  pane's centring offset), so wrapped rows no longer jump or bounce the column
+  — and the highlighted (focused) lyrics pane is no longer translated with it,
+  only the lyric column inside it glides. A manual scroll snaps an in-flight
+  glide off instead of letting it keep dragging the column.
+- Send every star-row increase/decrease to the core immediately instead of one
+  final commit on the Alt release: the header star row now follows each
+  `Shift-H`/`Shift-L` rating step (and each IPC `quick_cycle` step), a clamped
+  step at 0 or 5 sends nothing, and the release no longer repeats the level.
+  A rating step still owns the release, so it never also toggles the favourite
+  underneath it.
+- Add `playlist add selected; <playlist>`: append the UI's live selection to a
+  playlist, covering the visual range of the active surface (the floating
+  search, the queue, an open page or the library) or the cursor row when no
+  range is active, like `yank`/`delete_row`. Selected album and artist rows
+  expand to their songs and playlist rows are skipped. The command line
+  suggests `selected` before the `;` cutoff. The selection lives in the UI, so
+  the command is forwarded to `musika-ui` and does nothing without an attached
+  window.
+
 ## 0.6.9 - _Engine rework and UI extras_
 
 - Load the restored queue paused without reporting `loading`, so opening the app

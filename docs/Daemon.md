@@ -123,6 +123,12 @@ freedesktop watcher:
   **Random** = play a random non-empty album from `library.db`,
   **Quit** = `quit` (flush status, close the UI child and stop the core).
 
+The item's icon comes from `musika-tray-icon.svg` in the runtime asset dir
+(`MUSIKA_ASSET_DIR/icons`, or `src/icons` for a cargo build), rasterized into
+SNI `IconPixmap` sizes 16–64 px, so it does not depend on the panel's icon
+theme. The package also installs the same artwork as the `musika-tray` hicolor
+icon for hosts or panel configs that look it up by name.
+
 Without a tray host the core still runs; the next `musika` launch opens the
 window. Under niri the UI also asks niri to focus its own window on an explicit
 `show` request, because Wayland/GPUI cannot activate applications itself.

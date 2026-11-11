@@ -270,12 +270,10 @@ impl Render for AppRoot {
         if self.hold_toast.is_some() {
             perf::request_frame(window, "hold-toast");
         }
-        // Sticky mute bubble: no TTL, so it repaints only while fading in.
-        if self
-            .mute_toast
-            .as_ref()
-            .is_some_and(|mute| self.clock.now - mute.created_at < 0.120)
-        {
+        // Sticky mute bubble: no TTL, so it repaints only while popping in.
+        if self.mute_toast.as_ref().is_some_and(|mute| {
+            self.clock.now - mute.created_at < f64::from(anim::TOAST_IN_MS / 1000.0)
+        }) {
             perf::request_frame(window, "mute-toast");
         }
         let reconnect_banner = self.reconnecting.clone().map(|notice| {

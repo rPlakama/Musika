@@ -108,7 +108,7 @@ mpris_position:5000000
 | Command | Usage |
 | --- | --- |
 | `playlist create` | `playlist create <name> [--offline]` |
-| `playlist add` | `playlist add <target>...; <playlist>` |
+| `playlist add` | `playlist add <target>...; <playlist>` or `playlist add selected; <playlist>` |
 | `playlist rm` | `playlist rm <target>...; <playlist>` or `playlist rm; <playlist>` |
 
 `playlist create` creates a playlist containing the currently playing track.
@@ -126,7 +126,18 @@ resolved through the same search engine as the Search overlay:
 - an artist expands to all of its songs;
 - an album expands to all of its tracks;
 - a track adds that one song;
-- the literal `current` adds the currently playing track.
+- the literal `current` adds the currently playing track;
+- the literal `selected` adds the rows currently selected in the UI.
+
+`selected` is the one target that is not resolved by name: it uses the live
+selection of the active surface. The floating search's range wins when the
+overlay is open; otherwise the queue selection, the open page's rows or the
+library rows are used. An active `visual` range contributes every selected row;
+without one the cursor row counts as a single selected row (like `yank` and
+`delete_row`). Selected album and artist rows expand to their songs, and
+playlist rows are skipped. Because the selection lives in the UI process,
+`selected` must be the only target and, like the navigation commands, needs an
+attached window — an `ipc.sock` client forwards it to `musika-ui`.
 
 The destination playlist name or id comes after the first unquoted `;`; it may
 be unquoted even when it has spaces. Before the `;` sits the target list
@@ -134,12 +145,14 @@ be unquoted even when it has spaces. Before the `;` sits the target list
 target may itself contain `;`). The legacy form without a cutoff — playlist is
 the last argument — is still accepted.
 
-Command-line suggestions follow the cutoff: before `;` you get `current` plus
-search hits for the targets, after `;` only existing playlist names (matched
-against the name typed so far, so a two-word name completes in one Tab).
+Command-line suggestions follow the cutoff: before `;` you get `current`,
+`selected` plus search hits for the targets, after `;` only existing playlist
+names (matched against the name typed so far, so a two-word name completes in
+one Tab).
 
 ```text
 playlist add current; "Rated R Mix"
+playlist add selected; "Rated R Mix"
 playlist add "Pink Floyd", "King Crimson"; Road Trip
 playlist add "Rated R" "Leg of Lamb"; Rated R Mix
 # legacy form, still accepted:
@@ -329,6 +342,7 @@ socket="${MUSIKA_IPC_SOCKET:-$HOME/.config/musika/ipc.sock}"
 printf 'shuffle album "Rated R"\n' | nc -U "$socket"
 printf 'radio album "Kid A"\n' | nc -U "$socket"
 printf 'playlist add current; "Road Trip"\n' | nc -U "$socket"
+printf 'playlist add selected; "Road Trip"\n' | nc -U "$socket" # needs an attached window
 printf 'playlist create "Road Trip" --offline\n' | nc -U "$socket"
 printf 'radio save --offline\n' | nc -U "$socket"
 printf 'download "Pink Floyd" album "Atom Heart Mother"\n' | nc -U "$socket"

@@ -466,25 +466,23 @@ impl AppRoot {
             .gap_2()
             .children(self.toasts.iter().map(|toast| {
                 let age = (self.clock.now - toast.created_at) as f32;
-                let opacity = if age < 0.120 {
-                    age / 0.120
-                } else if age > 6.0 {
-                    ((6.320 - age) / 0.320).clamp(0.0, 1.0)
-                } else {
-                    1.0
-                };
-                self.toast_bubble(&toast.message, None, opacity, toast.retry, cx)
+                // Pop in with a slight bezier overshoot; the fade-out at the
+                // end of the lifetime stays a plain fade.
+                let (fade, rise) = anim::toast_entrance(age);
+                let opacity = fade * ((6.320 - age) / 0.320).clamp(0.0, 1.0);
+                self.toast_bubble(&toast.message, None, opacity, rise, toast.retry, cx)
             }))
             .when_some(self.hold_toast.as_ref(), |this, hold| {
-                this.child(self.toast_bubble(&hold.message, hold.icon, 1.0, None, cx))
+                this.child(self.toast_bubble(&hold.message, hold.icon, 1.0, 0.0, None, cx))
             })
             .when_some(self.mute_toast.as_ref(), |this, mute| {
                 let age = (self.clock.now - mute.created_at) as f32;
-                let opacity = (age / 0.120).clamp(0.0, 1.0);
+                let (fade, rise) = anim::toast_entrance(age);
                 this.child(self.toast_bubble(
                     &mute.message,
                     Some("vol-mute-svgrepo-com.svg"),
-                    opacity,
+                    fade,
+                    rise,
                     None,
                     cx,
                 ))
@@ -492,16 +490,20 @@ impl AppRoot {
     }
 
     /// One toast card. Shared by the queued toasts, the held-key counter and the
-    /// sticky mute bubble so they all read as the same surface.
+    /// sticky mute bubble so they all read as the same surface. `rise` is the
+    /// entrance offset below the resting position (0 when not animating).
     fn toast_bubble(
         &self,
         message: &str,
         icon_name: Option<&str>,
         opacity: f32,
+        rise: f32,
         retry: Option<RetryAction>,
         cx: &Context<Self>,
     ) -> gpui::Div {
         div()
+            .relative()
+            .top(px(rise))
             .max_w(px(280.0))
             .max_h(px(150.0))
             .px_4()

@@ -121,6 +121,47 @@ impl Bridge {
 }
 
 impl Bridge {
+    /// Append the UI's current selection to an existing playlist
+    /// (`playlist add selected; <playlist>`). The selection lives in the UI
+    /// process, so the UI sends one row kind plus the selected ids; album and
+    /// artist selections expand here, like the row-clipboard paste.
+    pub fn playlist_add_selected(&self, kind: String, ids: Vec<String>, playlist: String) {
+        let tx = self.tx.clone();
+        crate::app::runtime().spawn(async move {
+            let Some(dbs) = crate::app::dbs() else { return };
+            let event =
+                match crate::playlists::add_selection_to_playlist(&dbs, &kind, &ids, &playlist)
+                    .await
+                {
+                    Ok((name, rows)) => Event::PlaylistSaved {
+                        name,
+                        offline: false,
+                        created: false,
+                        removed: false,
+                        moved: false,
+                        rows,
+                        playlist_id: None,
+                        cursor: None,
+                        error: None,
+                    },
+                    Err(err) => Event::PlaylistSaved {
+                        name: playlist,
+                        offline: false,
+                        created: false,
+                        removed: false,
+                        moved: false,
+                        rows: 0,
+                        playlist_id: None,
+                        cursor: None,
+                        error: Some(format!("{err:#}")),
+                    },
+                };
+            let _ = tx.send(event);
+        });
+    }
+}
+
+impl Bridge {
     /// Remove targets from an existing local/server playlist, mirroring
     /// [`Self::playlist_add`]; targets resolve through the same playlists
     /// backend (`playlist rm <target...>; <playlist>`).

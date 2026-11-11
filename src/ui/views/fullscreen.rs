@@ -244,20 +244,32 @@ impl AppRoot {
                             } else {
                                 palette::outline_variant()
                             }))
-                            .flex_col()
-                            .items_center()
-                            .justify_center()
-                            .gap(px(lyric_gap))
-                            .relative()
-                            .top(px(self.lyrics_shift.value(&self.clock)))
+                            .overflow_hidden()
                             .on_scroll_wheel(cx.listener(Self::on_lyrics_wheel))
+                            // The follow glide moves only the lyric column
+                            // inside the pane: the highlighted (focused) pane
+                            // itself stays put, so scrolling cannot bounce the
+                            // border and the whole box.
                             .child(
                                 div()
-                                    .text_size(px(10.0))
-                                    .text_color(rgb(palette::on_surface_variant()))
-                                    .child(lyrics_label),
-                            )
-                            .children(lyric_children),
+                                    .w_full()
+                                    .h_full()
+                                    .min_w_0()
+                                    .flex()
+                                    .flex_col()
+                                    .items_center()
+                                    .justify_center()
+                                    .gap(px(lyric_gap))
+                                    .relative()
+                                    .top(px(self.lyrics_shift.value(&self.clock)))
+                                    .child(
+                                        div()
+                                            .text_size(px(10.0))
+                                            .text_color(rgb(palette::on_surface_variant()))
+                                            .child(lyrics_label),
+                                    )
+                                    .children(lyric_children),
+                            ),
                     ),
             )
             .child(

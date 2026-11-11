@@ -399,6 +399,58 @@ impl AppRoot {
         count
     }
 
+    /// The active surface's current selection as one row kind plus its ids,
+    /// for `playlist add selected; <playlist>`. Mirrors `yank_surface`: the
+    /// floating search wins, then the queue, then a page, then the library.
+    /// The visual range is used when a selection is active; otherwise the
+    /// cursor row counts as a one-row selection, like `yank`/`delete_row`.
+    /// Playlist rows are skipped because a playlist cannot be appended by id.
+    pub(in crate::ui) fn selected_playlist_ids(&self) -> Option<(&'static str, Vec<String>)> {
+        if self.fullscreen || self.login.is_some() || self.command_line.is_open() {
+            return None;
+        }
+        if self.search_open
+            && let Some(search) = self.search.as_ref()
+        {
+            let scoped = search.scoped();
+            let rows: Vec<Row> = search
+                .selection
+                .indices(search.cursor(), false)
+                .into_iter()
+                .filter_map(|index| scoped.get(index).map(|row| (*row).clone()))
+                .collect();
+            return clipboard_ids_from_rows(rows)
+                .and_then(|(kind, ids)| kind.queue_kind().map(|kind| (kind, ids)));
+        }
+        if self.queue_open {
+            let queue = self.player.queue_snapshot();
+            let ids: Vec<String> = self
+                .queue_selection
+                .indices(self.queue_cursor, false)
+                .into_iter()
+                .filter_map(|index| queue.get(index).map(|track| track.id.clone()))
+                .filter(|id| !id.is_empty())
+                .collect();
+            return (!ids.is_empty()).then_some(("song", ids));
+        }
+        let rows: Vec<Row> = if let Some(page) = self.page.as_ref() {
+            page.selection
+                .indices(page.cursor, false)
+                .into_iter()
+                .filter_map(|index| page.rows.get(index).cloned())
+                .collect()
+        } else {
+            self.view
+                .selection
+                .indices(self.view.cursor, false)
+                .into_iter()
+                .filter_map(|index| self.view.rows.row(index).cloned())
+                .collect()
+        };
+        clipboard_ids_from_rows(rows)
+            .and_then(|(kind, ids)| kind.queue_kind().map(|kind| (kind, ids)))
+    }
+
     fn announce_yank(&mut self, count: usize, missing: usize) {
         if count == 0 {
             self.push_toast(

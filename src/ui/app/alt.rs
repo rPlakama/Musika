@@ -615,6 +615,8 @@ impl AppRoot {
                     self.dispatch_quick(verb);
                     acted = true;
                 }
+                // Every rating step was already pushed by `alt_cycle`; this
+                // flush only catches a level that never got sent.
                 if let Some(verb) = self.alt.commit_rating(&menu) {
                     self.dispatch_quick(verb);
                     acted = true;
@@ -780,6 +782,27 @@ impl AppRoot {
         cx.notify();
     }
 
+    /// Shift-H/L over the aimed tile: step a rating or rotate a multi-action
+    /// slot. A rating step is pushed to the core immediately, so the header
+    /// star row follows every increase/decrease instead of only the release
+    /// commit (a clamped step sends nothing because the level did not change).
+    pub(in crate::ui) fn alt_cycle(&mut self, delta: i32) {
+        let Some(menu) = self.alt_menu.clone() else {
+            return;
+        };
+        let before = self.alt.rating_value;
+        if !self.alt.cycle(delta, &menu) {
+            return;
+        }
+        if self.alt.rating_value == before {
+            self.alt.discard_rating();
+            return;
+        }
+        if let Some(verb) = self.alt.commit_rating(&menu) {
+            self.dispatch_quick(verb);
+        }
+    }
+
     pub(in crate::ui) fn on_alt_key(&mut self, event: &gpui::KeyDownEvent, cx: &mut Context<Self>) {
         let key = event.keystroke.key.as_str();
         let shift = event.keystroke.modifiers.shift;
@@ -791,14 +814,10 @@ impl AppRoot {
                 self.animate_alt(0.0);
             }
             "h" if shift => {
-                if let Some(menu) = self.alt_menu.clone() {
-                    self.alt.cycle(-1, &menu);
-                }
+                self.alt_cycle(-1);
             }
             "l" if shift => {
-                if let Some(menu) = self.alt_menu.clone() {
-                    self.alt.cycle(1, &menu);
-                }
+                self.alt_cycle(1);
             }
             "h" | "left" => {
                 if let Some(menu) = self.alt_menu.clone() {
@@ -806,14 +825,10 @@ impl AppRoot {
                 }
             }
             "j" if control => {
-                if let Some(menu) = self.alt_menu.clone() {
-                    self.alt.cycle(1, &menu);
-                }
+                self.alt_cycle(1);
             }
             "k" if control => {
-                if let Some(menu) = self.alt_menu.clone() {
-                    self.alt.cycle(-1, &menu);
-                }
+                self.alt_cycle(-1);
             }
             "j" | "down" | "ctrl-j" => {
                 if let Some(menu) = self.alt_menu.clone() {

@@ -1071,6 +1071,38 @@ pub async fn add_song_ids_to_playlist(
     Ok(display_playlist_name(&playlist.name))
 }
 
+/// Append an already-selected set of rows to a playlist (the
+/// `playlist add selected; <playlist>` path). The UI sends its selection as
+/// one row kind plus the selected ids: songs are added as-is, albums and
+/// artists expand to their songs in selection order, mirroring the row
+/// clipboard paste. The playlist resolves by id or name like
+/// [`add_to_playlist`]. Returns the playlist name and the number of tracks
+/// the append covers.
+pub async fn add_selection_to_playlist(
+    dbs: &Dbs,
+    kind: &str,
+    ids: &[String],
+    playlist_query: &str,
+) -> Result<(String, usize)> {
+    let playlist = resolve_playlist(dbs, playlist_query).await?;
+    let ids: Vec<String> = ids
+        .iter()
+        .map(|id| id.trim().to_string())
+        .filter(|id| !id.is_empty())
+        .collect();
+    if ids.is_empty() {
+        return Err(anyhow!("No songs selected to add."));
+    }
+    let songs = crate::queue::quick_songs_many(dbs, kind, &ids).await?;
+    let song_ids: Vec<String> = songs.into_iter().map(|song| song.id).collect();
+    if song_ids.is_empty() {
+        return Err(anyhow!("No songs selected to add."));
+    }
+    let rows = dedup_keep_last(&song_ids).len();
+    append_resolved(dbs, &playlist, &song_ids).await?;
+    Ok((display_playlist_name(&playlist.name), rows))
+}
+
 async fn append_resolved(dbs: &Dbs, playlist: &PlaylistRef, song_ids: &[String]) -> Result<()> {
     let song_ids = dedup_keep_last(song_ids);
     if song_ids.is_empty() {

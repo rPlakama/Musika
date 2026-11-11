@@ -93,6 +93,17 @@ impl AppRoot {
                 let current = self.player.current().map(|track| track.id.clone());
                 self.bridge.playlist_add(targets, playlist, current);
             }
+            IpcCommand::PlaylistAddSelected { playlist } => match self.selected_playlist_ids() {
+                Some((kind, ids)) => {
+                    self.bridge
+                        .playlist_add_selected(kind.to_string(), ids, playlist);
+                }
+                None => self.push_toast(
+                    "Nothing selected to add.".to_string(),
+                    ToastKind::Notice,
+                    None,
+                ),
+            },
             IpcCommand::PlaylistRemove { targets, playlist } => {
                 let current = self.player.current().map(|track| track.id.clone());
                 self.bridge.playlist_remove(targets, playlist, current);
@@ -262,9 +273,7 @@ impl AppRoot {
                 }
             }
             IpcCommand::QuickCycle { next } => {
-                if let Some(menu) = self.alt_menu.clone() {
-                    self.alt.cycle(if next { 1 } else { -1 }, &menu);
-                }
+                self.alt_cycle(if next { 1 } else { -1 });
             }
             IpcCommand::QuickCancel => {
                 self.alt.dismiss();

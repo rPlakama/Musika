@@ -31,10 +31,13 @@
 //! unit-tested (or driven by the IPC `quick_aim`/`quick_cycle` hooks) without
 //! a window.
 //!
-//! The legacy UI 180 ms rating debounce is a host timer. This model only carries the
-//! flags that timer needs: [`AltGesture::rating_dirty`] (a level is not on the
-//! server yet) and [`AltGesture::rating_touched`] (a step happened during this
-//! hold, so the release must not also toggle the favourite underneath it).
+//! The host pushes every rating step to the core immediately (the legacy UI
+//! used a 180 ms debounce), so the visible star row follows each
+//! increase/decrease instead of jumping only when the hold ends. This model
+//! still carries the two flags the host needs: [`AltGesture::rating_dirty`] (a
+//! level that is not on the server yet) and [`AltGesture::rating_touched`] (a
+//! step happened during this hold, so the release must not also toggle the
+//! favourite underneath it).
 
 /// One invokable Alt verb.
 ///
@@ -499,8 +502,8 @@ pub struct AltGesture {
     pub action_index: [usize; 4],
     /// Live 0..=5 rating level while the favourite slot is adjusted.
     pub rating_value: u8,
-    /// The level is not on the server yet (the host's idle timer/release
-    /// flushes it once).
+    /// The level is not on the server yet. The host flushes each step right
+    /// away and flushes a leftover once more on the release edge.
     pub rating_dirty: bool,
     /// A rating step happened in this hold: the release must not also toggle
     /// the favourite underneath it.
@@ -592,6 +595,10 @@ impl AltGesture {
     /// clamped to 0..=5; a slot with more than one action rotates its active
     /// verb; a single-action slot is a no-op. Returns `true` when something
     /// changed (legacy UI bounces the aimed tile then).
+    ///
+    /// A rating step only updates the live level here: the host flushes it with
+    /// [`AltGesture::commit_rating`] immediately so the star row tracks every
+    /// step instead of only the release.
     pub fn cycle(&mut self, delta: i32, menu: &QuickMenu) -> bool {
         if !self.armed {
             return false;
@@ -694,9 +701,10 @@ impl AltGesture {
         self.active_verb(menu)
     }
 
-    /// Flush the pending rating level (the host's 180 ms idle timer and the
-    /// Alt release both call this). Returns the `RateAlbum`/`RateArtist` verb
-    /// once and clears `rating_dirty`; a second call returns `None`.
+    /// Flush the pending rating level. The host calls this after every rating
+    /// step (so the star row follows each increase/decrease) and once more on
+    /// the Alt release; a second call returns `None`. Returns the
+    /// `RateAlbum`/`RateArtist` verb once and clears `rating_dirty`.
     pub fn commit_rating(&mut self, menu: &QuickMenu) -> Option<QuickVerb> {
         if !self.rating_dirty {
             return None;
@@ -711,6 +719,14 @@ impl AltGesture {
         };
         self.rating_dirty = false;
         Some(verb)
+    }
+
+    /// Drop a pending rating level without emitting it. A clamped increase or
+    /// decrease (already 0 or 5) changes nothing, so there is no step to push;
+    /// the hold still remembers it so the release does not toggle the
+    /// favourite underneath the rating slot.
+    pub fn discard_rating(&mut self) {
+        self.rating_dirty = false;
     }
 
     /// legacy UI `cancel()`: leave the board, clear the transient rating and sticky

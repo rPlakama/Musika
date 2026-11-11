@@ -1017,6 +1017,91 @@ async fn add_song_ids_and_remove_positions_edit_a_local_m3u() {
     let _ = std::fs::remove_dir_all(root);
 }
 
+/// `playlist add selected;` hands the UI selection to the backend as one row
+/// kind plus ids: songs append as-is and album rows expand to their tracks,
+/// in selection order, without ever duplicating an entry.
+#[tokio::test]
+async fn add_selection_expands_songs_and_albums() {
+    let _guard = PLAYLIST_FOLDER_LOCK.lock().await;
+    let library = memory_pool().await;
+    sqlx::migrate!("./migrations_library")
+        .run(&library)
+        .await
+        .unwrap();
+    sqlx::raw_sql(
+        "INSERT INTO artists (id, name, album_count) VALUES ('ar1', 'Artist', 1);
+         INSERT INTO albums (id, artist_id, name, artist, song_count)
+             VALUES ('al1', 'ar1', 'Album', 'Artist', 2);
+         INSERT INTO songs
+             (id, album_id, artist_id, title, artist, album, track, disc_number, duration, path)
+         VALUES
+             ('s1', 'al1', 'ar1', 'First', 'Artist', 'Album', 1, 1, 100, 'Music/first.flac'),
+             ('s2', 'al1', 'ar1', 'Second', 'Artist', 'Album', 2, 1, 200, 'Music/second.flac');",
+    )
+    .execute(&library)
+    .await
+    .unwrap();
+    let playlist = memory_pool().await;
+    sqlx::migrate!("./migrations_playlist")
+        .run(&playlist)
+        .await
+        .unwrap();
+    let dbs = test_dbs(&library, &playlist);
+    let root = std::env::temp_dir().join(format!("musika-selection-add-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    crate::db::set_data_root(root.clone());
+
+    let path = create_local(&dbs, "Sel Mix", &["s1".into()]).await.unwrap();
+    let paths = |text: &str| {
+        parse_m3u(text)
+            .into_iter()
+            .map(|entry| entry.path)
+            .collect::<Vec<_>>()
+    };
+
+    // A song selection appends in selection order; re-adding s1 moves it.
+    let (name, rows) =
+        add_selection_to_playlist(&dbs, "song", &["s2".into(), "s1".into()], "Sel Mix")
+            .await
+            .unwrap();
+    assert_eq!((name.as_str(), rows), ("Sel Mix", 2));
+    assert_eq!(
+        paths(&std::fs::read_to_string(&path).unwrap()),
+        vec!["Music/second.flac", "Music/first.flac"]
+    );
+
+    // An album selection expands to every track of the album.
+    let (name, rows) = add_selection_to_playlist(&dbs, "album", &["al1".into()], "Sel Mix")
+        .await
+        .unwrap();
+    assert_eq!((name.as_str(), rows), ("Sel Mix", 2));
+    assert_eq!(
+        paths(&std::fs::read_to_string(&path).unwrap()),
+        vec!["Music/first.flac", "Music/second.flac"]
+    );
+
+    // An empty selection, an unknown row kind and an unknown playlist all
+    // report an error instead of rewriting the file.
+    assert!(
+        add_selection_to_playlist(&dbs, "song", &[], "Sel Mix")
+            .await
+            .is_err()
+    );
+    assert!(
+        add_selection_to_playlist(&dbs, "bogus", &["s1".into()], "Sel Mix")
+            .await
+            .is_err()
+    );
+    assert!(
+        add_selection_to_playlist(&dbs, "song", &["s1".into()], "Missing")
+            .await
+            .is_err()
+    );
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
 /// Server `d d` maps cached positions to song ids and removes them, then
 /// reloads the ordered entries and the list count.
 #[tokio::test]

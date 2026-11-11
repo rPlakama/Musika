@@ -1178,6 +1178,13 @@ fn dispatch_bridge(bridge: &Bridge, method: &str, args: &serde_json::Value) -> b
                 bridge.playlist_add(targets, playlist, arg(args, "current_song_id"));
             }
         }
+        "playlist_add_selected" => {
+            if let (Some(kind), Some(ids), Some(playlist)) =
+                (arg(args, "kind"), arg(args, "ids"), arg(args, "playlist"))
+            {
+                bridge.playlist_add_selected(kind, ids, playlist);
+            }
+        }
         "playlist_remove" => {
             if let (Some(targets), Some(playlist)) = (arg(args, "targets"), arg(args, "playlist")) {
                 bridge.playlist_remove(targets, playlist, arg(args, "current_song_id"));
@@ -1259,6 +1266,20 @@ mod tests {
         assert_eq!(
             ipc_command::parse("move_down").unwrap().target(),
             CommandTarget::Presentation
+        );
+        // The selection lives in the UI, so the selected-rows playlist add is
+        // forwarded to the attached UI instead of running in the core.
+        assert_eq!(
+            ipc_command::parse("playlist add selected; Mix")
+                .unwrap()
+                .target(),
+            CommandTarget::Presentation
+        );
+        assert_eq!(
+            ipc_command::parse("playlist add current; Mix")
+                .unwrap()
+                .target(),
+            CommandTarget::CoreBridge
         );
         assert_eq!(
             ipc_command::parse("quit").unwrap().target(),

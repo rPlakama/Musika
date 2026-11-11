@@ -1004,6 +1004,13 @@ impl RemoteBridge {
         )
     }
 
+    pub fn playlist_add_selected(&self, kind: String, ids: Vec<String>, playlist: String) -> u32 {
+        self.client.send_request(
+            "playlist_add_selected",
+            json!({ "kind": kind, "ids": ids, "playlist": playlist }),
+        )
+    }
+
     pub fn playlist_remove(
         &self,
         targets: Vec<String>,

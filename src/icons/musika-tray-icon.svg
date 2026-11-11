@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24">
+  <!-- Musika tray glyph: the wordmark ring reduced to a record, so it stays
+       readable at panel sizes (16-24 px). White ink is baked in for dark
+       panels, like every other glyph asset (scripts/check-icons.sh). -->
+  <circle cx="12" cy="12" r="9.2" fill="none" stroke="#FFFFFF" stroke-width="2.2"/>
+  <circle cx="12" cy="12" r="4.8" fill="none" stroke="#FFFFFF" stroke-width="1.5"/>
+  <circle cx="12" cy="12" r="1.6" fill="#FFFFFF"/>
+</svg>

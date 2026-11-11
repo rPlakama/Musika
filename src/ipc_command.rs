@@ -44,6 +44,11 @@ pub enum IpcCommand {
         targets: Vec<String>,
         playlist: String,
     },
+    /// Append the UI's current selection (the `visual` range or cursor row) to
+    /// a playlist: `playlist add selected; <playlist>`.
+    PlaylistAddSelected {
+        playlist: String,
+    },
     PlaylistRemove {
         targets: Vec<String>,
         playlist: String,
@@ -260,7 +265,10 @@ impl IpcCommand {
             // radio-save page state) only make sense with a UI attached.
             | Self::AddAccount
             | Self::WipeDatabases
-            | Self::RadioSave { .. } => T::Presentation,
+            | Self::RadioSave { .. }
+            // The selection lives in the UI process, so the selected-rows
+            // playlist add is presentation work like `yank`/`delete_row`.
+            | Self::PlaylistAddSelected { .. } => T::Presentation,
         }
     }
 }
@@ -452,7 +460,7 @@ pub const COMMANDS: &[CommandSpec] = &[
     CommandSpec {
         name: "playlist",
         usage: "playlist <create|add|rm> ...",
-        description: "Create, add/remove targets or delete a playlist (playlist rm <target...>; <name>, playlist rm <name>)",
+        description: "Create, add/remove targets or delete a playlist (playlist rm <target...>; <name>, playlist add selected; <name>, playlist rm <name>)",
         args: ArgSpec::Enum(&["create", "add", "rm"]),
     },
     CommandSpec {
@@ -1380,12 +1388,25 @@ fn parse_playlist(rest: &str) -> Result<IpcCommand, CommandError> {
             }
             if subcommand == "rm" {
                 Ok(IpcCommand::PlaylistRemove { targets, playlist })
+            } else if targets.len() == 1 && is_selected_target(&targets[0]) {
+                Ok(IpcCommand::PlaylistAddSelected { playlist })
+            } else if targets.iter().any(|target| is_selected_target(target)) {
+                // `selected` names the UI's live selection, so it cannot be
+                // mixed with free-form targets (those resolve in the daemon).
+                Err(CommandError(
+                    "usage: playlist add selected; <playlist>".to_string(),
+                ))
             } else {
                 Ok(IpcCommand::PlaylistAdd { targets, playlist })
             }
         }
         _ => Err(CommandError("usage: playlist <create|add|rm> ...".to_string())),
     }
+}
+
+/// The `selected` target keyword of `playlist add selected; <playlist>`.
+fn is_selected_target(value: &str) -> bool {
+    value.eq_ignore_ascii_case("selected")
 }
 
 pub(crate) fn quote_arg(value: &str) -> String {
@@ -1464,6 +1485,9 @@ pub fn canonical_string(command: &IpcCommand) -> String {
             out.push_str("; ");
             out.push_str(&quote_arg(playlist));
             out
+        }
+        PlaylistAddSelected { playlist } => {
+            format!("playlist add selected; {}", quote_arg(playlist))
         }
         PlaylistDelete { playlist } => format!("playlist rm; {}", quote_arg(playlist)),
         PlaylistRemove { targets, playlist } => {
@@ -1842,6 +1866,18 @@ fn playlist_suggestions(
             completion: Some("current".to_string()),
         });
     }
+    if !playlist_only
+        && before.get(1).copied() == Some("add")
+        && "selected".starts_with(&prefix_lower)
+    {
+        out.push(Suggestion {
+            start,
+            end,
+            label: "selected".to_string(),
+            description: "Add the visual selection (or the cursor row)".to_string(),
+            completion: Some("selected".to_string()),
+        });
+    }
     for row in context.rows.iter().filter(|row| row.kind == "playlist") {
         if !prefix_lower.is_empty() && !row.title.to_lowercase().starts_with(&prefix_lower) {
             continue;
@@ -2214,6 +2250,26 @@ mod tests {
     }
 
     #[test]
+    fn playlist_add_suggests_the_selection_target() {
+        let context = SuggestionContext::default();
+        let all = suggestions_with("playlist add ", "playlist add ".len(), &context);
+        assert!(
+            all.iter()
+                .any(|s| s.label == "selected" && s.completion.as_deref() == Some("selected"))
+        );
+        let prefixed = suggestions_with("playlist add sel", "playlist add sel".len(), &context);
+        assert_eq!(prefixed.len(), 1);
+        assert_eq!(prefixed[0].completion.as_deref(), Some("selected"));
+        // `playlist rm` has no selected-target form.
+        let rm = suggestions_with("playlist rm ", "playlist rm ".len(), &context);
+        assert!(!rm.iter().any(|s| s.label == "selected"));
+        // After the cutoff only playlist names are offered.
+        let input = "playlist add selected; ";
+        let after = suggestions_with(input, input.len(), &context);
+        assert!(!after.iter().any(|s| s.label == "selected"));
+    }
+
+    #[test]
     fn suggests_the_current_track_for_download() {
         let context = SuggestionContext {
             current: Some(CurrentTrack {
@@ -2322,6 +2378,35 @@ mod tests {
                 playlist: "Road Trip".into()
             })
         );
+        // `selected` names the UI's live selection, not a resolved target.
+        assert_eq!(
+            parse("playlist add selected; \"Road Trip\""),
+            Ok(IpcCommand::PlaylistAddSelected {
+                playlist: "Road Trip".into()
+            })
+        );
+        assert_eq!(
+            parse("playlist add SELECTED; Road Trip"),
+            Ok(IpcCommand::PlaylistAddSelected {
+                playlist: "Road Trip".into()
+            })
+        );
+        assert_eq!(
+            parse("playlist add selected \"Road Trip\""),
+            Ok(IpcCommand::PlaylistAddSelected {
+                playlist: "Road Trip".into()
+            }),
+            "the legacy last-token form accepts selected too"
+        );
+        assert!(
+            parse("playlist add \"Pink Floyd\" selected; Road Trip").is_err(),
+            "selected cannot be mixed with free-form targets"
+        );
+        assert!(parse("playlist add selected;").is_err());
+        assert_eq!(
+            canonical_string(&parse("playlist add selected; \"Road Trip\"").unwrap()),
+            "playlist add selected; \"Road Trip\""
+        );
         assert_eq!(
             parse("radio save"),
             Ok(IpcCommand::RadioSave { offline: false })
@@ -2395,6 +2480,7 @@ mod tests {
             "playlist create Road Trip",
             "playlist create Road Trip --offline",
             "playlist add \"Pink Floyd\" \"King Crimson\" \"Road Trip\"",
+            "playlist add selected; \"Road Trip\"",
             "radio save",
             "radio save --offline",
             "shuffle queue",

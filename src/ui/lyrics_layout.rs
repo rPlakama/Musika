@@ -35,6 +35,37 @@ impl LyricsLayout {
             width: 0.0,
         }
     }
+
+    /// The full height of the windowed column: every row plus the gaps.
+    pub fn content_height(&self) -> f32 {
+        self.rows.iter().map(|row| row.height).sum::<f32>()
+            + self.gap * self.rows.len().saturating_sub(1) as f32
+    }
+
+    /// Distance from the column's top edge to the row `index`, when that line
+    /// is inside this window.
+    fn row_top(&self, index: usize) -> Option<f32> {
+        let position = self.rows.iter().position(|row| row.index == index)?;
+        let mut y = 0.0;
+        for row in &self.rows[..position] {
+            y += row.height + self.gap;
+        }
+        Some(y)
+    }
+
+    /// The shift to paint this layout with so a line shared with `previous`
+    /// stays exactly where `previous` painted it: the lyric follow glide.
+    /// The column is centred in the pane, so the total height change moves it
+    /// by half; using the real row heights keeps wrapped lines from jumping
+    /// when the window scrolls (a uniform row step cannot, because lyric rows
+    /// differ in height). `None` when the anchor is not inside both windows
+    /// (a far seek), where no meaningful glide exists.
+    pub fn glide_shift(&self, previous: &Self, anchor: usize) -> Option<f32> {
+        let before = previous.row_top(anchor)?;
+        let after = self.row_top(anchor)?;
+        let height_delta = self.content_height() - previous.content_height();
+        Some(height_delta * 0.5 + before - after)
+    }
 }
 
 /// Measure the number of wrapped lines for one lyric at `size` and `width`.
@@ -253,5 +284,62 @@ mod tests {
         // Out-of-range anchors clamp instead of panicking.
         let clamped = layout_windowed(&lines, 0, 999, 500.0, 300.0, 18.0, char_lines);
         assert_eq!(clamped.center, 19);
+    }
+
+    /// Painted y of a line relative to the pane centre, without the constant
+    /// pane height (it cancels in the glide difference).
+    fn painted_y(layout: &LyricsLayout, index: usize) -> f32 {
+        -layout.content_height() * 0.5 + layout.row_top(index).unwrap()
+    }
+
+    #[test]
+    fn glide_shift_keeps_the_anchor_line_in_place() {
+        let lines = lines(100);
+        let old = layout(&lines, 50, 500.0, 300.0, 18.0, char_lines);
+        let new = layout(&lines, 51, 500.0, 300.0, 18.0, char_lines);
+        let anchor = old.center;
+        let shift = new.glide_shift(&old, anchor).expect("anchor stays visible");
+        assert!(
+            (painted_y(&old, anchor) - (painted_y(&new, anchor) + shift)).abs() < 0.01,
+            "the previous phrase must keep its painted position"
+        );
+        // With uniform rows and the same window size the exact glide is one
+        // row: the next phrase starts below the centre and rises into it.
+        let row_step = new.rows[0].height + new.gap;
+        assert!(
+            (shift - row_step).abs() < 0.01,
+            "uniform rows glide exactly one row: {shift} vs {row_step}"
+        );
+    }
+
+    #[test]
+    fn glide_shift_uses_the_real_row_heights() {
+        // A wrapped neighbour changes the column height, so a uniform row step
+        // is wrong; the exact glide keeps the painted line in place.
+        let mut lines: Vec<(Option<i64>, String)> = (0..40)
+            .map(|index| (Some(index as i64 * 1000), format!("line {index}")))
+            .collect();
+        lines[19].1 = "a longer line".to_string();
+        let old = layout(&lines, 20, 500.0, 300.0, 18.0, char_lines);
+        let new = layout(&lines, 21, 500.0, 300.0, 18.0, char_lines);
+        let anchor = old.center;
+        let shift = new.glide_shift(&old, anchor).expect("anchor stays visible");
+        assert!(
+            (painted_y(&old, anchor) - (painted_y(&new, anchor) + shift)).abs() < 0.01,
+            "wrapped rows must not jump the column"
+        );
+        let uniform_step = new.rows[0].height + new.gap;
+        assert!(
+            (shift - uniform_step).abs() > 0.5,
+            "the wrapped row makes the exact glide differ from a row step: {shift}"
+        );
+    }
+
+    #[test]
+    fn glide_shift_is_none_without_a_shared_line() {
+        let lines = lines(100);
+        let old = layout(&lines, 10, 500.0, 300.0, 18.0, char_lines);
+        let far = layout(&lines, 80, 500.0, 300.0, 18.0, char_lines);
+        assert!(far.glide_shift(&old, old.center).is_none());
     }
 }

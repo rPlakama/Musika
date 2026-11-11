@@ -143,6 +143,16 @@ impl Behavior {
     pub fn settled(&self, clock: &Clock) -> bool {
         REDUCE_MOTION || clock.now - self.start >= self.duration as f64
     }
+
+    /// Jump to `value` without animation. Unlike `target(value, 0.0)` this
+    /// also stops an in-flight glide whose target already equals `value`.
+    pub fn snap(&mut self, value: f32) {
+        self.from = value;
+        self.to = value;
+        self.start = 0.0;
+        self.duration = 0.0;
+        self.initialized = true;
+    }
 }
 
 fn cubic(x1: f32, y1: f32, x2: f32, y2: f32, x: f32) -> f32 {
@@ -205,6 +215,34 @@ mod tests {
         behavior.target(0.0, 1000.0, Curve::Linear, &clock);
         assert!((behavior.value(&clock) - mid).abs() < 1e-4);
     }
+
+    #[test]
+    fn snap_stops_an_in_flight_glide() {
+        let mut clock = Clock::new();
+        clock.now = 0.0;
+        let mut behavior = Behavior::new(0.0);
+        behavior.target(30.0, 300.0, Curve::Linear, &clock);
+        clock.now = 0.1;
+        assert!(behavior.value(&clock) > 0.0);
+        behavior.snap(0.0);
+        assert_eq!(behavior.value(&clock), 0.0);
+        assert!(behavior.settled(&clock));
+    }
+
+    #[test]
+    fn toast_entrance_fades_in_with_a_slight_overshoot() {
+        let (opacity, rise) = toast_entrance(0.0);
+        assert_eq!(opacity, 0.0);
+        assert_eq!(rise, TOAST_RISE_PX);
+
+        // The OutBack crest passes the resting position, then settles back.
+        let (opacity, rise) = toast_entrance(TOAST_IN_MS / 1000.0 * 0.5);
+        assert!(opacity > 0.0);
+        assert!(rise < 0.0, "the pop overshoots upward: {rise}");
+
+        assert_eq!(toast_entrance(TOAST_IN_MS / 1000.0), (1.0, 0.0));
+        assert_eq!(toast_entrance(1.0), (1.0, 0.0), "settled afterwards");
+    }
 }
 
 /// The red denied-flash envelope shared by the floating search, `/` and `:`.
@@ -219,6 +257,22 @@ pub fn denied_opacity(started_at: Option<f64>, now: f64) -> f32 {
     } else {
         (1.0 - (elapsed - 0.03) / 0.12).clamp(0.0, 1.0)
     }
+}
+
+/// How long a new toast takes to pop in.
+pub const TOAST_IN_MS: f32 = 220.0;
+
+/// The toast starts this far below its resting position and rises into it.
+pub const TOAST_RISE_PX: f32 = 6.0;
+
+/// The toast entrance at `age` seconds since it was pushed: `(opacity,
+/// rise_px)`. Both are eased with the slight-overshoot `OutBack` bezier, so the
+/// bubble fades in while popping up, overshooting its resting position by a
+/// pixel or so before settling.
+pub fn toast_entrance(age: f32) -> (f32, f32) {
+    let t = (age / (TOAST_IN_MS / 1000.0)).clamp(0.0, 1.0);
+    let eased = Curve::OutBack.sample(t);
+    (eased.clamp(0.0, 1.0), (1.0 - eased) * TOAST_RISE_PX)
 }
 
 /// legacy UI `ColorAnim` semantics: straight-alpha component-wise sRGB interpolation,

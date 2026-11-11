@@ -749,6 +749,9 @@ fn bootstrap_client(
 
 fn publish_mpris(snapshot: &Snapshot) {
     let state = snapshot.state;
+    // The tray icon doubles as a playback indicator: the pause glyph while
+    // audio plays, the play glyph while the core is paused or stopped.
+    crate::tray::set_playing(matches!(state.state(), proto::StateWire::Playing));
     let current = current_track(snapshot);
     crate::mpris::publish(crate::mpris::Snapshot {
         playback_status: match state.state() {

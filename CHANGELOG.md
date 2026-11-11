@@ -5,12 +5,13 @@ open work; this file is the release history.
 
 ## Unreleased
 
-- Give the core's system tray its own glyph: `src/icons/musika-tray-icon.svg`
-  (a record mark simplified from the wordmark ring) is rasterized from the
-  runtime asset dir into StatusNotifier `IconPixmap` sizes 16–64 px, instead of
-  leaving the panel to guess a themed icon; the package also installs the same
-  artwork as the `musika-tray` hicolor icon for name lookups. A missing or
-  broken asset is not fatal — the tray still registers.
+- Make the core's tray icon a playback indicator: the panel shows the pause
+  glyph while audio is playing and the play glyph while the core is paused or
+  stopped. Both come from the transport's own assets, rasterized from the
+  runtime asset dir into StatusNotifier `IconPixmap` sizes 16–64 px, so the
+  glyph does not depend on the panel's icon theme; the core repaints it only
+  when the playback state flips. A missing or broken asset is not fatal — the
+  tray still registers.
 - Pop toast bubbles in with a slight bezier overshoot: the card fades in while
   rising a few pixels on the `OutBack` curve and settles back (the sticky mute
   bubble pops in the same way), instead of a linear alpha ramp. The queued

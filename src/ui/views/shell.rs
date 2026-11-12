@@ -584,9 +584,9 @@ impl AppRoot {
             .text_color(rgb(palette::on_surface_variant()))
             .child({
                 let visual = if let Some(page) = self.page.as_ref() {
-                    page.selection.count(page.cursor)
+                    page.list.selection.count(page.list.cursor)
                 } else {
-                    self.view.selection.count(self.view.cursor)
+                    self.view.list.selection.count(self.view.list.cursor)
                 };
                 if visual > 0 {
                     format!(

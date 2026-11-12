@@ -156,7 +156,7 @@ impl AppRoot {
     fn current_song_id(&self) -> Option<String> {
         self.page
             .as_ref()
-            .and_then(|page| page.rows.get(page.cursor))
+            .and_then(|page| page.rows.get(page.list.cursor))
             .filter(|row| row.kind == state::RowKind::Song)
             .map(|row| row.song_id.clone())
             .filter(|id| !id.is_empty())
@@ -174,7 +174,7 @@ impl AppRoot {
             .or_else(|| {
                 self.view
                     .rows
-                    .row(self.view.cursor)
+                    .row(self.view.list.cursor)
                     .filter(|row| row.kind == state::RowKind::Song)
                     .map(|row| row.song_id.clone())
                     .filter(|id| !id.is_empty())

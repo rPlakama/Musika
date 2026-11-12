@@ -154,9 +154,9 @@ impl AppRoot {
     pub(in crate::ui) fn clear_line_search_selection(&mut self) {
         self.visual_mode = false;
         self.queue_selection.clear();
-        self.view.selection.clear();
+        self.view.list.selection.clear();
         if let Some(page) = self.page.as_mut() {
-            page.selection.clear();
+            page.list.selection.clear();
         }
     }
 

@@ -516,52 +516,52 @@ impl AppRoot {
             ));
         }
         if let Some(page) = self.page.as_ref()
-            && page.selection.active()
+            && page.list.selection.active()
         {
-            let anchor_index = page.selection.anchor().unwrap_or(page.cursor);
-            let lo = anchor_index.min(page.cursor);
-            let hi = anchor_index.max(page.cursor);
+            let anchor_index = page.list.selection.anchor().unwrap_or(page.list.cursor);
+            let lo = anchor_index.min(page.list.cursor);
+            let hi = anchor_index.max(page.list.cursor);
             let rows = page.rows.get(lo..=hi).unwrap_or_default().to_vec();
             if let Some(hit) = self.alt_selection_target(
                 rows,
-                page.cursor.saturating_sub(lo),
-                self.alt_scroll_anchor(&self.page_scroll_modal, page.cursor, page.rows.len()),
+                page.list.cursor.saturating_sub(lo),
+                self.alt_scroll_anchor(&self.page_scroll_modal, page.list.cursor, page.rows.len()),
             ) {
                 return Some(hit);
             }
         }
         if let Some(page) = self.page.as_ref() {
-            let row = page.rows.get(page.cursor)?;
+            let row = page.rows.get(page.list.cursor)?;
             return Some((
                 self.alt_menu_for_row(row),
                 self.alt_target_for_row(row),
-                self.alt_scroll_anchor(&self.page_scroll_modal, page.cursor, page.rows.len()),
+                self.alt_scroll_anchor(&self.page_scroll_modal, page.list.cursor, page.rows.len()),
             ));
         }
-        if self.view.selection.active() {
-            let anchor_index = self.view.selection.anchor().unwrap_or(self.view.cursor);
-            let lo = anchor_index.min(self.view.cursor);
-            let hi = anchor_index.max(self.view.cursor);
+        if self.view.list.selection.active() {
+            let anchor_index = self.view.list.selection.anchor().unwrap_or(self.view.list.cursor);
+            let lo = anchor_index.min(self.view.list.cursor);
+            let hi = anchor_index.max(self.view.list.cursor);
             let rows: Vec<Row> = (lo..=hi)
                 .filter_map(|index| self.view.rows.get(index).cloned())
                 .collect();
             if let Some(hit) = self.alt_selection_target(
                 rows,
-                self.view.cursor.saturating_sub(lo),
+                self.view.list.cursor.saturating_sub(lo),
                 self.alt_scroll_anchor(
                     &self.library_scroll,
-                    self.view.cursor,
+                    self.view.list.cursor,
                     self.view.rows.count,
                 ),
             ) {
                 return Some(hit);
             }
         }
-        let row = self.view.rows.get(self.view.cursor)?;
+        let row = self.view.rows.get(self.view.list.cursor)?;
         Some((
             self.alt_menu_for_row(row),
             self.alt_target_for_row(row),
-            self.alt_scroll_anchor(&self.library_scroll, self.view.cursor, self.view.rows.count),
+            self.alt_scroll_anchor(&self.library_scroll, self.view.list.cursor, self.view.rows.count),
         ))
     }
 

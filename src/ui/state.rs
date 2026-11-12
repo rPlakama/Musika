@@ -85,16 +85,41 @@ impl RowWindow {
     }
 }
 
+/// The state every list surface shares: the cursor position and the visual
+/// range anchor. Each surface owns its rows (a [`RowWindow`], a page's row
+/// vector, the live queue) and reads the cursor through this state.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct ListState {
+    pub cursor: usize,
+    pub selection: Selection,
+}
+
+impl ListState {
+    /// Clamp `index` into a list of `len` rows (an empty list keeps the head).
+    pub fn select(&mut self, index: usize, len: usize) {
+        self.cursor = if len == 0 { 0 } else { index.min(len - 1) };
+    }
+
+    /// The id of the row under the cursor, or `None` on an empty surface.
+    pub fn row_id<'a>(&self, rows: impl FnOnce(usize) -> Option<&'a Row>) -> Option<&'a str> {
+        rows(self.cursor).map(|row| row.id.as_str())
+    }
+
+    /// Back to the head with no visual range.
+    pub fn clear(&mut self) {
+        self.cursor = 0;
+        self.selection.clear();
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct ViewState {
     pub scope: Scope,
     pub order: usize,
     pub rows: RowWindow,
-    pub cursor: usize,
-    pub scroll: f32,
+    pub list: ListState,
     pub loading: bool,
     pub error: Option<String>,
-    pub selection: Selection,
     /// Container state for the superior bar's contextual chips (Album/Artist).
     pub container_cached: bool,
     pub container_downloading: bool,
@@ -109,11 +134,9 @@ impl Default for ViewState {
             scope: Scope::Albums,
             order: 0,
             rows: RowWindow::default(),
-            cursor: 0,
-            scroll: 0.0,
+            list: ListState::default(),
             loading: true,
             error: None,
-            selection: Selection::default(),
             container_cached: false,
             container_downloading: false,
             covers: Vec::new(),
@@ -144,13 +167,11 @@ impl ViewState {
     }
 
     pub fn clear_for(&mut self, scope: Scope) {
-        self.selection.clear();
+        self.list.clear();
         self.scope = scope;
         self.order = 0;
         self.rows.clear();
         self.covers.clear();
-        self.cursor = 0;
-        self.scroll = 0.0;
         self.loading = true;
         self.error = None;
     }
@@ -172,11 +193,7 @@ impl ViewState {
     }
 
     pub fn select(&mut self, index: usize) {
-        if self.rows.is_empty() {
-            self.cursor = 0;
-            return;
-        }
-        self.cursor = index.min(self.rows.len() - 1);
+        self.list.select(index, self.rows.len());
     }
 }
 
@@ -218,10 +235,10 @@ mod tests {
             ..ViewState::default()
         };
         view.select(99);
-        assert_eq!(view.cursor, 0);
+        assert_eq!(view.list.cursor, 0);
         view.rows.clear();
         view.select(4);
-        assert_eq!(view.cursor, 0);
+        assert_eq!(view.list.cursor, 0);
     }
 
     #[test]
@@ -275,11 +292,9 @@ pub struct PageState {
     pub descriptor: PageDescriptor,
     pub header: PageHeader,
     pub rows: Vec<Row>,
-    pub cursor: usize,
-    pub scroll: f32,
+    pub list: ListState,
     pub loading: bool,
     pub error: Option<String>,
-    pub selection: Selection,
     /// Container state for the superior bar's contextual chips (Album/Artist).
     pub container_cached: bool,
     pub container_downloading: bool,
@@ -305,11 +320,9 @@ impl PageState {
                 starred: false,
             },
             rows: Vec::new(),
-            cursor: 0,
-            scroll: 0.0,
+            list: ListState::default(),
             loading: true,
             error: None,
-            selection: Selection::default(),
             container_cached: false,
             container_downloading: false,
             covers: Vec::new(),
@@ -329,11 +342,7 @@ impl PageState {
     }
 
     pub fn select(&mut self, index: usize) {
-        if self.rows.is_empty() {
-            self.cursor = 0;
-        } else {
-            self.cursor = index.min(self.rows.len() - 1);
-        }
+        self.list.select(index, self.rows.len());
     }
 }
 
@@ -497,7 +506,7 @@ mod page_kind_tests {
     fn page_select_clamps() {
         let mut page = PageState::new(PageDescriptor::new(PageKind::Album, "a"));
         page.select(4);
-        assert_eq!(page.cursor, 0);
+        assert_eq!(page.list.cursor, 0);
         page.rows = vec![Row {
             track: String::new(),
             id: "s".into(),
@@ -514,7 +523,7 @@ mod page_kind_tests {
             downloaded: false,
         }];
         page.select(9);
-        assert_eq!(page.cursor, 0);
+        assert_eq!(page.list.cursor, 0);
     }
 }
 

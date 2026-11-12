@@ -55,13 +55,13 @@ impl AppRoot {
         }
         if let Some(page) = self.page.as_mut() {
             if !self.visual_mode {
-                page.selection.clear();
+                page.list.selection.clear();
             }
-            page.select(page.cursor.saturating_add(1));
+            page.select(page.list.cursor.saturating_add(1));
             self.hovered_page = None;
             self.follow_page(true);
         } else {
-            self.select(self.view.cursor.saturating_add(1));
+            self.select(self.view.list.cursor.saturating_add(1));
         }
         cx.notify();
     }
@@ -96,13 +96,13 @@ impl AppRoot {
         }
         if let Some(page) = self.page.as_mut() {
             if !self.visual_mode {
-                page.selection.clear();
+                page.list.selection.clear();
             }
-            page.select(page.cursor.saturating_sub(1));
+            page.select(page.list.cursor.saturating_sub(1));
             self.hovered_page = None;
             self.follow_page(true);
         } else {
-            self.select(self.view.cursor.saturating_sub(1));
+            self.select(self.view.list.cursor.saturating_sub(1));
         }
         cx.notify();
     }
@@ -434,15 +434,16 @@ impl AppRoot {
             return (!ids.is_empty()).then_some(("song", ids));
         }
         let rows: Vec<Row> = if let Some(page) = self.page.as_ref() {
-            page.selection
-                .indices(page.cursor, false)
+            page.list.selection
+                .indices(page.list.cursor, false)
                 .into_iter()
                 .filter_map(|index| page.rows.get(index).cloned())
                 .collect()
         } else {
             self.view
+                .list
                 .selection
-                .indices(self.view.cursor, false)
+                .indices(self.view.list.cursor, false)
                 .into_iter()
                 .filter_map(|index| self.view.rows.row(index).cloned())
                 .collect()
@@ -491,7 +492,7 @@ impl AppRoot {
             return count;
         }
         let page_rows = self.page.as_ref().map(|page| {
-            let indices = page.selection.indices(page.cursor, row_only);
+            let indices = page.list.selection.indices(page.list.cursor, row_only);
             indices
                 .iter()
                 .filter_map(|index| page.rows.get(*index).cloned())
@@ -500,13 +501,13 @@ impl AppRoot {
         if let Some(rows) = page_rows {
             let count = self.clipboard_from_rows(rows);
             if let Some(page) = self.page.as_mut() {
-                page.selection.clear();
+                page.list.selection.clear();
             }
             self.visual_mode = false;
             self.announce_yank(count, 0);
             return count;
         }
-        let indices = self.view.selection.indices(self.view.cursor, row_only);
+        let indices = self.view.list.selection.indices(self.view.list.cursor, row_only);
         let selected = indices.len();
         let rows: Vec<Row> = indices
             .iter()
@@ -514,7 +515,7 @@ impl AppRoot {
             .collect();
         let missing = selected.saturating_sub(rows.len());
         let count = self.clipboard_from_rows(rows);
-        self.view.selection.clear();
+        self.view.list.selection.clear();
         self.visual_mode = false;
         self.announce_yank(count, missing);
         count
@@ -587,7 +588,7 @@ impl AppRoot {
                 .map(|page| {
                     PasteTarget::Playlist(
                         page.descriptor.id.clone(),
-                        paste_at(page.cursor, above),
+                        paste_at(page.list.cursor, above),
                     )
                 })
         };
@@ -675,8 +676,9 @@ impl AppRoot {
             return;
         };
         let indices: Vec<usize> = page
+            .list
             .selection
-            .indices(page.cursor, false)
+            .indices(page.list.cursor, false)
             .into_iter()
             .filter(|index| *index < page.rows.len())
             .collect();
@@ -684,8 +686,8 @@ impl AppRoot {
             return;
         }
         let first = indices[0];
-        page.cursor = first;
-        page.selection.clear();
+        page.list.cursor = first;
+        page.list.selection.clear();
         let playlist_id = page.descriptor.id.clone();
         self.visual_mode = false;
         self.bridge
@@ -762,7 +764,7 @@ impl AppRoot {
         if page.descriptor.kind != PageKind::Playlist {
             return;
         }
-        let indices = page.selection.indices(page.cursor, false);
+        let indices = page.list.selection.indices(page.list.cursor, false);
         let Some(&start) = indices.first() else {
             return;
         };
@@ -772,13 +774,13 @@ impl AppRoot {
         {
             return;
         }
-        let cursor = (page.cursor as i64 + i64::from(delta)) as usize;
-        if page.selection.active() {
-            page.selection.shift(delta);
+        let cursor = (page.list.cursor as i64 + i64::from(delta)) as usize;
+        if page.list.selection.active() {
+            page.list.selection.shift(delta);
         }
-        page.cursor = cursor;
+        page.list.cursor = cursor;
         let playlist_id = page.descriptor.id.clone();
-        self.visual_mode = page.selection.active();
+        self.visual_mode = page.list.selection.active();
         self.bridge
             .move_playlist_block(playlist_id, start, len, delta, cursor);
         cx.notify();
@@ -976,10 +978,10 @@ impl AppRoot {
             return;
         }
         if let Some(page) = self.page.as_mut() {
-            page.select(page.cursor.saturating_add(10));
+            page.select(page.list.cursor.saturating_add(10));
             self.follow_page(true);
         } else {
-            self.select(self.view.cursor.saturating_add(10));
+            self.select(self.view.list.cursor.saturating_add(10));
         }
         cx.notify();
     }
@@ -1001,10 +1003,10 @@ impl AppRoot {
             return;
         }
         if let Some(page) = self.page.as_mut() {
-            page.select(page.cursor.saturating_sub(10));
+            page.select(page.list.cursor.saturating_sub(10));
             self.follow_page(true);
         } else {
-            self.select(self.view.cursor.saturating_sub(10));
+            self.select(self.view.list.cursor.saturating_sub(10));
         }
         cx.notify();
     }
@@ -1028,21 +1030,21 @@ impl AppRoot {
             return;
         }
         let (active, cursor) = if let Some(page) = self.page.as_ref() {
-            (page.selection.active(), page.cursor)
+            (page.list.selection.active(), page.list.cursor)
         } else {
-            (self.view.selection.active(), self.view.cursor)
+            (self.view.list.selection.active(), self.view.list.cursor)
         };
         self.visual_mode = !active;
         if active {
             if let Some(page) = self.page.as_mut() {
-                page.selection.clear();
+                page.list.selection.clear();
             } else {
-                self.view.selection.clear();
+                self.view.list.selection.clear();
             }
         } else if let Some(page) = self.page.as_mut() {
-            page.selection.start(cursor);
+            page.list.selection.start(cursor);
         } else {
-            self.view.selection.start(cursor);
+            self.view.list.selection.start(cursor);
         }
         cx.notify();
     }
@@ -1062,11 +1064,11 @@ impl AppRoot {
             return;
         }
         if let Some(page) = self.page.as_mut() {
-            page.selection.select_all();
+            page.list.selection.select_all();
             let last = page.rows.len().saturating_sub(1);
             page.select(last);
         } else {
-            self.view.selection.select_all();
+            self.view.list.selection.select_all();
             let last = self.view.rows.len().saturating_sub(1);
             self.select(last);
         }
@@ -1125,7 +1127,7 @@ impl AppRoot {
         if self.page.is_some() {
             self.activate_page_cursor();
         } else {
-            let row = self.view.rows.get(self.view.cursor).cloned();
+            let row = self.view.rows.get(self.view.list.cursor).cloned();
             if let Some(row) = row {
                 self.activate_row(&row);
             }
@@ -1193,16 +1195,16 @@ impl AppRoot {
         if self
             .page
             .as_ref()
-            .is_some_and(|page| page.selection.active())
+            .is_some_and(|page| page.list.selection.active())
         {
             if let Some(page) = self.page.as_mut() {
-                page.selection.clear();
+                page.list.selection.clear();
             }
             cx.notify();
             return;
         }
-        if self.view.selection.active() && self.page.is_none() {
-            self.view.selection.clear();
+        if self.view.list.selection.active() && self.page.is_none() {
+            self.view.list.selection.clear();
             cx.notify();
             return;
         }
@@ -1263,7 +1265,7 @@ impl AppRoot {
         self.description = None;
         self.page = None;
         self.travel = Travel::default();
-        self.view.selection.clear();
+        self.view.list.selection.clear();
         cx.notify();
     }
 

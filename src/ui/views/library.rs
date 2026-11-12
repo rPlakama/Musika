@@ -7,7 +7,7 @@ impl AppRoot {
         let title = self.view.scope.label();
         let hint = "(Shift-J/K) cycle filter";
         let order = format!("Shift-H / Shift-L  /  {}", self.view.order_label());
-        let selection_count = self.view.selection.count(self.view.cursor);
+        let selection_count = self.view.list.selection.count(self.view.list.cursor);
         let header = div()
             .flex()
             .flex_none()
@@ -108,8 +108,8 @@ impl AppRoot {
                         for index in range {
                             let selected = this.view.rows.get(index).is_some_and(|row| {
                                 selected_id == Some(row.id.as_str())
-                            }) || index == this.view.cursor
-                                || this.view.selection.contains(this.view.cursor, index);
+                            }) || index == this.view.list.cursor
+                                || this.view.list.selection.contains(this.view.list.cursor, index);
                             let hovered = this.hovered_row == Some(index);
                             let striped = index % 2 != 0;
                             let Some(row) = this.view.rows.get(index) else {

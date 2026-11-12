@@ -44,9 +44,9 @@ impl AppRoot {
                 self.view.error = None;
                 let saved = crate::scroll_memory::saved_index(scope.key());
                 if saved >= 0 {
-                    self.view.cursor = saved as usize;
+                    self.view.list.cursor = saved as usize;
                 }
-                self.view.cursor = self.view.cursor.min(count.saturating_sub(1));
+                self.view.list.cursor = self.view.list.cursor.min(count.saturating_sub(1));
                 self.follow_library(false);
                 self.ensure_library_window();
             }
@@ -90,9 +90,9 @@ impl AppRoot {
                 self.view.error = None;
                 let saved = crate::scroll_memory::saved_index(scope.key());
                 if saved >= 0 {
-                    self.view.cursor = saved as usize;
+                    self.view.list.cursor = saved as usize;
                 }
-                self.view.cursor = self.view.cursor.min(self.view.rows.len().saturating_sub(1));
+                self.view.list.cursor = self.view.list.cursor.min(self.view.rows.len().saturating_sub(1));
                 self.follow_library(false);
             }
             Event::CommandSuggestions {
@@ -424,13 +424,13 @@ impl AppRoot {
                     let row = *row;
                     let keep_selection = *keep_selection;
                     self.pending_playlist_cursor = None;
-                    page.cursor = row.min(page.rows.len().saturating_sub(1));
+                    page.list.cursor = row.min(page.rows.len().saturating_sub(1));
                     if !keep_selection {
-                        page.selection.clear();
+                        page.list.selection.clear();
                         self.visual_mode = false;
                     }
                 }
-                page.cursor = page.cursor.min(page.rows.len().saturating_sub(1));
+                page.list.cursor = page.list.cursor.min(page.rows.len().saturating_sub(1));
                 let reveal_index = self.pending_page_reveal.as_ref().and_then(|pending| {
                     if page.descriptor.kind != pending.page_kind
                         || page.descriptor.id != pending.page_id
@@ -446,8 +446,8 @@ impl AppRoot {
                 });
                 if let Some(index) = reveal_index {
                     self.pending_page_reveal = None;
-                    page.cursor = index;
-                    page.selection.clear();
+                    page.list.cursor = index;
+                    page.list.selection.clear();
                 }
                 self.follow_page(false);
                 if let Some(index) = reveal_index {

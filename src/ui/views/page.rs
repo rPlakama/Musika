@@ -144,8 +144,8 @@ impl AppRoot {
                                             break;
                                         };
                                         let selected = selected_id == Some(row.id.as_str())
-                                            || index == page.cursor
-                                            || page.selection.contains(page.cursor, index);
+                                            || index == page.list.cursor
+                                            || page.list.selection.contains(page.list.cursor, index);
                                         let cover = page.cover(index);
                                         let hovered = this.hovered_page == Some(index);
                                         let page_base = if index % 2 != 0 {

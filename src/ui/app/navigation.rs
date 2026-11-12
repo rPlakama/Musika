@@ -22,7 +22,7 @@ impl AppRoot {
         self.clock.tick();
         self.library_scroll.start(
             self.view.rows.count,
-            self.view.cursor,
+            self.view.list.cursor,
             animated,
             self.clock.now,
         );
@@ -34,9 +34,9 @@ impl AppRoot {
         let Some(page) = self.page.as_ref() else {
             return;
         };
-        self.selected_id = page.rows.get(page.cursor).map(|row| row.id.clone());
+        self.selected_id = page.rows.get(page.list.cursor).map(|row| row.id.clone());
         self.page_scroll_modal
-            .start(page.rows.len(), page.cursor, animated, self.clock.now);
+            .start(page.rows.len(), page.list.cursor, animated, self.clock.now);
     }
 
     pub(in crate::ui) fn follow_search(&mut self, _animated: bool) {
@@ -143,7 +143,7 @@ impl AppRoot {
         let row_h = self.library_scroll.row_h;
         let visible = ((viewport / row_h).ceil() as usize).max(1);
         let overscan = 10;
-        let cursor = self.view.cursor.min(count - 1);
+        let cursor = self.view.list.cursor.min(count - 1);
         let mut first = top.saturating_sub(overscan);
         let mut last = (top + visible + overscan).min(count - 1);
         first = first.min(cursor);
@@ -159,7 +159,7 @@ impl AppRoot {
                 "GPUI trace: row window {}..{} cursor {} count {} row_h {:.1}",
                 start,
                 end,
-                self.view.cursor,
+                self.view.list.cursor,
                 count,
                 row_h
             );
@@ -475,7 +475,7 @@ impl AppRoot {
     pub(in crate::ui) fn select(&mut self, index: usize) {
         self.status_focus = None;
         if !self.visual_mode {
-            self.view.selection.clear();
+            self.view.list.selection.clear();
         }
         self.view.select(index);
         self.selected_id = self.view.rows.get(index).map(|row| row.id.clone());
@@ -575,7 +575,7 @@ impl AppRoot {
             let key = page_key(&page.descriptor);
             crate::scroll_memory::remember(
                 &key,
-                page.cursor as i64,
+                page.list.cursor as i64,
                 0.0,
                 page.descriptor.kind as i64,
                 "list",
@@ -583,7 +583,7 @@ impl AppRoot {
         } else {
             crate::scroll_memory::remember(
                 self.view.scope.key(),
-                self.view.cursor as i64,
+                self.view.list.cursor as i64,
                 0.0,
                 self.view.scope as i64,
                 "list",
@@ -595,12 +595,12 @@ impl AppRoot {
         let Some(page) = self.page.as_ref() else {
             return;
         };
-        let Some(row) = page.rows.get(page.cursor) else {
+        let Some(row) = page.rows.get(page.list.cursor) else {
             return;
         };
         let profile = page_profile::PageProfile::for_descriptor(&page.descriptor);
         let action = profile.row_action(row);
-        let index = page.cursor;
+        let index = page.list.cursor;
         let descriptor = page.descriptor.clone();
         let song_id = row.song_id.clone();
         let album_id = row.album_id.clone();
@@ -613,7 +613,7 @@ impl AppRoot {
             page_profile::PageAction::PlayAlbum => {
                 if let Some(page) = self.page.as_ref() {
                     self.bridge
-                        .play_album(page.descriptor.id.clone(), page.cursor);
+                        .play_album(page.descriptor.id.clone(), page.list.cursor);
                 }
             }
             page_profile::PageAction::PlayArtist => {

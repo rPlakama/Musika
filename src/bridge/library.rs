@@ -182,7 +182,7 @@ impl Bridge {
 
 impl Bridge {
     /// Async scoped suggestions for `:`/IPC commands. Uses the same unified
-    /// search payload as the Search overlay; stale generations are ignored by
+    /// search result as the Search overlay; stale generations are ignored by
     /// the caller.
     pub fn request_command_suggestions(
         &self,
@@ -197,7 +197,7 @@ impl Bridge {
         crate::app::runtime().spawn(async move {
             tokio::time::sleep(std::time::Duration::from_millis(120)).await;
             let Some(dbs) = crate::app::dbs() else { return };
-            let Ok(json) = crate::browse::search_json(&dbs, &query, offline, 8).await else {
+            let Ok(results) = crate::browse::search(&dbs, &query, offline, 8).await else {
                 let _ = tx.send(Event::CommandSuggestions {
                     generation,
                     start,
@@ -206,52 +206,56 @@ impl Bridge {
                 });
                 return;
             };
-            let Ok(payload) = serde_json::from_str::<serde_json::Value>(&json) else {
-                return;
-            };
-            let columns: &[(&str, &str)] = match scope {
-                crate::ipc_command::SuggestScope::Artist => &[("artists", "Artist")],
-                crate::ipc_command::SuggestScope::Album => &[("albums", "Album")],
-                crate::ipc_command::SuggestScope::Track => &[("songs", "Track")],
-                crate::ipc_command::SuggestScope::Any => &[
-                    ("songs", "Track"),
-                    ("albums", "Album"),
-                    ("artists", "Artist"),
-                    ("playlists", "Playlist"),
-                ],
-                crate::ipc_command::SuggestScope::Playlist => &[("playlists", "Playlist")],
-            };
-            let mut rows = Vec::new();
-            for (column, kind) in columns {
-                let Some(array) = payload.get(*column).and_then(serde_json::Value::as_array) else {
-                    continue;
-                };
-                for row in array.iter() {
-                    if rows.len() >= 8 {
-                        break;
-                    }
-                    let title = row
-                        .get("name")
-                        .or_else(|| row.get("title"))
-                        .and_then(serde_json::Value::as_str)
-                        .unwrap_or_default();
-                    let detail = row
-                        .get("artist")
-                        .and_then(serde_json::Value::as_str)
-                        .or_else(|| row.get("subtitle").and_then(serde_json::Value::as_str))
-                        .unwrap_or_default();
-                    if title.is_empty() {
-                        continue;
-                    }
-                    let subtitle = if detail.is_empty() {
-                        (*kind).to_string()
+            let mut rows: Vec<(String, String)> = Vec::new();
+            let mut push = |title: &str, detail: &str, kind: &str| {
+                if rows.len() >= 8 || title.is_empty() {
+                    return;
+                }
+                rows.push((
+                    title.to_string(),
+                    if detail.is_empty() {
+                        kind.to_string()
                     } else {
                         format!("{kind} · {detail}")
-                    };
-                    rows.push((title.to_string(), subtitle));
+                    },
+                ));
+            };
+            match scope {
+                crate::ipc_command::SuggestScope::Artist => {
+                    for artist in &results.artists {
+                        push(&artist.name, "", "Artist");
+                    }
                 }
-                if rows.len() >= 8 {
-                    break;
+                crate::ipc_command::SuggestScope::Album => {
+                    for album in &results.albums {
+                        push(&album.title, &album.artist, "Album");
+                    }
+                }
+                crate::ipc_command::SuggestScope::Track => {
+                    for song in &results.songs {
+                        let subtitle = song.subtitle();
+                        push(&song.title, song.artist.as_deref().unwrap_or(&subtitle), "Track");
+                    }
+                }
+                crate::ipc_command::SuggestScope::Playlist => {
+                    for playlist in &results.playlists {
+                        push(&playlist.name, &playlist.subtitle, "Playlist");
+                    }
+                }
+                crate::ipc_command::SuggestScope::Any => {
+                    for song in &results.songs {
+                        let subtitle = song.subtitle();
+                        push(&song.title, song.artist.as_deref().unwrap_or(&subtitle), "Track");
+                    }
+                    for album in &results.albums {
+                        push(&album.title, &album.artist, "Album");
+                    }
+                    for artist in &results.artists {
+                        push(&artist.name, "", "Artist");
+                    }
+                    for playlist in &results.playlists {
+                        push(&playlist.name, &playlist.subtitle, "Playlist");
+                    }
                 }
             }
             let _ = tx.send(Event::CommandSuggestions {

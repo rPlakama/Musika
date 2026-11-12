@@ -295,39 +295,52 @@ async fn nucleo_search_payload_follows_the_one_album_and_most_played() {
     .await
     .unwrap();
 
-    let parsed = search_value_index(&dbs, "rdo", false, 20).await.unwrap();
-    assert_eq!(parsed["most_played"], false);
-    assert_eq!(parsed["album_context"], "al1");
-    let ids: Vec<&str> = parsed["songs"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|song| song["id"].as_str().unwrap())
-        .collect();
+    let results = search_results_index(&dbs, "rdo", false, 20).await.unwrap();
+    assert!(!results.most_played);
+    assert_eq!(results.album_context.as_deref(), Some("al1"));
+    let ids: Vec<&str> = results.songs.iter().map(|song| song.id.as_str()).collect();
     assert_eq!(ids, ["s1", "s2"], "one album match reads in track order");
 
-    let parsed = search_value_index(&dbs, "", false, 20).await.unwrap();
-    assert_eq!(parsed["most_played"], true);
-    assert!(parsed["album_context"].is_null());
-    assert_eq!(parsed["songs"][0]["id"], "s2");
+    let results = search_results_index(&dbs, "", false, 20).await.unwrap();
+    assert!(results.most_played);
+    assert!(results.album_context.is_none());
+    assert_eq!(results.songs[0].id, "s2");
     // The unified search browses every scope on an empty query.
-    assert_eq!(parsed["artists"][0]["id"], "ar1");
-    assert_eq!(parsed["albums"][0]["id"], "al1");
+    assert_eq!(results.artists[0].id, "ar1");
+    assert_eq!(results.albums[0].id, "al1");
 
     crate::search::index::clear();
 }
 
 #[test]
 fn hybrid_merge_keeps_primary_order_and_dedupes() {
-    let mut primary = serde_json::json!([{"id": "a"}, {"id": "b"}]);
-    let mut secondary = serde_json::json!([{"id": "b"}, {"id": "c"}, {"id": "d"}]);
-    merge_json_rows(&mut primary, &mut secondary, 3);
-    let ids: Vec<&str> = primary
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|row| row["id"].as_str().unwrap())
-        .collect();
+    use crate::browse::search::SearchArtist;
+    let mut primary = vec![
+        SearchArtist {
+            id: "a".to_string(),
+            ..SearchArtist::default()
+        },
+        SearchArtist {
+            id: "b".to_string(),
+            ..SearchArtist::default()
+        },
+    ];
+    let secondary = vec![
+        SearchArtist {
+            id: "b".to_string(),
+            ..SearchArtist::default()
+        },
+        SearchArtist {
+            id: "c".to_string(),
+            ..SearchArtist::default()
+        },
+        SearchArtist {
+            id: "d".to_string(),
+            ..SearchArtist::default()
+        },
+    ];
+    merge_hits(&mut primary, secondary, 3, |row| &row.id);
+    let ids: Vec<&str> = primary.iter().map(|row| row.id.as_str()).collect();
     assert_eq!(ids, ["a", "b", "c"]);
 }
 
@@ -438,14 +451,18 @@ fn bench_session_loaders() {
         page_time
     );
 
-    // Warm the catalog once, then measure the typed search payload.
-    rt.block_on(search_json(&dbs, "artist", false, 30))
+    // Warm the catalog once, then measure the typed search.
+    rt.block_on(search(&dbs, "artist", false, 30))
         .expect("warm search");
-    let (search_len, search_peak, search_time) =
-        measured(&rt, search_json(&dbs, "artist", false, 30));
+    let start = Instant::now();
+    let (results, search_peak) = crate::test_alloc::measure(|| {
+        rt.block_on(search(&dbs, "artist", false, 30))
+            .expect("search")
+    });
+    let search_time = start.elapsed();
     eprintln!(
-        "session search (30 rows/column): {} KiB payload, {} KiB peak, {:?}",
-        search_len / 1024,
+        "session search (30 rows/column): {} songs, {} KiB peak, {:?}",
+        results.songs.len(),
         search_peak / 1024,
         search_time
     );

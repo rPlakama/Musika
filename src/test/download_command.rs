@@ -158,20 +158,46 @@ async fn path_resolution_walks_artist_album_and_track() {
 
 #[test]
 fn search_payload_matching_prefers_exact_then_prefix_then_first() {
-    let payload = serde_json::json!({
-        "artists": [
-            {"id": "ar-prefix", "name": "Muse Tribute"},
-            {"id": "ar-exact", "name": "Muse"},
+    use crate::browse::search::{SearchAlbum, SearchArtist, SearchResults, SearchSong};
+    let payload = SearchResults {
+        artists: vec![
+            SearchArtist {
+                id: "ar-prefix".to_string(),
+                name: "Muse Tribute".to_string(),
+                ..SearchArtist::default()
+            },
+            SearchArtist {
+                id: "ar-exact".to_string(),
+                name: "Muse".to_string(),
+                ..SearchArtist::default()
+            },
         ],
-        "albums": [
-            {"id": "al-prefix", "title": "Kid A Live"},
-            {"id": "al-exact", "title": "Kid A"},
+        albums: vec![
+            SearchAlbum {
+                id: "al-prefix".to_string(),
+                title: "Kid A Live".to_string(),
+                ..SearchAlbum::default()
+            },
+            SearchAlbum {
+                id: "al-exact".to_string(),
+                title: "Kid A".to_string(),
+                ..SearchAlbum::default()
+            },
         ],
-        "songs": [
-            {"id": "s-prefix", "title": "Idioteque (Live)"},
-            {"id": "s-exact", "title": "Idioteque"},
+        songs: vec![
+            SearchSong {
+                id: "s-prefix".to_string(),
+                title: "Idioteque (Live)".to_string(),
+                ..SearchSong::default()
+            },
+            SearchSong {
+                id: "s-exact".to_string(),
+                title: "Idioteque".to_string(),
+                ..SearchSong::default()
+            },
         ],
-    });
+        ..SearchResults::default()
+    };
 
     // Case-insensitive exact wins even when the row is not first.
     assert_eq!(

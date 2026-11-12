@@ -6,20 +6,12 @@
 //! device-local by design: it never calls a server delete endpoint.
 
 use anyhow::{Context, Result, anyhow, bail};
-use serde_json::Value;
 
 use crate::db::Dbs;
 use crate::ui::ipc_command::{CurrentTrack, DownloadMode, DownloadRequest, DownloadScope};
 
 /// Name resolution only needs the best few search hits, not a full page.
 const RESOLVE_LIMIT: usize = 50;
-
-const ARTIST_ID_KEYS: &[&str] = &["id", "artistId"];
-const ARTIST_LABEL_KEYS: &[&str] = &["name", "title"];
-const ALBUM_ID_KEYS: &[&str] = &["id", "albumId"];
-const ALBUM_LABEL_KEYS: &[&str] = &["title", "name"];
-const SONG_ID_KEYS: &[&str] = &["id", "songId"];
-const SONG_LABEL_KEYS: &[&str] = &["title", "name"];
 
 /// The concrete library ids a request resolved to.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -100,12 +92,10 @@ pub(crate) async fn resolve_ids(
 async fn resolve_direct(dbs: &Dbs, scope: DownloadScope, query: &str) -> Result<ResolvedIds> {
     // Resolution is always against the local catalog: resolving a download
     // target must see the full library even while playback is offline.
-    let json = crate::browse::search_json(dbs, query, false, RESOLVE_LIMIT)
+    let results = crate::browse::search(dbs, query, false, RESOLVE_LIMIT)
         .await
         .context("Could not search the library")?;
-    let payload: Value =
-        serde_json::from_str(&json).context("Could not parse the search results")?;
-    let id = search_match_id(&payload, scope, query).ok_or_else(|| no_match(scope, query))?;
+    let id = search_match_id(&results, scope, query).ok_or_else(|| no_match(scope, query))?;
     resolve_id(dbs, scope, id).await
 }
 
@@ -189,12 +179,10 @@ pub(crate) async fn resolve_named_id(
     if is_id {
         return Ok(value.to_string());
     }
-    let json = crate::browse::search_json(dbs, value, false, RESOLVE_LIMIT)
+    let results = crate::browse::search(dbs, value, false, RESOLVE_LIMIT)
         .await
         .context("Could not search the library")?;
-    let payload: Value =
-        serde_json::from_str(&json).context("Could not parse the search results")?;
-    search_match_id(&payload, scope, value).ok_or_else(|| no_match(scope, value))
+    search_match_id(&results, scope, value).ok_or_else(|| no_match(scope, value))
 }
 
 /// Turn one already-matched scope id into its concrete download/removal set.
@@ -264,36 +252,37 @@ fn best_match<'a>(
 
 /// Pick the id of the best matching row in one search-payload column.
 pub(crate) fn search_match_id(
-    payload: &Value,
+    results: &crate::browse::search::SearchResults,
     scope: DownloadScope,
     query: &str,
 ) -> Option<String> {
-    let (column, id_keys, label_keys): (&str, &[&str], &[&str]) = match scope {
-        DownloadScope::Artist => ("artists", ARTIST_ID_KEYS, ARTIST_LABEL_KEYS),
-        DownloadScope::Album => ("albums", ALBUM_ID_KEYS, ALBUM_LABEL_KEYS),
-        DownloadScope::Track => ("songs", SONG_ID_KEYS, SONG_LABEL_KEYS),
-    };
-    let rows = payload.get(column)?.as_array()?;
-    let candidates: Vec<Candidate> = rows
-        .iter()
-        .filter_map(|row| {
-            let id = first_string(row, id_keys)?;
-            let label = first_string(row, label_keys).unwrap_or(id);
-            Some(Candidate {
-                id: id.to_string(),
-                label: label.to_string(),
+    let candidates: Vec<Candidate> = match scope {
+        DownloadScope::Artist => results
+            .artists
+            .iter()
+            .map(|artist| Candidate {
+                id: artist.id.clone(),
+                label: artist.name.clone(),
             })
-        })
-        .collect();
+            .collect(),
+        DownloadScope::Album => results
+            .albums
+            .iter()
+            .map(|album| Candidate {
+                id: album.id.clone(),
+                label: album.title.clone(),
+            })
+            .collect(),
+        DownloadScope::Track => results
+            .songs
+            .iter()
+            .map(|song| Candidate {
+                id: song.id.clone(),
+                label: song.title.clone(),
+            })
+            .collect(),
+    };
     best_match(&candidates, query, true).map(|candidate| candidate.id.clone())
-}
-
-fn first_string<'a>(row: &'a Value, keys: &[&str]) -> Option<&'a str> {
-    keys.iter().find_map(|key| {
-        row.get(*key)
-            .and_then(Value::as_str)
-            .filter(|value| !value.is_empty())
-    })
 }
 
 fn no_match(scope: DownloadScope, query: &str) -> anyhow::Error {
@@ -381,39 +370,40 @@ async fn remove_songs(dbs: &Dbs, song_ids: &[String]) -> Result<()> {
 /// to song ids. The search payload is authoritative for names; a fuzzy hit
 /// still provides a deterministic fallback when no row matches textually.
 pub(crate) async fn resolve_target_song_ids(dbs: &Dbs, target: &str) -> Result<Vec<String>> {
-    let json = crate::browse::search_json(dbs, target, false, RESOLVE_LIMIT)
+    let results = crate::browse::search(dbs, target, false, RESOLVE_LIMIT)
         .await
         .context("Could not search the library")?;
-    let payload: Value = serde_json::from_str(&json).context("Could not parse search results")?;
     let mut candidates: Vec<(u8, u8, String, u8)> = Vec::new();
     // kind priority for equal textual rank: song, album, artist.
     let query = target.trim().to_lowercase();
     if query.is_empty() {
         bail!("An empty playlist target cannot be resolved.");
     }
-    let mut add = |column: &str, id_keys: &[&str], label_keys: &[&str], kind: u8| {
-        if let Some(rows) = payload.get(column).and_then(Value::as_array) {
-            for (index, row) in rows.iter().enumerate() {
-                let Some(id) = first_string(row, id_keys) else {
-                    continue;
-                };
-                let label = first_string(row, label_keys).unwrap_or(id).to_lowercase();
-                let rank = if label == query {
-                    0
-                } else if label.starts_with(&query) {
-                    1
-                } else if label.contains(&query) {
-                    2
-                } else {
-                    3
-                };
-                candidates.push((rank, kind, id.to_string(), index as u8));
-            }
+    let mut add = |id: &str, label: &str, kind: u8, index: usize| {
+        if id.is_empty() {
+            return;
         }
+        let label = label.to_lowercase();
+        let rank = if label == query {
+            0
+        } else if label.starts_with(&query) {
+            1
+        } else if label.contains(&query) {
+            2
+        } else {
+            3
+        };
+        candidates.push((rank, kind, id.to_string(), index as u8));
     };
-    add("songs", SONG_ID_KEYS, SONG_LABEL_KEYS, 0);
-    add("albums", ALBUM_ID_KEYS, ALBUM_LABEL_KEYS, 1);
-    add("artists", ARTIST_ID_KEYS, ARTIST_LABEL_KEYS, 2);
+    for (index, song) in results.songs.iter().enumerate() {
+        add(&song.id, &song.title, 0, index);
+    }
+    for (index, album) in results.albums.iter().enumerate() {
+        add(&album.id, &album.title, 1, index);
+    }
+    for (index, artist) in results.artists.iter().enumerate() {
+        add(&artist.id, &artist.name, 2, index);
+    }
     let best_rank = candidates.iter().map(|(rank, ..)| *rank).min();
     candidates.sort_by_key(|(rank, kind, _, index)| {
         // Exact/prefix/contains hits prefer the most specific row; a wholly

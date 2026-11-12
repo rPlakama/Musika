@@ -14,13 +14,213 @@
 // You should have received a copy of the GNU General Public License
 // along with this program; if not, see <https://www.gnu.org/licenses/>.
 
-//! Search payload assembly: Nucleo/FTS merge and the unified JSON shape.
+//! Search result assembly: Nucleo/FTS merge over typed rows.
+//!
+//! All three engines (Nucleo index, FTS, hybrid) answer with the same
+//! [`SearchResults`]. The hybrid merge composes the typed columns instead of
+//! serializing each engine's payload only to parse it back for the merge.
 
 use std::collections::HashSet;
 
-use super::rows::{album_json, artist_json, song_json};
+use crate::browse::rows::{format_duration, song_subtitle_from_parts};
 
-struct SearchSong {
+/// One artist hit, decorated with the live library state (cover URLs, the
+/// local favourite overlay and rating).
+#[derive(Debug, Clone, Default)]
+pub struct SearchArtist {
+    pub id: String,
+    pub name: String,
+    pub album_count: i64,
+    pub cover: String,
+    pub cover_remote: String,
+    pub starred: bool,
+    pub rating: i64,
+}
+
+impl SearchArtist {
+    /// The palette's subtitle for an artist row: the album count.
+    pub fn meta(&self) -> String {
+        format!(
+            "{} album{}",
+            self.album_count,
+            if self.album_count == 1 { "" } else { "s" }
+        )
+    }
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct SearchAlbum {
+    pub id: String,
+    pub title: String,
+    pub artist: String,
+    pub year: i64,
+    pub song_count: i64,
+    pub duration: i64,
+    pub cover: String,
+    pub cover_remote: String,
+    pub starred: bool,
+    pub rating: i64,
+}
+
+impl SearchAlbum {
+    /// The palette's meta for an album row: the track count.
+    pub fn meta(&self) -> String {
+        format!("{} tracks", self.song_count)
+    }
+}
+
+/// One song hit. The optional fields mirror the library's nullable columns
+/// (a server-only or malformed row may lack an album), so the palette text
+/// keeps its exact fallbacks.
+#[derive(Debug, Clone, Default)]
+pub struct SearchSong {
+    pub id: String,
+    pub title: String,
+    pub artist: Option<String>,
+    pub album: Option<String>,
+    pub album_id: Option<String>,
+    pub track: Option<i32>,
+    pub duration: Option<i32>,
+    pub cover: String,
+    pub cover_remote: String,
+    pub starred: bool,
+    pub play_count: i64,
+}
+
+impl SearchSong {
+    /// The palette's subtitle: `artist · album` with empty parts dropped.
+    pub fn subtitle(&self) -> String {
+        song_subtitle_from_parts(self.artist.as_deref(), self.album.as_deref())
+    }
+
+    /// The palette's meta: the formatted duration.
+    pub fn meta(&self) -> String {
+        format_duration(self.duration)
+    }
+}
+
+/// The unified search result: one typed column per scope plus the surface
+/// flags the palette keys off (`most_played` for the empty query, the single
+/// album context that turns the Songs column into its tracklist).
+#[derive(Debug, Clone, Default)]
+pub struct SearchResults {
+    pub most_played: bool,
+    pub album_context: Option<String>,
+    pub artists: Vec<SearchArtist>,
+    pub albums: Vec<SearchAlbum>,
+    pub songs: Vec<SearchSong>,
+    pub playlists: Vec<crate::playlists::PlaylistHit>,
+}
+
+impl SearchResults {
+    /// Merge a sparse secondary engine into this result (primary order wins,
+    /// rows are deduped by id and the visible cap is kept).
+    fn merge(&mut self, secondary: SearchResults, limit: usize) {
+        merge_hits(&mut self.artists, secondary.artists, limit, |row| &row.id);
+        merge_hits(&mut self.albums, secondary.albums, limit, |row| &row.id);
+        merge_hits(&mut self.songs, secondary.songs, limit, |row| &row.id);
+    }
+}
+
+/// Append `secondary` rows to `primary`, keeping the primary order and the
+/// visible cap. Rows are identified by their library id; the secondary vector
+/// is consumed, never cloned.
+pub(crate) fn merge_hits<T>(
+    primary: &mut Vec<T>,
+    secondary: Vec<T>,
+    limit: usize,
+    id: impl Fn(&T) -> &String,
+) {
+    let mut seen: HashSet<String> = primary.iter().map(|row| id(row).clone()).collect();
+    for row in secondary {
+        if primary.len() >= limit {
+            break;
+        }
+        if !seen.insert(id(&row).clone()) {
+            continue;
+        }
+        primary.push(row);
+    }
+    primary.truncate(limit);
+}
+
+/// The unified search: the engine dispatch with the FTS fallback.
+pub async fn search(
+    dbs: &crate::db::Dbs,
+    query: &str,
+    offline: bool,
+    limit: usize,
+) -> anyhow::Result<SearchResults> {
+    let engine = crate::search::engine();
+    // A library past the catalog budget already knows FTS is the answer; do
+    // not build a Nucleo result only to discard it.
+    if engine != crate::search::Engine::Fts && crate::search::index::over_budget() {
+        return search_results_fts(dbs, query, offline, limit).await;
+    }
+    match engine {
+        crate::search::Engine::Hybrid => search_results_hybrid(dbs, query, offline, limit).await,
+        crate::search::Engine::Nucleo => {
+            match search_results_index(dbs, query, offline, limit).await {
+                Ok(results) => Ok(results),
+                Err(err) => {
+                    // The in-memory catalog is a cache: a build failure must
+                    // not take the palette down while FTS is still available.
+                    eprintln!("search: nucleo engine failed, using FTS: {err:#}");
+                    search_results_fts(dbs, query, offline, limit).await
+                }
+            }
+        }
+        crate::search::Engine::Fts => search_results_fts(dbs, query, offline, limit).await,
+    }
+}
+
+/// Nucleo answers first; FTS fills any column that came back short (or steps
+/// in wholesale when the in-memory catalog fails). The merge is only paid for
+/// sparse queries — a broad hit set never touches SQLite.
+async fn search_results_hybrid(
+    dbs: &crate::db::Dbs,
+    query: &str,
+    offline: bool,
+    limit: usize,
+) -> anyhow::Result<SearchResults> {
+    let mut nucleo = match search_results_index(dbs, query, offline, limit).await {
+        Ok(results) => results,
+        Err(err) => {
+            eprintln!("search: nucleo engine failed, using FTS: {err:#}");
+            return search_results_fts(dbs, query, offline, limit).await;
+        }
+    };
+    // The first search may have discovered the over-budget verdict while this
+    // request was in flight; `search_results_index` already returned the FTS
+    // payload then, so do not merge FTS with itself.
+    if crate::search::index::over_budget() {
+        return Ok(nucleo);
+    }
+    // The empty-query surface and S-8's single-album tracklist already own
+    // their result set; do not let FTS mix another album in.
+    if nucleo.most_played || nucleo.album_context.is_some() {
+        return Ok(nucleo);
+    }
+    // The FTS fill is for sparse song sets (a rare/typo query, or an offline
+    // catalog); a broad hit set already fills the Songs column, and the
+    // artist/album lists are cheap Nucleo lookups.
+    if nucleo.songs.len() >= limit {
+        return Ok(nucleo);
+    }
+
+    let fts = match search_results_fts(dbs, query, offline, limit).await {
+        Ok(results) => results,
+        Err(err) => {
+            eprintln!("search: FTS fill failed: {err:#}");
+            return Ok(nucleo);
+        }
+    };
+    nucleo.merge(fts, limit);
+    Ok(nucleo)
+}
+
+/// A search hit before the live-library decoration pass.
+struct SeedSong {
     id: String,
     title: String,
     artist: Option<String>,
@@ -32,7 +232,7 @@ struct SearchSong {
     play_count: i64,
 }
 
-impl SearchSong {
+impl SeedSong {
     fn from_index(hit: &crate::search::index::SongHit) -> Self {
         Self {
             id: hit.id.clone(),
@@ -48,150 +248,20 @@ impl SearchSong {
     }
 }
 
-pub async fn search_json(
+async fn search_results_fts(
     dbs: &crate::db::Dbs,
     query: &str,
     offline: bool,
     limit: usize,
-) -> anyhow::Result<String> {
-    Ok(search_value(dbs, query, offline, limit).await?.to_string())
-}
-
-/// One payload, built as a [`serde_json::Value`] until the bridge boundary.
-/// The hybrid merge composes two engines' results, so serializing each one
-/// first and parsing it back only to merge would copy the whole payload
-/// several times per keystroke.
-async fn search_value(
-    dbs: &crate::db::Dbs,
-    query: &str,
-    offline: bool,
-    limit: usize,
-) -> anyhow::Result<serde_json::Value> {
-    let engine = crate::search::engine();
-    // A library past the catalog budget already knows FTS is the answer; do
-    // not rebuild/serialize a Nucleo payload only to discard it.
-    if engine != crate::search::Engine::Fts && crate::search::index::over_budget() {
-        return search_value_fts(dbs, query, offline, limit).await;
-    }
-    match engine {
-        crate::search::Engine::Hybrid => search_value_hybrid(dbs, query, offline, limit).await,
-        crate::search::Engine::Nucleo => {
-            match search_value_index(dbs, query, offline, limit).await {
-                Ok(value) => Ok(value),
-                Err(err) => {
-                    // The in-memory catalog is a cache: a build failure must
-                    // not take the palette down while FTS is still available.
-                    eprintln!("search: nucleo engine failed, using FTS: {err:#}");
-                    search_value_fts(dbs, query, offline, limit).await
-                }
-            }
-        }
-        crate::search::Engine::Fts => search_value_fts(dbs, query, offline, limit).await,
-    }
-}
-
-/// Nucleo answers first; FTS fills any column that came back short (or steps
-/// in wholesale when the in-memory catalog fails). The merge is only paid for
-/// sparse queries — a broad hit set never touches SQLite.
-async fn search_value_hybrid(
-    dbs: &crate::db::Dbs,
-    query: &str,
-    offline: bool,
-    limit: usize,
-) -> anyhow::Result<serde_json::Value> {
-    let mut nucleo = match search_value_index(dbs, query, offline, limit).await {
-        Ok(value) => value,
-        Err(err) => {
-            eprintln!("search: nucleo engine failed, using FTS: {err:#}");
-            return search_value_fts(dbs, query, offline, limit).await;
-        }
-    };
-    // The first search may have discovered the over-budget verdict while this
-    // request was in flight; `search_value_index` already returned the FTS
-    // payload then, so do not merge FTS with itself.
-    if crate::search::index::over_budget() {
-        return Ok(nucleo);
-    }
-    // The empty-query surface and S-8's single-album tracklist already own
-    // their result set; do not let FTS mix another album in.
-    if nucleo["most_played"].as_bool() == Some(true) || nucleo["album_context"].is_string() {
-        return Ok(nucleo);
-    }
-    // The FTS fill is for sparse song sets (a rare/typo query, or an offline
-    // catalog); a broad hit set already fills the Songs column, and the
-    // artist/album lists are cheap Nucleo lookups.
-    let sparse_songs = nucleo
-        .get("songs")
-        .and_then(serde_json::Value::as_array)
-        .is_none_or(|rows| rows.len() < limit);
-    if !sparse_songs {
-        return Ok(nucleo);
-    }
-
-    let mut fts = match search_value_fts(dbs, query, offline, limit).await {
-        Ok(value) => value,
-        Err(err) => {
-            eprintln!("search: FTS fill failed: {err:#}");
-            return Ok(nucleo);
-        }
-    };
-    for key in ["songs", "artists", "albums"] {
-        if let (Some(primary), Some(secondary)) = (nucleo.get_mut(key), fts.get_mut(key)) {
-            merge_json_rows(primary, secondary, limit);
-        }
-    }
-    Ok(nucleo)
-}
-
-/// Append the FTS-only rows to the Nucleo array, keeping the Nucleo order and
-/// the visible cap. Rows are identified by their `id`. The secondary rows are
-/// moved, not cloned: the FTS payload is discarded after the merge.
-pub(crate) fn merge_json_rows(
-    primary: &mut serde_json::Value,
-    secondary: &mut serde_json::Value,
-    limit: usize,
-) {
-    let Some(primary_rows) = primary.as_array_mut() else {
-        return;
-    };
-    let mut seen: HashSet<String> = primary_rows.iter().filter_map(json_row_id).collect();
-    let Some(secondary_rows) = secondary.as_array_mut() else {
-        return;
-    };
-    for row in std::mem::take(secondary_rows) {
-        if primary_rows.len() >= limit {
-            break;
-        }
-        if let Some(id) = json_row_id(&row)
-            && !seen.insert(id)
-        {
-            continue;
-        }
-        primary_rows.push(row);
-    }
-    primary_rows.truncate(limit);
-}
-
-fn json_row_id(row: &serde_json::Value) -> Option<String> {
-    row.get("id")
-        .and_then(serde_json::Value::as_str)
-        .map(str::to_string)
-}
-
-async fn search_value_fts(
-    dbs: &crate::db::Dbs,
-    query: &str,
-    offline: bool,
-    limit: usize,
-) -> anyhow::Result<serde_json::Value> {
+) -> anyhow::Result<SearchResults> {
     let filter = crate::offline::load(dbs, offline).await?;
     let limit = limit.max(1);
     // Offline hits are filtered down to the downloaded catalog, so over-fetch
     // before truncating back to the rendered rows.
     let fetch = if filter.is_some() { limit * 3 } else { limit };
     // S-9: an empty query is the "Most played" surface, not three dead
-    // columns. Punctuation is ignored for matching (`(hello` == `hello`),
-    // but the payload keeps the raw text so the field's stale check works.
+    // columns. Punctuation is ignored for matching (`(hello` == `hello`), but
+    // the raw query still reaches the payload consumers.
     let cleaned = crate::search::clean_query(query);
     let most_played = cleaned.is_empty();
     let (artists, albums, mut songs) = if most_played {
@@ -236,12 +306,12 @@ async fn search_value_fts(
         crate::library::song_cover_ids(&dbs.library, &song_ids),
         crate::library::song_album_ids(&dbs.library, &song_ids),
     )?;
-    let songs: Vec<SearchSong> = songs
+    let songs: Vec<SeedSong> = songs
         .into_iter()
         .map(|song| {
             let cover_art = song_covers.get(&song.id).cloned();
             let album_id = song_albums.get(&song.id).cloned();
-            SearchSong {
+            SeedSong {
                 id: song.id,
                 title: song.title,
                 artist: song.artist,
@@ -255,25 +325,25 @@ async fn search_value_fts(
         })
         .collect();
 
-    search_payload_value(
+    decorate(
         dbs,
         query,
         most_played,
+        None,
         artists.into_iter().map(std::sync::Arc::new).collect(),
         albums.into_iter().map(std::sync::Arc::new).collect(),
         songs,
-        None,
         limit,
     )
     .await
 }
 
-pub(crate) async fn search_value_index(
+pub(crate) async fn search_results_index(
     dbs: &crate::db::Dbs,
     query: &str,
     offline: bool,
     limit: usize,
-) -> anyhow::Result<serde_json::Value> {
+) -> anyhow::Result<SearchResults> {
     let filter = crate::offline::load(dbs, offline).await?;
     let limit = limit.max(1);
     let fetch = if filter.is_some() { limit * 3 } else { limit };
@@ -281,7 +351,7 @@ pub(crate) async fn search_value_index(
     let most_played = cleaned.is_empty();
     let Some(index) = crate::search::index::ensure(&dbs.library).await? else {
         // Over budget: the catalog declined to build, FTS owns the query.
-        return search_value_fts(dbs, query, offline, limit).await;
+        return search_results_fts(dbs, query, offline, limit).await;
     };
     let (mut artists, mut albums, mut songs) = if most_played {
         // The unified search's empty-query surface browses every scope:
@@ -299,7 +369,7 @@ pub(crate) async fn search_value_index(
             index
                 .most_played(fetch)
                 .iter()
-                .map(|song| SearchSong::from_index(song))
+                .map(|hit| SeedSong::from_index(hit))
                 .collect::<Vec<_>>(),
         )
     } else {
@@ -310,11 +380,7 @@ pub(crate) async fn search_value_index(
         (
             results.artists,
             results.albums,
-            results
-                .songs
-                .iter()
-                .map(|song| SearchSong::from_index(song))
-                .collect(),
+            results.songs.iter().map(|hit| SeedSong::from_index(hit)).collect(),
         )
     };
     if let Some(filter) = &filter {
@@ -331,7 +397,7 @@ pub(crate) async fn search_value_index(
         songs = index
             .album_tracks(album_id, fetch)
             .iter()
-            .map(|song| SearchSong::from_index(song))
+            .map(|hit| SeedSong::from_index(hit))
             .collect();
         if let Some(filter) = &filter {
             songs.retain(|song| filter.contains_song(&song.id));
@@ -339,30 +405,33 @@ pub(crate) async fn search_value_index(
     }
     songs.truncate(limit);
 
-    search_payload_value(
+    decorate(
         dbs,
         query,
         most_played,
+        album_context,
         artists,
         albums,
         songs,
-        album_context,
         limit,
     )
     .await
 }
 
+/// Decorate the engine hits with the live library state that the index's
+/// sync-time snapshot cannot know: cover URLs, the favourite overlay and
+/// ratings, and the playlist column.
 #[allow(clippy::too_many_arguments)]
-async fn search_payload_value(
+async fn decorate(
     dbs: &crate::db::Dbs,
     query: &str,
     most_played: bool,
+    album_context: Option<String>,
     artists: Vec<std::sync::Arc<crate::library::ArtistRow>>,
     albums: Vec<std::sync::Arc<crate::library::AlbumRow>>,
-    songs: Vec<SearchSong>,
-    album_context: Option<String>,
+    songs: Vec<SeedSong>,
     limit: usize,
-) -> anyhow::Result<serde_json::Value> {
+) -> anyhow::Result<SearchResults> {
     let playlists = crate::playlists::search_rows(dbs, query, limit as i64).await?;
     let mut cover_ids: Vec<String> = albums
         .iter()
@@ -388,78 +457,80 @@ async fn search_payload_value(
         user_starred,
         user_ratings
     )?;
-    let user_starred: std::collections::HashSet<String> = user_starred.into_iter().collect();
+    let user_starred: HashSet<String> = user_starred.into_iter().collect();
 
-    let artist_rows: Vec<serde_json::Value> = artists
+    let artist_rows = artists
         .iter()
-        .map(|artist| {
-            let starred = artist.starred.is_some() || user_starred.contains(&artist.id);
-            let rating = user_ratings.get(&artist.id).copied().unwrap_or(0);
-            let mut value = artist_json(artist, &covers, None, starred, rating);
-            value["coverRemote"] = serde_json::json!(
-                artist
-                    .cover_art
-                    .as_deref()
-                    .and_then(|id| remotes.get(id))
-                    .cloned()
-                    .unwrap_or_default()
-            );
-            value
+        .map(|artist| SearchArtist {
+            id: artist.id.clone(),
+            name: artist.name.clone(),
+            album_count: artist.album_count,
+            cover: crate::covers::url_for(artist.cover_art.as_deref(), &covers),
+            cover_remote: artist
+                .cover_art
+                .as_deref()
+                .and_then(|id| remotes.get(id))
+                .cloned()
+                .unwrap_or_default(),
+            starred: artist.starred.is_some() || user_starred.contains(&artist.id),
+            rating: user_ratings.get(&artist.id).copied().unwrap_or(0),
         })
         .collect();
-    let album_rows: Vec<serde_json::Value> = albums
+    let album_rows = albums
         .iter()
         .map(|album| {
-            let mut value = album_json(album, &covers, None);
-            value["coverRemote"] = serde_json::json!(
-                album
+            let (starred, rating) = album_states
+                .get(&album.id)
+                .map(|(starred, rating)| (*starred, *rating))
+                .unwrap_or((album.starred.is_some(), album.rating));
+            SearchAlbum {
+                id: album.id.clone(),
+                title: album.title.clone(),
+                artist: album.artist.clone().unwrap_or_default(),
+                year: album.year.map(i64::from).unwrap_or(0),
+                song_count: album.song_count,
+                duration: album.duration,
+                cover: crate::covers::url_for(album.cover_art.as_deref(), &covers),
+                cover_remote: album
                     .cover_art
                     .as_deref()
                     .and_then(|id| remotes.get(id))
                     .cloned()
-                    .unwrap_or_default()
-            );
-            if let Some((starred, rating)) = album_states.get(&album.id) {
-                value["starred"] = serde_json::json!(starred);
-                value["rating"] = serde_json::json!(rating);
+                    .unwrap_or_default(),
+                starred,
+                rating,
             }
-            value
         })
         .collect();
-    let song_rows: Vec<serde_json::Value> = songs
-        .iter()
-        .map(|song| {
-            let mut value = song_json(
-                &song.id,
-                &song.title,
-                song.artist.as_deref(),
-                song.album.as_deref(),
-                song.album_id.as_deref(),
-                song.track,
-                song.duration,
-                None,
-                crate::covers::url_for(song.cover_art.as_deref(), &covers),
-                song_starred.contains(&song.id),
-            );
-            value["coverRemote"] = serde_json::json!(
-                song.cover_art
-                    .as_deref()
-                    .and_then(|id| remotes.get(id))
-                    .cloned()
-                    .unwrap_or_default()
-            );
-            value["play_count"] = serde_json::json!(song.play_count);
-            value
+    let song_rows = songs
+        .into_iter()
+        .map(|song| SearchSong {
+            cover: crate::covers::url_for(song.cover_art.as_deref(), &covers),
+            cover_remote: song
+                .cover_art
+                .as_deref()
+                .and_then(|id| remotes.get(id))
+                .cloned()
+                .unwrap_or_default(),
+            starred: song_starred.contains(&song.id),
+            id: song.id,
+            title: song.title,
+            artist: song.artist,
+            album: song.album,
+            album_id: song.album_id,
+            track: song.track,
+            duration: song.duration,
+            play_count: song.play_count,
         })
         .collect();
 
-    Ok(serde_json::json!({
-        "query": query,
-        "most_played": most_played,
-        "album_context": album_context,
-        "artists": artist_rows,
-        "albums": album_rows,
-        "songs": song_rows,
-        "playlists": playlists,
-    }))
+    Ok(SearchResults {
+        most_played,
+        album_context,
+        artists: artist_rows,
+        albums: album_rows,
+        songs: song_rows,
+        playlists,
+    })
 }
+

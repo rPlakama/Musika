@@ -20,12 +20,12 @@
 //! Split out of `legacy.rs` (ARC-17); playback queues live in [`crate::queue`].
 
 pub(crate) mod rows;
-mod search;
+pub(crate) mod search;
 
 pub(crate) use rows::*;
-pub use search::search_json;
+pub use search::search;
 #[cfg(test)]
-pub(crate) use search::{merge_json_rows, search_value_index};
+pub(crate) use search::{merge_hits, search_results_index};
 
 pub async fn load_albums_json(
     dbs: &crate::db::Dbs,

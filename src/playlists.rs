@@ -691,50 +691,31 @@ struct PlaylistListRow {
     owner: Option<String>,
 }
 
-/// One playlist row for the list and the search channel (same schema; the
-/// search copy used to omit `source`).
-fn playlist_row(row: &PlaylistListRow) -> serde_json::Value {
-    let origin = if row.source == "m3u" {
+/// Where a playlist came from, as the row subtitle leads with it: the local
+/// m3u folder, the server owner's name, or a plain playlist.
+fn playlist_origin(row: &PlaylistListRow) -> String {
+    if row.source == "m3u" {
         "M3U".to_string()
     } else if let Some(owner) = row.owner.as_ref().filter(|owner| !owner.is_empty()) {
         owner.clone()
     } else {
         "Playlist".to_string()
-    };
-    serde_json::json!({
-        "id": row.id,
-        "source": row.source,
-        "name": row.name,
-        "song_count": row.song_count,
-        "duration": row.duration,
-        "owner": row.owner,
-        "title": row.name,
-        "subtitle": format!("{origin} · {} song{}", row.song_count,
-            if row.song_count == 1 { "" } else { "s" }),
-        "meta": if row.duration > 0 {
-            crate::browse::rows::format_duration(Some(row.duration as i32))
-        } else {
-            String::new()
-        },
-        "playlistId": row.id,
-        "songId": "",
-        "albumId": "",
-        "cover": "",
-        "starred": false,
-        "rating": 0,
-    })
+    }
+}
+
+/// One playlist hit for the unified search: identity plus the palette text.
+#[derive(Debug, Clone)]
+pub struct PlaylistHit {
+    pub id: String,
+    pub name: String,
+    pub subtitle: String,
+    pub meta: String,
 }
 
 /// One playlist segment row, deriving the same title/subtitle/meta text the
 /// JSON row carried (`playlist_row`) without a `Value` round trip.
 fn playlist_segment_row(row: &PlaylistListRow) -> crate::model::Row {
-    let origin = if row.source == "m3u" {
-        "M3U".to_string()
-    } else if let Some(owner) = row.owner.as_ref().filter(|owner| !owner.is_empty()) {
-        owner.clone()
-    } else {
-        "Playlist".to_string()
-    };
+    let origin = playlist_origin(row);
     crate::model::Row {
         track: String::new(),
         id: row.id.clone(),
@@ -981,7 +962,7 @@ pub async fn page(
 
 /// Playlist hits for the unified search. Playlists live in their own database,
 /// so they are matched here by name rather than through the song FTS index.
-pub async fn search_rows(dbs: &Dbs, query: &str, limit: i64) -> Result<Vec<serde_json::Value>> {
+pub async fn search_rows(dbs: &Dbs, query: &str, limit: i64) -> Result<Vec<PlaylistHit>> {
     let like = format!("%{}%", query.trim());
     let rows: Vec<PlaylistListRow> = sqlx::query_as(
         "SELECT id, source, name, song_count, duration, owner
@@ -993,7 +974,24 @@ pub async fn search_rows(dbs: &Dbs, query: &str, limit: i64) -> Result<Vec<serde
     .bind(limit.max(1))
     .fetch_all(&dbs.playlist)
     .await?;
-    Ok(rows.iter().map(playlist_row).collect())
+    Ok(rows
+        .iter()
+        .map(|row| PlaylistHit {
+            id: row.id.clone(),
+            name: row.name.clone(),
+            subtitle: format!(
+                "{} · {} song{}",
+                playlist_origin(row),
+                row.song_count,
+                if row.song_count == 1 { "" } else { "s" }
+            ),
+            meta: if row.duration > 0 {
+                crate::browse::rows::format_duration(Some(row.duration as i32))
+            } else {
+                String::new()
+            },
+        })
+        .collect())
 }
 
 /// One resolved playlist row (local M3U or server).

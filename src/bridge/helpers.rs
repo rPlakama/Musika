@@ -308,111 +308,93 @@ pub(crate) async fn search_rows(
     use crate::model::{Row, RowKind};
 
     let dbs = crate::app::dbs().ok_or_else(|| anyhow::anyhow!("databases not ready"))?;
-    let json = crate::browse::search_json(&dbs, query, offline, limit.max(1)).await?;
-    let value: serde_json::Value = serde_json::from_str(&json)?;
-    let most_played = value["most_played"].as_bool().unwrap_or(false);
-    let text =
-        |row: &serde_json::Value, key: &str| row[key].as_str().unwrap_or_default().to_string();
+    let results = crate::browse::search(&dbs, query, offline, limit.max(1)).await?;
+    let most_played = results.most_played;
     let mut rows = Vec::new();
 
-    if let Some(artists) = value["artists"].as_array() {
-        for artist in artists.iter().take(limit) {
-            rows.push(Row {
-                track: String::new(),
-                id: text(artist, "id"),
-                kind: RowKind::Artist,
-                title: text(artist, "name"),
-                subtitle: text(artist, "meta"),
-                meta: String::new(),
-                cover_url: text(artist, "cover"),
-                cover_remote: text(artist, "coverRemote"),
-                song_id: String::new(),
-                album_id: String::new(),
-                starred: artist["starred"].as_bool().unwrap_or(false),
-                rating: artist["rating"].as_i64().unwrap_or(0),
-                downloaded: false,
-            });
-        }
+    for artist in results.artists.iter().take(limit) {
+        rows.push(Row {
+            track: String::new(),
+            id: artist.id.clone(),
+            kind: RowKind::Artist,
+            title: artist.name.clone(),
+            subtitle: artist.meta(),
+            meta: String::new(),
+            cover_url: artist.cover.clone(),
+            cover_remote: artist.cover_remote.clone(),
+            song_id: String::new(),
+            album_id: String::new(),
+            starred: artist.starred,
+            rating: artist.rating,
+            downloaded: false,
+        });
     }
-    if let Some(albums) = value["albums"].as_array() {
-        for album in albums.iter().take(limit) {
-            let year = album["year"].as_i64().unwrap_or(0);
-            let meta = text(album, "meta");
-            let meta = if year > 0 {
-                format!("{year} · {meta}")
-            } else {
-                meta
-            };
-            rows.push(Row {
-                track: String::new(),
-                id: text(album, "id"),
-                kind: RowKind::Album,
-                title: text(album, "title"),
-                subtitle: text(album, "artist"),
-                meta,
-                cover_url: text(album, "cover"),
-                cover_remote: text(album, "coverRemote"),
-                song_id: String::new(),
-                album_id: text(album, "id"),
-                starred: album["starred"].as_bool().unwrap_or(false),
-                rating: album["rating"].as_i64().unwrap_or(0),
-                downloaded: false,
-            });
-        }
+    for album in results.albums.iter().take(limit) {
+        let meta = if album.year > 0 {
+            format!("{} · {}", album.year, album.meta())
+        } else {
+            album.meta()
+        };
+        rows.push(Row {
+            track: String::new(),
+            id: album.id.clone(),
+            kind: RowKind::Album,
+            title: album.title.clone(),
+            subtitle: album.artist.clone(),
+            meta,
+            cover_url: album.cover.clone(),
+            cover_remote: album.cover_remote.clone(),
+            song_id: String::new(),
+            album_id: album.id.clone(),
+            starred: album.starred,
+            rating: album.rating,
+            downloaded: false,
+        });
     }
-    if let Some(songs) = value["songs"].as_array() {
-        for song in songs.iter().take(limit) {
-            let plays = song["play_count"].as_i64().unwrap_or(0);
-            rows.push(Row {
-                track: song["track"]
-                    .as_i64()
-                    .map(|track| track.to_string())
-                    .unwrap_or_default(),
-                id: text(song, "id"),
-                kind: RowKind::Song,
-                title: text(song, "title"),
-                subtitle: text(song, "subtitle"),
-                meta: if most_played {
-                    if plays == 1 {
-                        "1 play".to_string()
-                    } else {
-                        format!("{plays} plays")
-                    }
+    for song in results.songs.iter().take(limit) {
+        rows.push(Row {
+            track: song
+                .track
+                .map(|track| track.to_string())
+                .unwrap_or_default(),
+            id: song.id.clone(),
+            kind: RowKind::Song,
+            title: song.title.clone(),
+            subtitle: song.subtitle(),
+            meta: if most_played {
+                if song.play_count == 1 {
+                    "1 play".to_string()
                 } else {
-                    text(song, "meta")
-                },
-                cover_url: text(song, "cover"),
-                cover_remote: text(song, "coverRemote"),
-                song_id: text(song, "songId"),
-                album_id: text(song, "albumId"),
-                starred: song["starred"].as_bool().unwrap_or(false),
-                rating: song["rating"].as_i64().unwrap_or(0),
-                downloaded: false,
-            });
-        }
+                    format!("{} plays", song.play_count)
+                }
+            } else {
+                song.meta()
+            },
+            cover_url: song.cover.clone(),
+            cover_remote: song.cover_remote.clone(),
+            song_id: song.id.clone(),
+            album_id: song.album_id.clone().unwrap_or_default(),
+            starred: song.starred,
+            rating: 0,
+            downloaded: false,
+        });
     }
-    if let Some(playlists) = value["playlists"].as_array() {
-        for playlist in playlists.iter().take(limit) {
-            rows.push(Row {
-                track: String::new(),
-                id: text(playlist, "id"),
-                kind: RowKind::Playlist,
-                title: playlist["name"]
-                    .as_str()
-                    .or_else(|| playlist["title"].as_str())
-                    .unwrap_or_default()
-                    .to_string(),
-                subtitle: text(playlist, "subtitle"),
-                meta: text(playlist, "meta"),
-                cover_url: text(playlist, "cover"),
-                cover_remote: text(playlist, "coverRemote"),
-                song_id: String::new(),
-                album_id: String::new(),
-                starred: false,
-                rating: 0,
-                downloaded: false,
-            });
-        }
+    for playlist in results.playlists.iter().take(limit) {
+        rows.push(Row {
+            track: String::new(),
+            id: playlist.id.clone(),
+            kind: RowKind::Playlist,
+            title: playlist.name.clone(),
+            subtitle: playlist.subtitle.clone(),
+            meta: playlist.meta.clone(),
+            cover_url: String::new(),
+            cover_remote: String::new(),
+            song_id: String::new(),
+            album_id: String::new(),
+            starred: false,
+            rating: 0,
+            downloaded: false,
+        });
     }
     Ok((rows, most_played))
 }

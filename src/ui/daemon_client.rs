@@ -46,13 +46,11 @@ use serde_json::json;
 use tokio::sync::mpsc::{Receiver, Sender, error::TrySendError as UpdateTrySendError};
 
 use crate::bridge::Event;
-use crate::ipc_command::{CurrentTrack, DownloadRequest};
 use crate::ipc_protocol::{
     self, ByeReason, ErrorCode, Frame, Heartbeat, Hello, Message, PlaybackState, PlayerOp,
     PlayerReply, PlayerRequest, QueueDelta, QueueOp, QueueRows, ReplyJson, RequestJson, Role,
     UI_FEATURES, VERSION, WireTrack,
 };
-use crate::model::{PageDescriptor, PageKind, Scope};
 use crate::player::{Repeat, State, Track};
 
 /// How long `Client::connect` waits for the freshly spawned daemon to bind.
@@ -688,14 +686,6 @@ pub struct RemoteBridge {
     client: Client,
 }
 
-macro_rules! no_args {
-    ($($name:ident),* $(,)?) => {
-        $(pub fn $name(&self) -> u32 {
-            self.client.send_request(stringify!($name), json!({}))
-        })*
-    };
-}
-
 impl RemoteBridge {
     pub fn new(client: Client) -> Self {
         Self { client }
@@ -704,371 +694,33 @@ impl RemoteBridge {
     pub fn shutdown_core(&self) {
         self.client.shutdown_core();
     }
-
-    pub fn request_album_state(&self, album_id: String) -> u32 {
-        self.client
-            .send_request("request_album_state", json!({ "album_id": album_id }))
-    }
-
-    pub fn load_library(&self, scope: Scope, order: usize) -> u32 {
-        self.client
-            .send_request("load_library", json!({ "scope": scope, "order": order }))
-    }
-
-    pub fn request_library_window(
-        &self,
-        generation: u64,
-        scope: Scope,
-        order: usize,
-        start: usize,
-        count: usize,
-    ) -> u32 {
-        self.client.send_request(
-            "request_library_window",
-            json!({
-                "generation": generation,
-                "scope": scope,
-                "order": order,
-                "start": start,
-                "count": count,
-            }),
-        )
-    }
-
-    pub fn preload_library(&self, scope: Scope, order: usize) -> u32 {
-        self.client
-            .send_request("preload_library", json!({ "scope": scope, "order": order }))
-    }
-
-    pub fn search(&self, query: String) -> u32 {
-        self.client.send_request("search", json!({ "query": query }))
-    }
-
-    pub fn request_command_suggestions(
-        &self,
-        generation: u64,
-        scope: crate::ipc_command::SuggestScope,
-        query: String,
-        start: usize,
-        end: usize,
-    ) -> u32 {
-        self.client.send_request(
-            "request_command_suggestions",
-            json!({
-                "generation": generation,
-                "scope": scope,
-                "query": query,
-                "start": start,
-                "end": end,
-            }),
-        )
-    }
-
-    pub fn load_page(&self, descriptor: PageDescriptor) -> u32 {
-        self.client
-            .send_request("load_page", json!({ "descriptor": descriptor }))
-    }
-
-    pub fn request_notes(&self, album_id: String) -> u32 {
-        self.client
-            .send_request("request_notes", json!({ "album_id": album_id }))
-    }
-
-    pub fn request_artist_notes(&self, artist_id: String) -> u32 {
-        self.client
-            .send_request("request_artist_notes", json!({ "artist_id": artist_id }))
-    }
-
-    pub fn request_lyrics(&self, song_id: String) -> u32 {
-        self.client
-            .send_request("request_lyrics", json!({ "song_id": song_id }))
-    }
-
-    pub fn request_marks(&self, songs: Vec<String>, albums: Vec<String>) -> u32 {
-        self.client
-            .send_request("request_marks", json!({ "songs": songs, "albums": albums }))
-    }
-
-    pub fn request_container_state(&self, kind: PageKind, id: String) -> u32 {
-        self.client
-            .send_request("request_container_state", json!({ "kind": kind, "id": id }))
-    }
-
-    pub fn request_colors(&self, cover_art: String) -> u32 {
-        self.client
-            .send_request("request_colors", json!({ "cover_art": cover_art }))
-    }
-
-    pub fn request_display_cover(&self, key: String, cover_art: String, target: u32) -> u32 {
-        self.client.send_request(
-            "request_display_cover",
-            json!({ "key": key, "cover_art": cover_art, "target": target }),
-        )
-    }
-
-    pub fn play_song(&self, song_id: String, order: String) -> u32 {
-        self.client
-            .send_request("play_song", json!({ "song_id": song_id, "order": order }))
-    }
-
-    pub fn play_album(&self, album_id: String, start: usize) -> u32 {
-        self.client
-            .send_request("play_album", json!({ "album_id": album_id, "start": start }))
-    }
-
-    pub fn play_song_in_album(&self, song_id: String) -> u32 {
-        self.client
-            .send_request("play_song_in_album", json!({ "song_id": song_id }))
-    }
-
-    pub fn play_radio(&self, kind: String, id: String, start_index: usize) -> u32 {
-        self.client.send_request(
-            "play_radio",
-            json!({ "kind": kind, "id": id, "start": start_index }),
-        )
-    }
-
-    pub fn play_radio_query(&self, kind: String, query: String, start_index: usize) -> u32 {
-        self.client.send_request(
-            "play_radio_query",
-            json!({ "kind": kind, "query": query, "start": start_index }),
-        )
-    }
-
-    pub fn quick_radio(&self, kind: String, id: String) -> u32 {
-        self.client
-            .send_request("quick_radio", json!({ "kind": kind, "id": id }))
-    }
-
-    pub fn shuffle_album(&self, album_id: String) -> u32 {
-        self.client
-            .send_request("shuffle_album", json!({ "album_id": album_id }))
-    }
-
-    pub fn shuffle_artist(&self, artist_id: String) -> u32 {
-        self.client
-            .send_request("shuffle_artist", json!({ "artist_id": artist_id }))
-    }
-
-    pub fn shuffle_album_query(&self, query: String) -> u32 {
-        self.client
-            .send_request("shuffle_album_query", json!({ "query": query }))
-    }
-
-    pub fn shuffle_artist_query(&self, query: String) -> u32 {
-        self.client
-            .send_request("shuffle_artist_query", json!({ "query": query }))
-    }
-
-    pub fn shuffle_radio(&self, seed_kind: String, seed_id: String) -> u32 {
-        self.client.send_request(
-            "shuffle_radio",
-            json!({ "seed_kind": seed_kind, "seed_id": seed_id }),
-        )
-    }
-
-    pub fn queue_add_radio(&self, seed_kind: String, seed_id: String) -> u32 {
-        self.client.send_request(
-            "queue_add_radio",
-            json!({ "seed_kind": seed_kind, "seed_id": seed_id }),
-        )
-    }
-
-    pub fn save_radio(&self, seed_kind: String, seed_id: String, name: String) -> u32 {
-        self.client.send_request(
-            "save_radio",
-            json!({ "seed_kind": seed_kind, "seed_id": seed_id, "name": name }),
-        )
-    }
-
-    pub fn save_radio_local(&self, seed_kind: String, seed_id: String, name: String) -> u32 {
-        self.client.send_request(
-            "save_radio_local",
-            json!({ "seed_kind": seed_kind, "seed_id": seed_id, "name": name }),
-        )
-    }
-
-    pub fn download_radio(&self, seed_kind: String, seed_id: String) -> u32 {
-        self.client.send_request(
-            "download_radio",
-            json!({ "seed_kind": seed_kind, "seed_id": seed_id }),
-        )
-    }
-
-    pub fn quick_queue_add(&self, kind: String, id: String) -> u32 {
-        self.client
-            .send_request("quick_queue_add", json!({ "kind": kind, "id": id }))
-    }
-
-    pub fn paste_queue(&self, kind: String, ids: Vec<String>, at: usize) -> u32 {
-        self.client
-            .send_request("paste_queue", json!({ "kind": kind, "ids": ids, "at": at }))
-    }
-
-    pub fn quick_favorite(&self, kind: String, id: String, on: bool) -> u32 {
-        self.client
-            .send_request("quick_favorite", json!({ "kind": kind, "id": id, "on": on }))
-    }
-
-    pub fn quick_rate(&self, kind: String, id: String, level: u8) -> u32 {
-        self.client.send_request(
-            "quick_rate",
-            json!({ "kind": kind, "id": id, "level": level }),
-        )
-    }
-
-    pub fn quick_download(&self, kind: String, id: String, on: bool) -> u32 {
-        self.client
-            .send_request("quick_download", json!({ "kind": kind, "id": id, "on": on }))
-    }
-
-    pub fn quick_go_album(&self, song_id: String) -> u32 {
-        self.client
-            .send_request("quick_go_album", json!({ "song_id": song_id }))
-    }
-
-    pub fn quick_go_artist(&self, album_id: String) -> u32 {
-        self.client
-            .send_request("quick_go_artist", json!({ "album_id": album_id }))
-    }
-
-    pub fn quick_play_playlist(&self, id: String) -> u32 {
-        self.client
-            .send_request("quick_play_playlist", json!({ "id": id }))
-    }
-
-    pub fn open_album_artist_reveal(&self, album_id: String) -> u32 {
-        self.client
-            .send_request("open_album_artist_reveal", json!({ "album_id": album_id }))
-    }
-
-    pub fn sync(&self, mode: crate::bridge::SyncMode) -> u32 {
-        self.client.send_request("sync", json!({ "mode": mode }))
-    }
-
-    pub fn wipe(&self, scope: String) -> u32 {
-        self.client.send_request("wipe", json!({ "scope": scope }))
-    }
-
-    pub fn download_artist(&self, artist_id: String, on: bool) -> u32 {
-        self.client.send_request(
-            "download_artist",
-            json!({ "artist_id": artist_id, "on": on }),
-        )
-    }
-
-    pub fn download_request(&self, request: DownloadRequest, current: Option<CurrentTrack>) -> u32 {
-        self.client.send_request(
-            "download_request",
-            json!({ "request": request, "current": current }),
-        )
-    }
-
-    pub fn login(&self, server_url: String, username: String, password: String) -> u32 {
-        self.client.send_request(
-            "login",
-            json!({ "server_url": server_url, "username": username, "password": password }),
-        )
-    }
-
-    pub fn offline_login(&self, server_url: String, username: String) -> u32 {
-        self.client.send_request(
-            "offline_login",
-            json!({ "server_url": server_url, "username": username }),
-        )
-    }
-
-    no_args!(logout, refresh_header, play_random_album);
-
-    pub fn remove_account(&self, keep_data: bool) -> u32 {
-        self.client
-            .send_request("remove_account", json!({ "keep_data": keep_data }))
-    }
-
-    pub fn create_playlist(&self, name: String, song_ids: Vec<String>, offline: bool) -> u32 {
-        self.client.send_request(
-            "create_playlist",
-            json!({ "name": name, "song_ids": song_ids, "offline": offline }),
-        )
-    }
-
-    pub fn playlist_add(
-        &self,
-        targets: Vec<String>,
-        playlist: String,
-        current_song_id: Option<String>,
-    ) -> u32 {
-        self.client.send_request(
-            "playlist_add",
-            json!({ "targets": targets, "playlist": playlist, "current_song_id": current_song_id }),
-        )
-    }
-
-    pub fn playlist_add_selected(&self, kind: String, ids: Vec<String>, playlist: String) -> u32 {
-        self.client.send_request(
-            "playlist_add_selected",
-            json!({ "kind": kind, "ids": ids, "playlist": playlist }),
-        )
-    }
-
-    pub fn playlist_remove(
-        &self,
-        targets: Vec<String>,
-        playlist: String,
-        current_song_id: Option<String>,
-    ) -> u32 {
-        self.client.send_request(
-            "playlist_remove",
-            json!({ "targets": targets, "playlist": playlist, "current_song_id": current_song_id }),
-        )
-    }
-
-    pub fn delete_playlist(&self, playlist: String) -> u32 {
-        self.client
-            .send_request("delete_playlist", json!({ "playlist": playlist }))
-    }
-
-    pub fn paste_playlist(
-        &self,
-        playlist_id: String,
-        kind: String,
-        ids: Vec<String>,
-        position: usize,
-    ) -> u32 {
-        self.client.send_request(
-            "paste_playlist",
-            json!({ "playlist_id": playlist_id, "kind": kind, "ids": ids, "position": position }),
-        )
-    }
-
-    pub fn move_playlist_row(&self, playlist_id: String, from: usize, to: usize) -> u32 {
-        self.client.send_request(
-            "move_playlist_row",
-            json!({ "playlist_id": playlist_id, "from": from, "to": to }),
-        )
-    }
-
-    pub fn move_playlist_block(
-        &self,
-        playlist_id: String,
-        start: usize,
-        len: usize,
-        delta: i32,
-        cursor: usize,
-    ) -> u32 {
-        self.client.send_request(
-            "move_playlist_block",
-            json!({ "playlist_id": playlist_id, "start": start, "len": len, "delta": delta, "cursor": cursor }),
-        )
-    }
-
-    pub fn delete_playlist_positions(&self, playlist_id: String, positions: Vec<usize>) -> u32 {
-        self.client.send_request(
-            "delete_playlist_positions",
-            json!({ "playlist_id": playlist_id, "positions": positions }),
-        )
-    }
 }
+
+/// Generate the UI's request methods from the shared bridge RPC table: one
+/// `RequestJson` frame per call, keyed by the method name.
+macro_rules! bridge_client {
+    ($( $name:ident ( $( $field:ident : $ty:ty ),* $(,)? ), )*) => {
+        impl RemoteBridge {
+            $(
+                #[allow(clippy::too_many_arguments)]
+                pub fn $name(&self $(, $field: $ty)*) -> u32 {
+                    #[allow(unused_mut)]
+                    let mut args = serde_json::Map::new();
+                    $(
+                        args.insert(
+                            stringify!($field).to_string(),
+                            json!($field),
+                        );
+                    )*
+                    self.client
+                        .send_request(stringify!($name), serde_json::Value::Object(args))
+                }
+            )*
+        }
+    };
+}
+
+crate::for_each_bridge_rpc!(bridge_client);
 
 // ---------------------------------------------------------------------------
 // PlaybackView: the read-only projection of core playback/queue state.

@@ -23,11 +23,11 @@ use tokio::sync::mpsc;
 use tokio::time::MissedTickBehavior;
 
 use crate::bridge::{Bridge, Event, SyncMode};
-use crate::ipc_command::{self, CommandTarget, CurrentTrack, DownloadRequest, IpcCommand, RadioSeed, ShuffleTarget, SuggestScope};
+use crate::ipc_command::{self, CommandTarget, CurrentTrack, IpcCommand, RadioSeed, ShuffleTarget};
 use crate::ipc_protocol::{
     self as proto, ByeReason, Frame, Message, PlayerReply, ReplyJson, Role,
 };
-use crate::model::{PageDescriptor, PageKind, Scope};
+use crate::model::{PageDescriptor, PageKind};
 use crate::player::core::CoreCommand;
 use crate::player::{Track};
 
@@ -879,360 +879,32 @@ fn arg<T: DeserializeOwned>(args: &serde_json::Value, key: &str) -> Option<T> {
         .and_then(|value| serde_json::from_value(value.clone()).ok())
 }
 
-fn dispatch_bridge(bridge: &Bridge, method: &str, args: &serde_json::Value) -> bool {
-    match method {
-        "refresh_header" => bridge.refresh_header(),
-        "load_library" => {
-            if let (Some(scope), Some(order)) = (arg::<Scope>(args, "scope"), arg::<usize>(args, "order")) {
-                let _ = bridge.load_library(scope, order);
+/// Generate the core's request dispatcher from the shared bridge RPC table:
+/// each arm extracts the declared arguments from the request's JSON object and
+/// calls the matching `Bridge` handler. A request with missing or malformed
+/// arguments is consumed silently (handled), like the hand-written arms did.
+macro_rules! bridge_dispatch {
+    ($( $name:ident ( $( $field:ident : $ty:ty ),* $(,)? ), )*) => {
+        fn dispatch_bridge(bridge: &Bridge, method: &str, args: &serde_json::Value) -> bool {
+            match method {
+                $(
+                    stringify!($name) => {
+                        $(
+                            let Some($field) = arg::<$ty>(args, stringify!($field)) else {
+                                return true;
+                            };
+                        )*
+                        let _ = bridge.$name($($field),*);
+                    }
+                )*
+                _ => return false,
             }
+            true
         }
-        "request_library_window" => {
-            if let (Some(generation), Some(scope), Some(order), Some(start), Some(count)) = (
-                arg(args, "generation"),
-                arg::<Scope>(args, "scope"),
-                arg(args, "order"),
-                arg(args, "start"),
-                arg(args, "count"),
-            ) {
-                bridge.request_library_window(generation, scope, order, start, count);
-            }
-        }
-        "preload_library" => {
-            if let (Some(scope), Some(order)) = (arg::<Scope>(args, "scope"), arg(args, "order")) {
-                bridge.preload_library(scope, order);
-            }
-        }
-        "search" => {
-            if let Some(query) = arg(args, "query") {
-                bridge.search(query);
-            }
-        }
-        "request_command_suggestions" => {
-            if let (Some(generation), Some(scope), Some(query), Some(start), Some(end)) = (
-                arg(args, "generation"),
-                arg::<SuggestScope>(args, "scope"),
-                arg(args, "query"),
-                arg(args, "start"),
-                arg(args, "end"),
-            ) {
-                bridge.request_command_suggestions(generation, scope, query, start, end);
-            }
-        }
-        "load_page" => {
-            if let Some(descriptor) = arg::<PageDescriptor>(args, "descriptor") {
-                bridge.load_page(descriptor);
-            }
-        }
-        "request_notes" => {
-            if let Some(album_id) = arg(args, "album_id") {
-                bridge.request_notes(album_id);
-            }
-        }
-        "request_artist_notes" => {
-            if let Some(artist_id) = arg(args, "artist_id") {
-                bridge.request_artist_notes(artist_id);
-            }
-        }
-        "request_lyrics" => {
-            if let Some(song_id) = arg(args, "song_id") {
-                bridge.request_lyrics(song_id);
-            }
-        }
-        "request_marks" => {
-            if let (Some(songs), Some(albums)) = (arg(args, "songs"), arg(args, "albums")) {
-                bridge.request_marks(songs, albums);
-            }
-        }
-        "request_container_state" => {
-            if let (Some(kind), Some(id)) = (arg::<PageKind>(args, "kind"), arg(args, "id")) {
-                bridge.request_container_state(kind, id);
-            }
-        }
-        "request_album_state" => {
-            if let Some(album_id) = arg(args, "album_id") {
-                bridge.request_album_state(album_id);
-            }
-        }
-        "request_colors" => {
-            if let Some(cover_art) = arg(args, "cover_art") {
-                bridge.request_colors(cover_art);
-            }
-        }
-        "request_display_cover" => {
-            if let (Some(key), Some(cover_art), Some(target)) = (
-                arg(args, "key"),
-                arg(args, "cover_art"),
-                arg(args, "target"),
-            ) {
-                bridge.request_display_cover(key, cover_art, target);
-            }
-        }
-        "restore" => bridge.restore(),
-        "play_song" => {
-            if let (Some(song_id), Some(order)) = (arg(args, "song_id"), arg(args, "order")) {
-                bridge.play_song(song_id, order);
-            }
-        }
-        "play_song_in_album" => {
-            if let Some(song_id) = arg(args, "song_id") {
-                bridge.play_song_in_album(song_id);
-            }
-        }
-        "play_album" => {
-            if let (Some(album_id), Some(start)) = (arg(args, "album_id"), arg(args, "start")) {
-                bridge.play_album(album_id, start);
-            }
-        }
-        "play_random_album" => bridge.play_random_album(),
-        "play_radio" => {
-            if let (Some(kind), Some(id), Some(start)) =
-                (arg(args, "kind"), arg(args, "id"), arg(args, "start"))
-            {
-                bridge.play_radio(kind, id, start);
-            }
-        }
-        "play_radio_query" => {
-            if let (Some(kind), Some(query), Some(start)) =
-                (arg(args, "kind"), arg(args, "query"), arg(args, "start"))
-            {
-                bridge.play_radio_query(kind, query, start);
-            }
-        }
-        "quick_radio" => {
-            if let (Some(kind), Some(id)) = (arg(args, "kind"), arg(args, "id")) {
-                bridge.quick_radio(kind, id);
-            }
-        }
-        "shuffle_album" => {
-            if let Some(album_id) = arg(args, "album_id") {
-                bridge.shuffle_album(album_id);
-            }
-        }
-        "shuffle_artist" => {
-            if let Some(artist_id) = arg(args, "artist_id") {
-                bridge.shuffle_artist(artist_id);
-            }
-        }
-        "shuffle_album_query" => {
-            if let Some(query) = arg(args, "query") {
-                bridge.shuffle_album_query(query);
-            }
-        }
-        "shuffle_artist_query" => {
-            if let Some(query) = arg(args, "query") {
-                bridge.shuffle_artist_query(query);
-            }
-        }
-        "shuffle_radio" => {
-            if let (Some(seed_kind), Some(seed_id)) =
-                (arg(args, "seed_kind"), arg(args, "seed_id"))
-            {
-                bridge.shuffle_radio(seed_kind, seed_id);
-            }
-        }
-        "queue_add_radio" => {
-            if let (Some(seed_kind), Some(seed_id)) =
-                (arg(args, "seed_kind"), arg(args, "seed_id"))
-            {
-                bridge.queue_add_radio(seed_kind, seed_id);
-            }
-        }
-        "save_radio" => {
-            if let (Some(seed_kind), Some(seed_id), Some(name)) =
-                (arg(args, "seed_kind"), arg(args, "seed_id"), arg(args, "name"))
-            {
-                bridge.save_radio(seed_kind, seed_id, name);
-            }
-        }
-        "save_radio_local" => {
-            if let (Some(seed_kind), Some(seed_id), Some(name)) =
-                (arg(args, "seed_kind"), arg(args, "seed_id"), arg(args, "name"))
-            {
-                bridge.save_radio_local(seed_kind, seed_id, name);
-            }
-        }
-        "download_radio" => {
-            if let (Some(seed_kind), Some(seed_id)) =
-                (arg(args, "seed_kind"), arg(args, "seed_id"))
-            {
-                bridge.download_radio(seed_kind, seed_id);
-            }
-        }
-        "quick_queue_add" => {
-            if let (Some(kind), Some(id)) = (arg(args, "kind"), arg(args, "id")) {
-                bridge.quick_queue_add(kind, id);
-            }
-        }
-        "paste_queue" => {
-            if let (Some(kind), Some(ids), Some(at)) =
-                (arg(args, "kind"), arg(args, "ids"), arg(args, "at"))
-            {
-                bridge.paste_queue(kind, ids, at);
-            }
-        }
-        "quick_favorite" => {
-            if let (Some(kind), Some(id), Some(on)) =
-                (arg(args, "kind"), arg(args, "id"), arg(args, "on"))
-            {
-                bridge.quick_favorite(kind, id, on);
-            }
-        }
-        "quick_rate" => {
-            if let (Some(kind), Some(id), Some(level)) =
-                (arg(args, "kind"), arg(args, "id"), arg(args, "level"))
-            {
-                bridge.quick_rate(kind, id, level);
-            }
-        }
-        "quick_download" => {
-            if let (Some(kind), Some(id), Some(on)) =
-                (arg(args, "kind"), arg(args, "id"), arg(args, "on"))
-            {
-                bridge.quick_download(kind, id, on);
-            }
-        }
-        "quick_go_album" => {
-            if let Some(song_id) = arg(args, "song_id") {
-                bridge.quick_go_album(song_id);
-            }
-        }
-        "quick_go_artist" => {
-            if let Some(album_id) = arg(args, "album_id") {
-                bridge.quick_go_artist(album_id);
-            }
-        }
-        "quick_play_playlist" => {
-            if let Some(id) = arg(args, "id") {
-                bridge.quick_play_playlist(id);
-            }
-        }
-        "open_album_artist_reveal" => {
-            if let Some(album_id) = arg(args, "album_id") {
-                bridge.open_album_artist_reveal(album_id);
-            }
-        }
-        "sync" => {
-            if let Some(mode) = arg::<SyncMode>(args, "mode") {
-                bridge.sync(mode);
-            }
-        }
-        "wipe" => {
-            if let Some(scope) = arg(args, "scope") {
-                bridge.wipe(scope);
-            }
-        }
-        "download_artist" => {
-            if let (Some(artist_id), Some(on)) = (arg(args, "artist_id"), arg(args, "on")) {
-                bridge.download_artist(artist_id, on);
-            }
-        }
-        "download_request" => {
-            if let (Some(request), current) = (
-                arg::<DownloadRequest>(args, "request"),
-                arg::<Option<CurrentTrack>>(args, "current").flatten(),
-            ) {
-                bridge.download_request(request, current);
-            }
-        }
-        "login" => {
-            if let (Some(server_url), Some(username), Some(password)) =
-                (arg(args, "server_url"), arg(args, "username"), arg(args, "password"))
-            {
-                bridge.login(server_url, username, password);
-            }
-        }
-        "offline_login" => {
-            if let (Some(server_url), Some(username)) =
-                (arg(args, "server_url"), arg(args, "username"))
-            {
-                bridge.offline_login(server_url, username);
-            }
-        }
-        "logout" => bridge.logout(),
-        "remove_account" => {
-            if let Some(keep_data) = arg(args, "keep_data") {
-                bridge.remove_account(keep_data);
-            }
-        }
-        "create_playlist" => {
-            if let (Some(name), Some(song_ids), Some(offline)) = (
-                arg(args, "name"),
-                arg(args, "song_ids"),
-                arg(args, "offline"),
-            ) {
-                bridge.create_playlist(name, song_ids, offline);
-            }
-        }
-        "playlist_add" => {
-            if let (Some(targets), Some(playlist)) = (arg(args, "targets"), arg(args, "playlist")) {
-                bridge.playlist_add(targets, playlist, arg(args, "current_song_id"));
-            }
-        }
-        "playlist_add_selected" => {
-            if let (Some(kind), Some(ids), Some(playlist)) =
-                (arg(args, "kind"), arg(args, "ids"), arg(args, "playlist"))
-            {
-                bridge.playlist_add_selected(kind, ids, playlist);
-            }
-        }
-        "playlist_remove" => {
-            if let (Some(targets), Some(playlist)) = (arg(args, "targets"), arg(args, "playlist")) {
-                bridge.playlist_remove(targets, playlist, arg(args, "current_song_id"));
-            }
-        }
-        "delete_playlist" => {
-            if let Some(playlist) = arg(args, "playlist") {
-                bridge.delete_playlist(playlist);
-            }
-        }
-        "paste_playlist" => {
-            if let (Some(playlist_id), Some(kind), Some(ids), Some(position)) = (
-                arg(args, "playlist_id"),
-                arg(args, "kind"),
-                arg(args, "ids"),
-                arg(args, "position"),
-            ) {
-                bridge.paste_playlist(playlist_id, kind, ids, position);
-            }
-        }
-        "move_playlist_row" => {
-            if let (Some(playlist_id), Some(from), Some(to)) =
-                (arg(args, "playlist_id"), arg(args, "from"), arg(args, "to"))
-            {
-                bridge.move_playlist_row(playlist_id, from, to);
-            }
-        }
-        "move_playlist_block" => {
-            if let (Some(playlist_id), Some(start), Some(len), Some(delta), Some(cursor)) = (
-                arg(args, "playlist_id"),
-                arg(args, "start"),
-                arg(args, "len"),
-                arg(args, "delta"),
-                arg(args, "cursor"),
-            ) {
-                bridge.move_playlist_block(playlist_id, start, len, delta, cursor);
-            }
-        }
-        "delete_playlist_positions" => {
-            if let (Some(playlist_id), Some(positions)) =
-                (arg(args, "playlist_id"), arg(args, "positions"))
-            {
-                bridge.delete_playlist_positions(playlist_id, positions);
-            }
-        }
-        "set_offline" => {
-            if let Some(offline) = arg(args, "offline") {
-                bridge.set_offline(offline);
-            }
-        }
-        other => return {
-            eprintln!("daemon: unknown UI bridge request {other}");
-            false
-        },
-    }
-    true
+    };
 }
+
+crate::for_each_bridge_rpc!(bridge_dispatch);
 
 #[cfg(test)]
 mod tests {

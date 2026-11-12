@@ -27,7 +27,7 @@ use crate::ipc_command::{self, CommandTarget, CurrentTrack, IpcCommand, RadioSee
 use crate::ipc_protocol::{
     self as proto, ByeReason, Frame, Message, PlayerReply, ReplyJson, Role,
 };
-use crate::model::{PageDescriptor, PageKind};
+use crate::model::PageDescriptor;
 use crate::player::core::CoreCommand;
 use crate::player::{Track};
 
@@ -35,12 +35,9 @@ use self::clients::{Outbox, ServerEvent};
 use self::playback::{PlaybackControl, PlaybackInput, PlaybackOutput, PlaybackService, Snapshot};
 
 /// Last page hint loaded from the status row; preserved when the daemon
-/// flushes so a later UI session can reopen it.
-#[derive(Debug, Clone, Default)]
-struct LastPage {
-    kind: String,
-    id: String,
-}
+/// flushes so a later UI session can reopen it. The typed descriptor is the
+/// single form in the daemon; only `status::{load,save}` speaks strings.
+type LastPage = Option<PageDescriptor>;
 
 #[derive(Clone, Copy, Debug)]
 enum Lifecycle {
@@ -136,7 +133,7 @@ async fn run_async() {
     let (mpris_tx, mut mpris_rx) = mpsc::unbounded_channel::<String>();
     crate::mpris::init(mpris_tx);
 
-    let mut page = LastPage::default();
+    let mut page: LastPage = None;
     let mut header: Option<Event> = None;
     let mut auth: Option<Event> = None;
     let mut ui_clients: HashMap<u64, UiClient> = HashMap::new();
@@ -331,8 +328,7 @@ async fn run_async() {
 }
 
 fn update_page(page: &mut LastPage, descriptor: &PageDescriptor) {
-    page.kind = descriptor.kind.api_kind().to_string();
-    page.id = descriptor.id.clone();
+    *page = Some(descriptor.clone());
 }
 
 async fn restore_status(playback: &PlaybackControl, page: &mut LastPage) {
@@ -342,8 +338,7 @@ async fn restore_status(playback: &PlaybackControl, page: &mut LastPage) {
     let Ok(Some(status)) = crate::status::load(&dbs.status).await else {
         return;
     };
-    page.kind = status.page_kind.clone();
-    page.id = status.page_id.clone();
+    *page = PageDescriptor::from_stored_parts(&status.page_kind, &status.page_id);
     let Ok(resume) = crate::queue::resume(&dbs, &status, false).await else {
         return;
     };
@@ -723,11 +718,9 @@ fn bootstrap_client(
             let _ = outbox.send(&frame);
         }
     }
-    if let Some(kind) = PageKind::from_api_kind(&page.kind)
-        && !page.id.is_empty()
-    {
+    if let Some(descriptor) = page {
         let event = Event::OpenPage {
-            descriptor: PageDescriptor::new(kind, page.id.clone()),
+            descriptor: descriptor.clone(),
         };
         if let Ok(frame) = proto::event_frame(&event) {
             let _ = outbox.send(&frame);
@@ -789,8 +782,14 @@ fn build_status(snapshot: &Snapshot, page: &LastPage) -> crate::status::SessionS
             (!track.album_id.is_empty()).then(|| track.album_id.clone())
         }),
         song_id: current.map(|track| track.id.clone()),
-        page_kind: page.kind.clone(),
-        page_id: page.id.clone(),
+        page_kind: page
+            .as_ref()
+            .map(|page| page.kind.api_kind().to_string())
+            .unwrap_or_default(),
+        page_id: page
+            .as_ref()
+            .map(|page| page.id.clone())
+            .unwrap_or_default(),
         queue,
         queue_index: snapshot.state.index as i64,
         position: snapshot.state.position_at(crate::linux::monotonic_ns()),

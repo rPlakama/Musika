@@ -190,8 +190,9 @@ pub enum Event {
         tracks: Vec<crate::player::Track>,
         start: usize,
         position: f64,
-        page_kind: String,
-        page_id: String,
+        /// The page to reopen, already typed (the restore path is the only
+        /// producer; it no longer ships loose `page_kind`/`page_id` strings).
+        page: Option<crate::model::PageDescriptor>,
     },
     Lyrics {
         song_id: String,

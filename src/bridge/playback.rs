@@ -32,8 +32,10 @@ impl Bridge {
                 tracks,
                 start,
                 position,
-                page_kind: status.page_kind,
-                page_id: status.page_id,
+                page: crate::model::PageDescriptor::from_stored_parts(
+                    &status.page_kind,
+                    &status.page_id,
+                ),
             });
         });
     }

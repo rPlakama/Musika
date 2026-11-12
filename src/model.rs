@@ -193,6 +193,17 @@ impl PageDescriptor {
             radio_seed_kind: Some(seed_kind.into()),
         }
     }
+
+    /// Rebuild the descriptor from the persisted session status's text fields
+    /// (`page_kind`/`page_id`). This is the one place those strings become a
+    /// descriptor; the caller writes them back with [`PageKind::api_kind`].
+    pub fn from_stored_parts(kind: &str, id: &str) -> Option<Self> {
+        if id.is_empty() {
+            return None;
+        }
+        let kind = PageKind::from_api_kind(kind)?;
+        Some(Self::new(kind, id))
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

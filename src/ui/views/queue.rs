@@ -159,35 +159,17 @@ impl AppRoot {
                                                             true,
                                                         )),
                                                 )
-                                                .when(pending, |this| {
-                                                    this.child(RetainedIcon::new(
-                                                        "retained-queue-download-pending",
-                                                        index,
-                                                        icon_download_pending(),
-                                                        12.0,
-                                                        palette::primary(),
-                                                    ))
-                                                })
-                                                .when(downloaded && !pending, |this| {
-                                                    this.child(RetainedIcon::new(
-                                                        "retained-queue-download",
-                                                        index,
-                                                        crate::assets::icon(
-                                                            "outline-download.svg",
-                                                        ),
-                                                        12.0,
-                                                        palette::primary(),
-                                                    ))
-                                                })
-                                                .when(track.favorite, |this| {
-                                                    this.child(RetainedIcon::new(
-                                                        "retained-queue-favorite",
-                                                        index,
-                                                        icon_favorite(),
-                                                        11.0,
-                                                        0xFFD54F,
-                                                    ))
-                                                }),
+                                                .children(row_mark_icons(
+                                                    index,
+                                                    "retained-queue-download-pending",
+                                                    "retained-queue-download",
+                                                    "retained-queue-favorite",
+                                                    RowMarks {
+                                                        downloaded,
+                                                        downloading: pending,
+                                                        favorite: track.favorite,
+                                                    },
+                                                )),
                                         );
                                     }
                                     items

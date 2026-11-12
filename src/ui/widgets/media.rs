@@ -244,6 +244,57 @@ fn cached_icon(
         .clone()
 }
 
+/// Gold used by every favourite mark (list rows, queue rows, fullscreen).
+pub(crate) const FAVORITE_GOLD: u32 = 0xFFD54F;
+
+/// The marks a list row can carry.
+#[derive(Debug, Clone, Copy, Default)]
+pub(crate) struct RowMarks {
+    pub downloaded: bool,
+    pub downloading: bool,
+    pub favorite: bool,
+}
+
+/// The trailing mark icons for one row, in paint order: pending download,
+/// downloaded, favourite. The caller supplies its per-surface retained-icon
+/// id names so the marks keep their own animation identity on each surface.
+pub(crate) fn row_mark_icons(
+    index: usize,
+    pending_id: &'static str,
+    downloaded_id: &'static str,
+    favorite_id: &'static str,
+    marks: RowMarks,
+) -> Vec<RetainedIcon> {
+    let mut icons = Vec::with_capacity(3);
+    if marks.downloading {
+        icons.push(RetainedIcon::new(
+            pending_id,
+            index,
+            icon_download_pending(),
+            12.0,
+            palette::primary(),
+        ));
+    } else if marks.downloaded {
+        icons.push(RetainedIcon::new(
+            downloaded_id,
+            index,
+            icon_downloaded(),
+            12.0,
+            palette::primary(),
+        ));
+    }
+    if marks.favorite {
+        icons.push(RetainedIcon::new(
+            favorite_id,
+            index,
+            icon_favorite(),
+            11.0,
+            FAVORITE_GOLD,
+        ));
+    }
+    icons
+}
+
 /// Row mark: a download is in flight.
 pub(crate) fn icon_download_pending() -> SharedString {
     static CELL: std::sync::OnceLock<SharedString> = std::sync::OnceLock::new();

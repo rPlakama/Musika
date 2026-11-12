@@ -108,7 +108,6 @@ impl AppRoot {
                             let selected = index == this.view.list.cursor
                                 || this.view.list.selection.contains(this.view.list.cursor, index);
                             let hovered = this.hovered_row == Some(index);
-                            let striped = index % 2 != 0;
                             let Some(row) = this.view.rows.get(index) else {
                                 // RowWindow blank slot: a waving grey placeholder
                                 // until the live window lands.
@@ -139,16 +138,13 @@ impl AppRoot {
                             );
                             let cover_scale = this.visuals.row_cover_scale(scale);
                             let emphasis = this.visuals.row_text_emphasis(text_scale);
-                            let base_fill = if striped {
-                                palette::surface_container_lowest()
-                            } else {
-                                palette::surface()
-                            };
-                            let hover_fill = if hovered && !selected {
-                                this.library_hover_fill.value(&this.clock)
-                            } else {
-                                base_fill
-                            };
+                            let hover_fill = row_hover_fill(
+                                &this.library_hover_fill,
+                                &this.clock,
+                                index,
+                                selected,
+                                hovered,
+                            );
                             items.push(
                                 div()
                                     .id(gpui::ElementId::named_usize(
@@ -172,21 +168,12 @@ impl AppRoot {
                                     })
                                     .cursor_pointer()
                                     .on_hover(cx.listener(move |this, hovered: &bool, _, cx| {
-                                        let base_fill = if striped {
-                                            palette::surface_container_lowest()
-                                        } else {
-                                            palette::surface()
-                                        };
-                                        let target = if *hovered && !selected {
-                                            palette::surface_container_high()
-                                        } else {
-                                            base_fill
-                                        };
-                                        this.library_hover_fill.target(
-                                            target,
-                                            anim::QUICK_MS,
-                                            anim::Curve::Standard,
+                                        target_row_hover_fill(
+                                            &mut this.library_hover_fill,
                                             &this.clock,
+                                            index,
+                                            selected,
+                                            *hovered,
                                         );
                                         if *hovered {
                                             this.hovered_row = Some(index);
@@ -302,32 +289,18 @@ impl AppRoot {
                     )),
             );
         }
-        if downloading {
-            trailing = trailing.child(RetainedIcon::new(
-                "retained-download-pending",
-                paint.index,
-                icon_download_pending(),
-                12.0,
-                palette::primary(),
-            ));
-        }
-        if downloaded && !downloading {
-            trailing = trailing.child(RetainedIcon::new(
-                "retained-download-mark",
-                paint.index,
-                icon_downloaded(),
-                12.0,
-                palette::primary(),
-            ));
-        }
-        if row.starred {
-            trailing = trailing.child(RetainedIcon::new(
-                "retained-star-mark",
-                paint.index,
-                icon_favorite(),
-                11.0,
-                0xFFD54F,
-            ));
+        for mark in row_mark_icons(
+            paint.index,
+            "retained-download-pending",
+            "retained-download-mark",
+            "retained-star-mark",
+            RowMarks {
+                downloaded,
+                downloading,
+                favorite: row.starred,
+            },
+        ) {
+            trailing = trailing.child(mark);
         }
         if row.rating > 0 {
             trailing = trailing.child(

@@ -49,7 +49,7 @@ impl AppRoot {
     pub(in crate::ui) fn topbar_action_chip(
         &self,
         action: TopBarAction,
-        page: Option<&PageBarState>,
+        page: Option<&PageBarState<'_>>,
         anchors: StatusAnchorSlots,
         cx: &Context<Self>,
     ) -> gpui::AnyElement {
@@ -287,7 +287,7 @@ impl AppRoot {
         let title = if page.title.is_empty() {
             page.kind.label().to_string()
         } else {
-            page.title.clone()
+            page.title.to_string()
         };
         let mut identity = div()
             .flex()
@@ -314,7 +314,7 @@ impl AppRoot {
                     .text_color(rgb(palette::on_surface_variant()))
                     .whitespace_nowrap()
                     .text_ellipsis()
-                    .child(page.subtitle.clone()),
+                    .child(page.subtitle.to_string()),
             );
         }
         if matches!(
@@ -329,7 +329,7 @@ impl AppRoot {
                     .text_color(rgb(palette::on_surface_variant()))
                     .whitespace_nowrap()
                     .text_ellipsis()
-                    .child(page.meta.clone()),
+                    .child(page.meta.to_string()),
             );
         }
         let mut row = div()

@@ -20,13 +20,13 @@ mod contextual_bar_tests {
     use super::*;
     use crate::ui::widgets::media::cover_source;
 
-    fn page_state(kind: PageKind, starred: bool, cached: bool, downloading: bool) -> PageBarState {
+    fn page_state(kind: PageKind, starred: bool, cached: bool, downloading: bool) -> PageBarState<'static> {
         PageBarState {
             kind,
-            id: "id".to_string(),
-            title: String::new(),
-            subtitle: String::new(),
-            meta: String::new(),
+            id: "id",
+            title: "",
+            subtitle: "",
+            meta: "",
             rating: 0,
             starred,
             cached,

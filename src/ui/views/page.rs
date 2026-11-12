@@ -146,16 +146,13 @@ impl AppRoot {
                                             || page.list.selection.contains(page.list.cursor, index);
                                         let cover = page.cover(index);
                                         let hovered = this.hovered_page == Some(index);
-                                        let page_base = if index % 2 != 0 {
-                                            palette::surface_container_lowest()
-                                        } else {
-                                            palette::surface()
-                                        };
-                                        let hover_fill = if hovered && !selected {
-                                            this.page_hover_fill.value(&this.clock)
-                                        } else {
-                                            page_base
-                                        };
+                                        let hover_fill = row_hover_fill(
+                                            &this.page_hover_fill,
+                                            &this.clock,
+                                            index,
+                                            selected,
+                                            hovered,
+                                        );
                                         let (scale, text_scale) = this.row_emphasis(
                                             LineSurface::Page,
                                             this.page_generation as usize,
@@ -189,21 +186,12 @@ impl AppRoot {
                                                 })
                                                 .on_hover(cx.listener(
                                                     move |this, hovered: &bool, _, cx| {
-                                                        let page_base = if index % 2 != 0 {
-                                                            palette::surface_container_lowest()
-                                                        } else {
-                                                            palette::surface()
-                                                        };
-                                                        let target = if *hovered && !selected {
-                                                            palette::surface_container_high()
-                                                        } else {
-                                                            page_base
-                                                        };
-                                                        this.page_hover_fill.target(
-                                                            target,
-                                                            anim::QUICK_MS,
-                                                            anim::Curve::Standard,
+                                                        target_row_hover_fill(
+                                                            &mut this.page_hover_fill,
                                                             &this.clock,
+                                                            index,
+                                                            selected,
+                                                            *hovered,
                                                         );
                                                         if *hovered {
                                                             this.hovered_page = Some(index);

@@ -55,10 +55,10 @@ mod widgets;
 use self::text_modal::TextModal;
 use self::widgets::marquee::MarqueeText;
 use self::widgets::media::{
-    CoverSource, art, collage_art_from_sources, cover_element, cover_source_with_remote,
-    format_time, highlighted_text, icon, icon_downloaded, icon_download_pending, icon_favorite,
-    icon_rotated, loading_placeholder, loading_skeleton, page_key, remote_cover, repeat_label,
-    progress_bar, transport_controls, volume_meter,
+    CoverSource, FAVORITE_GOLD, RowMarks, art, collage_art_from_sources, cover_element,
+    cover_source_with_remote, format_time, highlighted_text, icon, icon_rotated,
+    loading_placeholder, loading_skeleton, page_key, remote_cover, repeat_label, progress_bar,
+    row_mark_icons, transport_controls, volume_meter,
 };
 use self::widgets::retained_cover::RetainedCover;
 use self::widgets::retained_icon::RetainedIcon;
@@ -658,11 +658,11 @@ impl SuperiorMode {
     }
 }
 
-fn page_tool_visible(page: &PageBarState) -> bool {
+fn page_tool_visible(page: &PageBarState<'_>) -> bool {
     !page.starred || !page.cached
 }
 
-fn page_actions(page: &PageBarState, artist_tool: bool) -> Vec<TopBarAction> {
+fn page_actions(page: &PageBarState<'_>, artist_tool: bool) -> Vec<TopBarAction> {
     let mut actions = Vec::new();
     if page.starred {
         actions.push(TopBarAction::Favorite);
@@ -678,7 +678,7 @@ fn page_actions(page: &PageBarState, artist_tool: bool) -> Vec<TopBarAction> {
     actions
 }
 
-fn topbar_actions_for(mode: SuperiorMode, page: Option<&PageBarState>) -> Vec<TopBarAction> {
+fn topbar_actions_for(mode: SuperiorMode, page: Option<&PageBarState<'_>>) -> Vec<TopBarAction> {
     match mode {
         SuperiorMode::Home => vec![TopBarAction::Sync],
         SuperiorMode::Album => page
@@ -713,19 +713,67 @@ fn next_tab_slot(order: &[usize], current: Option<usize>, backward: bool) -> Opt
         .and_then(|position| order.get(position).copied())
 }
 
-#[derive(Debug, Clone)]
-struct PageBarState {
+/// The alternating row base fill: the same stripe rule on every list.
+pub(in crate::ui) fn row_base_fill(index: usize) -> u32 {
+    if index % 2 != 0 {
+        palette::surface_container_lowest()
+    } else {
+        palette::surface()
+    }
+}
+
+/// The rendered hover fill for a row: the behaviour's current colour while the
+/// row is hovered and not selected, otherwise the striped base.
+pub(in crate::ui) fn row_hover_fill(
+    behavior: &anim::ColorBehavior,
+    clock: &anim::Clock,
+    index: usize,
+    selected: bool,
+    hovered: bool,
+) -> u32 {
+    if hovered && !selected {
+        behavior.value(clock)
+    } else {
+        row_base_fill(index)
+    }
+}
+
+/// Retarget the hover fill for a row (the row's `on_hover` path).
+pub(in crate::ui) fn target_row_hover_fill(
+    behavior: &mut anim::ColorBehavior,
+    clock: &anim::Clock,
+    index: usize,
+    selected: bool,
+    hovered: bool,
+) {
+    behavior.target(
+        if hovered && !selected {
+            palette::surface_container_high()
+        } else {
+            row_base_fill(index)
+        },
+        anim::QUICK_MS,
+        anim::Curve::Standard,
+        clock,
+    );
+}
+
+/// The superior bar's projection of the open page. Borrowed from
+/// [`PageState`] so opening/rendering the bar does not clone its identity
+/// strings; the action code that mutates a page reads what it needs first.
+#[derive(Debug, Clone, Copy)]
+struct PageBarState<'a> {
     kind: PageKind,
-    id: String,
-    title: String,
-    subtitle: String,
-    meta: String,
+    id: &'a str,
+    title: &'a str,
+    subtitle: &'a str,
+    meta: &'a str,
     rating: u8,
     starred: bool,
     cached: bool,
     downloading: bool,
     /// Radio seed kind (`album`/`song`) for the Tool radio actions.
-    radio_seed_kind: Option<String>,
+    radio_seed_kind: Option<&'a str>,
 }
 
 const LIBRARY_ROW_FLAGS: page_profile::RowFlags = page_profile::RowFlags {

@@ -357,7 +357,7 @@ impl AppRoot {
                                         this.child(icon(
                                             "baseline-favorite.svg",
                                             (title_size * 0.62).clamp(13.0, 19.0),
-                                            0xFFD54F,
+                                            FAVORITE_GOLD,
                                         ))
                                     })
                                     .when(pending, |this| {

@@ -5,7 +5,7 @@ use super::super::*;
 impl AppRoot {
     pub(in crate::ui) fn page_alt_menu(
         &self,
-        page: &PageBarState,
+        page: &PageBarState<'_>,
     ) -> Option<(QuickMenu, AltTarget)> {
         let (menu, kind, radio_seed_kind, radio_seed_id) = match page.kind {
             PageKind::Album => (
@@ -23,10 +23,8 @@ impl AppRoot {
             PageKind::Radio => (
                 QuickMenu::radio_tool(),
                 RowKind::Song,
-                page.radio_seed_kind
-                    .clone()
-                    .unwrap_or_else(|| "album".to_string()),
-                page.id.clone(),
+                page.radio_seed_kind.unwrap_or("album").to_string(),
+                page.id.to_string(),
             ),
             _ => return None,
         };
@@ -34,9 +32,9 @@ impl AppRoot {
             menu,
             AltTarget {
                 kind,
-                id: page.id.clone(),
+                id: page.id.to_string(),
                 album_id: if page.kind == PageKind::Album {
-                    page.id.clone()
+                    page.id.to_string()
                 } else {
                     String::new()
                 },
@@ -44,7 +42,7 @@ impl AppRoot {
                 playlist_id: String::new(),
                 radio_seed_kind,
                 radio_seed_id,
-                ids: vec![page.id.clone()],
+                ids: vec![page.id.to_string()],
                 selection: false,
             },
         ))
@@ -119,16 +117,18 @@ impl AppRoot {
             return;
         }
         let on = !page.cached;
+        let kind = page.kind;
+        let id = page.id.to_string();
         if let Some(page) = self.page.as_mut() {
             page.container_cached = on;
             page.container_downloading = true;
         }
-        match page.kind {
+        match kind {
             PageKind::Album => {
-                self.bridge.quick_download("album".to_string(), page.id, on);
+                self.bridge.quick_download("album".to_string(), id, on);
             }
             PageKind::Artist => {
-                self.bridge.download_artist(page.id, on);
+                self.bridge.download_artist(id, on);
             }
             _ => {}
         }
@@ -140,11 +140,12 @@ impl AppRoot {
             return;
         }
         let kind = page.kind.api_kind();
+        let id = page.id.to_string();
+        let on = !page.starred;
         if let Some(page) = self.page.as_mut() {
-            page.header.starred = !page.header.starred;
+            page.header.starred = on;
         }
-        self.bridge
-            .quick_favorite(kind.to_string(), page.id, !page.starred);
+        self.bridge.quick_favorite(kind.to_string(), id, on);
     }
 
     pub(in crate::ui) fn alt_menu_for_row(&self, row: &Row) -> QuickMenu {
@@ -314,19 +315,19 @@ impl AppRoot {
         SuperiorMode::from_page(self.page.as_ref())
     }
 
-    pub(in crate::ui) fn page_bar(&self) -> Option<PageBarState> {
+    pub(in crate::ui) fn page_bar(&self) -> Option<PageBarState<'_>> {
         let page = self.page.as_ref()?;
         Some(PageBarState {
             kind: page.descriptor.kind,
-            id: page.descriptor.id.clone(),
-            title: page.header.title.clone(),
-            subtitle: page.header.subtitle.clone(),
-            meta: page.header.meta.clone(),
+            id: &page.descriptor.id,
+            title: &page.header.title,
+            subtitle: &page.header.subtitle,
+            meta: &page.header.meta,
             rating: page.header.rating.clamp(0, 5) as u8,
             starred: page.header.starred,
             cached: page.container_cached,
             downloading: page.container_downloading,
-            radio_seed_kind: page.descriptor.radio_seed_kind.clone(),
+            radio_seed_kind: page.descriptor.radio_seed_kind.as_deref(),
         })
     }
 

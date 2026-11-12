@@ -397,497 +397,520 @@ impl fmt::Display for CommandError {
 
 impl std::error::Error for CommandError {}
 
+/// How one command is parsed and printed. The registry declares this once;
+/// `parse` and `canonical_string` read the same declaration.
+#[derive(Debug, Clone)]
+pub enum CommandForm {
+    /// No arguments. Parsing ignores trailing words (the hand-written arms
+    /// did) and the canonical form is just the command name.
+    Bare(IpcCommand),
+    /// One word argument: `name <value>`. Unknown values name the scope.
+    Word {
+        values: &'static [(&'static str, IpcCommand)],
+        unknown: &'static str,
+    },
+    /// A whole-rest argument: empty selects the `""` entry, anything else must
+    /// equal a listed value. A bad argument reports the command's usage.
+    Exact(&'static [(&'static str, IpcCommand)]),
+    /// Grammar that needs the raw rest (ids, numbers, quoted targets, flags);
+    /// `parse`/`canonical_string` keep explicit arms for these.
+    Advanced(ArgHints),
+}
+
+/// The argument completion metadata an [`CommandForm::Advanced`] command
+/// carries (the hand-written grammar cannot derive it).
 #[derive(Debug, Clone, Copy)]
-pub enum ArgSpec {
+pub enum ArgHints {
     None,
-    Enum(&'static [&'static str]),
-    OptionalEnum(&'static [&'static str]),
-    Number(&'static str),
-    Text(&'static str),
+    /// One of the listed words.
+    Values(&'static [&'static str]),
+    /// A free argument shown as a usage hint (`<seconds>`).
+    Label(&'static str),
+}
+
+impl CommandSpec {
+    /// Whether completing this command's name should continue into arguments.
+    pub fn needs_argument(&self) -> bool {
+        !matches!(self.form, CommandForm::Bare(_))
+    }
 }
 
 pub struct CommandSpec {
     pub name: &'static str,
     pub usage: &'static str,
     pub description: &'static str,
-    pub args: ArgSpec,
+    /// How the command is parsed and printed.
+    pub form: CommandForm,
 }
-
-const SYNC_ARGS: &[&str] = &["all", "repair"];
-const WIPE_ARGS: &[&str] = &["album", "lyrics", "covers"];
-const ON_OFF: &[&str] = &["on", "off"];
-const DIRECTIONS: &[&str] = &["north", "south", "east", "west"];
-const NEXT_PREV: &[&str] = &["next", "prev"];
-const TRACK_ACTIONS: &[&str] = &["next", "previous"];
 
 pub const COMMANDS: &[CommandSpec] = &[
     CommandSpec {
         name: "sync",
         usage: "sync [all|repair]",
         description: "Sync the library (incremental, deep, or repair)",
-        args: ArgSpec::OptionalEnum(SYNC_ARGS),
+        form: CommandForm::Exact(&[("", IpcCommand::Sync(SyncMode::Incremental)), ("all", IpcCommand::Sync(SyncMode::All)), ("repair", IpcCommand::Sync(SyncMode::Repair))]),
     },
     CommandSpec {
         name: "wipe",
         usage: "wipe <album|lyrics|covers>",
         description: "Clear downloaded albums or a cache",
-        args: ArgSpec::Enum(WIPE_ARGS),
+        form: CommandForm::Word { values: &[("album", IpcCommand::Wipe(WipeScope::Album)), ("lyrics", IpcCommand::Wipe(WipeScope::Lyrics)), ("covers", IpcCommand::Wipe(WipeScope::Covers))], unknown: "wipe scope" },
     },
     CommandSpec {
         name: "wipe_databases",
         usage: "wipe_databases",
         description: "Open the destructive wipe chooser",
-        args: ArgSpec::None,
+        form: CommandForm::Bare(IpcCommand::WipeDatabases),
     },
     CommandSpec {
         name: "logout",
         usage: "logout",
         description: "Log out of the current account",
-        args: ArgSpec::None,
+        form: CommandForm::Bare(IpcCommand::Logout),
     },
     CommandSpec {
         name: "add_account",
         usage: "add_account",
         description: "Open the login screen to add an account",
-        args: ArgSpec::None,
+        form: CommandForm::Bare(IpcCommand::AddAccount),
     },
     CommandSpec {
         name: "remove_account",
         usage: "remove_account [--keep-data]",
         description: "Remove the current account",
-        args: ArgSpec::OptionalEnum(&["--keep-data"]),
+        form: CommandForm::Exact(&[("", IpcCommand::RemoveAccount { keep_data: false }), ("--keep-data", IpcCommand::RemoveAccount { keep_data: true })]),
     },
     CommandSpec {
         name: "playlist",
         usage: "playlist <create|add|rm> ...",
         description: "Create, add/remove targets or delete a playlist (playlist rm <target...>; <name>, playlist add selected; <name>, playlist rm <name>)",
-        args: ArgSpec::Enum(&["create", "add", "rm"]),
+        form: CommandForm::Advanced(ArgHints::Values(&["create", "add", "rm"])),
     },
     CommandSpec {
         name: "shuffle",
         usage: "shuffle <queue|album|artist> [name]",
         description: "Shuffle the queue, an album, or an artist",
-        args: ArgSpec::Enum(&["queue", "album", "artist"]),
+        form: CommandForm::Advanced(ArgHints::Values(&["queue", "album", "artist"])),
     },
     CommandSpec {
         name: "radio",
         usage: "radio [current|album|song] [name]",
         description: "Start radio from the current context or an explicit seed",
-        args: ArgSpec::OptionalEnum(&["save", "current", "album", "song"]),
+        form: CommandForm::Advanced(ArgHints::Values(&["save", "current", "album", "song"])),
     },
     CommandSpec {
         name: "download",
         usage: "download [rm] [artist|album|track] <names...>",
         description: "Download the current track or a searched artist/album/track",
-        args: ArgSpec::Text("[rm] <artist> [album] [track]"),
+        form: CommandForm::Advanced(ArgHints::Label("[rm] <artist> [album] [track]")),
     },
     CommandSpec {
         name: "refresh",
         usage: "refresh",
         description: "Start an incremental sync",
-        args: ArgSpec::None,
+        form: CommandForm::Bare(IpcCommand::Refresh),
     },
     CommandSpec {
         name: "status",
         usage: "status",
         description: "Print the playback state as one JSON line",
-        args: ArgSpec::None,
+        form: CommandForm::Bare(IpcCommand::Status),
     },
     CommandSpec {
         name: "queue",
         usage: "queue",
         description: "Print the queue ids as one JSON line",
-        args: ArgSpec::None,
+        form: CommandForm::Bare(IpcCommand::QueueQuery),
     },
     CommandSpec {
         name: "top",
         usage: "top",
         description: "Jump to the first row",
-        args: ArgSpec::None,
+        form: CommandForm::Bare(IpcCommand::Top),
     },
     CommandSpec {
         name: "bottom",
         usage: "bottom",
         description: "Jump to the last row",
-        args: ArgSpec::None,
+        form: CommandForm::Bare(IpcCommand::Bottom),
     },
     CommandSpec {
         name: "move_up",
         usage: "move_up",
         description: "Move the cursor up",
-        args: ArgSpec::None,
+        form: CommandForm::Bare(IpcCommand::MoveUp),
     },
     CommandSpec {
         name: "move_down",
         usage: "move_down",
         description: "Move the cursor down",
-        args: ArgSpec::None,
+        form: CommandForm::Bare(IpcCommand::MoveDown),
     },
     CommandSpec {
         name: "scroll_up",
         usage: "scroll_up",
         description: "Scroll up one row",
-        args: ArgSpec::None,
+        form: CommandForm::Bare(IpcCommand::ScrollUp),
     },
     CommandSpec {
         name: "scroll_down",
         usage: "scroll_down",
         description: "Scroll down one row",
-        args: ArgSpec::None,
+        form: CommandForm::Bare(IpcCommand::ScrollDown),
     },
     CommandSpec {
         name: "page_up",
         usage: "page_up",
         description: "Move one page up",
-        args: ArgSpec::None,
+        form: CommandForm::Bare(IpcCommand::PageUp),
     },
     CommandSpec {
         name: "page_down",
         usage: "page_down",
         description: "Move one page down",
-        args: ArgSpec::None,
+        form: CommandForm::Bare(IpcCommand::PageDown),
     },
     CommandSpec {
         name: "move_left",
         usage: "move_left",
         description: "Move left within the active surface",
-        args: ArgSpec::None,
+        form: CommandForm::Bare(IpcCommand::MoveLeft),
     },
     CommandSpec {
         name: "move_right",
         usage: "move_right",
         description: "Move right within the active surface",
-        args: ArgSpec::None,
+        form: CommandForm::Bare(IpcCommand::MoveRight),
     },
     CommandSpec {
         name: "prev_place",
         usage: "prev_place",
         description: "Go to the previous place",
-        args: ArgSpec::None,
+        form: CommandForm::Bare(IpcCommand::PrevPlace),
     },
     CommandSpec {
         name: "next_place",
         usage: "next_place",
         description: "Go to the next place",
-        args: ArgSpec::None,
+        form: CommandForm::Bare(IpcCommand::NextPlace),
     },
     CommandSpec {
         name: "home",
         usage: "home",
         description: "Return to the Home library",
-        args: ArgSpec::None,
+        form: CommandForm::Bare(IpcCommand::Home),
     },
     CommandSpec {
         name: "back",
         usage: "back",
         description: "Back out of the current surface",
-        args: ArgSpec::None,
+        form: CommandForm::Bare(IpcCommand::Back),
     },
     CommandSpec {
         name: "enter",
         usage: "enter",
         description: "Activate the current selection",
-        args: ArgSpec::None,
+        form: CommandForm::Bare(IpcCommand::Enter),
     },
     CommandSpec {
         name: "scope_next",
         usage: "scope_next",
         description: "Next library scope",
-        args: ArgSpec::None,
+        form: CommandForm::Bare(IpcCommand::ScopeNext),
     },
     CommandSpec {
         name: "scope_prev",
         usage: "scope_prev",
         description: "Previous library scope",
-        args: ArgSpec::None,
+        form: CommandForm::Bare(IpcCommand::ScopePrev),
     },
     CommandSpec {
         name: "order_next",
         usage: "order_next",
         description: "Next library order",
-        args: ArgSpec::None,
+        form: CommandForm::Bare(IpcCommand::OrderNext),
     },
     CommandSpec {
         name: "order_prev",
         usage: "order_prev",
         description: "Previous library order",
-        args: ArgSpec::None,
+        form: CommandForm::Bare(IpcCommand::OrderPrev),
     },
     CommandSpec {
         name: "visual",
         usage: "visual",
         description: "Toggle visual selection",
-        args: ArgSpec::None,
+        form: CommandForm::Bare(IpcCommand::Visual),
     },
     CommandSpec {
         name: "visual_all",
         usage: "visual_all",
         description: "Select every visible row",
-        args: ArgSpec::None,
+        form: CommandForm::Bare(IpcCommand::VisualAll),
     },
     CommandSpec {
         name: "queue_toggle",
         usage: "queue_toggle",
         description: "Open or close the queue",
-        args: ArgSpec::None,
+        form: CommandForm::Bare(IpcCommand::QueueToggle),
     },
     CommandSpec {
         name: "queue_remove",
         usage: "queue_remove",
         description: "Remove the queue cursor row",
-        args: ArgSpec::None,
+        form: CommandForm::Bare(IpcCommand::QueueRemove),
     },
     CommandSpec {
         name: "queue_up",
         usage: "queue_up",
         description: "Move the queue row up",
-        args: ArgSpec::None,
+        form: CommandForm::Bare(IpcCommand::QueueUp),
     },
     CommandSpec {
         name: "queue_down",
         usage: "queue_down",
         description: "Move the queue row down",
-        args: ArgSpec::None,
+        form: CommandForm::Bare(IpcCommand::QueueDown),
     },
     CommandSpec {
         name: "yank",
         usage: "yank",
         description: "Yank the visual range or cursor row",
-        args: ArgSpec::None,
+        form: CommandForm::Bare(IpcCommand::Yank),
     },
     CommandSpec {
         name: "yank_row",
         usage: "yank_row",
         description: "Yank the cursor row",
-        args: ArgSpec::None,
+        form: CommandForm::Bare(IpcCommand::YankRow),
     },
     CommandSpec {
         name: "paste_below",
         usage: "paste_below",
         description: "Paste the row clipboard below the queue cursor or into the playlist",
-        args: ArgSpec::None,
+        form: CommandForm::Bare(IpcCommand::PasteBelow),
     },
     CommandSpec {
         name: "paste_above",
         usage: "paste_above",
         description: "Paste the row clipboard above the queue cursor or into the playlist",
-        args: ArgSpec::None,
+        form: CommandForm::Bare(IpcCommand::PasteAbove),
     },
     CommandSpec {
         name: "delete_row",
         usage: "delete_row",
         description: "Delete the selected queue rows or playlist entries",
-        args: ArgSpec::None,
+        form: CommandForm::Bare(IpcCommand::DeleteRow),
     },
     CommandSpec {
         name: "repeat_cycle",
         usage: "repeat_cycle",
         description: "Cycle repeat mode",
-        args: ArgSpec::None,
+        form: CommandForm::Bare(IpcCommand::RepeatCycle),
     },
     CommandSpec {
         name: "toggle_fullscreen",
         usage: "toggle_fullscreen",
         description: "Toggle playback/fullscreen view",
-        args: ArgSpec::None,
+        form: CommandForm::Bare(IpcCommand::ToggleFullscreen),
     },
     CommandSpec {
         name: "lyrics_overlay",
         usage: "lyrics_overlay",
         description: "Toggle the lyrics overlay",
-        args: ArgSpec::None,
+        form: CommandForm::Bare(IpcCommand::LyricsOverlay),
     },
     CommandSpec {
         name: "pane_cycle",
         usage: "pane_cycle [back]",
         description: "Cycle the active pane/cursor scope",
-        args: ArgSpec::OptionalEnum(&["back"]),
+        form: CommandForm::Exact(&[("", IpcCommand::PaneCycle { backward: false }), ("back", IpcCommand::PaneCycle { backward: true })]),
     },
     CommandSpec {
         name: "search",
         usage: "search [query]",
         description: "Open floating search, optionally with a query",
-        args: ArgSpec::Text("<query>"),
+        form: CommandForm::Advanced(ArgHints::Label("<query>")),
     },
     CommandSpec {
         name: "insert_mode",
         usage: "insert_mode [query]",
         description: "Open search in insert mode",
-        args: ArgSpec::Text("<query>"),
+        form: CommandForm::Advanced(ArgHints::Label("<query>")),
     },
     CommandSpec {
         name: "search_next",
         usage: "search_next",
         description: "Next floating-search row",
-        args: ArgSpec::None,
+        form: CommandForm::Bare(IpcCommand::SearchNext),
     },
     CommandSpec {
         name: "search_prev",
         usage: "search_prev",
         description: "Previous floating-search row",
-        args: ArgSpec::None,
+        form: CommandForm::Bare(IpcCommand::SearchPrev),
     },
     CommandSpec {
         name: "search_scope_next",
         usage: "search_scope_next",
         description: "Next floating-search scope",
-        args: ArgSpec::None,
+        form: CommandForm::Bare(IpcCommand::SearchScopeNext),
     },
     CommandSpec {
         name: "search_scope_prev",
         usage: "search_scope_prev",
         description: "Previous floating-search scope",
-        args: ArgSpec::None,
+        form: CommandForm::Bare(IpcCommand::SearchScopePrev),
     },
     CommandSpec {
         name: "line_search",
         usage: "line_search",
         description: "Open the / line search",
-        args: ArgSpec::None,
+        form: CommandForm::Bare(IpcCommand::LineSearch),
     },
     CommandSpec {
         name: "play_pause",
         usage: "play_pause",
         description: "Toggle playback",
-        args: ArgSpec::None,
+        form: CommandForm::Bare(IpcCommand::PlayPause),
     },
     CommandSpec {
         name: "play",
         usage: "play",
         description: "Resume playback",
-        args: ArgSpec::None,
+        form: CommandForm::Bare(IpcCommand::Play),
     },
     CommandSpec {
         name: "pause",
         usage: "pause",
         description: "Pause playback",
-        args: ArgSpec::None,
+        form: CommandForm::Bare(IpcCommand::Pause),
     },
     CommandSpec {
         name: "stop",
         usage: "stop",
         description: "Stop playback",
-        args: ArgSpec::None,
+        form: CommandForm::Bare(IpcCommand::Stop),
     },
     CommandSpec {
         name: "track",
         usage: "track <next|previous>",
         description: "Control track playback",
-        args: ArgSpec::Enum(TRACK_ACTIONS),
+        form: CommandForm::Word { values: &[("next", IpcCommand::Track(TrackCommand::Next)), ("previous", IpcCommand::Track(TrackCommand::Previous))], unknown: "track command" },
     },
     CommandSpec {
         name: "mute",
         usage: "mute",
         description: "Toggle mute",
-        args: ArgSpec::None,
+        form: CommandForm::Bare(IpcCommand::Mute),
     },
     CommandSpec {
         name: "volume_up",
         usage: "volume_up",
         description: "Raise volume by 5",
-        args: ArgSpec::None,
+        form: CommandForm::Bare(IpcCommand::VolumeUp),
     },
     CommandSpec {
         name: "volume_down",
         usage: "volume_down",
         description: "Lower volume by 5",
-        args: ArgSpec::None,
+        form: CommandForm::Bare(IpcCommand::VolumeDown),
     },
     CommandSpec {
         name: "set_volume",
         usage: "set_volume <0..100>",
         description: "Set volume",
-        args: ArgSpec::Number("<0..100>"),
+        form: CommandForm::Advanced(ArgHints::Label("<0..100>")),
     },
     CommandSpec {
         name: "seek_back",
         usage: "seek_back",
         description: "Seek back 5 seconds",
-        args: ArgSpec::None,
+        form: CommandForm::Bare(IpcCommand::SeekBack),
     },
     CommandSpec {
         name: "seek_forward",
         usage: "seek_forward",
         description: "Seek forward 5 seconds",
-        args: ArgSpec::None,
+        form: CommandForm::Bare(IpcCommand::SeekForward),
     },
     CommandSpec {
         name: "seek",
         usage: "seek <seconds>",
         description: "Seek to an absolute position",
-        args: ArgSpec::Number("<seconds>"),
+        form: CommandForm::Advanced(ArgHints::Label("<seconds>")),
     },
     CommandSpec {
         name: "seek_relative",
         usage: "seek_relative <±seconds>",
         description: "Seek relative to the playhead",
-        args: ArgSpec::Number("<±seconds>"),
+        form: CommandForm::Advanced(ArgHints::Label("<±seconds>")),
     },
     CommandSpec {
         name: "play_song",
         usage: "play_song <song-id>",
         description: "Play one song in the current order",
-        args: ArgSpec::Text("<song-id>"),
+        form: CommandForm::Advanced(ArgHints::Label("<song-id>")),
     },
     CommandSpec {
         name: "play_song_in_album",
         usage: "play_song_in_album <song-id>",
         description: "Play a song in its album queue",
-        args: ArgSpec::Text("<song-id>"),
+        form: CommandForm::Advanced(ArgHints::Label("<song-id>")),
     },
     CommandSpec {
         name: "open_song_album",
         usage: "open_song_album <song-id>",
         description: "Open the song's album page",
-        args: ArgSpec::Text("<song-id>"),
+        form: CommandForm::Advanced(ArgHints::Label("<song-id>")),
     },
     CommandSpec {
         name: "download_song",
         usage: "download_song <song-id>",
         description: "Download one song",
-        args: ArgSpec::Text("<song-id>"),
+        form: CommandForm::Advanced(ArgHints::Label("<song-id>")),
     },
     CommandSpec {
         name: "quick_hold",
         usage: "quick_hold <on|off>",
         description: "Arm/release the Alt quick actions",
-        args: ArgSpec::Enum(ON_OFF),
+        form: CommandForm::Advanced(ArgHints::Values(&["on", "off"])),
     },
     CommandSpec {
         name: "quick_aim",
         usage: "quick_aim <north|south|east|west>",
         description: "Aim the Alt quick actions",
-        args: ArgSpec::Enum(DIRECTIONS),
+        form: CommandForm::Advanced(ArgHints::Values(&["north", "south", "east", "west"])),
     },
     CommandSpec {
         name: "quick_cycle",
         usage: "quick_cycle <next|prev>",
         description: "Cycle the aimed Alt action",
-        args: ArgSpec::Enum(NEXT_PREV),
+        form: CommandForm::Advanced(ArgHints::Values(&["next", "prev"])),
     },
     CommandSpec {
         name: "quick_cancel",
         usage: "quick_cancel",
         description: "Cancel the Alt quick actions",
-        args: ArgSpec::None,
+        form: CommandForm::Bare(IpcCommand::QuickCancel),
     },
     CommandSpec {
         name: "show",
         usage: "show",
         description: "Show or raise the Musika window",
-        args: ArgSpec::None,
+        form: CommandForm::Bare(IpcCommand::Show),
     },
     CommandSpec {
         name: "random",
         usage: "random",
         description: "Play a random album from the library",
-        args: ArgSpec::None,
+        form: CommandForm::Bare(IpcCommand::RandomAlbum),
     },
     CommandSpec {
         name: "quit",
         usage: "quit",
         description: "Quit Musika",
-        args: ArgSpec::None,
+        form: CommandForm::Bare(IpcCommand::Quit),
     },
 ];
 
@@ -1157,7 +1180,7 @@ pub fn needs_argument(name: &str) -> bool {
     COMMANDS
         .iter()
         .find(|spec| spec.name == name)
-        .is_some_and(|spec| !matches!(spec.args, ArgSpec::None))
+        .is_some_and(CommandSpec::needs_argument)
 }
 
 /// Shell-like argument splitting for commands whose names contain spaces.
@@ -1787,10 +1810,15 @@ pub fn suggestions_with(
     if index != 1 {
         return Vec::new();
     }
-    let args = match spec.args {
-        ArgSpec::Enum(args) => args,
-        ArgSpec::OptionalEnum(args) => args,
-        ArgSpec::Number(label) | ArgSpec::Text(label) => {
+    let args: Vec<&'static str> = match &spec.form {
+        CommandForm::Bare(_) | CommandForm::Advanced(ArgHints::None) => return Vec::new(),
+        CommandForm::Word { values, .. } | CommandForm::Exact(values) => values
+            .iter()
+            .filter(|(label, _)| !label.is_empty())
+            .map(|(label, _)| *label)
+            .collect(),
+        CommandForm::Advanced(ArgHints::Values(values)) => values.to_vec(),
+        CommandForm::Advanced(ArgHints::Label(label)) => {
             if prefix.is_empty() {
                 return vec![Suggestion {
                     start,
@@ -1802,7 +1830,6 @@ pub fn suggestions_with(
             }
             return Vec::new();
         }
-        ArgSpec::None => return Vec::new(),
     };
     args.iter()
         .filter(|arg| arg.starts_with(prefix))

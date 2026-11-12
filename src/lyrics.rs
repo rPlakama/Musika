@@ -482,7 +482,7 @@ async fn song_lyrics_supported(dbs: &Dbs, client: &SubsonicClient) -> bool {
             let supported = extensions
                 .iter()
                 .any(|extension| extension.name == "songLyrics" && !extension.versions.is_empty());
-            let _ = meta_set(
+            _ = meta_set(
                 &dbs.lyrics,
                 "song_lyrics",
                 if supported { "yes" } else { "no" },

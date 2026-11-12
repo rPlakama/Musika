@@ -180,7 +180,7 @@ async fn write_loop(
             _ = tokio::time::sleep_until(deadline) => break,
         }
     }
-    let _ = writer.shutdown().await;
+    _ = writer.shutdown().await;
 }
 
 /// Starts the framed server. Returns immediately; connections are handled by
@@ -192,15 +192,15 @@ pub(crate) fn spawn(
 ) {
     tokio::spawn(async move {
         if let Some(parent) = path.parent() {
-            let _ = tokio::fs::create_dir_all(parent).await;
+            _ = tokio::fs::create_dir_all(parent).await;
             use std::os::unix::fs::PermissionsExt;
-            let _ = tokio::fs::set_permissions(
+            _ = tokio::fs::set_permissions(
                 parent,
                 std::fs::Permissions::from_mode(0o700),
             )
             .await;
         }
-        let _ = tokio::fs::remove_file(&path).await;
+        _ = tokio::fs::remove_file(&path).await;
         let listener = match UnixListener::bind(&path) {
             Ok(listener) => listener,
             Err(error) => {
@@ -210,7 +210,7 @@ pub(crate) fn spawn(
         };
         {
             use std::os::unix::fs::PermissionsExt;
-            let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600));
+            _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600));
         }
         let next_conn = Arc::new(AtomicU64::new(1));
         loop {
@@ -227,7 +227,7 @@ pub(crate) fn spawn(
                 if let Err(error) = handle_connection(conn, stream, events.clone(), session).await {
                     crate::debug_log!("daemon: connection {conn} ended: {error}");
                 }
-                let _ = events.send(ServerEvent::Gone { conn });
+                _ = events.send(ServerEvent::Gone { conn });
             });
         }
     });
@@ -401,8 +401,8 @@ async fn handle_connection(
 
 async fn send_one_shot(mut writer: tokio::net::unix::OwnedWriteHalf, frame: &Frame) {
     if let Ok(bytes) = frame.encode() {
-        let _ = writer.write_all(&bytes).await;
-        let _ = writer.flush().await;
+        _ = writer.write_all(&bytes).await;
+        _ = writer.flush().await;
     }
-    let _ = writer.shutdown().await;
+    _ = writer.shutdown().await;
 }

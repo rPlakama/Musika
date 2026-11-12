@@ -225,7 +225,7 @@ pub(crate) async fn store_in_dir(
     let previous = get(pool, song_id).await?;
 
     if let Err(err) = std::fs::rename(source, &final_path) {
-        let _ = std::fs::remove_file(source);
+        _ = std::fs::remove_file(source);
         return Err(err).with_context(|| format!("failed to move {}", final_path.display()));
     }
 
@@ -247,7 +247,7 @@ pub(crate) async fn store_in_dir(
             .as_ref()
             .is_none_or(|old| old.file != file || old.kind != kind)
         {
-            let _ = std::fs::remove_file(&final_path);
+            _ = std::fs::remove_file(&final_path);
         }
         return Err(err);
     }
@@ -256,7 +256,7 @@ pub(crate) async fn store_in_dir(
         && (old.file != file || old.kind != kind)
         && let Ok(old_dir) = tier_dir(&old.kind)
     {
-        let _ = std::fs::remove_file(old_dir.join(&old.file));
+        _ = std::fs::remove_file(old_dir.join(&old.file));
     }
     Ok(final_path)
 }
@@ -439,7 +439,7 @@ pub async fn prune_uncovered(dbs: &crate::db::Dbs) -> Result<usize> {
 
 fn remove_blob(row: &Stored) {
     if let Ok(dir) = tier_dir(&row.kind) {
-        let _ = std::fs::remove_file(dir.join(&row.file));
+        _ = std::fs::remove_file(dir.join(&row.file));
     }
 }
 
@@ -520,7 +520,7 @@ fn remove_temp_files(dir: &std::path::Path) {
         let name = entry.file_name();
         let name = name.to_string_lossy();
         if name.ends_with(".tmp") || name.ends_with(".part") {
-            let _ = std::fs::remove_file(entry.path());
+            _ = std::fs::remove_file(entry.path());
         }
     }
 }

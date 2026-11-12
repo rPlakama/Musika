@@ -26,7 +26,7 @@ impl Bridge {
                 start,
                 position
             );
-            let _ = tx.send(Event::Restore {
+            _ = tx.send(Event::Restore {
                 volume: status.volume,
                 muted: status.muted,
                 tracks,
@@ -53,7 +53,7 @@ impl Bridge {
                     crate::lyrics::Document::missing(&song_id)
                 }
             };
-            let _ = tx.send(Event::Lyrics { song_id, document });
+            _ = tx.send(Event::Lyrics { song_id, document });
         });
     }
 
@@ -82,11 +82,11 @@ impl Bridge {
             let id = match crate::library::random_album_id(&dbs.library).await {
                 Ok(Some(id)) => id,
                 Ok(None) => {
-                    let _ = tx.send(Event::Error("The library has no albums to pick.".to_string()));
+                    _ = tx.send(Event::Error("The library has no albums to pick.".to_string()));
                     return;
                 }
                 Err(err) => {
-                    let _ = tx.send(Event::Error(format!(
+                    _ = tx.send(Event::Error(format!(
                         "Could not pick a random album: {err:#}"
                     )));
                     return;
@@ -94,8 +94,8 @@ impl Bridge {
             };
             match crate::queue::album_tracks(&dbs, &id, offline).await {
                 Ok(tracks) if !tracks.is_empty() => {
-                    let _ = tx.send(Event::Queue { tracks, start: 0 });
-                    let _ = tx.send(Event::OpenPage {
+                    _ = tx.send(Event::Queue { tracks, start: 0 });
+                    _ = tx.send(Event::OpenPage {
                         descriptor: crate::model::PageDescriptor::new(
                             crate::model::PageKind::Album,
                             id,
@@ -103,12 +103,12 @@ impl Bridge {
                     });
                 }
                 Ok(_) => {
-                    let _ = tx.send(Event::Error(
+                    _ = tx.send(Event::Error(
                         "The random album has no playable tracks.".to_string(),
                     ));
                 }
                 Err(err) => {
-                    let _ = tx.send(Event::Error(format!(
+                    _ = tx.send(Event::Error(format!(
                         "Could not load the random album: {err:#}"
                     )));
                 }
@@ -127,7 +127,7 @@ impl Bridge {
                     .ok()
                     .and_then(|map| map.get(&song_id).cloned())
             else {
-                let _ = tx.send(Event::Error("That song has no album to open.".to_string()));
+                _ = tx.send(Event::Error("That song has no album to open.".to_string()));
                 return;
             };
             match crate::queue::album_tracks(&dbs, &album_id, offline).await {
@@ -136,8 +136,8 @@ impl Bridge {
                         .iter()
                         .position(|track| track.id == song_id)
                         .unwrap_or(0);
-                    let _ = tx.send(Event::Queue { tracks, start });
-                    let _ = tx.send(Event::OpenPage {
+                    _ = tx.send(Event::Queue { tracks, start });
+                    _ = tx.send(Event::OpenPage {
                         descriptor: crate::model::PageDescriptor::new(
                             crate::model::PageKind::Album,
                             album_id,
@@ -145,7 +145,7 @@ impl Bridge {
                     });
                 }
                 Err(err) => {
-                    let _ = tx.send(Event::Error(format!(
+                    _ = tx.send(Event::Error(format!(
                         "Could not play the song's album: {err:#}"
                     )));
                 }
@@ -163,7 +163,7 @@ impl Bridge {
                 }
                 Err(err) => Event::Error(format!("Playback failed: {err:#}")),
             };
-            let _ = tx.send(event);
+            _ = tx.send(event);
         });
     }
 }

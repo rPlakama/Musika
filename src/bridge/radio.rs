@@ -29,14 +29,14 @@ impl Bridge {
             let Some(dbs) = crate::app::dbs() else { return };
             match crate::radio::save_radio(&dbs, &seed_kind, &seed_id, &name).await {
                 Ok(saved) => {
-                    let _ = tx.send(Event::RadioSaved {
+                    _ = tx.send(Event::RadioSaved {
                         name: saved.name,
                         offline: false,
                         remote_error: saved.remote_error,
                     });
                 }
                 Err(err) => {
-                    let _ = tx.send(Event::Error(format!("Could not save radio: {err:#}")));
+                    _ = tx.send(Event::Error(format!("Could not save radio: {err:#}")));
                 }
             }
         });
@@ -51,22 +51,22 @@ impl Bridge {
             let rows = match crate::radio::radio_rows(&dbs, &seed_kind, &seed_id).await {
                 Ok(rows) => rows,
                 Err(err) => {
-                    let _ = tx.send(Event::Error(format!("Could not load radio: {err:#}")));
+                    _ = tx.send(Event::Error(format!("Could not load radio: {err:#}")));
                     return;
                 }
             };
             if rows.is_empty() {
-                let _ = tx.send(Event::Error(
+                _ = tx.send(Event::Error(
                     "This radio has no songs to download.".to_string(),
                 ));
                 return;
             }
             for song in rows {
                 if let Err(err) = crate::media_actions::download_one(&dbs, &song.id).await {
-                    let _ = tx.send(Event::Error(format!("Download failed: {err:#}")));
+                    _ = tx.send(Event::Error(format!("Download failed: {err:#}")));
                 }
             }
-            let _ = tx.send(Event::DownloadSettled);
+            _ = tx.send(Event::DownloadSettled);
         });
     }
 
@@ -95,7 +95,7 @@ impl Bridge {
             let tracks = match crate::radio::tracks(&dbs, &seed_kind, &seed_id, 0).await {
                 Ok((tracks, _)) => tracks,
                 Err(err) => {
-                    let _ = tx.send(Event::Error(format!(
+                    _ = tx.send(Event::Error(format!(
                         "Could not add the radio to the queue: {err:#}"
                     )));
                     return;
@@ -115,7 +115,7 @@ impl Bridge {
             let Some(album_id) = song.album_id else {
                 return;
             };
-            let _ = tx.send(Event::OpenPage {
+            _ = tx.send(Event::OpenPage {
                 descriptor: crate::model::PageDescriptor::new(
                     crate::model::PageKind::Album,
                     album_id,
@@ -150,7 +150,7 @@ impl Bridge {
                     crate::model::RowKind::Album,
                 ),
             };
-            let _ = tx.send(Event::OpenPageReveal {
+            _ = tx.send(Event::OpenPageReveal {
                 descriptor,
                 row_kind,
                 row_id: album_id,
@@ -167,14 +167,14 @@ impl Bridge {
             let Some(dbs) = crate::app::dbs() else { return };
             match crate::radio::save_radio_local(&dbs, &seed_kind, &seed_id, &name).await {
                 Ok(saved) => {
-                    let _ = tx.send(Event::RadioSaved {
+                    _ = tx.send(Event::RadioSaved {
                         name: saved.name,
                         offline: true,
                         remote_error: None,
                     });
                 }
                 Err(err) => {
-                    let _ = tx.send(Event::Error(format!("Could not save radio: {err:#}")));
+                    _ = tx.send(Event::Error(format!("Could not save radio: {err:#}")));
                 }
             }
         });
@@ -194,7 +194,7 @@ impl Bridge {
             };
             let result = async {
                 let id = crate::download_command::resolve_named_id(&dbs, scope, &query).await?;
-                let _ = tx.send(Event::OpenPage {
+                _ = tx.send(Event::OpenPage {
                     descriptor: crate::model::PageDescriptor::radio(
                         kind.clone(),
                         id.clone(),

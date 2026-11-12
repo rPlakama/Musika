@@ -27,7 +27,7 @@ impl Bridge {
                 },
                 None => Event::Error("The library is not initialised".to_string()),
             };
-            let _ = tx.send(event);
+            _ = tx.send(event);
         });
     }
 
@@ -55,7 +55,7 @@ impl Bridge {
                     }
                     Err(err) => Event::Error(format!("Search failed: {err:#}")),
                 };
-            let _ = tx.send(event);
+            _ = tx.send(event);
         });
     }
 
@@ -77,7 +77,7 @@ impl Bridge {
                     }
                     Err(err) => Event::Error(format!("Library load failed: {err:#}")),
                 };
-                let _ = tx.send(event);
+                _ = tx.send(event);
             });
             return generation;
         }
@@ -99,7 +99,7 @@ impl Bridge {
                 }
                 None => Event::Error("databases not ready".to_string()),
             };
-            let _ = tx.send(event);
+            _ = tx.send(event);
         });
         generation
     }
@@ -129,7 +129,7 @@ impl Bridge {
             .await
             {
                 Ok(rows) => {
-                    let _ = tx.send(Event::LibraryWindow {
+                    _ = tx.send(Event::LibraryWindow {
                         generation,
                         scope,
                         order,
@@ -170,7 +170,7 @@ impl Bridge {
             else {
                 return;
             };
-            let _ = tx.send(Event::Preload {
+            _ = tx.send(Event::Preload {
                 scope,
                 order,
                 count,
@@ -198,7 +198,7 @@ impl Bridge {
             tokio::time::sleep(std::time::Duration::from_millis(120)).await;
             let Some(dbs) = crate::app::dbs() else { return };
             let Ok(results) = crate::browse::search(&dbs, &query, offline, 8).await else {
-                let _ = tx.send(Event::CommandSuggestions {
+                _ = tx.send(Event::CommandSuggestions {
                     generation,
                     start,
                     end,
@@ -258,7 +258,7 @@ impl Bridge {
                     }
                 }
             }
-            let _ = tx.send(Event::CommandSuggestions {
+            _ = tx.send(Event::CommandSuggestions {
                 generation,
                 start,
                 end,

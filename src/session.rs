@@ -84,13 +84,16 @@ pub(crate) async fn client(_dbs: &crate::db::Dbs) -> anyhow::Result<SubsonicClie
         .lock()
         .await
         .as_ref()
-        .expect("client installed above")
-        .client
-        .clone();
+        .map(|cached| cached.client.clone())
+        .ok_or_else(|| anyhow::anyhow!("session client was not installed"))?;
     Ok(client)
 }
 
 #[cfg(test)]
+#[expect(
+    clippy::unused_async,
+    reason = "the test stub mirrors the async non-test signature used by shared call sites"
+)]
 pub(crate) async fn install(_server_url: &str, _username: &str, _password: &str) {}
 
 /// Tests use independent in-memory credential DBs; bypass the process-wide
@@ -116,4 +119,8 @@ pub(crate) async fn invalidate() {
 }
 
 #[cfg(test)]
+#[expect(
+    clippy::unused_async,
+    reason = "the test stub mirrors the async non-test signature used by shared call sites"
+)]
 pub(crate) async fn invalidate() {}

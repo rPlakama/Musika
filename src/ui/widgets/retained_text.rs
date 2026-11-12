@@ -112,28 +112,26 @@ impl CachedLine {
     ) {
         match self {
             Self::Wrapped(line) => {
-                line.paint_background(
+                _ = line.paint_background(
                     origin,
                     line_height,
                     TextAlign::Left,
                     Some(bounds),
                     window,
                     cx,
-                )
-                .ok();
-                line.paint(
+                );
+                _ = line.paint(
                     origin,
                     line_height,
                     TextAlign::Left,
                     Some(bounds),
                     window,
                     cx,
-                )
-                .ok();
+                );
             }
             Self::Plain(line) => {
-                line.paint_background(origin, line_height, window, cx).ok();
-                line.paint(origin, line_height, window, cx).ok();
+                _ = line.paint_background(origin, line_height, window, cx);
+                _ = line.paint(origin, line_height, window, cx);
             }
         }
     }
@@ -443,10 +441,9 @@ impl Element for RetainedText {
             return self.shape(width, window);
         };
         window.with_element_state::<CachedText, _>(global_id, |cached, window| {
-            let next = if cached.as_ref().is_some_and(|cached| cached.key == key) {
-                cached.unwrap()
-            } else {
-                self.shape(width, window)
+            let next = match cached.as_ref() {
+                Some(cached) if cached.key == key => cached.clone(),
+                _ => self.shape(width, window),
             };
             (next.clone(), next)
         })

@@ -265,7 +265,7 @@ impl Inner {
         match self.updates.try_send(update) {
             Ok(()) => {}
             Err(UpdateTrySendError::Full(update)) => {
-                let _ = self.updates.blocking_send(update);
+                _ = self.updates.blocking_send(update);
             }
             Err(UpdateTrySendError::Closed(_)) => {}
         }
@@ -293,7 +293,11 @@ impl Inner {
             out.pending = None;
         }
         let inner = Arc::clone(self);
-        std::thread::Builder::new()
+        #[expect(
+            clippy::expect_used,
+            reason = "without the writer thread the UI cannot talk to the core at all; failure is a fatal startup invariant"
+        )]
+        let _writer = std::thread::Builder::new()
             .name("musika-ipc-writer".to_string())
             .spawn(move || write_loop(inner, write_half, receiver))
             .expect("spawn ipc writer");
@@ -463,7 +467,11 @@ impl Client {
         let (updates, receiver) = tokio::sync::mpsc::channel(UPDATE_QUEUE_FRAMES);
         let inner = Arc::new(Inner::new(updates));
         let supervisor = Arc::clone(&inner);
-        std::thread::Builder::new()
+        #[expect(
+            clippy::expect_used,
+            reason = "without the reader/supervisor thread the UI never receives core updates; failure is a fatal startup invariant"
+        )]
+        let _reader = std::thread::Builder::new()
             .name("musika-ipc-reader".to_string())
             .spawn(move || supervise(supervisor, socket, retry_ms))
             .expect("spawn ipc supervisor");
@@ -492,7 +500,7 @@ impl Client {
     /// `ipc::send_line`); the daemon answers with `KIND_ACTIVATE`, which the
     /// reader maps to [`UiUpdate::Activate`].
     pub fn show(&self) {
-        let _ = crate::ipc::send_line("show");
+        _ = crate::ipc::send_line("show");
     }
 
     /// Asks the core to quit. The core broadcasts `Bye { reason: Quit }` before
@@ -500,7 +508,7 @@ impl Client {
     pub fn shutdown_core(&self) {
         // One line on the bounded command socket; the write timeout keeps this
         // short enough for the quit path that calls it from the render loop.
-        let _ = crate::ipc::send_line("quit");
+        _ = crate::ipc::send_line("quit");
     }
 
     /// Random id of the current daemon run (0 while disconnected).

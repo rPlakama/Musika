@@ -89,14 +89,12 @@ impl Element for RetainedIcon {
         window: &mut Window,
         cx: &mut App,
     ) {
-        window
-            .paint_svg(
-                bounds,
-                self.path.clone(),
-                TransformationMatrix::unit(),
-                rgb(self.color).into(),
-                cx,
-            )
-            .ok();
+        _ = window.paint_svg(
+            bounds,
+            self.path.clone(),
+            TransformationMatrix::unit(),
+            rgb(self.color).into(),
+            cx,
+        );
     }
 }

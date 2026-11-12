@@ -9,25 +9,25 @@ impl Bridge {
         crate::app::runtime().spawn(async move {
             let Some(dbs) = crate::app::dbs() else { return };
             let Ok(client) = crate::session::client(&dbs).await else {
-                let _ = tx.send(Event::Error("Sync needs a live session.".to_string()));
+                _ = tx.send(Event::Error("Sync needs a live session.".to_string()));
                 return;
             };
             let client = Arc::new(client);
             if mode == SyncMode::Repair {
-                let _ = tx.send(Event::SyncProgress {
+                _ = tx.send(Event::SyncProgress {
                     message: "Repairing library…".to_string(),
                     done: 0,
                     total: 100,
                 });
                 if let Err(err) = crate::db::wipe_library(&dbs).await {
-                    let _ = tx.send(Event::Error(format!("Library repair failed: {err:#}")));
+                    _ = tx.send(Event::Error(format!("Library repair failed: {err:#}")));
                     return;
                 }
             }
             let deep = mode != SyncMode::Incremental;
             let progress_tx = tx.clone();
             let report = match crate::index::sync_library(&dbs, client.clone(), deep, |progress| {
-                let _ = progress_tx.send(Event::SyncProgress {
+                _ = progress_tx.send(Event::SyncProgress {
                     message: progress.message,
                     done: progress.done,
                     total: progress.total,
@@ -37,19 +37,19 @@ impl Bridge {
             {
                 Ok(report) => report,
                 Err(err) => {
-                    let _ = tx.send(Event::Error(format!("Library sync failed: {err:#}")));
+                    _ = tx.send(Event::Error(format!("Library sync failed: {err:#}")));
                     return;
                 }
             };
             if mode != SyncMode::Incremental && report.covers_due {
-                let _ = tx.send(Event::SyncProgress {
+                _ = tx.send(Event::SyncProgress {
                     message: "Refreshing covers…".to_string(),
                     done: 90,
                     total: 100,
                 });
                 crate::index::cache_covers(&dbs, &client, &report.forced_covers).await;
             }
-            let _ = tx.send(Event::LibrarySynced);
+            _ = tx.send(Event::LibrarySynced);
         });
     }
 
@@ -68,10 +68,10 @@ impl Bridge {
             };
             match result {
                 Ok(()) => {
-                    let _ = tx.send(Event::Wiped { scope });
+                    _ = tx.send(Event::Wiped { scope });
                 }
                 Err(err) => {
-                    let _ = tx.send(Event::Error(format!("Wipe failed: {err:#}")));
+                    _ = tx.send(Event::Error(format!("Wipe failed: {err:#}")));
                 }
             }
         });
@@ -120,7 +120,7 @@ impl Bridge {
                 }
                 _ => (false, false, 0),
             };
-            let _ = tx.send(Event::PageContainerState {
+            _ = tx.send(Event::PageContainerState {
                 kind,
                 id,
                 cached,
@@ -135,7 +135,7 @@ impl Bridge {
         let tx = self.tx.clone();
         crate::app::runtime().spawn(async move {
             let Some(dbs) = crate::app::dbs() else { return };
-            let _ = tx.send(Event::DownloadStarted {
+            _ = tx.send(Event::DownloadStarted {
                 kind: "artist".to_string(),
                 id: artist_id.clone(),
                 on,
@@ -144,7 +144,7 @@ impl Bridge {
                 .await
                 .unwrap_or_default();
             if ids.is_empty() {
-                let _ = tx.send(Event::Error(
+                _ = tx.send(Event::Error(
                     "This artist has no songs to download.".to_string(),
                 ));
                 return;
@@ -152,20 +152,20 @@ impl Bridge {
             if on {
                 for song in &ids {
                     if let Err(err) = crate::media_actions::download_one(&dbs, song).await {
-                        let _ = tx.send(Event::Error(format!("Download failed: {err:#}")));
+                        _ = tx.send(Event::Error(format!("Download failed: {err:#}")));
                     }
                 }
             } else {
                 for song in &ids {
-                    let _ = crate::download::unmark(&dbs.download, song).await;
+                    _ = crate::download::unmark(&dbs.download, song).await;
                 }
                 if let Err(err) = crate::media::remove_songs_media(&dbs.media, &ids).await {
-                    let _ = tx.send(Event::Error(format!(
+                    _ = tx.send(Event::Error(format!(
                         "Could not remove the artist media: {err:#}"
                     )));
                 }
             }
-            let _ = tx.send(Event::DownloadSettled);
+            _ = tx.send(Event::DownloadSettled);
         });
     }
 

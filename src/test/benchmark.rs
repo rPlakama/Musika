@@ -103,7 +103,7 @@ fn bench_cover_load() {
         let bytes = std::fs::metadata(path).unwrap().len();
         for &(reader_name, reader) in &readers {
             for _ in 0..WARMUP {
-                let _ = sample(path, reader);
+                _ = sample(path, reader);
             }
             let mut reads = Vec::with_capacity(ROUNDS);
             let mut decodes = Vec::with_capacity(ROUNDS);
@@ -138,7 +138,7 @@ fn bench_cover_load() {
             std::fs::copy(&thumb_path, path).expect("batch cover");
         }
         let reader = Reader::new().expect("batch reader");
-        let _ = reader.read_many(&batch);
+        _ = reader.read_many(&batch);
         let started = Instant::now();
         for _ in 0..10 {
             let results = reader.read_many(&batch);
@@ -151,7 +151,7 @@ fn bench_cover_load() {
         );
     }
 
-    let _ = std::fs::remove_dir_all(dir);
+    _ = std::fs::remove_dir_all(dir);
 }
 
 #[cfg(feature = "io-uring")]
@@ -180,7 +180,7 @@ fn io_uring_read_many_matches_std_fs() {
             .collect();
         assert_eq!(result.expect("batch read"), expected, "file {index}");
     }
-    let _ = std::fs::remove_dir_all(dir);
+    _ = std::fs::remove_dir_all(dir);
 }
 
 #[cfg(feature = "io-uring")]
@@ -195,7 +195,7 @@ fn io_uring_read_matches_std_fs() {
     std::fs::write(&path, &expected).expect("write probe");
     let actual = crate::io_uring_read::read_file(&path).expect("io_uring read");
     assert_eq!(actual, expected);
-    let _ = std::fs::remove_file(path);
+    _ = std::fs::remove_file(path);
 }
 
 /// Reports the same GPU/Vulkan facts as the debug binary.

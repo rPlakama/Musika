@@ -30,7 +30,7 @@ impl Bridge {
                     cover_art: cover_art.clone(),
                 },
             };
-            let _ = tx.send(event);
+            _ = tx.send(event);
             let mut inflight = inflight_shared
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -79,7 +79,7 @@ impl Bridge {
                         target,
                         key
                     );
-                    let _ = tx.send(Event::DisplayCover {
+                    _ = tx.send(Event::DisplayCover {
                         key: key.clone(),
                         cover_art: cover_art.clone(),
                         target,
@@ -100,7 +100,7 @@ impl Bridge {
                 path,
                 started.elapsed().as_secs_f64() * 1000.0
             );
-            let _ = tx.send(Event::DisplayCover {
+            _ = tx.send(Event::DisplayCover {
                 key: key.clone(),
                 cover_art: cover_art.clone(),
                 target,

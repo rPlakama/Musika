@@ -48,7 +48,7 @@ pub fn write_atomic(dir: &Path, file: &str, bytes: &[u8]) -> Result<PathBuf> {
         .with_context(|| format!("failed to write {}", tmp_path.display()))?;
     if let Err(err) = std::fs::rename(&tmp_path, &final_path) {
         // FIX-10: a failed replace must not litter the cache directory.
-        let _ = std::fs::remove_file(&tmp_path);
+        _ = std::fs::remove_file(&tmp_path);
         return Err(err).with_context(|| format!("failed to replace {}", final_path.display()));
     }
     Ok(final_path)

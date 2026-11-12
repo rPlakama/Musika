@@ -49,7 +49,7 @@ impl HttpClient for ReqwestHttpClient {
         let client = self.client.clone();
         let (tx, rx) = tokio::sync::oneshot::channel();
         crate::app::runtime().spawn(async move {
-            let _ = tx.send(fetch(client, request).await);
+            _ = tx.send(fetch(client, request).await);
         });
         Box::pin(async move {
             rx.await

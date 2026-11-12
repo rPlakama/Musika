@@ -56,7 +56,7 @@ pub(crate) async fn wipe_albums(dbs: &crate::db::Dbs) -> anyhow::Result<()> {
         .filter(|song| albums.contains_key(song))
         .collect();
     for song in &album_songs {
-        let _ = crate::download::unmark(&dbs.download, song).await;
+        _ = crate::download::unmark(&dbs.download, song).await;
     }
     crate::media::remove_songs_media(&dbs.media, &album_songs).await?;
     Ok(())
@@ -124,7 +124,7 @@ pub(crate) async fn download_one(
         let written = match client.download_media_to(song_id, &temp).await {
             Ok(written) => written,
             Err(err) => {
-                let _ = std::fs::remove_file(&temp);
+                _ = std::fs::remove_file(&temp);
                 return Err(err);
             }
         };
@@ -153,7 +153,7 @@ pub(crate) async fn download_one(
         Err(err) => {
             let message = format!("{err:#}");
             eprintln!("download: {song_id} failed: {message}");
-            let _ = crate::download::set_state(
+            _ = crate::download::set_state(
                 &dbs.download,
                 song_id,
                 crate::download::ERROR,

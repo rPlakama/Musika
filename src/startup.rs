@@ -31,7 +31,7 @@ static EXIT_AFTER_READY: OnceLock<bool> = OnceLock::new();
 
 /// Starts the process-wide clock. Call once, after the `--version` probe.
 pub(crate) fn start() {
-    let _ = PROCESS_START.set(Instant::now());
+    _ = PROCESS_START.set(Instant::now());
 }
 
 /// Time since [`start`] (or since the first call when `start` was skipped).

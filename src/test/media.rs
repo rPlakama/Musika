@@ -18,7 +18,7 @@ async fn library_pool() -> SqlitePool {
 
 fn temp_dir(name: &str) -> PathBuf {
     let dir = std::env::temp_dir().join(format!("musika-media-{}-{name}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
+    _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).expect("temp dir");
     dir
 }
@@ -84,7 +84,7 @@ async fn streamed_blob_is_adopted_and_recorded() {
         .expect("count");
     assert_eq!(rows, 0, "a failed adopt must not record a row");
 
-    let _ = std::fs::remove_dir_all(dir);
+    _ = std::fs::remove_dir_all(dir);
 }
 
 #[test]

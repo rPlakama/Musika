@@ -49,7 +49,7 @@ pub fn set_dbs(dbs: crate::db::Dbs) {
             drop_dbs(old);
         }
         None => {
-            let _ = DBS.set(RwLock::new(dbs));
+            _ = DBS.set(RwLock::new(dbs));
         }
     }
 }

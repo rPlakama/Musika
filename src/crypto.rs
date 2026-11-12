@@ -122,7 +122,7 @@ static SECRET_KEY: std::sync::OnceLock<SecretKey> = std::sync::OnceLock::new();
 /// real config dir (the nix sandbox's `$HOME` is read-only).
 #[cfg(test)]
 pub fn use_test_key() {
-    let _ = SECRET_KEY.set(SecretKey([7u8; KEY_LEN]));
+    _ = SECRET_KEY.set(SecretKey([7u8; KEY_LEN]));
 }
 
 fn secret_key() -> Result<&'static SecretKey> {
@@ -130,7 +130,7 @@ fn secret_key() -> Result<&'static SecretKey> {
         return Ok(key);
     }
     let key = SecretKey::load()?;
-    let _ = SECRET_KEY.set(key);
+    _ = SECRET_KEY.set(key);
     SECRET_KEY
         .get()
         .ok_or_else(|| anyhow::anyhow!("secret key not initialised"))

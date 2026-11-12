@@ -74,7 +74,7 @@ pub fn send_line(line: &str) -> bool {
     let Ok(mut stream) = UnixStream::connect(socket_path()) else {
         return false;
     };
-    let _ = stream.set_write_timeout(Some(Duration::from_millis(100)));
+    _ = stream.set_write_timeout(Some(Duration::from_millis(100)));
     writeln!(stream, "{}", line.trim()).is_ok()
 }
 
@@ -98,18 +98,18 @@ pub fn send_query(line: &str) -> Option<String> {
 
 /// Removes a stale socket file before binding.
 pub fn remove_stale_socket(path: &Path) {
-    let _ = std::fs::remove_file(path);
+    _ = std::fs::remove_file(path);
 }
 
 /// Binds a socket with owner-only permissions, creating the parent directory.
 pub fn bind_private(path: &Path) -> std::io::Result<UnixListener> {
     if let Some(parent) = path.parent() {
-        let _ = std::fs::create_dir_all(parent);
-        let _ = std::fs::set_permissions(parent, std::fs::Permissions::from_mode(0o700));
+        _ = std::fs::create_dir_all(parent);
+        _ = std::fs::set_permissions(parent, std::fs::Permissions::from_mode(0o700));
     }
     remove_stale_socket(path);
     let listener = UnixListener::bind(path)?;
-    let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600));
+    _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600));
     Ok(listener)
 }
 
@@ -162,8 +162,8 @@ where
         for (line, stream) in rx {
             if let Some(reply) = handler(line) {
                 let mut writer = &*stream;
-                let _ = writeln!(writer, "{reply}");
-                let _ = writer.flush();
+                _ = writeln!(writer, "{reply}");
+                _ = writer.flush();
             }
         }
     });
@@ -191,7 +191,7 @@ where
             let tx = tx.clone();
             std::thread::spawn(move || {
                 let mut reader = BufReader::new(stream);
-                let _ = reader
+                _ = reader
                     .get_ref()
                     .set_read_timeout(Some(COMMAND_READ_TIMEOUT));
                 loop {

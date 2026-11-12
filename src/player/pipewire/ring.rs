@@ -227,7 +227,7 @@ impl Ring {
         // non-blocking; the return value is ignored because eventfd writes
         // coalesce and a full counter is not an error for a wakeup.
         unsafe {
-            let _ = libc::write(
+            _ = libc::write(
                 self.wake_fd,
                 &one as *const u64 as *const libc::c_void,
                 std::mem::size_of::<u64>(),
@@ -242,7 +242,7 @@ impl Ring {
         // The read is non-blocking and an empty counter is intentionally
         // ignored.
         unsafe {
-            let _ = libc::read(
+            _ = libc::read(
                 self.wake_fd,
                 &mut value as *mut u64 as *mut libc::c_void,
                 std::mem::size_of::<u64>(),
@@ -268,7 +268,7 @@ impl Ring {
         // cannot occur here (`Ring::new` rejects it) and poll ignores it
         // anyway.
         unsafe {
-            let _ = libc::poll(&mut pollfd, 1, 250);
+            _ = libc::poll(&mut pollfd, 1, 250);
         }
         self.drain_wake();
     }
@@ -410,7 +410,7 @@ impl Drop for Ring {
         // closed once and no reference to it can outlive the ring (producer
         // and consumer only hold `Arc<Ring>` clones of this same allocation).
         unsafe {
-            let _ = libc::close(self.wake_fd);
+            _ = libc::close(self.wake_fd);
         }
     }
 }

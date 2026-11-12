@@ -96,5 +96,5 @@ fn a_failed_replace_removes_the_temp_file() {
         .filter(|entry| entry.file_name().to_string_lossy().ends_with(".tmp"))
         .collect();
     assert!(leftovers.is_empty(), "temp files must be cleaned up");
-    let _ = std::fs::remove_dir_all(dir);
+    _ = std::fs::remove_dir_all(dir);
 }

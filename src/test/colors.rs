@@ -1,6 +1,7 @@
 use super::common::*;
 use crate::colors::engine;
-use crate::colors::seed;
+use crate::colors::scheme::{Spec, VariantChoice};
+use crate::colors::seed::{self, SourceMode};
 use crate::colors::*;
 use image::{Rgba, RgbaImage};
 use material_colors::color::Rgb;
@@ -31,7 +32,7 @@ fn tonal() -> Options {
 fn generated_scheme_exposes_the_full_role_map() {
     let path = write_cover("blue", |_, _| Rgba([58, 95, 205, 255]));
     let scheme = generate_from_path(&path, &tonal()).unwrap();
-    let _ = std::fs::remove_file(&path);
+    _ = std::fs::remove_file(&path);
 
     assert_eq!(scheme.scheme, "tonal_spot");
     assert_ne!(scheme.seed, 0);
@@ -57,7 +58,7 @@ fn identical_covers_generate_identical_schemes() {
     });
     let first = generate_from_path(&path, &tonal()).unwrap();
     let second = generate_from_path(&path, &tonal()).unwrap();
-    let _ = std::fs::remove_file(&path);
+    _ = std::fs::remove_file(&path);
 
     assert_eq!(first, second);
 }
@@ -70,7 +71,7 @@ fn grayscale_covers_fall_back_without_error() {
         Rgba([level, level, level, 255])
     });
     let scheme = generate_from_path(&path, &tonal()).unwrap();
-    let _ = std::fs::remove_file(&path);
+    _ = std::fs::remove_file(&path);
 
     assert!(scheme.roles.contains_key("surface"));
     assert!(scheme.roles.contains_key("on_surface"));
@@ -80,7 +81,7 @@ fn grayscale_covers_fall_back_without_error() {
 fn fully_transparent_covers_are_rejected() {
     let path = write_cover("clear", |_, _| Rgba([10, 20, 30, 0]));
     let result = generate_from_path(&path, &tonal());
-    let _ = std::fs::remove_file(&path);
+    _ = std::fs::remove_file(&path);
 
     assert!(result.is_err());
 }
@@ -98,7 +99,7 @@ fn colorful_seed_prefers_the_vivid_region() {
     });
     let (dominant, _) = seed::extract(&path, SourceMode::Dominant).unwrap();
     let (colorful, _) = seed::extract(&path, SourceMode::Colorful).unwrap();
-    let _ = std::fs::remove_file(&path);
+    _ = std::fs::remove_file(&path);
 
     assert_ne!(dominant, colorful, "colorful must not equal dominant");
 }
@@ -155,7 +156,7 @@ fn bench_palette_decode_peak() {
         "the thumbnail path must cost a fraction of the original decode"
     );
 
-    let _ = std::fs::remove_dir_all(dir);
+    _ = std::fs::remove_dir_all(dir);
 }
 
 #[test]
@@ -283,7 +284,7 @@ async fn purge_drops_schemes_for_vanished_covers() {
     fetch_into(&colors, "gone", &path, "hash", &Options::default())
         .await
         .unwrap();
-    let _ = std::fs::remove_file(&path);
+    _ = std::fs::remove_file(&path);
 
     let removed = purge_with(&colors, &covers).await.unwrap();
     assert_eq!(removed, 1);

@@ -421,7 +421,7 @@ pub(crate) fn unix_ms_for_cover() -> u128 {
 }
 
 pub(crate) fn send_event(tx: &UnboundedSender<Event>, event: Event) {
-    let _ = tx.send(event);
+    _ = tx.send(event);
 }
 
 pub(crate) fn emit_queue(

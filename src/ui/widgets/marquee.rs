@@ -214,6 +214,6 @@ impl Element for MarqueeText {
             bounds.origin.x - px(paint.offset),
             bounds.origin.y + (bounds.size.height - line_height) * 0.5,
         );
-        paint.line.paint(origin, line_height, window, cx).ok();
+        _ = paint.line.paint(origin, line_height, window, cx);
     }
 }

@@ -148,7 +148,7 @@ fn load_paused_keeps_the_transport_paused() {
 #[test]
 fn load_playing_reports_loading_until_the_first_pcm() {
     let mut core = PlaybackCore::new();
-    let _ = core.load(tracks(1), 0, false);
+    _ = core.load(tracks(1), 0, false);
     assert_eq!(core.state(), State::Playing);
     let snapshot = core.snapshot(1, SECOND);
     assert_ne!(snapshot.flags & STATE_FLAG_LOADING, 0);
@@ -157,7 +157,7 @@ fn load_playing_reports_loading_until_the_first_pcm() {
 #[test]
 fn gapless_next_follows_the_repeat_mode() {
     let mut core = PlaybackCore::new();
-    let _ = core.load(tracks(3), 0, false);
+    _ = core.load(tracks(3), 0, false);
     assert_eq!(core.next_url().as_deref(), Some("file:///1.flac"));
 
     // repeat One repeats the current row.
@@ -265,7 +265,7 @@ fn next_at_the_end_stops_without_repeat_all() {
 #[test]
 fn next_at_the_end_wraps_with_repeat_all() {
     let mut core = PlaybackCore::new();
-    let _ = core.load(tracks(2), 1, false);
+    _ = core.load(tracks(2), 1, false);
     core.apply(CoreCommand::CycleRepeat); // One
     core.apply(CoreCommand::CycleRepeat); // All
     assert_eq!(core.repeat(), Repeat::All);
@@ -292,7 +292,7 @@ fn ended_advances_the_queue() {
 fn ended_with_repeat_one_replays_and_repeat_all_wraps() {
     // repeat One replays the same row.
     let mut core = PlaybackCore::new();
-    let _ = core.load(tracks(2), 1, false);
+    _ = core.load(tracks(2), 1, false);
     core.apply(CoreCommand::CycleRepeat); // One
     assert_eq!(core.repeat(), Repeat::One);
     let outcome = core.on_engine(EngineEvent::Ended, SECOND);
@@ -315,7 +315,7 @@ fn ended_with_repeat_one_replays_and_repeat_all_wraps() {
 
     // repeat All wraps to the head.
     let mut core = PlaybackCore::new();
-    let _ = core.load(tracks(2), 1, false);
+    _ = core.load(tracks(2), 1, false);
     core.apply(CoreCommand::CycleRepeat);
     core.apply(CoreCommand::CycleRepeat); // All
     let outcome = core.on_engine(EngineEvent::Ended, SECOND);
@@ -328,7 +328,7 @@ fn ended_with_repeat_one_replays_and_repeat_all_wraps() {
 
     // repeat Off at the end of the queue stops.
     let mut core = PlaybackCore::new();
-    let _ = core.load(tracks(2), 1, false);
+    _ = core.load(tracks(2), 1, false);
     assert_eq!(core.repeat(), Repeat::Off);
     let outcome = core.on_engine(EngineEvent::Ended, SECOND);
     assert_eq!(core.state(), State::Stopped);
@@ -381,7 +381,7 @@ fn boundary_advances_into_the_gapless_row() {
 #[test]
 fn boundary_while_paused_keeps_the_transport_paused() {
     let mut core = PlaybackCore::new();
-    let _ = core.load(tracks(2), 0, true);
+    _ = core.load(tracks(2), 0, true);
     core.on_engine(
         EngineEvent::Boundary {
             duration: 10.0,
@@ -415,7 +415,7 @@ fn sink_failed_freezes_without_advancing() {
 #[test]
 fn loading_cleared_and_loaded_update_the_snapshot() {
     let mut core = PlaybackCore::new();
-    let _ = core.load(tracks(2), 0, false);
+    _ = core.load(tracks(2), 0, false);
     assert_ne!(core.snapshot(0, 0).flags & STATE_FLAG_LOADING, 0);
 
     let outcome = core.on_engine(
@@ -437,7 +437,7 @@ fn loading_cleared_and_loaded_update_the_snapshot() {
 #[test]
 fn first_pcm_clears_loading() {
     let mut core = PlaybackCore::new();
-    let _ = core.load(tracks(1), 0, false);
+    _ = core.load(tracks(1), 0, false);
     let outcome = core.on_engine(EngineEvent::FirstPcm, SECOND);
     assert!(outcome.changed);
     assert_eq!(core.snapshot(0, SECOND).flags & STATE_FLAG_LOADING, 0);
@@ -661,7 +661,7 @@ fn set_track_favorite_patches_the_matching_row() {
 #[test]
 fn shuffle_permutes_and_restarts_the_queue() {
     let mut core = PlaybackCore::new();
-    let _ = core.load(tracks(32), 0, false);
+    _ = core.load(tracks(32), 0, false);
     core.apply(CoreCommand::CycleRepeat);
     core.apply(CoreCommand::CycleRepeat); // All
     core.apply(CoreCommand::Jump(17));
@@ -797,7 +797,7 @@ fn snapshot_encodes_the_transport() {
     let mut core = PlaybackCore::new();
     core.apply(CoreCommand::SetVolume(73.0));
     // Load paused at the head of two rows: the second row is preloaded.
-    let _ = core.load(tracks(2), 0, true);
+    _ = core.load(tracks(2), 0, true);
     assert_eq!(core.repeat(), Repeat::Off);
     core.apply(CoreCommand::CycleRepeat); // One
     let now = 7 * SECOND;
@@ -1132,7 +1132,7 @@ fn random_row_operations_match_the_reference_model() {
     };
     let initial: Vec<Track> = tracks(12);
     model.rows = initial.iter().map(|track| track.id.clone()).collect();
-    let _ = core.load(initial, 0, false);
+    _ = core.load(initial, 0, false);
     model.playing = true;
     model.revision = core.revision();
     core.on_engine(EngineEvent::LoadingCleared, 0);
@@ -1367,7 +1367,7 @@ fn engine_pause_resume_keeps_progress_and_shuts_down() {
     let (done_tx, done_rx) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
         engine.shutdown();
-        let _ = done_tx.send(());
+        _ = done_tx.send(());
     });
     assert!(
         done_rx
@@ -1375,7 +1375,7 @@ fn engine_pause_resume_keeps_progress_and_shuts_down() {
             .is_ok(),
         "engine shutdown deadlocked"
     );
-    let _ = std::fs::remove_file(path);
+    _ = std::fs::remove_file(path);
 }
 
 #[test]

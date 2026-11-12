@@ -159,14 +159,14 @@ pub(crate) mod test_alloc {
     fn add(delta: isize) {
         // Runs on every allocation of every test: touch TLS only when this
         // thread is measuring, and never allocate from inside the hook.
-        let _ = TRACK.try_with(|track| {
+        _ = TRACK.try_with(|track| {
             if !track.get() {
                 return;
             }
-            let _ = CURRENT.try_with(|current| {
+            _ = CURRENT.try_with(|current| {
                 let live = current.get() + delta;
                 current.set(live);
-                let _ = PEAK.try_with(|peak| {
+                _ = PEAK.try_with(|peak| {
                     if live > peak.get() {
                         peak.set(live);
                     }

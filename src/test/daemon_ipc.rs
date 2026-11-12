@@ -124,7 +124,7 @@ async fn read_message(stream: &mut UnixStream) -> Message {
 
 impl Drop for Harness {
     fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.dir);
+        _ = std::fs::remove_dir_all(&self.dir);
     }
 }
 

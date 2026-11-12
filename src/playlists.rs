@@ -495,7 +495,7 @@ pub async fn scan(dbs: &Dbs) -> Result<Vec<crate::model::Row>> {
 
 /// [`scan`] against an explicit folder (the test seam).
 pub async fn scan_dir(dbs: &Dbs, dir: &Path) -> Result<Vec<crate::model::Row>> {
-    std::fs::create_dir_all(dir).ok();
+    _ = std::fs::create_dir_all(dir);
 
     struct ScannedM3u {
         id: String,

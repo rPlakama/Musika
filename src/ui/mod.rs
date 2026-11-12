@@ -831,7 +831,7 @@ fn activate_niri_window() {
         return;
     };
     crate::debug_log!("GPUI: niri activate window {id}");
-    let _ = std::process::Command::new("niri")
+    _ = std::process::Command::new("niri")
         .args(["msg", "action", "focus-window", "--id", &id.to_string()])
         .output();
 }

@@ -146,7 +146,7 @@ pub async fn init() -> Result<Dbs> {
 pub fn warm_startup() {
     std::thread::spawn(|| {
         for candidate in warm_startup_paths() {
-            let _ = warm_path(&candidate);
+            _ = warm_path(&candidate);
         }
     });
 }
@@ -181,7 +181,7 @@ fn warm_file(path: &Path) -> std::io::Result<()> {
     use std::io::Read;
     // Ask the kernel to start readahead without copying through userspace;
     // the buffered pass below remains the actual page-cache fallback.
-    let _ = crate::linux::advise_willneed(path);
+    _ = crate::linux::advise_willneed(path);
     let mut file = std::fs::File::open(path)?;
     let mut buffer = vec![0u8; 1024 * 1024];
     while file.read(&mut buffer)? > 0 {}
@@ -266,7 +266,7 @@ async fn absorb_files(
 fn remove_legacy_db(path: &Path) {
     for suffix in ["", "-wal", "-shm"] {
         let candidate = PathBuf::from(format!("{}{suffix}", path.display()));
-        let _ = std::fs::remove_file(candidate);
+        _ = std::fs::remove_file(candidate);
     }
 }
 
@@ -390,7 +390,7 @@ pub async fn wipe_covers(dbs: &Dbs) -> Result<()> {
 
 fn remove_mirror() {
     if let Ok(mirror) = mirror_path() {
-        let _ = std::fs::remove_file(mirror);
+        _ = std::fs::remove_file(mirror);
     }
 }
 
@@ -501,7 +501,7 @@ async fn open_sync_pool(path: PathBuf) -> Result<SqlitePool> {
     let before = sqlite_workers();
     let pool = open_pool(path, 1, Durability::Full).await?;
     // Force the worker to exist, then demote only newly created sqlx workers.
-    let _ = pool.acquire().await?;
+    _ = pool.acquire().await?;
     demote_new_sqlite_workers(&before);
     Ok(pool)
 }
@@ -731,7 +731,7 @@ mod options_tests {
             assert_eq!(value, expected);
             runtime.block_on(pool.close());
         }
-        let _ = std::fs::remove_dir_all(&dir);
+        _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -775,14 +775,14 @@ mod options_tests {
         let dir = std::env::temp_dir().join(format!("musika-db-warm-dir-{}", std::process::id()));
         ensure_dir(&dir).expect("temp dir");
         assert!(warm_path(&dir).is_err());
-        let _ = std::fs::remove_dir_all(&dir);
+        _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
     fn remove_legacy_db_removes_the_file_and_sidecars() {
         let dir =
             std::env::temp_dir().join(format!("musika-db-legacy-remove-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
+        _ = std::fs::remove_dir_all(&dir);
         ensure_dir(&dir).expect("temp dir");
         let path = dir.join("covers.db");
         for suffix in ["", "-wal", "-shm"] {
@@ -797,14 +797,14 @@ mod options_tests {
             let file = PathBuf::from(format!("{}{suffix}", path.display()));
             assert!(!file.exists(), "{} was left behind", file.display());
         }
-        let _ = std::fs::remove_dir_all(&dir);
+        _ = std::fs::remove_dir_all(&dir);
     }
 
     #[tokio::test]
     async fn absorb_files_imports_then_removes_the_legacy_file() {
         let dir =
             std::env::temp_dir().join(format!("musika-db-legacy-absorb-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
+        _ = std::fs::remove_dir_all(&dir);
         ensure_dir(&dir).expect("temp dir");
         let library = open_migrated(
             dir.join("library.db"),
@@ -848,7 +848,7 @@ mod options_tests {
         assert!(meta_flag(&library).await.expect("flag"));
         assert!(!legacy.exists(), "the absorbed legacy file must be removed");
         library.close().await;
-        let _ = std::fs::remove_dir_all(&dir);
+        _ = std::fs::remove_dir_all(&dir);
     }
 }
 
@@ -869,7 +869,7 @@ mod sync_bench {
                 Durability::Full => "full.db",
                 Durability::Normal => "normal.db",
             });
-            let _ = std::fs::remove_file(&path);
+            _ = std::fs::remove_file(&path);
             let started = std::time::Instant::now();
             runtime.block_on(async {
                 let pool = open_migrated(
@@ -909,7 +909,7 @@ mod sync_bench {
                 pool.close().await;
             });
         }
-        let _ = std::fs::remove_dir_all(&dir);
+        _ = std::fs::remove_dir_all(&dir);
     }
 }
 #[cfg(test)]

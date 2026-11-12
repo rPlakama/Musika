@@ -33,7 +33,7 @@ impl Bridge {
                 .ok()
                 .flatten();
             if let Some((notes, fetched_at)) = &cached {
-                let _ = tx.send(Event::Notes {
+                _ = tx.send(Event::Notes {
                     album_id: album_id.clone(),
                     notes: plain_notes(notes),
                 });
@@ -61,7 +61,7 @@ impl Bridge {
             } else {
                 fresh
             };
-            let _ = tx.send(Event::Notes {
+            _ = tx.send(Event::Notes {
                 album_id,
                 notes: plain_notes(&notes),
             });
@@ -77,7 +77,7 @@ impl Bridge {
                 .ok()
                 .flatten();
             if let Some(row) = &cached {
-                let _ = tx.send(Event::Notes {
+                _ = tx.send(Event::Notes {
                     album_id: artist_id.clone(),
                     notes: plain_notes(&row.biography),
                 });
@@ -102,7 +102,7 @@ impl Bridge {
                 Err(_) => String::new(),
             };
             if !fresh.is_empty() {
-                let _ =
+                _ =
                     crate::library::upsert_artist_info(&dbs.library, &artist_id, &fresh, "").await;
             }
             let notes = if fresh.is_empty() {
@@ -110,7 +110,7 @@ impl Bridge {
             } else {
                 fresh
             };
-            let _ = tx.send(Event::Notes {
+            _ = tx.send(Event::Notes {
                 album_id: artist_id,
                 notes: plain_notes(&notes),
             });

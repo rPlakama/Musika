@@ -172,7 +172,7 @@ async fn apply_fetched_stores_new_art_and_handles_revalidation() {
     assert_eq!(report.unchanged, 1);
     assert_eq!(jobs.len(), 1, "a 304 never queues a thumbnail");
 
-    let _ = std::fs::remove_dir_all(dir);
+    _ = std::fs::remove_dir_all(dir);
 }
 
 /// The palette decodes the 320 px thumbnail when it exists (the whole
@@ -204,7 +204,7 @@ fn palette_art_prefers_the_thumbnail_then_the_original() {
         "a missing original must not hide an existing thumbnail"
     );
 
-    let _ = std::fs::remove_dir_all(dir);
+    _ = std::fs::remove_dir_all(dir);
 }
 
 #[test]
@@ -223,7 +223,7 @@ fn thumb_is_bounded_and_written() {
     write_thumb(&source, &dir, &name).expect("write thumbnail");
     assert!(dir.join(&name).is_file());
 
-    let _ = std::fs::remove_dir_all(dir);
+    _ = std::fs::remove_dir_all(dir);
 }
 
 #[test]
@@ -239,7 +239,7 @@ fn thumb_falls_back_to_the_original_blob() {
         b"not an image"
     );
 
-    let _ = std::fs::remove_dir_all(dir);
+    _ = std::fs::remove_dir_all(dir);
 }
 
 /// The size split still processes every job: small art decodes in the
@@ -276,5 +276,5 @@ async fn ensure_thumbs_covers_both_size_buckets() {
         THUMB_LARGE_BYTES as usize + 1
     );
 
-    let _ = std::fs::remove_dir_all(dir);
+    _ = std::fs::remove_dir_all(dir);
 }

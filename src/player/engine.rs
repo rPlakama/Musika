@@ -147,7 +147,7 @@ impl Engine {
         let Some(commands) = self.commands.as_ref() else {
             return;
         };
-        let _ = commands.send(command);
+        _ = commands.send(command);
         self.signal();
     }
 
@@ -205,7 +205,7 @@ impl Drop for Engine {
         drop(self.commands.take());
         self.signal();
         if let Some(join) = self.join.take() {
-            let _ = join.join();
+            _ = join.join();
         }
         close_fd(self.wake_fd);
     }
@@ -385,7 +385,7 @@ fn wait(command_fd: libc::c_int, shared_fd: libc::c_int, timeout: Duration) {
     // SAFETY: `fds` is a valid array of two `pollfd`s for the duration of the
     // call; a negative descriptor is ignored by `poll(2)`.
     unsafe {
-        let _ = libc::poll(fds.as_mut_ptr(), fds.len() as libc::nfds_t, millis);
+        _ = libc::poll(fds.as_mut_ptr(), fds.len() as libc::nfds_t, millis);
     }
 }
 
@@ -400,7 +400,7 @@ fn signal_fd(fd: libc::c_int) {
     // `u64` and the requested length matches it; the descriptor was created
     // with `EFD_NONBLOCK`, so the write cannot block.
     unsafe {
-        let _ = libc::write(
+        _ = libc::write(
             fd,
             &one as *const u64 as *const libc::c_void,
             std::mem::size_of::<u64>(),
@@ -418,7 +418,7 @@ fn drain_fd(fd: libc::c_int) {
     // eventfd expects. The descriptor is non-blocking, and an empty counter is
     // reported as an error that is intentionally ignored.
     unsafe {
-        let _ = libc::read(
+        _ = libc::read(
             fd,
             &mut value as *mut u64 as *mut libc::c_void,
             std::mem::size_of::<u64>(),
@@ -434,6 +434,6 @@ fn close_fd(fd: libc::c_int) {
     // closes it exactly once (the `Engine::new` spawn-error path or
     // `Engine::drop`, never both), and no other code uses it afterwards.
     unsafe {
-        let _ = libc::close(fd);
+        _ = libc::close(fd);
     }
 }

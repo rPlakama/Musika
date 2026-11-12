@@ -114,6 +114,10 @@ impl PlaybackService {
         let engine_tx = tx.clone();
         let snapshot = Arc::new(Mutex::new(Arc::new(Snapshot::default())));
         let thread_snapshot = Arc::clone(&snapshot);
+        #[expect(
+            clippy::expect_used,
+            reason = "the daemon cannot play audio without its playback thread; a failed spawn is a fatal startup invariant"
+        )]
         let join = thread::Builder::new()
             .name("musika-playback".to_string())
             .spawn(move || run(rx, engine_tx, outputs, thread_snapshot))
@@ -140,9 +144,9 @@ impl PlaybackService {
 
     /// Stops the thread. Bounded: the thread exits on `Shutdown` immediately.
     pub(crate) fn shutdown(mut self) {
-        let _ = self.tx.send(ServiceInput::Command(PlaybackInput::Shutdown));
+        _ = self.tx.send(ServiceInput::Command(PlaybackInput::Shutdown));
         if let Some(join) = self.join.take() {
-            let _ = join.join();
+            _ = join.join();
         }
     }
 }
@@ -180,9 +184,9 @@ impl PlaybackService {
 
 impl Drop for PlaybackService {
     fn drop(&mut self) {
-        let _ = self.tx.send(ServiceInput::Command(PlaybackInput::Shutdown));
+        _ = self.tx.send(ServiceInput::Command(PlaybackInput::Shutdown));
         if let Some(join) = self.join.take() {
-            let _ = join.join();
+            _ = join.join();
         }
     }
 }
@@ -236,7 +240,7 @@ impl ServiceState {
                 true
             }
             Err(error) => {
-                let _ = self.outputs.send(PlaybackOutput::EngineUnavailable(error.clone()));
+                _ = self.outputs.send(PlaybackOutput::EngineUnavailable(error.clone()));
                 crate::debug_log!("playback: engine unavailable: {error}");
                 false
             }
@@ -248,7 +252,7 @@ impl ServiceState {
             engine.shutdown();
         }
         if let Some(forwarder) = self.forwarder.take() {
-            let _ = forwarder.join();
+            _ = forwarder.join();
         }
     }
 
@@ -356,7 +360,7 @@ fn run(
                     let outcome = service.core.apply(op);
                     apply_outcome(&mut service, &outcome, &mut force, &mut queue_reset);
                 } else {
-                    let _ = service.outputs.send(PlaybackOutput::Error(
+                    _ = service.outputs.send(PlaybackOutput::Error(
                         "the audio engine is unavailable".to_string(),
                     ));
                 }
@@ -399,7 +403,7 @@ fn run(
             Some(ServiceInput::Engine(event)) => match event {
                 EngineEvent::SinkFailed { message } => {
                     service.last_error = Some(message.clone());
-                    let _ = service.outputs.send(PlaybackOutput::Error(message));
+                    _ = service.outputs.send(PlaybackOutput::Error(message));
                     let position = service.core.position_at(crate::linux::monotonic_ns());
                     service.drop_engine();
                     service.last_engine_attempt = None;
@@ -407,7 +411,7 @@ fn run(
                         let outcome = service.core.apply(CoreCommand::Recover { position });
                         apply_outcome(&mut service, &outcome, &mut force, &mut queue_reset);
                         service.sync_audio();
-                        let _ = service.outputs.send(PlaybackOutput::Error(
+                        _ = service.outputs.send(PlaybackOutput::Error(
                             "PipeWire restarted; playback resumed".to_string(),
                         ));
                     }
@@ -416,7 +420,7 @@ fn run(
                 event => {
                     if let EngineEvent::Failed { message } = &event {
                         service.last_error = Some(message.clone());
-                        let _ = service.outputs.send(PlaybackOutput::Error(message.clone()));
+                        _ = service.outputs.send(PlaybackOutput::Error(message.clone()));
                     }
                     let now = crate::linux::monotonic_ns();
                     let outcome = service.core.on_engine(event, now);
@@ -426,7 +430,7 @@ fn run(
         }
 
         if queue_reset {
-            let _ = service.outputs.send(PlaybackOutput::Reset {
+            _ = service.outputs.send(PlaybackOutput::Reset {
                 rev: service.core.revision(),
                 queue: service.core.queue(),
             });
@@ -438,11 +442,11 @@ fn run(
             &mut next_seq,
             force,
         ) {
-            let _ = service.outputs.send(PlaybackOutput::State(state));
+            _ = service.outputs.send(PlaybackOutput::State(state));
         }
         store_snapshot(&snapshot, &service, &published);
         if let Some((conn, req, ok, code)) = ack {
-            let _ = service.outputs.send(PlaybackOutput::Ack {
+            _ = service.outputs.send(PlaybackOutput::Ack {
                 conn,
                 req,
                 ok,
@@ -463,7 +467,7 @@ fn apply_outcome(
 ) {
     service.send_audio(outcome);
     if let Some(delta) = outcome.delta.clone() {
-        let _ = service.outputs.send(PlaybackOutput::Delta(delta));
+        _ = service.outputs.send(PlaybackOutput::Delta(delta));
         *force = true;
     }
     if outcome.changed {

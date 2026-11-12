@@ -544,6 +544,10 @@ impl AppRoot {
     }
 
     pub(in crate::ui) fn login_view(&self, window: &gpui::Window) -> gpui::Div {
+        #[expect(
+            clippy::expect_used,
+            reason = "the render path calls login_view only inside `if self.login.is_some()`"
+        )]
         let login = self.login.as_ref().expect("login view");
         let fields = [
             ("Server URL", &login.server, 0, false),

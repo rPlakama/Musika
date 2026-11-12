@@ -258,7 +258,7 @@ pub async fn write_mirror(pool: &SqlitePool) -> Result<()> {
     let mut chunk = String::with_capacity(64 * 1024);
     while let Some((id, artist, album, title)) = rows.try_next().await? {
         // Writing to a String cannot fail; the heap is the only cost.
-        let _ = writeln!(chunk, "{artist}\t{album}\t{title}\t{id}");
+        _ = writeln!(chunk, "{artist}\t{album}\t{title}\t{id}");
         if chunk.len() >= 64 * 1024 {
             writer
                 .write_all(chunk.as_bytes())

@@ -99,11 +99,11 @@ impl Sink {
                 thread: Some(thread),
             }),
             Ok(Err(error)) => {
-                let _ = thread.join();
+                _ = thread.join();
                 Err(error)
             }
             Err(error) => {
-                let _ = thread.join();
+                _ = thread.join();
                 Err(format!("PipeWire sink did not start: {error}"))
             }
         }
@@ -151,12 +151,12 @@ impl Sink {
 
     pub(crate) fn set_paused(&self, paused: bool) {
         self.ring.set_paused(paused);
-        let _ = self.commands.send(SinkCommand::SetPaused(paused));
+        _ = self.commands.send(SinkCommand::SetPaused(paused));
     }
 
     pub(crate) fn set_muted(&self, muted: bool) {
         self.ring.set_muted(muted);
-        let _ = self.commands.send(SinkCommand::SetMuted(muted));
+        _ = self.commands.send(SinkCommand::SetMuted(muted));
     }
 
     /// `volume` is the linear 0..=1 software gain applied by the RT callback.
@@ -166,7 +166,7 @@ impl Sink {
     pub(crate) fn set_volume(&self, volume: f64) {
         let volume = volume.clamp(0.0, 1.0);
         self.ring.set_volume(volume);
-        let _ = self.commands.send(SinkCommand::SetVolume(volume as f32));
+        _ = self.commands.send(SinkCommand::SetVolume(volume as f32));
     }
 
     pub(crate) fn flush(&self) {
@@ -207,9 +207,9 @@ impl Drop for Sink {
     fn drop(&mut self) {
         self.ring.close_writes();
         self.ring.wake();
-        let _ = self.commands.send(SinkCommand::Shutdown);
+        _ = self.commands.send(SinkCommand::Shutdown);
         if let Some(thread) = self.thread.take() {
-            let _ = thread.join();
+            _ = thread.join();
         }
     }
 }
@@ -222,7 +222,7 @@ fn sink_thread(
 ) {
     let result = run_sink(ring, shared, commands, ready.clone());
     if let Err(error) = result {
-        let _ = ready.send(Err(error));
+        _ = ready.send(Err(error));
     }
 }
 
@@ -412,7 +412,7 @@ fn run_sink(
     // it reaches Paused/Streaming (a `set_control` before negotiation can be
     // refused even though the software path already carries the right gain).
     let mut controls_dirty = true;
-    let _ = ready.send(Ok(()));
+    _ = ready.send(Ok(()));
 
     let mut running = true;
     while running {
@@ -506,7 +506,7 @@ fn process(stream: &pw::stream::Stream, ctx: &mut RtContext) {
     // callback. Do not consume or advance the clock while paused; service a
     // pending reset/flush with a zero-frame read so the producer can wake.
     if paused {
-        let _ = ring.read_into(out, 0);
+        _ = ring.read_into(out, 0);
         out.fill(0);
     } else {
         let written = ring.read_into(out, frames);

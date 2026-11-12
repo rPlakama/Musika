@@ -119,7 +119,7 @@ fn write_registry(registry: &Registry) -> Result<()> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        let _ = std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o600));
+        _ = std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o600));
     }
     std::fs::rename(&tmp, &path)
         .with_context(|| format!("failed to replace {}", path.display()))?;
@@ -129,7 +129,7 @@ fn write_registry(registry: &Registry) -> Result<()> {
 fn registry() -> &'static RwLock<Registry> {
     REGISTRY.get_or_init(|| match load_from_disk() {
         Ok(registry) => {
-            let _ = REGISTRY_EXISTED.set(registry_path().is_ok_and(|path| path.exists()));
+            _ = REGISTRY_EXISTED.set(registry_path().is_ok_and(|path| path.exists()));
             RwLock::new(registry)
         }
         Err(err) => {
@@ -280,7 +280,7 @@ pub fn remove_active(keep_data: bool) -> Result<Option<Account>> {
     let legacy_root = crate::db::config_dir()?;
     let data_root = resolve_data_root(&removed.data_root)?;
     if !keep_data && data_root != legacy_root {
-        let _ = std::fs::remove_dir_all(&data_root);
+        _ = std::fs::remove_dir_all(&data_root);
     }
     let next = guard
         .accounts

@@ -61,7 +61,7 @@ impl Bridge {
         crate::app::runtime().spawn(async move {
             crate::session::invalidate().await;
             crate::session::set_online(false);
-            let _ = tx.send(Event::LoggedOut);
+            _ = tx.send(Event::LoggedOut);
         });
     }
 
@@ -79,7 +79,7 @@ impl Bridge {
                 Ok(next) => {
                     let next_label = if let Some(account) = next {
                         if let Err(err) = crate::auth::switch_storage(&account).await {
-                            let _ = tx.send(Event::Error(format!(
+                            _ = tx.send(Event::Error(format!(
                                 "Removed {removed_label}, but could not open {}: {err:#}",
                                 account.label()
                             )));
@@ -88,20 +88,20 @@ impl Bridge {
                         Some(account.label())
                     } else {
                         if let Err(err) = crate::auth::open_empty_root().await {
-                            let _ = tx.send(Event::Error(format!(
+                            _ = tx.send(Event::Error(format!(
                                 "Removed {removed_label}, but could not open the login database: {err:#}"
                             )));
                             return;
                         }
                         None
                     };
-                    let _ = tx.send(Event::AccountRemoved {
+                    _ = tx.send(Event::AccountRemoved {
                         label: removed_label,
                         next: next_label,
                     });
                 }
                 Err(err) => {
-                    let _ = tx.send(Event::Error(format!(
+                    _ = tx.send(Event::Error(format!(
                         "Could not remove {removed_label}: {err:#}"
                     )));
                 }

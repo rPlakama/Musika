@@ -122,7 +122,7 @@ fn submit(command: String) {
 
 /// The non-blocking send policy, split out so the bound is testable.
 pub(crate) fn queue_command(tx: &mpsc::Sender<String>, command: String) {
-    let _ = tx.try_send(command);
+    _ = tx.try_send(command);
 }
 
 fn submit_action(action: &str) {
@@ -142,9 +142,9 @@ fn put_nonempty(map: &mut HashMap<String, OwnedValue>, key: &str, value: &str) {
 /// queue keeps a panel flood from growing memory (FIX-8).
 pub fn init(commands: mpsc::UnboundedSender<String>) {
     let (tx, mut rx) = mpsc::channel(COMMAND_CAP);
-    let _ = COMMAND_TX.set(tx);
-    let _ = SNAPSHOT.set(Mutex::new(Snapshot::default()));
-    let _ = NOTIFY.set(Notify::new());
+    _ = COMMAND_TX.set(tx);
+    _ = SNAPSHOT.set(Mutex::new(Snapshot::default()));
+    _ = NOTIFY.set(Notify::new());
     crate::app::runtime().spawn(async move {
         while let Some(command) = rx.recv().await {
             if commands.send(command).is_err() {
@@ -479,7 +479,7 @@ impl MprisPlayer {
     async fn seek(&self, offset: i64, #[zbus(signal_emitter)] emitter: SignalEmitter<'_>) {
         submit(format!("mpris_seek:{offset}"));
         let position = snapshot().position_us + offset;
-        let _ = MprisPlayer::seeked(&emitter, position).await;
+        _ = MprisPlayer::seeked(&emitter, position).await;
     }
 
     async fn set_position(
@@ -491,7 +491,7 @@ impl MprisPlayer {
         let expected = track_path(&snapshot().track_id);
         if track_id.as_str() == expected {
             submit(format!("mpris_position:{position}"));
-            let _ = MprisPlayer::seeked(&emitter, position).await;
+            _ = MprisPlayer::seeked(&emitter, position).await;
         }
     }
 

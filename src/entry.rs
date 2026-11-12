@@ -44,7 +44,7 @@ pub fn run() {
         // int)`; the call has no memory-safety preconditions and failure is
         // reported through the return value, which is deliberately ignored.
         unsafe {
-            let _ = mallopt(M_ARENA_MAX, 1);
+            _ = mallopt(M_ARENA_MAX, 1);
         }
     }
 
@@ -138,7 +138,7 @@ fn spawn_detached_daemon() {
     command.stdin(std::process::Stdio::null());
     if let Some(log) = daemon_log_path() {
         if let Some(parent) = log.parent() {
-            let _ = std::fs::create_dir_all(parent);
+            _ = std::fs::create_dir_all(parent);
         }
         if let Ok(file) = std::fs::OpenOptions::new().create(true).append(true).open(&log) {
             if let Ok(file2) = file.try_clone() {

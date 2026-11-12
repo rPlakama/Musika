@@ -458,7 +458,7 @@ async fn cache_covers_locked(
 
     match crate::covers::refresh(&dbs.covers, client, &referenced, forced).await {
         Ok(report) => {
-            let _ = crate::library::touch_cover_check(&dbs.library).await;
+            _ = crate::library::touch_cover_check(&dbs.library).await;
             report
         }
         Err(err) => {

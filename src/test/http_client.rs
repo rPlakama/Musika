@@ -104,7 +104,7 @@ async fn media_download_streams_chunks_to_the_target_file() {
     let server = std::thread::spawn(move || {
         let (mut socket, _) = listener.accept().expect("accept");
         let mut request = [0u8; 4096];
-        let _ = socket.read(&mut request);
+        _ = socket.read(&mut request);
         let head = format!(
             "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nContent-Type: application/octet-stream\r\nConnection: close\r\n\r\n",
             served.len()
@@ -129,7 +129,7 @@ async fn media_download_streams_chunks_to_the_target_file() {
 
     assert_eq!(written as usize, body.len());
     assert_eq!(std::fs::read(&dest).expect("read back"), body);
-    let _ = std::fs::remove_dir_all(dir);
+    _ = std::fs::remove_dir_all(dir);
 }
 
 #[tokio::test]

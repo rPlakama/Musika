@@ -29,7 +29,7 @@ fn a_silent_client_does_not_block_later_commands() {
 
     let (tx, rx) = std::sync::mpsc::channel::<String>();
     serve(path.clone(), move |line| {
-        let _ = tx.send(line);
+        _ = tx.send(line);
         None
     });
 
@@ -44,7 +44,7 @@ fn a_silent_client_does_not_block_later_commands() {
 
     drop(silent);
     drop(second);
-    let _ = std::fs::remove_dir_all(dir);
+    _ = std::fs::remove_dir_all(dir);
 }
 
 /// Read-only query commands answer on the same connection; fire-and-forget
@@ -78,7 +78,7 @@ fn query_commands_answer_and_plain_commands_stay_silent() {
         .expect("read reply");
     assert_eq!(reply.trim(), "{\"state\":\"playing\"}");
 
-    let _ = std::fs::remove_dir_all(dir);
+    _ = std::fs::remove_dir_all(dir);
 }
 
 /// The peer-credential check accepts our own process and refuses nothing else

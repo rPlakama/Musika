@@ -143,7 +143,7 @@ impl Shared {
         // worker: all write the same fd, which the kernel serialises, and
         // `EFD_NONBLOCK` keeps the call from blocking the RT thread.
         unsafe {
-            let _ = libc::write(
+            _ = libc::write(
                 self.wake_fd,
                 &one as *const u64 as *const libc::c_void,
                 std::mem::size_of::<u64>(),
@@ -162,7 +162,7 @@ impl Shared {
         // `u64` used as eventfd's read buffer. The read is non-blocking and an
         // empty counter is intentionally ignored.
         unsafe {
-            let _ = libc::read(
+            _ = libc::read(
                 self.wake_fd,
                 &mut value as *mut u64 as *mut libc::c_void,
                 std::mem::size_of::<u64>(),
@@ -195,7 +195,7 @@ impl Drop for Shared {
             // Failing to close is intentionally ignored and there is no other
             // owner that could close the same descriptor.
             unsafe {
-                let _ = libc::close(self.wake_fd);
+                _ = libc::close(self.wake_fd);
             }
         }
     }

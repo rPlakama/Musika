@@ -311,7 +311,7 @@ impl AppRoot {
                 .background_executor()
                 .spawn(async move { crate::ipc::send_query(line) })
                 .await;
-            let _ = this.update(cx, |this, cx| {
+            _ = this.update(cx, |this, cx| {
                 match reply {
                     Some(text) => {
                         this.push_toast(format!("{line} · {text}"), ToastKind::Notice, None);

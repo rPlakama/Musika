@@ -173,7 +173,7 @@ impl Worker {
         interrupt_current(&self.shared);
         self.sink.reset();
         self.sink.set_paused(paused);
-        let _ = tx.send(Command::Load {
+        _ = tx.send(Command::Load {
             url,
             next_url,
             paused,
@@ -203,14 +203,14 @@ impl Worker {
                 interrupt_current(&self.shared);
                 self.sink.reset();
             }
-            let _ = tx.send(Command::Pause);
+            _ = tx.send(Command::Pause);
         } else {
             self.sink.set_paused(false);
             let position = *self
                 .paused_position
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
-            let _ = tx.send(Command::Resume { position });
+            _ = tx.send(Command::Resume { position });
         }
     }
 
@@ -235,7 +235,7 @@ impl Worker {
         // forever: nothing decodes until the worker is resumed.
         self.shared.lock().loading = !self.paused.load(Ordering::Acquire);
         self.sink.flush();
-        let _ = tx.send(Command::Seek(seconds));
+        _ = tx.send(Command::Seek(seconds));
     }
 
     pub(crate) fn stop(&self) {
@@ -261,7 +261,7 @@ impl Worker {
         self.sink.reset();
         self.sink.close_writes();
         self.sink.set_paused(true);
-        let _ = tx.send(Command::Stop);
+        _ = tx.send(Command::Stop);
     }
 }
 
@@ -271,7 +271,7 @@ impl Drop for Worker {
         self.sink.reset();
         self.sink.close_writes();
         if let Some(tx) = self.tx.take() {
-            let _ = tx.send(Command::Shutdown);
+            _ = tx.send(Command::Shutdown);
         }
         if let Some(preload_tx) = self.preload_tx.take() {
             // Dropping the sender lets the preload thread observe the closed
@@ -279,10 +279,10 @@ impl Drop for Worker {
             drop(preload_tx);
         }
         if let Some(join) = self.join.take() {
-            let _ = join.join();
+            _ = join.join();
         }
         if let Some(join) = self.preload_join.take() {
-            let _ = join.join();
+            _ = join.join();
         }
     }
 }
@@ -290,7 +290,7 @@ impl Drop for Worker {
 fn preload_thread(rx: Receiver<PreloadRequest>, results: Sender<PreloadResult>) {
     while let Ok(request) = rx.recv() {
         if request.stop.load(Ordering::Acquire) {
-            let _ = results.send(PreloadResult {
+            _ = results.send(PreloadResult {
                 token: request.token,
                 result: Err("preload cancelled".to_string()),
             });
@@ -909,7 +909,7 @@ fn seed_preload(current: &mut Current, shared: &Shared, preload_tx: &Sender<Prel
     current.preload_token = token;
     current.preload_stop = Some(Arc::clone(&stop));
     current.preload_started = Some(Instant::now());
-    let _ = preload_tx.send(PreloadRequest { token, url, stop });
+    _ = preload_tx.send(PreloadRequest { token, url, stop });
 }
 
 fn drain_preload(current: &mut Current, rx: &Receiver<PreloadResult>) {
@@ -1000,7 +1000,7 @@ mod tests {
     impl Drop for WavFile {
         fn drop(&mut self) {
             if let Some(dir) = self.path.parent() {
-                let _ = fs::remove_dir_all(dir);
+                _ = fs::remove_dir_all(dir);
             }
         }
     }

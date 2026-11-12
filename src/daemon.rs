@@ -83,7 +83,7 @@ pub fn run() -> ! {
 fn acquire_instance_lock() -> Option<std::fs::File> {
     use std::os::fd::AsRawFd;
     let dir = crate::db::config_dir().ok()?;
-    let _ = std::fs::create_dir_all(&dir);
+    _ = std::fs::create_dir_all(&dir);
     let path = dir.join("daemon.lock");
     let file = std::fs::OpenOptions::new()
         .create(true)
@@ -318,12 +318,12 @@ async fn run_async() {
     flush_status_now(&playback_control, &page).await;
     crate::tray::shutdown().await;
     if let Some(mut child) = ui_child.take() {
-        let _ = child.kill();
-        let _ = child.wait();
+        _ = child.kill();
+        _ = child.wait();
     }
     playback.shutdown();
-    let _ = std::fs::remove_file(crate::ipc::socket_path());
-    let _ = std::fs::remove_file(crate::ipc::daemon_socket_path());
+    _ = std::fs::remove_file(crate::ipc::socket_path());
+    _ = std::fs::remove_file(crate::ipc::daemon_socket_path());
     eprintln!("daemon: stopped");
 }
 
@@ -390,16 +390,16 @@ fn dispatch_text(services: &Services, line: &str, announce: bool) -> Option<Stri
         }
         CommandTarget::Query => Some(query_json(&services.playback.snapshot(), &command)),
         CommandTarget::Presentation => {
-            let _ = services.ui_forward.send(line.to_string());
+            _ = services.ui_forward.send(line.to_string());
             None
         }
         CommandTarget::Lifecycle => {
             match command {
                 IpcCommand::Quit => {
-                    let _ = services.lifecycle.send(Lifecycle::Quit);
+                    _ = services.lifecycle.send(Lifecycle::Quit);
                 }
                 IpcCommand::Show => {
-                    let _ = services.lifecycle.send(Lifecycle::Show);
+                    _ = services.lifecycle.send(Lifecycle::Show);
                 }
                 _ => {}
             }
@@ -562,7 +562,7 @@ fn handle_client_message(
             // `qq` asks the core to quit through the bridge-shaped surface; it
             // is a lifecycle action, not a bridge method.
             if request.method == "shutdown_core" {
-                let _ = services.lifecycle.send(Lifecycle::Quit);
+                _ = services.lifecycle.send(Lifecycle::Quit);
                 if let Ok(bytes) = proto::json_encode(&ReplyJson::ok(request.req))
                     && let Some(client) = ui_clients.get(&conn)
                 {

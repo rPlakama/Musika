@@ -377,7 +377,7 @@ impl AppRoot {
             cx.background_executor()
                 .timer(std::time::Duration::from_millis(resume_ms))
                 .await;
-            let _ = this.update(cx, |this, cx| {
+            _ = this.update(cx, |this, cx| {
                 if this.lyrics_hold_generation == generation {
                     this.lyrics_hold = None;
                     cx.notify();

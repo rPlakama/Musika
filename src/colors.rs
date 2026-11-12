@@ -78,5 +78,3 @@ pub use engine::{
     CoverScheme, Options, fetch, fetch_into, from_seed, generate_from_path, hash_roles, invalidate,
     invalidate_with, purge, purge_with,
 };
-pub use scheme::{Spec, VariantChoice};
-pub use seed::SourceMode;

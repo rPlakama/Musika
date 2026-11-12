@@ -69,11 +69,12 @@ pub fn bucket_for(logical_px: f32, scale_factor: f32) -> u32 {
         return smallest;
     }
     let need = (logical_px * scale_factor).ceil();
+    let largest = DISPLAY_BUCKETS[DISPLAY_BUCKETS.len() - 1];
     DISPLAY_BUCKETS
         .iter()
         .copied()
         .find(|bucket| *bucket as f32 >= need)
-        .unwrap_or_else(|| *DISPLAY_BUCKETS.last().expect("display buckets are non-empty"))
+        .unwrap_or(largest)
 }
 
 /// The 320 px thumbnail path for `source`, mirroring `covers::thumb_name`
@@ -500,7 +501,7 @@ mod tests {
 
     impl Drop for TempCoverDir {
         fn drop(&mut self) {
-            let _ = fs::remove_dir_all(&self.path);
+            _ = fs::remove_dir_all(&self.path);
         }
     }
 

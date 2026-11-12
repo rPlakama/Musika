@@ -242,8 +242,8 @@ async fn refresh_inner(
     if purge_unreferenced {
         for (id, row) in known.iter() {
             if !referenced.contains(id) {
-                let _ = std::fs::remove_file(dir.join(&row.file));
-                let _ = std::fs::remove_file(dir.join(thumb_name(&row.file)));
+                _ = std::fs::remove_file(dir.join(&row.file));
+                _ = std::fs::remove_file(dir.join(thumb_name(&row.file)));
                 crate::cache::delete_by(pool, "DELETE FROM covers WHERE id = ?1", id).await?;
                 report.removed += 1;
             }
@@ -267,7 +267,7 @@ async fn refresh_inner(
             }
         }
     }
-    let _ = ensure_thumbs(&dir, thumb_jobs).await;
+    _ = ensure_thumbs(&dir, thumb_jobs).await;
     remove_orphans(pool, &dir).await?;
 
     Ok(report)
@@ -343,8 +343,8 @@ pub(crate) async fn apply_fetched(
                         art.last_modified.as_deref(),
                     )
                     .await?;
-                    let _ = std::fs::remove_file(dir.join(&old.file));
-                    let _ = std::fs::remove_file(dir.join(thumb_name(&old.file)));
+                    _ = std::fs::remove_file(dir.join(&old.file));
+                    _ = std::fs::remove_file(dir.join(thumb_name(&old.file)));
                     report.upgraded += 1;
                 }
                 return Ok(());
@@ -371,8 +371,8 @@ pub(crate) async fn apply_fetched(
             if let Some(old) = known.get(id)
                 && old.file != file
             {
-                let _ = std::fs::remove_file(dir.join(&old.file));
-                let _ = std::fs::remove_file(dir.join(thumb_name(&old.file)));
+                _ = std::fs::remove_file(dir.join(&old.file));
+                _ = std::fs::remove_file(dir.join(thumb_name(&old.file)));
             }
             report.downloaded += 1;
         }
@@ -511,7 +511,7 @@ async fn remove_orphans(pool: &SqlitePool, dir: &std::path::Path) -> Result<()> 
                 && !kept_thumbs.contains(&name)
                 && !is_display_copy(&name, &kept_stems))
         {
-            let _ = std::fs::remove_file(entry.path());
+            _ = std::fs::remove_file(entry.path());
         }
     }
     Ok(())
@@ -649,7 +649,7 @@ pub(crate) fn thumb_name(file: &str) -> String {
 }
 
 pub(crate) fn build_thumb(source: &Path) -> Result<Vec<u8>> {
-    let _ = crate::linux::advise_willneed(source);
+    _ = crate::linux::advise_willneed(source);
     let reader = image::ImageReader::open(source)
         .with_context(|| format!("failed to open cover {}", source.display()))?
         .with_guessed_format()
@@ -934,7 +934,7 @@ pub async fn get_or_create_resized_cover(
         {
             return Some(resized_path);
         }
-        let _ = std::fs::remove_file(&resized_path);
+        _ = std::fs::remove_file(&resized_path);
     }
 
     // Offload image decoding and scaling to a blocking thread pool. Encode to
@@ -1147,6 +1147,6 @@ mod orphan_tests {
             "other display bucket removed"
         );
         assert!(!dir.join("stray.jpg").exists(), "unknown blob kept");
-        let _ = std::fs::remove_dir_all(&dir);
+        _ = std::fs::remove_dir_all(&dir);
     }
 }

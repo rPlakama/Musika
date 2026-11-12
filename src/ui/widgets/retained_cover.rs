@@ -170,9 +170,7 @@ impl Element for RetainedCover {
             bottom_left: px(4.0),
         }));
         if let Some(image) = self.image.as_ref() {
-            window
-                .paint_image(image_bounds, corners, image.clone(), 0, false)
-                .ok();
+            _ = window.paint_image(image_bounds, corners, image.clone(), 0, false);
         }
     }
 }

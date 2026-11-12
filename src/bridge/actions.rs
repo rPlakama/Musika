@@ -12,7 +12,7 @@ impl Bridge {
             let Some(row_kind) =
                 RowKind::from_api_kind(&kind).filter(|kind| *kind != RowKind::Playlist)
             else {
-                let _ = tx.send(Event::Error(format!(
+                _ = tx.send(Event::Error(format!(
                     "Could not update the favourite: unknown favourite kind: {kind}"
                 )));
                 return;
@@ -34,7 +34,7 @@ impl Bridge {
                 }
             };
             if let Err(err) = result.await {
-                let _ = tx.send(Event::Error(format!(
+                _ = tx.send(Event::Error(format!(
                     "Could not update the favourite: {err:#}"
                 )));
                 return;
@@ -45,12 +45,12 @@ impl Bridge {
                 _ => crate::artist_user::set_starred(&dbs.artist_user, &id, on).await,
             };
             if let Err(err) = local {
-                let _ = tx.send(Event::Error(format!(
+                _ = tx.send(Event::Error(format!(
                     "Could not save the favourite: {err:#}"
                 )));
                 return;
             }
-            let _ = tx.send(Event::RowsPatched {
+            _ = tx.send(Event::RowsPatched {
                 kind: row_kind,
                 id,
                 starred: Some(on),
@@ -76,7 +76,7 @@ impl Bridge {
             }
             .await;
             if let Err(err) = result {
-                let _ = tx.send(Event::Error(format!("Could not rate: {err:#}")));
+                _ = tx.send(Event::Error(format!("Could not rate: {err:#}")));
                 return;
             }
             let row_kind = if artist {
@@ -84,7 +84,7 @@ impl Bridge {
             } else {
                 RowKind::Album
             };
-            let _ = tx.send(Event::RowsPatched {
+            _ = tx.send(Event::RowsPatched {
                 kind: row_kind,
                 id,
                 starred: None,
@@ -97,7 +97,7 @@ impl Bridge {
         let tx = self.tx.clone();
         crate::app::runtime().spawn(async move {
             let Some(dbs) = crate::app::dbs() else { return };
-            let _ = tx.send(Event::DownloadStarted {
+            _ = tx.send(Event::DownloadStarted {
                 kind: kind.clone(),
                 id: id.clone(),
                 on,
@@ -120,9 +120,9 @@ impl Bridge {
                     Ok(())
                 };
                 if let Err(err) = result {
-                    let _ = tx.send(Event::Error(format!("Could not remove download: {err:#}")));
+                    _ = tx.send(Event::Error(format!("Could not remove download: {err:#}")));
                 } else {
-                    let _ = tx.send(Event::DownloadSettled);
+                    _ = tx.send(Event::DownloadSettled);
                 }
                 return;
             }
@@ -138,17 +138,17 @@ impl Bridge {
                 Vec::new()
             };
             if songs.is_empty() {
-                let _ = tx.send(Event::Error(
+                _ = tx.send(Event::Error(
                     "No songs to download for this item".to_string(),
                 ));
                 return;
             }
             for song in songs {
                 if let Err(err) = crate::media_actions::download_one(&dbs, &song).await {
-                    let _ = tx.send(Event::Error(format!("Download failed: {err:#}")));
+                    _ = tx.send(Event::Error(format!("Download failed: {err:#}")));
                 }
             }
-            let _ = tx.send(Event::DownloadSettled);
+            _ = tx.send(Event::DownloadSettled);
         });
     }
 
@@ -183,15 +183,15 @@ impl Bridge {
             let Some(dbs) = crate::app::dbs() else { return };
             match crate::queue::quick_tracks_many(&dbs, &kind, &ids, offline).await {
                 Ok(tracks) if tracks.is_empty() => {
-                    let _ = tx.send(Event::Error(
+                    _ = tx.send(Event::Error(
                         "Could not paste: no tracks matched the row clipboard".to_string(),
                     ));
                 }
                 Ok(tracks) => {
-                    let _ = tx.send(Event::QueuePaste { tracks, at });
+                    _ = tx.send(Event::QueuePaste { tracks, at });
                 }
                 Err(err) => {
-                    let _ = tx.send(Event::Error(format!("Could not paste: {err:#}")));
+                    _ = tx.send(Event::Error(format!("Could not paste: {err:#}")));
                 }
             }
         });
@@ -206,7 +206,7 @@ impl Bridge {
             else {
                 return;
             };
-            let _ = tx.send(Event::OpenPage {
+            _ = tx.send(Event::OpenPage {
                 descriptor: crate::model::PageDescriptor::new(
                     crate::model::PageKind::Artist,
                     artist_id,

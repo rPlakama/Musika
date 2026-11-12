@@ -70,7 +70,7 @@ static INIT: Once = Once::new();
 /// failures through `Result` instead of the terminal.
 fn initialize() {
     INIT.call_once(|| {
-        let _ = ffmpeg::init();
+        _ = ffmpeg::init();
         ffmpeg::format::network::init();
         ffmpeg::log::set_level(ffmpeg::log::Level::Error);
     });
@@ -410,8 +410,8 @@ impl Decoder {
         // A demuxer that reached EOF keeps a sticky AVIO latch. Seeking
         // clears the normal EOF state; clear an interrupt latch as well so a
         // later seek/read cannot inherit cancellation from an earlier stop.
-        let _ = self.input.clear_eof();
-        let _ = self.input.clear_interrupt();
+        _ = self.input.clear_eof();
+        _ = self.input.clear_interrupt();
         Ok(())
     }
 
@@ -778,7 +778,7 @@ mod tests {
     impl Drop for WavFile {
         fn drop(&mut self) {
             if let Some(dir) = self.path.parent() {
-                let _ = fs::remove_dir_all(dir);
+                _ = fs::remove_dir_all(dir);
             }
         }
     }

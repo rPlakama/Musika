@@ -352,6 +352,6 @@ fn main() {
             },
             move |_, cx| cx.new(|cx| Bench::new(rows, cx)),
         )
-        .unwrap();
+        .unwrap_or_else(|error| panic!("cannot open the benchmark window: {error}"));
     });
 }

@@ -18,15 +18,15 @@ undocumented_unsafe_blocks = "deny"
 multiple_unsafe_ops_per_block = "deny"
 
 # every suppression says why; prefer #[expect] so stale ones fail
-allow_attributes_without_reason = "warn"
+allow_attributes_without_reason = "deny"
 
 # panics in production code
-unwrap_used = "warn"
+unwrap_used = "deny"
 expect_used = "warn"        # warn only: many are real startup invariants
 
 # swallowed results (daemon, sockets, channels)
 let_underscore_must_use = "warn"
-unused_result_ok = "warn"
+unused_result_ok = "deny"
 
 # enum drift protection (CoreCommand, EngineEvent, IPC messages, ItemKind/RowKind/PageKind)
 match_wildcard_for_single_variants = "warn"

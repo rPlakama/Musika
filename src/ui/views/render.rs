@@ -331,7 +331,7 @@ impl Render for AppRoot {
                 cx.background_executor()
                     .timer(std::time::Duration::from_millis(350))
                     .await;
-                let _ = this.update(cx, |this, _| {
+                _ = this.update(cx, |this, _| {
                     for scope in Scope::ALL {
                         if scope != start_scope && scope != Scope::Playlists {
                             this.bridge.preload_library(scope, 0);

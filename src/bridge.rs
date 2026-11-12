@@ -330,12 +330,12 @@ impl Bridge {
 
     /// Emits a user-facing error event (toast) for a core-side rejection.
     pub fn error(&self, message: impl Into<String>) {
-        let _ = self.tx.send(Event::Error(message.into()));
+        _ = self.tx.send(Event::Error(message.into()));
     }
 
     /// Echoes one executed IPC command to the attached UI (canonical text).
     pub fn ipc_ran(&self, command: String) {
-        let _ = self.tx.send(Event::IpcRan(command));
+        _ = self.tx.send(Event::IpcRan(command));
     }
 
     /// Fullscreen cover focus: fetch the playing album's favourite/rating.
@@ -348,7 +348,7 @@ impl Bridge {
                 .ok()
                 .and_then(|states| states.get(&album_id).copied());
             if let Some((starred, rating)) = state {
-                let _ = tx.send(Event::AlbumState {
+                _ = tx.send(Event::AlbumState {
                     id: album_id,
                     starred,
                     rating: rating.clamp(0, 5) as u8,

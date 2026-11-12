@@ -81,7 +81,7 @@ async fn scan_indexes_m3u_files() {
     assert_eq!(rows[1].1.as_deref(), Some("s2"));
     assert_eq!(rows[2].1, None);
 
-    let _ = std::fs::remove_dir_all(&dir);
+    _ = std::fs::remove_dir_all(&dir);
 }
 
 /// An empty m3u folder must not read `library.db` at all: the segment is
@@ -99,13 +99,13 @@ async fn an_empty_m3u_folder_does_not_read_the_library() {
     let dbs = playlist_dbs(&library, &playlist);
 
     let dir = std::env::temp_dir().join(format!("musika-pl-empty-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
+    _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
 
     let rows = scan_dir(&dbs, &dir).await.expect("empty scan");
     assert!(rows.is_empty());
 
-    let _ = std::fs::remove_dir_all(&dir);
+    _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]
@@ -259,7 +259,7 @@ async fn saved_radio_writes_a_local_m3u_and_resolves_ids() {
         },
     ];
     let dir = std::env::temp_dir().join(format!("musika-radio-save-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
+    _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     let path = crate::radio::write_radio_m3u(&dbs, &dir, "Saved Radio", &rows)
         .await
@@ -272,7 +272,7 @@ async fn saved_radio_writes_a_local_m3u_and_resolves_ids() {
             .await
             .unwrap();
     assert_eq!(ids, vec![Some("s1".into()), Some("s2".into()), None]);
-    let _ = std::fs::remove_dir_all(dir);
+    _ = std::fs::remove_dir_all(dir);
 }
 
 /// ARC-44: creating from a selection writes one named app-owned M3U, keeps
@@ -305,7 +305,7 @@ async fn create_local_writes_a_named_m3u_and_scans_it() {
     // folder so the test never touches the real playlist directory. No other
     // test resolves the m3u folder, so the process-wide root is safe here.
     let root = std::env::temp_dir().join(format!("musika-create-local-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&root);
+    _ = std::fs::remove_dir_all(&root);
     std::fs::create_dir_all(&root).unwrap();
     crate::db::set_data_root(root.clone());
 
@@ -348,7 +348,7 @@ async fn create_local_writes_a_named_m3u_and_scans_it() {
     .unwrap();
     assert_eq!(stored, vec![Some("s1".into()), Some("s2".into())]);
 
-    let _ = std::fs::remove_dir_all(root);
+    _ = std::fs::remove_dir_all(root);
 }
 
 #[tokio::test]
@@ -445,7 +445,7 @@ async fn create_remote_posts_songs_then_refreshes_the_list() {
                 }
                 Err(_) => break,
             };
-            socket.set_read_timeout(Some(Duration::from_secs(5))).ok();
+            _ = socket.set_read_timeout(Some(Duration::from_secs(5)));
             let mut buffer = [0u8; 8192];
             let read = socket.read(&mut buffer).unwrap_or(0);
             let request = String::from_utf8_lossy(&buffer[..read]).to_string();
@@ -544,7 +544,7 @@ async fn add_to_playlist_appends_resolved_targets() {
         .unwrap();
     let dbs = playlist_dbs(&library, &playlist);
     let root = std::env::temp_dir().join(format!("musika-add-playlist-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&root);
+    _ = std::fs::remove_dir_all(&root);
     std::fs::create_dir_all(&root).unwrap();
     crate::db::set_data_root(root.clone());
 
@@ -578,7 +578,7 @@ async fn add_to_playlist_appends_resolved_targets() {
     assert_eq!(entries.last().unwrap().path, "Music/second.flac");
     assert_eq!(entries.len(), 2, "adding an existing song moves it");
 
-    let _ = std::fs::remove_dir_all(root);
+    _ = std::fs::remove_dir_all(root);
 }
 
 /// `playlist rm` mirrors add: targets resolve the same way and matching M3U
@@ -611,7 +611,7 @@ async fn remove_from_playlist_drops_matching_m3u_entries() {
         .unwrap();
     let dbs = playlist_dbs(&library, &playlist);
     let root = std::env::temp_dir().join(format!("musika-rm-playlist-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&root);
+    _ = std::fs::remove_dir_all(&root);
     std::fs::create_dir_all(&root).unwrap();
     crate::db::set_data_root(root.clone());
 
@@ -660,7 +660,7 @@ async fn remove_from_playlist_drops_matching_m3u_entries() {
     .unwrap();
     assert_eq!(count.0, 0, "the rescan must reflect the emptied file");
 
-    let _ = std::fs::remove_dir_all(root);
+    _ = std::fs::remove_dir_all(root);
 }
 
 /// A playlist page whose cached entries disagree with the list's song_count
@@ -693,7 +693,7 @@ async fn page_json_refreshes_a_stale_subsonic_cache() {
                 }
                 Err(_) => break,
             };
-            socket.set_read_timeout(Some(Duration::from_secs(5))).ok();
+            _ = socket.set_read_timeout(Some(Duration::from_secs(5)));
             let mut buffer = [0u8; 8192];
             let read = socket.read(&mut buffer).unwrap_or(0);
             let request = String::from_utf8_lossy(&buffer[..read]).to_string();
@@ -819,7 +819,7 @@ async fn add_to_playlist_refreshes_the_server_entries() {
                 }
                 Err(_) => break,
             };
-            socket.set_read_timeout(Some(Duration::from_secs(5))).ok();
+            _ = socket.set_read_timeout(Some(Duration::from_secs(5)));
             let mut buffer = [0u8; 8192];
             let read = socket.read(&mut buffer).unwrap_or(0);
             let request = String::from_utf8_lossy(&buffer[..read]).to_string();
@@ -939,7 +939,7 @@ async fn add_song_ids_and_remove_positions_edit_a_local_m3u() {
         .unwrap();
     let dbs = playlist_dbs(&library, &playlist);
     let root = std::env::temp_dir().join(format!("musika-clip-edit-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&root);
+    _ = std::fs::remove_dir_all(&root);
     std::fs::create_dir_all(&root).unwrap();
     crate::db::set_data_root(root.clone());
 
@@ -984,7 +984,7 @@ async fn add_song_ids_and_remove_positions_edit_a_local_m3u() {
             .is_err()
     );
 
-    let _ = std::fs::remove_dir_all(root);
+    _ = std::fs::remove_dir_all(root);
 }
 
 /// `playlist add selected;` hands the UI selection to the backend as one row
@@ -1018,7 +1018,7 @@ async fn add_selection_expands_songs_and_albums() {
         .unwrap();
     let dbs = playlist_dbs(&library, &playlist);
     let root = std::env::temp_dir().join(format!("musika-selection-add-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&root);
+    _ = std::fs::remove_dir_all(&root);
     std::fs::create_dir_all(&root).unwrap();
     crate::db::set_data_root(root.clone());
 
@@ -1069,7 +1069,7 @@ async fn add_selection_expands_songs_and_albums() {
             .is_err()
     );
 
-    let _ = std::fs::remove_dir_all(root);
+    _ = std::fs::remove_dir_all(root);
 }
 
 /// Server `d d` maps cached positions to song ids and removes them, then
@@ -1101,7 +1101,7 @@ async fn remove_playlist_positions_updates_a_server_playlist() {
                 }
                 Err(_) => break,
             };
-            socket.set_read_timeout(Some(Duration::from_secs(5))).ok();
+            _ = socket.set_read_timeout(Some(Duration::from_secs(5)));
             let mut buffer = [0u8; 8192];
             let read = socket.read(&mut buffer).unwrap_or(0);
             let request = String::from_utf8_lossy(&buffer[..read]).to_string();
@@ -1213,7 +1213,7 @@ async fn insert_and_move_local_playlist_entries() {
         .unwrap();
     let dbs = playlist_dbs(&library, &playlist);
     let root = std::env::temp_dir().join(format!("musika-movepl-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&root);
+    _ = std::fs::remove_dir_all(&root);
     std::fs::create_dir_all(&root).unwrap();
     crate::db::set_data_root(root.clone());
 
@@ -1262,7 +1262,7 @@ async fn insert_and_move_local_playlist_entries() {
         "top boundary is a no-op"
     );
 
-    let _ = std::fs::remove_dir_all(root);
+    _ = std::fs::remove_dir_all(root);
 }
 
 /// Server insert-at-position rebuilds the order through updatePlaylist
@@ -1294,7 +1294,7 @@ async fn insert_song_ids_at_rebuilds_a_server_playlist_order() {
                 }
                 Err(_) => break,
             };
-            socket.set_read_timeout(Some(Duration::from_secs(5))).ok();
+            _ = socket.set_read_timeout(Some(Duration::from_secs(5)));
             let mut buffer = [0u8; 8192];
             let read = socket.read(&mut buffer).unwrap_or(0);
             let request = String::from_utf8_lossy(&buffer[..read]).to_string();
@@ -1396,7 +1396,7 @@ async fn delete_playlist_removes_a_local_file_and_its_row() {
         .unwrap();
     let dbs = playlist_dbs(&library, &playlist);
     let root = std::env::temp_dir().join(format!("musika-delpl-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&root);
+    _ = std::fs::remove_dir_all(&root);
     std::fs::create_dir_all(&root).unwrap();
     crate::db::set_data_root(root.clone());
 
@@ -1415,7 +1415,7 @@ async fn delete_playlist_removes_a_local_file_and_its_row() {
     assert_eq!(count, 0, "the scanned playlist row is gone");
     assert!(delete_playlist(&dbs, "Delete Me").await.is_err());
 
-    let _ = std::fs::remove_dir_all(root);
+    _ = std::fs::remove_dir_all(root);
 }
 
 /// Server playlist deletion calls deletePlaylist and refreshes the list.
@@ -1446,7 +1446,7 @@ async fn delete_playlist_removes_a_server_playlist() {
                 }
                 Err(_) => break,
             };
-            socket.set_read_timeout(Some(Duration::from_secs(5))).ok();
+            _ = socket.set_read_timeout(Some(Duration::from_secs(5)));
             let mut buffer = [0u8; 8192];
             let read = socket.read(&mut buffer).unwrap_or(0);
             let request = String::from_utf8_lossy(&buffer[..read]).to_string();

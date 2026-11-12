@@ -76,6 +76,7 @@ mod http_client;
 
 mod index;
 
+mod command_registry;
 mod ipc;
 
 mod ipc_protocol;

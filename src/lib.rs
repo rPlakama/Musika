@@ -1,6 +1,14 @@
 // Transitional: legacy backend helpers remain compiled until they are
 // cleaned up or reused by the GPUI front end.
 #![allow(dead_code)]
+#![cfg_attr(
+    test,
+    allow(
+        clippy::unwrap_used,
+        clippy::expect_used,
+        reason = "tests use unwrap/expect for fixtures and assertions"
+    )
+)]
 
 // Musika — a keyboard-driven music player.
 // Copyright (C) 2026 rPlakama <rPlakama@proton.me>

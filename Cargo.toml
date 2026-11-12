@@ -9,6 +9,41 @@ version = "0.7.0"
 edition = "2024"
 license = "GPL-2.0-or-later"
 
+[lints.rust]
+unsafe_op_in_unsafe_fn = "warn"
+
+[lints.clippy]
+# unsafe hygiene (highest value: lock-free ring buffer and RT callback live here)
+undocumented_unsafe_blocks = "warn"
+multiple_unsafe_ops_per_block = "warn"
+
+# every suppression says why; prefer #[expect] so stale ones fail
+allow_attributes_without_reason = "warn"
+
+# panics in production code
+unwrap_used = "warn"
+expect_used = "warn"        # warn only: many are real startup invariants
+
+# swallowed results (daemon, sockets, channels)
+let_underscore_must_use = "warn"
+unused_result_ok = "warn"
+
+# enum drift protection (CoreCommand, EngineEvent, IPC messages, ItemKind/RowKind/PageKind)
+match_wildcard_for_single_variants = "warn"
+wildcard_enum_match_arm = "warn"
+
+# cheap perf / honest-signature lints
+or_fun_call = "warn"
+redundant_clone = "warn"
+needless_pass_by_ref_mut = "warn"
+unused_async = "warn"
+
+# free insurance (currently 0 hits)
+dbg_macro = "deny"
+todo = "deny"
+unimplemented = "deny"
+mem_forget = "warn"
+
 [dependencies]
 anyhow = "1.0.104"
 futures-util = { version = "0.3", default-features = false, features = ["std"] }

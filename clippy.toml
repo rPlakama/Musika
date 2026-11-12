@@ -1,0 +1,6 @@
+# Clippy configuration for Musika.
+# Tests predate the strict production lints: assertions and fixtures are
+# expected to unwrap/expect. Production code is still held to the warnings in
+# Cargo.toml `[lints.clippy]`.
+allow-unwrap-in-tests = true
+allow-expect-in-tests = true

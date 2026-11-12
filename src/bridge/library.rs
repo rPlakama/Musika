@@ -128,15 +128,7 @@ impl Bridge {
             )
             .await
             {
-                Ok(value) => {
-                    let rows = value["rows"]
-                        .as_array()
-                        .map(|rows| {
-                            rows.iter()
-                                .map(|row| row_from_json(scope, row))
-                                .collect::<Vec<_>>()
-                        })
-                        .unwrap_or_default();
+                Ok(rows) => {
                     let _ = tx.send(Event::LibraryWindow {
                         generation,
                         scope,
@@ -165,7 +157,7 @@ impl Bridge {
             if count == 0 {
                 return;
             }
-            let Ok(value) = crate::rows::window(
+            let Ok(rows) = crate::rows::window(
                 &dbs,
                 scope.key(),
                 "",
@@ -178,10 +170,6 @@ impl Bridge {
             else {
                 return;
             };
-            let rows = value["rows"]
-                .as_array()
-                .map(|rows| rows.iter().map(|row| row_from_json(scope, row)).collect())
-                .unwrap_or_default();
             let _ = tx.send(Event::Preload {
                 scope,
                 order,

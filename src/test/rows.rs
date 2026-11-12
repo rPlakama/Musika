@@ -36,10 +36,16 @@ async fn counts_and_windows_an_ordered_surface() {
             .unwrap(),
         1
     );
-    let value = crate::rows::window(&dbs, "albums", "", "Artist", 0, 10, false)
+    let rows = crate::rows::window(&dbs, "albums", "", "Artist", 0, 10, false)
         .await
         .unwrap();
-    assert_eq!(value["start"], 0);
-    assert_eq!(value["rows"].as_array().unwrap().len(), 1);
-    assert_eq!(value["rows"][0]["title"], "Album");
+    assert_eq!(rows.len(), 1);
+    let row = &rows[0];
+    assert_eq!(row.id, "al1");
+    assert_eq!(row.kind, crate::model::RowKind::Album);
+    assert_eq!(row.title, "Album");
+    assert_eq!(row.subtitle, "Artist · 2026");
+    assert_eq!(row.meta, "1 tracks");
+    assert_eq!(row.album_id, "al1");
+    assert!(!row.downloaded);
 }

@@ -106,7 +106,7 @@ pub(crate) fn format_duration(seconds: Option<i32>) -> String {
     }
 }
 
-fn album_subtitle(album: &crate::library::AlbumRow) -> String {
+pub(crate) fn album_subtitle(album: &crate::library::AlbumRow) -> String {
     let artist = album.artist.as_deref().unwrap_or("");
     match album.year {
         Some(year) => format!("{artist} · {year}"),
@@ -114,7 +114,7 @@ fn album_subtitle(album: &crate::library::AlbumRow) -> String {
     }
 }
 
-fn song_subtitle_from_parts(artist: Option<&str>, album: Option<&str>) -> String {
+pub(crate) fn song_subtitle_from_parts(artist: Option<&str>, album: Option<&str>) -> String {
     let artist = artist.unwrap_or("");
     match album {
         Some(album) if !album.is_empty() => format!("{artist} · {album}"),

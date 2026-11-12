@@ -14,35 +14,6 @@ pub(crate) fn order_name(scope: crate::model::Scope, order: usize) -> String {
     }
 }
 
-pub(crate) fn row_from_json(
-    scope: crate::model::Scope,
-    value: &serde_json::Value,
-) -> crate::model::Row {
-    use crate::model::{Row, RowKind, Scope};
-    let text = |key: &str| value[key].as_str().unwrap_or_default().to_string();
-    let kind = match scope {
-        Scope::Albums => RowKind::Album,
-        Scope::Artists => RowKind::Artist,
-        Scope::Songs => RowKind::Song,
-        Scope::Playlists => RowKind::Playlist,
-    };
-    Row {
-        track: String::new(),
-        id: text("id"),
-        kind,
-        title: text("title"),
-        subtitle: text("subtitle"),
-        meta: text("meta"),
-        cover_url: text("cover"),
-        cover_remote: text("coverRemote"),
-        song_id: text("songId"),
-        album_id: text("albumId"),
-        starred: value["starred"].as_bool().unwrap_or(false),
-        rating: value["rating"].as_i64().unwrap_or(0),
-        downloaded: false,
-    }
-}
-
 pub(crate) async fn library_rows(
     scope: crate::model::Scope,
     order: usize,

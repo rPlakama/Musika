@@ -213,3 +213,152 @@ fn vulkan_probe() {
         println!("[bench] {line}");
     }
 }
+
+/// Compression audit: what gzip saves on the payloads Musika moves or stores.
+///
+/// The UI cover cache is image data (JPEG/PNG), so gzip there buys little and
+/// costs an inflate before every decode; JSON and text payloads are the cases
+/// where an HTTP content encoding actually pays off. This benchmark prefers the
+/// real cover cache and `index.txt` mirror when present (so the numbers are
+/// representative photos, not synthetic noise) and falls back to generated
+/// fixtures on a machine without them.
+///
+/// `cargo test test::benchmark::bench_compression -- --ignored --nocapture`
+#[ignore = "benchmark, run explicitly"]
+#[test]
+fn bench_compression() {
+    use flate2::read::GzDecoder;
+    use flate2::write::GzEncoder;
+    use std::io::{Cursor, Read, Write};
+
+    fn compress_gzip(input: &[u8]) -> Vec<u8> {
+        let mut encoder = GzEncoder::new(Vec::new(), flate2::Compression::default());
+        encoder.write_all(input).expect("gzip");
+        encoder.finish().expect("finish gzip")
+    }
+
+    fn report(name: &str, raw: &[u8]) {
+        let started = Instant::now();
+        let compressed = compress_gzip(raw);
+        let encode = started.elapsed();
+        let started = Instant::now();
+        let mut decoded = Vec::with_capacity(raw.len());
+        GzDecoder::new(compressed.as_slice())
+            .read_to_end(&mut decoded)
+            .expect("gunzip");
+        let decode = started.elapsed();
+        assert_eq!(decoded, raw, "gzip round-trip for {name}");
+        let saving = (raw.len() as f64 - compressed.len() as f64) * 100.0 / raw.len() as f64;
+        println!(
+            "[bench] compression.{name}: raw={} B gzip={} B ({saving:+.1}%) enc={:.2} ms dec={:.2} ms",
+            raw.len(),
+            compressed.len(),
+            encode.as_secs_f64() * 1000.0,
+            decode.as_secs_f64() * 1000.0,
+        );
+    }
+
+    /// The largest cached originals of one extension: real provider art is a
+    /// better gzip sample than a generated pattern, which can compress well by
+    /// accident. Returns `(label, bytes)` tuples, empty when the cache is absent.
+    fn cached_originals(extension: &str, limit: usize) -> Vec<(String, Vec<u8>)> {
+        let Ok(dir) = crate::db::covers_dir() else {
+            return Vec::new();
+        };
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            return Vec::new();
+        };
+        let mut files: Vec<(u64, PathBuf)> = entries
+            .flatten()
+            .filter_map(|entry| {
+                let path = entry.path();
+                let name = path.file_name()?.to_str()?.to_string();
+                if !name.starts_with("raw-") || !name.ends_with(&format!(".{extension}")) {
+                    return None;
+                }
+                let size = entry.metadata().ok()?.len();
+                Some((size, path))
+            })
+            .collect();
+        files.sort_by_key(|(size, _)| std::cmp::Reverse(*size));
+        files
+            .into_iter()
+            .take(limit)
+            .enumerate()
+            .filter_map(|(index, (_, path))| {
+                let bytes = std::fs::read(&path).ok()?;
+                Some((format!("real_{extension}_sample_{}", index + 1), bytes))
+            })
+            .collect()
+    }
+
+    fn encode_image(image: &image::DynamicImage, format: image::ImageFormat) -> Vec<u8> {
+        let mut bytes = Cursor::new(Vec::new());
+        image
+            .write_to(&mut bytes, format)
+            .expect("encode benchmark image");
+        bytes.into_inner()
+    }
+
+    let jpeg_samples = cached_originals("jpg", 3);
+    let png_samples = cached_originals("png", 2);
+    if jpeg_samples.is_empty() {
+        let cover = image::RgbImage::from_fn(1024, 1024, |x, y| {
+            image::Rgb([
+                (x.wrapping_mul(31) ^ y) as u8,
+                (y.wrapping_mul(17) ^ (x / 3)) as u8,
+                ((x + y) % 251) as u8,
+            ])
+        });
+        report(
+            "jpeg_synthetic_1024",
+            &encode_image(&image::DynamicImage::ImageRgb8(cover), image::ImageFormat::Jpeg),
+        );
+    }
+    for (label, bytes) in &jpeg_samples {
+        report(label, bytes);
+    }
+    for (label, bytes) in &png_samples {
+        report(label, bytes);
+    }
+
+    // A page/window JSON payload shaped like the bridge payloads (50 rows).
+    let rows: Vec<Value> = (0..50)
+        .map(|index| {
+            json!({
+                "id": format!("song-{index:04}"),
+                "title": format!("Track title number {index}"),
+                "album": "A reasonably long album title for realism",
+                "artist": "The Artist Name",
+                "subtitle": "12 tracks · 2024",
+                "meta": "4:21",
+                "song_id": format!("song-{index:04}"),
+                "album_id": format!("album-{:02}", index / 10),
+                "kind": "song",
+                "starred": index % 7 == 0,
+            })
+        })
+        .collect();
+    report(
+        "json_page_payload",
+        &serde_json::to_vec(&rows).expect("serialize page fixture"),
+    );
+
+    // The write-only text mirror, real when present (it is a good proxy for
+    // any large tab-separated text the app could gzip).
+    let mirror = crate::db::mirror_path()
+        .ok()
+        .and_then(|path| std::fs::read(path).ok())
+        .unwrap_or_else(|| {
+            (0..5000)
+                .map(|index| {
+                    format!(
+                        "The Artist Name\tThe Album Title {}\tTrack title number {index}\tsong-{index:04}\n",
+                        index / 12
+                    )
+                })
+                .collect::<String>()
+                .into_bytes()
+        });
+    report("text_index_mirror", &mirror);
+}

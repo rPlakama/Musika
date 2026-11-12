@@ -14,6 +14,18 @@
 // You should have received a copy of the GNU General Public License
 // along with this program; if not, see <https://www.gnu.org/licenses/>.
 
+//! Subsonic HTTP transport.
+//!
+//! Compression policy: JSON API responses negotiate gzip (the `reqwest`
+//! `gzip` feature is enabled, so the shared client advertises it and
+//! transparently decodes the body before the envelope parser sees it).
+//! Binary transfers — media downloads and cover art — are already compressed
+//! files, so they explicitly ask for `identity`; negotiating an encoding there
+//! would only add an inflate step before the bytes reach the decoder.
+//!
+//! The `zstd` feature remains enabled for backends that prefer it; the server
+//! picks one of the advertised encodings.
+
 use anyhow::{Context, Result, bail};
 use reqwest::Url;
 use serde::Deserialize;
@@ -39,6 +51,16 @@ pub(crate) fn shared_http_client() -> reqwest::Client {
                 .unwrap_or_else(|_| reqwest::Client::new())
         })
         .clone()
+}
+
+/// Marks a binary-transfer request as `identity`.
+///
+/// Media streams and cover art are compressed formats already; asking for a
+/// content encoding would only add an inflate step. `reqwest` only adds its
+/// automatic `Accept-Encoding` when the request does not already carry one, so
+/// setting this header opts the request out of negotiation.
+fn identity_encoding(request: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
+    request.header(reqwest::header::ACCEPT_ENCODING, "identity")
 }
 
 /// A reusable client for the [Subsonic API](https://www.subsonic.org/pages/api.jsp).
@@ -151,11 +173,7 @@ impl SubsonicClient {
 
         let url = self.endpoint_url("download", &[("id", id.to_string())])?;
         let mut response = self
-            .send_checked(
-                self.http
-                    .get(url)
-                    .header(reqwest::header::ACCEPT_ENCODING, "identity"),
-            )
+            .send_checked(identity_encoding(self.http.get(url)))
             .await?;
         let mut file = tokio::fs::File::create(dest)
             .await
@@ -199,7 +217,7 @@ impl SubsonicClient {
         }
         let url = self.endpoint_url("getCoverArt", &params)?;
 
-        let mut request = self.http.get(url);
+        let mut request = identity_encoding(self.http.get(url));
         if let Some(last_modified) = last_modified {
             request = request.header(reqwest::header::IF_MODIFIED_SINCE, last_modified);
         } else if let Some(etag) = etag {

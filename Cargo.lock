@@ -3662,6 +3662,7 @@ version = "0.7.1"
 dependencies = [
  "anyhow",
  "ffmpeg-next",
+ "flate2",
  "futures-util",
  "gpui",
  "image",

@@ -235,3 +235,162 @@ async fn update_playlist_posts_repeated_song_id_to_remove() {
     assert!(request.contains("songIdToRemove=s2"));
     assert!(!request.contains("songIdToAdd"));
 }
+
+// --- compression negotiation ------------------------------------------------
+
+use std::io::{Read, Write};
+use std::net::{TcpListener, TcpStream};
+use std::time::Duration;
+
+/// A one-shot HTTP/1.1 server: accepts one loopback connection, captures the
+/// request head and answers with `response`. Returns the base URL the client
+/// should use and a handle carrying the captured request text.
+fn serve_once(response: Vec<u8>) -> (String, std::thread::JoinHandle<String>) {
+    let listener = TcpListener::bind(("127.0.0.1", 0)).expect("bind loopback server");
+    let address = listener.local_addr().expect("loopback address");
+    listener
+        .set_nonblocking(true)
+        .expect("non-blocking listener");
+    let handle = std::thread::spawn(move || {
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        let mut socket = loop {
+            match listener.accept() {
+                Ok((socket, _)) => break socket,
+                Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {
+                    if std::time::Instant::now() >= deadline {
+                        panic!("loopback server: no connection within 10 s");
+                    }
+                    std::thread::sleep(Duration::from_millis(5));
+                }
+                Err(err) => panic!("loopback server: accept failed: {err}"),
+            }
+        };
+        socket
+            .set_read_timeout(Some(Duration::from_secs(10)))
+            .expect("read timeout");
+        let request = read_request_head(&mut socket);
+        socket.write_all(&response).expect("write response");
+        _ = socket.flush();
+        request
+    });
+    (format!("http://{address}"), handle)
+}
+
+fn read_request_head(socket: &mut TcpStream) -> String {
+    let mut request = Vec::new();
+    let mut chunk = [0u8; 1024];
+    while !request.windows(4).any(|window| window == b"\r\n\r\n") {
+        let read = socket.read(&mut chunk).expect("read request");
+        if read == 0 {
+            break;
+        }
+        request.extend_from_slice(&chunk[..read]);
+    }
+    String::from_utf8_lossy(&request).into_owned()
+}
+
+fn response_bytes(content_type: &str, encoding: Option<&str>, body: &[u8]) -> Vec<u8> {
+    let mut response = format!(
+        "HTTP/1.1 200 OK\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n",
+        body.len()
+    );
+    if let Some(encoding) = encoding {
+        response.push_str(&format!("Content-Encoding: {encoding}\r\n"));
+    }
+    response.push_str("\r\n");
+    let mut bytes = response.into_bytes();
+    bytes.extend_from_slice(body);
+    bytes
+}
+
+/// Header value as sent on the wire (`None` when the request did not send it).
+fn sent_header(request: &str, name: &str) -> Option<String> {
+    request.lines().find_map(|line| {
+        let (key, value) = line.split_once(':')?;
+        key.eq_ignore_ascii_case(name)
+            .then(|| value.trim().to_string())
+    })
+}
+
+fn gzip(bytes: &[u8]) -> Vec<u8> {
+    let mut encoder =
+        flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+    encoder.write_all(bytes).expect("gzip fixture");
+    encoder.finish().expect("finish gzip fixture")
+}
+
+#[tokio::test]
+async fn json_calls_advertise_gzip_and_decode_it() {
+    const ENVELOPE: &[u8] = br#"{"subsonic-response":{"status":"ok","version":"1.16.1"}}"#;
+    let (base, server) = serve_once(response_bytes(
+        "application/json",
+        Some("gzip"),
+        &gzip(ENVELOPE),
+    ));
+    let client = SubsonicClient::new(&base, "alice", "secret");
+
+    let body: serde_json::Value = client
+        .call("ping", &[])
+        .await
+        .expect("a gzip JSON body decodes transparently");
+    assert_eq!(body.get("version").and_then(|value| value.as_str()), Some("1.16.1"));
+
+    let request = server.join().expect("loopback server");
+    let encoding = sent_header(&request, "accept-encoding")
+        .expect("the JSON request must advertise an Accept-Encoding it can decode");
+    assert!(
+        encoding.to_ascii_lowercase().contains("gzip"),
+        "JSON request advertised {encoding:?}, expected gzip"
+    );
+}
+
+#[tokio::test]
+async fn cover_requests_are_identity_and_pass_the_bytes_through() {
+    const COVER: &[u8] = b"\xff\xd8\xff\xe0fake-jpeg-cover";
+    let (base, server) = serve_once(response_bytes("image/jpeg", None, COVER));
+    let client = SubsonicClient::new(&base, "alice", "secret");
+
+    let art = client
+        .get_cover_art("al-1", Some(1024), None, None)
+        .await
+        .expect("cover art fetch");
+    assert_eq!(art.bytes, COVER);
+    assert_eq!(art.content_type.as_deref(), Some("image/jpeg"));
+    assert!(!art.not_modified);
+
+    let request = server.join().expect("loopback server");
+    assert_eq!(
+        sent_header(&request, "accept-encoding").as_deref(),
+        Some("identity"),
+        "cover bytes are already compressed; the request must not negotiate an encoding"
+    );
+}
+
+#[tokio::test]
+async fn media_download_requests_are_identity() {
+    const AUDIO: &[u8] = b"fake-flac-bytes";
+    let (base, server) = serve_once(response_bytes("audio/flac", None, AUDIO));
+    let client = SubsonicClient::new(&base, "alice", "secret");
+    let dir = std::env::temp_dir().join(format!(
+        "musika-http-media-{}-{}",
+        std::process::id(),
+        crate::consts::now_nanos()
+    ));
+    std::fs::create_dir_all(&dir).expect("temp download dir");
+    let dest = dir.join("track.flac");
+
+    let written = client
+        .download_media_to("s1", &dest)
+        .await
+        .expect("media download");
+    assert_eq!(written, AUDIO.len() as u64);
+    assert_eq!(std::fs::read(&dest).expect("downloaded media"), AUDIO);
+    _ = std::fs::remove_dir_all(&dir);
+
+    let request = server.join().expect("loopback server");
+    assert_eq!(
+        sent_header(&request, "accept-encoding").as_deref(),
+        Some("identity"),
+        "media bytes are already compressed; the request must not negotiate an encoding"
+    );
+}

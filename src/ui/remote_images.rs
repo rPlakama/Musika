@@ -9,12 +9,19 @@
 //! GPUI polls its image futures on its own worker pool, where no Tokio reactor
 //! exists. Every reqwest call is therefore moved onto the application runtime
 //! and only the oneshot result is awaited from the GPUI future.
+//!
+//! Requests opt out of content-encoding negotiation (`Accept-Encoding:
+//! identity`): these are image bytes, already compressed, and the JSON API
+//! gzip path is owned by [`crate::http_client`].
 
 use std::io::Read;
 use std::sync::Arc;
 
 use futures_util::future::BoxFuture;
-use gpui::http_client::{AsyncBody, HttpClient, Inner, Request, Response, Url, http::HeaderValue};
+use gpui::http_client::{
+    AsyncBody, HttpClient, Inner, Request, Response, Url, http::HeaderValue,
+    http::header::ACCEPT_ENCODING,
+};
 
 pub struct ReqwestHttpClient {
     client: reqwest::Client,
@@ -44,8 +51,14 @@ impl HttpClient for ReqwestHttpClient {
 
     fn send(
         &self,
-        request: Request<AsyncBody>,
+        mut request: Request<AsyncBody>,
     ) -> BoxFuture<'static, anyhow::Result<Response<AsyncBody>>> {
+        // Cover streams are already-compressed JPEG/PNG bytes; the crate-wide
+        // `gzip` feature would otherwise advertise gzip for them. Ask for the
+        // raw bytes so the image decoder never sees an inflate step first.
+        request
+            .headers_mut()
+            .insert(ACCEPT_ENCODING, HeaderValue::from_static("identity"));
         let client = self.client.clone();
         let (tx, rx) = tokio::sync::oneshot::channel();
         crate::app::runtime().spawn(async move {

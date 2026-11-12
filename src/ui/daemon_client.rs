@@ -698,9 +698,15 @@ macro_rules! bridge_client {
     ($( $name:ident ( $( $field:ident : $ty:ty ),* $(,)? ), )*) => {
         impl RemoteBridge {
             $(
-                #[allow(clippy::too_many_arguments)]
+                #[allow(
+                    clippy::too_many_arguments,
+                    reason = "generated signatures mirror the RPC parameter list"
+                )]
                 pub fn $name(&self $(, $field: $ty)*) -> u32 {
-                    #[allow(unused_mut)]
+                    #[allow(
+                        unused_mut,
+                        reason = "generated methods with no arguments do not need the mutation that others do"
+                    )]
                     let mut args = serde_json::Map::new();
                     $(
                         args.insert(

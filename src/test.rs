@@ -20,7 +20,10 @@
 //! each module in `test/` imports its own production module and keeps that
 //! module's original test helpers and cases.
 
-#![allow(unused_imports)]
+#![expect(
+    unused_imports,
+    reason = "the shared test prelude is imported once for every module under test/"
+)]
 
 mod common;
 

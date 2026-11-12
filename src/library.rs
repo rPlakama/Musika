@@ -19,7 +19,10 @@
 //! The tables are replaced wholesale on every real sync; deletions on the
 //! server are therefore reflected locally without any diffing.
 
-#![allow(dead_code)] // Browse queries are prepared before the library UI lands.
+#![expect(
+    dead_code,
+    reason = "browse queries are prepared before the library UI lands"
+)]
 
 use std::collections::{HashMap, HashSet};
 

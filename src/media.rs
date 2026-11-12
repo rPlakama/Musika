@@ -24,7 +24,10 @@
 
 // The fetcher/prefetch/status consumers land with CACHE-2/3/7; until then some
 // of this surface is exercised by tests only (same stance as `covers.rs`).
-#![allow(dead_code)]
+#![expect(
+    dead_code,
+    reason = "media cache consumers land with CACHE-2/3/7; tests exercise the surface first"
+)]
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -101,7 +104,10 @@ async fn get(pool: &SqlitePool, song_id: &str) -> Result<Option<Stored>> {
 }
 
 /// Upserts one media row. `file` is the blob name relative to its tier dir.
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "parameters mirror the media row; a wrapper struct would restate it"
+)]
 pub async fn record(
     pool: &SqlitePool,
     song_id: &str,
@@ -161,7 +167,10 @@ pub fn temp_path(kind: &str) -> Result<PathBuf> {
 /// Adopts an already-streamed temporary blob: renames it to the canonical
 /// name and records the row. The source must live in the same tier directory
 /// (see [`temp_path`]).
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "parameters mirror the media row; a wrapper struct would restate it"
+)]
 pub async fn store_streamed(
     pool: &SqlitePool,
     song_id: &str,
@@ -191,7 +200,10 @@ pub async fn store_streamed(
 }
 
 /// The directory-taking half of [`store_streamed`] (also the test seam).
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "parameters mirror the media row; a wrapper struct would restate it"
+)]
 pub(crate) async fn store_in_dir(
     pool: &SqlitePool,
     dir: &Path,

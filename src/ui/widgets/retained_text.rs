@@ -32,7 +32,10 @@ struct TextKey {
 }
 
 impl TextKey {
-    #[allow(clippy::too_many_arguments)]
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "the constructor mirrors the cached text inputs; a builder would obscure the cache key"
+    )]
     fn new(
         title: SharedString,
         subtitle: SharedString,
@@ -177,7 +180,10 @@ pub(crate) struct RetainedText {
 }
 
 impl RetainedText {
-    #[allow(clippy::too_many_arguments)]
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "the constructor mirrors the layout/text inputs; grouping them would add a throwaway struct"
+    )]
     pub(crate) fn new(
         id_name: &'static str,
         index: usize,

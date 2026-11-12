@@ -21,7 +21,10 @@
 //! Vulkan/GPU information and startup timings. Release builds do not include
 //! any of it.
 
-#![allow(dead_code)]
+#![expect(
+    dead_code,
+    reason = "the debug module compiles into both the test and debug-UI surfaces"
+)]
 
 use std::process::Command;
 use std::time::Instant;

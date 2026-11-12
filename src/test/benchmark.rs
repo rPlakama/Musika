@@ -91,7 +91,10 @@ fn bench_cover_load() {
         .save_with_format(&thumb_path, ImageFormat::Jpeg)
         .expect("save thumb");
 
-    #[allow(unused_mut)]
+    #[expect(
+        unused_mut,
+        reason = "the binding is mutated only under the io-uring feature, which is off by default"
+    )]
     let mut readers: Vec<(&str, Reader)> = vec![("std", read_std)];
     #[cfg(feature = "io-uring")]
     readers.push(("io_uring", crate::io_uring_read::read_file));

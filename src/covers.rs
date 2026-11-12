@@ -28,7 +28,10 @@
 //! If the server provides no validators, the downloaded bytes are compared by
 //! hash so an unchanged image is not rewritten.
 
-#![allow(dead_code)]
+#![expect(
+    dead_code,
+    reason = "cover-cache maintenance surface is exercised by tests first; consumers land incrementally"
+)]
 
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -273,7 +276,6 @@ async fn refresh_inner(
 /// Stores one completed fetch: revalidation touch, content-addressed write,
 /// URI-field upsert and thumbnail job. Split out of [`refresh_inner`] so the
 /// network chunk and the disk/database step stay one short result apart.
-#[allow(clippy::too_many_arguments)]
 pub(crate) async fn apply_fetched(
     pool: &SqlitePool,
     dir: &Path,
@@ -440,7 +442,10 @@ async fn touch(pool: &SqlitePool, id: &str) -> Result<()> {
     Ok(())
 }
 
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "parameters mirror the cover row; a wrapper struct would restate it"
+)]
 async fn upsert(
     pool: &SqlitePool,
     id: &str,

@@ -24,7 +24,10 @@
 
 // The prefetch/status consumers land with CACHE-2/7; until then some of this
 // surface is exercised by tests only (same stance as `covers.rs`).
-#![allow(dead_code)]
+#![expect(
+    dead_code,
+    reason = "download prefetch/status consumers land with CACHE-2/7; tests exercise the surface first"
+)]
 
 use std::collections::{HashMap, HashSet};
 

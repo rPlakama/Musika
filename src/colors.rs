@@ -28,7 +28,7 @@
 //! the MIT/Apache `material-colors` crate and reimplement the surrounding
 //! pipeline, honoring DMS's seed/scheme split (`MATUGENSTUDY.md`).
 
-#![allow(dead_code)] // some milestone APIs (previews/settings) land later.
+#![expect(dead_code, reason = "some milestone APIs (previews/settings) land later")]
 
 macro_rules! name_enum {
     (
@@ -70,12 +70,13 @@ mod rgb;
 pub(crate) mod scheme;
 pub(crate) mod seed;
 
-#[allow(unused_imports)]
+#[expect(
+    unused_imports,
+    reason = "re-export facade: call sites import through colors::*, not the inner module"
+)]
 pub use engine::{
     CoverScheme, Options, fetch, fetch_into, from_seed, generate_from_path, hash_roles, invalidate,
     invalidate_with, purge, purge_with,
 };
-#[allow(unused_imports)]
 pub use scheme::{Spec, VariantChoice};
-#[allow(unused_imports)]
 pub use seed::SourceMode;

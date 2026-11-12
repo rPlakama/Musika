@@ -583,7 +583,10 @@ pub async fn scan_dir(dbs: &Dbs, dir: &Path) -> Result<Vec<crate::model::Row>> {
     list(dbs).await
 }
 
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "parameters mirror the playlist file/database row; a wrapper struct would restate it"
+)]
 async fn store_file(
     dbs: &Dbs,
     id: &str,

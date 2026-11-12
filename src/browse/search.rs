@@ -421,7 +421,10 @@ pub(crate) async fn search_results_index(
 /// Decorate the engine hits with the live library state that the index's
 /// sync-time snapshot cannot know: cover URLs, the favourite overlay and
 /// ratings, and the playlist column.
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "parameters are the independent search/query overlays; a struct would add a second vocabulary"
+)]
 async fn decorate(
     dbs: &crate::db::Dbs,
     query: &str,

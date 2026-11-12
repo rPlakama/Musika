@@ -1,6 +1,9 @@
 // Transitional: legacy backend helpers remain compiled until they are
 // cleaned up or reused by the GPUI front end.
-#![allow(dead_code)]
+#![expect(
+    dead_code,
+    reason = "legacy backend helpers remain compiled until they are cleaned up or reused by the GPUI front end"
+)]
 #![cfg_attr(
     test,
     allow(

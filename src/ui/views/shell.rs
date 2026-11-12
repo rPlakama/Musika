@@ -376,7 +376,7 @@ impl AppRoot {
                     cx,
                 ));
             }
-            _ => {}
+            SuperiorMode::Home | SuperiorMode::Playlist => {}
         }
         row.into_any_element()
     }

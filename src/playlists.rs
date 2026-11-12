@@ -597,7 +597,7 @@ async fn store_file(
     songs: &[SongRef],
     matcher: &Matcher,
 ) -> Result<()> {
-    let dir = file.parent().unwrap_or(Path::new("."));
+    let dir = file.parent().unwrap_or_else(|| Path::new("."));
     let now = crate::consts::now_secs();
 
     let mut duration_total: i64 = 0;
@@ -1304,7 +1304,7 @@ async fn upsert_local_m3u(
         Vec::new()
     };
     let matcher = Matcher::new(&songs);
-    let dir = path.parent().unwrap_or(Path::new("."));
+    let dir = path.parent().unwrap_or_else(|| Path::new("."));
     let incoming = dedup_keep_last(song_ids);
     let wanted: std::collections::HashSet<&str> = incoming.iter().map(String::as_str).collect();
     let mut kept: Vec<M3uEntry> = entries
@@ -1346,7 +1346,7 @@ pub async fn delete_playlist(dbs: &Dbs, playlist_query: &str) -> Result<(String,
         let path = local_playlist_path(&playlist)?;
         std::fs::remove_file(&path)
             .with_context(|| format!("removing the playlist file {}", path.display()))?;
-        let dir = path.parent().unwrap_or(Path::new("."));
+        let dir = path.parent().unwrap_or_else(|| Path::new("."));
         scan_dir(dbs, dir).await?;
     } else {
         let client = crate::session::client(dbs)
@@ -1414,7 +1414,7 @@ pub async fn move_playlist_entry(
         let entry = entries.remove(from);
         entries.insert(to, entry);
         write_m3u_entries(&path, &entries)?;
-        let dir = path.parent().unwrap_or(Path::new("."));
+        let dir = path.parent().unwrap_or_else(|| Path::new("."));
         scan_dir(dbs, dir).await?;
     } else {
         let mut ordered = cached_playlist_song_ids(dbs, &playlist.id).await?;
@@ -1461,7 +1461,7 @@ pub async fn move_playlist_block(
         let block: Vec<M3uEntry> = entries.drain(start..end).collect();
         entries.splice(new_start..new_start, block);
         write_m3u_entries(&path, &entries)?;
-        let dir = path.parent().unwrap_or(Path::new("."));
+        let dir = path.parent().unwrap_or_else(|| Path::new("."));
         scan_dir(dbs, dir).await?;
     } else {
         let mut ordered = cached_playlist_song_ids(dbs, &playlist.id).await?;
@@ -1562,7 +1562,7 @@ async fn remove_local_m3u(
     let entries = parse_m3u(&text);
     let songs = load_songs(&dbs.library).await?;
     let matcher = Matcher::new(&songs);
-    let dir = path.parent().unwrap_or(Path::new("."));
+    let dir = path.parent().unwrap_or_else(|| Path::new("."));
     let remove: std::collections::HashSet<&str> = remove_ids.iter().map(String::as_str).collect();
 
     let mut out = String::from("#EXTM3U\n");
@@ -1612,7 +1612,7 @@ async fn remove_positions_local_m3u(
     }
     std::fs::write(path, out)
         .with_context(|| format!("writing the playlist file {}", path.display()))?;
-    let dir = path.parent().unwrap_or(Path::new("."));
+    let dir = path.parent().unwrap_or_else(|| Path::new("."));
     scan_dir(dbs, dir).await?;
     Ok(())
 }

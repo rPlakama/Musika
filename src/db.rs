@@ -749,9 +749,9 @@ mod options_tests {
         assert_eq!(
             warm_targets([library.clone(), media.clone()]),
             vec![
-                library.clone(),
+                library,
                 dir.join("library.db-wal"),
-                media.clone(),
+                media,
                 dir.join("media.db-wal"),
             ]
         );

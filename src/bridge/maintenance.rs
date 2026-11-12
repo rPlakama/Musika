@@ -118,7 +118,9 @@ impl Bridge {
                         .unwrap_or((false, 0));
                     (cached, starred, rating)
                 }
-                _ => (false, false, 0),
+                crate::model::PageKind::Playlist | crate::model::PageKind::Radio => {
+                    (false, false, 0)
+                }
             };
             _ = tx.send(Event::PageContainerState {
                 kind,

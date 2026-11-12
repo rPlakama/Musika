@@ -485,7 +485,7 @@ async fn decorate(
             let (starred, rating) = album_states
                 .get(&album.id)
                 .map(|(starred, rating)| (*starred, *rating))
-                .unwrap_or((album.starred.is_some(), album.rating));
+                .unwrap_or_else(|| (album.starred.is_some(), album.rating));
             SearchAlbum {
                 id: album.id.clone(),
                 title: album.title.clone(),

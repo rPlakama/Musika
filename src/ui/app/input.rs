@@ -402,7 +402,7 @@ impl AppRoot {
     /// Applies one held-key group as a single absolute op. One absolute target
     /// per key release: the core owns the playhead and the volume, so a held key
     /// (or a rapidly alternating pair) coalesces into one `Seek`/`SetVolume`.
-    pub(in crate::ui) fn apply_playback_hold(&mut self, hold: KeyHold) {
+    pub(in crate::ui) fn apply_playback_hold(&self, hold: KeyHold) {
         match hold.kind {
             HoldKind::Seek => {
                 let target = (self.player.position_now() + hold.delta).max(0.0);

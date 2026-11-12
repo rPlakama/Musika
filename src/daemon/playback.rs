@@ -288,7 +288,7 @@ fn run(
         engine: None,
         forwarder: None,
         service_tx: engine_tx,
-        outputs: outputs.clone(),
+        outputs,
         last_engine_attempt: None,
         last_error: None,
     };
@@ -337,7 +337,7 @@ fn run(
                         ack = Some((Some(conn), req, false, ErrorCode::EngineUnavailable));
                     } else {
                         let outcome = service.core.apply(command);
-                        apply_outcome(&mut service, &outcome, &mut force, &mut queue_reset);
+                        apply_outcome(&service, &outcome, &mut force, &mut queue_reset);
                         ack = Some((Some(conn), req, true, ErrorCode::Internal));
                     }
                 } else {
@@ -358,7 +358,7 @@ fn run(
                 );
                 if !needs_audio || service.ensure_engine() {
                     let outcome = service.core.apply(op);
-                    apply_outcome(&mut service, &outcome, &mut force, &mut queue_reset);
+                    apply_outcome(&service, &outcome, &mut force, &mut queue_reset);
                 } else {
                     _ = service.outputs.send(PlaybackOutput::Error(
                         "the audio engine is unavailable".to_string(),
@@ -378,19 +378,19 @@ fn run(
                 let paused = paused || !service.ensure_engine();
                 if let Some(volume) = volume {
                     let outcome = service.core.apply(CoreCommand::SetVolume(volume));
-                    apply_outcome(&mut service, &outcome, &mut force, &mut queue_reset);
+                    apply_outcome(&service, &outcome, &mut force, &mut queue_reset);
                 }
                 if let Some(muted) = muted {
                     let outcome = service.core.apply(CoreCommand::SetMuted(muted));
-                    apply_outcome(&mut service, &outcome, &mut force, &mut queue_reset);
+                    apply_outcome(&service, &outcome, &mut force, &mut queue_reset);
                 }
                 let outcome = service.core.load(tracks, start, paused);
-                apply_outcome(&mut service, &outcome, &mut force, &mut queue_reset);
+                apply_outcome(&service, &outcome, &mut force, &mut queue_reset);
                 if let Some(position) = position
                     && position > 0.0
                 {
                     let outcome = service.core.apply(CoreCommand::Seek(position));
-                    apply_outcome(&mut service, &outcome, &mut force, &mut queue_reset);
+                    apply_outcome(&service, &outcome, &mut force, &mut queue_reset);
                 }
                 force = true;
                 queue_reset = true;
@@ -409,7 +409,7 @@ fn run(
                     service.last_engine_attempt = None;
                     if service.ensure_engine() {
                         let outcome = service.core.apply(CoreCommand::Recover { position });
-                        apply_outcome(&mut service, &outcome, &mut force, &mut queue_reset);
+                        apply_outcome(&service, &outcome, &mut force, &mut queue_reset);
                         service.sync_audio();
                         _ = service.outputs.send(PlaybackOutput::Error(
                             "PipeWire restarted; playback resumed".to_string(),
@@ -417,14 +417,20 @@ fn run(
                     }
                     force = true;
                 }
-                event => {
+                event @ (EngineEvent::FirstPcm
+                | EngineEvent::Loaded { .. }
+                | EngineEvent::Boundary { .. }
+                | EngineEvent::Ended
+                | EngineEvent::Failed { .. }
+                | EngineEvent::SinkRecovered
+                | EngineEvent::LoadingCleared) => {
                     if let EngineEvent::Failed { message } = &event {
                         service.last_error = Some(message.clone());
                         _ = service.outputs.send(PlaybackOutput::Error(message.clone()));
                     }
                     let now = crate::linux::monotonic_ns();
                     let outcome = service.core.on_engine(event, now);
-                    apply_outcome(&mut service, &outcome, &mut force, &mut queue_reset);
+                    apply_outcome(&service, &outcome, &mut force, &mut queue_reset);
                 }
             },
         }
@@ -460,7 +466,7 @@ fn run(
 }
 
 fn apply_outcome(
-    service: &mut ServiceState,
+    service: &ServiceState,
     outcome: &Outcome,
     force: &mut bool,
     queue_reset: &mut bool,

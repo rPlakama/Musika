@@ -838,7 +838,7 @@ impl AppRoot {
     }
 
     pub(in crate::ui) fn on_volume_up(
-        &mut self,
+        &self,
         _: &VolumeUp,
         _window: &mut Window,
         cx: &mut Context<Self>,
@@ -848,7 +848,7 @@ impl AppRoot {
     }
 
     pub(in crate::ui) fn on_volume_down(
-        &mut self,
+        &self,
         _: &VolumeDown,
         _window: &mut Window,
         cx: &mut Context<Self>,
@@ -858,7 +858,7 @@ impl AppRoot {
     }
 
     pub(in crate::ui) fn on_seek_back(
-        &mut self,
+        &self,
         _: &SeekBack,
         _window: &mut Window,
         _cx: &mut Context<Self>,
@@ -867,7 +867,7 @@ impl AppRoot {
     }
 
     pub(in crate::ui) fn on_seek_forward(
-        &mut self,
+        &self,
         _: &SeekForward,
         _window: &mut Window,
         _cx: &mut Context<Self>,
@@ -1286,7 +1286,7 @@ impl AppRoot {
 
     /// Scroll the description reader by `delta` pixels (positive = down),
     /// clamped to the real content range tracked by the scroll handle.
-    fn scroll_description(&mut self, delta: f32) {
+    fn scroll_description(&self, delta: f32) {
         // The handle stores the offset negatively (content moved up); the
         // tracked `max_offset` is the positive scroll range.
         let current = -f32::from(self.description_scroll.offset().y);
@@ -1297,7 +1297,7 @@ impl AppRoot {
     }
 
     /// Page the description reader: 90% of the visible height per motion.
-    fn page_description(&mut self, down: bool) {
+    fn page_description(&self, down: bool) {
         let step = self.description_viewport() * DESCRIPTION_PAGE_RATIO;
         self.scroll_description(if down { step } else { -step });
     }

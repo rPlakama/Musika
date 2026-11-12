@@ -165,6 +165,10 @@ fn dms_scheme(hct: Hct, variant: Variant, contrast: f64, is_dark: bool) -> Dynam
         is_dark,
     );
 
+    #[expect(
+        clippy::wildcard_enum_match_arm,
+        reason = "the scrutinee is a foreign (material_colors) enum; any other spec-2025 variant keeps its own palettes"
+    )]
     let (rules, chromas) = match variant {
         Variant::TonalSpot => (Variant::Vibrant, (40.0, 28.0, 36.0)),
         Variant::Expressive => (Variant::TonalSpot, (48.0, 40.0, 48.0)),

@@ -141,7 +141,7 @@ struct Bench {
 }
 
 impl Bench {
-    fn new(rows: usize, cx: &mut Context<Self>) -> Self {
+    fn new(rows: usize, cx: &Context<Self>) -> Self {
         let rows = make_rows(rows);
         Self {
             mode: Mode::Uniform,

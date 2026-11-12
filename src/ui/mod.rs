@@ -632,12 +632,12 @@ impl TopBarAction {
             Self::Download => match mode {
                 SuperiorMode::Album => "Download album",
                 SuperiorMode::Artist => "Download artist",
-                _ => "Download",
+                SuperiorMode::Home | SuperiorMode::Playlist | SuperiorMode::Radio => "Download",
             },
             Self::Favorite => match mode {
                 SuperiorMode::Album => "Favorite album",
                 SuperiorMode::Artist => "Favorite artist",
-                _ => "Favorite",
+                SuperiorMode::Home | SuperiorMode::Playlist | SuperiorMode::Radio => "Favorite",
             },
             Self::Tool => "Tool",
         }
@@ -1020,10 +1020,13 @@ impl AppRoot {
                 let keep = this.update(cx, |this, cx| {
                     let mut notify = true;
                     match update {
-                        UiUpdate::Event(Event::Command(command)) => {
-                            this.handle_command(&command, cx);
+                        UiUpdate::Event(event) => {
+                            if let Event::Command(command) = event.as_ref() {
+                                this.handle_command(command, cx);
+                            } else {
+                                this.apply(*event);
+                            }
                         }
-                        UiUpdate::Event(event) => this.apply(event),
                         UiUpdate::State(state) => {
                             // Playback frames arrive on transport changes only;
                             // the anchor carries the position between them.

@@ -494,7 +494,7 @@ fn process(stream: &pw::stream::Stream, ctx: &mut RtContext) {
         return;
     }
     let ptr = bytes.as_mut_ptr() as *mut i16;
-    if (ptr as usize) % std::mem::align_of::<i16>() != 0 {
+    if !(ptr as usize).is_multiple_of(std::mem::align_of::<i16>()) {
         return;
     }
     // SAFETY: the PipeWire buffer is at least `max_frames * 2` samples long and

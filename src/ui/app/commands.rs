@@ -7,7 +7,7 @@ impl AppRoot {
     pub(in crate::ui) fn execute_shuffle(&mut self, target: ShuffleTarget) {
         match target {
             ShuffleTarget::Queue => {
-                if self.player.len() == 0 {
+                if self.player.is_empty() {
                     self.push_toast("The queue is empty.".to_string(), ToastKind::Error, None);
                     return;
                 }

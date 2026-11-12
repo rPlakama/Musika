@@ -231,7 +231,7 @@ impl RetainedText {
         )
     }
 
-    fn shape(&self, width: Pixels, window: &mut Window) -> CachedText {
+    fn shape(&self, width: Pixels, window: &Window) -> CachedText {
         let title_font = if self.selected {
             gpui::font("Overused Grotesk Roman").bold()
         } else {
@@ -302,7 +302,7 @@ fn shape_text(
     width: Pixels,
     line_clamp: usize,
     compact: bool,
-    window: &mut Window,
+    window: &Window,
 ) -> Option<CachedLine> {
     if text.is_empty() {
         return None;

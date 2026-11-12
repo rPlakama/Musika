@@ -117,7 +117,7 @@ impl ItemKind {
     pub fn suggestion_kind(self) -> &'static str {
         match self {
             Self::Song => "track",
-            _ => self.api_kind(),
+            Self::Album | Self::Artist | Self::Playlist | Self::Radio => self.api_kind(),
         }
     }
 }
@@ -173,7 +173,7 @@ impl RowKind {
     pub fn suggestion_kind(self) -> &'static str {
         match self {
             Self::Song => "track",
-            _ => self.api_kind(),
+            Self::Album | Self::Artist | Self::Playlist => self.api_kind(),
         }
     }
 }

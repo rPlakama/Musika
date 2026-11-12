@@ -157,13 +157,16 @@ pub(crate) fn remember_layout(key: &str, layout: &str) {
     }
     let mut store = store();
     store.hydrated = true;
-    let entry = store.entries.entry(key.to_string()).or_insert(ScrollEntry {
-        index: -1,
-        y: 0.0,
-        scope: -1,
-        layout: String::new(),
-        saved_at: now_ms(),
-    });
+    let entry = store
+        .entries
+        .entry(key.to_string())
+        .or_insert_with(|| ScrollEntry {
+            index: -1,
+            y: 0.0,
+            scope: -1,
+            layout: String::new(),
+            saved_at: now_ms(),
+        });
     entry.layout = layout.to_string();
     entry.saved_at = now_ms();
 }

@@ -378,7 +378,7 @@ impl TextModal {
                 background_color: Some(rgb(palette::primary_container()).into()),
                 ..Default::default()
             };
-            StyledText::new(display.text.clone())
+            StyledText::new(display.text)
                 .with_highlights([(range, highlight)])
                 .into_any_element()
         } else if style.caret {
@@ -397,7 +397,7 @@ impl TextModal {
                 .child(after.to_string())
                 .into_any_element()
         } else {
-            display.text.clone().into_any_element()
+            display.text.into_any_element()
         };
 
         let text_color = rgb(palette::on_surface());

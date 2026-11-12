@@ -54,7 +54,16 @@ impl AppRoot {
                 PlayerOp::SeekRelative(offset) => self.player.seek_relative(offset),
                 PlayerOp::CycleRepeat => self.player.cycle_repeat(),
                 PlayerOp::ShuffleQueue => self.player.shuffle_queue(),
-                _ => unreachable!("IPC playback mapping returned a non-playback op"),
+                PlayerOp::SetMuted(_)
+                | PlayerOp::Jump(_)
+                | PlayerOp::Remove(_)
+                | PlayerOp::RemoveMany(_)
+                | PlayerOp::Move { .. }
+                | PlayerOp::MoveBlock { .. }
+                | PlayerOp::SetTrackFavorite { .. }
+                | PlayerOp::Resync => {
+                    unreachable!("IPC playback mapping returned a non-playback op")
+                }
             }
             cx.notify();
             return;
@@ -305,7 +314,7 @@ impl AppRoot {
     /// Runs a read-only text query (`status`/`queue`) against the core socket
     /// off the UI thread and echoes the reply in a toast. The core does not
     /// forward these commands, so `:` is the only UI surface that runs them.
-    fn query_ipc(&mut self, line: &'static str, cx: &mut Context<Self>) {
+    fn query_ipc(&self, line: &'static str, cx: &Context<Self>) {
         cx.spawn(async move |this, cx| {
             let reply = cx
                 .background_executor()

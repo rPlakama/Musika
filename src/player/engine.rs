@@ -212,7 +212,7 @@ impl Drop for Engine {
 }
 
 fn engine_thread(
-    mut native: Native,
+    native: Native,
     commands: Receiver<AudioCommand>,
     events: Sender<EngineEvent>,
     clock: Arc<ClockState>,
@@ -236,7 +236,7 @@ fn engine_thread(
         let mut disconnected = false;
         loop {
             match commands.try_recv() {
-                Ok(command) => apply_command(&mut native, command, &mut paused),
+                Ok(command) => apply_command(&native, command, &mut paused),
                 Err(TryRecvError::Empty) => break,
                 Err(TryRecvError::Disconnected) => {
                     disconnected = true;
@@ -248,7 +248,7 @@ fn engine_thread(
             break;
         }
 
-        if !pump(&mut native, &events, &mut paused, &mut sink_failed) {
+        if !pump(&native, &events, &paused, &mut sink_failed) {
             break;
         }
 
@@ -265,7 +265,7 @@ fn engine_thread(
 
 /// Applies one transport command. `paused` mirrors the transport so the wait
 /// cadence and the loading heuristic stay honest.
-fn apply_command(native: &mut Native, command: AudioCommand, paused: &mut bool) {
+fn apply_command(native: &Native, command: AudioCommand, paused: &mut bool) {
     match command {
         AudioCommand::Load {
             url,
@@ -301,29 +301,29 @@ fn apply_command(native: &mut Native, command: AudioCommand, paused: &mut bool) 
 /// Drains the native transport into events. Returns `false` when the event
 /// receiver closed (the engine must end).
 fn pump(
-    native: &mut Native,
+    native: &Native,
     events: &Sender<EngineEvent>,
-    paused: &mut bool,
+    paused: &bool,
     sink_failed: &mut bool,
 ) -> bool {
     let emit = |event: EngineEvent| -> bool { events.send(event).is_ok() };
 
-    if let Some((duration, stream_size)) = native.take_boundary_event() {
-        if !emit(EngineEvent::Boundary {
+    if let Some((duration, stream_size)) = native.take_boundary_event()
+        && !emit(EngineEvent::Boundary {
             duration,
             stream_size,
-        }) {
-            return false;
-        }
+        })
+    {
+        return false;
     }
-    if let Some((duration, stream_size, seekable)) = native.take_loaded() {
-        if !emit(EngineEvent::Loaded {
+    if let Some((duration, stream_size, seekable)) = native.take_loaded()
+        && !emit(EngineEvent::Loaded {
             duration,
             stream_size,
             seekable,
-        }) {
-            return false;
-        }
+        })
+    {
+        return false;
     }
     if native.take_first_pcm() && !emit(EngineEvent::FirstPcm) {
         return false;
@@ -355,7 +355,10 @@ fn pump(
                     return false;
                 }
             }
-            _ => {}
+            SinkState::Unconnected
+            | SinkState::Connecting
+            | SinkState::Paused
+            | SinkState::Streaming => {}
         }
     }
     // The loading heuristic moved out of `Native::poll`: the legacy player keeps

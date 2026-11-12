@@ -441,7 +441,9 @@ impl AppRoot {
                         state::RowKind::Song => {
                             row.song_id == pending.row_id || row.id == pending.row_id
                         }
-                        _ => row.id == pending.row_id,
+                        state::RowKind::Album
+                        | state::RowKind::Artist
+                        | state::RowKind::Playlist => row.id == pending.row_id,
                     })
                 });
                 if let Some(index) = reveal_index {
@@ -473,8 +475,8 @@ impl AppRoot {
                 self.reset_for_account();
                 self.login = None;
                 self.header = Some(Header {
-                    server_url: server_url.clone(),
-                    username: username.clone(),
+                    server_url,
+                    username,
                     server_type: String::new(),
                     last_sync: None,
                     counts: (0, 0, 0),

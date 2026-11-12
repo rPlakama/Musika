@@ -484,7 +484,7 @@ mod page_tests {
         let a = PageDescriptor::new(PageKind::Album, "a");
         let b = PageDescriptor::new(PageKind::Album, "b");
         let mut travel = Travel::default();
-        travel.open(a.clone());
+        travel.open(a);
         // Back from A reaches Home (no entry); the app then clears the log.
         assert!(travel.back().is_none());
         travel.clear();
@@ -509,7 +509,7 @@ mod page_tests {
         let mut travel = Travel::default();
         let album = PageDescriptor::new(PageKind::Album, "same");
         travel.open(album.clone());
-        travel.open(album.clone());
+        travel.open(album);
         assert_eq!(travel.places.len(), 1);
         assert!(travel.back().is_none());
     }

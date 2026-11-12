@@ -684,7 +684,7 @@ async fn page_json_refreshes_a_stale_subsonic_cache() {
     let server = std::thread::spawn(move || {
         let mut requests: Vec<String> = Vec::new();
         let deadline = Instant::now() + Duration::from_secs(10);
-        while requests.len() < 1 && Instant::now() < deadline {
+        while requests.is_empty() && Instant::now() < deadline {
             let (mut socket, _) = match listener.accept() {
                 Ok(pair) => pair,
                 Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {

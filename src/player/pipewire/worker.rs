@@ -493,7 +493,11 @@ fn worker_thread(
                     while let Ok(command) = rx.try_recv() {
                         match command {
                             Command::Seek(newer) => seconds = newer,
-                            command => {
+                            Command::Load { .. }
+                            | Command::Pause
+                            | Command::Resume { .. }
+                            | Command::Stop
+                            | Command::Shutdown => {
                                 pending_command = Some(command);
                                 break;
                             }
@@ -729,6 +733,10 @@ fn worker_thread(
     cancel_preload(&mut current);
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the decoder start is driven by the worker's current state plus the load parameters; grouping them into a struct would be a throwaway used by five call sites"
+)]
 fn start_decoder(
     current: &mut Current,
     url: String,

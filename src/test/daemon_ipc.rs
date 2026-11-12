@@ -61,34 +61,32 @@ impl Harness {
         proto_write(&mut stream, &Frame::new(KIND_HELLO, json_encode(&hello).unwrap())).await;
 
         let welcome = next_frame(&mut stream).await;
-        match Message::decode(&welcome).unwrap() {
-            Message::Welcome(welcome) => {
-                assert_eq!(welcome.proto, VERSION);
-                assert_eq!(welcome.session, 4242);
-                assert_eq!(welcome.features, UI_FEATURES);
-            }
-            other => panic!("expected welcome, got {other:?}"),
-        }
+        let message = Message::decode(&welcome).unwrap();
+        let Message::Welcome(welcome) = message else {
+            panic!("expected welcome, got {message:?}");
+        };
+        assert_eq!(welcome.proto, VERSION);
+        assert_eq!(welcome.session, 4242);
+        assert_eq!(welcome.features, UI_FEATURES);
 
         let event = tokio::time::timeout(Duration::from_secs(2), self.events.recv())
             .await
             .expect("connected event")
             .expect("event channel");
-        match event {
-            ServerEvent::Connected {
-                conn,
-                role,
-                features,
-                client,
-                outbox,
-            } => {
-                assert_eq!(role, Role::Ui);
-                assert_eq!(features, UI_FEATURES);
-                assert_eq!(client, "test-ui");
-                (stream, conn, outbox)
-            }
-            _ => panic!("expected a Connected event"),
-        }
+        let ServerEvent::Connected {
+            conn,
+            role,
+            features,
+            client,
+            outbox,
+        } = event
+        else {
+            panic!("expected a Connected event");
+        };
+        assert_eq!(role, Role::Ui);
+        assert_eq!(features, UI_FEATURES);
+        assert_eq!(client, "test-ui");
+        (stream, conn, outbox)
     }
 
     async fn drop_gone(&mut self, conn: u64) {
@@ -145,10 +143,11 @@ async fn handshake_rejects_a_protocol_mismatch() {
         features: UI_FEATURES,
     };
     proto_write(&mut stream, &Frame::new(KIND_HELLO, json_encode(&hello).unwrap())).await;
-    match read_message(&mut stream).await {
-        Message::Reject(reject) => assert_eq!(reject.code, ErrorCode::VersionMismatch),
-        other => panic!("expected a rejection, got {other:?}"),
-    }
+    let message = read_message(&mut stream).await;
+    let Message::Reject(reject) = message else {
+        panic!("expected a rejection, got {message:?}");
+    };
+    assert_eq!(reject.code, ErrorCode::VersionMismatch);
 }
 
 #[tokio::test]
@@ -160,10 +159,11 @@ async fn first_frame_must_be_hello() {
         monotonic_ns: 2,
     };
     proto_write(&mut stream, &Frame::new(KIND_PING, ping.encode())).await;
-    match read_message(&mut stream).await {
-        Message::Reject(reject) => assert_eq!(reject.code, ErrorCode::BadFrame),
-        other => panic!("expected a rejection, got {other:?}"),
-    }
+    let message = read_message(&mut stream).await;
+    let Message::Reject(reject) = message else {
+        panic!("expected a rejection, got {message:?}");
+    };
+    assert_eq!(reject.code, ErrorCode::BadFrame);
 }
 
 #[tokio::test]
@@ -185,30 +185,28 @@ async fn bridge_requests_are_delivered_and_replies_round_trip() {
         .await
         .expect("message")
         .expect("channel");
-    match event {
-        ServerEvent::Message {
-            conn: from,
-            message: Message::Request(decoded),
-        } => {
-            assert_eq!(from, conn);
-            assert_eq!(decoded.req, 7);
-            assert_eq!(decoded.method, "play_song");
-        }
-        _ => panic!("expected the request event"),
-    }
+    let ServerEvent::Message {
+        conn: from,
+        message: Message::Request(decoded),
+    } = event
+    else {
+        panic!("expected the request event");
+    };
+    assert_eq!(from, conn);
+    assert_eq!(decoded.req, 7);
+    assert_eq!(decoded.method, "play_song");
 
     let reply = ReplyJson::ok(7);
     outbox.send(&Frame::new(
         KIND_REPLY_JSON,
         json_encode(&reply).unwrap(),
     ));
-    match read_message(&mut stream).await {
-        Message::Reply(reply) => {
-            assert_eq!(reply.req, 7);
-            assert!(reply.ok);
-        }
-        other => panic!("expected a reply, got {other:?}"),
-    }
+    let message = read_message(&mut stream).await;
+    let Message::Reply(reply) = message else {
+        panic!("expected a reply, got {message:?}");
+    };
+    assert_eq!(reply.req, 7);
+    assert!(reply.ok);
 }
 
 #[tokio::test]
@@ -248,19 +246,20 @@ async fn activate_and_bye_are_typed_frames() {
     let mut harness = harness();
     let (mut stream, conn, outbox) = harness.handshake().await;
     outbox.send(&Frame::new(KIND_ACTIVATE, Vec::new()));
-    match read_message(&mut stream).await {
-        Message::Activate => {}
-        other => panic!("expected activate, got {other:?}"),
-    }
+    let message = read_message(&mut stream).await;
+    let Message::Activate = message else {
+        panic!("expected activate, got {message:?}");
+    };
     let bye = Bye {
         reason: ByeReason::Quit,
     };
     outbox.send(&Frame::new(KIND_BYE, json_encode(&bye).unwrap()));
     outbox.close();
-    match read_message(&mut stream).await {
-        Message::Bye(bye) => assert_eq!(bye.reason, ByeReason::Quit),
-        other => panic!("expected bye, got {other:?}"),
-    }
+    let message = read_message(&mut stream).await;
+    let Message::Bye(bye) = message else {
+        panic!("expected bye, got {message:?}");
+    };
+    assert_eq!(bye.reason, ByeReason::Quit);
     harness.drop_gone(conn).await;
 }
 

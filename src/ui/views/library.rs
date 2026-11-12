@@ -3,7 +3,7 @@
 use super::super::*;
 
 impl AppRoot {
-    pub(in crate::ui) fn list(&self, cx: &Context<Self>, window: &mut Window) -> impl IntoElement {
+    pub(in crate::ui) fn list(&self, cx: &Context<Self>, window: &Window) -> impl IntoElement {
         let title = self.view.scope.label();
         let hint = "(Shift-J/K) cycle filter";
         let order = format!("Shift-H / Shift-L  /  {}", self.view.order_label());
@@ -235,7 +235,10 @@ impl AppRoot {
             let id_name = match paint.surface {
                 LineSurface::Library => "retained-cover-library",
                 LineSurface::Page => "retained-cover-page",
-                _ => "retained-cover",
+                LineSurface::Search
+                | LineSurface::Queue
+                | LineSurface::Lyrics
+                | LineSurface::Status => "retained-cover",
             };
             body = body.child(div().mr_3().child(RetainedCover::new(
                 id_name,
@@ -249,7 +252,10 @@ impl AppRoot {
         let id_name = match paint.surface {
             LineSurface::Library => "retained-text-library",
             LineSurface::Page => "retained-text-page",
-            _ => "retained-text",
+            LineSurface::Search
+            | LineSurface::Queue
+            | LineSurface::Lyrics
+            | LineSurface::Status => "retained-text",
         };
         let cells = div()
             .flex()

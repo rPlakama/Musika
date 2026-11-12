@@ -218,7 +218,9 @@ mod tests {
             // the corner inside the viewBox padding stays fully transparent.
             assert!(
                 icon.data
-                    .chunks_exact(4)
+                    .as_chunks::<4>()
+                    .0
+                    .iter()
                     .any(|pixel| pixel[0] == 255 && pixel[1..] == [255, 255, 255]),
                 "the {label} icon is blank at {edge}px"
             );

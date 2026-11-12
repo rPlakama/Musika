@@ -44,7 +44,7 @@ struct MarqueeCache {
 }
 
 impl MarqueeCache {
-    fn shape(key: MarqueeKey, window: &mut Window) -> Self {
+    fn shape(key: MarqueeKey, window: &Window) -> Self {
         let weight = gpui::FontWeight(f32::from_bits(key.weight));
         let mut font = gpui::font("Overused Grotesk Roman");
         font.weight = weight;

@@ -87,6 +87,7 @@ fn acquire_instance_lock() -> Option<std::fs::File> {
     let path = dir.join("daemon.lock");
     let file = std::fs::OpenOptions::new()
         .create(true)
+        .truncate(false)
         .read(true)
         .write(true)
         .open(path)
@@ -219,7 +220,35 @@ async fn run_async() {
                         });
                     }
                     Event::Error(message) => eprintln!("daemon: backend error: {message}"),
-                    _ => {}
+                    // Everything else is UI-side only; the forwarding below
+                    // still delivers it to every attached client verbatim.
+                    Event::AuthError(_)
+                    | Event::CommandSuggestions { .. }
+                    | Event::PlaylistDeleted { .. }
+                    | Event::PlaylistSaved { .. }
+                    | Event::LibraryCount { .. }
+                    | Event::LibraryWindow { .. }
+                    | Event::Library { .. }
+                    | Event::Page { .. }
+                    | Event::Notes { .. }
+                    | Event::Marks { .. }
+                    | Event::Preload { .. }
+                    | Event::DisplayCover { .. }
+                    | Event::RowsPatched { .. }
+                    | Event::AlbumState { .. }
+                    | Event::LibrarySynced
+                    | Event::RadioSaved { .. }
+                    | Event::SyncProgress { .. }
+                    | Event::PageContainerState { .. }
+                    | Event::Wiped { .. }
+                    | Event::DownloadSettled
+                    | Event::DownloadStarted { .. }
+                    | Event::Palette { .. }
+                    | Event::PaletteReset { .. }
+                    | Event::Command(_)
+                    | Event::IpcRan(_)
+                    | Event::Lyrics { .. }
+                    | Event::Search { .. } => {}
                 }
                 // Queue content travels as queue deltas, never as whole-queue
                 // events; the rest of the bridge surface is forwarded verbatim.
@@ -274,7 +303,7 @@ async fn run_async() {
                 }
                 ServerEvent::Message { conn, message } => {
                     handle_client_message(
-                        &mut ui_clients,
+                        &ui_clients,
                         conn,
                         message,
                         &services,
@@ -394,6 +423,10 @@ fn dispatch_text(services: &Services, line: &str, announce: bool) -> Option<Stri
             None
         }
         CommandTarget::Lifecycle => {
+            #[expect(
+                clippy::wildcard_enum_match_arm,
+                reason = "lifecycle dispatch over the 83-variant IpcCommand handles Quit/Show; enumerating the no-op fallback would restate the vocabulary"
+            )]
             match command {
                 IpcCommand::Quit => {
                     _ = services.lifecycle.send(Lifecycle::Quit);
@@ -408,6 +441,10 @@ fn dispatch_text(services: &Services, line: &str, announce: bool) -> Option<Stri
     }
 }
 
+#[expect(
+    clippy::wildcard_enum_match_arm,
+    reason = "open query dispatch over the 83-variant IpcCommand; the empty-object fallback covers every non-query command"
+)]
 fn query_json(snapshot: &Snapshot, command: &IpcCommand) -> String {
     let state = snapshot.state;
     match command {
@@ -453,6 +490,10 @@ fn current_track(snapshot: &Snapshot) -> Option<&Track> {
     snapshot.queue.get(snapshot.state.index as usize)
 }
 
+#[expect(
+    clippy::wildcard_enum_match_arm,
+    reason = "open core-bridge dispatch over the 83-variant IpcCommand; enumerating the unhandled fallback would restate the vocabulary"
+)]
 fn dispatch_core_bridge(services: &Services, command: &IpcCommand) {
     let bridge = &services.bridge;
     let snapshot = services.playback.snapshot();
@@ -536,7 +577,7 @@ fn dispatch_core_bridge(services: &Services, command: &IpcCommand) {
 }
 
 fn handle_client_message(
-    ui_clients: &mut HashMap<u64, UiClient>,
+    ui_clients: &HashMap<u64, UiClient>,
     conn: u64,
     message: Message,
     services: &Services,
@@ -590,7 +631,20 @@ fn handle_client_message(
                     .send(&Frame::new(proto::KIND_REPLY_JSON, bytes));
             }
         }
-        other => {
+        other @ (Message::Hello(_)
+        | Message::Welcome(_)
+        | Message::Reject(_)
+        | Message::Bye(_)
+        | Message::ProtocolError(_)
+        | Message::Activate
+        | Message::Ping(_)
+        | Message::Pong(_)
+        | Message::Reply(_)
+        | Message::Event(_)
+        | Message::PlayerReply(_)
+        | Message::PlaybackState(_)
+        | Message::QueueDelta(_)
+        | Message::QueueRows(_)) => {
             crate::debug_log!("daemon: unexpected client frame: {other:?}");
         }
     }
@@ -839,10 +893,10 @@ fn show_window(ui_clients: &mut HashMap<u64, UiClient>, ui_child: &mut Option<st
 }
 
 fn ensure_ui_child(child: &mut Option<std::process::Child>) {
-    if let Some(child) = child.as_mut() {
-        if child.try_wait().ok().flatten().is_none() {
-            return;
-        }
+    if let Some(child) = child.as_mut()
+        && child.try_wait().ok().flatten().is_none()
+    {
+        return;
     }
     let Ok(exe) = std::env::current_exe() else {
         eprintln!("daemon: cannot locate the UI binary");
@@ -856,13 +910,15 @@ fn ensure_ui_child(child: &mut Option<std::process::Child>) {
         .map(|dir| dir.join("musika-ui.log"));
     let mut command = std::process::Command::new(&ui);
     command.stdin(std::process::Stdio::null());
-    if let Some(log) = log {
-        if let Ok(file) = std::fs::OpenOptions::new().create(true).append(true).open(log) {
-            if let Ok(file2) = file.try_clone() {
-                command.stdout(std::process::Stdio::from(file));
-                command.stderr(std::process::Stdio::from(file2));
-            }
-        }
+    if let Some(log) = log
+        && let Ok(file) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(log)
+        && let Ok(file2) = file.try_clone()
+    {
+        command.stdout(std::process::Stdio::from(file));
+        command.stderr(std::process::Stdio::from(file2));
     }
     match command.spawn() {
         Ok(spawned) => {

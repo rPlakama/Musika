@@ -188,7 +188,7 @@ impl CoverSource {
         };
         match self {
             Self::Path(path) => Self::Fallback { path, remote },
-            other => other,
+            other @ (Self::Remote(_) | Self::Fallback { .. }) => other,
         }
     }
 }
@@ -423,7 +423,7 @@ pub(crate) fn cover_element(
                 "cover-fade:{}|{remote}:{size:.0}",
                 path.display()
             ));
-            let fallback_url = remote.clone();
+            let fallback_url = remote;
             let image = img(path)
                 .size(px(size))
                 .rounded_sm()

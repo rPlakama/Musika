@@ -41,6 +41,14 @@ const HEARTBEAT_MISSES: u32 = 2;
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Events the daemon consumes from the socket layer.
+///
+/// The `Message` variant embeds the whole wire [`Message`] enum (320 B) because
+/// the daemon consumes these one at a time; boxing it would only move the cost
+/// to a heap allocation per frame and churn every dispatch site.
+#[expect(
+    clippy::large_enum_variant,
+    reason = "the wire Message payload is consumed one frame at a time; boxing it would only add an allocation per frame"
+)]
 pub(crate) enum ServerEvent {
     Connected {
         conn: u64,

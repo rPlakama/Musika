@@ -155,7 +155,9 @@ mod contextual_bar_tests {
                 assert_eq!(path, std::path::PathBuf::from("/tmp/cover.jpg"));
                 assert_eq!(remote, "https://provider.test/rest/getCoverArt?id=x");
             }
-            _ => panic!("expected a cached path with a remote fallback"),
+            CoverSource::Path(_) | CoverSource::Remote(_) => {
+                panic!("expected a cached path with a remote fallback")
+            }
         }
 
         let source = CoverSource::Remote("https://cache.test/cover.jpg".into())

@@ -277,6 +277,10 @@ impl IpcCommand {
     /// Translate a text playback command into the typed wire request. The core
     /// owns the authoritative position/volume, so relative controls stay
     /// relative instead of being resolved against a stale UI copy.
+    #[expect(
+        clippy::wildcard_enum_match_arm,
+        reason = "open playback dispatch over the 83-variant IpcCommand; the None fallback is the default for the other ~68 commands"
+    )]
     pub fn player_op(&self) -> Option<crate::ipc_protocol::PlayerOp> {
         use crate::ipc_protocol::PlayerOp as P;
         use IpcCommand as I;
@@ -1488,6 +1492,10 @@ pub fn canonical_string(command: &IpcCommand) -> String {
 /// The canonical printer for the [`CommandForm::Advanced`] commands. Their
 /// grammar carries payloads (ids, numbers, quoted targets), so the printer
 /// stays explicit next to the parser; the registry covers everything else.
+#[expect(
+    clippy::wildcard_enum_match_arm,
+    reason = "open printer dispatch over the 83-variant IpcCommand; the empty fallback covers the commands the registry already formats"
+)]
 fn advanced_canonical(command: &IpcCommand) -> String {
     use IpcCommand::*;
     match command {

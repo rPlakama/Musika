@@ -29,7 +29,7 @@ let_underscore_must_use = "warn"
 unused_result_ok = "deny"
 
 # enum drift protection (CoreCommand, EngineEvent, IPC messages, ItemKind/RowKind/PageKind)
-match_wildcard_for_single_variants = "warn"
+match_wildcard_for_single_variants = "deny"
 wildcard_enum_match_arm = "warn"
 
 # cheap perf / honest-signature lints

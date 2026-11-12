@@ -206,7 +206,7 @@ pub(crate) fn reset_raf_sites() {
 }
 
 /// Requests one frame, attributing it to `site` for the frame summary.
-pub(crate) fn request_frame(window: &mut gpui::Window, site: &'static str) {
+pub(crate) fn request_frame(window: &gpui::Window, site: &'static str) {
     if enabled() {
         RAF_SITES.with(|sites| {
             *sites.borrow_mut().entry(site).or_insert(0) += 1;

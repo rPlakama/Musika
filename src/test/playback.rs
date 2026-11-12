@@ -70,15 +70,17 @@ fn only_load(outcome: &Outcome) -> &AudioCommand {
 }
 
 fn load_url(outcome: &Outcome) -> (&str, Option<&str>, bool) {
-    match only_load(outcome) {
-        AudioCommand::Load {
-            url,
-            next_url,
-            paused,
-            ..
-        } => (url.as_str(), next_url.as_deref(), *paused),
-        other => panic!("expected a load, got {other:?}"),
-    }
+    let command = only_load(outcome);
+    let AudioCommand::Load {
+        url,
+        next_url,
+        paused,
+        ..
+    } = command
+    else {
+        panic!("expected a load, got {command:?}");
+    };
+    (url.as_str(), next_url.as_deref(), *paused)
 }
 
 // --- load ----------------------------------------------------------------
@@ -298,20 +300,20 @@ fn ended_with_repeat_one_replays_and_repeat_all_wraps() {
     let outcome = core.on_engine(EngineEvent::Ended, SECOND);
     assert_eq!(core.index(), 1);
     assert_eq!(core.state(), State::Playing);
-    match only_load(&outcome) {
-        AudioCommand::Load {
-            url,
-            next_url,
-            paused,
-            ..
-        } => {
-            assert_eq!(url, "file:///1.flac");
-            // repeat One preloads the same row again.
-            assert_eq!(next_url.as_deref(), Some("file:///1.flac"));
-            assert!(!paused);
-        }
-        other => panic!("expected a load, got {other:?}"),
-    }
+    let command = only_load(&outcome);
+    let AudioCommand::Load {
+        url,
+        next_url,
+        paused,
+        ..
+    } = command
+    else {
+        panic!("expected a load, got {command:?}");
+    };
+    assert_eq!(url, "file:///1.flac");
+    // repeat One preloads the same row again.
+    assert_eq!(next_url.as_deref(), Some("file:///1.flac"));
+    assert!(!paused);
 
     // repeat All wraps to the head.
     let mut core = PlaybackCore::new();
@@ -718,10 +720,11 @@ fn seek_relative_uses_the_interpolated_position() {
     let t0 = 0;
     core.snapshot(0, t0);
     let outcome = core.apply_at(CoreCommand::SeekRelative(5.0), t0 + 3 * SECOND);
-    match only_load(&outcome) {
-        AudioCommand::Seek(seconds) => assert!((seconds - 8.0).abs() < 1e-6, "{seconds}"),
-        other => panic!("expected a seek, got {other:?}"),
-    }
+    let command = only_load(&outcome);
+    let AudioCommand::Seek(seconds) = command else {
+        panic!("expected a seek, got {command:?}");
+    };
+    assert!((seconds - 8.0).abs() < 1e-6, "{seconds}");
 }
 
 #[test]
@@ -840,20 +843,20 @@ fn recover_replays_the_current_row_at_the_last_playhead() {
     let position = 33.5;
     let outcome = core.apply(CoreCommand::Recover { position });
     assert_eq!(core.state(), State::Playing);
-    match &outcome.audio[0] {
-        AudioCommand::Load {
-            url,
-            next_url,
-            paused,
-            generation,
-        } => {
-            assert_eq!(url, "file:///1.flac");
-            assert_eq!(next_url.as_deref(), Some("file:///2.flac"));
-            assert!(!paused);
-            assert!(*generation > 0, "a recovery uses a fresh generation");
-        }
-        other => panic!("expected a load, got {other:?}"),
-    }
+    let command = &outcome.audio[0];
+    let AudioCommand::Load {
+        url,
+        next_url,
+        paused,
+        generation,
+    } = command
+    else {
+        panic!("expected a load, got {command:?}");
+    };
+    assert_eq!(url, "file:///1.flac");
+    assert_eq!(next_url.as_deref(), Some("file:///2.flac"));
+    assert!(!paused);
+    assert!(*generation > 0, "a recovery uses a fresh generation");
     assert_eq!(outcome.audio[1], AudioCommand::Seek(position));
     assert!((core.position_at(SECOND) - position).abs() < 1e-6);
     assert!(outcome.changed);
@@ -864,10 +867,11 @@ fn recover_preserves_a_paused_transport() {
     let mut core = playing_core(2);
     core.apply(CoreCommand::Pause);
     let outcome = core.apply(CoreCommand::Recover { position: 12.0 });
-    match &outcome.audio[0] {
-        AudioCommand::Load { paused, .. } => assert!(*paused),
-        other => panic!("expected a load, got {other:?}"),
-    }
+    let command = &outcome.audio[0];
+    let AudioCommand::Load { paused, .. } = command else {
+        panic!("expected a load, got {command:?}");
+    };
+    assert!(*paused);
     assert_eq!(core.state(), State::Paused);
 }
 
@@ -897,9 +901,11 @@ fn every_load_uses_a_new_generation() {
 }
 
 fn load_generation(outcome: &Outcome) -> Option<u64> {
-    outcome.audio.iter().find_map(|command| match command {
-        AudioCommand::Load { generation, .. } => Some(*generation),
-        _ => None,
+    outcome.audio.iter().find_map(|command| {
+        let AudioCommand::Load { generation, .. } = command else {
+            return None;
+        };
+        Some(*generation)
     })
 }
 
@@ -1226,7 +1232,7 @@ fn row_deltas_match_the_mutated_queue() {
     core.apply(CoreCommand::Jump(4));
 
     let outcome = core.apply(CoreCommand::Remove(2));
-    match outcome.delta.clone().map(|delta| delta.op) {
+    match outcome.delta.map(|delta| delta.op) {
         Some(QueueOp::Remove { indices }) => {
             let mut before = vec!["0", "1", "2", "3", "4", "5", "6", "7"];
             for index in indices.iter().rev() {
@@ -1241,7 +1247,7 @@ fn row_deltas_match_the_mutated_queue() {
         at: 1,
         tracks: vec![track("x", 1.0)],
     });
-    match outcome.delta.clone().map(|delta| delta.op) {
+    match outcome.delta.map(|delta| delta.op) {
         Some(QueueOp::Insert { at, rows }) => {
             assert_eq!(at, 1);
             assert_eq!(ids(&core)[1], "x");

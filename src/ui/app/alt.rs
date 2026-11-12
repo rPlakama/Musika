@@ -26,7 +26,7 @@ impl AppRoot {
                 page.radio_seed_kind.unwrap_or("album").to_string(),
                 page.id.to_string(),
             ),
-            _ => return None,
+            PageKind::Playlist => return None,
         };
         Some((
             menu,
@@ -130,7 +130,7 @@ impl AppRoot {
             PageKind::Artist => {
                 self.bridge.download_artist(id, on);
             }
-            _ => {}
+            PageKind::Playlist | PageKind::Radio => {}
         }
     }
 
@@ -345,10 +345,12 @@ impl AppRoot {
 
     pub(in crate::ui) fn status_anchor(&self, scope: usize) -> (f32, f32) {
         let stored = self.status_anchors.borrow()[scope.min(5)];
-        let (x, y) = stored.unwrap_or((
-            (self.win_w - 42.0).max(30.0),
-            (self.win_h * 0.0648 * 0.5).max(30.0),
-        ));
+        let (x, y) = stored.unwrap_or_else(|| {
+            (
+                (self.win_w - 42.0).max(30.0),
+                (self.win_h * 0.0648 * 0.5).max(30.0),
+            )
+        });
         (
             x.clamp(30.0, (self.win_w - 30.0).max(30.0)),
             y.clamp(30.0, (self.win_h - 30.0).max(30.0)),
@@ -644,14 +646,28 @@ impl AppRoot {
                 self.bridge.wipe("covers".to_string());
                 return;
             }
-            _ => {}
+            QuickVerb::AddToQueue
+            | QuickVerb::StartRadio
+            | QuickVerb::Favorite { .. }
+            | QuickVerb::RateAlbum { .. }
+            | QuickVerb::RateArtist { .. }
+            | QuickVerb::GoToArtist
+            | QuickVerb::GoToAlbum
+            | QuickVerb::Download { .. }
+            | QuickVerb::PlayPlaylist
+            | QuickVerb::DeletePlaylist
+            | QuickVerb::ShuffleArtist
+            | QuickVerb::ShuffleAlbum
+            | QuickVerb::SaveRadio
+            | QuickVerb::ShuffleRadio
+            | QuickVerb::DownloadRadio => {}
         }
         let Some(target) = self.alt_target.clone() else {
             return;
         };
         if !target.radio_seed_id.is_empty() {
             let seed_kind = target.radio_seed_kind.clone();
-            let seed_id = target.radio_seed_id.clone();
+            let seed_id = target.radio_seed_id;
             match verb {
                 QuickVerb::AddToQueue => {
                     self.bridge.queue_add_radio(seed_kind, seed_id);
@@ -671,7 +687,20 @@ impl AppRoot {
                 QuickVerb::DownloadRadio => {
                     self.bridge.download_radio(seed_kind, seed_id);
                 }
-                _ => {}
+                QuickVerb::StartRadio
+                | QuickVerb::Favorite { .. }
+                | QuickVerb::RateAlbum { .. }
+                | QuickVerb::RateArtist { .. }
+                | QuickVerb::GoToArtist
+                | QuickVerb::GoToAlbum
+                | QuickVerb::Download { .. }
+                | QuickVerb::PlayPlaylist
+                | QuickVerb::DeletePlaylist
+                | QuickVerb::ShuffleArtist
+                | QuickVerb::ShuffleAlbum
+                | QuickVerb::WipeLibrary
+                | QuickVerb::WipeIndexes
+                | QuickVerb::WipeCovers => {}
             }
             return;
         }
@@ -695,7 +724,21 @@ impl AppRoot {
                             .quick_download(target.api_kind().to_string(), id.clone(), on);
                     }
                 }
-                _ => {}
+                QuickVerb::StartRadio
+                | QuickVerb::RateAlbum { .. }
+                | QuickVerb::RateArtist { .. }
+                | QuickVerb::GoToArtist
+                | QuickVerb::GoToAlbum
+                | QuickVerb::PlayPlaylist
+                | QuickVerb::DeletePlaylist
+                | QuickVerb::ShuffleArtist
+                | QuickVerb::ShuffleAlbum
+                | QuickVerb::SaveRadio
+                | QuickVerb::ShuffleRadio
+                | QuickVerb::DownloadRadio
+                | QuickVerb::WipeLibrary
+                | QuickVerb::WipeIndexes
+                | QuickVerb::WipeCovers => {}
             }
             return;
         }
@@ -721,33 +764,33 @@ impl AppRoot {
             }
             QuickVerb::RateAlbum { level } => {
                 self.bridge
-                    .quick_rate("album".to_string(), target.id.clone(), level);
+                    .quick_rate("album".to_string(), target.id, level);
             }
             QuickVerb::RateArtist { level } => {
                 self.bridge
-                    .quick_rate("artist".to_string(), target.id.clone(), level);
+                    .quick_rate("artist".to_string(), target.id, level);
             }
             QuickVerb::GoToAlbum => {
-                self.bridge.quick_go_album(target.song_id.clone());
+                self.bridge.quick_go_album(target.song_id);
             }
             QuickVerb::GoToArtist => {
-                self.bridge.quick_go_artist(target.album_id.clone());
+                self.bridge.quick_go_artist(target.album_id);
             }
             QuickVerb::PlayPlaylist => {
-                self.bridge.quick_play_playlist(target.playlist_id.clone());
+                self.bridge.quick_play_playlist(target.playlist_id);
             }
             QuickVerb::DeletePlaylist => {
-                self.bridge.delete_playlist(target.playlist_id.clone());
+                self.bridge.delete_playlist(target.playlist_id);
             }
             QuickVerb::ShuffleArtist => {
-                self.bridge.shuffle_artist(target.id.clone());
+                self.bridge.shuffle_artist(target.id);
             }
             QuickVerb::ShuffleAlbum => {
-                self.bridge.shuffle_album(target.id.clone());
+                self.bridge.shuffle_album(target.id);
             }
             QuickVerb::Download { on } => {
                 if target.kind == RowKind::Artist {
-                    self.bridge.download_artist(target.id.clone(), on);
+                    self.bridge.download_artist(target.id, on);
                 } else {
                     self.bridge.quick_download(
                         target.api_kind().to_string(),

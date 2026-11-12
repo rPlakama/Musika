@@ -268,10 +268,11 @@ fn player_request_and_reply_frames_round_trip() {
         op: PlayerOp::Seek(30.0),
     };
     let frame = Frame::new(KIND_PLAYER_REQUEST, request.encode());
-    match Message::decode(&frame).unwrap() {
-        Message::PlayerRequest(decoded) => assert_eq!(decoded, request),
-        other => panic!("expected a player request, got {other:?}"),
-    }
+    let message = Message::decode(&frame).unwrap();
+    let Message::PlayerRequest(decoded) = message else {
+        panic!("expected a player request, got {message:?}");
+    };
+    assert_eq!(decoded, request);
 
     let reply = PlayerReply {
         req: 99,
@@ -280,10 +281,11 @@ fn player_request_and_reply_frames_round_trip() {
         applied_seq: 3,
     };
     let frame = Frame::with_flags(KIND_PLAYER_REPLY, FLAG_REPLY | FLAG_ERROR, reply.encode());
-    match Message::decode(&frame).unwrap() {
-        Message::PlayerReply(decoded) => assert_eq!(decoded, reply),
-        other => panic!("expected a player reply, got {other:?}"),
-    }
+    let message = Message::decode(&frame).unwrap();
+    let Message::PlayerReply(decoded) = message else {
+        panic!("expected a player reply, got {message:?}");
+    };
+    assert_eq!(decoded, reply);
 }
 
 #[test]
@@ -320,10 +322,10 @@ fn wire_track_never_carries_a_stream_url() {
 
 #[test]
 fn activate_frame_is_empty_and_typed() {
-    match Message::decode(&Frame::new(KIND_ACTIVATE, Vec::new())).unwrap() {
-        Message::Activate => {}
-        other => panic!("expected activate, got {other:?}"),
-    }
+    let message = Message::decode(&Frame::new(KIND_ACTIVATE, Vec::new())).unwrap();
+    let Message::Activate = message else {
+        panic!("expected activate, got {message:?}");
+    };
     assert_eq!(
         Message::decode(&Frame::new(KIND_ACTIVATE, vec![1])).unwrap_err().code,
         ErrorCode::BadPayload
@@ -351,22 +353,22 @@ fn handshake_frames_round_trip() {
         client: "musika-ui".to_string(),
         features: UI_FEATURES,
     };
-    match Message::decode(&Frame::new(KIND_HELLO, json_encode(&hello).unwrap())).unwrap() {
-        Message::Hello(decoded) => {
-            assert_eq!(decoded.proto, VERSION);
-            assert_eq!(decoded.role, Role::Ui);
-            assert_eq!(decoded.features, UI_FEATURES);
-        }
-        other => panic!("expected hello, got {other:?}"),
-    }
+    let message = Message::decode(&Frame::new(KIND_HELLO, json_encode(&hello).unwrap())).unwrap();
+    let Message::Hello(decoded) = message else {
+        panic!("expected hello, got {message:?}");
+    };
+    assert_eq!(decoded.proto, VERSION);
+    assert_eq!(decoded.role, Role::Ui);
+    assert_eq!(decoded.features, UI_FEATURES);
 
     let bye = Bye {
         reason: ByeReason::Quit,
     };
-    match Message::decode(&Frame::new(KIND_BYE, json_encode(&bye).unwrap())).unwrap() {
-        Message::Bye(decoded) => assert_eq!(decoded.reason, ByeReason::Quit),
-        other => panic!("expected bye, got {other:?}"),
-    }
+    let message = Message::decode(&Frame::new(KIND_BYE, json_encode(&bye).unwrap())).unwrap();
+    let Message::Bye(decoded) = message else {
+        panic!("expected bye, got {message:?}");
+    };
+    assert_eq!(decoded.reason, ByeReason::Quit);
 
     let welcome = Welcome {
         proto: VERSION,
@@ -374,10 +376,12 @@ fn handshake_frames_round_trip() {
         session: 7,
         features: CONTROL_FEATURES,
     };
-    match Message::decode(&Frame::new(KIND_WELCOME, json_encode(&welcome).unwrap())).unwrap() {
-        Message::Welcome(decoded) => assert_eq!(decoded.session, 7),
-        other => panic!("expected welcome, got {other:?}"),
-    }
+    let message =
+        Message::decode(&Frame::new(KIND_WELCOME, json_encode(&welcome).unwrap())).unwrap();
+    let Message::Welcome(decoded) = message else {
+        panic!("expected welcome, got {message:?}");
+    };
+    assert_eq!(decoded.session, 7);
 }
 
 #[test]
@@ -408,10 +412,11 @@ fn bridge_events_travel_as_json_frames() {
     let event = crate::bridge::Event::Error("boom".to_string());
     let frame = event_frame(&event).unwrap();
     assert_eq!(frame.kind, KIND_EVENT_JSON);
-    match Message::decode(&frame).unwrap() {
-        Message::Event(crate::bridge::Event::Error(message)) => assert_eq!(message, "boom"),
-        other => panic!("expected an error event, got {other:?}"),
-    }
+    let message = Message::decode(&frame).unwrap();
+    let Message::Event(crate::bridge::Event::Error(text)) = message else {
+        panic!("expected an error event, got {message:?}");
+    };
+    assert_eq!(text, "boom");
 }
 
 #[test]
@@ -421,23 +426,26 @@ fn request_and_reply_json_round_trip() {
         method: "play_song".to_string(),
         args: json!({ "song_id": "abc", "order": "album" }),
     };
-    match Message::decode(&Frame::new(KIND_REQUEST_JSON, json_encode(&request).unwrap())).unwrap() {
-        Message::Request(decoded) => {
-            assert_eq!(decoded.req, 3);
-            assert_eq!(decoded.method, "play_song");
-            assert_eq!(decoded.args["song_id"], "abc");
-        }
-        other => panic!("expected request, got {other:?}"),
-    }
+    let message = Message::decode(&Frame::new(
+        KIND_REQUEST_JSON,
+        json_encode(&request).unwrap(),
+    ))
+    .unwrap();
+    let Message::Request(decoded) = message else {
+        panic!("expected request, got {message:?}");
+    };
+    assert_eq!(decoded.req, 3);
+    assert_eq!(decoded.method, "play_song");
+    assert_eq!(decoded.args["song_id"], "abc");
 
     let reply = ReplyJson::err(3, ErrorCode::InvalidArgs, "song_id is required");
-    match Message::decode(&Frame::new(KIND_REPLY_JSON, json_encode(&reply).unwrap())).unwrap() {
-        Message::Reply(decoded) => {
-            assert!(!decoded.ok);
-            assert_eq!(decoded.code, Some(ErrorCode::InvalidArgs));
-            assert_eq!(decoded.message.as_deref(), Some("song_id is required"));
-        }
-        other => panic!("expected reply, got {other:?}"),
-    }
+    let message =
+        Message::decode(&Frame::new(KIND_REPLY_JSON, json_encode(&reply).unwrap())).unwrap();
+    let Message::Reply(decoded) = message else {
+        panic!("expected reply, got {message:?}");
+    };
+    assert!(!decoded.ok);
+    assert_eq!(decoded.code, Some(ErrorCode::InvalidArgs));
+    assert_eq!(decoded.message.as_deref(), Some("song_id is required"));
     assert!(ReplyJson::ok(1).ok);
 }

@@ -18,7 +18,7 @@ async fn test_dbs() -> Dbs {
         colors: library.clone(),
         status: library.clone(),
         artist_user: library.clone(),
-        download: media.clone(),
+        download: media,
         playlist: library,
     }
 }
@@ -108,40 +108,38 @@ async fn path_resolution_walks_artist_album_and_track() {
     seed_library(&dbs).await;
 
     // Artist only: every song of the artist.
-    match resolve_ids(&dbs, &path_request("radiohead", None, None, false), None)
+    let resolved = resolve_ids(&dbs, &path_request("radiohead", None, None, false), None)
         .await
-        .unwrap()
-    {
-        ResolvedIds::Artist {
-            artist_id,
-            mut song_ids,
-        } => {
-            assert_eq!(artist_id, "ar1");
-            song_ids.sort();
-            assert_eq!(song_ids, ["s1", "s2", "s3"]);
-        }
-        other => panic!("expected artist resolution, got {other:?}"),
-    }
+        .unwrap();
+    let ResolvedIds::Artist {
+        artist_id,
+        mut song_ids,
+    } = resolved
+    else {
+        panic!("expected artist resolution, got {resolved:?}");
+    };
+    assert_eq!(artist_id, "ar1");
+    song_ids.sort();
+    assert_eq!(song_ids, ["s1", "s2", "s3"]);
 
     // Album only: every song of that album.
-    match resolve_ids(
+    let resolved = resolve_ids(
         &dbs,
         &path_request("Radiohead", Some("kid a"), None, false),
         None,
     )
     .await
-    .unwrap()
-    {
-        ResolvedIds::Album {
-            album_id,
-            mut song_ids,
-        } => {
-            assert_eq!(album_id, "al1");
-            song_ids.sort();
-            assert_eq!(song_ids, ["s1", "s2"]);
-        }
-        other => panic!("expected album resolution, got {other:?}"),
-    }
+    .unwrap();
+    let ResolvedIds::Album {
+        album_id,
+        mut song_ids,
+    } = resolved
+    else {
+        panic!("expected album resolution, got {resolved:?}");
+    };
+    assert_eq!(album_id, "al1");
+    song_ids.sort();
+    assert_eq!(song_ids, ["s1", "s2"]);
 
     // Track: one id, matched case-insensitively.
     assert_eq!(

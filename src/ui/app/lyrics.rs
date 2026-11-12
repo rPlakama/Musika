@@ -353,7 +353,7 @@ impl AppRoot {
     /// Anchor the pane on `line` for a manual scroll and arm the idle resume
     /// (LYR-8): the follow returns after 5 s with the pane focused, 2 s when
     /// focus is elsewhere.
-    pub(in crate::ui) fn hold_lyrics_at(&mut self, line: usize, cx: &mut Context<Self>) {
+    pub(in crate::ui) fn hold_lyrics_at(&mut self, line: usize, cx: &Context<Self>) {
         let Some(count) = self
             .lyrics
             .as_ref()
@@ -388,7 +388,7 @@ impl AppRoot {
     }
 
     /// Scroll the lyric body by `lines` (positive = down).
-    pub(in crate::ui) fn scroll_lyrics_by(&mut self, lines: i32, cx: &mut Context<Self>) {
+    pub(in crate::ui) fn scroll_lyrics_by(&mut self, lines: i32, cx: &Context<Self>) {
         let Some(current) = self.lyrics_center_line() else {
             return;
         };
@@ -400,12 +400,12 @@ impl AppRoot {
     }
 
     /// `g g` in the lyric body: hold the first line.
-    pub(in crate::ui) fn lyrics_top(&mut self, cx: &mut Context<Self>) {
+    pub(in crate::ui) fn lyrics_top(&mut self, cx: &Context<Self>) {
         self.hold_lyrics_at(0, cx);
     }
 
     /// `G` in the lyric body: hold the last line.
-    pub(in crate::ui) fn lyrics_bottom(&mut self, cx: &mut Context<Self>) {
+    pub(in crate::ui) fn lyrics_bottom(&mut self, cx: &Context<Self>) {
         let last = self
             .lyrics
             .as_ref()

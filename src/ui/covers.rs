@@ -520,7 +520,7 @@ mod tests {
 
         let mut store = CoverStore::new(16);
         assert_eq!(store.row_path(&file_url(&small)), Some(small_thumb.clone()));
-        assert_eq!(store.row_path(&file_url(&large)), Some(large_thumb.clone()));
+        assert_eq!(store.row_path(&file_url(&large)), Some(large_thumb));
         assert_eq!(store.row_path(&file_url(&plain)), Some(plain.clone()));
 
         // A cached success is served without touching the filesystem again.
@@ -595,7 +595,7 @@ mod tests {
 
         let mut store = CoverStore::new(8);
         assert_eq!(store.display_path(&key256), None);
-        assert_eq!(store.display_path(&key512), Some(copy512.clone()));
+        assert_eq!(store.display_path(&key512), Some(copy512));
         assert_eq!(
             store.display_path(&key256),
             None,
@@ -681,7 +681,7 @@ mod tests {
         let thumb = dir.file("hero.thumb.jpg", 2048);
         assert_eq!(store.hero_path(&key), None);
         store.clear();
-        assert_eq!(store.hero_path(&key), Some(thumb.clone()));
+        assert_eq!(store.hero_path(&key), Some(thumb));
 
         // A published display copy wins over the thumbnail.
         let bucket = dir.file("hero_512x512.jpg", 4096);

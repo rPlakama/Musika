@@ -1125,7 +1125,15 @@ fn event_decode(payload: &[u8]) -> Result<Event, ProtocolError> {
 
 /// The daemon-side classification of a frame's payload. Keeping it explicit
 /// makes the dispatch exhaustive and testable.
+///
+/// The [`Event`] variant embeds the largest bridge document (320 B). Boxing it
+/// would ripple through every IPC consumer and test for no runtime gain: a
+/// decoded frame is moved once, so indirection would only add an allocation.
 #[derive(Debug)]
+#[expect(
+    clippy::large_enum_variant,
+    reason = "the Event payload is the largest bridge document; boxing it would churn every IPC consumer and test for one allocation"
+)]
 pub enum Message {
     Hello(Hello),
     Welcome(Welcome),

@@ -42,7 +42,7 @@ impl Native {
     /// Loads `url` with the playback core's generation. A newer generation
     /// supersedes any queued load that has not reached the decoder yet.
     pub(crate) fn load_with_next_generation(
-        &mut self,
+        &self,
         url: &str,
         next_url: Option<String>,
         paused: bool,
@@ -53,7 +53,7 @@ impl Native {
             .load(url.to_string(), next_url, paused, generation);
     }
 
-    pub(crate) fn stop(&mut self) {
+    pub(crate) fn stop(&self) {
         self.worker.stop();
         self.sink.set_paused(true);
     }

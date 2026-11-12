@@ -347,7 +347,7 @@ impl MprisPlayer {
     }
 
     #[zbus(property)]
-    fn set_loop_status(&mut self, status: String) {
+    fn set_loop_status(&self, status: String) {
         let state = snapshot().loop_status;
         let current = match state.as_str() {
             "Track" => 1,
@@ -371,7 +371,7 @@ impl MprisPlayer {
     }
 
     #[zbus(property)]
-    fn set_rate(&mut self, _rate: f64) {}
+    fn set_rate(&self, _rate: f64) {}
 
     #[zbus(property)]
     fn shuffle(&self) -> bool {
@@ -379,7 +379,7 @@ impl MprisPlayer {
     }
 
     #[zbus(property)]
-    fn set_shuffle(&mut self, shuffle: bool) {
+    fn set_shuffle(&self, shuffle: bool) {
         // The existing IPC shuffle command randomizes the queue in place; it
         // has no persistent shuffle mode to disable.
         if shuffle {
@@ -398,7 +398,7 @@ impl MprisPlayer {
     }
 
     #[zbus(property)]
-    fn set_volume(&mut self, volume: f64) {
+    fn set_volume(&self, volume: f64) {
         submit(format!("mpris_volume:{}", volume.clamp(0.0, 1.0)));
     }
 

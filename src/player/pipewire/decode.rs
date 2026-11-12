@@ -251,7 +251,6 @@ impl Decoder {
         codec_context.set_threading(threading::Config {
             kind: threading::Type::None,
             count: 1,
-            ..threading::Config::default()
         });
         let audio = codec_context
             .decoder()
@@ -431,10 +430,8 @@ impl Decoder {
 
         let mut frames_read = 0usize;
         while frames_read < max_frames {
-            if self.pending_frames == 0 {
-                if !self.decode_more()? {
-                    break;
-                }
+            if self.pending_frames == 0 && !self.decode_more()? {
+                break;
             }
 
             let available = self.pending_frames.saturating_sub(self.pending_offset);
@@ -495,7 +492,7 @@ impl Decoder {
                 return Ok(false);
             }
 
-            match self.audio.receive_frame(&mut *self.decoded) {
+            match self.audio.receive_frame(&mut self.decoded) {
                 Ok(()) => {
                     if self.decoded.samples() == 0 {
                         self.unref_decoded();
@@ -675,8 +672,7 @@ impl Decoder {
         let input_samples = self.decoded.samples() as u64;
         // Only sources above MAX_PIPELINE_RATE need a rate conversion; for the
         // usual native-rate case this is a plain format/layout conversion.
-        let scaled = (input_samples * u64::from(output_rate) + u64::from(source_rate) - 1)
-            / u64::from(source_rate);
+        let scaled = (input_samples * u64::from(output_rate)).div_ceil(u64::from(source_rate));
         let needed = delay.saturating_add(scaled as usize).saturating_add(64);
         self.ensure_output_capacity(needed);
         // swr_convert_frame treats the frame's nb_samples as the output
@@ -914,7 +910,9 @@ mod tests {
         assert!(out[..read * 2].iter().any(|sample| *sample != 0));
         assert!(
             out[..read * 2]
-                .chunks_exact(2)
+                .as_chunks::<2>()
+                .0
+                .iter()
                 .any(|frame| frame[0] != frame[1]),
             "stereo channels must stay interleaved, not collapsed to mono"
         );

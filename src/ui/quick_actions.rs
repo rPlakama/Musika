@@ -125,7 +125,22 @@ impl QuickVerb {
         match self {
             QuickVerb::RateAlbum { .. } => Some(QuickKind::Album),
             QuickVerb::RateArtist { .. } => Some(QuickKind::Artist),
-            _ => None,
+            QuickVerb::AddToQueue
+            | QuickVerb::StartRadio
+            | QuickVerb::Favorite { .. }
+            | QuickVerb::GoToArtist
+            | QuickVerb::GoToAlbum
+            | QuickVerb::Download { .. }
+            | QuickVerb::PlayPlaylist
+            | QuickVerb::DeletePlaylist
+            | QuickVerb::ShuffleArtist
+            | QuickVerb::ShuffleAlbum
+            | QuickVerb::SaveRadio
+            | QuickVerb::ShuffleRadio
+            | QuickVerb::DownloadRadio
+            | QuickVerb::WipeLibrary
+            | QuickVerb::WipeIndexes
+            | QuickVerb::WipeCovers => None,
         }
     }
 }
@@ -715,7 +730,7 @@ impl AltGesture {
             QuickKind::Album => QuickVerb::RateAlbum { level },
             QuickKind::Artist => QuickVerb::RateArtist { level },
             // Only album/artist surfaces carry a server rating.
-            _ => return None,
+            QuickKind::Song | QuickKind::Playlist | QuickKind::Selection => return None,
         };
         self.rating_dirty = false;
         Some(verb)

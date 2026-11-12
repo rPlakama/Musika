@@ -23,13 +23,17 @@ impl Bridge {
                     match row_kind {
                         RowKind::Song => client.star(&[id.as_str()], &[], &[]).await,
                         RowKind::Album => client.star(&[], &[id.as_str()], &[]).await,
-                        _ => client.star(&[], &[], &[id.as_str()]).await,
+                        RowKind::Artist | RowKind::Playlist => {
+                            client.star(&[], &[], &[id.as_str()]).await
+                        }
                     }
                 } else {
                     match row_kind {
                         RowKind::Song => client.unstar(&[id.as_str()], &[], &[]).await,
                         RowKind::Album => client.unstar(&[], &[id.as_str()], &[]).await,
-                        _ => client.unstar(&[], &[], &[id.as_str()]).await,
+                        RowKind::Artist | RowKind::Playlist => {
+                            client.unstar(&[], &[], &[id.as_str()]).await
+                        }
                     }
                 }
             };
@@ -42,7 +46,9 @@ impl Bridge {
             let local = match row_kind {
                 RowKind::Song => crate::library::set_song_starred(&dbs.library, &id, on).await,
                 RowKind::Album => crate::library::set_album_starred(&dbs.library, &id, on).await,
-                _ => crate::artist_user::set_starred(&dbs.artist_user, &id, on).await,
+                RowKind::Artist | RowKind::Playlist => {
+                    crate::artist_user::set_starred(&dbs.artist_user, &id, on).await
+                }
             };
             if let Err(err) = local {
                 _ = tx.send(Event::Error(format!(

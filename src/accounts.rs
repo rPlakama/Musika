@@ -226,7 +226,7 @@ pub fn upsert_and_activate(
             username: username.to_string(),
             password: encrypted,
             server_type: server_type.to_string(),
-            data_root: data_root.clone(),
+            data_root,
             created_at: now,
             last_used: now,
         });

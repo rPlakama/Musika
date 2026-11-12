@@ -140,11 +140,11 @@ fn spawn_detached_daemon() {
         if let Some(parent) = log.parent() {
             _ = std::fs::create_dir_all(parent);
         }
-        if let Ok(file) = std::fs::OpenOptions::new().create(true).append(true).open(&log) {
-            if let Ok(file2) = file.try_clone() {
-                command.stdout(std::process::Stdio::from(file));
-                command.stderr(std::process::Stdio::from(file2));
-            }
+        if let Ok(file) = std::fs::OpenOptions::new().create(true).append(true).open(&log)
+            && let Ok(file2) = file.try_clone()
+        {
+            command.stdout(std::process::Stdio::from(file));
+            command.stderr(std::process::Stdio::from(file2));
         }
     }
     let child_setup = || {

@@ -90,7 +90,7 @@ fn empty_track() -> Track {
 #[derive(Debug)]
 pub enum UiUpdate {
     /// A cached bridge event (`Header`, auth, `OpenPage`, …).
-    Event(Event),
+    Event(Box<Event>),
     /// Coalescible transport snapshot.
     State(PlaybackState),
     /// Structural queue change.
@@ -275,10 +275,10 @@ impl Inner {
     /// behind, then repaired: a lost row chunk asks for a resync, a lost state
     /// leaves a `seq` gap that also asks for one.
     fn push_coalescible(&self, update: UiUpdate) {
-        if let Err(UpdateTrySendError::Full(update)) = self.updates.try_send(update) {
-            if matches!(update, UiUpdate::QueueRows(_)) {
-                self.send_player(PlayerOp::Resync);
-            }
+        if let Err(UpdateTrySendError::Full(update)) = self.updates.try_send(update)
+            && matches!(update, UiUpdate::QueueRows(_))
+        {
+            self.send_player(PlayerOp::Resync);
         }
     }
 
@@ -405,7 +405,7 @@ impl Inner {
                 Reaction::Continue
             }
             Message::Event(event) => {
-                self.push_structural(UiUpdate::Event(event));
+                self.push_structural(UiUpdate::Event(Box::new(event)));
                 Reaction::Continue
             }
             Message::Activate => {
@@ -560,7 +560,7 @@ fn supervise(inner: Arc<Inner>, initial: Option<UnixStream>, retry_ms: u64) {
         if inner.stopping.load(Ordering::Acquire) {
             break;
         }
-        let mut connected = match socket.take() {
+        let connected = match socket.take() {
             Some(socket) => socket,
             None => match reconnect(&inner, &mut backoff) {
                 Some(socket) => socket,
@@ -588,7 +588,7 @@ fn supervise(inner: Arc<Inner>, initial: Option<UnixStream>, retry_ms: u64) {
             continue;
         }
         inner.connected.store(true, Ordering::Release);
-        let control = serve(&inner, &mut connected);
+        let control = serve(&inner, &connected);
         inner.drop_connection();
         match control {
             Served::Stop => break,
@@ -622,9 +622,9 @@ fn reconnect(inner: &Arc<Inner>, backoff: &mut u64) -> Option<UnixStream> {
     }
 }
 
-fn serve(inner: &Arc<Inner>, socket: &mut UnixStream) -> Served {
+fn serve(inner: &Arc<Inner>, socket: &UnixStream) -> Served {
     loop {
-        let mut reader = &*socket;
+        let mut reader = socket;
         let frame = match ipc_protocol::read_frame_blocking(&mut reader) {
             Ok(Some(frame)) => frame,
             Ok(None) => return Served::Closed(Some("core closed the connection".to_string())),

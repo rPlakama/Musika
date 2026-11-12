@@ -132,7 +132,6 @@ impl AppRoot {
                             cx.processor(
                                 move |this, range: std::ops::Range<usize>, _window, cx| {
                                     let row_h = this.page_scroll_modal.row_h;
-                                    let selected_id = this.selected_id.as_deref();
                                     let line_query: gpui::SharedString =
                                         this.line_search.query().to_string().into();
                                     let mut items = Vec::with_capacity(range.len());
@@ -143,8 +142,7 @@ impl AppRoot {
                                         let Some(row) = page.rows.get(index) else {
                                             break;
                                         };
-                                        let selected = selected_id == Some(row.id.as_str())
-                                            || index == page.list.cursor
+                                        let selected = index == page.list.cursor
                                             || page.list.selection.contains(page.list.cursor, index);
                                         let cover = page.cover(index);
                                         let hovered = this.hovered_page == Some(index);

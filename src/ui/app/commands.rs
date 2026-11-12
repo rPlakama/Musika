@@ -17,7 +17,7 @@ impl AppRoot {
                 self.playback_error = None;
                 self.request_current_lyrics();
                 if self.queue_open {
-                    self.queue_selection.clear();
+                    self.queue_list.selection.clear();
                     self.visual_mode = false;
                     self.land_queue(self.player.index());
                 }

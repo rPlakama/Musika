@@ -20,9 +20,10 @@ impl AppRoot {
 
     pub(in crate::ui) fn follow_library(&mut self, animated: bool) {
         self.clock.tick();
-        self.library_scroll.start(
+        state::follow_list(
+            &self.view.list,
+            &mut self.library_scroll,
             self.view.rows.count,
-            self.view.list.cursor,
             animated,
             self.clock.now,
         );
@@ -34,9 +35,13 @@ impl AppRoot {
         let Some(page) = self.page.as_ref() else {
             return;
         };
-        self.selected_id = page.rows.get(page.list.cursor).map(|row| row.id.clone());
-        self.page_scroll_modal
-            .start(page.rows.len(), page.list.cursor, animated, self.clock.now);
+        state::follow_list(
+            &page.list,
+            &mut self.page_scroll_modal,
+            page.rows.len(),
+            animated,
+            self.clock.now,
+        );
     }
 
     pub(in crate::ui) fn follow_search(&mut self, _animated: bool) {
@@ -56,14 +61,10 @@ impl AppRoot {
     pub(in crate::ui) fn follow_queue(&mut self, animated: bool) {
         self.status_focus = None;
         self.clock.tick();
-        self.selected_id = self
-            .player
-            .queue_snapshot()
-            .get(self.queue_cursor)
-            .map(|track| track.id.clone());
-        self.queue_scroll_modal.start(
+        state::follow_list(
+            &self.queue_list,
+            &mut self.queue_scroll_modal,
             self.player.len(),
-            self.queue_cursor,
             animated,
             self.clock.now,
         );
@@ -87,9 +88,12 @@ impl AppRoot {
     pub(in crate::ui) fn land_library(&mut self, index: usize) {
         self.status_focus = None;
         self.reset_row_scales();
-        let cursor = self.library_scroll.land(self.view.rows.count, index);
-        self.view.select(cursor);
-        self.selected_id = self.view.rows.get(cursor).map(|row| row.id.clone());
+        state::land_list(
+            &mut self.view.list,
+            &mut self.library_scroll,
+            self.view.rows.count,
+            index,
+        );
         self.view.rows.requested = None;
         self.ensure_library_window();
         self.remember_current();
@@ -101,22 +105,24 @@ impl AppRoot {
         let Some(page) = self.page.as_mut() else {
             return;
         };
-        let cursor = self.page_scroll_modal.land(page.rows.len(), index);
-        page.select(cursor);
-        self.selected_id = page.rows.get(cursor).map(|row| row.id.clone());
+        state::land_list(
+            &mut page.list,
+            &mut self.page_scroll_modal,
+            page.rows.len(),
+            index,
+        );
         self.hovered_page = None;
     }
 
     pub(in crate::ui) fn land_queue(&mut self, index: usize) {
         self.status_focus = None;
         self.reset_row_scales();
-        let cursor = self.queue_scroll_modal.land(self.player.len(), index);
-        self.queue_cursor = cursor;
-        self.selected_id = self
-            .player
-            .queue_snapshot()
-            .get(cursor)
-            .map(|track| track.id.clone());
+        state::land_list(
+            &mut self.queue_list,
+            &mut self.queue_scroll_modal,
+            self.player.len(),
+            index,
+        );
     }
 
     pub(in crate::ui) fn ensure_library_window(&mut self) {
@@ -478,7 +484,6 @@ impl AppRoot {
             self.view.list.selection.clear();
         }
         self.view.select(index);
-        self.selected_id = self.view.rows.get(index).map(|row| row.id.clone());
         self.hovered_row = None;
         self.follow_library(true);
         self.remember_current();

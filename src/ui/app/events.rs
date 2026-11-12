@@ -822,8 +822,8 @@ impl AppRoot {
         self.search_open = false;
         self.search_loading_since = None;
         self.queue_open = false;
-        self.queue_cursor = 0;
-        self.queue_selection.clear();
+        self.queue_list.cursor = 0;
+        self.queue_list.selection.clear();
         self.clipboard_kind = None;
         self.clipboard_ids.clear();
         self.paste_backup = None;

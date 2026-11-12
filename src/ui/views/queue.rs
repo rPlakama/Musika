@@ -6,7 +6,7 @@ impl AppRoot {
     pub(in crate::ui) fn queue_overlay(&self, cx: &Context<Self>, progress: f32) -> gpui::Div {
         let count = self.player.len();
         let current = self.player.index();
-        let cursor = self.queue_cursor;
+        let cursor = self.queue_list.cursor;
         let scroll = self.queue_scroll_modal.handle.clone();
         div()
             .absolute()
@@ -61,13 +61,11 @@ impl AppRoot {
                                         )
                                         .map(std::sync::Arc::new);
                                         let active = index == cursor;
-                                        let selected = this.selected_id.as_deref()
-                                            == Some(track.id.as_str())
-                                            || active
-                                            || this.queue_selection.contains(cursor, index)
+                                        let selected = active
+                                            || this.queue_list.selection.contains(cursor, index)
                                             || this
-                                                .queue_selection
-                                                .contains(this.queue_cursor, index);
+                                                .queue_list.selection
+                                                .contains(this.queue_list.cursor, index);
                                         let playing = index == this.player.index();
                                         let pending = this.marks.pending(&track.id, &track.album_id);
                                         let downloaded =
@@ -114,9 +112,9 @@ impl AppRoot {
                                                 ))
                                                 .on_click(cx.listener(move |this, _, _, cx| {
                                                     if !this.visual_mode {
-                                                        this.queue_selection.clear();
+                                                        this.queue_list.selection.clear();
                                                     }
-                                                    this.queue_cursor = index;
+                                                    this.queue_list.cursor = index;
                                                     this.player.jump(index);
                                                     cx.notify();
                                                 }))

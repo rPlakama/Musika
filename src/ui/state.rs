@@ -2,6 +2,7 @@
 
 use std::sync::Arc;
 
+use super::scroll_modal;
 use crate::ui::widgets::media::{CoverSource, cover_sources};
 
 pub use crate::model::{PageDescriptor, PageHeader, PageKind, Row, RowKind, Scope};
@@ -110,6 +111,31 @@ impl ListState {
         self.cursor = 0;
         self.selection.clear();
     }
+}
+
+/// Start the scroll-follow animation for one list surface: the surface's
+/// [`ListState`] owns the cursor, its `ScrollModal` owns the viewport metrics.
+pub fn follow_list(
+    list: &ListState,
+    scroll: &mut scroll_modal::ScrollModal,
+    count: usize,
+    animated: bool,
+    now: f64,
+) {
+    scroll.start(count, list.cursor, animated, now);
+}
+
+/// Land the scroll modal on `index`, clamp the shared cursor to the list and
+/// return the landed row. One implementation for every list surface.
+pub fn land_list(
+    list: &mut ListState,
+    scroll: &mut scroll_modal::ScrollModal,
+    count: usize,
+    index: usize,
+) -> usize {
+    let cursor = scroll.land(count, index);
+    list.select(cursor, count);
+    cursor
 }
 
 #[derive(Debug, Clone)]

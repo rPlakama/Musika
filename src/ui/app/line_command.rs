@@ -16,7 +16,7 @@ impl AppRoot {
                 }
             }
             LineSurface::Queue => {
-                self.queue_cursor = hit.row.min(self.player.len().saturating_sub(1));
+                self.queue_list.cursor = hit.row.min(self.player.len().saturating_sub(1));
                 self.follow_queue(true);
             }
             LineSurface::Page => {
@@ -153,7 +153,7 @@ impl AppRoot {
 
     pub(in crate::ui) fn clear_line_search_selection(&mut self) {
         self.visual_mode = false;
-        self.queue_selection.clear();
+        self.queue_list.selection.clear();
         self.view.list.selection.clear();
         if let Some(page) = self.page.as_mut() {
             page.list.selection.clear();

@@ -805,13 +805,11 @@ struct AppRoot {
     palette_cover: Option<String>,
     hovered_row: Option<usize>,
     hovered_page: Option<usize>,
-    selected_id: Option<String>,
     pending_page_reveal: Option<PendingReveal>,
     /// (playlist id, cursor row, keep selection) to apply when an edited
     /// playlist page reloads.
     pending_playlist_cursor: Option<(String, usize, bool)>,
     visual_mode: bool,
-    queue_selection: state::Selection,
     /// In-app row clipboard (VI-8a): kind + ids in yank order, duplicates kept.
     clipboard_kind: Option<RowKind>,
     clipboard_ids: Vec<String>,
@@ -835,7 +833,7 @@ struct AppRoot {
     player_bar_cover: views::shell::PlayerBarCover,
     playback_error: Option<String>,
     queue_open: bool,
-    queue_cursor: usize,
+    queue_list: state::ListState,
     queue_anim: anim::Behavior,
     repeat: crate::player::Repeat,
     login: Option<LoginState>,
@@ -971,7 +969,7 @@ impl AppRoot {
                             let old_loading = this.player.is_loading();
                             this.player.apply_state(state);
                             this.repeat = this.player.repeat();
-                            this.clamp_queue_cursor();
+                            this.clamp_queue();
                             this.drain_resync();
                             this.sync_mute_toast(this.player.muted());
                             notify = old_state != this.player.state()
@@ -980,12 +978,12 @@ impl AppRoot {
                         }
                         UiUpdate::QueueDelta(delta) => {
                             this.player.apply_delta(delta);
-                            this.clamp_queue_cursor();
+                            this.clamp_queue();
                             this.drain_resync();
                         }
                         UiUpdate::QueueRows(rows) => {
                             this.player.apply_rows(rows);
-                            this.clamp_queue_cursor();
+                            this.clamp_queue();
                             this.drain_resync();
                         }
                         UiUpdate::PlayerReply(reply) => {
@@ -1096,11 +1094,9 @@ impl AppRoot {
             palette_cover: None,
             hovered_row: None,
             hovered_page: None,
-            selected_id: None,
             pending_page_reveal: None,
             pending_playlist_cursor: None,
             visual_mode: false,
-            queue_selection: state::Selection::default(),
             clipboard_kind: None,
             clipboard_ids: Vec::new(),
             paste_backup: None,
@@ -1116,7 +1112,7 @@ impl AppRoot {
             player_bar_cover: views::shell::PlayerBarCover::default(),
             playback_error: None,
             queue_open: false,
-            queue_cursor: 0,
+            queue_list: state::ListState::default(),
             queue_anim: anim::Behavior::new(0.0),
             repeat: crate::player::Repeat::Off,
             login: None,
@@ -1214,7 +1210,7 @@ impl AppRoot {
         }
         if std::env::var_os("MUSIKA_GPUUI_QUEUE").is_some() {
             app.queue_open = true;
-            app.queue_cursor = app.player.index();
+            app.queue_list.cursor = app.player.index();
         }
         if let Ok(song_id) = std::env::var("MUSIKA_GPUUI_PLAY")
             && !song_id.is_empty()
@@ -1259,8 +1255,8 @@ impl AppRoot {
     }
 
     /// Keeps the queue cursor inside the row window the core reported.
-    fn clamp_queue_cursor(&mut self) {
-        self.queue_cursor = self.queue_cursor.min(self.player.len().saturating_sub(1));
+    fn clamp_queue(&mut self) {
+        self.queue_list.cursor = self.queue_list.cursor.min(self.player.len().saturating_sub(1));
     }
 }
 

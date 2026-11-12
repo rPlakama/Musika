@@ -455,12 +455,12 @@ impl AppRoot {
             ));
         }
 
-        if self.queue_open && self.queue_selection.active() {
+        if self.queue_open && self.queue_list.selection.active() {
             let queue = self.player.queue_snapshot();
-            let anchor_index = self.queue_selection.anchor().unwrap_or(self.queue_cursor);
-            let lo = anchor_index.min(self.queue_cursor);
+            let anchor_index = self.queue_list.selection.anchor().unwrap_or(self.queue_list.cursor);
+            let lo = anchor_index.min(self.queue_list.cursor);
             let hi = anchor_index
-                .max(self.queue_cursor)
+                .max(self.queue_list.cursor)
                 .min(queue.len().saturating_sub(1));
             let tracks = queue.get(lo..=hi).unwrap_or_default();
             if tracks.is_empty() {
@@ -468,7 +468,7 @@ impl AppRoot {
             }
             let all_starred = tracks.iter().all(|track| track.favorite);
             let ids: Vec<String> = tracks.iter().map(|track| track.id.clone()).collect();
-            let track = tracks.get(self.queue_cursor.saturating_sub(lo))?;
+            let track = tracks.get(self.queue_list.cursor.saturating_sub(lo))?;
             let target = AltTarget {
                 kind: RowKind::Song,
                 id: track.id.clone(),
@@ -485,14 +485,14 @@ impl AppRoot {
                 target,
                 self.alt_scroll_anchor(
                     &self.queue_scroll_modal,
-                    self.queue_cursor,
+                    self.queue_list.cursor,
                     self.player.len(),
                 ),
             ));
         }
         if self.queue_open {
             let queue = self.player.queue_snapshot();
-            let track = queue.get(self.queue_cursor)?;
+            let track = queue.get(self.queue_list.cursor)?;
             let menu = QuickMenu::song_with(track.favorite);
             let target = AltTarget {
                 kind: RowKind::Song,
@@ -510,7 +510,7 @@ impl AppRoot {
                 target,
                 self.alt_scroll_anchor(
                     &self.queue_scroll_modal,
-                    self.queue_cursor,
+                    self.queue_list.cursor,
                     self.player.len(),
                 ),
             ));

@@ -102,13 +102,10 @@ impl AppRoot {
                     count,
                     cx.processor(move |this, range: std::ops::Range<usize>, window, cx| {
                         let row_h = this.library_scroll.row_h;
-                        let selected_id = this.selected_id.as_deref();
                         let line_query: gpui::SharedString = this.line_search.query().to_string().into();
                         let mut items = Vec::with_capacity(range.len());
                         for index in range {
-                            let selected = this.view.rows.get(index).is_some_and(|row| {
-                                selected_id == Some(row.id.as_str())
-                            }) || index == this.view.list.cursor
+                            let selected = index == this.view.list.cursor
                                 || this.view.list.selection.contains(this.view.list.cursor, index);
                             let hovered = this.hovered_row == Some(index);
                             let striped = index % 2 != 0;

@@ -40,8 +40,8 @@ impl AppRoot {
             return;
         }
         if self.queue_open {
-            self.queue_cursor = self
-                .queue_cursor
+            self.queue_list.cursor = self
+                .queue_list.cursor
                 .saturating_add(1)
                 .min(self.player.len().saturating_sub(1));
             self.follow_queue(true);
@@ -84,7 +84,7 @@ impl AppRoot {
             return;
         }
         if self.queue_open {
-            self.queue_cursor = self.queue_cursor.saturating_sub(1);
+            self.queue_list.cursor = self.queue_list.cursor.saturating_sub(1);
             self.follow_queue(true);
             cx.notify();
             return;
@@ -425,8 +425,8 @@ impl AppRoot {
         if self.queue_open {
             let queue = self.player.queue_snapshot();
             let ids: Vec<String> = self
-                .queue_selection
-                .indices(self.queue_cursor, false)
+                .queue_list.selection
+                .indices(self.queue_list.cursor, false)
                 .into_iter()
                 .filter_map(|index| queue.get(index).map(|track| track.id.clone()))
                 .filter(|id| !id.is_empty())
@@ -480,13 +480,13 @@ impl AppRoot {
         }
         if self.queue_open {
             let queue = self.player.queue_snapshot();
-            let indices = self.queue_selection.indices(self.queue_cursor, row_only);
+            let indices = self.queue_list.selection.indices(self.queue_list.cursor, row_only);
             let ids: Vec<String> = indices
                 .iter()
                 .filter_map(|index| queue.get(*index).map(|track| track.id.clone()))
                 .collect();
             let count = self.clipboard_from_song_ids(ids);
-            self.queue_selection.clear();
+            self.queue_list.selection.clear();
             self.visual_mode = false;
             self.announce_yank(count, 0);
             return count;
@@ -580,7 +580,7 @@ impl AppRoot {
             return;
         }
         let target = if self.queue_open {
-            Some(PasteTarget::Queue(paste_at(self.queue_cursor, above)))
+            Some(PasteTarget::Queue(paste_at(self.queue_list.cursor, above)))
         } else {
             self.page
                 .as_ref()
@@ -609,7 +609,7 @@ impl AppRoot {
         self.paste_backup = Some((kind, ids.clone()));
         match target {
             PasteTarget::Queue(at) => {
-                self.queue_selection.clear();
+                self.queue_list.selection.clear();
                 self.visual_mode = false;
                 self.bridge.paste_queue(kind_str.to_string(), ids, at);
             }
@@ -645,8 +645,8 @@ impl AppRoot {
 
     fn delete_queue_range(&mut self, cx: &mut Context<Self>) {
         let indices: Vec<usize> = self
-            .queue_selection
-            .indices(self.queue_cursor, false)
+            .queue_list.selection
+            .indices(self.queue_list.cursor, false)
             .into_iter()
             .filter(|index| *index < self.player.len())
             .collect();
@@ -659,8 +659,8 @@ impl AppRoot {
         // Clamp against the expected remaining length so the cursor never
         // parks past the end in the meantime.
         let remaining = self.player.len().saturating_sub(count);
-        self.queue_cursor = first.min(remaining.saturating_sub(1));
-        self.queue_selection.clear();
+        self.queue_list.cursor = first.min(remaining.saturating_sub(1));
+        self.queue_list.selection.clear();
         self.visual_mode = false;
         self.follow_queue(true);
         self.push_toast(
@@ -726,12 +726,12 @@ impl AppRoot {
         cx: &mut Context<Self>,
     ) {
         if self.queue_open {
-            if self.queue_selection.active() {
+            if self.queue_list.selection.active() {
                 self.move_queue_block(-1, cx);
-            } else if self.queue_cursor > 0 {
+            } else if self.queue_list.cursor > 0 {
                 self.player
-                    .move_item(self.queue_cursor, self.queue_cursor - 1);
-                self.queue_cursor -= 1;
+                    .move_item(self.queue_list.cursor, self.queue_list.cursor - 1);
+                self.queue_list.cursor -= 1;
                 self.follow_queue(true);
                 cx.notify();
             }
@@ -742,15 +742,15 @@ impl AppRoot {
 
     /// Queue `Ctrl-Shift-K/J` with a visual selection: move the whole block.
     fn move_queue_block(&mut self, delta: i32, cx: &mut Context<Self>) {
-        let anchor = self.queue_selection.anchor().unwrap_or(self.queue_cursor);
-        let start = anchor.min(self.queue_cursor);
-        let end = anchor.max(self.queue_cursor);
+        let anchor = self.queue_list.selection.anchor().unwrap_or(self.queue_list.cursor);
+        let start = anchor.min(self.queue_list.cursor);
+        let end = anchor.max(self.queue_list.cursor);
         let len = end - start + 1;
         if !self.player.move_block(start, len, delta) {
             return;
         }
-        self.queue_cursor = (self.queue_cursor as i64 + i64::from(delta)) as usize;
-        self.queue_selection.shift(delta);
+        self.queue_list.cursor = (self.queue_list.cursor as i64 + i64::from(delta)) as usize;
+        self.queue_list.selection.shift(delta);
         self.follow_queue(true);
         cx.notify();
     }
@@ -793,12 +793,12 @@ impl AppRoot {
         cx: &mut Context<Self>,
     ) {
         if self.queue_open {
-            if self.queue_selection.active() {
+            if self.queue_list.selection.active() {
                 self.move_queue_block(1, cx);
-            } else if self.queue_cursor + 1 < self.player.len() {
+            } else if self.queue_list.cursor + 1 < self.player.len() {
                 self.player
-                    .move_item(self.queue_cursor, self.queue_cursor + 1);
-                self.queue_cursor += 1;
+                    .move_item(self.queue_list.cursor, self.queue_list.cursor + 1);
+                self.queue_list.cursor += 1;
                 self.follow_queue(true);
                 cx.notify();
             }
@@ -901,7 +901,7 @@ impl AppRoot {
         self.press_transport(0);
         self.player.previous();
         if self.queue_open {
-            self.queue_cursor = self.player.index();
+            self.queue_list.cursor = self.player.index();
             self.follow_queue(true);
         }
         cx.notify();
@@ -1018,12 +1018,12 @@ impl AppRoot {
         cx: &mut Context<Self>,
     ) {
         if self.queue_open {
-            let active = self.queue_selection.active();
+            let active = self.queue_list.selection.active();
             self.visual_mode = !active;
             if active {
-                self.queue_selection.clear();
+                self.queue_list.selection.clear();
             } else {
-                self.queue_selection.start(self.queue_cursor);
+                self.queue_list.selection.start(self.queue_list.cursor);
             }
             self.hovered_row = None;
             cx.notify();
@@ -1057,8 +1057,8 @@ impl AppRoot {
     ) {
         self.visual_mode = true;
         if self.queue_open {
-            self.queue_selection.select_all();
-            self.queue_cursor = self.player.len().saturating_sub(1);
+            self.queue_list.selection.select_all();
+            self.queue_list.cursor = self.player.len().saturating_sub(1);
             self.follow_queue(false);
             cx.notify();
             return;
@@ -1118,7 +1118,7 @@ impl AppRoot {
             return;
         }
         if self.queue_open {
-            let index = self.queue_cursor;
+            let index = self.queue_list.cursor;
             self.player.jump(index);
             self.queue_open = false;
             cx.notify();
@@ -1176,8 +1176,8 @@ impl AppRoot {
             cx.notify();
             return;
         }
-        if self.queue_open && self.queue_selection.active() {
-            self.queue_selection.clear();
+        if self.queue_open && self.queue_list.selection.active() {
+            self.queue_list.selection.clear();
             self.visual_mode = false;
             cx.notify();
             return;

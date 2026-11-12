@@ -16,6 +16,13 @@ fn load_dotenv() {
         let key = key.trim();
         let value = value.trim().trim_matches(['"', '\'']);
         if !key.is_empty() && std::env::var_os(key).is_none() {
+            // SAFETY: `set_var` is unsafe because the process environment is
+            // global and must not be mutated while another thread reads it.
+            // TODO(safety): the call site (`init_backend`) already started the
+            // audio warm-up thread and startup instrumentation before
+            // `load_dotenv`, so the single-threaded invariant is not currently
+            // established; moving dotenv loading ahead of `warm_native()` would
+            // make it sound.
             unsafe {
                 std::env::set_var(key, value);
             }
@@ -26,12 +33,19 @@ fn load_dotenv() {
 pub fn run() {
     // Keep glibc from creating a new arena per decoder thread.
     #[cfg(target_os = "linux")]
-    unsafe {
+    {
+        // SAFETY: `mallopt` is a plain glibc C function with integer
+        // parameters; no pointers cross this boundary.
         unsafe extern "C" {
             fn mallopt(param: std::ffi::c_int, value: std::ffi::c_int) -> std::ffi::c_int;
         }
         const M_ARENA_MAX: std::ffi::c_int = -8;
-        let _ = mallopt(M_ARENA_MAX, 1);
+        // SAFETY: the declaration above matches glibc's `int mallopt(int,
+        // int)`; the call has no memory-safety preconditions and failure is
+        // reported through the return value, which is deliberately ignored.
+        unsafe {
+            let _ = mallopt(M_ARENA_MAX, 1);
+        }
     }
 
     // CLI probe before any database work, so `musika --version` also works
@@ -133,13 +147,20 @@ fn spawn_detached_daemon() {
             }
         }
     }
+    let child_setup = || {
+        // SAFETY: `setsid(2)` takes no pointers, allocates nothing and returns
+        // -1 on failure; it is async-signal-safe, which is what the
+        // fork/exec window requires.
+        if unsafe { libc::setsid() } == -1 {
+            return Err(std::io::Error::last_os_error());
+        }
+        Ok(())
+    };
+    // SAFETY: `pre_exec` requires the closure to be async-signal-safe in the
+    // forked child; `child_setup` only calls `setsid(2)` and
+    // `last_os_error()`, holds no locks and allocates nothing.
     unsafe {
-        command.pre_exec(|| {
-            if libc::setsid() == -1 {
-                return Err(std::io::Error::last_os_error());
-            }
-            Ok(())
-        });
+        command.pre_exec(child_setup);
     }
     match command.spawn() {
         Ok(child) => {

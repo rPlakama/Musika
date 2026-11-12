@@ -110,8 +110,14 @@ pub(crate) mod test_alloc {
     /// A `System` allocator that records live bytes on the measuring thread.
     pub(crate) struct TrackingAllocator;
 
+    // SAFETY: the implementation obeys the `GlobalAlloc` contract by
+    // forwarding every request to `System` unchanged; the only extra work is
+    // recording byte counts in thread-local cells, which never allocate and
+    // never dereference the returned pointer.
     unsafe impl GlobalAlloc for TrackingAllocator {
         unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+            // SAFETY: the caller-supplied layout is forwarded unchanged to
+            // `System`, so any pointer it returns is valid for that layout.
             let ptr = unsafe { System.alloc(layout) };
             if !ptr.is_null() {
                 add(layout.size() as isize);
@@ -120,6 +126,8 @@ pub(crate) mod test_alloc {
         }
 
         unsafe fn alloc_zeroed(&self, layout: Layout) -> *mut u8 {
+            // SAFETY: the caller-supplied layout is forwarded unchanged to
+            // `System`, so any pointer it returns is valid and zeroed for it.
             let ptr = unsafe { System.alloc_zeroed(layout) };
             if !ptr.is_null() {
                 add(layout.size() as isize);
@@ -129,10 +137,17 @@ pub(crate) mod test_alloc {
 
         unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
             add(-(layout.size() as isize));
+            // SAFETY: the caller returns a pointer that this allocator handed
+            // out together with its layout; `System.dealloc` owns that same
+            // allocation contract, and the tracking wrapper never reinterprets
+            // the pointer.
             unsafe { System.dealloc(ptr, layout) }
         }
 
         unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
+            // SAFETY: the caller passes a pointer/layout this allocator
+            // returned; `System.realloc` has the same contract, and the result
+            // is returned unchanged (or null) to the caller.
             let new = unsafe { System.realloc(ptr, layout, new_size) };
             if !new.is_null() {
                 add(new_size as isize - layout.size() as isize);

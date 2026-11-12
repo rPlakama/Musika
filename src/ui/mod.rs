@@ -193,6 +193,10 @@ pub fn run() {
             .detach();
 
             let bounds = Bounds::centered(None, size(px(1200.0), px(800.0)), cx);
+            #[expect(
+                clippy::expect_used,
+                reason = "the application cannot run without a window; failing here is the startup contract"
+            )]
             cx.open_window(
                 WindowOptions {
                     window_bounds: Some(WindowBounds::Windowed(bounds)),
@@ -1446,7 +1450,12 @@ fn last_sync_text(raw: &str) -> String {
 
 fn local_tm(secs: i64) -> Option<libc::tm> {
     let time = secs as libc::time_t;
+    // SAFETY: `libc::tm` is a plain C struct whose all-zero bit pattern is a
+    // valid (empty) calendar time value.
     let mut tm: libc::tm = unsafe { std::mem::zeroed() };
+    // SAFETY: `time` points at a live `time_t` and `tm` at a valid writable
+    // `libc::tm` for the call; `localtime_r` writes through those pointers and
+    // returns null on failure instead of touching the output.
     let ok = unsafe { libc::localtime_r(&time, &mut tm) };
     (!ok.is_null()).then_some(tm)
 }

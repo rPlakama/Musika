@@ -89,6 +89,12 @@ impl Shared {
         // The wakeup descriptor is best-effort: if `eventfd` fails the engine
         // still pumps on its timeout, so playback stays correct (only latency
         // degrades). `poll(2)` ignores a negative descriptor.
+        //
+        // SAFETY: `eventfd` has no Rust-side preconditions; it creates a new
+        // kernel eventfd and returns a descriptor (or -1). A successful
+        // descriptor is owned by `Shared` and closed exactly once by `Drop`; a
+        // failed one is stored as -1 and never dereferenced or written to
+        // because every user checks for that first.
         let wake_fd = unsafe { libc::eventfd(0, libc::EFD_NONBLOCK | libc::EFD_CLOEXEC) };
         let loaded = Status {
             loaded: false,
@@ -129,6 +135,13 @@ impl Shared {
             return;
         }
         let one = 1u64;
+        // SAFETY: `wake_fd` is the eventfd owned by this `Shared` and is
+        // non-negative on this path (checked above); it is closed only in
+        // `Drop`, which runs after the last `Arc<Shared>` clone is gone. `one`
+        // is a live 8-byte `u64` and the requested size matches it. This is
+        // called from the RT process callback, the sink loop and the decode
+        // worker: all write the same fd, which the kernel serialises, and
+        // `EFD_NONBLOCK` keeps the call from blocking the RT thread.
         unsafe {
             let _ = libc::write(
                 self.wake_fd,
@@ -144,6 +157,10 @@ impl Shared {
             return;
         }
         let mut value = 0u64;
+        // SAFETY: `wake_fd` is non-negative (checked above) and owned by this
+        // `Shared`, which keeps it open until `Drop`; `value` is a live 8-byte
+        // `u64` used as eventfd's read buffer. The read is non-blocking and an
+        // empty counter is intentionally ignored.
         unsafe {
             let _ = libc::read(
                 self.wake_fd,
@@ -172,6 +189,11 @@ impl Shared {
 impl Drop for Shared {
     fn drop(&mut self) {
         if self.wake_fd >= 0 {
+            // SAFETY: `wake_fd` was created by `eventfd` in `Shared::new` and
+            // is non-negative on this path; `Drop` runs exactly once, when the
+            // last `Arc<Shared>` is dropped, after which no clone can use it.
+            // Failing to close is intentionally ignored and there is no other
+            // owner that could close the same descriptor.
             unsafe {
                 let _ = libc::close(self.wake_fd);
             }

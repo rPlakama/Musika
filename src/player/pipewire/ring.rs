@@ -65,15 +65,27 @@ pub(crate) struct Ring {
     wake_fd: libc::c_int,
 }
 
-// SAFETY: the ring is a true SPSC buffer: the decoder thread is the only
-// writer and the PipeWire RT callback is the only reader. Positions use
-// acquire/release atomics; the sample storage is only touched inside the
-// ranges owned by the respective side.
+// SAFETY: `Ring` is a true SPSC buffer shared across threads: the decode
+// worker is the only writer and the PipeWire RT callback is the only reader.
+// Positions are absolute frame counters published through acquire/release
+// atomics; the sample storage is only accessed through its `UnsafeCell`s and
+// only inside the range owned by the respective side, so concurrent shared
+// access through `&Ring` is sound.
 unsafe impl Sync for Ring {}
+
+// SAFETY: moving a `Ring` between threads is sound because it holds no
+// thread-affine state: the samples are a plain heap allocation and the wake fd
+// is a kernel eventfd usable from any thread. Producer/consumer roles are
+// enforced by which side calls `write`/`read_into`, and once the ring is shared
+// all access goes through `&Ring`, which is covered by the `Sync` impl above.
 unsafe impl Send for Ring {}
 
 impl Ring {
     pub(crate) fn new() -> Result<Self, String> {
+        // SAFETY: `eventfd` has no Rust-side preconditions; it creates a new
+        // kernel eventfd and returns a descriptor (or -1). A successful
+        // descriptor is owned by `Ring` and closed exactly once in `Drop`; a
+        // failed one is rejected below and never stored.
         let wake_fd = unsafe { libc::eventfd(0, libc::EFD_NONBLOCK | libc::EFD_CLOEXEC) };
         if wake_fd < 0 {
             return Err(format!("eventfd: {}", std::io::Error::last_os_error()));
@@ -209,6 +221,11 @@ impl Ring {
 
     pub(crate) fn wake(&self) {
         let one = 1u64;
+        // SAFETY: `wake_fd` is the eventfd owned by this ring (valid for the
+        // ring's lifetime, closed once in `Drop`) and `one` is a live 8-byte
+        // `u64` matching the requested size. `EFD_NONBLOCK` keeps the write
+        // non-blocking; the return value is ignored because eventfd writes
+        // coalesce and a full counter is not an error for a wakeup.
         unsafe {
             let _ = libc::write(
                 self.wake_fd,
@@ -220,6 +237,10 @@ impl Ring {
 
     fn drain_wake(&self) {
         let mut value = 0u64;
+        // SAFETY: `wake_fd` is the ring's owned eventfd and is still open
+        // here; `value` is a live 8-byte `u64` used as eventfd's read buffer.
+        // The read is non-blocking and an empty counter is intentionally
+        // ignored.
         unsafe {
             let _ = libc::read(
                 self.wake_fd,
@@ -240,6 +261,12 @@ impl Ring {
             events: libc::POLLIN,
             revents: 0,
         };
+        // SAFETY: `pollfd` is a single fully initialised `pollfd` whose `fd` is
+        // the ring's own eventfd (valid because the ring outlives this call)
+        // and whose `revents` field is writable for the duration of the call;
+        // `poll` is passed the matching array length of one. A negative `fd`
+        // cannot occur here (`Ring::new` rejects it) and poll ignores it
+        // anyway.
         unsafe {
             let _ = libc::poll(&mut pollfd, 1, 250);
         }
@@ -277,17 +304,34 @@ impl Ring {
             // how much of it the current rate may fill.
             let start = (write & RING_MASK) as usize;
             let first = take.min(RING_FRAMES - start);
-            let dst = self.samples.as_ptr() as *mut i16;
+            let source = &pcm[offset * CHANNELS..(offset + take) * CHANNELS];
+            let destination = self.samples[start * CHANNELS..(start + first) * CHANNELS]
+                .as_ptr()
+                .cast::<i16>() as *mut i16;
+            // SAFETY: `start < RING_FRAMES` (masked) and `first <= RING_FRAMES -
+            // start`, so the destination range lies inside the allocated
+            // `samples` buffer; `source` lies inside the caller's `pcm` slice.
+            // The ranges belong to different allocations and the producer owns
+            // the absolute range `[write, write + take)`, so no reader touches
+            // them concurrently.
             unsafe {
-                std::ptr::copy_nonoverlapping(
-                    pcm.as_ptr().add(offset * CHANNELS),
-                    dst.add(start * CHANNELS),
-                    first * CHANNELS,
-                );
-                if take > first {
+                std::ptr::copy_nonoverlapping(source.as_ptr(), destination, first * CHANNELS);
+            }
+            if take > first {
+                let tail = &pcm[(offset + first) * CHANNELS..(offset + take) * CHANNELS];
+                let wrap_destination = self.samples[..(take - first) * CHANNELS]
+                    .as_ptr()
+                    .cast::<i16>() as *mut i16;
+                // SAFETY: the wrapped write starts at the beginning of the
+                // buffer and `take - first < take <= RING_FRAMES`, so
+                // `[0, take - first)` is inside the allocation; `tail` lies in
+                // the caller's slice. The ranges are in different allocations
+                // and the producer owns `[write, write + take)`, so no consumer
+                // reads them concurrently.
+                unsafe {
                     std::ptr::copy_nonoverlapping(
-                        pcm.as_ptr().add((offset + first) * CHANNELS),
-                        dst,
+                        tail.as_ptr(),
+                        wrap_destination,
                         (take - first) * CHANNELS,
                     );
                 }
@@ -318,17 +362,35 @@ impl Ring {
         if frames > 0 {
             let start = (read & RING_MASK) as usize;
             let first = frames.min(RING_FRAMES - start);
-            let src = self.samples.as_ptr() as *const i16;
+            let source = self.samples[start * CHANNELS..(start + first) * CHANNELS]
+                .as_ptr()
+                .cast::<i16>();
+            // SAFETY: `start < RING_FRAMES` (masked) and `first <= RING_FRAMES -
+            // start`, so the source range lies inside the allocated `samples`
+            // buffer; `out` has room for `frames * CHANNELS` samples and
+            // `first <= frames`. Source and destination are different
+            // allocations and the consumer owns `[read, read + frames)`.
             unsafe {
                 std::ptr::copy_nonoverlapping(
-                    src.add(start * CHANNELS),
-                    out.as_mut_ptr(),
+                    source,
+                    out[..first * CHANNELS].as_mut_ptr(),
                     first * CHANNELS,
                 );
-                if frames > first {
+            }
+            if frames > first {
+                let wrap_source = self.samples[..(frames - first) * CHANNELS]
+                    .as_ptr()
+                    .cast::<i16>();
+                // SAFETY: the wrapped read starts at the beginning of the
+                // buffer and `frames - first < frames <= RING_FRAMES`, so
+                // `[0, frames - first)` is inside the allocation; `out` has
+                // room for the remaining `frames - first` frames. The ranges
+                // are in different allocations and the consumer owns
+                // `[read, read + frames)`.
+                unsafe {
                     std::ptr::copy_nonoverlapping(
-                        src,
-                        out.as_mut_ptr().add(first * CHANNELS),
+                        wrap_source,
+                        out[first * CHANNELS..frames * CHANNELS].as_mut_ptr(),
                         (frames - first) * CHANNELS,
                     );
                 }
@@ -343,6 +405,10 @@ impl Ring {
 
 impl Drop for Ring {
     fn drop(&mut self) {
+        // SAFETY: `wake_fd` was created by `eventfd` in `Ring::new` and is
+        // owned by this ring; `Drop` runs exactly once, so the descriptor is
+        // closed once and no reference to it can outlive the ring (producer
+        // and consumer only hold `Arc<Ring>` clones of this same allocation).
         unsafe {
             let _ = libc::close(self.wake_fd);
         }

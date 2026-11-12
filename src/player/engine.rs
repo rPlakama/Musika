@@ -117,6 +117,10 @@ impl Engine {
         };
         let (command_tx, command_rx) = mpsc::channel::<AudioCommand>();
         let clock = Arc::new(ClockState::default());
+        // SAFETY: `eventfd` has no Rust-side preconditions: it creates a new
+        // kernel eventfd and returns a descriptor (or -1). The descriptor is
+        // owned by the resulting `Engine` and closed exactly once by
+        // `close_fd`, either on the spawn-error path below or in `Drop`.
         let wake_fd = unsafe { libc::eventfd(0, libc::EFD_NONBLOCK | libc::EFD_CLOEXEC) };
         let thread_wake = if wake_fd < 0 { -1 } else { wake_fd };
         let thread_clock = Arc::clone(&clock);
@@ -390,6 +394,11 @@ fn signal_fd(fd: libc::c_int) {
         return;
     }
     let one = 1u64;
+    // SAFETY: `fd` is the eventfd owned by `Engine` and it is closed only when
+    // the engine is dropped, so it cannot be closed while a signal is in
+    // flight from the engine thread or its command senders. `one` is a live
+    // `u64` and the requested length matches it; the descriptor was created
+    // with `EFD_NONBLOCK`, so the write cannot block.
     unsafe {
         let _ = libc::write(
             fd,
@@ -404,6 +413,10 @@ fn drain_fd(fd: libc::c_int) {
         return;
     }
     let mut value = 0u64;
+    // SAFETY: `fd` is the engine's owned eventfd (still open; only `Drop`
+    // closes it) and `value` is a live `u64` used as the 8-byte output buffer
+    // eventfd expects. The descriptor is non-blocking, and an empty counter is
+    // reported as an error that is intentionally ignored.
     unsafe {
         let _ = libc::read(
             fd,
@@ -417,6 +430,9 @@ fn close_fd(fd: libc::c_int) {
     if fd < 0 {
         return;
     }
+    // SAFETY: `fd` is a valid open descriptor owned by the engine; the caller
+    // closes it exactly once (the `Engine::new` spawn-error path or
+    // `Engine::drop`, never both), and no other code uses it afterwards.
     unsafe {
         let _ = libc::close(fd);
     }

@@ -122,14 +122,16 @@ pub fn same_uid<T: std::os::fd::AsRawFd + ?Sized>(stream: &T) -> bool {
         uid: libc::uid_t,
         gid: libc::gid_t,
     }
-    // SAFETY: `getsockopt(SO_PEERCRED)` writes one `struct ucred` into the
-    // provided buffer; the fd is valid for the duration of the call.
     let mut cred = UCred {
         pid: 0,
         uid: 0,
         gid: 0,
     };
     let mut len = std::mem::size_of::<UCred>() as libc::socklen_t;
+    // SAFETY: `getsockopt(SO_PEERCRED)` writes one `struct ucred` into
+    // `cred` (which is fully initialised and sized by `len`) and the stream fd
+    // stays valid for the duration of the call; on failure the kernel writes
+    // nothing and the result is checked below.
     let result = unsafe {
         libc::getsockopt(
             stream.as_raw_fd(),
@@ -139,6 +141,8 @@ pub fn same_uid<T: std::os::fd::AsRawFd + ?Sized>(stream: &T) -> bool {
             &mut len,
         )
     };
+    // SAFETY: `geteuid` has no preconditions and cannot fail; it returns the
+    // process's effective uid as an integer, so no memory can be affected.
     result == 0 && cred.uid == unsafe { libc::geteuid() }
 }
 

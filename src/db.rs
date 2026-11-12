@@ -558,7 +558,14 @@ fn demote_new_sqlite_workers(before: &std::collections::HashSet<u32>) {
             continue;
         }
         let param = SchedParam { priority: 0 };
+        // SAFETY: `tid` is a task id just read from /proc/self/task, and
+        // `param` is a fully initialised `sched_param`; `sched_setscheduler`
+        // only reads those values and reports failure through its return
+        // value, so no memory-safety precondition can be violated.
         let sched = unsafe { sched_setscheduler(tid as std::ffi::c_int, SCHED_IDLE, &param) };
+        // SAFETY: raw `ioprio_set(2)` (syscall 251 on Linux) with integer-only
+        // arguments; the kernel validates the target task and class and
+        // reports errors through the return value.
         let io = unsafe {
             syscall(
                 251,

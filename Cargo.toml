@@ -14,8 +14,8 @@ unsafe_op_in_unsafe_fn = "warn"
 
 [lints.clippy]
 # unsafe hygiene (highest value: lock-free ring buffer and RT callback live here)
-undocumented_unsafe_blocks = "warn"
-multiple_unsafe_ops_per_block = "warn"
+undocumented_unsafe_blocks = "deny"
+multiple_unsafe_ops_per_block = "deny"
 
 # every suppression says why; prefer #[expect] so stale ones fail
 allow_attributes_without_reason = "warn"

@@ -31,6 +31,8 @@ use std::path::Path;
 #[cfg(target_os = "linux")]
 pub(crate) fn advise_willneed(path: &Path) -> std::io::Result<()> {
     const POSIX_FADV_WILLNEED: std::ffi::c_int = 3;
+    // SAFETY: `posix_fadvise` is a plain libc function declared with the
+    // platform's `int`/`long` ABI; only integers cross this boundary.
     unsafe extern "C" {
         fn posix_fadvise(
             fd: std::ffi::c_int,
@@ -40,6 +42,10 @@ pub(crate) fn advise_willneed(path: &Path) -> std::io::Result<()> {
         ) -> std::ffi::c_int;
     }
     let file = std::fs::File::open(path)?;
+    // SAFETY: `file` keeps the descriptor open for the duration of the call;
+    // `posix_fadvise` only inspects the open file description and reports
+    // invalid/unsupported advice through its return value, never as memory
+    // unsafety.
     let _ = unsafe { posix_fadvise(file.as_raw_fd(), 0, 0, POSIX_FADV_WILLNEED) };
     Ok(())
 }

@@ -84,14 +84,20 @@ fn stopped() -> String {
 fn error_text(error: Error) -> String {
     let code: c_int = error.into();
     let mut buffer = [0 as c_char; 256];
-    let text = unsafe {
-        if ffmpeg::ffi::av_strerror(code, buffer.as_mut_ptr(), buffer.len()) < 0 {
-            format!("{error}")
-        } else {
-            CStr::from_ptr(buffer.as_ptr())
-                .to_string_lossy()
-                .into_owned()
-        }
+    // SAFETY: `buffer` is a writable array of `buffer.len()` bytes and `code`
+    // is an FFmpeg error number; `av_strerror` only writes the message into
+    // the provided buffer and never retains the pointer.
+    let written = unsafe { ffmpeg::ffi::av_strerror(code, buffer.as_mut_ptr(), buffer.len()) };
+    let text = if written < 0 {
+        format!("{error}")
+    } else {
+        // SAFETY: on success `av_strerror` NUL-terminates the message within
+        // `errbuf_size` (FFmpeg copies it with `av_strlcpy`); `buffer` was
+        // additionally zero-initialised, so a terminator is always present
+        // inside the array. The array outlives the borrowed `CStr`.
+        unsafe { CStr::from_ptr(buffer.as_ptr()) }
+            .to_string_lossy()
+            .into_owned()
     };
     format!("{text} (FFmpeg {code})")
 }
@@ -252,11 +258,21 @@ impl Decoder {
             .audio()
             .map_err(|error| context_error("decoder: cannot open audio decoder", error))?;
 
-        let seekable = unsafe {
-            let format_context = input.as_ptr();
-            let io = (*format_context).pb;
-            !io.is_null() && ((*io).seekable & ffmpeg::ffi::AVIO_SEEKABLE_NORMAL) != 0
-        };
+        // SAFETY: `input` owns the currently open AVFormatContext and keeps it
+        // alive for as long as the returned `Decoder`; it is moved into that
+        // struct below, and `as_ptr` only lends the internal pointer for this
+        // read. No other `Input` method is called while the pointer is used.
+        let format_context = unsafe { input.as_ptr() };
+        // SAFETY: `format_context` points at the live AVFormatContext owned by
+        // `input`; `pb` is the AVIOContext FFmpeg creates and owns for the
+        // open input, kept alive until the input is closed, and it is only
+        // read here.
+        let io = unsafe { (*format_context).pb };
+        // SAFETY: `io` is either null (rejected before the dereference) or the
+        // live AVIOContext owned by the input; `seekable` is a plain bit field
+        // of that context whose lifetime is bounded by the input's.
+        let seekable =
+            !io.is_null() && unsafe { ((*io).seekable & ffmpeg::ffi::AVIO_SEEKABLE_NORMAL) != 0 };
 
         let mut decoder = Self {
             input,
@@ -353,9 +369,19 @@ impl Decoder {
             target as i64
         };
 
+        // SAFETY: `self.input` owns the open AVFormatContext for the decoder's
+        // lifetime; `as_mut_ptr` lends it mutably for the duration of the seek,
+        // and no other reference into the context is used at this point.
+        let input_ptr = unsafe { self.input.as_mut_ptr() };
+        // SAFETY: `input_ptr` is the live context owned by `self.input`;
+        // `self.stream_index` identifies one of its audio streams and `target`
+        // is a timestamp in that stream's time base. FFmpeg keeps the context
+        // valid across the call, and all decoder/resampler state is flushed
+        // right afterwards (or the decoder is failed), so no stale frame or
+        // packet pointers survive a seek.
         let result = unsafe {
             ffmpeg::ffi::av_seek_frame(
-                self.input.as_mut_ptr(),
+                input_ptr,
                 self.stream_index as c_int,
                 target,
                 ffmpeg::ffi::AVSEEK_FLAG_BACKWARD,
@@ -702,12 +728,28 @@ impl Decoder {
     }
 
     fn unref_decoded(&mut self) {
+        // SAFETY: `decoded` is an AVFrame allocated by `frame::Audio::empty`
+        // and owned by this decoder; `as_mut_ptr` (an unsafe binding accessor)
+        // only lends the raw pointer for the duration of this reset, and no
+        // other Rust reference to the frame is alive here.
+        let frame = unsafe { self.decoded.as_mut_ptr() };
+        // SAFETY: `frame` points at the live AVFrame owned by `self.decoded`;
+        // `av_frame_unref` releases the buffers it references while keeping
+        // the AVFrame allocation itself valid for later `receive_frame` reuse,
+        // which is exactly the reset this helper performs.
         unsafe {
-            ffmpeg::ffi::av_frame_unref(self.decoded.as_mut_ptr());
+            ffmpeg::ffi::av_frame_unref(frame);
         }
     }
 
     fn unref_packet(&mut self) {
+        // SAFETY: `packet` is the initialised AVPacket embedded in the `Packet`
+        // wrapper owned by this decoder (`Packet::empty` initialises it and
+        // the wrapper is its sole owner); `as_mut_ptr` is a safe accessor and
+        // the pointer stays valid for the duration of the call. `av_packet_unref`
+        // only releases the buffers the packet references and leaves the
+        // packet struct itself usable, so the wrapper can be reused and later
+        // dropped safely.
         unsafe {
             ffmpeg::ffi::av_packet_unref(self.packet.as_mut_ptr());
         }

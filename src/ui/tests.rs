@@ -409,3 +409,37 @@ mod ipc_toast_tests {
         );
     }
 }
+
+mod fullscreen_identity_tests {
+    use crate::ui::views::fullscreen::identity_widths;
+
+    #[test]
+    fn short_title_and_artist_stay_adjacent() {
+        // Both fit their natural width: the artist starts right after the
+        // title instead of at the far edge.
+        let (title, artist) = identity_widths(1000.0, 200.0, 120.0, 80.0);
+        assert_eq!((title, artist), (200.0, 120.0));
+    }
+
+    #[test]
+    fn long_title_is_capped_so_the_artist_still_fits() {
+        let (title, artist) = identity_widths(1000.0, 2000.0, 120.0, 80.0);
+        assert_eq!(artist, 120.0);
+        assert_eq!(title, 1000.0 - 80.0 - 120.0 - 8.0);
+        assert!(title + artist + 80.0 + 8.0 <= 1000.0);
+    }
+
+    #[test]
+    fn long_artist_is_capped_before_the_title() {
+        let (title, artist) = identity_widths(1000.0, 200.0, 2000.0, 80.0);
+        assert_eq!(title, 200.0);
+        assert!(artist <= (1000.0 - 80.0) * 0.34 + 1e-4);
+        assert!(artist >= 70.0);
+    }
+
+    #[test]
+    fn missing_artist_returns_no_artist_slot() {
+        let (title, artist) = identity_widths(1000.0, 400.0, 0.0, 40.0);
+        assert_eq!((title, artist), (400.0, 0.0));
+    }
+}

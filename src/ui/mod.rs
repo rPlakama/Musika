@@ -53,7 +53,7 @@ mod visuals;
 mod widgets;
 
 use self::text_modal::TextModal;
-use self::widgets::marquee::MarqueeText;
+use self::widgets::marquee::{MarqueeText, line_width};
 use self::widgets::media::{
     CoverSource, FAVORITE_GOLD, RowMarks, art, collage_art_from_sources, cover_element,
     cover_source_with_remote, format_time, highlighted_text, icon, icon_rotated,

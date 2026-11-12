@@ -111,7 +111,12 @@ impl AppRoot {
             .into_any_element()
     }
 
-    pub(in crate::ui) fn fullscreen_overlay(&self, progress: f32, cx: &Context<Self>) -> gpui::Div {
+    pub(in crate::ui) fn fullscreen_overlay(
+        &self,
+        progress: f32,
+        window: &Window,
+        cx: &Context<Self>,
+    ) -> gpui::Div {
         let track = self.player.current().cloned();
         let (title, artist, cover) = match &track {
             Some(track) => {
@@ -137,6 +142,39 @@ impl AppRoot {
         let downloaded = track
             .as_ref()
             .is_some_and(|track| self.marks.downloaded(&track.id, &track.album_id));
+        // Natural widths for the identity line: the title is sized to its text
+        // (capped to the row budget) so the artist sits immediately after it
+        // instead of being pinned to the right edge; the repeat insight follows
+        // the artist and the marks keep the right edge via a flexible spacer.
+        let repeat_visible = self.repeat != crate::player::Repeat::Off;
+        let repeat_text = repeat_label(self.repeat);
+        let identity_inner = (self.win_w - 50.0).max(220.0);
+        let mark_gap = 8.0;
+        let mut marks_width = 0.0;
+        if favorite {
+            marks_width += (title_size * 0.62).clamp(13.0, 19.0) + mark_gap;
+        }
+        if pending {
+            marks_width += (title_size * 0.58).clamp(12.0, 18.0) + mark_gap;
+        }
+        if downloaded && !pending {
+            marks_width += (title_size * 0.58).clamp(12.0, 18.0) + mark_gap;
+        }
+        let repeat_width = if repeat_visible {
+            line_width(window, repeat_text, 12.0, 400.0) + mark_gap
+        } else {
+            0.0
+        };
+        let (title_width, artist_width) = identity_widths(
+            identity_inner,
+            line_width(window, &title, title_size, 700.0),
+            if artist.is_empty() {
+                0.0
+            } else {
+                line_width(window, &artist, 12.0, 400.0)
+            },
+            marks_width + repeat_width,
+        );
         let cover_focus = self.fullscreen_focus == FullscreenFocus::Cover;
         let title_focus = self.fullscreen_focus == FullscreenFocus::Title;
         let lyrics_focus = self.fullscreen_focus == FullscreenFocus::Lyrics;
@@ -282,8 +320,9 @@ impl AppRoot {
                     .gap_2()
                     .child(
                         // One identity line: the title keeps the focus border
-                        // and its Alt anchor, with the artist tucked beside it
-                        // before the favourite/pending/download marks.
+                        // and its Alt anchor, the artist sits immediately to
+                        // its right, the repeat insight follows the artist and
+                        // the favourite/pending/download marks keep the edge.
                         div()
                             .w_full()
                             .rounded_md()
@@ -324,8 +363,12 @@ impl AppRoot {
                                     .flex()
                                     .items_center()
                                     .gap_2()
+                                    .overflow_hidden()
                                     .child(
-                                        div().flex_1().min_w_0().overflow_hidden().child(
+                                        // Sized to the shaped title: a shorter
+                                        // name leaves the artist right after
+                                        // it instead of at the far edge.
+                                        div().w(px(title_width)).min_w_0().overflow_hidden().child(
                                             MarqueeText::new(
                                                 "fullscreen-title",
                                                 0,
@@ -336,23 +379,38 @@ impl AppRoot {
                                             ),
                                         ),
                                     )
-                                    .child(
-                                        // The artist rides the title line so
-                                        // the block loses a whole row of height.
-                                        div()
-                                            .flex_none()
-                                            .w(relative(0.24))
-                                            .min_w(px(80.0))
-                                            .overflow_hidden()
-                                            .child(MarqueeText::new(
-                                                "fullscreen-artist",
-                                                0,
-                                                artist,
-                                                12.0,
-                                                400.0,
-                                                palette::on_surface_variant(),
-                                            )),
-                                    )
+                                    .when(!artist.is_empty(), |this| {
+                                        this.child(
+                                            // The artist rides the title line
+                                            // so the block loses a whole row of
+                                            // height.
+                                            div()
+                                                .w(px(artist_width))
+                                                .min_w_0()
+                                                .overflow_hidden()
+                                                .child(MarqueeText::new(
+                                                    "fullscreen-artist",
+                                                    0,
+                                                    artist,
+                                                    12.0,
+                                                    400.0,
+                                                    palette::on_surface_variant(),
+                                                )),
+                                        )
+                                    })
+                                    .when(repeat_visible, |this| {
+                                        // Repeat insight: the same "one"/"all"
+                                        // label the bottom player bar uses,
+                                        // placed next to the artist.
+                                        this.child(
+                                            div()
+                                                .flex_none()
+                                                .text_size(px(12.0))
+                                                .text_color(rgb(palette::primary()))
+                                                .child(repeat_text),
+                                        )
+                                    })
+                                    .child(div().flex_1().min_w(px(8.0)))
                                     .when(favorite, |this| {
                                         this.child(icon(
                                             "baseline-favorite.svg",
@@ -431,4 +489,24 @@ impl AppRoot {
                     ),
             )
     }
+}
+
+/// Sizes for the fullscreen identity line.
+///
+/// The title is shaped to its text and then capped so the artist sits right
+/// after it while the repeat insight and the right-edge marks still fit. The
+/// artist is capped independently; both fall back to a minimum so a very
+/// narrow window still shows something before the row clips.
+pub(in crate::ui) fn identity_widths(
+    inner: f32,
+    title: f32,
+    artist: f32,
+    reserved: f32,
+) -> (f32, f32) {
+    if artist <= 0.0 {
+        return (title.min((inner - reserved).max(120.0)), 0.0);
+    }
+    let artist = artist.min(((inner - reserved) * 0.34).clamp(70.0, 240.0));
+    let title = title.min((inner - reserved - artist - 8.0).max(120.0));
+    (title, artist)
 }

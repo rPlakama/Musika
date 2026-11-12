@@ -109,6 +109,33 @@ pub struct MarqueePaint {
     offset: f32,
 }
 
+/// Natural pixel width of `text` shaped at `size`/`weight`.
+///
+/// The marquee element itself stretches to its parent, so a caller that needs
+/// to place something immediately after the text (the fullscreen artist line)
+/// measures the shaped line here.
+pub(crate) fn line_width(window: &Window, text: &str, size: f32, weight: f32) -> f32 {
+    if text.is_empty() {
+        return 0.0;
+    }
+    let mut font = gpui::font("Overused Grotesk Roman");
+    font.weight = gpui::FontWeight(weight);
+    let color = gpui::rgb(0).into();
+    let run = TextRun {
+        len: text.len(),
+        font,
+        color,
+        background_color: None,
+        underline: None,
+        strikethrough: None,
+    };
+    let shaped_text: gpui::SharedString = text.to_owned().into();
+    let line = window
+        .text_system()
+        .shape_line(shaped_text, px(size), &[run], None);
+    f32::from(line.width)
+}
+
 impl MarqueeText {
     pub(crate) fn new(
         id_name: &'static str,

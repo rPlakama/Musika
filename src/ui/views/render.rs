@@ -241,7 +241,7 @@ impl Render for AppRoot {
             perf::request_frame(window, "lyrics-overlay");
         }
         let fullscreen_overlay = (self.fullscreen || fullscreen_progress > 0.001)
-            .then(|| self.fullscreen_overlay(fullscreen_progress, cx));
+            .then(|| self.fullscreen_overlay(fullscreen_progress, window, cx));
         let exit_overlay = self.exiting.map(|started| {
             let progress = (((self.clock.now - started) / 0.200) as f32).clamp(0.0, 1.0);
             self.exit_overlay(progress)

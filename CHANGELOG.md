@@ -3,7 +3,7 @@
 All notable changes to Musika, newest first. `TASKLISTMAJOR.md` tracks the
 open work; this file is the release history.
 
-## Unreleased
+## 0.7.0 - _Somewhere betwheen... Six and Seven._
 
 - Identify Musika to Subsonic/Navidrome: every request (and the login `ping`)
   now sends the client flag `c=MUSIKA`, so servers and panels show the app by
@@ -54,6 +54,12 @@ open work; this file is the release history.
   suggests `selected` before the `;` cutoff. The selection lives in the UI, so
   the command is forwarded to `musika-ui` and does nothing without an attached
   window.
+- Inherit shared data instead of restating it: the bridge RPC surface, command
+  grammar, search/list payloads, item vocabulary, row/track identity and
+  download marks each have a single declaration now. Core↔UI payloads are
+  typed end to end (the secondary JSON schema is gone), the command line's
+  completion rides the same registry as its parser, and the list surfaces share
+  one state/follow/row-chrome implementation. Intended behaviour is unchanged.
 
 ## 0.6.9 - _Engine rework and UI extras_
 

@@ -1,13 +1,9 @@
 use super::common::*;
 use crate::library::*;
 
-async fn memory_pool() -> SqlitePool {
-    crate::test::memory_pool(sqlx::migrate!("./migrations_library")).await
-}
-
 #[tokio::test]
 async fn replace_round_trips_artists_albums_and_songs() {
-    let pool = memory_pool().await;
+    let pool = library_pool().await;
     let artist = ArtistID3 {
         id: "ar1".into(),
         name: "Radiohead".into(),
@@ -70,7 +66,7 @@ async fn replace_round_trips_artists_albums_and_songs() {
 
 #[tokio::test]
 async fn replace_reports_changed_albums_artists_and_covers() {
-    let pool = memory_pool().await;
+    let pool = library_pool().await;
     let album = |cover: &str| AlbumID3 {
         id: "al1".into(),
         name: "Kid A".into(),
@@ -113,7 +109,7 @@ async fn replace_reports_changed_albums_artists_and_covers() {
 
 #[tokio::test]
 async fn replace_reports_changed_songs() {
-    let pool = memory_pool().await;
+    let pool = library_pool().await;
     let song = |title: &str| Child {
         id: "s1".into(),
         album_id: Some("al1".into()),
@@ -140,7 +136,7 @@ async fn replace_reports_changed_songs() {
 
 #[tokio::test]
 async fn album_rating_round_trips_and_syncs_the_user_rating() {
-    let pool = memory_pool().await;
+    let pool = library_pool().await;
     let album = AlbumID3 {
         id: "al1".into(),
         name: "Kid A".into(),
@@ -157,7 +153,7 @@ async fn album_rating_round_trips_and_syncs_the_user_rating() {
 
 #[tokio::test]
 async fn finds_songs_by_artist_and_title_case_insensitively() {
-    let pool = memory_pool().await;
+    let pool = library_pool().await;
     sqlx::query("INSERT INTO songs (id, title, artist) VALUES ('s1', 'Weird Fishes', 'Radiohead')")
         .execute(&pool)
         .await
@@ -204,7 +200,7 @@ fn artist_order_cycles_both_ways() {
 
 #[tokio::test]
 async fn artist_orders_switch_between_name_and_album_count() {
-    let pool = memory_pool().await;
+    let pool = library_pool().await;
     for (id, name, count) in [
         ("a0", "Empty", 0),
         ("a1", "Zed", 3),
@@ -251,7 +247,7 @@ async fn artist_orders_switch_between_name_and_album_count() {
 
 #[tokio::test]
 async fn artist_albums_follow_the_id_not_the_name() {
-    let pool = memory_pool().await;
+    let pool = library_pool().await;
     for (id, name) in [("a1", "Radiohead"), ("a2", "Radiohead"), ("a3", "Muse")] {
         sqlx::query("INSERT INTO artists (id, name) VALUES (?1, ?2)")
             .bind(id)
@@ -305,7 +301,7 @@ async fn artist_albums_follow_the_id_not_the_name() {
 
 #[tokio::test]
 async fn recent_orders_follow_created_then_name() {
-    let pool = memory_pool().await;
+    let pool = library_pool().await;
     for (id, name, created) in [
         ("al-old", "Old", "2020-01-01T00:00:00Z"),
         ("al-new", "New", "2023-01-01T00:00:00Z"),
@@ -351,7 +347,7 @@ async fn recent_orders_follow_created_then_name() {
 
 #[tokio::test]
 async fn song_pages_follow_all_songs_order_without_materializing_it() {
-    let pool = memory_pool().await;
+    let pool = library_pool().await;
     for (id, artist, album, disc, track, title) in [
         (
             "s1",
@@ -414,7 +410,7 @@ async fn song_pages_follow_all_songs_order_without_materializing_it() {
 
 #[tokio::test]
 async fn artist_info_round_trips_and_purges_with_the_artist() {
-    let pool = memory_pool().await;
+    let pool = library_pool().await;
     sqlx::query("INSERT INTO artists (id, name) VALUES ('a1', 'Pixies')")
         .execute(&pool)
         .await
@@ -457,7 +453,7 @@ async fn artist_info_round_trips_and_purges_with_the_artist() {
 
 #[tokio::test]
 async fn artist_song_ids_and_file_info_feed_the_downloader() {
-    let pool = memory_pool().await;
+    let pool = library_pool().await;
     sqlx::query(
         "INSERT INTO songs (id, title, artist_id, size, suffix, bit_rate)
              VALUES ('s1', 'A', 'a1', 123, 'mp3', 320)",
@@ -491,7 +487,7 @@ async fn artist_song_ids_and_file_info_feed_the_downloader() {
 
 #[tokio::test]
 async fn downloaded_owners_count_only_the_selected_ids() {
-    let pool = memory_pool().await;
+    let pool = library_pool().await;
     for (id, album, artist) in [
         ("s1", "al1", "ar1"),
         ("s2", "al1", "ar1"),
@@ -526,7 +522,7 @@ async fn downloaded_owners_count_only_the_selected_ids() {
 /// row select must carry it.
 #[tokio::test]
 async fn album_songs_carry_the_file_suffix() {
-    let pool = memory_pool().await;
+    let pool = library_pool().await;
     sqlx::query(
         "INSERT INTO songs (id, album_id, title, suffix, duration)
              VALUES ('s1', 'al1', 'Track', 'flac', 200)",
@@ -550,7 +546,7 @@ fn bench_existing_song_ids() {
         .enable_all()
         .build()
         .expect("probe runtime");
-    let pool = rt.block_on(memory_pool());
+    let pool = rt.block_on(library_pool());
     rt.block_on(async {
         sqlx::raw_sql(
             "INSERT INTO songs (id, title, artist, album, duration, play_count)
@@ -593,7 +589,7 @@ fn bench_existing_song_ids() {
 
 #[tokio::test]
 async fn random_album_id_skips_empty_albums() {
-    let pool = memory_pool().await;
+    let pool = library_pool().await;
     sqlx::raw_sql(
         "INSERT INTO artists (id, name, album_count) VALUES ('ar1', 'Artist', 2);
          INSERT INTO albums (id, artist_id, name, artist, song_count) VALUES

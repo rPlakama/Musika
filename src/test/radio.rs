@@ -1,22 +1,5 @@
 use super::common::*;
 
-fn dbs(pool: &SqlitePool) -> crate::db::Dbs {
-    crate::db::Dbs {
-        credentials: pool.clone(),
-        library: pool.clone(),
-        sync: pool.clone(),
-        search: pool.clone(),
-        covers: pool.clone(),
-        media: pool.clone(),
-        lyrics: pool.clone(),
-        colors: pool.clone(),
-        status: pool.clone(),
-        artist_user: pool.clone(),
-        download: pool.clone(),
-        playlist: pool.clone(),
-    }
-}
-
 /// ARC-RS-1: an album seed resolves to its first song and reports the
 /// album identity even when the page is offline (empty rows).
 #[tokio::test]
@@ -36,7 +19,7 @@ async fn offline_page_uses_the_album_seed_identity() {
     .await
     .unwrap();
 
-    let (header, rows) = crate::radio::page(&dbs(&pool), "album", "al1", true)
+    let (header, rows) = crate::radio::page(&dbs_on(&pool), "album", "al1", true)
         .await
         .unwrap();
     assert_eq!(header.title, "Kid A");
@@ -46,7 +29,7 @@ async fn offline_page_uses_the_album_seed_identity() {
     assert!(rows.is_empty());
 
     assert!(
-        crate::radio::page(&dbs(&pool), "album", "missing", true)
+        crate::radio::page(&dbs_on(&pool), "album", "missing", true)
             .await
             .is_err()
     );
@@ -70,12 +53,12 @@ async fn song_seed_uses_local_identity_or_falls_back_to_the_id() {
         .await
         .unwrap();
 
-    let (local, _) = crate::radio::page(&dbs(&pool), "song", "s1", true)
+    let (local, _) = crate::radio::page(&dbs_on(&pool), "song", "s1", true)
         .await
         .unwrap();
     assert_eq!(local.title, "Everything In Its Right Place");
 
-    let (remote, _) = crate::radio::page(&dbs(&pool), "song", "server-only", true)
+    let (remote, _) = crate::radio::page(&dbs_on(&pool), "song", "server-only", true)
         .await
         .unwrap();
     assert_eq!(remote.title, "Radio");

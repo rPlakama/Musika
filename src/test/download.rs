@@ -1,13 +1,9 @@
 use super::common::*;
 use crate::download::*;
 
-async fn memory_pool() -> SqlitePool {
-    crate::test::memory_pool(sqlx::migrate!("./migrations_download")).await
-}
-
 #[tokio::test]
 async fn runs_the_state_machine_and_never_downgrades_done() {
-    let pool = memory_pool().await;
+    let pool = download_pool().await;
     assert!(get(&pool, "s1").await.unwrap().is_none());
 
     mark_queued(&pool, "s1", Some("r1")).await.unwrap();
@@ -37,7 +33,7 @@ async fn runs_the_state_machine_and_never_downgrades_done() {
 
 #[tokio::test]
 async fn done_ids_lists_only_finished_songs() {
-    let pool = memory_pool().await;
+    let pool = download_pool().await;
     mark_queued(&pool, "s1", None).await.unwrap();
     set_state(&pool, "s2", DONE, None).await.unwrap();
     set_state(&pool, "s3", ERROR, Some("x")).await.unwrap();
@@ -50,7 +46,7 @@ async fn done_ids_lists_only_finished_songs() {
 
 #[tokio::test]
 async fn counts_and_unmark() {
-    let pool = memory_pool().await;
+    let pool = download_pool().await;
     mark_queued(&pool, "s1", Some("r1")).await.unwrap();
     mark_queued(&pool, "s2", Some("r1")).await.unwrap();
     set_state(&pool, "s2", DONE, None).await.unwrap();
@@ -86,7 +82,7 @@ async fn counts_and_unmark() {
 
 #[tokio::test]
 async fn window_sets_split_done_from_in_flight() {
-    let pool = memory_pool().await;
+    let pool = download_pool().await;
     mark_queued(&pool, "a", None).await.unwrap();
     set_state(&pool, "a", ACTIVE, None).await.unwrap();
     mark_queued(&pool, "b", None).await.unwrap();

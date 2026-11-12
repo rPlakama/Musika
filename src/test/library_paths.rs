@@ -1,13 +1,9 @@
 use super::common::*;
 use crate::library::*;
 
-async fn memory_pool() -> SqlitePool {
-    crate::test::memory_pool(sqlx::migrate!("./migrations_library")).await
-}
-
 #[tokio::test]
 async fn album_artist_id_resolves_the_owner() {
-    let pool = memory_pool().await;
+    let pool = library_pool().await;
     sqlx::query("INSERT INTO albums (id, name, artist_id) VALUES ('al1', 'Kid A', 'ar1')")
         .execute(&pool)
         .await
@@ -22,7 +18,7 @@ async fn album_artist_id_resolves_the_owner() {
 
 #[tokio::test]
 async fn album_info_cache_and_cover_check_gate_round_trip() {
-    let pool = memory_pool().await;
+    let pool = library_pool().await;
     sqlx::query("INSERT INTO albums (id, name) VALUES ('al1', 'Kid A')")
         .execute(&pool)
         .await

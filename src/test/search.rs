@@ -11,13 +11,9 @@ async fn rebuild(pool: &SqlitePool, rows: &[SongSearchRow]) -> anyhow::Result<()
     Ok(())
 }
 
-async fn memory_pool() -> SqlitePool {
-    crate::test::memory_pool(sqlx::migrate!("./migrations_search")).await
-}
-
 #[tokio::test]
 async fn search_matches_song_metadata() {
-    let pool = memory_pool().await;
+    let pool = search_pool().await;
 
     let rows = vec![SongSearchRow {
         id: "1".to_string(),
@@ -53,7 +49,7 @@ fn row(id: &str, title: &str, plays: i64) -> SongSearchRow {
 
 #[tokio::test]
 async fn most_played_orders_by_count_then_title() {
-    let pool = memory_pool().await;
+    let pool = search_pool().await;
     rebuild(
         &pool,
         &[
@@ -74,7 +70,7 @@ async fn most_played_orders_by_count_then_title() {
 
 #[tokio::test]
 async fn play_count_boosts_equal_ranks() {
-    let pool = memory_pool().await;
+    let pool = search_pool().await;
     // Same matched text => equal rank; the play count decides (S-9).
     rebuild(&pool, &[row("quiet", "Hello", 0), row("loud", "Hello", 40)])
         .await
@@ -112,7 +108,7 @@ async fn rebuild_from_library_pages_every_song() {
 
 #[tokio::test]
 async fn text_rank_leads_until_plays_are_large() {
-    let pool = memory_pool().await;
+    let pool = search_pool().await;
     // bm25 magnitudes collapse to ~1e-6 in a two-row corpus, so use a
     // realistic size where the rank gap means something.
     let mut rows = vec![
@@ -150,7 +146,7 @@ fn query_quotes_every_token_and_ignores_punctuation() {
 
 #[tokio::test]
 async fn search_ignores_punctuation_in_the_query() {
-    let pool = memory_pool().await;
+    let pool = search_pool().await;
     rebuild(&pool, &[row("1", "Hello World", 0)]).await.unwrap();
 
     for query in ["(hello)", "\"world\"", "[hello] world"] {

@@ -1,13 +1,9 @@
 use super::common::*;
 use crate::artist_user::*;
 
-async fn memory_pool() -> SqlitePool {
-    crate::test::memory_pool(sqlx::migrate!("./migrations_artist_user")).await
-}
-
 #[tokio::test]
 async fn writes_preserve_the_other_field() {
-    let pool = memory_pool().await;
+    let pool = artist_user_pool().await;
     assert!(get(&pool, "a1").await.unwrap().is_none());
 
     set_starred(&pool, "a1", true).await.unwrap();
@@ -28,7 +24,7 @@ async fn writes_preserve_the_other_field() {
 
 #[tokio::test]
 async fn star_index_lists_only_favourites() {
-    let pool = memory_pool().await;
+    let pool = artist_user_pool().await;
     set_starred(&pool, "a1", true).await.unwrap();
     set_starred(&pool, "a2", false).await.unwrap();
     set_rating(&pool, "a3", 5).await.unwrap();
@@ -37,14 +33,14 @@ async fn star_index_lists_only_favourites() {
 
 #[tokio::test]
 async fn rating_outside_the_domain_is_refused() {
-    let pool = memory_pool().await;
+    let pool = artist_user_pool().await;
     assert!(set_rating(&pool, "a1", 6).await.is_err());
     assert!(get(&pool, "a1").await.unwrap().is_none());
 }
 
 #[tokio::test]
 async fn ratings_map_and_import_skip_invalid_levels() {
-    let pool = memory_pool().await;
+    let pool = artist_user_pool().await;
     set_rating(&pool, "a1", 3).await.unwrap();
     set_rating(&pool, "a2", 0).await.unwrap();
 
@@ -73,7 +69,7 @@ async fn ratings_map_and_import_skip_invalid_levels() {
 
 #[tokio::test]
 async fn payload_defaults_and_reads() {
-    let pool = memory_pool().await;
+    let pool = artist_user_pool().await;
     let unknown: serde_json::Value = serde_json::from_str(&payload(&pool, "a1").await).unwrap();
     assert_eq!(unknown["starred"], false);
     assert_eq!(unknown["rating"], 0);

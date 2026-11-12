@@ -1,4 +1,5 @@
 use super::common::*;
+use super::common::isolated_dbs as test_dbs;
 use crate::queue::*;
 
 fn song_row(id: &str) -> crate::library::SongRow {
@@ -88,29 +89,6 @@ fn snapshot_start_survives_dropped_ids() {
     assert_eq!(snapshot_start(&ids, &rows, 1), 0);
     // A truncated snapshot lands on the head too.
     assert_eq!(snapshot_start(&ids, &rows, 9), 0);
-}
-
-async fn test_dbs() -> crate::db::Dbs {
-    let mut credential_migrations = sqlx::migrate!("./migrations");
-    credential_migrations.set_ignore_missing(true);
-    let credentials = crate::test::memory_pool(credential_migrations).await;
-    let library = crate::test::memory_pool(sqlx::migrate!("./migrations_library")).await;
-    let covers = crate::test::memory_pool(sqlx::migrate!("./migrations_covers")).await;
-    let download = crate::test::memory_pool(sqlx::migrate!("./migrations_download")).await;
-    crate::db::Dbs {
-        credentials,
-        sync: library.clone(),
-        library,
-        search: crate::test::memory_pool(None).await,
-        covers,
-        media: crate::test::memory_pool(None).await,
-        lyrics: crate::test::memory_pool(None).await,
-        colors: crate::test::memory_pool(None).await,
-        status: crate::test::memory_pool(None).await,
-        artist_user: crate::test::memory_pool(None).await,
-        download,
-        playlist: crate::test::memory_pool(None).await,
-    }
 }
 
 #[tokio::test]

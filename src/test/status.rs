@@ -1,13 +1,9 @@
 use super::common::*;
 use crate::status::*;
 
-async fn memory_pool() -> SqlitePool {
-    crate::test::memory_pool(sqlx::migrate!("./migrations_status")).await
-}
-
 #[tokio::test]
 async fn round_trips_and_last_write_wins() {
-    let pool = memory_pool().await;
+    let pool = status_pool().await;
     assert!(load(&pool).await.unwrap().is_none());
 
     let first = SessionStatus {

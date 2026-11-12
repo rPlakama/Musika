@@ -5,41 +5,14 @@ use crate::playlists::*;
 /// folder-writing tests must not race each other's root.
 static PLAYLIST_FOLDER_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
-async fn memory_pool() -> SqlitePool {
+async fn playlist_pool() -> SqlitePool {
     crate::test::memory_pool(None).await
-}
-
-fn test_dbs(pools: &SqlitePool, playlist: &SqlitePool) -> Dbs {
-    test_dbs_with_credentials(pools, pools, playlist)
-}
-
-/// A `Dbs` whose credential pool is distinct from the library pool (the
-/// remote-create test saves a server URL there).
-fn test_dbs_with_credentials(
-    credentials: &SqlitePool,
-    library: &SqlitePool,
-    playlist: &SqlitePool,
-) -> Dbs {
-    Dbs {
-        credentials: credentials.clone(),
-        library: library.clone(),
-        sync: library.clone(),
-        search: library.clone(),
-        covers: library.clone(),
-        media: library.clone(),
-        lyrics: library.clone(),
-        colors: library.clone(),
-        status: library.clone(),
-        artist_user: library.clone(),
-        download: library.clone(),
-        playlist: playlist.clone(),
-    }
 }
 
 #[tokio::test]
 async fn list_skips_empty_playlists() {
-    let library = memory_pool().await;
-    let playlist = memory_pool().await;
+    let library = playlist_pool().await;
+    let playlist = playlist_pool().await;
     sqlx::migrate!("./migrations_playlist")
         .run(&playlist)
         .await
@@ -53,7 +26,7 @@ async fn list_skips_empty_playlists() {
     .await
     .unwrap();
 
-    let rows = list(&test_dbs(&library, &playlist)).await.unwrap();
+    let rows = list(&playlist_dbs(&library, &playlist)).await.unwrap();
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0].id, "p1");
     assert_eq!(rows[0].kind, crate::model::RowKind::Playlist);
@@ -63,7 +36,7 @@ async fn list_skips_empty_playlists() {
 
 #[tokio::test]
 async fn scan_indexes_m3u_files() {
-    let library = memory_pool().await;
+    let library = playlist_pool().await;
     sqlx::migrate!("./migrations_library")
         .run(&library)
         .await
@@ -76,12 +49,12 @@ async fn scan_indexes_m3u_files() {
     .execute(&library)
     .await
     .unwrap();
-    let playlist = memory_pool().await;
+    let playlist = playlist_pool().await;
     sqlx::migrate!("./migrations_playlist")
         .run(&playlist)
         .await
         .unwrap();
-    let dbs = test_dbs(&library, &playlist);
+    let dbs = playlist_dbs(&library, &playlist);
 
     let dir = std::env::temp_dir().join(format!("musika-pl-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
@@ -117,13 +90,13 @@ async fn scan_indexes_m3u_files() {
 /// library pool here has no schema, so a read would fail the scan.
 #[tokio::test]
 async fn an_empty_m3u_folder_does_not_read_the_library() {
-    let library = memory_pool().await;
-    let playlist = memory_pool().await;
+    let library = playlist_pool().await;
+    let playlist = playlist_pool().await;
     sqlx::migrate!("./migrations_playlist")
         .run(&playlist)
         .await
         .unwrap();
-    let dbs = test_dbs(&library, &playlist);
+    let dbs = playlist_dbs(&library, &playlist);
 
     let dir = std::env::temp_dir().join(format!("musika-pl-empty-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
@@ -228,7 +201,7 @@ fn matcher_falls_back_path_then_base_then_names() {
 
 #[tokio::test]
 async fn saved_radio_writes_a_local_m3u_and_resolves_ids() {
-    let library = memory_pool().await;
+    let library = playlist_pool().await;
     sqlx::migrate!("./migrations_library")
         .run(&library)
         .await
@@ -241,12 +214,12 @@ async fn saved_radio_writes_a_local_m3u_and_resolves_ids() {
     .execute(&library)
     .await
     .unwrap();
-    let playlist = memory_pool().await;
+    let playlist = playlist_pool().await;
     sqlx::migrate!("./migrations_playlist")
         .run(&playlist)
         .await
         .unwrap();
-    let dbs = test_dbs(&library, &playlist);
+    let dbs = playlist_dbs(&library, &playlist);
     let rows = vec![
         crate::library::SongRow {
             id: "s1".into(),
@@ -308,7 +281,7 @@ async fn saved_radio_writes_a_local_m3u_and_resolves_ids() {
 #[tokio::test]
 async fn create_local_writes_a_named_m3u_and_scans_it() {
     let _guard = PLAYLIST_FOLDER_LOCK.lock().await;
-    let library = memory_pool().await;
+    let library = playlist_pool().await;
     sqlx::migrate!("./migrations_library")
         .run(&library)
         .await
@@ -321,12 +294,12 @@ async fn create_local_writes_a_named_m3u_and_scans_it() {
     .execute(&library)
     .await
     .unwrap();
-    let playlist = memory_pool().await;
+    let playlist = playlist_pool().await;
     sqlx::migrate!("./migrations_playlist")
         .run(&playlist)
         .await
         .unwrap();
-    let dbs = test_dbs(&library, &playlist);
+    let dbs = playlist_dbs(&library, &playlist);
 
     // `create_local` uses the active data root; point it at a disposable
     // folder so the test never touches the real playlist directory. No other
@@ -380,9 +353,9 @@ async fn create_local_writes_a_named_m3u_and_scans_it() {
 
 #[tokio::test]
 async fn create_rejects_empty_names_and_empty_song_lists() {
-    let library = memory_pool().await;
-    let playlist = memory_pool().await;
-    let dbs = test_dbs(&library, &playlist);
+    let library = playlist_pool().await;
+    let playlist = playlist_pool().await;
+    let dbs = playlist_dbs(&library, &playlist);
 
     assert!(create_local(&dbs, "", &["s1".into()]).await.is_err());
     assert!(create_local(&dbs, "   ", &["s1".into()]).await.is_err());
@@ -399,7 +372,7 @@ async fn create_rejects_empty_names_and_empty_song_lists() {
 /// library knows; unknown (or path-less) ids use the app-owned id convention.
 #[tokio::test]
 async fn m3u_text_keeps_order_duplicates_and_id_fallbacks() {
-    let library = memory_pool().await;
+    let library = playlist_pool().await;
     sqlx::migrate!("./migrations_library")
         .run(&library)
         .await
@@ -412,8 +385,8 @@ async fn m3u_text_keeps_order_duplicates_and_id_fallbacks() {
     .execute(&library)
     .await
     .unwrap();
-    let playlist = memory_pool().await;
-    let dbs = test_dbs(&library, &playlist);
+    let playlist = playlist_pool().await;
+    let dbs = playlist_dbs(&library, &playlist);
 
     let ids = ["s1", "missing", "s1", "s2"].map(String::from).to_vec();
     let text = m3u_text(&dbs, &ids).await.unwrap();
@@ -448,7 +421,7 @@ async fn m3u_text_keeps_order_duplicates_and_id_fallbacks() {
 async fn create_remote_posts_songs_then_refreshes_the_list() {
     use std::io::{Read, Write};
 
-    let credentials = memory_pool().await;
+    let credentials = playlist_pool().await;
     sqlx::migrate!("./migrations")
         .run(&credentials)
         .await
@@ -499,13 +472,13 @@ async fn create_remote_posts_songs_then_refreshes_the_list() {
         .await
         .unwrap();
 
-    let library = memory_pool().await;
-    let playlist = memory_pool().await;
+    let library = playlist_pool().await;
+    let playlist = playlist_pool().await;
     sqlx::migrate!("./migrations_playlist")
         .run(&playlist)
         .await
         .unwrap();
-    let dbs = test_dbs_with_credentials(&credentials, &library, &playlist);
+    let dbs = dbs_with_credentials(&credentials, &library, &playlist);
 
     let ids = vec!["s1".to_string(), "s2".to_string()];
     create_remote(&dbs, "Mix", &ids).await.unwrap();
@@ -546,7 +519,7 @@ async fn create_remote_posts_songs_then_refreshes_the_list() {
 #[tokio::test]
 async fn add_to_playlist_appends_resolved_targets() {
     let _guard = PLAYLIST_FOLDER_LOCK.lock().await;
-    let library = memory_pool().await;
+    let library = playlist_pool().await;
     sqlx::migrate!("./migrations_library")
         .run(&library)
         .await
@@ -564,12 +537,12 @@ async fn add_to_playlist_appends_resolved_targets() {
     .execute(&library)
     .await
     .unwrap();
-    let playlist = memory_pool().await;
+    let playlist = playlist_pool().await;
     sqlx::migrate!("./migrations_playlist")
         .run(&playlist)
         .await
         .unwrap();
-    let dbs = test_dbs(&library, &playlist);
+    let dbs = playlist_dbs(&library, &playlist);
     let root = std::env::temp_dir().join(format!("musika-add-playlist-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&root);
     std::fs::create_dir_all(&root).unwrap();
@@ -613,7 +586,7 @@ async fn add_to_playlist_appends_resolved_targets() {
 #[tokio::test]
 async fn remove_from_playlist_drops_matching_m3u_entries() {
     let _guard = PLAYLIST_FOLDER_LOCK.lock().await;
-    let library = memory_pool().await;
+    let library = playlist_pool().await;
     sqlx::migrate!("./migrations_library")
         .run(&library)
         .await
@@ -631,12 +604,12 @@ async fn remove_from_playlist_drops_matching_m3u_entries() {
     .execute(&library)
     .await
     .unwrap();
-    let playlist = memory_pool().await;
+    let playlist = playlist_pool().await;
     sqlx::migrate!("./migrations_playlist")
         .run(&playlist)
         .await
         .unwrap();
-    let dbs = test_dbs(&library, &playlist);
+    let dbs = playlist_dbs(&library, &playlist);
     let root = std::env::temp_dir().join(format!("musika-rm-playlist-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&root);
     std::fs::create_dir_all(&root).unwrap();
@@ -698,7 +671,7 @@ async fn page_json_refreshes_a_stale_subsonic_cache() {
     use std::io::{Read, Write};
     use std::time::{Duration, Instant};
 
-    let credentials = memory_pool().await;
+    let credentials = playlist_pool().await;
     sqlx::migrate!("./migrations")
         .run(&credentials)
         .await
@@ -742,7 +715,7 @@ async fn page_json_refreshes_a_stale_subsonic_cache() {
         .await
         .unwrap();
 
-    let library = memory_pool().await;
+    let library = playlist_pool().await;
     sqlx::migrate!("./migrations_library")
         .run(&library)
         .await
@@ -772,7 +745,7 @@ async fn page_json_refreshes_a_stale_subsonic_cache() {
     .await
     .unwrap();
 
-    let playlist = memory_pool().await;
+    let playlist = playlist_pool().await;
     sqlx::migrate!("./migrations_playlist")
         .run(&playlist)
         .await
@@ -792,7 +765,7 @@ async fn page_json_refreshes_a_stale_subsonic_cache() {
     .await
     .unwrap();
 
-    let dbs = test_dbs_with_credentials(&credentials, &library, &playlist);
+    let dbs = dbs_with_credentials(&credentials, &library, &playlist);
     let (header, rows) = page(&dbs, "pl1").await.unwrap();
     assert_eq!(header.title, "Too Much");
     assert_eq!(rows.len(), 3, "the page must show every server entry");
@@ -824,7 +797,7 @@ async fn add_to_playlist_refreshes_the_server_entries() {
     use std::io::{Read, Write};
     use std::time::{Duration, Instant};
 
-    let credentials = memory_pool().await;
+    let credentials = playlist_pool().await;
     sqlx::migrate!("./migrations")
         .run(&credentials)
         .await
@@ -874,8 +847,8 @@ async fn add_to_playlist_refreshes_the_server_entries() {
         .await
         .unwrap();
 
-    let library = memory_pool().await;
-    let playlist = memory_pool().await;
+    let library = playlist_pool().await;
+    let playlist = playlist_pool().await;
     sqlx::migrate!("./migrations_playlist")
         .run(&playlist)
         .await
@@ -894,7 +867,7 @@ async fn add_to_playlist_refreshes_the_server_entries() {
     .execute(&playlist)
     .await
     .unwrap();
-    let dbs = test_dbs_with_credentials(&credentials, &library, &playlist);
+    let dbs = dbs_with_credentials(&credentials, &library, &playlist);
 
     add_to_playlist(&dbs, &["current".into()], "Mix", Some("s2"))
         .await
@@ -941,7 +914,7 @@ async fn add_to_playlist_refreshes_the_server_entries() {
 #[tokio::test]
 async fn add_song_ids_and_remove_positions_edit_a_local_m3u() {
     let _guard = PLAYLIST_FOLDER_LOCK.lock().await;
-    let library = memory_pool().await;
+    let library = playlist_pool().await;
     sqlx::migrate!("./migrations_library")
         .run(&library)
         .await
@@ -959,12 +932,12 @@ async fn add_song_ids_and_remove_positions_edit_a_local_m3u() {
     .execute(&library)
     .await
     .unwrap();
-    let playlist = memory_pool().await;
+    let playlist = playlist_pool().await;
     sqlx::migrate!("./migrations_playlist")
         .run(&playlist)
         .await
         .unwrap();
-    let dbs = test_dbs(&library, &playlist);
+    let dbs = playlist_dbs(&library, &playlist);
     let root = std::env::temp_dir().join(format!("musika-clip-edit-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&root);
     std::fs::create_dir_all(&root).unwrap();
@@ -1020,7 +993,7 @@ async fn add_song_ids_and_remove_positions_edit_a_local_m3u() {
 #[tokio::test]
 async fn add_selection_expands_songs_and_albums() {
     let _guard = PLAYLIST_FOLDER_LOCK.lock().await;
-    let library = memory_pool().await;
+    let library = playlist_pool().await;
     sqlx::migrate!("./migrations_library")
         .run(&library)
         .await
@@ -1038,12 +1011,12 @@ async fn add_selection_expands_songs_and_albums() {
     .execute(&library)
     .await
     .unwrap();
-    let playlist = memory_pool().await;
+    let playlist = playlist_pool().await;
     sqlx::migrate!("./migrations_playlist")
         .run(&playlist)
         .await
         .unwrap();
-    let dbs = test_dbs(&library, &playlist);
+    let dbs = playlist_dbs(&library, &playlist);
     let root = std::env::temp_dir().join(format!("musika-selection-add-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&root);
     std::fs::create_dir_all(&root).unwrap();
@@ -1106,7 +1079,7 @@ async fn remove_playlist_positions_updates_a_server_playlist() {
     use std::io::{Read, Write};
     use std::time::{Duration, Instant};
 
-    let credentials = memory_pool().await;
+    let credentials = playlist_pool().await;
     sqlx::migrate!("./migrations")
         .run(&credentials)
         .await
@@ -1156,8 +1129,8 @@ async fn remove_playlist_positions_updates_a_server_playlist() {
         .await
         .unwrap();
 
-    let library = memory_pool().await;
-    let playlist = memory_pool().await;
+    let library = playlist_pool().await;
+    let playlist = playlist_pool().await;
     sqlx::migrate!("./migrations_playlist")
         .run(&playlist)
         .await
@@ -1178,7 +1151,7 @@ async fn remove_playlist_positions_updates_a_server_playlist() {
     .execute(&playlist)
     .await
     .unwrap();
-    let dbs = test_dbs_with_credentials(&credentials, &library, &playlist);
+    let dbs = dbs_with_credentials(&credentials, &library, &playlist);
 
     let name = remove_playlist_positions(&dbs, "pl1", &[1]).await.unwrap();
     assert_eq!(name, "Mix");
@@ -1215,7 +1188,7 @@ async fn remove_playlist_positions_updates_a_server_playlist() {
 #[tokio::test]
 async fn insert_and_move_local_playlist_entries() {
     let _guard = PLAYLIST_FOLDER_LOCK.lock().await;
-    let library = memory_pool().await;
+    let library = playlist_pool().await;
     sqlx::migrate!("./migrations_library")
         .run(&library)
         .await
@@ -1233,12 +1206,12 @@ async fn insert_and_move_local_playlist_entries() {
     .execute(&library)
     .await
     .unwrap();
-    let playlist = memory_pool().await;
+    let playlist = playlist_pool().await;
     sqlx::migrate!("./migrations_playlist")
         .run(&playlist)
         .await
         .unwrap();
-    let dbs = test_dbs(&library, &playlist);
+    let dbs = playlist_dbs(&library, &playlist);
     let root = std::env::temp_dir().join(format!("musika-movepl-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&root);
     std::fs::create_dir_all(&root).unwrap();
@@ -1299,7 +1272,7 @@ async fn insert_song_ids_at_rebuilds_a_server_playlist_order() {
     use std::io::{Read, Write};
     use std::time::{Duration, Instant};
 
-    let credentials = memory_pool().await;
+    let credentials = playlist_pool().await;
     sqlx::migrate!("./migrations")
         .run(&credentials)
         .await
@@ -1349,8 +1322,8 @@ async fn insert_song_ids_at_rebuilds_a_server_playlist_order() {
         .await
         .unwrap();
 
-    let library = memory_pool().await;
-    let playlist = memory_pool().await;
+    let library = playlist_pool().await;
+    let playlist = playlist_pool().await;
     sqlx::migrate!("./migrations_playlist")
         .run(&playlist)
         .await
@@ -1370,7 +1343,7 @@ async fn insert_song_ids_at_rebuilds_a_server_playlist_order() {
     .execute(&playlist)
     .await
     .unwrap();
-    let dbs = test_dbs_with_credentials(&credentials, &library, &playlist);
+    let dbs = dbs_with_credentials(&credentials, &library, &playlist);
 
     insert_song_ids_at(&dbs, "pl1", 1, &["s3".into()])
         .await
@@ -1411,17 +1384,17 @@ async fn insert_song_ids_at_rebuilds_a_server_playlist_order() {
 #[tokio::test]
 async fn delete_playlist_removes_a_local_file_and_its_row() {
     let _guard = PLAYLIST_FOLDER_LOCK.lock().await;
-    let library = memory_pool().await;
+    let library = playlist_pool().await;
     sqlx::migrate!("./migrations_library")
         .run(&library)
         .await
         .unwrap();
-    let playlist = memory_pool().await;
+    let playlist = playlist_pool().await;
     sqlx::migrate!("./migrations_playlist")
         .run(&playlist)
         .await
         .unwrap();
-    let dbs = test_dbs(&library, &playlist);
+    let dbs = playlist_dbs(&library, &playlist);
     let root = std::env::temp_dir().join(format!("musika-delpl-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&root);
     std::fs::create_dir_all(&root).unwrap();
@@ -1451,7 +1424,7 @@ async fn delete_playlist_removes_a_server_playlist() {
     use std::io::{Read, Write};
     use std::time::{Duration, Instant};
 
-    let credentials = memory_pool().await;
+    let credentials = playlist_pool().await;
     sqlx::migrate!("./migrations")
         .run(&credentials)
         .await
@@ -1499,8 +1472,8 @@ async fn delete_playlist_removes_a_server_playlist() {
         .await
         .unwrap();
 
-    let library = memory_pool().await;
-    let playlist = memory_pool().await;
+    let library = playlist_pool().await;
+    let playlist = playlist_pool().await;
     sqlx::migrate!("./migrations_playlist")
         .run(&playlist)
         .await
@@ -1512,7 +1485,7 @@ async fn delete_playlist_removes_a_server_playlist() {
     .execute(&playlist)
     .await
     .unwrap();
-    let dbs = test_dbs_with_credentials(&credentials, &library, &playlist);
+    let dbs = dbs_with_credentials(&credentials, &library, &playlist);
 
     let (id, name) = delete_playlist(&dbs, "pl1").await.unwrap();
     assert_eq!((id.as_str(), name.as_str()), ("pl1", "Gone"));

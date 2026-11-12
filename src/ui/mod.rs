@@ -713,6 +713,10 @@ fn next_tab_slot(order: &[usize], current: Option<usize>, backward: bool) -> Opt
         .and_then(|position| order.get(position).copied())
 }
 
+/// The overlay rows (search results, queue) size their square cover as this
+/// fraction of the row height; both surfaces previously restated `0.714`.
+pub(in crate::ui) const OVERLAY_ROW_COVER_RATIO: f32 = 0.714;
+
 /// The alternating row base fill: the same stripe rule on every list.
 pub(in crate::ui) fn row_base_fill(index: usize) -> u32 {
     if index % 2 != 0 {

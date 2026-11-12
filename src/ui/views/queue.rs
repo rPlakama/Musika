@@ -123,7 +123,7 @@ impl AppRoot {
                                                     index,
                                                     cover,
                                                     this.image_cache.clone(),
-                                                    this.queue_scroll_modal.row_h * 0.714,
+                                                    this.queue_scroll_modal.row_h * OVERLAY_ROW_COVER_RATIO,
                                                     cover_scale,
                                                 ))
                                                 .child(

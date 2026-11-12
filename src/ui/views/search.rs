@@ -115,7 +115,7 @@ impl AppRoot {
                 index,
                 cover,
                 self.image_cache.clone(),
-                row_h * 0.714,
+                row_h * OVERLAY_ROW_COVER_RATIO,
                 cover_scale,
             ))
             .child(

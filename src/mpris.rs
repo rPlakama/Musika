@@ -129,6 +129,15 @@ fn submit_action(action: &str) {
     submit(format!("mpris_{action}"));
 }
 
+/// Command line for the MPRIS next/previous controls.
+///
+/// `track next` / `track previous` are two-word commands, so they cannot use
+/// the single-word `mpris_*` compatibility vocabulary: prefixing them produced
+/// `mpris_track next`, which the parser rejects (the UI silently did nothing).
+pub(crate) fn track_command(action: &str) -> String {
+    format!("track {action}")
+}
+
 fn put_nonempty(map: &mut HashMap<String, OwnedValue>, key: &str, value: &str) {
     if !value.is_empty() {
         map.insert(key.to_string(), owned(Value::from(value.to_string())));
@@ -469,11 +478,11 @@ impl MprisPlayer {
     }
 
     fn next(&self) {
-        submit_action("track next");
+        submit(track_command("next"));
     }
 
     fn previous(&self) {
-        submit_action("track previous");
+        submit(track_command("previous"));
     }
 
     async fn seek(&self, offset: i64, #[zbus(signal_emitter)] emitter: SignalEmitter<'_>) {

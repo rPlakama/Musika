@@ -73,3 +73,19 @@ fn a_full_command_queue_drops_instead_of_blocking() {
     assert_eq!(rx.try_recv().as_deref(), Ok("track next"));
     assert!(rx.try_recv().is_err(), "the excess command was dropped");
 }
+
+/// Regression: MPRIS next/previous used to submit "mpris_track next", which is
+/// not a command (two-word commands cannot use the single-word `mpris_*` alias
+/// vocabulary), so the dispatcher dropped them and the controls did nothing.
+#[test]
+fn track_controls_submit_canonical_commands() {
+    use crate::ipc_command::{canonical_string, parse};
+
+    assert!(parse("mpris_track next").is_err());
+    for (action, canonical) in [("next", "track next"), ("previous", "track previous")] {
+        let line = track_command(action);
+        assert_eq!(line, canonical);
+        let command = parse(&line).expect("canonical track command parses");
+        assert_eq!(canonical_string(&command), canonical);
+    }
+}

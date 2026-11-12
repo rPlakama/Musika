@@ -434,7 +434,6 @@ impl AppRoot {
         let position = self.player.position_now();
         let duration = self.player.duration();
         let volume = self.player.volume();
-        let muted = self.player.muted();
         let progress = if duration > 0.0 {
             (position / duration).clamp(0.0, 1.0) as f32
         } else {

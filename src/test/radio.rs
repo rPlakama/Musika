@@ -36,19 +36,17 @@ async fn offline_page_uses_the_album_seed_identity() {
     .await
     .unwrap();
 
-    let page: Value = serde_json::from_str(
-        &crate::radio::page_json(&dbs(&pool), "album", "al1", true)
-            .await
-            .unwrap(),
-    )
-    .unwrap();
-    assert_eq!(page["title"], "Kid A");
-    assert_eq!(page["subtitle"], "Radio needs a connection");
-    assert_eq!(page["song_count"], 0);
-    assert!(page["songs"].as_array().unwrap().is_empty());
+    let (header, rows) = crate::radio::page(&dbs(&pool), "album", "al1", true)
+        .await
+        .unwrap();
+    assert_eq!(header.title, "Kid A");
+    assert_eq!(header.subtitle, "Radio needs a connection");
+    assert_eq!(header.meta, "Similar songs");
+    assert!(header.collage.is_empty());
+    assert!(rows.is_empty());
 
     assert!(
-        crate::radio::page_json(&dbs(&pool), "album", "missing", true)
+        crate::radio::page(&dbs(&pool), "album", "missing", true)
             .await
             .is_err()
     );
@@ -72,21 +70,14 @@ async fn song_seed_uses_local_identity_or_falls_back_to_the_id() {
         .await
         .unwrap();
 
-    let local: Value = serde_json::from_str(
-        &crate::radio::page_json(&dbs(&pool), "song", "s1", true)
-            .await
-            .unwrap(),
-    )
-    .unwrap();
-    assert_eq!(local["title"], "Everything In Its Right Place");
+    let (local, _) = crate::radio::page(&dbs(&pool), "song", "s1", true)
+        .await
+        .unwrap();
+    assert_eq!(local.title, "Everything In Its Right Place");
 
-    let remote: Value = serde_json::from_str(
-        &crate::radio::page_json(&dbs(&pool), "song", "server-only", true)
-            .await
-            .unwrap(),
-    )
-    .unwrap();
-    assert_eq!(remote["seed_id"], "server-only");
-    assert_eq!(remote["title"], "Radio");
-    assert_eq!(remote["subtitle"], "Radio needs a connection");
+    let (remote, _) = crate::radio::page(&dbs(&pool), "song", "server-only", true)
+        .await
+        .unwrap();
+    assert_eq!(remote.title, "Radio");
+    assert_eq!(remote.subtitle, "Radio needs a connection");
 }

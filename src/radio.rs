@@ -22,7 +22,6 @@ use std::sync::LazyLock;
 use std::sync::Mutex;
 
 use anyhow::{Result, anyhow};
-use serde_json::json;
 
 use crate::library::SongRow;
 
@@ -170,32 +169,38 @@ async fn similar_songs(dbs: &crate::db::Dbs, seed: &Seed) -> Result<Vec<crate::a
 /// The RadioEntry payload: seed identity, similar-song rows and a cover
 /// collage. Offline still returns the seed identity so the page can say why
 /// it is empty.
-pub async fn page_json(
+pub async fn page(
     dbs: &crate::db::Dbs,
     seed_kind: &str,
     seed_id: &str,
     offline: bool,
-) -> Result<String> {
+) -> Result<(crate::model::PageHeader, Vec<crate::model::Row>)> {
+    use crate::model::{PageHeader, Row, RowKind};
     let seed = resolve_seed(dbs, seed_kind, seed_id).await?;
-    let subtitle = if seed.subtitle.is_empty() {
+    let subtitle = if offline {
+        "Radio needs a connection".to_string()
+    } else if seed.subtitle.is_empty() {
         "Radio".to_string()
     } else {
         format!("Radio · {}", seed.subtitle)
     };
-    let mut page = json!({
-        "seed_kind": seed_kind,
-        "seed_id": seed_id,
-        "title": seed.title,
-        "subtitle": subtitle,
-        "meta": "Similar songs",
-        "song_count": 0,
-        "duration": 0,
-        "collage": [],
-        "songs": [],
-    });
+    let header = |collage: Vec<String>, collage_remote: Vec<String>, collage_art: Vec<String>| {
+        PageHeader {
+            title: seed.title.clone(),
+            subtitle: subtitle.clone(),
+            meta: "Similar songs".to_string(),
+            cover_url: collage.first().cloned().unwrap_or_default(),
+            cover_remote: collage_remote.first().cloned().unwrap_or_default(),
+            collage,
+            collage_remote,
+            collage_art,
+            cover_art: String::new(),
+            rating: 0,
+            starred: false,
+        }
+    };
     if offline {
-        page["subtitle"] = json!("Radio needs a connection");
-        return Ok(page.to_string());
+        return Ok((header(Vec::new(), Vec::new(), Vec::new()), Vec::new()));
     }
 
     // The page and the playback queue must share one expansion. `radio_rows`
@@ -236,39 +241,33 @@ pub async fn page_json(
         }
     }
 
-    let mut duration = 0i64;
-    let songs: Vec<serde_json::Value> = rows
-        .iter()
-        .map(|row| {
-            duration += i64::from(row.duration.unwrap_or(0));
-            json!({
-                "track": "",
-                "title": row.title,
-                "subtitle": row.artist.clone().or_else(|| row.album.clone()).unwrap_or_default(),
-                "duration": crate::browse::rows::format_duration(row.duration),
-                "cover": crate::covers::url_for_ref(row.cover_art.as_deref(), &covers),
-                "coverRemote": row
-                    .cover_art
-                    .as_deref()
-                    .and_then(|id| remotes.get(id))
-                    .cloned()
-                    .unwrap_or_default(),
-                "songId": row.id,
-                "albumId": row.album_id.clone().unwrap_or_default(),
-                "starred": row.starred.is_some(),
-                "playable": true,
-            })
-        })
-        .collect();
+    let mut page_rows: Vec<Row> = Vec::with_capacity(rows.len());
+    for row in &rows {
+        page_rows.push(Row {
+            track: String::new(),
+            id: row.id.clone(),
+            kind: RowKind::Song,
+            title: row.title.clone(),
+            subtitle: row.artist.clone().or_else(|| row.album.clone()).unwrap_or_default(),
+            meta: crate::browse::rows::format_duration(row.duration),
+            cover_url: crate::covers::url_for_ref(row.cover_art.as_deref(), &covers).to_string(),
+            cover_remote: row
+                .cover_art
+                .as_deref()
+                .and_then(|id| remotes.get(id))
+                .cloned()
+                .unwrap_or_default(),
+            song_id: row.id.clone(),
+            album_id: row.album_id.clone().unwrap_or_default(),
+            starred: row.starred.is_some(),
+            rating: 0,
+            downloaded: false,
+        });
+    }
 
-    page["song_count"] = json!(songs.len());
-    page["duration"] = json!(duration);
-    page["collage"] = json!(collage);
-    page["collage_remote"] = json!(collage_remote);
-    page["collage_art"] = json!(collage_art);
-    page["songs"] = json!(songs);
-    Ok(page.to_string())
+    Ok((header(collage, collage_remote, collage_art), page_rows))
 }
+
 /// The radio queue: the same similar-song list, in server order. The clicked
 /// row becomes the queue start.
 pub async fn tracks(

@@ -259,12 +259,12 @@ pub async fn create(dbs: &Dbs, name: &str, song_ids: &[String], offline: bool) -
 
 /// The segment refresh: the m3u scan plus the Subsonic list. A server hit
 /// that fails is non-fatal — the cached rows and the m3u half still serve.
-pub async fn refresh(dbs: &Dbs, client: &SubsonicClient) -> Result<String> {
+pub async fn refresh(dbs: &Dbs, client: &SubsonicClient) -> Result<Vec<crate::model::Row>> {
     scan_dir(dbs, &m3u_dir()?).await?;
     if let Err(err) = refresh_subsonic(dbs, client).await {
         eprintln!("playlists: could not refresh from the server: {err:#}");
     }
-    list_json(dbs).await
+    list(dbs).await
 }
 
 /// Refreshes the Subsonic half from `getPlaylists`: upserts the rows and
@@ -489,13 +489,13 @@ async fn load_songs(pool: &SqlitePool) -> Result<Vec<SongRef>> {
 }
 
 /// Scans the default m3u folder into `playlist.db` and returns the segment
-/// payload (the list rows as JSON) so one call serves the UI.
-pub async fn scan(dbs: &Dbs) -> Result<String> {
+/// rows so one call serves the UI.
+pub async fn scan(dbs: &Dbs) -> Result<Vec<crate::model::Row>> {
     scan_dir(dbs, &m3u_dir()?).await
 }
 
 /// [`scan`] against an explicit folder (the test seam).
-pub async fn scan_dir(dbs: &Dbs, dir: &Path) -> Result<String> {
+pub async fn scan_dir(dbs: &Dbs, dir: &Path) -> Result<Vec<crate::model::Row>> {
     std::fs::create_dir_all(dir).ok();
 
     struct ScannedM3u {
@@ -581,7 +581,7 @@ pub async fn scan_dir(dbs: &Dbs, dir: &Path) -> Result<String> {
         }
     }
 
-    list_json(dbs).await
+    list(dbs).await
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -725,9 +725,43 @@ fn playlist_row(row: &PlaylistListRow) -> serde_json::Value {
     })
 }
 
-/// The segment payload: every playlist, m3u and (later) Subsonic, as the
-/// list rows the legacy UI maps.
-pub async fn list_json(dbs: &Dbs) -> Result<String> {
+/// One playlist segment row, deriving the same title/subtitle/meta text the
+/// JSON row carried (`playlist_row`) without a `Value` round trip.
+fn playlist_segment_row(row: &PlaylistListRow) -> crate::model::Row {
+    let origin = if row.source == "m3u" {
+        "M3U".to_string()
+    } else if let Some(owner) = row.owner.as_ref().filter(|owner| !owner.is_empty()) {
+        owner.clone()
+    } else {
+        "Playlist".to_string()
+    };
+    crate::model::Row {
+        track: String::new(),
+        id: row.id.clone(),
+        kind: crate::model::RowKind::Playlist,
+        title: row.name.clone(),
+        subtitle: format!(
+            "{origin} · {} song{}",
+            row.song_count,
+            if row.song_count == 1 { "" } else { "s" }
+        ),
+        meta: if row.duration > 0 {
+            crate::browse::rows::format_duration(Some(row.duration as i32))
+        } else {
+            String::new()
+        },
+        cover_url: String::new(),
+        cover_remote: String::new(),
+        song_id: String::new(),
+        album_id: String::new(),
+        starred: false,
+        rating: 0,
+        downloaded: false,
+    }
+}
+
+/// The segment payload: every playlist, m3u and Subsonic, as typed list rows.
+pub async fn list(dbs: &Dbs) -> Result<Vec<crate::model::Row>> {
     let rows: Vec<PlaylistListRow> = sqlx::query_as(
         "SELECT id, source, name, song_count, duration, owner
          FROM playlist
@@ -736,8 +770,7 @@ pub async fn list_json(dbs: &Dbs) -> Result<String> {
     )
     .fetch_all(&dbs.playlist)
     .await?;
-    let rows: Vec<serde_json::Value> = rows.iter().map(playlist_row).collect();
-    Ok(serde_json::to_string(&rows)?)
+    Ok(rows.iter().map(playlist_segment_row).collect())
 }
 
 /// M2: fetch one Subsonic playlist's contents on demand. The list refresh only
@@ -783,7 +816,10 @@ pub async fn name(dbs: &Dbs, playlist_id: &str) -> Result<Option<String>> {
 
 /// The playlist page payload: identity, song rows and every distinct song cover
 /// for the header collage. Rows keep playlist order and duplicates.
-pub async fn page_json(dbs: &Dbs, playlist_id: &str, offline: bool) -> Result<String> {
+pub async fn page(
+    dbs: &Dbs,
+    playlist_id: &str,
+) -> Result<(crate::model::PageHeader, Vec<crate::model::Row>)> {
     #[derive(sqlx::FromRow)]
     struct PlaylistRow {
         id: String,
@@ -853,12 +889,11 @@ pub async fn page_json(dbs: &Dbs, playlist_id: &str, offline: bool) -> Result<St
         .collect();
     let covers = crate::covers::url_map_for(dbs, cover_ids.iter()).await?;
     let remotes = crate::covers::remote_map_for(dbs, cover_ids.iter()).await?;
-    let filter = crate::offline::load(dbs, offline).await?;
 
     let mut collage: Vec<String> = Vec::new();
     let mut collage_remote: Vec<String> = Vec::new();
     let mut collage_origins: Vec<String> = Vec::new();
-    let mut songs = Vec::with_capacity(rows.len());
+    let mut list_rows: Vec<crate::model::Row> = Vec::with_capacity(rows.len());
     for row in &rows {
         let library_song = row.song_id.as_ref().and_then(|id| by_id.get(id));
         let cover_id = row
@@ -881,34 +916,36 @@ pub async fn page_json(dbs: &Dbs, playlist_id: &str, offline: bool) -> Result<St
             collage.push(cover.clone());
             collage_remote.push(cover_remote.clone());
         }
-        let playable = row.song_id.as_ref().is_some_and(|id| {
-            filter
-                .as_ref()
-                .is_none_or(|filter| filter.contains_song(id))
-        });
         let duration = row
             .duration
             .or_else(|| library_song.and_then(|song| song.duration.map(i64::from)));
         let album_id = library_song
             .and_then(|song| song.album_id.clone())
             .unwrap_or_default();
-        let track = library_song
-            .and_then(|song| song.track)
-            .unwrap_or(row.position as i32 + 1);
-        songs.push(serde_json::json!({
-            "position": row.position,
-            "track": track.to_string(),
-            "title": row.title,
-            "subtitle": row.artist.clone().or_else(|| library_song.and_then(|s| s.artist.clone())).unwrap_or_default(),
-            "album": row.album.clone().or_else(|| library_song.and_then(|s| s.album.clone())).unwrap_or_default(),
-            "duration": duration.map(|seconds| crate::browse::rows::format_duration(Some(seconds as i32))).unwrap_or_default(),
-            "cover": cover,
-            "coverRemote": cover_remote,
-            "songId": row.song_id.clone().unwrap_or_default(),
-            "albumId": album_id,
-            "starred": library_song.and_then(|song| song.starred.as_ref()).is_some(),
-            "playable": playable,
-        }));
+        let song_id = row.song_id.clone().unwrap_or_default();
+        list_rows.push(crate::model::Row {
+            track: String::new(),
+            id: song_id.clone(),
+            kind: crate::model::RowKind::Song,
+            title: row.title.clone(),
+            subtitle: row
+                .artist
+                .clone()
+                .or_else(|| library_song.and_then(|song| song.artist.clone()))
+                .unwrap_or_default(),
+            meta: duration
+                .map(|seconds| crate::browse::rows::format_duration(Some(seconds as i32)))
+                .unwrap_or_default(),
+            cover_url: cover,
+            cover_remote,
+            song_id,
+            album_id,
+            starred: library_song
+                .and_then(|song| song.starred.as_ref())
+                .is_some(),
+            rating: 0,
+            downloaded: false,
+        });
     }
 
     let origin = if playlist.source == "m3u" {
@@ -918,23 +955,28 @@ pub async fn page_json(dbs: &Dbs, playlist_id: &str, offline: bool) -> Result<St
     } else {
         "Playlist".to_string()
     };
-    Ok(serde_json::json!({
-        "playlist_id": playlist.id,
-        "name": playlist.name,
-        "comment": playlist.comment.unwrap_or_default(),
-        "subtitle": format!("{origin} · {} song{}", playlist.song_count,
-            if playlist.song_count == 1 { "" } else { "s" }),
-        "meta": if playlist.duration > 0 {
+    let header = crate::model::PageHeader {
+        title: playlist.name.clone(),
+        subtitle: format!(
+            "{origin} · {} song{}",
+            playlist.song_count,
+            if playlist.song_count == 1 { "" } else { "s" }
+        ),
+        meta: if playlist.duration > 0 {
             crate::browse::rows::format_duration(Some(playlist.duration as i32))
         } else {
             String::new()
         },
-        "song_count": playlist.song_count,
-        "collage": collage,
-        "collage_remote": collage_remote,
-        "songs": songs,
-    })
-    .to_string())
+        cover_url: collage.first().cloned().unwrap_or_default(),
+        cover_remote: collage_remote.first().cloned().unwrap_or_default(),
+        collage,
+        collage_remote,
+        collage_art: Vec::new(),
+        cover_art: String::new(),
+        rating: 0,
+        starred: false,
+    };
+    Ok((header, list_rows))
 }
 
 /// Playlist hits for the unified search. Playlists live in their own database,

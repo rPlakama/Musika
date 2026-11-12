@@ -131,31 +131,7 @@ pub(crate) async fn library_rows(
                 })
                 .collect())
         }
-        Scope::Playlists => {
-            let raw = crate::playlists::list_json(&dbs).await?;
-            let values: Vec<serde_json::Value> = serde_json::from_str(&raw)?;
-            Ok(values
-                .into_iter()
-                .map(|value| Row {
-                    track: String::new(),
-                    id: value["id"].as_str().unwrap_or_default().to_string(),
-                    kind: RowKind::Playlist,
-                    title: value["name"].as_str().unwrap_or_default().to_string(),
-                    subtitle: value["subtitle"].as_str().unwrap_or_default().to_string(),
-                    meta: value["meta"].as_str().unwrap_or_default().to_string(),
-                    cover_url: value["cover"].as_str().unwrap_or_default().to_string(),
-                    cover_remote: value["coverRemote"]
-                        .as_str()
-                        .unwrap_or_default()
-                        .to_string(),
-                    song_id: String::new(),
-                    album_id: String::new(),
-                    starred: false,
-                    rating: 0,
-                    downloaded: false,
-                })
-                .collect())
-        }
+        Scope::Playlists => crate::playlists::list(&dbs).await,
     }
 }
 
@@ -318,69 +294,9 @@ pub(crate) async fn page_data(
         }
         PageKind::Radio => {
             let seed_kind = descriptor.radio_seed_kind.as_deref().unwrap_or("album");
-            let raw = crate::radio::page_json(&dbs, seed_kind, &descriptor.id, offline).await?;
-            let value: serde_json::Value = serde_json::from_str(&raw)?;
-            let header = collage_header(&value, "title");
-            let rows = value["songs"]
-                .as_array()
-                .map(|songs| {
-                    songs
-                        .iter()
-                        .map(|song| Row {
-                            track: String::new(),
-                            id: song["songId"].as_str().unwrap_or_default().to_string(),
-                            kind: RowKind::Song,
-                            title: song["title"].as_str().unwrap_or_default().to_string(),
-                            subtitle: song["subtitle"].as_str().unwrap_or_default().to_string(),
-                            meta: song["duration"].as_str().unwrap_or_default().to_string(),
-                            cover_url: song["cover"].as_str().unwrap_or_default().to_string(),
-                            cover_remote: song["coverRemote"]
-                                .as_str()
-                                .unwrap_or_default()
-                                .to_string(),
-                            song_id: song["songId"].as_str().unwrap_or_default().to_string(),
-                            album_id: song["albumId"].as_str().unwrap_or_default().to_string(),
-                            starred: song["starred"].as_bool().unwrap_or(false),
-                            rating: 0,
-                            downloaded: false,
-                        })
-                        .collect()
-                })
-                .unwrap_or_default();
-            Ok((header, rows))
+            crate::radio::page(&dbs, seed_kind, &descriptor.id, offline).await
         }
-        PageKind::Playlist => {
-            let raw = crate::playlists::page_json(&dbs, &descriptor.id, false).await?;
-            let value: serde_json::Value = serde_json::from_str(&raw)?;
-            let header = collage_header(&value, "name");
-            let rows = value["songs"]
-                .as_array()
-                .map(|songs| {
-                    songs
-                        .iter()
-                        .map(|song| Row {
-                            track: String::new(),
-                            id: song["songId"].as_str().unwrap_or_default().to_string(),
-                            kind: RowKind::Song,
-                            title: song["title"].as_str().unwrap_or_default().to_string(),
-                            subtitle: song["subtitle"].as_str().unwrap_or_default().to_string(),
-                            meta: song["duration"].as_str().unwrap_or_default().to_string(),
-                            cover_url: song["cover"].as_str().unwrap_or_default().to_string(),
-                            cover_remote: song["coverRemote"]
-                                .as_str()
-                                .unwrap_or_default()
-                                .to_string(),
-                            song_id: song["songId"].as_str().unwrap_or_default().to_string(),
-                            album_id: song["albumId"].as_str().unwrap_or_default().to_string(),
-                            starred: song["starred"].as_bool().unwrap_or(false),
-                            rating: 0,
-                            downloaded: false,
-                        })
-                        .collect()
-                })
-                .unwrap_or_default();
-            Ok((header, rows))
-        }
+        PageKind::Playlist => crate::playlists::page(&dbs, &descriptor.id).await,
     }
 }
 

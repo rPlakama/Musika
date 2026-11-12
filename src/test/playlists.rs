@@ -53,11 +53,12 @@ async fn list_skips_empty_playlists() {
     .await
     .unwrap();
 
-    let json = list_json(&test_dbs(&library, &playlist)).await.unwrap();
-    let rows: serde_json::Value = serde_json::from_str(&json).unwrap();
-    let rows = rows.as_array().unwrap();
+    let rows = list(&test_dbs(&library, &playlist)).await.unwrap();
     assert_eq!(rows.len(), 1);
-    assert_eq!(rows[0]["id"], "p1");
+    assert_eq!(rows[0].id, "p1");
+    assert_eq!(rows[0].kind, crate::model::RowKind::Playlist);
+    assert_eq!(rows[0].title, "Mix");
+    assert_eq!(rows[0].subtitle, "Playlist · 2 songs");
 }
 
 #[tokio::test]
@@ -91,13 +92,10 @@ async fn scan_indexes_m3u_files() {
              #EXTINF:1,Ghost - Missing\nghost.flac\n",
     )
     .unwrap();
-    let json = scan_dir(&dbs, &dir).await.unwrap();
-
-    let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
-    let lists = parsed.as_array().unwrap();
+    let lists = scan_dir(&dbs, &dir).await.unwrap();
     assert_eq!(lists.len(), 1);
-    assert_eq!(lists[0]["name"], "mix.m3u");
-    assert_eq!(lists[0]["song_count"], 3);
+    assert_eq!(lists[0].title, "mix.m3u");
+    assert_eq!(lists[0].subtitle, "M3U · 3 songs");
 
     let rows: Vec<(i64, Option<String>)> =
         sqlx::query_as("SELECT position, song_id FROM playlist_song ORDER BY position")
@@ -131,8 +129,8 @@ async fn an_empty_m3u_folder_does_not_read_the_library() {
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
 
-    let json = scan_dir(&dbs, &dir).await.expect("empty scan");
-    assert_eq!(json, "[]");
+    let rows = scan_dir(&dbs, &dir).await.expect("empty scan");
+    assert!(rows.is_empty());
 
     let _ = std::fs::remove_dir_all(&dir);
 }
@@ -360,12 +358,12 @@ async fn create_local_writes_a_named_m3u_and_scans_it() {
     assert_eq!(entries[0].artist.as_deref(), Some("Artist"));
     assert_eq!(entries[0].title.as_deref(), Some("First"));
 
-    let json = list_json(&dbs).await.unwrap();
-    let lists: serde_json::Value = serde_json::from_str(&json).unwrap();
-    let lists = lists.as_array().unwrap();
+    let lists = list(&dbs).await.unwrap();
     assert_eq!(lists.len(), 1, "same-name save replaces the mix");
     assert!(lists.iter().any(|list| {
-        list["name"] == "Road Trip.m3u" && list["song_count"] == 2 && list["source"] == "m3u"
+        list.id == "m3u:Road Trip.m3u"
+            && list.title == "Road Trip.m3u"
+            && list.subtitle == "M3U · 2 songs"
     }));
 
     let stored: Vec<Option<String>> = sqlx::query_scalar(
@@ -763,7 +761,7 @@ async fn page_json_refreshes_a_stale_subsonic_cache() {
     .execute(&library)
     .await
     .unwrap();
-    // `page_json` resolves cover URLs through the covers pool (aliased to the
+    // `page` resolves cover URLs through the covers pool (aliased to the
     // library pool in tests): give it the empty table it expects.
     sqlx::raw_sql(
         "CREATE TABLE covers (
@@ -795,14 +793,13 @@ async fn page_json_refreshes_a_stale_subsonic_cache() {
     .unwrap();
 
     let dbs = test_dbs_with_credentials(&credentials, &library, &playlist);
-    let json = page_json(&dbs, "pl1", false).await.unwrap();
-    let value: serde_json::Value = serde_json::from_str(&json).unwrap();
-    let songs = value["songs"].as_array().expect("songs");
-    assert_eq!(songs.len(), 3, "the page must show every server entry");
-    assert_eq!(songs[0]["title"], "Too Much");
-    assert_eq!(songs[2]["title"], "Mr. Blue Sky");
+    let (header, rows) = page(&dbs, "pl1").await.unwrap();
+    assert_eq!(header.title, "Too Much");
+    assert_eq!(rows.len(), 3, "the page must show every server entry");
+    assert_eq!(rows[0].title, "Too Much");
+    assert_eq!(rows[2].title, "Mr. Blue Sky");
     assert!(
-        songs.iter().all(|song| song["title"] != "Stale entry"),
+        rows.iter().all(|row| row.title != "Stale entry"),
         "the stale cache row must be replaced"
     );
     let count: i64 =

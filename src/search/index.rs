@@ -375,7 +375,7 @@ pub(crate) const SONG_FIXED_COST: usize = 256;
 pub(crate) const HAYSTACK_FACTOR: usize = 3;
 
 /// The in-memory catalog is built for the hybrid and Nucleo engines;
-/// `MUSIKA_SEARCH_ENGINE=fts` skips it. `search_json` falls back to FTS
+/// `MUSIKA_SEARCH_ENGINE=fts` skips it. `browse::search` falls back to FTS
 /// whenever the in-memory build or query fails.
 pub fn enabled() -> bool {
     matches!(

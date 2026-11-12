@@ -18,6 +18,10 @@ open work; this file is the release history.
   icon, stretch the volume meter across the freed space, and grey its fill
   while the output is muted (the muted toast no longer shows a speaker icon
   either). The now-unused volume icon assets are removed.
+- Reorder the bottom player bar to `transport | metadata | progress`: the
+  transport buttons now sit in the left corner, the cover/title/artist follow
+  them, and the progress/volume zone keeps the right side. The fullscreen
+  playback block is unchanged.
 - Squash the fullscreen playback block: the artist shares the title line, the
   transport buttons, progress bar, times and a new volume meter share one
   control row (the key-hints line is gone; the hints stay in

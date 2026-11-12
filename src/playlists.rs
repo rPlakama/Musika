@@ -92,8 +92,7 @@ fn upsert_ids(ordered: &mut Vec<String>, position: usize, song_ids: &[String]) {
     if incoming.is_empty() {
         return;
     }
-    let wanted: std::collections::HashSet<&str> =
-        incoming.iter().map(String::as_str).collect();
+    let wanted: std::collections::HashSet<&str> = incoming.iter().map(String::as_str).collect();
     ordered.retain(|id| !wanted.contains(id.as_str()));
     let at = position.min(ordered.len());
     for (offset, id) in incoming.into_iter().enumerate() {
@@ -717,10 +716,15 @@ pub struct PlaylistHit {
 fn playlist_segment_row(row: &PlaylistListRow) -> crate::model::Row {
     let origin = playlist_origin(row);
     crate::model::Row {
+        item: crate::model::ItemMeta {
+            id: row.id.clone(),
+            title: row.name.clone(),
+            cover_url: String::new(),
+            cover_remote: String::new(),
+            album_id: String::new(),
+        },
         track: String::new(),
-        id: row.id.clone(),
         kind: crate::model::RowKind::Playlist,
-        title: row.name.clone(),
         subtitle: format!(
             "{origin} · {} song{}",
             row.song_count,
@@ -731,10 +735,7 @@ fn playlist_segment_row(row: &PlaylistListRow) -> crate::model::Row {
         } else {
             String::new()
         },
-        cover_url: String::new(),
-        cover_remote: String::new(),
         song_id: String::new(),
-        album_id: String::new(),
         starred: false,
         rating: 0,
     }
@@ -839,8 +840,7 @@ pub async fn page(
     // elsewhere (the server UI, another client) leave `playlist_song` stale.
     // An empty page always fetches; a count mismatch fetches again so the page
     // cannot show fewer songs than its own header claims.
-    let stale = playlist.source == "subsonic"
-        && (existing == 0 || existing != playlist.song_count);
+    let stale = playlist.source == "subsonic" && (existing == 0 || existing != playlist.song_count);
     if stale
         && let Ok(client) = crate::session::client(dbs).await
         && let Err(err) = load_subsonic_songs(dbs, &client, playlist_id).await
@@ -904,10 +904,15 @@ pub async fn page(
             .unwrap_or_default();
         let song_id = row.song_id.clone().unwrap_or_default();
         list_rows.push(crate::model::Row {
+            item: crate::model::ItemMeta {
+                id: song_id.clone(),
+                title: row.title.clone(),
+                cover_url: cover,
+                cover_remote,
+                album_id,
+            },
             track: String::new(),
-            id: song_id.clone(),
             kind: crate::model::RowKind::Song,
-            title: row.title.clone(),
             subtitle: row
                 .artist
                 .clone()
@@ -916,10 +921,7 @@ pub async fn page(
             meta: duration
                 .map(|seconds| crate::browse::rows::format_duration(Some(seconds as i32)))
                 .unwrap_or_default(),
-            cover_url: cover,
-            cover_remote,
             song_id,
-            album_id,
             starred: library_song
                 .and_then(|song| song.starred.as_ref())
                 .is_some(),
@@ -1154,8 +1156,7 @@ async fn append_resolved(dbs: &Dbs, playlist: &PlaylistRef, song_ids: &[String])
             .await
             .context("adding to a server playlist needs a signed-in server")?;
         let existing = cached_playlist_song_ids(dbs, &playlist.id).await?;
-        let wanted: std::collections::HashSet<&str> =
-            song_ids.iter().map(String::as_str).collect();
+        let wanted: std::collections::HashSet<&str> = song_ids.iter().map(String::as_str).collect();
         let duplicates: Vec<String> = existing
             .into_iter()
             .filter(|id| wanted.contains(id.as_str()))
@@ -1240,9 +1241,8 @@ pub async fn remove_playlist_positions(
         let path = local_playlist_path(&playlist)?;
         remove_positions_local_m3u(dbs, &path, &positions, &playlist.name).await?;
     } else {
-        let mut builder = sqlx::QueryBuilder::new(
-            "SELECT song_id FROM playlist_song WHERE playlist_id = ",
-        );
+        let mut builder =
+            sqlx::QueryBuilder::new("SELECT song_id FROM playlist_song WHERE playlist_id = ");
         builder.push_bind(&playlist.id);
         builder.push(" AND position IN (");
         let mut separated = builder.separated(", ");
@@ -1250,7 +1250,10 @@ pub async fn remove_playlist_positions(
             separated.push_bind(*position as i64);
         }
         separated.push_unseparated(")");
-        let song_ids: Vec<Option<String>> = builder.build_query_scalar().fetch_all(&dbs.playlist).await?;
+        let song_ids: Vec<Option<String>> = builder
+            .build_query_scalar()
+            .fetch_all(&dbs.playlist)
+            .await?;
         let song_ids: Vec<String> = song_ids
             .into_iter()
             .flatten()
@@ -1300,13 +1303,11 @@ async fn upsert_local_m3u(
     let matcher = Matcher::new(&songs);
     let dir = path.parent().unwrap_or(Path::new("."));
     let incoming = dedup_keep_last(song_ids);
-    let wanted: std::collections::HashSet<&str> =
-        incoming.iter().map(String::as_str).collect();
+    let wanted: std::collections::HashSet<&str> = incoming.iter().map(String::as_str).collect();
     let mut kept: Vec<M3uEntry> = entries
         .into_iter()
         .filter(|entry| {
-            entry_song_id(entry, &matcher, &songs, dir)
-                .is_none_or(|id| !wanted.contains(id))
+            entry_song_id(entry, &matcher, &songs, dir).is_none_or(|id| !wanted.contains(id))
         })
         .collect();
     let at = position.min(kept.len());
@@ -1559,13 +1560,14 @@ async fn remove_local_m3u(
     let songs = load_songs(&dbs.library).await?;
     let matcher = Matcher::new(&songs);
     let dir = path.parent().unwrap_or(Path::new("."));
-    let remove: std::collections::HashSet<&str> =
-        remove_ids.iter().map(String::as_str).collect();
+    let remove: std::collections::HashSet<&str> = remove_ids.iter().map(String::as_str).collect();
 
     let mut out = String::from("#EXTM3U\n");
     let mut removed = 0usize;
     for entry in &entries {
-        let song_id = matcher.resolve(entry, dir).map(|index| songs[index].id.as_str());
+        let song_id = matcher
+            .resolve(entry, dir)
+            .map(|index| songs[index].id.as_str());
         if song_id.is_some_and(|id| remove.contains(id)) {
             removed += 1;
             continue;
@@ -1573,9 +1575,7 @@ async fn remove_local_m3u(
         push_m3u_entry(&mut out, entry);
     }
     if removed == 0 {
-        return Err(anyhow!(
-            "None of the targets are in “{playlist_name}”"
-        ));
+        return Err(anyhow!("None of the targets are in “{playlist_name}”"));
     }
     std::fs::write(path, out)
         .with_context(|| format!("writing the playlist file {}", path.display()))?;

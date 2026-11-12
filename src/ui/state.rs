@@ -244,16 +244,18 @@ mod tests {
     fn cursor_is_clamped_to_rows() {
         let mut view = ViewState {
             rows: RowWindow::full(vec![Row {
+                item: crate::model::ItemMeta {
+                    id: "a".into(),
+                    title: "A".into(),
+                    cover_url: String::new(),
+                    cover_remote: String::new(),
+                    album_id: "a".into(),
+                },
                 track: String::new(),
-                id: "a".into(),
                 kind: RowKind::Album,
-                title: "A".into(),
                 subtitle: String::new(),
                 meta: String::new(),
-                cover_url: String::new(),
-                cover_remote: String::new(),
                 song_id: String::new(),
-                album_id: "a".into(),
                 starred: false,
                 rating: 0,
             }]),
@@ -285,16 +287,18 @@ mod tests {
         window.install_window(
             10,
             vec![Row {
+                item: crate::model::ItemMeta {
+                    id: "ten".into(),
+                    title: "Ten".into(),
+                    cover_url: String::new(),
+                    cover_remote: String::new(),
+                    album_id: "ten".into(),
+                },
                 track: String::new(),
-                id: "ten".into(),
                 kind: RowKind::Album,
-                title: "Ten".into(),
                 subtitle: String::new(),
                 meta: String::new(),
-                cover_url: String::new(),
-                cover_remote: String::new(),
                 song_id: String::new(),
-                album_id: "ten".into(),
                 starred: false,
                 rating: 0,
             }],
@@ -438,16 +442,18 @@ mod page_tests {
 
     fn test_row() -> Row {
         Row {
+            item: crate::model::ItemMeta {
+                id: "r".into(),
+                title: String::new(),
+                cover_url: String::new(),
+                cover_remote: String::new(),
+                album_id: String::new(),
+            },
             track: String::new(),
-            id: "r".into(),
             kind: RowKind::Song,
-            title: String::new(),
             subtitle: String::new(),
             meta: String::new(),
-            cover_url: String::new(),
-            cover_remote: String::new(),
             song_id: String::new(),
-            album_id: String::new(),
             starred: false,
             rating: 0,
         }
@@ -531,16 +537,18 @@ mod page_kind_tests {
         page.select(4);
         assert_eq!(page.list.cursor, 0);
         page.rows = vec![Row {
+            item: crate::model::ItemMeta {
+                id: "s".into(),
+                title: "S".into(),
+                cover_url: String::new(),
+                cover_remote: String::new(),
+                album_id: "a".into(),
+            },
             track: String::new(),
-            id: "s".into(),
             kind: RowKind::Song,
-            title: "S".into(),
             subtitle: String::new(),
             meta: String::new(),
-            cover_url: String::new(),
-            cover_remote: String::new(),
             song_id: "s".into(),
-            album_id: "a".into(),
             starred: false,
             rating: 0,
         }];

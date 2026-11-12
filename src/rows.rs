@@ -42,9 +42,7 @@ pub(crate) async fn count(
     };
     // Offline: the window reader below retains too, so the count must match
     // the filtered set or the virtual list overruns.
-    if offline
-        && let Some(filter) = crate::offline::load(dbs, true).await?
-    {
+    if offline && let Some(filter) = crate::offline::load(dbs, true).await? {
         let windowed = match surface {
             "albums" => {
                 let artist = (!key.is_empty()).then_some(key);
@@ -63,10 +61,7 @@ pub(crate) async fn count(
             }
             _ => {
                 let songs = crate::library::all_songs(&dbs.library, _order).await?;
-                songs
-                    .iter()
-                    .filter(|s| filter.contains_song(&s.id))
-                    .count()
+                songs.iter().filter(|s| filter.contains_song(&s.id)).count()
             }
         };
         return Ok(windowed.min(count));
@@ -110,21 +105,23 @@ pub(crate) async fn window(
             albums
                 .into_iter()
                 .map(|album| Row {
+                    item: crate::model::ItemMeta {
+                        id: album.id.clone(),
+                        title: album.title.clone(),
+                        cover_url: crate::covers::url_for(album.cover_art.as_deref(), &covers),
+                        cover_remote: album
+                            .cover_art
+                            .as_deref()
+                            .and_then(|id| remotes.get(id))
+                            .cloned()
+                            .unwrap_or_default(),
+                        album_id: album.id.clone(),
+                    },
                     track: String::new(),
-                    id: album.id.clone(),
                     kind: RowKind::Album,
-                    title: album.title.clone(),
                     subtitle: crate::browse::rows::album_subtitle(&album),
                     meta: format!("{} tracks", album.song_count),
-                    cover_url: crate::covers::url_for(album.cover_art.as_deref(), &covers),
-                    cover_remote: album
-                        .cover_art
-                        .as_deref()
-                        .and_then(|id| remotes.get(id))
-                        .cloned()
-                        .unwrap_or_default(),
                     song_id: String::new(),
-                    album_id: album.id,
                     starred: album.starred.is_some(),
                     rating: album.rating,
                 })
@@ -153,24 +150,23 @@ pub(crate) async fn window(
                 .map(|artist| {
                     let albums = artist.album_count;
                     Row {
+                        item: crate::model::ItemMeta {
+                            id: artist.id.clone(),
+                            title: artist.name.clone(),
+                            cover_url: crate::covers::url_for(artist.cover_art.as_deref(), &covers),
+                            cover_remote: artist
+                                .cover_art
+                                .as_deref()
+                                .and_then(|id| remotes.get(id))
+                                .cloned()
+                                .unwrap_or_default(),
+                            album_id: String::new(),
+                        },
                         track: String::new(),
-                        id: artist.id.clone(),
                         kind: RowKind::Artist,
-                        title: artist.name.clone(),
                         subtitle: String::new(),
-                        meta: format!(
-                            "{albums} album{}",
-                            if albums == 1 { "" } else { "s" }
-                        ),
-                        cover_url: crate::covers::url_for(artist.cover_art.as_deref(), &covers),
-                        cover_remote: artist
-                            .cover_art
-                            .as_deref()
-                            .and_then(|id| remotes.get(id))
-                            .cloned()
-                            .unwrap_or_default(),
+                        meta: format!("{albums} album{}", if albums == 1 { "" } else { "s" }),
                         song_id: String::new(),
-                        album_id: String::new(),
                         starred: artist.starred.is_some() || starred.contains(&artist.id),
                         rating: ratings.get(&artist.id).copied().unwrap_or(0),
                     }
@@ -190,24 +186,26 @@ pub(crate) async fn window(
             songs
                 .into_iter()
                 .map(|song| Row {
+                    item: crate::model::ItemMeta {
+                        id: song.id.clone(),
+                        title: song.title.clone(),
+                        cover_url: crate::covers::url_for(song.cover_art.as_deref(), &covers),
+                        cover_remote: song
+                            .cover_art
+                            .as_deref()
+                            .and_then(|id| remotes.get(id))
+                            .cloned()
+                            .unwrap_or_default(),
+                        album_id: song.album_id.unwrap_or_default(),
+                    },
                     track: String::new(),
-                    id: song.id.clone(),
                     kind: RowKind::Song,
-                    title: song.title.clone(),
                     subtitle: crate::browse::rows::song_subtitle_from_parts(
                         song.artist.as_deref(),
                         song.album.as_deref(),
                     ),
                     meta: crate::browse::rows::format_duration(song.duration),
-                    cover_url: crate::covers::url_for(song.cover_art.as_deref(), &covers),
-                    cover_remote: song
-                        .cover_art
-                        .as_deref()
-                        .and_then(|id| remotes.get(id))
-                        .cloned()
-                        .unwrap_or_default(),
                     song_id: song.id,
-                    album_id: song.album_id.unwrap_or_default(),
                     starred: song.starred.is_some(),
                     rating: 0,
                 })

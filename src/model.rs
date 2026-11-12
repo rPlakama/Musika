@@ -11,7 +11,6 @@ pub const SEARCH_VISIBLE_ROWS: usize = 5;
 /// Rows requested from the backend; the overlay scrolls beyond the visible 5.
 pub const SEARCH_FETCH_ROWS: usize = 100;
 
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum Scope {
     Albums,
@@ -198,20 +197,32 @@ pub struct ItemMeta {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Row {
-    pub id: String,
+    /// The shared item identity (id/title/album id/cover URLs).
+    #[serde(flatten)]
+    pub item: ItemMeta,
     pub kind: RowKind,
-    pub title: String,
     pub subtitle: String,
     pub meta: String,
     /// Album track number/module text, searchable by `/` but not painted.
     pub track: String,
-    pub cover_url: String,
-    /// Provider URL used when the cached row cover does not load.
-    pub cover_remote: String,
+    /// Source song id (empty for containers); the row's Go-to jumps use it.
     pub song_id: String,
-    pub album_id: String,
     pub starred: bool,
     pub rating: i64,
+}
+
+impl std::ops::Deref for Row {
+    type Target = ItemMeta;
+
+    fn deref(&self) -> &Self::Target {
+        &self.item
+    }
+}
+
+impl std::ops::DerefMut for Row {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.item
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -326,16 +337,18 @@ mod serde_tests {
     #[test]
     fn row_and_page_payloads_round_trip_json() {
         let row = Row {
-            id: "s1".into(),
+            item: crate::model::ItemMeta {
+                id: "s1".into(),
+                title: "Title".into(),
+                cover_url: "file:///cover.jpg".into(),
+                cover_remote: "https://example.test/art".into(),
+                album_id: "al1".into(),
+            },
             kind: RowKind::Song,
-            title: "Title".into(),
             subtitle: "Artist".into(),
             meta: "Album".into(),
             track: "1".into(),
-            cover_url: "file:///cover.jpg".into(),
-            cover_remote: "https://example.test/art".into(),
             song_id: "s1".into(),
-            album_id: "al1".into(),
             starred: true,
             rating: 3,
         };

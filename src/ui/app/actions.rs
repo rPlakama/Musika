@@ -41,7 +41,8 @@ impl AppRoot {
         }
         if self.queue_open {
             self.queue_list.cursor = self
-                .queue_list.cursor
+                .queue_list
+                .cursor
                 .saturating_add(1)
                 .min(self.player.len().saturating_sub(1));
             self.follow_queue(true);
@@ -386,10 +387,7 @@ impl AppRoot {
     }
 
     fn clipboard_from_song_ids(&mut self, ids: Vec<String>) -> usize {
-        let ids: Vec<String> = ids
-            .into_iter()
-            .filter(|id| !id.is_empty())
-            .collect();
+        let ids: Vec<String> = ids.into_iter().filter(|id| !id.is_empty()).collect();
         if ids.is_empty() {
             return 0;
         }
@@ -425,7 +423,8 @@ impl AppRoot {
         if self.queue_open {
             let queue = self.player.queue_snapshot();
             let ids: Vec<String> = self
-                .queue_list.selection
+                .queue_list
+                .selection
                 .indices(self.queue_list.cursor, false)
                 .into_iter()
                 .filter_map(|index| queue.get(index).map(|track| track.id.clone()))
@@ -434,7 +433,8 @@ impl AppRoot {
             return (!ids.is_empty()).then_some(("song", ids));
         }
         let rows: Vec<Row> = if let Some(page) = self.page.as_ref() {
-            page.list.selection
+            page.list
+                .selection
                 .indices(page.list.cursor, false)
                 .into_iter()
                 .filter_map(|index| page.rows.get(index).cloned())
@@ -454,11 +454,7 @@ impl AppRoot {
 
     fn announce_yank(&mut self, count: usize, missing: usize) {
         if count == 0 {
-            self.push_toast(
-                "Nothing to yank".to_string(),
-                ToastKind::Notice,
-                None,
-            );
+            self.push_toast("Nothing to yank".to_string(), ToastKind::Notice, None);
             return;
         }
         let suffix = if missing > 0 {
@@ -480,7 +476,10 @@ impl AppRoot {
         }
         if self.queue_open {
             let queue = self.player.queue_snapshot();
-            let indices = self.queue_list.selection.indices(self.queue_list.cursor, row_only);
+            let indices = self
+                .queue_list
+                .selection
+                .indices(self.queue_list.cursor, row_only);
             let ids: Vec<String> = indices
                 .iter()
                 .filter_map(|index| queue.get(*index).map(|track| track.id.clone()))
@@ -507,7 +506,11 @@ impl AppRoot {
             self.announce_yank(count, 0);
             return count;
         }
-        let indices = self.view.list.selection.indices(self.view.list.cursor, row_only);
+        let indices = self
+            .view
+            .list
+            .selection
+            .indices(self.view.list.cursor, row_only);
         let selected = indices.len();
         let rows: Vec<Row> = indices
             .iter()
@@ -614,12 +617,8 @@ impl AppRoot {
                 self.bridge.paste_queue(kind_str.to_string(), ids, at);
             }
             PasteTarget::Playlist(playlist_id, position) => {
-                self.bridge.paste_playlist(
-                    playlist_id,
-                    kind_str.to_string(),
-                    ids,
-                    position,
-                );
+                self.bridge
+                    .paste_playlist(playlist_id, kind_str.to_string(), ids, position);
             }
         }
         cx.notify();
@@ -645,7 +644,8 @@ impl AppRoot {
 
     fn delete_queue_range(&mut self, cx: &mut Context<Self>) {
         let indices: Vec<usize> = self
-            .queue_list.selection
+            .queue_list
+            .selection
             .indices(self.queue_list.cursor, false)
             .into_iter()
             .filter(|index| *index < self.player.len())
@@ -690,8 +690,7 @@ impl AppRoot {
         page.list.selection.clear();
         let playlist_id = page.descriptor.id.clone();
         self.visual_mode = false;
-        self.bridge
-            .delete_playlist_positions(playlist_id, indices);
+        self.bridge.delete_playlist_positions(playlist_id, indices);
         cx.notify();
     }
 
@@ -742,7 +741,11 @@ impl AppRoot {
 
     /// Queue `Ctrl-Shift-K/J` with a visual selection: move the whole block.
     fn move_queue_block(&mut self, delta: i32, cx: &mut Context<Self>) {
-        let anchor = self.queue_list.selection.anchor().unwrap_or(self.queue_list.cursor);
+        let anchor = self
+            .queue_list
+            .selection
+            .anchor()
+            .unwrap_or(self.queue_list.cursor);
         let start = anchor.min(self.queue_list.cursor);
         let end = anchor.max(self.queue_list.cursor);
         let len = end - start + 1;
@@ -770,7 +773,9 @@ impl AppRoot {
         };
         let len = indices.len();
         let new_start = start as i64 + i64::from(delta);
-        if new_start < 0 || new_start as usize + len > page.rows.len() || new_start as usize == start
+        if new_start < 0
+            || new_start as usize + len > page.rows.len()
+            || new_start as usize == start
         {
             return;
         }
@@ -1315,12 +1320,12 @@ fn clipboard_ids_from_rows(rows: Vec<Row>) -> Option<(RowKind, Vec<String>)> {
         }
         let id = if row.kind == RowKind::Song {
             if row.song_id.is_empty() {
-                row.id
+                row.item.id
             } else {
                 row.song_id
             }
         } else {
-            row.id
+            row.item.id
         };
         if id.is_empty() {
             continue;
@@ -1348,16 +1353,18 @@ mod clipboard_tests {
 
     fn row(kind: RowKind, id: &str, song_id: &str) -> Row {
         Row {
-            id: id.to_string(),
+            item: crate::model::ItemMeta {
+                id: id.to_string(),
+                title: String::new(),
+                cover_url: String::new(),
+                cover_remote: String::new(),
+                album_id: String::new(),
+            },
             kind,
-            title: String::new(),
             subtitle: String::new(),
             meta: String::new(),
             track: String::new(),
-            cover_url: String::new(),
-            cover_remote: String::new(),
             song_id: song_id.to_string(),
-            album_id: String::new(),
             starred: false,
             rating: 0,
         }
@@ -1372,7 +1379,10 @@ mod clipboard_tests {
         ];
         assert_eq!(
             clipboard_ids_from_rows(rows),
-            Some((RowKind::Song, vec!["s1".to_string(), "s1".to_string(), "c".to_string()]))
+            Some((
+                RowKind::Song,
+                vec!["s1".to_string(), "s1".to_string(), "c".to_string()]
+            ))
         );
     }
 

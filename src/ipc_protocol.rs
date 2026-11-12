@@ -91,8 +91,7 @@ pub const FEATURE_QUEUE_QUERY: u32 = 1 << 2;
 pub const FEATURE_CONTROL_REPLY: u32 = 1 << 3;
 
 /// Features a UI client wants: the full playback and queue stream.
-pub const UI_FEATURES: u32 =
-    FEATURE_PLAYBACK_STREAM | FEATURE_QUEUE_STREAM | FEATURE_QUEUE_QUERY;
+pub const UI_FEATURES: u32 = FEATURE_PLAYBACK_STREAM | FEATURE_QUEUE_STREAM | FEATURE_QUEUE_QUERY;
 /// Features a control client wants: acks for requests, no bulk streams.
 pub const CONTROL_FEATURES: u32 = FEATURE_CONTROL_REPLY;
 
@@ -450,11 +449,21 @@ pub enum PlayerOp {
     Jump(u32),
     Remove(u32),
     RemoveMany(Vec<u32>),
-    Move { from: u32, to: u32 },
-    MoveBlock { start: u32, len: u32, delta: i32 },
+    Move {
+        from: u32,
+        to: u32,
+    },
+    MoveBlock {
+        start: u32,
+        len: u32,
+        delta: i32,
+    },
     CycleRepeat,
     ShuffleQueue,
-    SetTrackFavorite { id: String, favorite: bool },
+    SetTrackFavorite {
+        id: String,
+        favorite: bool,
+    },
     /// Ask the core to replay the playback state and the queue rows.
     Resync,
 }
@@ -611,7 +620,11 @@ impl PlaybackState {
 
     pub fn decode(payload: &[u8]) -> Result<Self, ProtocolError> {
         if payload.len() != Self::ENCODED_BYTES {
-            return Err(bad_payload("playback state", Self::ENCODED_BYTES, payload.len()));
+            return Err(bad_payload(
+                "playback state",
+                Self::ENCODED_BYTES,
+                payload.len(),
+            ));
         }
         let mut r = Reader::new(payload);
         Ok(Self {
@@ -643,33 +656,17 @@ pub struct QueueDelta {
 #[derive(Debug, Clone, PartialEq)]
 pub enum QueueOp {
     /// The queue was replaced. Row bodies follow in `QueueRows` chunks.
-    Reset {
-        count: u32,
-    },
+    Reset { count: u32 },
     /// A contiguous window of the current queue (resync / first load).
-    Rows {
-        start: u32,
-        rows: Vec<WireTrack>,
-    },
+    Rows { start: u32, rows: Vec<WireTrack> },
     /// Rows inserted at `at`; the inserted rows are included.
-    Insert {
-        at: u32,
-        rows: Vec<WireTrack>,
-    },
+    Insert { at: u32, rows: Vec<WireTrack> },
     /// Existing rows removed by their positions (ascending, deduped).
-    Remove {
-        indices: Vec<u32>,
-    },
+    Remove { indices: Vec<u32> },
     /// One row moved.
-    Move {
-        from: u32,
-        to: u32,
-    },
+    Move { from: u32, to: u32 },
     /// A metadata-only change (favourite marks).
-    Patch {
-        index: u32,
-        favorite: bool,
-    },
+    Patch { index: u32, favorite: bool },
 }
 
 impl Default for QueueOp {
@@ -971,9 +968,9 @@ impl PlayerRequest {
         w.u32(self.req);
         w.u8(self.op.tag());
         match &self.op {
-            PlayerOp::SetVolume(volume) | PlayerOp::Seek(volume) | PlayerOp::SeekRelative(volume) => {
-                w.f64(*volume)
-            }
+            PlayerOp::SetVolume(volume)
+            | PlayerOp::Seek(volume)
+            | PlayerOp::SeekRelative(volume) => w.f64(*volume),
             PlayerOp::Jump(index) | PlayerOp::Remove(index) => w.u32(*index),
             PlayerOp::RemoveMany(indices) => {
                 w.u16(indices.len() as u16);
@@ -1108,7 +1105,8 @@ impl Heartbeat {
 
 /// JSON codec helper for the control frames.
 pub fn json_encode<T: Serialize>(value: &T) -> Result<Vec<u8>, ProtocolError> {
-    serde_json::to_vec(value).map_err(|error| ProtocolError::new(ErrorCode::BadPayload, error.to_string()))
+    serde_json::to_vec(value)
+        .map_err(|error| ProtocolError::new(ErrorCode::BadPayload, error.to_string()))
 }
 
 pub fn json_decode<T: for<'de> Deserialize<'de>>(payload: &[u8]) -> Result<T, ProtocolError> {
@@ -1238,10 +1236,7 @@ impl<'a> Reader<'a> {
     }
 
     fn take(&mut self, len: usize) -> Result<&'a [u8], ProtocolError> {
-        let end = self
-            .pos
-            .checked_add(len)
-            .ok_or_else(|| self.short(len))?;
+        let end = self.pos.checked_add(len).ok_or_else(|| self.short(len))?;
         if end > self.bytes.len() {
             return Err(self.short(len));
         }

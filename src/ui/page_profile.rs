@@ -60,7 +60,12 @@ impl PageProfile {
                 favorite: true,
                 artist_link: true,
                 show_row_cover: false,
-                row_flags: RowFlags { show_cover: false, show_subtitle: true, show_length: true, compact: true },
+                row_flags: RowFlags {
+                    show_cover: false,
+                    show_subtitle: true,
+                    show_length: true,
+                    compact: true,
+                },
                 empty_text: "No tracks in this album",
                 scroll: scroll_modal::ALBUM,
             },
@@ -74,7 +79,12 @@ impl PageProfile {
                 favorite: true,
                 artist_link: false,
                 show_row_cover: true,
-                row_flags: RowFlags { show_cover: true, show_subtitle: true, show_length: true, compact: true },
+                row_flags: RowFlags {
+                    show_cover: true,
+                    show_subtitle: true,
+                    show_length: true,
+                    compact: true,
+                },
                 empty_text: "No albums by this artist",
                 scroll: scroll_modal::ALBUM,
             },
@@ -88,7 +98,12 @@ impl PageProfile {
                 favorite: false,
                 artist_link: false,
                 show_row_cover: true,
-                row_flags: RowFlags { show_cover: true, show_subtitle: true, show_length: true, compact: true },
+                row_flags: RowFlags {
+                    show_cover: true,
+                    show_subtitle: true,
+                    show_length: true,
+                    compact: true,
+                },
                 empty_text: "No tracks in this playlist",
                 scroll: scroll_modal::ALBUM,
             },
@@ -107,7 +122,12 @@ impl PageProfile {
                 favorite: false,
                 artist_link: false,
                 show_row_cover: true,
-                row_flags: RowFlags { show_cover: true, show_subtitle: true, show_length: true, compact: true },
+                row_flags: RowFlags {
+                    show_cover: true,
+                    show_subtitle: true,
+                    show_length: true,
+                    compact: true,
+                },
                 empty_text: "No similar songs found",
                 scroll: scroll_modal::ALBUM,
             },
@@ -143,16 +163,18 @@ mod tests {
 
     fn row(kind: RowKind) -> Row {
         Row {
+            item: crate::model::ItemMeta {
+                id: "r".into(),
+                title: String::new(),
+                cover_url: String::new(),
+                cover_remote: String::new(),
+                album_id: "a".into(),
+            },
             track: String::new(),
-            id: "r".into(),
             kind,
-            title: String::new(),
             subtitle: String::new(),
             meta: String::new(),
-            cover_url: String::new(),
-            cover_remote: String::new(),
             song_id: "s".into(),
-            album_id: "a".into(),
             starred: false,
             rating: 0,
         }
@@ -174,11 +196,17 @@ mod tests {
     #[test]
     fn rows_resolve_actions() {
         let artist = PageProfile::for_descriptor(&PageDescriptor::new(PageKind::Artist, "ar"));
-        assert_eq!(artist.row_action(&row(RowKind::Album)), PageAction::OpenAlbum);
+        assert_eq!(
+            artist.row_action(&row(RowKind::Album)),
+            PageAction::OpenAlbum
+        );
         let album = PageProfile::for_descriptor(&PageDescriptor::new(PageKind::Album, "a"));
         assert_eq!(album.row_action(&row(RowKind::Song)), PageAction::PlayAlbum);
         let playlist = PageProfile::for_descriptor(&PageDescriptor::new(PageKind::Playlist, "p"));
-        assert_eq!(playlist.row_action(&row(RowKind::Song)), PageAction::PlayPlaylist);
+        assert_eq!(
+            playlist.row_action(&row(RowKind::Song)),
+            PageAction::PlayPlaylist
+        );
         let radio = PageProfile::for_descriptor(&PageDescriptor::radio("album", "s"));
         assert_eq!(radio.row_action(&row(RowKind::Song)), PageAction::PlayRadio);
     }

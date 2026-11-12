@@ -20,7 +20,12 @@ mod contextual_bar_tests {
     use super::*;
     use crate::ui::widgets::media::cover_source;
 
-    fn page_state(kind: PageKind, starred: bool, cached: bool, downloading: bool) -> PageBarState<'static> {
+    fn page_state(
+        kind: PageKind,
+        starred: bool,
+        cached: bool,
+        downloading: bool,
+    ) -> PageBarState<'static> {
         PageBarState {
             kind,
             id: "id",
@@ -168,16 +173,18 @@ mod contextual_bar_tests {
     }
     fn test_search_row(id: &str, title: &str) -> Row {
         Row {
-            id: id.to_string(),
+            item: crate::model::ItemMeta {
+                id: id.to_string(),
+                title: title.to_string(),
+                cover_url: String::new(),
+                cover_remote: String::new(),
+                album_id: String::new(),
+            },
             kind: RowKind::Song,
-            title: title.to_string(),
             subtitle: String::new(),
             meta: String::new(),
             track: String::new(),
-            cover_url: String::new(),
-            cover_remote: String::new(),
             song_id: id.to_string(),
-            album_id: String::new(),
             starred: false,
             rating: 0,
         }
@@ -349,7 +356,11 @@ mod hold_tests {
         let press = |key: char, count: u32| {
             let mut hold = KeyHold::record(None, key, 1_000_000_000);
             for step in 1..count {
-                hold = KeyHold::record(Some(hold), key, 1_000_000_000 + u64::from(step) * 30_000_000);
+                hold = KeyHold::record(
+                    Some(hold),
+                    key,
+                    1_000_000_000 + u64::from(step) * 30_000_000,
+                );
             }
             hold
         };
@@ -363,7 +374,11 @@ mod hold_tests {
         let press = |key: char, count: u32| {
             let mut hold = KeyHold::record(None, key, 1_000_000_000);
             for step in 1..count {
-                hold = KeyHold::record(Some(hold), key, 1_000_000_000 + u64::from(step) * 30_000_000);
+                hold = KeyHold::record(
+                    Some(hold),
+                    key,
+                    1_000_000_000 + u64::from(step) * 30_000_000,
+                );
             }
             hold
         };

@@ -184,8 +184,8 @@ pub async fn page(
     } else {
         format!("Radio · {}", seed.subtitle)
     };
-    let header = |collage: Vec<String>, collage_remote: Vec<String>, collage_art: Vec<String>| {
-        PageHeader {
+    let header =
+        |collage: Vec<String>, collage_remote: Vec<String>, collage_art: Vec<String>| PageHeader {
             title: seed.title.clone(),
             subtitle: subtitle.clone(),
             meta: "Similar songs".to_string(),
@@ -197,8 +197,7 @@ pub async fn page(
             cover_art: String::new(),
             rating: 0,
             starred: false,
-        }
-    };
+        };
     if offline {
         return Ok((header(Vec::new(), Vec::new(), Vec::new()), Vec::new()));
     }
@@ -244,21 +243,28 @@ pub async fn page(
     let mut page_rows: Vec<Row> = Vec::with_capacity(rows.len());
     for row in &rows {
         page_rows.push(Row {
+            item: crate::model::ItemMeta {
+                id: row.id.clone(),
+                title: row.title.clone(),
+                cover_url: crate::covers::url_for_ref(row.cover_art.as_deref(), &covers)
+                    .to_string(),
+                cover_remote: row
+                    .cover_art
+                    .as_deref()
+                    .and_then(|id| remotes.get(id))
+                    .cloned()
+                    .unwrap_or_default(),
+                album_id: row.album_id.clone().unwrap_or_default(),
+            },
             track: String::new(),
-            id: row.id.clone(),
             kind: RowKind::Song,
-            title: row.title.clone(),
-            subtitle: row.artist.clone().or_else(|| row.album.clone()).unwrap_or_default(),
-            meta: crate::browse::rows::format_duration(row.duration),
-            cover_url: crate::covers::url_for_ref(row.cover_art.as_deref(), &covers).to_string(),
-            cover_remote: row
-                .cover_art
-                .as_deref()
-                .and_then(|id| remotes.get(id))
-                .cloned()
+            subtitle: row
+                .artist
+                .clone()
+                .or_else(|| row.album.clone())
                 .unwrap_or_default(),
+            meta: crate::browse::rows::format_duration(row.duration),
             song_id: row.id.clone(),
-            album_id: row.album_id.clone().unwrap_or_default(),
             starred: row.starred.is_some(),
             rating: 0,
         });

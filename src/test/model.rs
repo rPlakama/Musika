@@ -56,8 +56,8 @@ fn page_descriptor_round_trips_the_stored_status_parts() {
         assert_eq!(restored, descriptor);
     }
     // Stored radio rows do not carry the seed kind; the descriptor defaults it.
-    let radio = crate::model::PageDescriptor::from_stored_parts("radio", "seed1")
-        .expect("radio restores");
+    let radio =
+        crate::model::PageDescriptor::from_stored_parts("radio", "seed1").expect("radio restores");
     assert_eq!(radio.kind, PageKind::Radio);
     assert_eq!(radio.radio_seed_kind, None);
     // No page / unknown kind is the "first launch" case.
@@ -74,7 +74,10 @@ fn item_kind_owns_the_canonical_vocabulary() {
         crate::model::ItemKind::Playlist,
         crate::model::ItemKind::Radio,
     ] {
-        assert_eq!(crate::model::ItemKind::from_api_kind(kind.api_kind()), Some(kind));
+        assert_eq!(
+            crate::model::ItemKind::from_api_kind(kind.api_kind()),
+            Some(kind)
+        );
     }
     assert_eq!(
         crate::model::ItemKind::from_api_kind("track"),
@@ -85,7 +88,12 @@ fn item_kind_owns_the_canonical_vocabulary() {
     assert_eq!(crate::model::ItemKind::Album.suggestion_kind(), "album");
 
     // The narrow surface enums are adapters, not restatements.
-    for row in [RowKind::Song, RowKind::Album, RowKind::Artist, RowKind::Playlist] {
+    for row in [
+        RowKind::Song,
+        RowKind::Album,
+        RowKind::Artist,
+        RowKind::Playlist,
+    ] {
         assert_eq!(RowKind::from_api_kind(row.api_kind()), Some(row));
         assert_eq!(row.api_kind(), row.item_kind().api_kind());
         assert_eq!(RowKind::from_item_kind(row.item_kind()), Some(row));
@@ -160,4 +168,37 @@ fn track_flattens_the_shared_identity_on_the_wire() {
     assert_eq!(track.id, "s2");
     assert_eq!(track.album_id, "");
     assert_eq!(track.cover_remote, "");
+}
+
+#[test]
+fn row_flattens_the_shared_identity_on_the_wire() {
+    let row = crate::model::Row {
+        item: crate::model::ItemMeta {
+            id: "al1".to_string(),
+            title: "Album".to_string(),
+            album_id: "al1".to_string(),
+            cover_url: "file:///al1".to_string(),
+            cover_remote: String::new(),
+        },
+        kind: RowKind::Album,
+        subtitle: "Artist · 2026".to_string(),
+        meta: "10 tracks".to_string(),
+        track: String::new(),
+        song_id: String::new(),
+        starred: true,
+        rating: 3,
+    };
+    let json = serde_json::to_value(&row).unwrap();
+    assert_eq!(json["id"], "al1");
+    assert_eq!(json["title"], "Album");
+    assert_eq!(json["album_id"], "al1");
+    assert_eq!(json["cover_url"], "file:///al1");
+    assert_eq!(json["kind"], "Album");
+    assert!(json.get("item").is_none(), "identity stays flattened");
+    // Field reads go through the shared identity.
+    assert_eq!(row.id, "al1");
+    assert_eq!(row.item.album_id, "al1");
+    let back: crate::model::Row = serde_json::from_value(json).unwrap();
+    assert_eq!(back.item, row.item);
+    assert_eq!(back.kind, row.kind);
 }

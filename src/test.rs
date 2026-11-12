@@ -90,6 +90,8 @@ mod lyrics;
 
 mod media;
 
+mod model;
+
 mod mpris;
 
 mod playback;

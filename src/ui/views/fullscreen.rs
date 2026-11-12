@@ -386,45 +386,19 @@ impl AppRoot {
                             .items_center()
                             .gap_3()
                             .w_full()
-                            .child(
-                                div()
-                                    .flex()
-                                    .flex_none()
-                                    .items_center()
-                                    .gap_1()
-                                    .child(transport_button(
-                                        "skip-previous-solid-svgrepo-com.svg",
-                                        22.0,
-                                        palette::on_surface(),
-                                        self.transport_scale(0),
-                                    ))
-                                    .child(if self.player.is_loading() {
-                                        transport_loading_button(
-                                            "loading-loop.svg",
-                                            28.0,
-                                            palette::on_surface(),
-                                            self.transport_scale(1),
-                                            self.stream_loading_angle(),
-                                        )
-                                    } else {
-                                        transport_button(
-                                            if self.player.state() == crate::player::State::Playing {
-                                                "pause-svgrepo-com.svg"
-                                            } else {
-                                                "play-1001-svgrepo-com.svg"
-                                            },
-                                            28.0,
-                                            palette::on_surface(),
-                                            self.transport_scale(1),
-                                        )
-                                    })
-                                    .child(transport_button(
-                                        "skip-next-circle-solid-svgrepo-com.svg",
-                                        22.0,
-                                        palette::on_surface(),
-                                        self.transport_scale(2),
-                                    )),
-                            )
+                            .child(transport_controls(
+                                self.player.state(),
+                                self.player.is_loading(),
+                                self.stream_loading_angle(),
+                                [
+                                    self.transport_scale(0),
+                                    self.transport_scale(1),
+                                    self.transport_scale(2),
+                                ],
+                                22.0,
+                                28.0,
+                                4.0,
+                            ))
                             .child(
                                 div()
                                     .flex_none()
@@ -433,35 +407,9 @@ impl AppRoot {
                                     .child(format_time(position)),
                             )
                             .child(
-                                div()
-                                    .relative()
-                                    .flex()
+                                progress_bar(progress_ratio, self.seek_preview(), 4.0, true)
                                     .flex_1()
-                                    .min_w(px(80.0))
-                                    .h(px(4.0))
-                                    .rounded_full()
-                                    .bg(rgb(palette::surface_container_high()))
-                                    .child(
-                                        div()
-                                            .h_full()
-                                            .w(relative(progress_ratio))
-                                            .rounded_full()
-                                            .bg(rgb(palette::primary())),
-                                    )
-                                    // Ghost band: where a held `,`/`.` lands.
-                                    .when_some(self.seek_preview(), |this, (start, length)| {
-                                        this.child(
-                                            div()
-                                                .absolute()
-                                                .top_0()
-                                                .left(relative(start))
-                                                .h_full()
-                                                .w(relative(length))
-                                                .rounded_full()
-                                                .bg(rgb(palette::primary()))
-                                                .opacity(0.30),
-                                        )
-                                    }),
+                                    .min_w(px(80.0)),
                             )
                             .child(
                                 div()

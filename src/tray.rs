@@ -17,10 +17,10 @@ use ksni::TrayMethods;
 use tokio::sync::Mutex;
 
 /// The glyph shown while the core is playing (the pause action is available).
-const TRAY_GLYPH_PLAYING: &str = "pause-svgrepo-com.svg";
+const TRAY_GLYPH_PLAYING: &str = crate::assets::ICON_PAUSE;
 
 /// The glyph shown while the core is paused or stopped.
-const TRAY_GLYPH_PAUSED: &str = "play-1001-svgrepo-com.svg";
+const TRAY_GLYPH_PAUSED: &str = crate::assets::ICON_PLAY;
 
 /// Panel sizes a StatusNotifier host may request; it picks the closest one.
 const TRAY_ICON_SIZES: [u32; 6] = [16, 22, 24, 32, 48, 64];
@@ -28,19 +28,6 @@ const TRAY_ICON_SIZES: [u32; 6] = [16, 22, 24, 32, 48, 64];
 /// The playback state the tray icon reflects. Written by the daemon from the
 /// playback snapshot, read by `icon_pixmap` on the SNI service thread.
 static PLAYING: AtomicBool = AtomicBool::new(false);
-
-/// The runtime asset root: `MUSIKA_ASSET_DIR` (the packaged share dir) or the
-/// checkout's `src/` for a plain cargo build. Mirrors the UI's resolver so the
-/// tray finds the same icons.
-fn asset_root() -> &'static str {
-    static ROOT: OnceLock<String> = OnceLock::new();
-    ROOT.get_or_init(|| {
-        std::env::var("MUSIKA_ASSET_DIR")
-            .ok()
-            .filter(|path| !path.is_empty())
-            .unwrap_or_else(|| format!("{}/src", env!("CARGO_MANIFEST_DIR")))
-    })
-}
 
 /// Fraction of the panel slot the glyph fills; the rest is breathing room so
 /// the tray glyph matches the padding of the system's other tray icons.
@@ -96,7 +83,7 @@ fn rasterize_icon(bytes: &[u8], edge: u32) -> Option<ksni::Icon> {
 /// Rasterize one glyph asset at every panel size. A missing or broken asset is
 /// not fatal: the tray still registers with whatever the other state loads.
 fn load_pixmaps(asset: &str) -> Vec<ksni::Icon> {
-    let path = format!("{}/icons/{}", asset_root(), asset);
+    let path = crate::assets::icon(asset);
     let bytes = match std::fs::read(&path) {
         Ok(bytes) => bytes,
         Err(error) => {

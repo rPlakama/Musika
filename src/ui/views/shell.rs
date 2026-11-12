@@ -458,27 +458,7 @@ impl AppRoot {
                     .top_0()
                     .left_0()
                     .right_0()
-                    .h(px(3.0))
-                    .bg(rgb(palette::surface_container_high()))
-                    .child(
-                        div()
-                            .h_full()
-                            .w(relative(progress))
-                            .bg(rgb(palette::primary())),
-                    )
-                    // Ghost band: where a held `,`/`.` is going to land.
-                    .when_some(self.seek_preview(), |this, (start, length)| {
-                        this.child(
-                            div()
-                                .absolute()
-                                .top_0()
-                                .left(relative(start))
-                                .h_full()
-                                .w(relative(length))
-                                .bg(rgb(palette::primary()))
-                                .opacity(0.30),
-                        )
-                    }),
+                    .child(progress_bar(progress, self.seek_preview(), 3.0, false)),
             )
             .child(
                 div()
@@ -526,46 +506,19 @@ impl AppRoot {
                                     }),
                             ),
                     )
-                    .child(
-                        div()
-                            .flex()
-                            .flex_none()
-                            .items_center()
-                            .justify_center()
-                            .gap(px(m.transport_spacing))
-                            .child(transport_button(
-                                "skip-previous-solid-svgrepo-com.svg",
-                                m.transport_unit,
-                                palette::on_surface(),
-                                self.transport_scale(0),
-                            ))
-                            .child(if self.player.is_loading() {
-                                transport_loading_button(
-                                    "loading-loop.svg",
-                                    m.play_size,
-                                    palette::on_surface(),
-                                    self.transport_scale(1),
-                                    self.stream_loading_angle(),
-                                )
-                            } else {
-                                transport_button(
-                                    if state == crate::player::State::Playing {
-                                        "pause-svgrepo-com.svg"
-                                    } else {
-                                        "play-1001-svgrepo-com.svg"
-                                    },
-                                    m.play_size,
-                                    palette::on_surface(),
-                                    self.transport_scale(1),
-                                )
-                            })
-                            .child(transport_button(
-                                "skip-next-circle-solid-svgrepo-com.svg",
-                                m.transport_unit,
-                                palette::on_surface(),
-                                self.transport_scale(2),
-                            )),
-                    )
+                    .child(transport_controls(
+                        state,
+                        self.player.is_loading(),
+                        self.stream_loading_angle(),
+                        [
+                            self.transport_scale(0),
+                            self.transport_scale(1),
+                            self.transport_scale(2),
+                        ],
+                        m.transport_unit,
+                        m.play_size,
+                        m.transport_spacing,
+                    ))
                     .child(
                         div()
                             .flex()

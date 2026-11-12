@@ -22,6 +22,7 @@ mod accounts;
 mod api;
 mod app;
 mod artist_user;
+mod assets;
 #[cfg(feature = "gpuui")]
 mod auth;
 mod bridge;

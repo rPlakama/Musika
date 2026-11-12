@@ -174,9 +174,8 @@ impl AppRoot {
                                                     this.child(RetainedIcon::new(
                                                         "retained-queue-download",
                                                         index,
-                                                        format!(
-                                                            "{}/icons/outline-download.svg",
-                                                            asset_root()
+                                                        crate::assets::icon(
+                                                            "outline-download.svg",
                                                         ),
                                                         12.0,
                                                         palette::primary(),

@@ -55,10 +55,10 @@ mod widgets;
 use self::text_modal::TextModal;
 use self::widgets::marquee::MarqueeText;
 use self::widgets::media::{
-    CoverSource, art, asset_root, collage_art_from_sources, cover_element, cover_source_with_remote,
+    CoverSource, art, collage_art_from_sources, cover_element, cover_source_with_remote,
     format_time, highlighted_text, icon, icon_downloaded, icon_download_pending, icon_favorite,
     icon_rotated, loading_placeholder, loading_skeleton, page_key, remote_cover, repeat_label,
-    transport_button, transport_loading_button, volume_meter,
+    progress_bar, transport_controls, volume_meter,
 };
 use self::widgets::retained_cover::RetainedCover;
 use self::widgets::retained_icon::RetainedIcon;
@@ -315,13 +315,8 @@ struct AltTarget {
 }
 
 impl AltTarget {
-    fn queue_kind(&self) -> &'static str {
-        match self.kind {
-            RowKind::Song => "song",
-            RowKind::Album => "album",
-            RowKind::Artist => "artist",
-            RowKind::Playlist => "playlist",
-        }
+    fn api_kind(&self) -> &'static str {
+        self.kind.api_kind()
     }
 }
 

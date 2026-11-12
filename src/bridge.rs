@@ -217,6 +217,89 @@ pub enum Event {
     Error(String),
 }
 
+/// One playlist edit result. Every unrelated flag defaults, so a bridge
+/// handler only names what its operation actually changed instead of
+/// restating the whole nine-field [`Event::PlaylistSaved`] shape.
+#[derive(Debug, Clone, Default)]
+pub struct PlaylistSave {
+    pub name: String,
+    pub offline: bool,
+    pub created: bool,
+    pub removed: bool,
+    pub moved: bool,
+    pub rows: usize,
+    pub playlist_id: Option<String>,
+    pub cursor: Option<usize>,
+    pub error: Option<String>,
+}
+
+impl PlaylistSave {
+    /// A successful edit of `name`.
+    pub fn ok(name: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            ..Self::default()
+        }
+    }
+
+    /// A failed edit; the UI toasts `error` under the playlist name.
+    pub fn failed(name: impl Into<String>, error: impl std::fmt::Display) -> Self {
+        Self {
+            name: name.into(),
+            error: Some(error.to_string()),
+            ..Self::default()
+        }
+    }
+
+    /// `playlist create`: the UI says "Created" instead of "Added".
+    pub fn created(mut self, offline: bool) -> Self {
+        self.created = true;
+        self.offline = offline;
+        self
+    }
+
+    /// `playlist rm`: the UI says "Removed from".
+    pub fn removed(mut self) -> Self {
+        self.removed = true;
+        self
+    }
+
+    /// A page reorder; success is silent (the list itself shows it).
+    pub fn moved(mut self) -> Self {
+        self.moved = true;
+        self
+    }
+
+    /// How many rows the edit added/removed (`playlist add selected`/paste).
+    pub fn rows(mut self, rows: usize) -> Self {
+        self.rows = rows;
+        self
+    }
+
+    /// The edited page plus the row to reveal after its reload.
+    pub fn at(mut self, playlist_id: impl Into<String>, cursor: Option<usize>) -> Self {
+        self.playlist_id = Some(playlist_id.into());
+        self.cursor = cursor;
+        self
+    }
+}
+
+impl From<PlaylistSave> for Event {
+    fn from(save: PlaylistSave) -> Self {
+        Event::PlaylistSaved {
+            name: save.name,
+            offline: save.offline,
+            created: save.created,
+            removed: save.removed,
+            moved: save.moved,
+            rows: save.rows,
+            playlist_id: save.playlist_id,
+            cursor: save.cursor,
+            error: save.error,
+        }
+    }
+}
+
 pub struct Bridge {
     tx: UnboundedSender<Event>,
     generation: AtomicU64,
@@ -301,5 +384,45 @@ mod serde_tests {
             let back: Event = serde_json::from_str(&json).unwrap();
             assert_eq!(serde_json::to_string(&back).unwrap(), json);
         }
+    }
+
+    #[test]
+    fn playlist_save_only_names_what_changed() {
+        let event = Event::from(PlaylistSave::ok("Mix").rows(3).removed().at("p1", Some(2)));
+        let Event::PlaylistSaved {
+            name,
+            offline,
+            created,
+            removed,
+            moved,
+            rows,
+            playlist_id,
+            cursor,
+            error,
+        } = event
+        else {
+            panic!("expected PlaylistSaved");
+        };
+        assert_eq!(name, "Mix");
+        assert_eq!(rows, 3);
+        assert!(removed && !offline && !created && !moved);
+        assert_eq!(playlist_id.as_deref(), Some("p1"));
+        assert_eq!(cursor, Some(2));
+        assert!(error.is_none());
+
+        let failed = Event::from(PlaylistSave::failed("Mix", "boom").created(true));
+        let Event::PlaylistSaved {
+            created,
+            offline,
+            error,
+            rows,
+            ..
+        } = failed
+        else {
+            panic!("expected PlaylistSaved");
+        };
+        assert!(created && offline, "a --offline create keeps its flag");
+        assert_eq!(rows, 0);
+        assert_eq!(error.as_deref(), Some("boom"));
     }
 }

@@ -262,6 +262,12 @@ pub fn denied_opacity(started_at: Option<f64>, now: f64) -> f32 {
 /// How long a new toast takes to pop in.
 pub const TOAST_IN_MS: f32 = 220.0;
 
+/// How long a toast stays on screen before its fade-out begins.
+pub const TOAST_TTL_S: f64 = 6.320;
+
+/// The plain fade-out at the very end of a toast's lifetime.
+pub const TOAST_FADE_OUT_S: f64 = 0.320;
+
 /// The toast starts this far below its resting position and rises into it.
 pub const TOAST_RISE_PX: f32 = 6.0;
 

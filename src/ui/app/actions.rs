@@ -420,7 +420,7 @@ impl AppRoot {
                 .filter_map(|index| scoped.get(index).map(|row| (*row).clone()))
                 .collect();
             return clipboard_ids_from_rows(rows)
-                .and_then(|(kind, ids)| kind.queue_kind().map(|kind| (kind, ids)));
+                .and_then(|(kind, ids)| kind.clipboard_kind().map(|kind| (kind, ids)));
         }
         if self.queue_open {
             let queue = self.player.queue_snapshot();
@@ -448,7 +448,7 @@ impl AppRoot {
                 .collect()
         };
         clipboard_ids_from_rows(rows)
-            .and_then(|(kind, ids)| kind.queue_kind().map(|kind| (kind, ids)))
+            .and_then(|(kind, ids)| kind.clipboard_kind().map(|kind| (kind, ids)))
     }
 
     fn announce_yank(&mut self, count: usize, missing: usize) {
@@ -570,7 +570,7 @@ impl AppRoot {
         let Some(kind) = self.clipboard_kind else {
             return;
         };
-        let Some(kind_str) = kind.queue_kind() else {
+        let Some(kind_str) = kind.clipboard_kind() else {
             return;
         };
         let ids = std::mem::take(&mut self.clipboard_ids);
@@ -1308,7 +1308,7 @@ fn clipboard_ids_from_rows(rows: Vec<Row>) -> Option<(RowKind, Vec<String>)> {
     let mut kind = None;
     let mut ids = Vec::new();
     for row in rows {
-        if row.kind.queue_kind().is_none() {
+        if row.kind.clipboard_kind().is_none() {
             continue;
         }
         let id = if row.kind == RowKind::Song {

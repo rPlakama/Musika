@@ -74,13 +74,38 @@ pub enum RowKind {
 }
 
 impl RowKind {
-    /// The queue/track-clipboard kind string; playlists are not row-yankable.
-    pub fn queue_kind(self) -> Option<&'static str> {
+    /// The wire vocabulary shared by the quick actions, the bridge RPCs and
+    /// the daemon (`song` is the canonical track spelling at this boundary).
+    pub fn api_kind(self) -> &'static str {
         match self {
-            Self::Song => Some("song"),
-            Self::Album => Some("album"),
-            Self::Artist => Some("artist"),
-            Self::Playlist => None,
+            Self::Song => "song",
+            Self::Album => "album",
+            Self::Artist => "artist",
+            Self::Playlist => "playlist",
+        }
+    }
+
+    /// Parse the wire vocabulary; `None` for an unknown value.
+    pub fn from_api_kind(value: &str) -> Option<Self> {
+        match value {
+            "song" | "track" => Some(Self::Song),
+            "album" => Some(Self::Album),
+            "artist" => Some(Self::Artist),
+            "playlist" => Some(Self::Playlist),
+            _ => None,
+        }
+    }
+
+    /// The row-clipboard kind; playlists are not yankable/queueable.
+    pub fn clipboard_kind(self) -> Option<&'static str> {
+        (self != Self::Playlist).then(|| self.api_kind())
+    }
+
+    /// The command-suggestion vocabulary (`track` instead of `song`).
+    pub fn suggestion_kind(self) -> &'static str {
+        match self {
+            Self::Song => "track",
+            _ => self.api_kind(),
         }
     }
 }
@@ -119,6 +144,27 @@ impl PageKind {
             PageKind::Artist => "Artist",
             PageKind::Playlist => "Playlist",
             PageKind::Radio => "Radio",
+        }
+    }
+
+    /// The wire vocabulary shared by the daemon, the bridge and the UI.
+    pub fn api_kind(self) -> &'static str {
+        match self {
+            PageKind::Album => "album",
+            PageKind::Artist => "artist",
+            PageKind::Playlist => "playlist",
+            PageKind::Radio => "radio",
+        }
+    }
+
+    /// Parse the wire vocabulary; `None` for an unknown value.
+    pub fn from_api_kind(value: &str) -> Option<Self> {
+        match value {
+            "album" => Some(PageKind::Album),
+            "artist" => Some(PageKind::Artist),
+            "playlist" => Some(PageKind::Playlist),
+            "radio" => Some(PageKind::Radio),
+            _ => None,
         }
     }
 }

@@ -19,28 +19,10 @@ impl Bridge {
                 crate::playlists::create_remote(&dbs, &name, &song_ids).await
             };
             let event = match result {
-                Ok(()) => Event::PlaylistSaved {
-                    name,
-                    offline,
-                    created: true,
-                    removed: false,
-                    moved: false,
-                    rows: 0,
-                    playlist_id: None,
-                    cursor: None,
-                    error: None,
-                },
-                Err(err) => Event::PlaylistSaved {
-                    name,
-                    offline,
-                    created: true,
-                    removed: false,
-                    moved: false,
-                    rows: 0,
-                    playlist_id: None,
-                    cursor: None,
-                    error: Some(format!("{err:#}")),
-                },
+                Ok(()) => PlaylistSave::ok(name).created(offline).into(),
+                Err(err) => PlaylistSave::failed(name, format!("{err:#}"))
+                    .created(offline)
+                    .into(),
             };
             let _ = tx.send(event);
         });
@@ -90,30 +72,10 @@ impl Bridge {
             .await
             {
                 Ok(name) => {
-                    let _ = tx.send(Event::PlaylistSaved {
-                        name,
-                        offline: false,
-                        created: false,
-                        removed: false,
-                        moved: false,
-                        rows: 0,
-                        playlist_id: None,
-                        cursor: None,
-                        error: None,
-                    });
+                    let _ = tx.send(PlaylistSave::ok(name).into());
                 }
                 Err(err) => {
-                    let _ = tx.send(Event::PlaylistSaved {
-                        name: playlist,
-                        offline: false,
-                        created: false,
-                        removed: false,
-                        moved: false,
-                        rows: 0,
-                        playlist_id: None,
-                        cursor: None,
-                        error: Some(format!("{err:#}")),
-                    });
+                    let _ = tx.send(PlaylistSave::failed(playlist, format!("{err:#}")).into());
                 }
             }
         });
@@ -129,33 +91,14 @@ impl Bridge {
         let tx = self.tx.clone();
         crate::app::runtime().spawn(async move {
             let Some(dbs) = crate::app::dbs() else { return };
-            let event =
-                match crate::playlists::add_selection_to_playlist(&dbs, &kind, &ids, &playlist)
-                    .await
-                {
-                    Ok((name, rows)) => Event::PlaylistSaved {
-                        name,
-                        offline: false,
-                        created: false,
-                        removed: false,
-                        moved: false,
-                        rows,
-                        playlist_id: None,
-                        cursor: None,
-                        error: None,
-                    },
-                    Err(err) => Event::PlaylistSaved {
-                        name: playlist,
-                        offline: false,
-                        created: false,
-                        removed: false,
-                        moved: false,
-                        rows: 0,
-                        playlist_id: None,
-                        cursor: None,
-                        error: Some(format!("{err:#}")),
-                    },
-                };
+            let event = match crate::playlists::add_selection_to_playlist(
+                &dbs, &kind, &ids, &playlist,
+            )
+            .await
+            {
+                Ok((name, rows)) => PlaylistSave::ok(name).rows(rows).into(),
+                Err(err) => PlaylistSave::failed(playlist, format!("{err:#}")).into(),
+            };
             let _ = tx.send(event);
         });
     }
@@ -183,30 +126,14 @@ impl Bridge {
             .await
             {
                 Ok(name) => {
-                    let _ = tx.send(Event::PlaylistSaved {
-                        name,
-                        offline: false,
-                        created: false,
-                        removed: true,
-                        moved: false,
-                        rows: 0,
-                        playlist_id: None,
-                        cursor: None,
-                        error: None,
-                    });
+                    let _ = tx.send(PlaylistSave::ok(name).removed().into());
                 }
                 Err(err) => {
-                    let _ = tx.send(Event::PlaylistSaved {
-                        name: playlist,
-                        offline: false,
-                        created: false,
-                        removed: true,
-                        moved: false,
-                        rows: 0,
-                        playlist_id: None,
-                        cursor: None,
-                        error: Some(format!("{err:#}")),
-                    });
+                    let _ = tx.send(
+                        PlaylistSave::failed(playlist, format!("{err:#}"))
+                            .removed()
+                            .into(),
+                    );
                 }
             }
         });
@@ -270,30 +197,15 @@ impl Bridge {
             let rows = song_ids.len();
             match crate::playlists::insert_song_ids_at(&dbs, &playlist_id, position, &song_ids).await {
                 Ok(name) => {
-                    let _ = tx.send(Event::PlaylistSaved {
-                        name,
-                        offline: false,
-                        created: false,
-                        removed: false,
-                        moved: false,
-                        rows,
-                        playlist_id: Some(playlist_id),
-                        cursor: Some(position),
-                        error: None,
-                    });
+                    let _ = tx.send(
+                        PlaylistSave::ok(name)
+                            .rows(rows)
+                            .at(playlist_id, Some(position))
+                            .into(),
+                    );
                 }
                 Err(err) => {
-                    let _ = tx.send(Event::PlaylistSaved {
-                        name: playlist_id,
-                        offline: false,
-                        created: false,
-                        removed: false,
-                        moved: false,
-                        rows: 0,
-                        playlist_id: None,
-                        cursor: None,
-                        error: Some(format!("{err:#}")),
-                    });
+                    let _ = tx.send(PlaylistSave::failed(playlist_id, format!("{err:#}")).into());
                 }
             }
         });
@@ -306,30 +218,15 @@ impl Bridge {
             let Some(dbs) = crate::app::dbs() else { return };
             match crate::playlists::move_playlist_entry(&dbs, &playlist_id, from, to).await {
                 Ok(name) => {
-                    let _ = tx.send(Event::PlaylistSaved {
-                        name,
-                        offline: false,
-                        created: false,
-                        removed: false,
-                        moved: true,
-                        rows: 0,
-                        playlist_id: Some(playlist_id),
-                        cursor: Some(to),
-                        error: None,
-                    });
+                    let _ = tx.send(
+                        PlaylistSave::ok(name)
+                            .moved()
+                            .at(playlist_id, Some(to))
+                            .into(),
+                    );
                 }
                 Err(err) => {
-                    let _ = tx.send(Event::PlaylistSaved {
-                        name: playlist_id,
-                        offline: false,
-                        created: false,
-                        removed: false,
-                        moved: false,
-                        rows: 0,
-                        playlist_id: None,
-                        cursor: None,
-                        error: Some(format!("{err:#}")),
-                    });
+                    let _ = tx.send(PlaylistSave::failed(playlist_id, format!("{err:#}")).into());
                 }
             }
         });
@@ -350,30 +247,15 @@ impl Bridge {
             let Some(dbs) = crate::app::dbs() else { return };
             match crate::playlists::move_playlist_block(&dbs, &playlist_id, start, len, delta).await {
                 Ok(name) => {
-                    let _ = tx.send(Event::PlaylistSaved {
-                        name,
-                        offline: false,
-                        created: false,
-                        removed: false,
-                        moved: true,
-                        rows: 0,
-                        playlist_id: Some(playlist_id),
-                        cursor: Some(cursor),
-                        error: None,
-                    });
+                    let _ = tx.send(
+                        PlaylistSave::ok(name)
+                            .moved()
+                            .at(playlist_id, Some(cursor))
+                            .into(),
+                    );
                 }
                 Err(err) => {
-                    let _ = tx.send(Event::PlaylistSaved {
-                        name: playlist_id,
-                        offline: false,
-                        created: false,
-                        removed: false,
-                        moved: false,
-                        rows: 0,
-                        playlist_id: None,
-                        cursor: None,
-                        error: Some(format!("{err:#}")),
-                    });
+                    let _ = tx.send(PlaylistSave::failed(playlist_id, format!("{err:#}")).into());
                 }
             }
         });
@@ -388,30 +270,20 @@ impl Bridge {
             let Some(dbs) = crate::app::dbs() else { return };
             match crate::playlists::remove_playlist_positions(&dbs, &playlist_id, &positions).await {
                 Ok(name) => {
-                    let _ = tx.send(Event::PlaylistSaved {
-                        name,
-                        offline: false,
-                        created: false,
-                        removed: true,
-                        moved: false,
-                        rows,
-                        playlist_id: Some(playlist_id),
-                        cursor,
-                        error: None,
-                    });
+                    let _ = tx.send(
+                        PlaylistSave::ok(name)
+                            .removed()
+                            .rows(rows)
+                            .at(playlist_id, cursor)
+                            .into(),
+                    );
                 }
                 Err(err) => {
-                    let _ = tx.send(Event::PlaylistSaved {
-                        name: playlist_id,
-                        offline: false,
-                        created: false,
-                        removed: true,
-                        moved: false,
-                        rows: 0,
-                        playlist_id: None,
-                        cursor: None,
-                        error: Some(format!("{err:#}")),
-                    });
+                    let _ = tx.send(
+                        PlaylistSave::failed(playlist_id, format!("{err:#}"))
+                            .removed()
+                            .into(),
+                    );
                 }
             }
         });

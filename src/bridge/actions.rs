@@ -2,26 +2,34 @@
 
 use super::*;
 
+use crate::model::RowKind;
+
 impl Bridge {
     pub fn quick_favorite(&self, kind: String, id: String, on: bool) {
         let tx = self.tx.clone();
         crate::app::runtime().spawn(async move {
             let Some(dbs) = crate::app::dbs() else { return };
+            let Some(row_kind) =
+                RowKind::from_api_kind(&kind).filter(|kind| *kind != RowKind::Playlist)
+            else {
+                let _ = tx.send(Event::Error(format!(
+                    "Could not update the favourite: unknown favourite kind: {kind}"
+                )));
+                return;
+            };
             let result = async {
                 let client = crate::session::client(&dbs).await?;
                 if on {
-                    match kind.as_str() {
-                        "song" => client.star(&[id.as_str()], &[], &[]).await,
-                        "album" => client.star(&[], &[id.as_str()], &[]).await,
-                        "artist" => client.star(&[], &[], &[id.as_str()]).await,
-                        other => anyhow::bail!("unknown favourite kind: {other}"),
+                    match row_kind {
+                        RowKind::Song => client.star(&[id.as_str()], &[], &[]).await,
+                        RowKind::Album => client.star(&[], &[id.as_str()], &[]).await,
+                        _ => client.star(&[], &[], &[id.as_str()]).await,
                     }
                 } else {
-                    match kind.as_str() {
-                        "song" => client.unstar(&[id.as_str()], &[], &[]).await,
-                        "album" => client.unstar(&[], &[id.as_str()], &[]).await,
-                        "artist" => client.unstar(&[], &[], &[id.as_str()]).await,
-                        other => anyhow::bail!("unknown favourite kind: {other}"),
+                    match row_kind {
+                        RowKind::Song => client.unstar(&[id.as_str()], &[], &[]).await,
+                        RowKind::Album => client.unstar(&[], &[id.as_str()], &[]).await,
+                        _ => client.unstar(&[], &[], &[id.as_str()]).await,
                     }
                 }
             };
@@ -31,9 +39,9 @@ impl Bridge {
                 )));
                 return;
             }
-            let local = match kind.as_str() {
-                "song" => crate::library::set_song_starred(&dbs.library, &id, on).await,
-                "album" => crate::library::set_album_starred(&dbs.library, &id, on).await,
+            let local = match row_kind {
+                RowKind::Song => crate::library::set_song_starred(&dbs.library, &id, on).await,
+                RowKind::Album => crate::library::set_album_starred(&dbs.library, &id, on).await,
                 _ => crate::artist_user::set_starred(&dbs.artist_user, &id, on).await,
             };
             if let Err(err) = local {
@@ -42,11 +50,6 @@ impl Bridge {
                 )));
                 return;
             }
-            let row_kind = match kind.as_str() {
-                "song" => crate::model::RowKind::Song,
-                "album" => crate::model::RowKind::Album,
-                _ => crate::model::RowKind::Artist,
-            };
             let _ = tx.send(Event::RowsPatched {
                 kind: row_kind,
                 id,
@@ -61,12 +64,14 @@ impl Bridge {
         let tx = self.tx.clone();
         crate::app::runtime().spawn(async move {
             let Some(dbs) = crate::app::dbs() else { return };
+            let artist = RowKind::from_api_kind(&kind) == Some(RowKind::Artist);
             let result = async {
                 let client = crate::session::client(&dbs).await?;
                 client.set_rating(&id, level).await?;
-                match kind.as_str() {
-                    "artist" => crate::artist_user::set_rating(&dbs.artist_user, &id, level).await,
-                    _ => crate::library::set_album_rating(&dbs.library, &id, level).await,
+                if artist {
+                    crate::artist_user::set_rating(&dbs.artist_user, &id, level).await
+                } else {
+                    crate::library::set_album_rating(&dbs.library, &id, level).await
                 }
             }
             .await;
@@ -74,10 +79,10 @@ impl Bridge {
                 let _ = tx.send(Event::Error(format!("Could not rate: {err:#}")));
                 return;
             }
-            let row_kind = if kind == "artist" {
-                crate::model::RowKind::Artist
+            let row_kind = if artist {
+                RowKind::Artist
             } else {
-                crate::model::RowKind::Album
+                RowKind::Album
             };
             let _ = tx.send(Event::RowsPatched {
                 kind: row_kind,
@@ -97,11 +102,12 @@ impl Bridge {
                 id: id.clone(),
                 on,
             });
+            let row_kind = RowKind::from_api_kind(&kind);
             if !on {
-                let result = if kind == "album" {
+                let result = if row_kind == Some(RowKind::Album) {
                     crate::media_actions::album_container_off(&dbs, &id).await;
                     Ok(())
-                } else if kind == "song" {
+                } else if row_kind == Some(RowKind::Song) {
                     let unmark = crate::download::unmark(&dbs.download, &id).await;
                     let media =
                         crate::media::remove_songs_media(&dbs.media, std::slice::from_ref(&id))
@@ -120,9 +126,9 @@ impl Bridge {
                 }
                 return;
             }
-            let songs = if kind == "song" {
+            let songs = if row_kind == Some(RowKind::Song) {
                 vec![id.clone()]
-            } else if kind == "album" {
+            } else if row_kind == Some(RowKind::Album) {
                 crate::library::album_song_ids_of(&dbs.library, std::slice::from_ref(&id))
                     .await
                     .ok()
@@ -151,12 +157,16 @@ impl Bridge {
         let offline = self.offline.load(Ordering::Relaxed);
         crate::app::runtime().spawn(async move {
             let Some(dbs) = crate::app::dbs() else { return };
-            let queued = if kind == "playlist" {
-                crate::queue::playlist_tracks_json(&dbs, &id, offline, 0)
+            let queued = match RowKind::from_api_kind(&kind) {
+                Some(RowKind::Playlist) => crate::queue::playlist_tracks_json(&dbs, &id, offline, 0)
                     .await
-                    .map(|(json, _)| json)
-            } else {
-                crate::queue::quick_tracks_json(&dbs, &kind, &id, offline).await
+                    .map(|(json, _)| json),
+                Some(row_kind) => {
+                    crate::queue::quick_tracks_json(&dbs, row_kind.api_kind(), &id, offline).await
+                }
+                // Unknown kinds keep the pre-parse behaviour: the queue
+                // helper rejects them with its own message.
+                None => crate::queue::quick_tracks_json(&dbs, &kind, &id, offline).await,
             };
             emit_append(&tx, queued, "Could not add to queue");
         });

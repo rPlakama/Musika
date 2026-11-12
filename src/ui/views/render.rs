@@ -247,11 +247,11 @@ impl Render for AppRoot {
             self.exit_overlay(progress)
         });
         self.toasts
-            .retain(|toast| self.clock.now - toast.created_at < 6.320);
+            .retain(|toast| self.clock.now - toast.created_at < anim::TOAST_TTL_S);
         if self
             .toasts
             .iter()
-            .any(|toast| self.clock.now - toast.created_at < 6.320)
+            .any(|toast| self.clock.now - toast.created_at < anim::TOAST_TTL_S)
         {
             perf::request_frame(window, "toast");
         }

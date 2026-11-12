@@ -136,11 +136,10 @@ impl AppRoot {
 
     pub(in crate::ui) fn activate_container_favorite(&mut self) {
         let Some(page) = self.page_bar() else { return };
-        let kind = match page.kind {
-            PageKind::Album => "album",
-            PageKind::Artist => "artist",
-            _ => return,
-        };
+        if !matches!(page.kind, PageKind::Album | PageKind::Artist) {
+            return;
+        }
+        let kind = page.kind.api_kind();
         if let Some(page) = self.page.as_mut() {
             page.header.starred = !page.header.starred;
         }
@@ -680,19 +679,19 @@ impl AppRoot {
                 QuickVerb::Favorite { on } => {
                     for id in &target.ids {
                         self.bridge
-                            .quick_favorite(target.queue_kind().to_string(), id.clone(), on);
+                            .quick_favorite(target.api_kind().to_string(), id.clone(), on);
                     }
                 }
                 QuickVerb::AddToQueue => {
                     for id in &target.ids {
                         self.bridge
-                            .quick_queue_add(target.queue_kind().to_string(), id.clone());
+                            .quick_queue_add(target.api_kind().to_string(), id.clone());
                     }
                 }
                 QuickVerb::Download { on } => {
                     for id in &target.ids {
                         self.bridge
-                            .quick_download(target.queue_kind().to_string(), id.clone(), on);
+                            .quick_download(target.api_kind().to_string(), id.clone(), on);
                     }
                 }
                 _ => {}
@@ -702,7 +701,7 @@ impl AppRoot {
         match verb {
             QuickVerb::AddToQueue => {
                 self.bridge
-                    .quick_queue_add(target.queue_kind().to_string(), target.id.clone());
+                    .quick_queue_add(target.api_kind().to_string(), target.id.clone());
             }
             QuickVerb::StartRadio => {
                 let seed_id = if !target.song_id.is_empty() {
@@ -711,13 +710,13 @@ impl AppRoot {
                     target.id.clone()
                 };
                 self.open_descriptor(PageDescriptor::radio(
-                    target.queue_kind().to_string(),
+                    target.api_kind().to_string(),
                     seed_id,
                 ));
             }
             QuickVerb::Favorite { on } => {
                 self.bridge
-                    .quick_favorite(target.queue_kind().to_string(), target.id.clone(), on);
+                    .quick_favorite(target.api_kind().to_string(), target.id.clone(), on);
             }
             QuickVerb::RateAlbum { level } => {
                 self.bridge
@@ -750,7 +749,7 @@ impl AppRoot {
                     self.bridge.download_artist(target.id.clone(), on);
                 } else {
                     self.bridge.quick_download(
-                        target.queue_kind().to_string(),
+                        target.api_kind().to_string(),
                         target.id.clone(),
                         on,
                     );

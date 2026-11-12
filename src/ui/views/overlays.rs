@@ -469,7 +469,9 @@ impl AppRoot {
                 // Pop in with a slight bezier overshoot; the fade-out at the
                 // end of the lifetime stays a plain fade.
                 let (fade, rise) = anim::toast_entrance(age);
-                let opacity = fade * ((6.320 - age) / 0.320).clamp(0.0, 1.0);
+                let fade_out = ((anim::TOAST_TTL_S - f64::from(age)) / anim::TOAST_FADE_OUT_S)
+                    .clamp(0.0, 1.0) as f32;
+                let opacity = fade * fade_out;
                 self.toast_bubble(&toast.message, None, opacity, rise, toast.retry, cx)
             }))
             .when_some(self.hold_toast.as_ref(), |this, hold| {

@@ -3,7 +3,7 @@
 use super::super::*;
 use gpui::{SharedString, StyledImage as _};
 
-pub(crate) fn transport_button(
+fn transport_button(
     icon_name: &str,
     base: f32,
     color: u32,
@@ -18,7 +18,7 @@ pub(crate) fn transport_button(
         .into_any_element()
 }
 
-pub(crate) fn transport_loading_button(
+fn transport_loading_button(
     icon_name: &str,
     base: f32,
     color: u32,
@@ -240,7 +240,7 @@ fn cached_icon(
     cell: &'static std::sync::OnceLock<SharedString>,
     name: &'static str,
 ) -> SharedString {
-    cell.get_or_init(|| format!("{}/icons/{name}", asset_root()).into())
+    cell.get_or_init(|| crate::assets::icon(name).into())
         .clone()
 }
 
@@ -423,13 +423,7 @@ pub(crate) fn cover_element(
 }
 
 pub(crate) fn page_key(descriptor: &PageDescriptor) -> String {
-    let kind = match descriptor.kind {
-        PageKind::Album => "album",
-        PageKind::Artist => "artist",
-        PageKind::Playlist => "playlist",
-        PageKind::Radio => "radio",
-    };
-    format!("{kind}:{}", descriptor.id)
+    format!("{}:{}", descriptor.kind.api_kind(), descriptor.id)
 }
 
 pub(crate) fn trace_scroll() -> bool {
@@ -450,18 +444,8 @@ pub(crate) fn repeat_label(repeat: crate::player::Repeat) -> &'static str {
     }
 }
 
-pub(crate) fn asset_root() -> &'static str {
-    static ROOT: std::sync::OnceLock<String> = std::sync::OnceLock::new();
-    ROOT.get_or_init(|| {
-        std::env::var("MUSIKA_ASSET_DIR")
-            .ok()
-            .filter(|path| !path.is_empty())
-            .unwrap_or_else(|| format!("{}/src", env!("CARGO_MANIFEST_DIR")))
-    })
-}
-
 pub(crate) fn icon(name: &str, size: f32, color: u32) -> gpui::AnyElement {
-    let path = format!("{}/icons/{}", asset_root(), name);
+    let path = crate::assets::icon(name);
     svg()
         .path(path)
         .size(px(size))
@@ -470,7 +454,7 @@ pub(crate) fn icon(name: &str, size: f32, color: u32) -> gpui::AnyElement {
 }
 
 pub(crate) fn icon_rotated(name: &str, size: f32, color: u32, degrees: f32) -> gpui::AnyElement {
-    let path = format!("{}/icons/{}", asset_root(), name);
+    let path = crate::assets::icon(name);
     svg()
         .path(path)
         .size(px(size))
@@ -479,6 +463,95 @@ pub(crate) fn icon_rotated(name: &str, size: f32, color: u32, degrees: f32) -> g
             degrees.to_radians(),
         )))
         .into_any_element()
+}
+
+/// The three transport buttons every player surface shows. The play/pause
+/// branch, the loading spinner and the shared glyph names live here once
+/// instead of in each view; `scales` are the press animations.
+pub(crate) fn transport_controls(
+    state: crate::player::State,
+    loading: bool,
+    loading_angle: f32,
+    scales: [f32; 3],
+    unit: f32,
+    play: f32,
+    spacing: f32,
+) -> gpui::AnyElement {
+    div()
+        .flex()
+        .flex_none()
+        .items_center()
+        .gap(px(spacing))
+        .child(transport_button(
+            crate::assets::ICON_PREVIOUS,
+            unit,
+            palette::on_surface(),
+            scales[0],
+        ))
+        .child(if loading {
+            transport_loading_button(
+                "loading-loop.svg",
+                play,
+                palette::on_surface(),
+                scales[1],
+                loading_angle,
+            )
+        } else {
+            transport_button(
+                if state == crate::player::State::Playing {
+                    crate::assets::ICON_PAUSE
+                } else {
+                    crate::assets::ICON_PLAY
+                },
+                play,
+                palette::on_surface(),
+                scales[1],
+            )
+        })
+        .child(transport_button(
+            crate::assets::ICON_NEXT,
+            unit,
+            palette::on_surface(),
+            scales[2],
+        ))
+        .into_any_element()
+}
+
+/// The playback progress bar, including the held-seek ghost band. The caller
+/// positions/sizes the returned bar; `rounded` keeps the fullscreen strip's
+/// pill shape while the bottom thin strip stays square.
+pub(crate) fn progress_bar(
+    progress: f32,
+    ghost: Option<(f32, f32)>,
+    height: f32,
+    rounded: bool,
+) -> gpui::Div {
+    div()
+        .relative()
+        .w_full()
+        .h(px(height))
+        .bg(rgb(palette::surface_container_high()))
+        .when(rounded, |this| this.rounded_full())
+        .child(
+            div()
+                .h_full()
+                .w(relative(progress))
+                .bg(rgb(palette::primary()))
+                .when(rounded, |this| this.rounded_full()),
+        )
+        .when_some(ghost, |this, (start, length)| {
+            this.child(
+                div()
+                    .absolute()
+                    .top_0()
+                    .left(relative(start))
+                    .h_full()
+                    .w(relative(length))
+                    .bg(rgb(palette::primary()))
+                    .opacity(0.30)
+                    .when(rounded, |this| this.rounded_full()),
+            )
+        })
 }
 
 /// The flat volume meter shared by the player bar and the fullscreen transport.

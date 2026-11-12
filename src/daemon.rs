@@ -331,13 +331,7 @@ async fn run_async() {
 }
 
 fn update_page(page: &mut LastPage, descriptor: &PageDescriptor) {
-    page.kind = match descriptor.kind {
-        PageKind::Album => "album",
-        PageKind::Artist => "artist",
-        PageKind::Playlist => "playlist",
-        PageKind::Radio => "radio",
-    }
-    .to_string();
+    page.kind = descriptor.kind.api_kind().to_string();
     page.id = descriptor.id.clone();
 }
 
@@ -738,14 +732,7 @@ fn bootstrap_client(
             let _ = outbox.send(&frame);
         }
     }
-    let page_kind = match page.kind.as_str() {
-        "album" => Some(PageKind::Album),
-        "artist" => Some(PageKind::Artist),
-        "playlist" => Some(PageKind::Playlist),
-        "radio" => Some(PageKind::Radio),
-        _ => None,
-    };
-    if let Some(kind) = page_kind
+    if let Some(kind) = PageKind::from_api_kind(&page.kind)
         && !page.id.is_empty()
     {
         let event = Event::OpenPage {

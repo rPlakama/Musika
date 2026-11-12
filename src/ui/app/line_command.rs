@@ -359,12 +359,7 @@ impl AppRoot {
             album: track.album.clone(),
             album_id: track.album_id.clone(),
         });
-        let kind_name = |kind: RowKind| match kind {
-            RowKind::Song => "track",
-            RowKind::Album => "album",
-            RowKind::Artist => "artist",
-            RowKind::Playlist => "playlist",
-        };
+        let kind_name = |kind: RowKind| kind.suggestion_kind();
         let mut rows = Vec::new();
         if let Some(page) = self.page.as_ref() {
             for row in page.rows.iter().take(32) {

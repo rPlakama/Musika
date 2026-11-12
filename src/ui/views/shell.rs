@@ -81,7 +81,13 @@ impl AppRoot {
                 let downloading = page.is_some_and(|page| page.downloading);
                 if downloading {
                     (
-                        icon("loading-loop.svg", 18.0, palette::on_surface_variant()),
+                        spinning_icon(
+                            "topbar-download-spin",
+                            slot,
+                            "loading-loop.svg",
+                            18.0,
+                            palette::on_surface_variant(),
+                        ),
                         0.85,
                     )
                 } else {

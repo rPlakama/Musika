@@ -419,7 +419,9 @@ impl AppRoot {
                                         ))
                                     })
                                     .when(pending, |this| {
-                                        this.child(icon(
+                                        this.child(spinning_icon(
+                                            "fullscreen-download-spin",
+                                            0,
                                             "loading-loop.svg",
                                             (title_size * 0.58).clamp(12.0, 18.0),
                                             palette::primary(),

@@ -256,49 +256,45 @@ pub(crate) struct RowMarks {
 }
 
 /// The trailing mark icons for one row, in paint order: pending download,
-/// downloaded, favourite. The caller supplies its per-surface retained-icon
-/// id names so the marks keep their own animation identity on each surface.
+/// downloaded, favourite. The caller supplies its per-surface id names so the
+/// marks keep their own animation identity on each surface. The pending mark
+/// spins: it is the same loading glyph as stream buffering, and a download in
+/// flight should read as activity rather than as a static "downloaded" glyph.
 pub(crate) fn row_mark_icons(
     index: usize,
     pending_id: &'static str,
     downloaded_id: &'static str,
     favorite_id: &'static str,
     marks: RowMarks,
-) -> Vec<RetainedIcon> {
+) -> Vec<gpui::AnyElement> {
     let mut icons = Vec::with_capacity(3);
     if marks.downloading {
-        icons.push(RetainedIcon::new(
+        icons.push(spinning_icon(
             pending_id,
             index,
-            icon_download_pending(),
+            "loading-loop.svg",
             12.0,
             palette::primary(),
         ));
     } else if marks.downloaded {
-        icons.push(RetainedIcon::new(
-            downloaded_id,
-            index,
-            icon_downloaded(),
-            12.0,
-            palette::primary(),
-        ));
+        icons.push(
+            RetainedIcon::new(
+                downloaded_id,
+                index,
+                icon_downloaded(),
+                12.0,
+                palette::primary(),
+            )
+            .into_any_element(),
+        );
     }
     if marks.favorite {
-        icons.push(RetainedIcon::new(
-            favorite_id,
-            index,
-            icon_favorite(),
-            11.0,
-            FAVORITE_GOLD,
-        ));
+        icons.push(
+            RetainedIcon::new(favorite_id, index, icon_favorite(), 11.0, FAVORITE_GOLD)
+                .into_any_element(),
+        );
     }
     icons
-}
-
-/// Row mark: a download is in flight.
-pub(crate) fn icon_download_pending() -> SharedString {
-    static CELL: std::sync::OnceLock<SharedString> = std::sync::OnceLock::new();
-    cached_icon(&CELL, "loading-loop.svg")
 }
 
 /// Row mark: downloaded.
@@ -501,6 +497,37 @@ pub(crate) fn icon(name: &str, size: f32, color: u32) -> gpui::AnyElement {
         .path(path)
         .size(px(size))
         .text_color(rgb(color))
+        .into_any_element()
+}
+
+/// A continuously rotating loading glyph.
+///
+/// The same `loading-loop.svg` is used for stream buffering and for a pending
+/// download; the animation element requests its own redraws, so list rows, the
+/// page-bar download chip and fullscreen marks spin without a manual clock
+/// angle or a surface-specific frame request. `id_name`/`index` keep each
+/// spinner's animation state distinct on its surface.
+pub(crate) fn spinning_icon(
+    id_name: &'static str,
+    index: usize,
+    name: &str,
+    size: f32,
+    color: u32,
+) -> gpui::AnyElement {
+    let path = crate::assets::icon(name);
+    svg()
+        .path(path)
+        .size(px(size))
+        .text_color(rgb(color))
+        .with_animation(
+            gpui::ElementId::named_usize(id_name, index),
+            Animation::new(std::time::Duration::from_millis(900)).repeat(),
+            |icon, delta| {
+                icon.with_transformation(gpui::Transformation::rotate(gpui::radians(
+                    delta * std::f32::consts::TAU,
+                )))
+            },
+        )
         .into_any_element()
 }
 

@@ -58,7 +58,7 @@ use self::widgets::media::{
     CoverSource, FAVORITE_GOLD, RowMarks, art, collage_art_from_sources, cover_element,
     cover_source_with_remote, format_time, highlighted_text, icon, icon_rotated,
     loading_placeholder, loading_skeleton, page_key, remote_cover, repeat_label, progress_bar,
-    row_mark_icons, transport_controls, volume_meter,
+    row_mark_icons, spinning_icon, transport_controls, volume_meter,
 };
 use self::widgets::retained_cover::RetainedCover;
 use self::widgets::retained_icon::RetainedIcon;

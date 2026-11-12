@@ -991,35 +991,35 @@ pub fn parse(input: &str) -> Result<IpcCommand, CommandError> {
     let Some(spec) = spec else {
         return Err(CommandError(format!("unknown command: {name}")));
     };
+    match &spec.form {
+        CommandForm::Bare(command) => Ok(command.clone()),
+        CommandForm::Word { values, unknown } => {
+            let value = one_arg(rest, spec.usage)?;
+            values
+                .iter()
+                .find(|(label, _)| *label == value)
+                .map(|(_, command)| command.clone())
+                .ok_or_else(|| CommandError(format!("unknown {unknown}: {value}")))
+        }
+        CommandForm::Exact(values) => {
+            let value = if rest.is_empty() { "" } else { rest };
+            values
+                .iter()
+                .find(|(label, _)| *label == value)
+                .map(|(_, command)| command.clone())
+                .ok_or_else(|| CommandError(format!("usage: {}", spec.usage)))
+        }
+        CommandForm::Advanced(_) => advanced_parse(name, rest, spec.usage),
+    }
+}
+
+/// The explicit grammar for the [`CommandForm::Advanced`] commands: ids,
+/// numbers, quoted targets and the playlist/download/radio sub-grammars.
+fn advanced_parse(name: &str, rest: &str, usage: &str) -> Result<IpcCommand, CommandError> {
     match name {
-        "track" => match one_arg(rest, spec.usage)? {
-            "next" => Ok(IpcCommand::Track(TrackCommand::Next)),
-            "previous" => Ok(IpcCommand::Track(TrackCommand::Previous)),
-            other => Err(CommandError(format!("unknown track command: {other}"))),
-        },
-        "sync" => match rest {
-            "" => Ok(IpcCommand::Sync(SyncMode::Incremental)),
-            "all" => Ok(IpcCommand::Sync(SyncMode::All)),
-            "repair" => Ok(IpcCommand::Sync(SyncMode::Repair)),
-            _ => Err(CommandError("usage: sync [all|repair]".to_string())),
-        },
-        "wipe" => match one_arg(rest, spec.usage)? {
-            "album" => Ok(IpcCommand::Wipe(WipeScope::Album)),
-            "lyrics" => Ok(IpcCommand::Wipe(WipeScope::Lyrics)),
-            "covers" => Ok(IpcCommand::Wipe(WipeScope::Covers)),
-            other => Err(CommandError(format!("unknown wipe scope: {other}"))),
-        },
-        "wipe_databases" => Ok(IpcCommand::WipeDatabases),
-        "logout" => Ok(IpcCommand::Logout),
-        "add_account" => Ok(IpcCommand::AddAccount),
-        "remove_account" => match rest {
-            "" => Ok(IpcCommand::RemoveAccount { keep_data: false }),
-            "--keep-data" => Ok(IpcCommand::RemoveAccount { keep_data: true }),
-            _ => Err(CommandError(
-                "usage: remove_account [--keep-data]".to_string(),
-            )),
-        },
+
         "playlist" => parse_playlist(rest),
+
         "shuffle" => match split_quoted_args(rest)?.as_slice() {
             [] => Err(CommandError(
                 "usage: shuffle <queue|album|artist> [id]".to_string(),
@@ -1043,6 +1043,7 @@ pub fn parse(input: &str) -> Result<IpcCommand, CommandError> {
                 "usage: shuffle <queue|album|artist> [id]".to_string(),
             )),
         },
+
         "radio" => match split_quoted_args(rest)?.as_slice() {
             [] => Ok(IpcCommand::Radio {
                 seed: RadioSeed::Current,
@@ -1070,110 +1071,66 @@ pub fn parse(input: &str) -> Result<IpcCommand, CommandError> {
                 "usage: radio [current|album|song] [id]".to_string(),
             )),
         },
+
         "download" => parse_download(rest),
-        "refresh" => Ok(IpcCommand::Refresh),
-        "top" => Ok(IpcCommand::Top),
-        "bottom" => Ok(IpcCommand::Bottom),
-        "move_up" => Ok(IpcCommand::MoveUp),
-        "move_down" => Ok(IpcCommand::MoveDown),
-        "scroll_up" => Ok(IpcCommand::ScrollUp),
-        "scroll_down" => Ok(IpcCommand::ScrollDown),
-        "page_up" => Ok(IpcCommand::PageUp),
-        "page_down" => Ok(IpcCommand::PageDown),
-        "move_left" => Ok(IpcCommand::MoveLeft),
-        "move_right" => Ok(IpcCommand::MoveRight),
-        "prev_place" => Ok(IpcCommand::PrevPlace),
-        "next_place" => Ok(IpcCommand::NextPlace),
-        "home" => Ok(IpcCommand::Home),
-        "back" => Ok(IpcCommand::Back),
-        "enter" => Ok(IpcCommand::Enter),
-        "scope_next" => Ok(IpcCommand::ScopeNext),
-        "scope_prev" => Ok(IpcCommand::ScopePrev),
-        "order_next" => Ok(IpcCommand::OrderNext),
-        "order_prev" => Ok(IpcCommand::OrderPrev),
-        "visual" => Ok(IpcCommand::Visual),
-        "visual_all" => Ok(IpcCommand::VisualAll),
-        "queue_toggle" => Ok(IpcCommand::QueueToggle),
-        "queue_remove" => Ok(IpcCommand::QueueRemove),
-        "yank" => Ok(IpcCommand::Yank),
-        "yank_row" => Ok(IpcCommand::YankRow),
-        "paste_below" => Ok(IpcCommand::PasteBelow),
-        "paste_above" => Ok(IpcCommand::PasteAbove),
-        "delete_row" => Ok(IpcCommand::DeleteRow),
-        "queue_up" => Ok(IpcCommand::QueueUp),
-        "queue_down" => Ok(IpcCommand::QueueDown),
-        "repeat_cycle" => Ok(IpcCommand::RepeatCycle),
-        "toggle_fullscreen" => Ok(IpcCommand::ToggleFullscreen),
-        "lyrics_overlay" => Ok(IpcCommand::LyricsOverlay),
-        "pane_cycle" => match rest {
-            "" => Ok(IpcCommand::PaneCycle { backward: false }),
-            "back" => Ok(IpcCommand::PaneCycle { backward: true }),
-            _ => Err(CommandError("usage: pane_cycle [back]".to_string())),
-        },
+
         "search" => Ok(IpcCommand::Search {
             query: rest.to_string(),
         }),
+
         "insert_mode" => Ok(IpcCommand::InsertMode {
             query: rest.to_string(),
         }),
-        "search_next" => Ok(IpcCommand::SearchNext),
-        "search_prev" => Ok(IpcCommand::SearchPrev),
-        "search_scope_next" => Ok(IpcCommand::SearchScopeNext),
-        "search_scope_prev" => Ok(IpcCommand::SearchScopePrev),
-        "line_search" => Ok(IpcCommand::LineSearch),
-        "play_pause" => Ok(IpcCommand::PlayPause),
-        "play" => Ok(IpcCommand::Play),
-        "pause" => Ok(IpcCommand::Pause),
-        "stop" => Ok(IpcCommand::Stop),
-        "mute" => Ok(IpcCommand::Mute),
-        "volume_up" => Ok(IpcCommand::VolumeUp),
-        "volume_down" => Ok(IpcCommand::VolumeDown),
+
         "set_volume" => {
-            let volume = parse_number(one_arg(rest, spec.usage)?, "volume")?;
+            let volume = parse_number(one_arg(rest, usage)?, "volume")?;
             if !(0.0..=100.0).contains(&volume) {
                 return Err(CommandError("volume must be in 0..=100".to_string()));
             }
             Ok(IpcCommand::SetVolume(volume))
         }
         "seek_back" => Ok(IpcCommand::SeekBack),
-        "seek_forward" => Ok(IpcCommand::SeekForward),
+
         "seek" => Ok(IpcCommand::Seek(
-            parse_number(one_arg(rest, spec.usage)?, "seconds")?.max(0.0),
+            parse_number(one_arg(rest, usage)?, "seconds")?.max(0.0),
         )),
+
         "seek_relative" => Ok(IpcCommand::SeekRelative(parse_number(
-            one_arg(rest, spec.usage)?,
+            one_arg(rest, usage)?,
             "seconds",
         )?)),
-        "play_song" => Ok(IpcCommand::PlaySong(one_arg(rest, spec.usage)?.to_string())),
+
+        "play_song" => Ok(IpcCommand::PlaySong(one_arg(rest, usage)?.to_string())),
+
         "play_song_in_album" => Ok(IpcCommand::PlaySongInAlbum(
-            one_arg(rest, spec.usage)?.to_string(),
+            one_arg(rest, usage)?.to_string(),
         )),
+
         "open_song_album" => Ok(IpcCommand::OpenSongAlbum(
-            one_arg(rest, spec.usage)?.to_string(),
+            one_arg(rest, usage)?.to_string(),
         )),
+
         "download_song" => Ok(IpcCommand::DownloadSong(
-            one_arg(rest, spec.usage)?.to_string(),
+            one_arg(rest, usage)?.to_string(),
         )),
-        "quick_hold" => Ok(IpcCommand::QuickHold(one_arg(rest, spec.usage)? == "on")),
-        "quick_aim" => Ok(IpcCommand::QuickAim(match one_arg(rest, spec.usage)? {
+
+        "quick_hold" => Ok(IpcCommand::QuickHold(one_arg(rest, usage)? == "on")),
+
+        "quick_aim" => Ok(IpcCommand::QuickAim(match one_arg(rest, usage)? {
             "north" => QuickDirection::North,
             "south" => QuickDirection::South,
             "east" => QuickDirection::East,
             "west" => QuickDirection::West,
             other => return Err(CommandError(format!("unknown direction: {other}"))),
         })),
+
         "quick_cycle" => Ok(IpcCommand::QuickCycle {
-            next: one_arg(rest, spec.usage)? == "next",
+            next: one_arg(rest, usage)? == "next",
         }),
-        "quick_cancel" => Ok(IpcCommand::QuickCancel),
-        "show" => Ok(IpcCommand::Show),
-        "random" => Ok(IpcCommand::RandomAlbum),
-        "quit" => Ok(IpcCommand::Quit),
-        "status" => Ok(IpcCommand::Status),
-        "queue" => Ok(IpcCommand::QueueQuery),
         _ => Err(CommandError(format!("unknown command: {name}"))),
     }
 }
+
 
 /// Whether completing `name` should append a space and continue into args.
 pub fn needs_argument(name: &str) -> bool {
@@ -1478,27 +1435,47 @@ fn canonical_download(request: &DownloadRequest) -> String {
 }
 
 pub fn canonical_string(command: &IpcCommand) -> String {
+    for spec in COMMANDS {
+        match &spec.form {
+            CommandForm::Bare(value) => {
+                if command == value {
+                    return spec.name.to_string();
+                }
+            }
+            CommandForm::Word { values, .. } | CommandForm::Exact(values) => {
+                for (label, value) in values.iter() {
+                    if command == value {
+                        return if label.is_empty() {
+                            spec.name.to_string()
+                        } else {
+                            format!("{} {label}", spec.name)
+                        };
+                    }
+                }
+            }
+            CommandForm::Advanced(_) => {}
+        }
+    }
+    advanced_canonical(command)
+}
+
+/// The canonical printer for the [`CommandForm::Advanced`] commands. Their
+/// grammar carries payloads (ids, numbers, quoted targets), so the printer
+/// stays explicit next to the parser; the registry covers everything else.
+fn advanced_canonical(command: &IpcCommand) -> String {
     use IpcCommand::*;
     match command {
-        Sync(SyncMode::Incremental) => "sync".to_string(),
-        Sync(SyncMode::All) => "sync all".to_string(),
-        Sync(SyncMode::Repair) => "sync repair".to_string(),
-        Wipe(WipeScope::Album) => "wipe album".to_string(),
-        Wipe(WipeScope::Lyrics) => "wipe lyrics".to_string(),
-        Wipe(WipeScope::Covers) => "wipe covers".to_string(),
-        WipeDatabases => "wipe_databases".to_string(),
-        Logout => "logout".to_string(),
-        AddAccount => "add_account".to_string(),
-        RemoveAccount { keep_data: false } => "remove_account".to_string(),
-        RemoveAccount { keep_data: true } => "remove_account --keep-data".to_string(),
+
         PlaylistCreate {
             name,
             offline: false,
         } => format!("playlist create {name}"),
+
         PlaylistCreate {
             name,
             offline: true,
         } => format!("playlist create {name} --offline"),
+
         PlaylistAdd { targets, playlist } => {
             let mut out = String::from("playlist add");
             for target in targets {
@@ -1513,6 +1490,7 @@ pub fn canonical_string(command: &IpcCommand) -> String {
             format!("playlist add selected; {}", quote_arg(playlist))
         }
         PlaylistDelete { playlist } => format!("playlist rm; {}", quote_arg(playlist)),
+
         PlaylistRemove { targets, playlist } => {
             let mut out = String::from("playlist rm");
             for target in targets {
@@ -1526,113 +1504,86 @@ pub fn canonical_string(command: &IpcCommand) -> String {
         Shuffle {
             target: ShuffleTarget::Queue,
         } => "shuffle queue".to_string(),
+
         Shuffle {
             target: ShuffleTarget::Album(None),
         } => "shuffle album".to_string(),
+
         Shuffle {
             target: ShuffleTarget::Album(Some(id)),
         } => format!("shuffle album {id}"),
+
         Shuffle {
             target: ShuffleTarget::Artist(None),
         } => "shuffle artist".to_string(),
+
         Shuffle {
             target: ShuffleTarget::Artist(Some(id)),
         } => format!("shuffle artist {id}"),
+
         Radio {
             seed: RadioSeed::Current,
         } => "radio current".to_string(),
+
         Radio {
             seed: RadioSeed::Album(None),
         } => "radio album".to_string(),
+
         Radio {
             seed: RadioSeed::Album(Some(id)),
         } => format!("radio album {id}"),
+
         Radio {
             seed: RadioSeed::Song(None),
         } => "radio song".to_string(),
+
         Radio {
             seed: RadioSeed::Song(Some(id)),
         } => format!("radio song {id}"),
+
         RadioSave { offline: false } => "radio save".to_string(),
+
         RadioSave { offline: true } => "radio save --offline".to_string(),
+
         Download { request } => canonical_download(request),
-        Refresh => "refresh".to_string(),
-        Top => "top".to_string(),
-        Bottom => "bottom".to_string(),
-        MoveUp => "move_up".to_string(),
-        MoveDown => "move_down".to_string(),
-        ScrollUp => "scroll_up".to_string(),
-        ScrollDown => "scroll_down".to_string(),
-        PageUp => "page_up".to_string(),
-        PageDown => "page_down".to_string(),
-        MoveLeft => "move_left".to_string(),
-        MoveRight => "move_right".to_string(),
-        PrevPlace => "prev_place".to_string(),
-        NextPlace => "next_place".to_string(),
-        Home => "home".to_string(),
-        Back => "back".to_string(),
-        Enter => "enter".to_string(),
-        ScopeNext => "scope_next".to_string(),
-        ScopePrev => "scope_prev".to_string(),
-        OrderNext => "order_next".to_string(),
-        OrderPrev => "order_prev".to_string(),
-        Visual => "visual".to_string(),
-        VisualAll => "visual_all".to_string(),
-        QueueToggle => "queue_toggle".to_string(),
-        QueueRemove => "queue_remove".to_string(),
-        Yank => "yank".to_string(),
-        YankRow => "yank_row".to_string(),
-        PasteBelow => "paste_below".to_string(),
-        PasteAbove => "paste_above".to_string(),
-        DeleteRow => "delete_row".to_string(),
-        QueueUp => "queue_up".to_string(),
-        QueueDown => "queue_down".to_string(),
-        RepeatCycle => "repeat_cycle".to_string(),
-        ToggleFullscreen => "toggle_fullscreen".to_string(),
-        LyricsOverlay => "lyrics_overlay".to_string(),
-        PaneCycle { backward: false } => "pane_cycle".to_string(),
-        PaneCycle { backward: true } => "pane_cycle back".to_string(),
+
         Search { query } => format!("search {query}").trim_end().to_string(),
+
         InsertMode { query } => format!("insert_mode {query}").trim_end().to_string(),
-        SearchNext => "search_next".to_string(),
-        SearchPrev => "search_prev".to_string(),
-        SearchScopeNext => "search_scope_next".to_string(),
-        SearchScopePrev => "search_scope_prev".to_string(),
-        LineSearch => "line_search".to_string(),
-        PlayPause => "play_pause".to_string(),
-        Play => "play".to_string(),
-        Pause => "pause".to_string(),
-        Stop => "stop".to_string(),
-        Track(TrackCommand::Next) => "track next".to_string(),
-        Track(TrackCommand::Previous) => "track previous".to_string(),
-        Mute => "mute".to_string(),
-        VolumeUp => "volume_up".to_string(),
-        VolumeDown => "volume_down".to_string(),
+
         SetVolume(volume) => format!("set_volume {volume:.0}"),
-        SeekBack => "seek_back".to_string(),
-        SeekForward => "seek_forward".to_string(),
+
         Seek(position) => format!("seek {position:.0}"),
+
         SeekRelative(offset) => format!("seek_relative {offset:.0}"),
+
         PlaySong(id) => format!("play_song {id}"),
+
         PlaySongInAlbum(id) => format!("play_song_in_album {id}"),
+
         OpenSongAlbum(id) => format!("open_song_album {id}"),
+
         DownloadSong(id) => format!("download_song {id}"),
+
         QuickHold(true) => "quick_hold on".to_string(),
+
         QuickHold(false) => "quick_hold off".to_string(),
+
         QuickAim(QuickDirection::North) => "quick_aim north".to_string(),
+
         QuickAim(QuickDirection::South) => "quick_aim south".to_string(),
+
         QuickAim(QuickDirection::East) => "quick_aim east".to_string(),
+
         QuickAim(QuickDirection::West) => "quick_aim west".to_string(),
+
         QuickCycle { next: true } => "quick_cycle next".to_string(),
+
         QuickCycle { next: false } => "quick_cycle prev".to_string(),
-        QuickCancel => "quick_cancel".to_string(),
-        Show => "show".to_string(),
-        RandomAlbum => "random".to_string(),
-        Quit => "quit".to_string(),
-        Status => "status".to_string(),
-        QueueQuery => "queue".to_string(),
+        _ => String::new(),
     }
 }
+
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Suggestion {
@@ -1849,6 +1800,7 @@ pub fn suggestions_with(
 ///   visible rows (playlists included: a playlist is a valid target);
 /// - after the cutoff only playlist names are offered, and the whole typed
 ///   name region is replaced (so a two-word query completes in one Tab).
+///
 /// Async search hits replace the list after the debounce.
 fn playlist_suggestions(
     input: &str,

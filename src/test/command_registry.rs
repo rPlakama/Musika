@@ -131,6 +131,40 @@ fn samples_parse_and_reprint_canonically() {
 }
 
 #[test]
+fn parse_errors_keep_their_messages() {
+    let cases: &[(&str, &str)] = &[
+        ("", "empty command"),
+        ("nope", "unknown command: nope"),
+        ("mpris_bogus:1", "unknown command: mpris_bogus"),
+        ("mpris_volume:101", "volume must be in 0..=100"),
+        ("track", "missing argument"),
+        ("track sideways", "unknown track command: sideways"),
+        ("track next extra", "too many arguments"),
+        ("wipe", "missing argument"),
+        ("wipe x", "unknown wipe scope: x"),
+        ("sync nope", "usage: sync [all|repair]"),
+        ("sync all extra", "usage: sync [all|repair]"),
+        ("remove_account x", "usage: remove_account [--keep-data]"),
+        ("pane_cycle x", "usage: pane_cycle [back]"),
+        ("set_volume 101", "volume must be in 0..=100"),
+        ("set_volume x", "invalid volume: x"),
+        ("seek x", "invalid seconds: x"),
+        ("seek_relative x", "invalid seconds: x"),
+    ];
+    for (input, expected) in cases {
+        let err = crate::ipc_command::parse(input)
+            .err()
+            .unwrap_or_else(|| panic!("{input:?} must fail"));
+        assert_eq!(&err.0, expected, "error message for {input:?}");
+    }
+    // Bare commands keep ignoring trailing words, as the hand-written arms did.
+    assert!(crate::ipc_command::parse("play now please").is_ok());
+    // `quick_hold` treats any non-`on` value as off, like the old arm did.
+    let off = crate::ipc_command::parse("quick_hold maybe").unwrap();
+    assert_eq!(crate::ipc_command::canonical_string(&off), "quick_hold off");
+}
+
+#[test]
 fn documented_commands_are_registered() {
     let docs = std::fs::read_to_string("docs/Commands.md").expect("read docs/Commands.md");
     let mut documented: Vec<String> = Vec::new();

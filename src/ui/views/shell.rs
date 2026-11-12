@@ -528,6 +528,21 @@ impl AppRoot {
                             .overflow_hidden()
                             .justify_end()
                             .gap_3()
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .text_size(px(m.time_size))
+                                    .text_color(rgb(palette::on_surface_variant()))
+                                    .text_right()
+                                    .whitespace_nowrap()
+                                    .text_ellipsis()
+                                    .child(format!(
+                                        "{} / {}",
+                                        format_time(position),
+                                        format_time(duration)
+                                    )),
+                            )
                             .when(self.repeat != crate::player::Repeat::Off, |this| {
                                 this.child(
                                     div()
@@ -536,9 +551,33 @@ impl AppRoot {
                                         .child(repeat_label(self.repeat)),
                                 )
                             })
-                            // The meter spans the space the elapsed/total
-                            // readout and the speaker icon used to take.
-                            .child(volume_meter(volume, muted).flex_1()),
+                            .child(icon(
+                                if muted {
+                                    "vol-mute-svgrepo-com.svg"
+                                } else if volume <= 1.0 {
+                                    "vol-zero-svgrepo-com.svg"
+                                } else if volume <= 33.0 {
+                                    "vol-low-svgrepo-com.svg"
+                                } else {
+                                    "vol-high-svgrepo-com.svg"
+                                },
+                                m.volume_icon,
+                                palette::on_surface_variant(),
+                            ))
+                            .child(
+                                div()
+                                    .w(px(m.volume_bar))
+                                    .h(px(3.0))
+                                    .rounded_full()
+                                    .bg(rgb(palette::surface_container_high()))
+                                    .child(
+                                        div()
+                                            .h_full()
+                                            .w(relative((volume / 100.0) as f32))
+                                            .rounded_full()
+                                            .bg(rgb(palette::primary())),
+                                    ),
+                            ),
                     ),
             )
     }

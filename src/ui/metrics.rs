@@ -242,6 +242,8 @@ pub struct PlayerBarMetrics {
     pub transport_unit: f32,
     pub play_size: f32,
     pub transport_spacing: f32,
+    pub volume_icon: f32,
+    pub volume_bar: f32,
 }
 
 impl PlayerBarMetrics {
@@ -264,6 +266,8 @@ impl PlayerBarMetrics {
             transport_unit,
             play_size: transport_unit * 1.22,
             transport_spacing: transport_unit * 0.11,
+            volume_icon: bar_h * 0.34,
+            volume_bar: (window_width * 0.07).clamp(28.0, 96.0),
         }
     }
 }
@@ -412,6 +416,7 @@ mod tests {
     fn player_bar_scales_with_window_and_keeps_bar_ratios() {
         let narrow = PlayerBarMetrics::new(640.0, 1000.0);
         let wide = PlayerBarMetrics::new(1600.0, 1000.0);
+        assert!(wide.volume_bar > narrow.volume_bar);
         assert!(wide.transport_unit > narrow.transport_unit);
         assert!(wide.title_size >= narrow.title_size);
         assert!(wide.time_size >= narrow.time_size);

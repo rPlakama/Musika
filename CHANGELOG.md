@@ -14,15 +14,14 @@ open work; this file is the release history.
   read-only `status`/`queue` queries on the `:` line now works too — the window
   asks the core over the text socket in the background and shows the JSON reply
   in a toast (it used to hit a core-only `unreachable!` path).
-- Slim the bottom player bar: drop the elapsed/total readout and the speaker
-  icon, stretch the volume meter across the freed space, and grey its fill
-  while the output is muted (the muted toast no longer shows a speaker icon
-  either). The now-unused volume icon assets are removed.
+- Keep the bottom player bar on its 0.6.9 design (metadata, centred transport,
+  elapsed/total readout, speaker icon and the fixed-width volume bar): the
+  fullscreen playback block carries the new squashed layout instead. The
+  sticky muted toast no longer shows a speaker icon.
 - Squash the fullscreen playback block: the artist shares the title line, the
   transport buttons, progress bar, times and a new volume meter share one
   control row (the key-hints line is gone; the hints stay in
-  `docs/Keybinds.md`), and the volume meter greys out while muted like the
-  bottom bar's.
+  `docs/Keybinds.md`), and its volume meter greys out while muted.
 - Make the core's tray icon a playback indicator: the panel shows the pause
   glyph while audio is playing and the play glyph while the core is paused or
   stopped. Both come from the transport's own assets, rasterized from the

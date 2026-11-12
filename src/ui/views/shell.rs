@@ -467,21 +467,6 @@ impl AppRoot {
                     .px_3()
                     .gap_3()
                     .items_center()
-                    // Bottom-bar scheme: transport in the left corner, the
-                    // track metadata after it, then the progress/volume zone.
-                    .child(transport_controls(
-                        state,
-                        self.player.is_loading(),
-                        self.stream_loading_angle(),
-                        [
-                            self.transport_scale(0),
-                            self.transport_scale(1),
-                            self.transport_scale(2),
-                        ],
-                        m.transport_unit,
-                        m.play_size,
-                        m.transport_spacing,
-                    ))
                     .child(
                         div()
                             .flex()
@@ -521,6 +506,19 @@ impl AppRoot {
                                     }),
                             ),
                     )
+                    .child(transport_controls(
+                        state,
+                        self.player.is_loading(),
+                        self.stream_loading_angle(),
+                        [
+                            self.transport_scale(0),
+                            self.transport_scale(1),
+                            self.transport_scale(2),
+                        ],
+                        m.transport_unit,
+                        m.play_size,
+                        m.transport_spacing,
+                    ))
                     .child(
                         div()
                             .flex()

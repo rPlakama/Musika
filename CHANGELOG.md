@@ -3,6 +3,45 @@
 All notable changes to Musika, newest first. `TASKLISTMAJOR.md` tracks the
 open work; this file is the release history.
 
+## 0.7.1 - _Format-aware audio pipeline and strict lint gate_
+
+- Present every track at its own sample rate: the decoder now only converts
+  sample format/channel layout to packed S16 stereo and keeps the source rate
+  (resampling only above 192 kHz). The PipeWire sink rebuilds its stream at that
+  rate on the loop thread — old-rate PCM flushed, stream state re-reported,
+  volume/mute replayed, synchronous ack — while the PCM ring keeps its 192 kHz
+  allocation but scales the usable size to hold the same ~10.9 s. The decode
+  worker scales its read chunks, park/low-water thresholds and clock math with
+  the rate; a rate change at a gapless boundary drains the old-rate ring before
+  renegotiating (a small gap only then, same-rate handoffs stay gapless), and
+  the paused-position math uses the current rate. `docs/Playback.md` describes
+  the new flow and its trade-offs.
+- Adopt a strict lint configuration and make the crate warning-free:
+  `Cargo.toml` gains `[lints.rust]`/`[lints.clippy]` (unsafe hygiene, panics,
+  swallowed results, enum drift, cheap perf smells) with `clippy.toml` test
+  allowances. Every `unsafe` block now states its invariant and blocks mixing
+  several unsafe operations are split; every suppression is a reasoned
+  `#[expect]`; production `unwrap`s are gone; enum matches enumerate their
+  variants instead of wildcarding; the numeric-cast lints are scoped to the
+  audio and IPC hot paths (132 warnings reported, deliberately not gated).
+  `cargo clippy --all-targets -- -D warnings` exits 0, and `expect_used` stays
+  a warning with startup-invariant expects annotated.
+- Add CI: one Nix dev-shell job installs Nix, restores `Swatinem/rust-cache`,
+  runs the strict clippy gate (`-D warnings`) and `cargo test --lib`. The flake
+  shell remains the single source of truth for PipeWire/FFmpeg/GPUI tooling.
+- Fix MPRIS `Next`/`Previous`: they submitted the two-word commands
+  `track next`/`track previous` through the single-word `mpris_*` alias path,
+  producing `mpris_track next`, which the dispatcher rejected. Both now submit
+  the canonical command (regression-tested), so media keys and `playerctl`
+  skip again.
+- Put the fullscreen artist next to the title using measured marquee slots
+  instead of a right-edge block, add the repeat insight ("one"/"all") beside
+  it, and keep the favourite/pending/download marks on the right edge.
+- Animate the pending-download insight: it reuses the same `loading-loop` glyph
+  as stream buffering but was painted statically. A self-animating spinner now
+  drives the page-bar download chip, list-row pending marks and the fullscreen
+  mark.
+
 ## 0.7.0 - _Somewhere betwheen... Six and Seven._
 
 - Identify Musika to Subsonic/Navidrome: every request (and the login `ping`)

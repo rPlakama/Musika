@@ -325,6 +325,17 @@ pub enum DownloadScope {
     Track,
 }
 
+impl DownloadScope {
+    /// The canonical item kind this command scope names (`track` is a song).
+    pub fn item_kind(self) -> crate::model::ItemKind {
+        match self {
+            Self::Artist => crate::model::ItemKind::Artist,
+            Self::Album => crate::model::ItemKind::Album,
+            Self::Track => crate::model::ItemKind::Song,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum DownloadMode {
     Current,
@@ -376,6 +387,21 @@ pub enum SuggestScope {
     Any,
     /// Playlist names only (the part after `playlist add ...;`).
     Playlist,
+}
+
+impl SuggestScope {
+    /// The canonical item kind this suggestion column names; `Any` spans all
+    /// of them and has no single kind.
+    pub fn item_kind(self) -> Option<crate::model::ItemKind> {
+        use crate::model::ItemKind;
+        Some(match self {
+            Self::Artist => ItemKind::Artist,
+            Self::Album => ItemKind::Album,
+            Self::Track => ItemKind::Song,
+            Self::Playlist => ItemKind::Playlist,
+            Self::Any => return None,
+        })
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

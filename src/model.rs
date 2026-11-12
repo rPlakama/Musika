@@ -65,6 +65,64 @@ impl Scope {
     }
 }
 
+/// The canonical item vocabulary: the five things a row, page or queue entry
+/// can name. Each surface keeps its own narrow enum (a library row has no
+/// Radio, a `:` command suggestion names tracks) and adapts to this one, so
+/// the wire spellings and labels are declared once.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum ItemKind {
+    Song,
+    Album,
+    Artist,
+    Playlist,
+    Radio,
+}
+
+impl ItemKind {
+    /// The canonical wire spelling (the bridge, daemon and pages all use it).
+    pub fn api_kind(self) -> &'static str {
+        match self {
+            Self::Song => "song",
+            Self::Album => "album",
+            Self::Artist => "artist",
+            Self::Playlist => "playlist",
+            Self::Radio => "radio",
+        }
+    }
+
+    /// Parse the wire vocabulary; `None` for an unknown value. `track` is
+    /// accepted as the search/browse payload spelling of a song.
+    pub fn from_api_kind(value: &str) -> Option<Self> {
+        match value {
+            "song" | "track" => Some(Self::Song),
+            "album" => Some(Self::Album),
+            "artist" => Some(Self::Artist),
+            "playlist" => Some(Self::Playlist),
+            "radio" => Some(Self::Radio),
+            _ => None,
+        }
+    }
+
+    /// The display label used by page bars and suggestions.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Song => "Song",
+            Self::Album => "Album",
+            Self::Artist => "Artist",
+            Self::Playlist => "Playlist",
+            Self::Radio => "Radio",
+        }
+    }
+
+    /// The command-suggestion vocabulary (`track` instead of `song`).
+    pub fn suggestion_kind(self) -> &'static str {
+        match self {
+            Self::Song => "track",
+            _ => self.api_kind(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum RowKind {
     Album,
@@ -74,25 +132,36 @@ pub enum RowKind {
 }
 
 impl RowKind {
-    /// The wire vocabulary shared by the quick actions, the bridge RPCs and
-    /// the daemon (`song` is the canonical track spelling at this boundary).
-    pub fn api_kind(self) -> &'static str {
+    /// The canonical vocabulary this row belongs to.
+    pub fn item_kind(self) -> ItemKind {
         match self {
-            Self::Song => "song",
-            Self::Album => "album",
-            Self::Artist => "artist",
-            Self::Playlist => "playlist",
+            Self::Song => ItemKind::Song,
+            Self::Album => ItemKind::Album,
+            Self::Artist => ItemKind::Artist,
+            Self::Playlist => ItemKind::Playlist,
         }
     }
 
-    /// Parse the wire vocabulary; `None` for an unknown value.
+    /// The wire vocabulary shared by the quick actions, the bridge RPCs and
+    /// the daemon (`song` is the canonical track spelling at this boundary).
+    pub fn api_kind(self) -> &'static str {
+        self.item_kind().api_kind()
+    }
+
+    /// Parse the wire vocabulary; `None` for an unknown value or a kind a
+    /// library row cannot represent (`radio`).
     pub fn from_api_kind(value: &str) -> Option<Self> {
-        match value {
-            "song" | "track" => Some(Self::Song),
-            "album" => Some(Self::Album),
-            "artist" => Some(Self::Artist),
-            "playlist" => Some(Self::Playlist),
-            _ => None,
+        Self::from_item_kind(ItemKind::from_api_kind(value)?)
+    }
+
+    /// The row form of a canonical item kind; `None` for Radio.
+    pub fn from_item_kind(kind: ItemKind) -> Option<Self> {
+        match kind {
+            ItemKind::Song => Some(Self::Song),
+            ItemKind::Album => Some(Self::Album),
+            ItemKind::Artist => Some(Self::Artist),
+            ItemKind::Playlist => Some(Self::Playlist),
+            ItemKind::Radio => None,
         }
     }
 
@@ -138,33 +207,39 @@ pub enum PageKind {
 }
 
 impl PageKind {
-    pub fn label(self) -> &'static str {
+    /// The canonical vocabulary this page belongs to.
+    pub fn item_kind(self) -> ItemKind {
         match self {
-            PageKind::Album => "Album",
-            PageKind::Artist => "Artist",
-            PageKind::Playlist => "Playlist",
-            PageKind::Radio => "Radio",
+            PageKind::Album => ItemKind::Album,
+            PageKind::Artist => ItemKind::Artist,
+            PageKind::Playlist => ItemKind::Playlist,
+            PageKind::Radio => ItemKind::Radio,
         }
+    }
+
+    pub fn label(self) -> &'static str {
+        self.item_kind().label()
     }
 
     /// The wire vocabulary shared by the daemon, the bridge and the UI.
     pub fn api_kind(self) -> &'static str {
-        match self {
-            PageKind::Album => "album",
-            PageKind::Artist => "artist",
-            PageKind::Playlist => "playlist",
-            PageKind::Radio => "radio",
-        }
+        self.item_kind().api_kind()
     }
 
-    /// Parse the wire vocabulary; `None` for an unknown value.
+    /// Parse the wire vocabulary; `None` for an unknown value or a kind no
+    /// page can represent (`song`).
     pub fn from_api_kind(value: &str) -> Option<Self> {
-        match value {
-            "album" => Some(PageKind::Album),
-            "artist" => Some(PageKind::Artist),
-            "playlist" => Some(PageKind::Playlist),
-            "radio" => Some(PageKind::Radio),
-            _ => None,
+        Self::from_item_kind(ItemKind::from_api_kind(value)?)
+    }
+
+    /// The page form of a canonical item kind; `None` for Song.
+    pub fn from_item_kind(kind: ItemKind) -> Option<Self> {
+        match kind {
+            ItemKind::Album => Some(PageKind::Album),
+            ItemKind::Artist => Some(PageKind::Artist),
+            ItemKind::Playlist => Some(PageKind::Playlist),
+            ItemKind::Radio => Some(PageKind::Radio),
+            ItemKind::Song => None,
         }
     }
 }

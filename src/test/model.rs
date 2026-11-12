@@ -64,3 +64,55 @@ fn page_descriptor_round_trips_the_stored_status_parts() {
     assert!(crate::model::PageDescriptor::from_stored_parts("album", "").is_none());
     assert!(crate::model::PageDescriptor::from_stored_parts("bogus", "x").is_none());
 }
+
+#[test]
+fn item_kind_owns_the_canonical_vocabulary() {
+    for kind in [
+        crate::model::ItemKind::Song,
+        crate::model::ItemKind::Album,
+        crate::model::ItemKind::Artist,
+        crate::model::ItemKind::Playlist,
+        crate::model::ItemKind::Radio,
+    ] {
+        assert_eq!(crate::model::ItemKind::from_api_kind(kind.api_kind()), Some(kind));
+    }
+    assert_eq!(
+        crate::model::ItemKind::from_api_kind("track"),
+        Some(crate::model::ItemKind::Song)
+    );
+    assert_eq!(crate::model::ItemKind::from_api_kind("nope"), None);
+    assert_eq!(crate::model::ItemKind::Song.suggestion_kind(), "track");
+    assert_eq!(crate::model::ItemKind::Album.suggestion_kind(), "album");
+
+    // The narrow surface enums are adapters, not restatements.
+    for row in [RowKind::Song, RowKind::Album, RowKind::Artist, RowKind::Playlist] {
+        assert_eq!(RowKind::from_api_kind(row.api_kind()), Some(row));
+        assert_eq!(row.api_kind(), row.item_kind().api_kind());
+        assert_eq!(RowKind::from_item_kind(row.item_kind()), Some(row));
+    }
+    assert_eq!(RowKind::from_api_kind("radio"), None);
+    for page in [
+        PageKind::Album,
+        PageKind::Artist,
+        PageKind::Playlist,
+        PageKind::Radio,
+    ] {
+        assert_eq!(PageKind::from_api_kind(page.api_kind()), Some(page));
+        assert_eq!(page.api_kind(), page.item_kind().api_kind());
+        assert_eq!(page.label(), page.item_kind().label());
+        assert_eq!(PageKind::from_item_kind(page.item_kind()), Some(page));
+    }
+    assert_eq!(PageKind::from_api_kind("track"), None);
+
+    // Command scopes adapt to the same vocabulary.
+    use crate::ipc_command::{DownloadScope, SuggestScope};
+    assert_eq!(
+        DownloadScope::Track.item_kind(),
+        crate::model::ItemKind::Song
+    );
+    assert_eq!(
+        SuggestScope::Album.item_kind(),
+        Some(crate::model::ItemKind::Album)
+    );
+    assert_eq!(SuggestScope::Any.item_kind(), None);
+}

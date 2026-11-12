@@ -69,7 +69,10 @@ impl Native {
             .clock_origin
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let position = origin + self.sink.played_frames().saturating_sub(start) as f64 / 48_000.0;
+        // The clock advances in frames at the current pipeline rate, which the
+        // sink/ring own (a track may be 44.1 kHz, 96 kHz, ...).
+        let rate = f64::from(self.sink.rate().max(1));
+        let position = origin + self.sink.played_frames().saturating_sub(start) as f64 / rate;
         self.worker.set_paused(paused, position);
     }
 

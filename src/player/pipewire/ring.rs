@@ -1,9 +1,19 @@
 //! SPSC PCM ring shared by the decoder worker and the PipeWire RT callback.
 //!
-//! `musika` outputs interleaved S16 stereo at 48 kHz. The producer (decoder)
-//! writes frames ahead; the consumer (PipeWire process callback) reads them.
-//! Both positions are absolute frame counters; the ring index is masked because
-//! [`RING_FRAMES`] is a power of two.
+//! `musika` presents interleaved S16 stereo at the current track's sample rate
+//! (see [`super::decode`]). The producer (decoder) writes frames ahead; the
+//! consumer (PipeWire process callback) reads them. Both positions are absolute
+//! frame counters; the ring index is masked because the allocated capacity is a
+//! power of two.
+//!
+//! The storage is allocated once for the highest supported pipeline rate
+//! ([`MAX_RATE`]) so it is never reallocated or moved while the RT callback may
+//! be reading it: the 524,288-frame reference ring (2 MiB, ~10.9 s at 48 kHz)
+//! scaled to [`MAX_RATE`] is 2,097,152 frames, i.e. 8 MiB. The *usable* limit
+//! is atomic and set by [`Ring::set_rate`], so a lower rate keeps roughly the
+//! same 10.9 s of queued audio in less of the buffer, and a 192 kHz track can
+//! use all of it. The 8 MiB is allocated for the whole sink lifetime; that is
+//! the deliberate memory trade-off for a reallocation-free ring.
 //!
 //! The producer blocks on an eventfd when the ring is full instead of polling
 //! every millisecond. The consumer signals the eventfd after draining frames
@@ -13,9 +23,21 @@ use std::cell::UnsafeCell;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 
 pub(crate) const CHANNELS: usize = 2;
-pub(crate) const RATE: u32 = 48_000;
-pub(crate) const RING_BYTES: usize = 2 * 1024 * 1024;
-pub(crate) const RING_FRAMES: usize = RING_BYTES / (CHANNELS * std::mem::size_of::<i16>());
+/// Default pipeline rate (Hz): used until a decoder reports the source rate and
+/// as the decoder fallback when FFmpeg cannot report one.
+pub(crate) const DEFAULT_RATE: u32 = 48_000;
+/// Highest pipeline rate (Hz). Sources above it are resampled down by the
+/// decoder so the stream format and this ring stay within a bounded range.
+pub(crate) const MAX_RATE: u32 = 192_000;
+/// Ring length at [`DEFAULT_RATE`]: 524,288 frames = 2 MiB = ~10.9 s.
+const REFERENCE_FRAMES: usize = 524_288;
+/// Allocated capacity in frames: the reference ring scaled to [`MAX_RATE`].
+///
+/// `MAX_RATE` is an exact multiple of [`DEFAULT_RATE`], so this is exactly
+/// `REFERENCE_FRAMES * (MAX_RATE / DEFAULT_RATE)` = 2,097,152 frames.
+pub(crate) const RING_FRAMES: usize =
+    REFERENCE_FRAMES * (MAX_RATE as usize / DEFAULT_RATE as usize);
+pub(crate) const RING_BYTES: usize = RING_FRAMES * CHANNELS * std::mem::size_of::<i16>();
 const RING_MASK: u64 = (RING_FRAMES as u64) - 1;
 
 pub(crate) struct Ring {
@@ -28,6 +50,10 @@ pub(crate) struct Ring {
     played: AtomicU64,
     /// Incremented whenever stale producer writes must be rejected.
     epoch: AtomicU64,
+    /// Usable frame limit for the current pipeline rate (<= [`RING_FRAMES`]).
+    limit: AtomicU64,
+    /// Current pipeline rate (Hz).
+    rate: AtomicU32,
     closed: AtomicBool,
     failed: AtomicBool,
     reset: AtomicBool,
@@ -62,6 +88,8 @@ impl Ring {
             read: AtomicU64::new(0),
             played: AtomicU64::new(0),
             epoch: AtomicU64::new(0),
+            limit: AtomicU64::new(REFERENCE_FRAMES as u64),
+            rate: AtomicU32::new(DEFAULT_RATE),
             closed: AtomicBool::new(false),
             failed: AtomicBool::new(false),
             reset: AtomicBool::new(false),
@@ -91,6 +119,32 @@ impl Ring {
     /// boundary marker: the sink's played counter shares this frame space.
     pub(crate) fn written_frames(&self) -> u64 {
         self.write.load(Ordering::Acquire)
+    }
+
+    /// Current pipeline rate (Hz).
+    pub(crate) fn rate(&self) -> u32 {
+        self.rate.load(Ordering::Acquire)
+    }
+
+    /// Frames of the allocated ring that the producer may use at the current
+    /// pipeline rate (the rest keeps the same temporal headroom at lower rates).
+    pub(crate) fn usable_frames(&self) -> u64 {
+        self.limit.load(Ordering::Acquire)
+    }
+
+    /// Switches the pipeline rate and returns the previous rate (Hz).
+    ///
+    /// The usable limit preserves the reference budget of ~10.9 s:
+    /// `RING_FRAMES * rate / MAX_RATE` frames. A rate change is expected to come
+    /// with a flush (the sink does it) because frames already queued were
+    /// produced at the previous rate; without a flush the producer simply waits
+    /// for the consumer to drain below the new limit.
+    pub(crate) fn set_rate(&self, rate: u32) -> u32 {
+        let rate = rate.clamp(1, MAX_RATE);
+        let usable = (RING_FRAMES as u64 * u64::from(rate) / u64::from(MAX_RATE)).max(1);
+        let previous = self.rate.swap(rate, Ordering::AcqRel);
+        self.limit.store(usable, Ordering::Release);
+        previous
     }
 
     pub(crate) fn closed(&self) -> bool {
@@ -142,7 +196,7 @@ impl Ring {
         self.wake();
     }
 
-    /// Discards queued audio but keeps the epoch (seek).
+    /// Discards queued audio but keeps the epoch (seek or format change).
     pub(crate) fn flush(&self) {
         self.flush.store(true, Ordering::Release);
         self.wake();
@@ -212,12 +266,15 @@ impl Ring {
             let write = self.write.load(Ordering::Relaxed);
             let read = self.read.load(Ordering::Acquire);
             let used = write.saturating_sub(read);
-            let room = RING_FRAMES as u64 - used;
+            let limit = self.limit.load(Ordering::Acquire);
+            let room = limit.saturating_sub(used);
             if room == 0 {
                 self.wait_wake();
                 continue;
             }
             let take = (total - offset).min(room as usize);
+            // The mask/bounds use the allocated capacity; `limit` only decides
+            // how much of it the current rate may fill.
             let start = (write & RING_MASK) as usize;
             let first = take.min(RING_FRAMES - start);
             let dst = self.samples.as_ptr() as *mut i16;
@@ -314,6 +371,9 @@ mod tests {
     #[test]
     fn ring_wraps_and_preserves_frames() {
         let ring = Ring::new().unwrap();
+        // Use the full allocated capacity: at the default 48 kHz rate only a
+        // quarter of it is usable.
+        assert_eq!(ring.set_rate(MAX_RATE), DEFAULT_RATE);
         let epoch = ring.epoch();
         // Fill more than one ring to force a wrap; consume as we go.
         let mut input = vec![0i16; RING_FRAMES * 2];
@@ -326,6 +386,55 @@ mod tests {
         assert_eq!(&out[..16], &input[..16]);
         ring.write(&input, epoch);
         assert_eq!(ring.read_into(&mut out, RING_FRAMES), RING_FRAMES);
+        assert_eq!(&out[..16], &input[..16]);
+    }
+
+    #[test]
+    fn usable_limit_scales_with_the_pipeline_rate() {
+        let ring = Ring::new().unwrap();
+        assert_eq!(ring.rate(), DEFAULT_RATE);
+        assert_eq!(ring.usable_frames(), REFERENCE_FRAMES as u64);
+        assert_eq!(RING_FRAMES, REFERENCE_FRAMES * 4);
+        assert_eq!(RING_BYTES, 8 * 1024 * 1024);
+
+        assert_eq!(ring.set_rate(96_000), DEFAULT_RATE);
+        assert_eq!(ring.rate(), 96_000);
+        assert_eq!(
+            ring.usable_frames(),
+            (RING_FRAMES as u64 * 96_000) / u64::from(MAX_RATE)
+        );
+        assert_eq!(ring.usable_frames(), 1_048_576);
+
+        assert_eq!(ring.set_rate(MAX_RATE), 96_000);
+        assert_eq!(ring.usable_frames(), RING_FRAMES as u64);
+
+        assert_eq!(ring.set_rate(44_100), MAX_RATE);
+        assert_eq!(
+            ring.usable_frames(),
+            (RING_FRAMES as u64 * 44_100) / u64::from(MAX_RATE)
+        );
+    }
+
+    #[test]
+    fn usable_limit_keeps_wrap_and_masking_correct() {
+        let ring = Ring::new().unwrap();
+        assert_eq!(ring.set_rate(DEFAULT_RATE), DEFAULT_RATE);
+        let usable = ring.usable_frames() as usize;
+        let epoch = ring.epoch();
+        let mut input = vec![0i16; usable * CHANNELS];
+        for (index, sample) in input.iter_mut().enumerate() {
+            *sample = (index % 4096) as i16;
+        }
+        // Fill exactly the usable share, consume it, then fill again: the
+        // second write starts past the old limit and wraps through the mask.
+        ring.write(&input, epoch);
+        assert_eq!(ring.buffered_frames(), usable as u64);
+        let mut out = vec![0i16; usable * CHANNELS];
+        assert_eq!(ring.read_into(&mut out, usable), usable);
+        assert_eq!(&out[..16], &input[..16]);
+        ring.write(&input, epoch);
+        assert_eq!(ring.buffered_frames(), usable as u64);
+        assert_eq!(ring.read_into(&mut out, usable), usable);
         assert_eq!(&out[..16], &input[..16]);
     }
 

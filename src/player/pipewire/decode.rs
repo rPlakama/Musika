@@ -8,10 +8,13 @@
 
 //! FFmpeg decoder used by the Rust-owned PipeWire transport.
 //!
-//! The decoder presents a single fixed output format: interleaved S16 stereo
-//! at 48 kHz. FFmpeg/swresample owns demuxing, codec selection, down/up-mix
-//! and sample-rate conversion, so the transport worker only ever sees PCM
-//! frames it can hand straight to the sink.
+//! The decoder presents interleaved S16 stereo at the *source* sample rate, so
+//! the PipeWire graph can usually present the track natively (no rate
+//! conversion). FFmpeg/swresample owns demuxing, codec selection, down/up-mix
+//! and sample-format conversion; the rate is only touched for sources above
+//! [`MAX_PIPELINE_RATE`], which are resampled down to that bound. The transport
+//! worker reads [`Decoder::sample_rate`] after opening and renegotiates the
+//! sink before writing any PCM.
 //!
 //! Both local paths (`file:` URLs included) and network URLs are opened by
 //! libavformat. A deliberately small read-ahead/probe configuration keeps
@@ -31,12 +34,23 @@ use ffmpeg::util::format::Sample;
 use ffmpeg::{ChannelLayout, Dictionary, Error, Packet, Rational};
 use ffmpeg_next as ffmpeg;
 
-/// Output sample rate expected by the PipeWire sink.
-const TARGET_RATE: u32 = 48_000;
+use super::ring::{DEFAULT_RATE, MAX_RATE};
+
+/// Highest sample rate the transport presents to the sink. Sources above it
+/// are resampled down to it; lower sources keep their native rate so no
+/// unnecessary sample-rate conversion happens.
+pub(crate) const MAX_PIPELINE_RATE: u32 = MAX_RATE;
 /// Output channel count expected by the PipeWire sink.
 const TARGET_CHANNELS: i32 = 2;
-/// Packed (interleaved) S16, matching `TARGET_CHANNELS`/`TARGET_RATE`.
+/// Packed (interleaved) S16, matching `TARGET_CHANNELS` at the source rate.
 const TARGET_SAMPLE: Sample = Sample::I16(ffmpeg::format::sample::Type::Packed);
+
+/// Clamps a source rate to a pipeline-supported rate. Rates above
+/// [`MAX_PIPELINE_RATE`] are downsampled; a decoded frame rate of 0 is treated
+/// as "unknown" by the caller.
+fn pipeline_rate(rate: u32) -> u32 {
+    rate.clamp(1, MAX_PIPELINE_RATE)
+}
 
 /// Network read-ahead. The transport worker streams a track instead of
 /// buffering it whole, so AVIO gets a bounded 32 MiB window.
@@ -90,8 +104,8 @@ fn is_eagain(error: Error) -> bool {
     matches!(error, Error::Other { errno } if errno == ffmpeg::error::EAGAIN)
 }
 
-fn seek_trim(target: f64, start: f64, produced: usize) -> Option<usize> {
-    let drop = ((target - start) * f64::from(TARGET_RATE)).round().max(0.0) as usize;
+fn seek_trim(target: f64, start: f64, produced: usize, rate: u32) -> Option<usize> {
+    let drop = ((target - start) * f64::from(rate)).round().max(0.0) as usize;
     (drop < produced).then_some(drop)
 }
 
@@ -148,7 +162,8 @@ fn open_input(url: &str, stop: &Arc<AtomicBool>) -> Result<format::context::Inpu
     }
 }
 
-/// A demux/decode/resample pipeline producing interleaved S16 stereo 48 kHz.
+/// A demux/decode/resample pipeline producing interleaved S16 stereo at the
+/// source rate (capped to [`MAX_PIPELINE_RATE`]).
 ///
 /// `read` never allocates from Rust: packet, decode frame, resample frame and
 /// pending PCM all live in this struct, and the caller supplies the output.
@@ -163,6 +178,8 @@ pub(crate) struct Decoder {
     stream_index: usize,
     stream_time_base: Rational,
     duration: f64,
+    /// Output PCM rate in Hz, resolved by [`Decoder::open`].
+    rate: u32,
     seekable: bool,
     stop: Arc<AtomicBool>,
     /// Frames currently available in `converted`, and how many were consumed.
@@ -241,7 +258,7 @@ impl Decoder {
             !io.is_null() && ((*io).seekable & ffmpeg::ffi::AVIO_SEEKABLE_NORMAL) != 0
         };
 
-        Ok(Self {
+        let mut decoder = Self {
             input,
             audio,
             packet: Packet::empty(),
@@ -252,6 +269,7 @@ impl Decoder {
             stream_index,
             stream_time_base,
             duration,
+            rate: 0,
             seekable,
             stop,
             pending_frames: 0,
@@ -261,11 +279,45 @@ impl Decoder {
             resampler_flushed: false,
             eof: false,
             seek_target: None,
-        })
+        };
+        // Resolve the output rate before returning: the worker renegotiates the
+        // sink to `sample_rate()` and only then writes PCM.
+        decoder.resolve_rate()?;
+        Ok(decoder)
+    }
+
+    /// Resolves the output rate from the codec parameters, falling back to the
+    /// first decoded frame and finally to [`DEFAULT_RATE`].
+    ///
+    /// Most containers/decoders report the rate in the codec parameters, so
+    /// this does no decoding at all. When they do not, one frame is decoded and
+    /// kept pending so `read` can deliver it later.
+    fn resolve_rate(&mut self) -> Result<(), String> {
+        let reported = self.audio.rate();
+        if reported > 0 {
+            self.rate = pipeline_rate(reported);
+            return Ok(());
+        }
+        while self.rate == 0 && !self.eof && !self.decoder_eof {
+            if !self.decode_more()? {
+                break;
+            }
+        }
+        if self.rate == 0 {
+            self.rate = DEFAULT_RATE;
+        }
+        Ok(())
     }
 
     pub(crate) fn duration(&self) -> f64 {
         self.duration
+    }
+
+    /// Output PCM sample rate in Hz. It is the track's source rate (so the
+    /// PipeWire graph can present it natively), clamped to
+    /// [`MAX_PIPELINE_RATE`].
+    pub(crate) fn sample_rate(&self) -> u32 {
+        self.rate
     }
 
     /// Byte size of the input when the protocol/container reports one,
@@ -337,7 +389,7 @@ impl Decoder {
         Ok(())
     }
 
-    /// Fill `out` with interleaved S16 stereo 48 kHz PCM.
+    /// Fill `out` with interleaved S16 stereo PCM at [`Self::sample_rate`].
     ///
     /// At most `max_frames` stereo frames are written. Returns the number of
     /// frames written; `0` means end of stream. Partial resampler output is
@@ -434,7 +486,7 @@ impl Decoder {
                     self.unref_decoded();
                     let produced = produced?;
                     if let Some((target, start)) = trim {
-                        if let Some(drop) = seek_trim(target, start, produced) {
+                        if let Some(drop) = seek_trim(target, start, produced, self.rate) {
                             self.pending_frames = produced;
                             self.pending_offset = drop;
                             self.seek_target = None;
@@ -558,6 +610,13 @@ impl Decoder {
         if source_format == Sample::None || source_rate == 0 {
             return Err("decoder: decoded audio has no sample format or rate".to_string());
         }
+        // Open resolves the rate, but a decoder that only reveals it with the
+        // first frame lands here first: adopt the frame rate as the pipeline
+        // rate so no conversion is needed.
+        if self.rate == 0 {
+            self.rate = pipeline_rate(source_rate);
+        }
+        let output_rate = self.rate;
         let rebuild = match self.resampler.as_ref() {
             Some(resampler) => {
                 let input = resampler.input();
@@ -575,7 +634,7 @@ impl Decoder {
                     source_rate,
                     TARGET_SAMPLE,
                     ChannelLayout::STEREO,
-                    TARGET_RATE,
+                    output_rate,
                 )
                 .map_err(|error| context_error("decoder: cannot initialise resampler", error))?,
             );
@@ -588,7 +647,9 @@ impl Decoder {
             .map(|delay| delay.output.max(0) as usize)
             .unwrap_or(0);
         let input_samples = self.decoded.samples() as u64;
-        let scaled = (input_samples * u64::from(TARGET_RATE) + u64::from(source_rate) - 1)
+        // Only sources above MAX_PIPELINE_RATE need a rate conversion; for the
+        // usual native-rate case this is a plain format/layout conversion.
+        let scaled = (input_samples * u64::from(output_rate) + u64::from(source_rate) - 1)
             / u64::from(source_rate);
         let needed = delay.saturating_add(scaled as usize).saturating_add(64);
         self.ensure_output_capacity(needed);
@@ -755,6 +816,11 @@ mod tests {
         .expect("open mono WAV by path");
 
         assert!(decoder.is_seekable());
+        assert_eq!(
+            decoder.sample_rate(),
+            rate,
+            "WAV rate must be presented natively"
+        );
         assert!(decoder.duration() > 0.15, "duration {}", decoder.duration());
         assert!(
             decoder.stream_size() > 44,
@@ -778,12 +844,14 @@ mod tests {
                 nonzero |= left != 0;
             }
             total += read;
-            assert!(total < 48_000, "decoder never reached EOF");
+            assert!(total < rate as usize * 2, "decoder never reached EOF");
         }
         assert!(nonzero, "decoded PCM is silent");
+        // The decoder must deliver the source-rate length (8,820 frames), not
+        // the 9,600 frames a fixed 48 kHz conversion would have produced.
         assert!(
-            (8_000..11_000).contains(&total),
-            "unexpected 0.2 s frame count: {total}"
+            (8_700..=8_900).contains(&total),
+            "unexpected 44.1 kHz frame count: {total}"
         );
 
         let mut stereo = Vec::with_capacity(frames * 2);
@@ -798,6 +866,7 @@ mod tests {
         let url = format!("file://{}", stereo_file.path().display());
         let mut decoder = Decoder::open(&url, new_stop()).expect("open file:// WAV");
         assert!(decoder.is_seekable());
+        assert_eq!(decoder.sample_rate(), rate);
         let read = decoder.read(&mut out, 512).expect("decode file:// WAV");
         assert!(read > 0, "file:// URL decoded no frames");
         assert!(out[..read * 2].iter().any(|sample| *sample != 0));
@@ -811,11 +880,43 @@ mod tests {
 
     #[test]
     fn seek_trim_skips_whole_frames_before_the_target() {
-        assert_eq!(super::seek_trim(7.5, 7.4935, 960), Some(312));
-        assert_eq!(super::seek_trim(7.5, 7.5, 960), Some(0));
-        assert_eq!(super::seek_trim(7.5, 7.51, 960), Some(0));
-        assert_eq!(super::seek_trim(7.5, 7.0, 960), None);
-        assert_eq!(super::seek_trim(7.5, 7.0, 0), None);
+        // 7.5 s - 7.4935 s = 6.5 ms, at 48 kHz and at 44.1 kHz.
+        assert_eq!(super::seek_trim(7.5, 7.4935, 960, 48_000), Some(312));
+        assert_eq!(super::seek_trim(7.5, 7.4935, 960, 44_100), Some(287));
+        assert_eq!(super::seek_trim(7.5, 7.5, 960, 48_000), Some(0));
+        assert_eq!(super::seek_trim(7.5, 7.51, 960, 44_100), Some(0));
+        assert_eq!(super::seek_trim(7.5, 7.0, 960, 44_100), None);
+        assert_eq!(super::seek_trim(7.5, 7.0, 0, 48_000), None);
+    }
+
+    #[test]
+    fn caps_rates_above_the_pipeline_maximum() {
+        let rate = 384_000u32;
+        let frames = rate as usize / 10; // 0.1 s
+        let mut mono = Vec::with_capacity(frames);
+        for index in 0..frames {
+            mono.push(((index as f64 * 0.01).sin() * 8_000.0) as i16);
+        }
+        let file = wav_fixture(rate, 1, &mono);
+        let mut decoder = Decoder::open(file.path().to_str().expect("utf-8 temp path"), new_stop())
+            .expect("open 384 kHz WAV");
+        assert_eq!(decoder.sample_rate(), super::MAX_PIPELINE_RATE);
+        let mut out = vec![0i16; 4096 * 2];
+        let mut total = 0usize;
+        loop {
+            let read = decoder.read(&mut out, 4096).expect("decode 384 kHz WAV");
+            if read == 0 {
+                break;
+            }
+            total += read;
+            assert!(total < 96_000, "decoder never reached EOF");
+        }
+        // 0.1 s resampled to the 192 kHz cap is ~19,200 frames (the 48 kHz
+        // pipeline would have produced 4,800).
+        assert!(
+            (19_000..=19_400).contains(&total),
+            "unexpected capped frame count: {total}"
+        );
     }
 
     #[test]
@@ -837,6 +938,7 @@ mod tests {
         let mut decoder = Decoder::open(file.path().to_str().expect("utf-8 temp path"), new_stop())
             .expect("open seek fixture");
         assert!(decoder.duration() > 0.9);
+        assert_eq!(decoder.sample_rate(), rate);
 
         decoder.seek(0.75).expect("seek into the tone");
         let mut out = vec![0i16; 4_800 * 2];

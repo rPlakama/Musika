@@ -19,14 +19,29 @@ use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender, TryRecvError};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
-use super::decode::Decoder;
-use super::ring::{RATE, RING_FRAMES};
+use super::decode::{Decoder, MAX_PIPELINE_RATE};
+use super::ring;
 use super::sink::Sink;
 use super::status::{Shared, Status};
 
 /// A pause longer than this reopens the stream instead of resuming the decoder
 /// in memory: a long-idle HTTP response is not reliable.
 const PAUSE_REOPEN_AFTER: Duration = Duration::from_secs(30);
+
+/// Target temporal size of one decode read: 20 ms (`rate / 50` frames). Keeping
+/// the chunk time-constant (not frame-constant) keeps seek/stop responses fast
+/// at high rates and the PCM scratch buffer bounded.
+const CHUNK_DIVISOR: u32 = 50;
+/// Lower clamp for very low-rate sources (still only a few milliseconds).
+const MIN_CHUNK_FRAMES: usize = 256;
+/// Largest chunk: 20 ms at [`MAX_PIPELINE_RATE`]. The worker's PCM scratch
+/// buffer is allocated for this size once.
+const MAX_CHUNK_FRAMES: usize = MAX_PIPELINE_RATE as usize / CHUNK_DIVISOR as usize;
+
+/// Frames to read per decoder call at the current pipeline rate.
+fn chunk_frames(rate: u32) -> usize {
+    ((rate / CHUNK_DIVISOR) as usize).clamp(MIN_CHUNK_FRAMES, MAX_CHUNK_FRAMES)
+}
 
 pub(crate) enum Command {
     Load {
@@ -302,11 +317,18 @@ struct Current {
     generation: u64,
     written_frames: u64,
     timeline_start: f64,
+    /// Pipeline rate (Hz) currently configured in the sink. PCM written for
+    /// this decoder is at this rate.
+    rate: u32,
     parked_url: Option<String>,
     next_url: Option<String>,
     preload_requested: bool,
     preload_token: u64,
     preload: Option<Decoder>,
+    /// A preloaded decoder whose rate differs from [`Current::rate`]. The
+    /// gapless swap waits for the ring to drain before the format is switched,
+    /// because queued frames still belong to the old rate.
+    pending_handoff: Option<Decoder>,
     preload_stop: Option<Arc<AtomicBool>>,
     preload_started: Option<Instant>,
     first_pcm: bool,
@@ -329,9 +351,10 @@ fn worker_thread(
         // Nothing is loaded yet: a stale seek/resume before the first load must
         // not reopen the (empty) URL.
         stopped: true,
+        rate: sink.ring().rate(),
         ..Current::default()
     };
-    let mut pcm = vec![0i16; 4096 * 2];
+    let mut pcm = vec![0i16; MAX_CHUNK_FRAMES * ring::CHANNELS];
     let mut pending_command = None;
     loop {
         // A blocking wait is used whenever the loop has nothing to decode:
@@ -562,11 +585,35 @@ fn worker_thread(
         }
 
         let Some(decoder) = current.decoder.as_mut() else {
+            // A rate change at a gapless boundary is not gapless: the frames
+            // still queued in the ring were produced at the old rate, so wait
+            // for playback to drain them before renegotiating the stream and
+            // swapping the decoder in.
+            if let Some(next) = current.pending_handoff.take() {
+                if sink.ring().buffered_frames() > 0 {
+                    current.pending_handoff = Some(next);
+                    continue;
+                }
+                let rate = next.sample_rate();
+                if rate != current.rate {
+                    match sink.set_format(rate) {
+                        Ok(()) => current.rate = rate,
+                        Err(error) => {
+                            fail(&shared, error);
+                            shared.lock().decoder_live = false;
+                            continue;
+                        }
+                    }
+                }
+                handoff_to_decoder(&mut current, next, &shared, &sink);
+                continue;
+            }
             if let Some(url) = current.parked_url.clone()
                 && !sink.ring().paused()
-                && sink.ring().buffered_frames() <= (RATE as u64 * 2)
+                && sink.ring().buffered_frames() <= current.rate as u64 * 2
             {
-                let target = current.timeline_start + current.written_frames as f64 / RATE as f64;
+                let target = current.timeline_start
+                    + current.written_frames as f64 / f64::from(current.rate);
                 let next_url = current.next_url.clone();
                 let generation = current.generation;
                 start_decoder(
@@ -583,7 +630,7 @@ fn worker_thread(
             continue;
         };
 
-        let frames = match decoder.read(&mut pcm, 1024) {
+        let frames = match decoder.read(&mut pcm, chunk_frames(current.rate)) {
             Ok(frames) => frames,
             Err(error) => {
                 let superseded = current.generation != shared.generation.load(Ordering::Acquire)
@@ -611,46 +658,20 @@ fn worker_thread(
                 apply_preload(&mut current, result);
             }
             if let Some(next) = current.preload.take() {
-                current.decoder = Some(next);
-                current.written_frames = 0;
-                current.first_pcm = true;
-                let duration = current
-                    .decoder
-                    .as_ref()
-                    .map(Decoder::duration)
-                    .unwrap_or(0.0);
-                let stream_size = current
-                    .decoder
-                    .as_ref()
-                    .map(|decoder| decoder.stream_size().max(0) as u64)
-                    .unwrap_or(0);
-                let boundary = sink_ring_written(&sink);
-                shared.boundary_frame.store(boundary, Ordering::Release);
-                *shared
-                    .boundary_duration
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner) = duration;
-                shared
-                    .boundary_stream_size
-                    .store(stream_size, Ordering::Release);
-                shared.boundary_active.store(true, Ordering::Release);
-                shared.decode_done.store(false, Ordering::Release);
-                {
-                    let mut status = shared.lock();
-                    status.duration = duration;
-                    status.stream_size = stream_size;
-                    status.seekable = current.decoder.as_ref().is_some_and(Decoder::is_seekable);
-                    status.loaded = true;
-                    status.decoder_live = true;
+                let next_rate = next.sample_rate();
+                if next_rate != current.rate {
+                    // Switching the graph rate in the middle of the stream
+                    // would replay the queued old-rate frames at the wrong
+                    // speed, so the swap waits for the ring to drain. A small
+                    // audible gap at the rate change is accepted; same-rate
+                    // handoffs stay gapless.
+                    current.pending_handoff = Some(next);
+                    current.decoder = None;
+                    current.stop = None;
+                    shared.lock().decoder_live = false;
+                    continue;
                 }
-                crate::startup::trace("gapless.next");
-                current.url = current.next_url.take().unwrap_or_default();
-                current.timeline_start = 0.0;
-                current.preload_requested = false;
-                current.preload_token = current.preload_token.wrapping_add(1);
-                current.preload_stop = None;
-                current.preload_started = None;
-                shared.signal();
+                handoff_to_decoder(&mut current, next, &shared, &sink);
                 continue;
             }
             crate::startup::trace("fetch.done");
@@ -680,8 +701,10 @@ fn worker_thread(
 
         // The ring is the playback buffer. Once it is nearly full, close the
         // current AVIO/HTTP response and let playback consume the buffered
-        // PCM. Reopen before it runs low, seeking to the decoded boundary.
-        if sink.ring().buffered_frames() >= RING_FRAMES as u64 * 7 / 8
+        // PCM. The threshold is 7/8 of the rate-scaled usable capacity (~9.5 s
+        // of audio at any pipeline rate). Reopen before it runs low, seeking to
+        // the decoded boundary.
+        if sink.ring().buffered_frames() >= sink.ring().usable_frames() * 7 / 8
             && current.decoder.as_ref().is_some_and(Decoder::is_seekable)
         {
             current.parked_url = Some(current.url.clone());
@@ -691,7 +714,7 @@ fn worker_thread(
             continue;
         }
 
-        seed_preload(&mut current, &shared, &sink, &preload_tx);
+        seed_preload(&mut current, &shared, &preload_tx);
         drain_preload(&mut current, &preload_rx);
         if sink.ring().paused()
             && current
@@ -732,6 +755,7 @@ fn start_decoder(
     current.written_frames = 0;
     current.timeline_start = position;
     current.parked_url = None;
+    current.pending_handoff = None;
     if !preserve_preload {
         current.next_url = next_url;
     }
@@ -758,6 +782,23 @@ fn start_decoder(
                 return;
             }
             crate::startup::trace("fetch.first_chunk");
+            // Adopt the track's native rate before any PCM is written for it:
+            // the sink rebuilds its PipeWire stream to S16LE/stereo/<rate>.
+            let rate = decoder.sample_rate();
+            if rate != current.rate {
+                match sink.set_format(rate) {
+                    Ok(()) => current.rate = rate,
+                    Err(error) => {
+                        shared.lock().decoder_live = false;
+                        if generation == shared.generation.load(Ordering::Acquire)
+                            && !stop.load(Ordering::Acquire)
+                        {
+                            fail(shared, error);
+                        }
+                        return;
+                    }
+                }
+            }
             let seekable = decoder.is_seekable();
             current.decoder = Some(decoder);
             {
@@ -797,22 +838,63 @@ fn start_decoder(
     }
 }
 
-fn seed_preload(
-    current: &mut Current,
-    shared: &Shared,
-    sink: &Sink,
-    preload_tx: &Sender<PreloadRequest>,
-) {
+/// Installs a preloaded decoder as the current one and arms the gapless
+/// boundary at the current end of the ring. The caller has already made the
+/// pipeline rate match the decoder's own rate.
+fn handoff_to_decoder(current: &mut Current, next: Decoder, shared: &Shared, sink: &Sink) {
+    let duration = next.duration();
+    let stream_size = next.stream_size().max(0) as u64;
+    let seekable = next.is_seekable();
+    current.decoder = Some(next);
+    current.written_frames = 0;
+    current.first_pcm = true;
+    let boundary = sink_ring_written(sink);
+    shared.boundary_frame.store(boundary, Ordering::Release);
+    *shared
+        .boundary_duration
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner) = duration;
+    shared
+        .boundary_stream_size
+        .store(stream_size, Ordering::Release);
+    shared.boundary_active.store(true, Ordering::Release);
+    shared.decode_done.store(false, Ordering::Release);
+    {
+        let mut status = shared.lock();
+        status.duration = duration;
+        status.stream_size = stream_size;
+        status.seekable = seekable;
+        status.loaded = true;
+        status.decoder_live = true;
+    }
+    crate::startup::trace("gapless.next");
+    current.url = current.next_url.take().unwrap_or_default();
+    current.timeline_start = 0.0;
+    current.preload_requested = false;
+    current.preload_token = current.preload_token.wrapping_add(1);
+    current.preload_started = None;
+    // The preloaded decoder was opened with the preload interrupt flag; it is
+    // now the live decoder, so adopt that flag for load/seek/stop cancels.
+    let stop = current.preload_stop.take();
+    current.stop = stop.clone();
+    *shared
+        .current_stop
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner) = stop;
+    shared.signal();
+}
+
+fn seed_preload(current: &mut Current, shared: &Shared, preload_tx: &Sender<PreloadRequest>) {
     let Some(url) = current.next_url.clone() else {
         return;
     };
-    if current.preload_requested || current.preload.is_some() {
+    if current.preload_requested || current.preload.is_some() || current.pending_handoff.is_some() {
         return;
     }
     let status = shared.lock();
     let duration = status.duration;
     drop(status);
-    let written_seconds = current.written_frames as f64 / RATE as f64;
+    let written_seconds = current.written_frames as f64 / f64::from(current.rate);
     let ready = if duration > 0.0 {
         duration - written_seconds <= 30.0
     } else {
@@ -828,7 +910,6 @@ fn seed_preload(
     current.preload_stop = Some(Arc::clone(&stop));
     current.preload_started = Some(Instant::now());
     let _ = preload_tx.send(PreloadRequest { token, url, stop });
-    let _ = sink;
 }
 
 fn drain_preload(current: &mut Current, rx: &Receiver<PreloadResult>) {
@@ -867,6 +948,7 @@ fn cancel_preload(current: &mut Current) {
         stop.store(true, Ordering::Release);
     }
     current.preload = None;
+    current.pending_handoff = None;
     current.preload_requested = false;
     current.preload_token = current.preload_token.wrapping_add(1);
     current.preload_started = None;
@@ -895,4 +977,171 @@ fn fail(shared: &Shared, message: String) {
     status.failed = Some(message);
     drop(status);
     shared.signal();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use std::path::{Path, PathBuf};
+    use std::sync::atomic::AtomicU64;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    struct WavFile {
+        path: PathBuf,
+    }
+
+    impl WavFile {
+        fn url(&self) -> String {
+            format!("file://{}", self.path.display())
+        }
+    }
+
+    impl Drop for WavFile {
+        fn drop(&mut self) {
+            if let Some(dir) = self.path.parent() {
+                let _ = fs::remove_dir_all(dir);
+            }
+        }
+    }
+
+    fn write_wav(path: &Path, sample_rate: u32, seconds: f64) {
+        let frames = (f64::from(sample_rate) * seconds) as usize;
+        let data_len = u32::try_from(frames * 4).expect("test WAV too large");
+        let mut bytes = Vec::with_capacity(44 + data_len as usize);
+        bytes.extend_from_slice(b"RIFF");
+        bytes.extend_from_slice(&(36 + data_len).to_le_bytes());
+        bytes.extend_from_slice(b"WAVEfmt ");
+        bytes.extend_from_slice(&16u32.to_le_bytes());
+        bytes.extend_from_slice(&1u16.to_le_bytes()); // linear PCM
+        bytes.extend_from_slice(&2u16.to_le_bytes()); // stereo
+        bytes.extend_from_slice(&sample_rate.to_le_bytes());
+        bytes.extend_from_slice(&(sample_rate * 4).to_le_bytes());
+        bytes.extend_from_slice(&4u16.to_le_bytes());
+        bytes.extend_from_slice(&16u16.to_le_bytes());
+        bytes.extend_from_slice(b"data");
+        bytes.extend_from_slice(&data_len.to_le_bytes());
+        bytes.resize(44 + data_len as usize, 0);
+        fs::write(path, bytes).expect("write test WAV");
+    }
+
+    fn wav_fixture(sample_rate: u32, seconds: f64) -> WavFile {
+        static COUNTER: AtomicU64 = AtomicU64::new(0);
+        let serial = COUNTER.fetch_add(1, Ordering::Relaxed);
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let dir = std::env::temp_dir().join(format!(
+            "musika-worker-{}-{}-{}",
+            std::process::id(),
+            serial,
+            nanos
+        ));
+        fs::create_dir_all(&dir).expect("create test temp dir");
+        let path = dir.join("fixture.wav");
+        write_wav(&path, sample_rate, seconds);
+        WavFile { path }
+    }
+
+    fn wait_until(mut predicate: impl FnMut() -> bool, timeout: Duration) -> bool {
+        let deadline = Instant::now() + timeout;
+        while Instant::now() < deadline {
+            if predicate() {
+                return true;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        predicate()
+    }
+
+    #[test]
+    #[ignore = "requires a running PipeWire session"]
+    fn rate_change_handoff_drains_then_renegotiates() {
+        let first = wav_fixture(44_100, 0.4);
+        let second = wav_fixture(48_000, 0.4);
+        let shared = Arc::new(Shared::new());
+        let sink = Arc::new(Sink::new(Arc::clone(&shared)).expect("PipeWire sink"));
+        let worker = Worker::new(Arc::clone(&shared), Arc::clone(&sink)).expect("decode worker");
+        assert_eq!(sink.rate(), ring::DEFAULT_RATE);
+        worker.load(first.url(), Some(second.url()), false, 1);
+
+        // First track: the worker adopts 44.1 kHz and renegotiates before PCM.
+        assert!(
+            wait_until(|| sink.rate() == 44_100, Duration::from_secs(15)),
+            "first track did not adopt its native rate"
+        );
+        let failed = shared.lock().failed.clone();
+        assert!(failed.is_none(), "first load failed: {failed:?}");
+
+        // Second track: the queued 44.1 kHz frames are drained first, then the
+        // stream is rebuilt at the new rate and the gapless boundary armed. The
+        // ring rate flips before the worker arms the boundary (the sink applies
+        // the format first), so wait for the boundary, not just the rate.
+        assert!(
+            wait_until(
+                || shared.boundary_active.load(Ordering::Acquire),
+                Duration::from_secs(15)
+            ),
+            "second track never armed the gapless boundary (rate {})",
+            sink.rate()
+        );
+        assert_eq!(
+            sink.rate(),
+            48_000,
+            "the stream was not renegotiated to the second track's rate"
+        );
+        let failed = shared.lock().failed.clone();
+        assert!(failed.is_none(), "rate-change handoff failed: {failed:?}");
+
+        let boundary = shared.boundary_frame.load(Ordering::Acquire);
+        assert!(
+            wait_until(|| sink.played_frames() >= boundary, Duration::from_secs(10)),
+            "playback never reached the armed boundary ({boundary})"
+        );
+        assert!(
+            !sink.failed(),
+            "sink reported a stream error during the handoff"
+        );
+    }
+
+    #[test]
+    #[ignore = "requires a running PipeWire session"]
+    fn same_rate_handoff_reuses_the_stream() {
+        let first = wav_fixture(44_100, 0.4);
+        let second = wav_fixture(44_100, 0.4);
+        let shared = Arc::new(Shared::new());
+        let sink = Arc::new(Sink::new(Arc::clone(&shared)).expect("PipeWire sink"));
+        let worker = Worker::new(Arc::clone(&shared), Arc::clone(&sink)).expect("decode worker");
+        worker.load(first.url(), Some(second.url()), false, 1);
+
+        assert!(
+            wait_until(|| sink.rate() == 44_100, Duration::from_secs(15)),
+            "first track did not adopt its native rate"
+        );
+        assert!(
+            wait_until(
+                || shared.boundary_active.load(Ordering::Acquire),
+                Duration::from_secs(15)
+            ),
+            "same-rate track never armed the gapless boundary"
+        );
+        // A same-rate handoff must not touch the stream format.
+        assert_eq!(
+            sink.rate(),
+            44_100,
+            "same-rate handoff renegotiated the stream"
+        );
+        let failed = shared.lock().failed.clone();
+        assert!(failed.is_none(), "same-rate handoff failed: {failed:?}");
+        let boundary = shared.boundary_frame.load(Ordering::Acquire);
+        assert!(
+            wait_until(|| sink.played_frames() >= boundary, Duration::from_secs(10)),
+            "playback never reached the same-rate boundary"
+        );
+        assert!(
+            !sink.failed(),
+            "sink reported a stream error during the handoff"
+        );
+    }
 }

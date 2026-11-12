@@ -256,7 +256,6 @@ mod tests {
                 album_id: "a".into(),
                 starred: false,
                 rating: 0,
-                downloaded: false,
             }]),
             ..ViewState::default()
         };
@@ -298,7 +297,6 @@ mod tests {
                 album_id: "ten".into(),
                 starred: false,
                 rating: 0,
-                downloaded: false,
             }],
         );
         assert!(window.row(9).is_none());
@@ -452,7 +450,6 @@ mod page_tests {
             album_id: String::new(),
             starred: false,
             rating: 0,
-            downloaded: false,
         }
     }
 
@@ -546,7 +543,6 @@ mod page_kind_tests {
             album_id: "a".into(),
             starred: false,
             rating: 0,
-            downloaded: false,
         }];
         page.select(9);
         assert_eq!(page.list.cursor, 0);

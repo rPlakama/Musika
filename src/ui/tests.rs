@@ -180,7 +180,6 @@ mod contextual_bar_tests {
             album_id: String::new(),
             starred: false,
             rating: 0,
-            downloaded: false,
         }
     }
 

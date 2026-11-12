@@ -265,6 +265,9 @@ struct MarksState {
     songs_done: std::collections::HashSet<String>,
     albums_done: std::collections::HashSet<String>,
     pending: std::collections::HashSet<String>,
+    /// Ids an in-flight removal already optimistically dropped: the marks
+    /// window is the download truth, and this is its only optimistic overlay.
+    cleared: std::collections::HashSet<String>,
     /// Hash of the window (player ids + visible row ids) last requested.
     /// `None` forces a new request after a library/page/wipe change.
     signature: Option<u64>,
@@ -280,12 +283,16 @@ impl MarksState {
         self.songs_done = result.songs_done.into_iter().collect();
         self.albums_done = result.albums_done.into_iter().collect();
         self.pending = result.pending.into_iter().collect();
+        self.cleared.clear();
         self.inflight = false;
     }
 
     fn downloaded(&self, song_id: &str, album_id: &str) -> bool {
-        (!song_id.is_empty() && self.songs_done.contains(song_id))
-            || (!album_id.is_empty() && self.albums_done.contains(album_id))
+        let cleared = (!song_id.is_empty() && self.cleared.contains(song_id))
+            || (!album_id.is_empty() && self.cleared.contains(album_id));
+        !cleared
+            && ((!song_id.is_empty() && self.songs_done.contains(song_id))
+                || (!album_id.is_empty() && self.albums_done.contains(album_id)))
     }
 
     fn pending(&self, song_id: &str, album_id: &str) -> bool {
@@ -719,7 +726,7 @@ pub(in crate::ui) const OVERLAY_ROW_COVER_RATIO: f32 = 0.714;
 
 /// The alternating row base fill: the same stripe rule on every list.
 pub(in crate::ui) fn row_base_fill(index: usize) -> u32 {
-    if index % 2 != 0 {
+    if !index.is_multiple_of(2) {
         palette::surface_container_lowest()
     } else {
         palette::surface()

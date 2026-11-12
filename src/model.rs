@@ -195,7 +195,6 @@ pub struct Row {
     pub album_id: String,
     pub starred: bool,
     pub rating: i64,
-    pub downloaded: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -322,7 +321,6 @@ mod serde_tests {
             album_id: "al1".into(),
             starred: true,
             rating: 3,
-            downloaded: false,
         };
         let json = serde_json::to_string(&row).unwrap();
         assert_eq!(serde_json::from_str::<Row>(&json).unwrap(), row);

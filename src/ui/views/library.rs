@@ -273,7 +273,7 @@ impl AppRoot {
                 paint.flags.compact,
             )));
         body = body.child(cells);
-        let downloaded = self.marks.downloaded(&row.song_id, &row.album_id) || row.downloaded;
+        let downloaded = self.marks.downloaded(&row.song_id, &row.album_id);
         let downloading = self.marks.pending_row(row);
         let mut trailing = div().flex().items_center().gap_2();
         if paint.flags.show_length && !row.meta.is_empty() {

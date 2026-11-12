@@ -155,7 +155,6 @@ mod tests {
             album_id: "a".into(),
             starred: false,
             rating: 0,
-            downloaded: false,
         }
     }
 

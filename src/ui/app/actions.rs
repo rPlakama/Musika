@@ -272,9 +272,6 @@ impl AppRoot {
             if !hit {
                 return;
             }
-            if !on {
-                row.downloaded = false;
-            }
             if !row.id.is_empty() {
                 row_ids.insert(row.id.clone());
             }
@@ -307,7 +304,6 @@ impl AppRoot {
                 patch(row, container);
             }
         }
-        drop(patch);
         if on {
             self.marks.pending.insert(id.to_string());
             self.marks.pending.extend(songs);
@@ -315,9 +311,13 @@ impl AppRoot {
             self.marks.pending.extend(row_ids);
             return;
         }
+        self.marks.cleared.insert(id.to_string());
         self.marks.songs_done.remove(id);
         self.marks.albums_done.remove(id);
         self.marks.pending.remove(id);
+        self.marks.cleared.extend(songs.iter().cloned());
+        self.marks.cleared.extend(albums.iter().cloned());
+        self.marks.cleared.extend(row_ids.iter().cloned());
         for song in &songs {
             self.marks.songs_done.remove(song);
             self.marks.pending.remove(song);
@@ -1360,7 +1360,6 @@ mod clipboard_tests {
             album_id: String::new(),
             starred: false,
             rating: 0,
-            downloaded: false,
         }
     }
 

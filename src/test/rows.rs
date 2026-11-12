@@ -28,5 +28,4 @@ async fn counts_and_windows_an_ordered_surface() {
     assert_eq!(row.subtitle, "Artist · 2026");
     assert_eq!(row.meta, "1 tracks");
     assert_eq!(row.album_id, "al1");
-    assert!(!row.downloaded);
 }

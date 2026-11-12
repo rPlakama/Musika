@@ -261,7 +261,6 @@ pub async fn page(
             album_id: row.album_id.clone().unwrap_or_default(),
             starred: row.starred.is_some(),
             rating: 0,
-            downloaded: false,
         });
     }
 

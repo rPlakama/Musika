@@ -737,7 +737,6 @@ fn playlist_segment_row(row: &PlaylistListRow) -> crate::model::Row {
         album_id: String::new(),
         starred: false,
         rating: 0,
-        downloaded: false,
     }
 }
 
@@ -925,7 +924,6 @@ pub async fn page(
                 .and_then(|song| song.starred.as_ref())
                 .is_some(),
             rating: 0,
-            downloaded: false,
         });
     }
 

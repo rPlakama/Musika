@@ -127,7 +127,6 @@ pub(crate) async fn window(
                     album_id: album.id,
                     starred: album.starred.is_some(),
                     rating: album.rating,
-                    downloaded: false,
                 })
                 .collect()
         }
@@ -174,7 +173,6 @@ pub(crate) async fn window(
                         album_id: String::new(),
                         starred: artist.starred.is_some() || starred.contains(&artist.id),
                         rating: ratings.get(&artist.id).copied().unwrap_or(0),
-                        downloaded: false,
                     }
                 })
                 .collect()
@@ -212,7 +210,6 @@ pub(crate) async fn window(
                     album_id: song.album_id.unwrap_or_default(),
                     starred: song.starred.is_some(),
                     rating: 0,
-                    downloaded: false,
                 })
                 .collect()
         }

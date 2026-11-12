@@ -61,7 +61,6 @@ pub(crate) async fn library_rows(
                     album_id: album.id,
                     starred: album.starred.is_some(),
                     rating: album.rating,
-                    downloaded: false,
                 })
                 .collect())
         }
@@ -95,7 +94,6 @@ pub(crate) async fn library_rows(
                     album_id: String::new(),
                     starred: artist.starred.is_some(),
                     rating: 0,
-                    downloaded: false,
                 })
                 .collect())
         }
@@ -127,7 +125,6 @@ pub(crate) async fn library_rows(
                     album_id: song.album_id.unwrap_or_default(),
                     starred: song.starred.is_some(),
                     rating: 0,
-                    downloaded: false,
                 })
                 .collect())
         }
@@ -219,7 +216,6 @@ pub(crate) async fn page_data(
                     album_id: descriptor.id.clone(),
                     starred: song.starred.is_some(),
                     rating: 0,
-                    downloaded: false,
                 })
                 .collect();
             Ok((header, rows))
@@ -287,7 +283,6 @@ pub(crate) async fn page_data(
                     album_id: album.id,
                     starred: album.starred.is_some(),
                     rating: album.rating,
-                    downloaded: false,
                 })
                 .collect();
             Ok((header, rows))
@@ -326,7 +321,6 @@ pub(crate) async fn search_rows(
             album_id: String::new(),
             starred: artist.starred,
             rating: artist.rating,
-            downloaded: false,
         });
     }
     for album in results.albums.iter().take(limit) {
@@ -348,7 +342,6 @@ pub(crate) async fn search_rows(
             album_id: album.id.clone(),
             starred: album.starred,
             rating: album.rating,
-            downloaded: false,
         });
     }
     for song in results.songs.iter().take(limit) {
@@ -376,7 +369,6 @@ pub(crate) async fn search_rows(
             album_id: song.album_id.clone().unwrap_or_default(),
             starred: song.starred,
             rating: 0,
-            downloaded: false,
         });
     }
     for playlist in results.playlists.iter().take(limit) {
@@ -393,7 +385,6 @@ pub(crate) async fn search_rows(
             album_id: String::new(),
             starred: false,
             rating: 0,
-            downloaded: false,
         });
     }
     Ok((rows, most_played))

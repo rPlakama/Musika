@@ -37,6 +37,7 @@ pub(crate) mod daemon_client;
 #[cfg(debug_assertions)]
 mod debug;
 pub(crate) use crate::ipc_command;
+mod image_cache;
 mod line_search;
 mod lyrics_layout;
 mod metrics;
@@ -857,6 +858,11 @@ struct AppRoot {
     page: Option<PageState>,
     travel: Travel,
     page_generation: u64,
+    /// `(page_generation, page is open)` at the last prune. Page navigation
+    /// replaces `page` in several places; comparing this marker in render
+    /// guarantees stale per-page render state is dropped however the page
+    /// changed, without a prune call at every mutation site.
+    page_state_marker: Option<(u64, bool)>,
     search: Option<SearchState>,
     search_open: bool,
     search_loading_since: Option<f64>,
@@ -881,7 +887,10 @@ struct AppRoot {
     paste_backup: Option<(RowKind, Vec<String>)>,
     last_player_index: usize,
     visuals: Visuals,
-    image_cache: gpui::Entity<gpui::RetainAllImageCache>,
+    image_cache: gpui::Entity<image_cache::BoundedImageCache>,
+    /// Cover-cache diagnostics for `MUSIKA_FRAME_STATS` (refreshed once per frame).
+    image_cache_entries: usize,
+    image_cache_bytes: usize,
     row_scales:
         std::cell::RefCell<std::collections::HashMap<(LineSurface, usize, usize), RowEmphasis>>,
     library_hover_fill: anim::ColorBehavior,
@@ -1149,6 +1158,7 @@ impl AppRoot {
             page: None,
             travel: Travel::default(),
             page_generation: 0,
+            page_state_marker: None,
             search: None,
             search_open: false,
             search_loading_since: None,
@@ -1168,7 +1178,9 @@ impl AppRoot {
             paste_backup: None,
             last_player_index: 0,
             visuals: Visuals::default(),
-            image_cache: gpui::RetainAllImageCache::new(cx),
+            image_cache: image_cache::new_cache(cx),
+            image_cache_entries: 0,
+            image_cache_bytes: 0,
             row_scales: std::cell::RefCell::new(std::collections::HashMap::new()),
             library_hover_fill: anim::ColorBehavior::new(palette::surface()),
             page_hover_fill: anim::ColorBehavior::new(palette::surface()),

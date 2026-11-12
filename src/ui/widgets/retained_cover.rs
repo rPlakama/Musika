@@ -11,9 +11,10 @@ use std::time::Instant;
 
 use gpui::{
     App, Bounds, Corners, Element, ElementId, Entity, GlobalElementId, InspectorElementId,
-    IntoElement, LayoutId, Pixels, RenderImage, RetainAllImageCache, Style, Window, fill, px, rgb,
+    IntoElement, LayoutId, Pixels, RenderImage, Style, Window, fill, px, rgb,
 };
 
+use crate::ui::image_cache::BoundedImageCache;
 use crate::ui::widgets::media::CoverSource;
 
 /// Opt-in cover-load latency log (`MUSIKA_COVER_STATS=1`): row decode latency is
@@ -32,7 +33,7 @@ pub(crate) struct RetainedCover {
     id_name: &'static str,
     index: usize,
     source: Option<Arc<CoverSource>>,
-    cache: Entity<RetainAllImageCache>,
+    cache: Entity<BoundedImageCache>,
     size: f32,
     scale: f32,
     image: Option<Arc<RenderImage>>,
@@ -43,7 +44,7 @@ impl RetainedCover {
         id_name: &'static str,
         index: usize,
         source: Option<Arc<CoverSource>>,
-        cache: Entity<RetainAllImageCache>,
+        cache: Entity<BoundedImageCache>,
         size: f32,
         scale: f32,
     ) -> Self {

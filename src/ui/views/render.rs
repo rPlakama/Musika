@@ -19,7 +19,9 @@ impl Render for AppRoot {
             // up until the supervisor reports `Connected` (it retries in the
             // background, so the window appears immediately either way).
             self.focus.focus(window);
-            return self.core_waiting_view().into_any_element();
+            return self
+                .core_waiting_view(self.image_cache.clone())
+                .into_any_element();
         }
         if !self.activation_observed {
             self.activation_observed = true;
@@ -40,6 +42,28 @@ impl Render for AppRoot {
             crate::debug_log!("GPUI trace: frame {}", self.frames);
         }
         self.clock.tick();
+        // Cover images are finite: anything nothing asked for in the last two
+        // frames (a page we just left, a closed overlay) is unloaded here, so a
+        // travel session holds one screen's covers instead of every cover it
+        // ever showed.
+        self.image_cache
+            .update(cx, |cache, cx| cache.begin_frame(window, cx));
+        // Page entries are virtual: only the open page exists. Drop the render
+        // state keyed by the page just left as soon as the page identity moves,
+        // so a travel session keeps one page's worth of row/cover bookkeeping.
+        if crate::ui::app::navigation::needs_page_prune(
+            self.page_state_marker,
+            self.page_generation,
+            self.page.is_some(),
+        ) {
+            self.page_state_marker = Some((self.page_generation, self.page.is_some()));
+            self.prune_page_state();
+            // The released page's covers are unloaded on the next frame. Ask
+            // for that frame explicitly: otherwise the window can go idle right
+            // after the navigation and hold the retired page's covers until the
+            // user happens to touch the UI again.
+            perf::request_frame(window, "cover-release");
+        }
         let resized = previous_size.is_some_and(|(width, height)| {
             (width - viewport_w).abs() > 0.5 || (height - viewport_h).abs() > 0.5
         });
@@ -83,6 +107,7 @@ impl Render for AppRoot {
             // `track_focus` and `on_key_down`, leaving the fields uneditable.
             self.focus.focus(window);
             let login = div()
+                .image_cache(self.image_cache.clone())
                 .track_focus(&self.focus)
                 .on_key_down(cx.listener(Self::on_key_down))
                 .on_modifiers_changed(cx.listener(Self::on_modifiers_changed))
@@ -453,6 +478,10 @@ impl Render for AppRoot {
             .on_action(cx.listener(Self::on_back))
             .on_action(cx.listener(Self::on_prev_place))
             .on_action(cx.listener(Self::on_next_place))
+            // One bounded cover cache for the whole tree: every descendant
+            // `img()` (page hero, fullscreen art, player-bar cover, collages)
+            // resolves through it instead of gpui's retain-forever asset cache.
+            .image_cache(self.image_cache.clone())
             .flex()
             .flex_col()
             .size_full()
@@ -503,6 +532,11 @@ impl Render for AppRoot {
                 Some(o) => o,
                 None => div().into_any_element(),
             });
+        {
+            let cache = self.image_cache.read(cx);
+            self.image_cache_entries = cache.len();
+            self.image_cache_bytes = cache.used_bytes();
+        }
         perf::record_frame(frame_started, &*self);
         #[cfg(debug_assertions)]
         let root = root.child(frame_hud);
@@ -514,12 +548,16 @@ impl AppRoot {
     /// Minimal full-window surface shown when the core was not reachable at
     /// startup; `UiUpdate::Connected` clears `awaiting_core` and the real UI
     /// takes over.
-    fn core_waiting_view(&self) -> gpui::AnyElement {
+    fn core_waiting_view(
+        &self,
+        image_cache: gpui::Entity<image_cache::BoundedImageCache>,
+    ) -> gpui::AnyElement {
         let detail = self
             .reconnecting
             .clone()
             .unwrap_or_else(|| "Waiting for the core daemon…".to_string());
         div()
+            .image_cache(image_cache)
             .track_focus(&self.focus)
             .size_full()
             .flex()

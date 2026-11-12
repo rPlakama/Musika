@@ -551,19 +551,6 @@ impl AppRoot {
                                         .child(repeat_label(self.repeat)),
                                 )
                             })
-                            .child(icon(
-                                if muted {
-                                    "vol-mute-svgrepo-com.svg"
-                                } else if volume <= 1.0 {
-                                    "vol-zero-svgrepo-com.svg"
-                                } else if volume <= 33.0 {
-                                    "vol-low-svgrepo-com.svg"
-                                } else {
-                                    "vol-high-svgrepo-com.svg"
-                                },
-                                m.volume_icon,
-                                palette::on_surface_variant(),
-                            ))
                             .child(
                                 div()
                                     .w(px(m.volume_bar))

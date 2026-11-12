@@ -15,9 +15,10 @@ open work; this file is the release history.
   asks the core over the text socket in the background and shows the JSON reply
   in a toast (it used to hit a core-only `unreachable!` path).
 - Keep the bottom player bar on its 0.6.9 design (metadata, centred transport,
-  elapsed/total readout, speaker icon and the fixed-width volume bar): the
-  fullscreen playback block carries the new squashed layout instead. The
-  sticky muted toast no longer shows a speaker icon.
+  elapsed/total readout and the fixed-width volume bar), minus the speaker
+  icon: the bar no longer draws a volume glyph, and the fullscreen playback
+  block carries the new squashed layout instead. The sticky muted toast no
+  longer shows a speaker icon either.
 - Squash the fullscreen playback block: the artist shares the title line, the
   transport buttons, progress bar, times and a new volume meter share one
   control row (the key-hints line is gone; the hints stay in

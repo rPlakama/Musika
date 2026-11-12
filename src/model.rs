@@ -179,6 +179,23 @@ impl RowKind {
     }
 }
 
+/// The identity every item carries across playback, presentation and
+/// storage: the library id, the display title, the source album id and the
+/// resolved cover URLs. Surfacing types embed it (wire-compatible through
+/// `#[serde(flatten)]`) and project their own extras on top of it; DB rows
+/// convert with [`crate::library::SongRow::item_meta`].
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ItemMeta {
+    pub id: String,
+    pub title: String,
+    /// Source album id (empty when the item has none).
+    pub album_id: String,
+    pub cover_url: String,
+    /// Provider URL used when the cached row cover does not load.
+    pub cover_remote: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Row {
     pub id: String,

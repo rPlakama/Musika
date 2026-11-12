@@ -289,17 +289,19 @@ fn player_request_and_reply_frames_round_trip() {
 #[test]
 fn wire_track_never_carries_a_stream_url() {
     let track = crate::player::Track {
-        id: "song-1".to_string(),
-        title: "Title".to_string(),
+        item: crate::model::ItemMeta {
+            id: "song-1".to_string(),
+            title: "Title".to_string(),
+            album_id: "album".to_string(),
+            cover_url: "file:///tmp/cover".to_string(),
+            cover_remote: String::new(),
+        },
         artist: "Artist".to_string(),
         album: "Album".to_string(),
-        album_id: "album".to_string(),
         favorite: true,
         duration: 10.0,
         url: "https://user:secret@example.invalid/stream?token=abc".to_string(),
         cover_art: "cover".to_string(),
-        cover_url: "file:///tmp/cover".to_string(),
-        cover_remote: String::new(),
     };
     let wire = WireTrack::from(&track);
     let json = serde_json::to_string(&wire).unwrap();

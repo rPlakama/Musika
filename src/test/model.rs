@@ -116,3 +116,48 @@ fn item_kind_owns_the_canonical_vocabulary() {
     );
     assert_eq!(SuggestScope::Any.item_kind(), None);
 }
+
+#[test]
+fn track_flattens_the_shared_identity_on_the_wire() {
+    let track = crate::player::Track {
+        item: crate::model::ItemMeta {
+            id: "s1".to_string(),
+            title: "Song".to_string(),
+            album_id: "al1".to_string(),
+            cover_url: "file:///c".to_string(),
+            cover_remote: String::new(),
+        },
+        artist: "Artist".to_string(),
+        album: "Album".to_string(),
+        favorite: true,
+        duration: 12.0,
+        url: "file:///s1.flac".to_string(),
+        cover_art: "cov1".to_string(),
+    };
+    let json = serde_json::to_value(&track).unwrap();
+    assert_eq!(json["id"], "s1");
+    assert_eq!(json["title"], "Song");
+    assert_eq!(json["album_id"], "al1");
+    assert_eq!(json["cover_url"], "file:///c");
+    assert!(json.get("item").is_none(), "identity stays flattened");
+    // Field reads go through the shared identity.
+    assert_eq!(track.id, "s1");
+    assert_eq!(track.album_id, "al1");
+
+    // Payloads serialized before album_id/cover_remote existed still parse.
+    let legacy = serde_json::json!({
+        "id": "s2",
+        "title": "Old",
+        "artist": "Artist",
+        "album": "Album",
+        "favorite": false,
+        "duration": 1.0,
+        "url": "file:///s2.flac",
+        "cover_art": "",
+        "cover_url": "",
+    });
+    let track: crate::player::Track = serde_json::from_value(legacy).unwrap();
+    assert_eq!(track.id, "s2");
+    assert_eq!(track.album_id, "");
+    assert_eq!(track.cover_remote, "");
+}

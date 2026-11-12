@@ -31,17 +31,17 @@ const SECOND: u64 = 1_000_000_000;
 
 fn track(id: &str, duration: f64) -> Track {
     Track {
-        id: id.to_string(),
-        title: format!("Song {id}"),
+        item: crate::model::ItemMeta {
+            id: id.to_string(),
+            title: format!("Song {id}"),
+            ..crate::model::ItemMeta::default()
+        },
         artist: String::new(),
         album: String::new(),
-        album_id: String::new(),
         favorite: false,
         duration,
         url: format!("file:///{id}.flac"),
         cover_art: String::new(),
-        cover_url: String::new(),
-        cover_remote: String::new(),
     }
 }
 

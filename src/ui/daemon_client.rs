@@ -76,17 +76,13 @@ const WRITER_POLL: Duration = Duration::from_millis(50);
 /// Same wire body as [`crate::player::Track`] minus the stream URL.
 fn empty_track() -> Track {
     Track {
-        id: String::new(),
-        title: String::new(),
+        item: crate::model::ItemMeta::default(),
         artist: String::new(),
         album: String::new(),
-        album_id: String::new(),
         favorite: false,
         duration: 0.0,
         url: String::new(),
         cover_art: String::new(),
-        cover_url: String::new(),
-        cover_remote: String::new(),
     }
 }
 

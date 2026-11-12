@@ -381,16 +381,25 @@ pub struct WireTrack {
 impl From<&Track> for WireTrack {
     fn from(track: &Track) -> Self {
         Self {
-            id: track.id.clone(),
-            title: track.title.clone(),
             artist: track.artist.clone(),
             album: track.album.clone(),
-            album_id: track.album_id.clone(),
             favorite: track.favorite,
             duration: track.duration,
             cover_art: track.cover_art.clone(),
-            cover_url: track.cover_url.clone(),
-            cover_remote: track.cover_remote.clone(),
+            ..Self::from_meta(&track.item)
+        }
+    }
+}
+
+impl WireTrack {
+    fn from_meta(item: &crate::model::ItemMeta) -> Self {
+        Self {
+            id: item.id.clone(),
+            title: item.title.clone(),
+            album_id: item.album_id.clone(),
+            cover_url: item.cover_url.clone(),
+            cover_remote: item.cover_remote.clone(),
+            ..Self::default()
         }
     }
 }
@@ -398,17 +407,19 @@ impl From<&Track> for WireTrack {
 impl From<WireTrack> for Track {
     fn from(track: WireTrack) -> Self {
         Self {
-            id: track.id,
-            title: track.title,
             artist: track.artist,
             album: track.album,
-            album_id: track.album_id,
             favorite: track.favorite,
             duration: track.duration,
             url: String::new(),
             cover_art: track.cover_art,
-            cover_url: track.cover_url,
-            cover_remote: track.cover_remote,
+            item: crate::model::ItemMeta {
+                id: track.id,
+                title: track.title,
+                album_id: track.album_id,
+                cover_url: track.cover_url,
+                cover_remote: track.cover_remote,
+            },
         }
     }
 }

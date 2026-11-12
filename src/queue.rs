@@ -56,22 +56,21 @@ pub(crate) fn build_tracks(
 ) -> anyhow::Result<Vec<crate::player::Track>> {
     let mut tracks = Vec::with_capacity(songs.len());
     for song in songs {
+        let mut item = song.item_meta();
+        item.cover_url = crate::covers::url_for(song.cover_art.as_deref(), covers);
+        item.cover_remote = song
+            .cover_art
+            .as_deref()
+            .map(|id| crate::covers::provider_cover_url(client, id))
+            .unwrap_or_default();
         tracks.push(crate::player::Track {
-            id: song.id.clone(),
-            title: song.title.clone(),
+            item,
             artist: song.artist.clone().unwrap_or_default(),
             album: song.album.clone().unwrap_or_default(),
-            album_id: song.album_id.clone().unwrap_or_default(),
             favorite: song.starred.is_some(),
             duration: song.duration.unwrap_or(0) as f64,
             url: track_url(client, song, media)?,
             cover_art: song.cover_art.clone().unwrap_or_default(),
-            cover_url: crate::covers::url_for(song.cover_art.as_deref(), covers),
-            cover_remote: song
-                .cover_art
-                .as_deref()
-                .map(|id| crate::covers::provider_cover_url(client, id))
-                .unwrap_or_default(),
         });
     }
     Ok(tracks)

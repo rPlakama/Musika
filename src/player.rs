@@ -65,27 +65,35 @@ pub(crate) fn take_warm_native() -> Option<Result<pipewire::Native, String>> {
         .take()
 }
 
-/// A queued track, including the resolved `stream` URL.
+/// A queued track, including the resolved `stream` URL. The shared
+/// [`crate::model::ItemMeta`] carries the identity; playback adds the stream
+/// extras. Field reads go through `Deref`, so `track.title` stays valid.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Track {
-    pub id: String,
-    pub title: String,
+    #[serde(flatten)]
+    pub item: crate::model::ItemMeta,
     pub artist: String,
     pub album: String,
-    /// ARC-UI-1: source album id (the queue row's Go to Artist jump);
-    /// optional so payloads serialized before the field still deserialize.
-    #[serde(default)]
-    pub album_id: String,
     /// UI-56: the queue row's favourite mark; optional for old payloads.
     #[serde(default)]
     pub favorite: bool,
     pub duration: f64,
     pub url: String,
     pub cover_art: String,
-    pub cover_url: String,
-    /// Provider `getCoverArt` URL used when the cached copy does not load.
-    #[serde(default)]
-    pub cover_remote: String,
+}
+
+impl std::ops::Deref for Track {
+    type Target = crate::model::ItemMeta;
+
+    fn deref(&self) -> &Self::Target {
+        &self.item
+    }
+}
+
+impl std::ops::DerefMut for Track {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.item
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]

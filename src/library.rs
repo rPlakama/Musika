@@ -547,6 +547,21 @@ pub struct SongRow {
     pub starred: Option<String>,
 }
 
+impl SongRow {
+    /// The shared identity projection. The DB row only knows the cover id, so
+    /// the cover URL fields are filled by the playback/presentation builder
+    /// that resolves them.
+    pub fn item_meta(&self) -> crate::model::ItemMeta {
+        crate::model::ItemMeta {
+            id: self.id.clone(),
+            title: self.title.clone(),
+            album_id: self.album_id.clone().unwrap_or_default(),
+            cover_url: String::new(),
+            cover_remote: String::new(),
+        }
+    }
+}
+
 /// A row for the artist list.
 #[derive(Debug, Clone, FromRow, serde::Serialize)]
 pub struct ArtistRow {

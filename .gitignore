@@ -1,6 +1,7 @@
 /target
 result
 result/
+.nix-cache/
 .qmlls.ini
 .env
 noctalia/

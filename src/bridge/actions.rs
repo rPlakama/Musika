@@ -158,15 +158,17 @@ impl Bridge {
         crate::app::runtime().spawn(async move {
             let Some(dbs) = crate::app::dbs() else { return };
             let queued = match RowKind::from_api_kind(&kind) {
-                Some(RowKind::Playlist) => crate::queue::playlist_tracks_json(&dbs, &id, offline, 0)
-                    .await
-                    .map(|(json, _)| json),
+                Some(RowKind::Playlist) => {
+                    crate::queue::playlist_tracks(&dbs, &id, offline, 0)
+                        .await
+                        .map(|(tracks, _)| tracks)
+                }
                 Some(row_kind) => {
-                    crate::queue::quick_tracks_json(&dbs, row_kind.api_kind(), &id, offline).await
+                    crate::queue::quick_tracks(&dbs, row_kind.api_kind(), &id, offline).await
                 }
                 // Unknown kinds keep the pre-parse behaviour: the queue
                 // helper rejects them with its own message.
-                None => crate::queue::quick_tracks_json(&dbs, &kind, &id, offline).await,
+                None => crate::queue::quick_tracks(&dbs, &kind, &id, offline).await,
             };
             emit_append(&tx, queued, "Could not add to queue");
         });
@@ -179,20 +181,15 @@ impl Bridge {
         let offline = self.offline.load(Ordering::Relaxed);
         crate::app::runtime().spawn(async move {
             let Some(dbs) = crate::app::dbs() else { return };
-            match crate::queue::quick_tracks_json_many(&dbs, &kind, &ids, offline).await {
-                Ok(json) => match serde_json::from_str::<Vec<crate::player::Track>>(&json) {
-                    Ok(tracks) if tracks.is_empty() => {
-                        let _ = tx.send(Event::Error(
-                            "Could not paste: no tracks matched the row clipboard".to_string(),
-                        ));
-                    }
-                    Ok(tracks) => {
-                        let _ = tx.send(Event::QueuePaste { tracks, at });
-                    }
-                    Err(err) => {
-                        let _ = tx.send(Event::Error(format!("Could not paste: {err:#}")));
-                    }
-                },
+            match crate::queue::quick_tracks_many(&dbs, &kind, &ids, offline).await {
+                Ok(tracks) if tracks.is_empty() => {
+                    let _ = tx.send(Event::Error(
+                        "Could not paste: no tracks matched the row clipboard".to_string(),
+                    ));
+                }
+                Ok(tracks) => {
+                    let _ = tx.send(Event::QueuePaste { tracks, at });
+                }
                 Err(err) => {
                     let _ = tx.send(Event::Error(format!("Could not paste: {err:#}")));
                 }
@@ -225,9 +222,9 @@ impl Bridge {
             let Some(dbs) = crate::app::dbs() else { return };
             emit_queue_pair(
                 &tx,
-                crate::queue::playlist_tracks_json(&dbs, &id, offline, 0)
+                crate::queue::playlist_tracks(&dbs, &id, offline, 0)
                     .await
-                    .map(|(json, start)| (json, start as usize)),
+                    .map(|(tracks, start)| (tracks, start as usize)),
                 "Could not play the playlist",
             );
         });
@@ -241,7 +238,7 @@ impl Bridge {
             let Some(dbs) = crate::app::dbs() else { return };
             emit_queue(
                 &tx,
-                crate::queue::album_shuffle_json(&dbs, &album_id, offline).await,
+                crate::queue::album_shuffle_tracks(&dbs, &album_id, offline).await,
                 0,
                 "Could not shuffle the album",
             );
@@ -255,7 +252,7 @@ impl Bridge {
             let Some(dbs) = crate::app::dbs() else { return };
             emit_queue(
                 &tx,
-                crate::queue::artist_shuffle_json(&dbs, &artist_id, offline).await,
+                crate::queue::artist_shuffle_tracks(&dbs, &artist_id, offline).await,
                 0,
                 "Could not shuffle the artist",
             );
@@ -277,7 +274,7 @@ impl Bridge {
                     &query,
                 )
                 .await?;
-                crate::queue::album_shuffle_json(&dbs, &id, offline).await
+                crate::queue::album_shuffle_tracks(&dbs, &id, offline).await
             }
             .await;
             emit_queue(&tx, result, 0, "Could not shuffle the album");
@@ -297,7 +294,7 @@ impl Bridge {
                     &query,
                 )
                 .await?;
-                crate::queue::artist_shuffle_json(&dbs, &id, offline).await
+                crate::queue::artist_shuffle_tracks(&dbs, &id, offline).await
             }
             .await;
             emit_queue(&tx, result, 0, "Could not shuffle the artist");

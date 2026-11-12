@@ -535,9 +535,7 @@ pub(crate) async fn queue_for_song(
     order: &str,
 ) -> anyhow::Result<(Vec<crate::player::Track>, usize)> {
     let dbs = crate::app::dbs().ok_or_else(|| anyhow::anyhow!("databases not ready"))?;
-    let (json, start) = crate::queue::library_queue_payload(&dbs, song_id, order, false).await?;
-    let tracks = serde_json::from_str::<Vec<crate::player::Track>>(&json)?;
-    Ok((tracks, start))
+    crate::queue::library_queue(&dbs, song_id, order, false).await
 }
 
 pub(crate) fn unix_ms_for_cover() -> u128 {
@@ -553,40 +551,34 @@ pub(crate) fn send_event(tx: &UnboundedSender<Event>, event: Event) {
 
 pub(crate) fn emit_queue(
     tx: &UnboundedSender<Event>,
-    result: Result<String, anyhow::Error>,
+    result: Result<Vec<crate::player::Track>, anyhow::Error>,
     start: usize,
     context: &str,
 ) {
     match result {
-        Ok(json) => match serde_json::from_str::<Vec<crate::player::Track>>(&json) {
-            Ok(tracks) => send_event(tx, Event::Queue { tracks, start }),
-            Err(err) => send_event(tx, Event::Error(format!("{context}: {err:#}"))),
-        },
+        Ok(tracks) => send_event(tx, Event::Queue { tracks, start }),
         Err(err) => send_event(tx, Event::Error(format!("{context}: {err:#}"))),
     }
 }
 
 pub(crate) fn emit_queue_pair(
     tx: &UnboundedSender<Event>,
-    result: Result<(String, usize), anyhow::Error>,
+    result: Result<(Vec<crate::player::Track>, usize), anyhow::Error>,
     context: &str,
 ) {
     match result {
-        Ok((json, start)) => emit_queue(tx, Ok(json), start, context),
+        Ok((tracks, start)) => emit_queue(tx, Ok(tracks), start, context),
         Err(err) => emit_queue(tx, Err(err), 0, context),
     }
 }
 
 pub(crate) fn emit_append(
     tx: &UnboundedSender<Event>,
-    result: Result<String, anyhow::Error>,
+    result: Result<Vec<crate::player::Track>, anyhow::Error>,
     context: &str,
 ) {
     match result {
-        Ok(json) => match serde_json::from_str::<Vec<crate::player::Track>>(&json) {
-            Ok(tracks) => send_event(tx, Event::QueueAppend { tracks }),
-            Err(err) => send_event(tx, Event::Error(format!("{context}: {err:#}"))),
-        },
+        Ok(tracks) => send_event(tx, Event::QueueAppend { tracks }),
         Err(err) => send_event(tx, Event::Error(format!("{context}: {err:#}"))),
     }
 }

@@ -13,9 +13,9 @@ impl Bridge {
             let Some(dbs) = crate::app::dbs() else { return };
             emit_queue_pair(
                 &tx,
-                crate::radio::tracks_json(&dbs, &kind, &id, start_index as i64)
+                crate::radio::tracks(&dbs, &kind, &id, start_index as i64)
                     .await
-                    .map(|(json, start)| (json, start as usize)),
+                    .map(|(tracks, start)| (tracks, start as usize)),
                 "Could not start radio",
             );
         });
@@ -79,7 +79,7 @@ impl Bridge {
             let Some(dbs) = crate::app::dbs() else { return };
             emit_queue(
                 &tx,
-                crate::radio::shuffled_tracks_json(&dbs, &seed_kind, &seed_id, offline).await,
+                crate::radio::shuffled_tracks(&dbs, &seed_kind, &seed_id, offline).await,
                 0,
                 "Could not shuffle the radio",
             );
@@ -92,8 +92,8 @@ impl Bridge {
         let tx = self.tx.clone();
         crate::app::runtime().spawn(async move {
             let Some(dbs) = crate::app::dbs() else { return };
-            let json = match crate::radio::tracks_json(&dbs, &seed_kind, &seed_id, 0).await {
-                Ok((json, _)) => json,
+            let tracks = match crate::radio::tracks(&dbs, &seed_kind, &seed_id, 0).await {
+                Ok((tracks, _)) => tracks,
                 Err(err) => {
                     let _ = tx.send(Event::Error(format!(
                         "Could not add the radio to the queue: {err:#}"
@@ -101,7 +101,7 @@ impl Bridge {
                     return;
                 }
             };
-            emit_append(&tx, Ok(json), "Could not add the radio to the queue");
+            emit_append(&tx, Ok(tracks), "Could not add the radio to the queue");
         });
     }
 
@@ -200,9 +200,9 @@ impl Bridge {
                         id.clone(),
                     ),
                 });
-                crate::radio::tracks_json(&dbs, &kind, &id, start_index as i64)
+                crate::radio::tracks(&dbs, &kind, &id, start_index as i64)
                     .await
-                    .map(|(json, start)| (json, start as usize))
+                    .map(|(tracks, start)| (tracks, start as usize))
             }
             .await;
             emit_queue_pair(&tx, result, "Could not start radio");

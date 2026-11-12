@@ -271,32 +271,32 @@ pub async fn page_json(
 }
 /// The radio queue: the same similar-song list, in server order. The clicked
 /// row becomes the queue start.
-pub async fn tracks_json(
+pub async fn tracks(
     dbs: &crate::db::Dbs,
     seed_kind: &str,
     seed_id: &str,
     start: i64,
-) -> Result<(String, i64)> {
+) -> Result<(Vec<crate::player::Track>, i64)> {
     let songs = radio_rows(dbs, seed_kind, seed_id).await?;
     let start = start.clamp(0, songs.len().saturating_sub(1) as i64);
-    Ok((crate::queue::tracks_json(dbs, songs).await?, start))
+    Ok((crate::queue::tracks(dbs, songs).await?, start))
 }
 
 /// Shuffled radio queue: the page's generated rows, in a fresh Fisher–Yates
 /// order. Used by the Radio Tool board's Shuffle action.
-pub async fn shuffled_tracks_json(
+pub async fn shuffled_tracks(
     dbs: &crate::db::Dbs,
     seed_kind: &str,
     seed_id: &str,
     offline: bool,
-) -> Result<String> {
+) -> Result<Vec<crate::player::Track>> {
     let mut songs = radio_rows(dbs, seed_kind, seed_id).await?;
     if songs.is_empty() {
         return Err(anyhow!("this radio has no songs to shuffle"));
     }
     crate::queue::shuffle_songs(&mut songs, crate::consts::now_nanos());
     crate::offline::retain_songs(dbs, offline, &mut songs).await?;
-    crate::queue::tracks_json(dbs, songs).await
+    crate::queue::tracks(dbs, songs).await
 }
 
 /// Saves the generated radio twice: an app-owned M3U in the local playlist

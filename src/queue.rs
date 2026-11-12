@@ -25,8 +25,6 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-use serde::ser::{Error as _, Serialize, SerializeSeq, SerializeStruct, Serializer};
-
 use crate::http_client::SubsonicClient;
 
 /// CACHE-1 local-first: a cached blob is handed to the native decoder as a `file://` URL,
@@ -45,101 +43,75 @@ pub(crate) fn track_url(
     Ok(url.to_string())
 }
 
-/// One `player::Track` row, streamed straight from its `SongRow`.
+/// Build the `player::Track` rows every queue consumer shares.
 ///
-/// The old path built a full `Vec<Track>` (moving every string) and then
-/// serialized it, so a library-wide queue held both the row vector and the
-/// JSON string. Borrowing the row and only owning the computed stream URL
-/// removes that intermediate vector.
-struct TrackElement<'a> {
-    song: &'a crate::library::SongRow,
-    url: &'a str,
-    cover_url: &'a str,
-    cover_remote: String,
-}
-
-impl Serialize for TrackElement<'_> {
-    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        let mut state = serializer.serialize_struct("track", 16)?;
-        state.serialize_field("id", &self.song.id)?;
-        state.serialize_field("title", &self.song.title)?;
-        state.serialize_field("artist", self.song.artist.as_deref().unwrap_or_default())?;
-        state.serialize_field("album", self.song.album.as_deref().unwrap_or_default())?;
-        state.serialize_field(
-            "album_id",
-            self.song.album_id.as_deref().unwrap_or_default(),
-        )?;
-        state.serialize_field("favorite", &self.song.starred.is_some())?;
-        state.serialize_field("duration", &(self.song.duration.unwrap_or(0) as f64))?;
-        state.serialize_field("url", self.url)?;
-        state.serialize_field(
-            "cover_art",
-            self.song.cover_art.as_deref().unwrap_or_default(),
-        )?;
-        state.serialize_field("cover_url", self.cover_url)?;
-        state.serialize_field("cover_remote", &self.cover_remote)?;
-        state.serialize_field("subtitle", self.song.artist.as_deref().unwrap_or_default())?;
-        state.serialize_field(
-            "meta",
-            &crate::browse::rows::format_duration(self.song.duration),
-        )?;
-        state.serialize_field("songId", &self.song.id)?;
-        state.serialize_field("albumId", self.song.album_id.as_deref().unwrap_or_default())?;
-        state.serialize_field("starred", &self.song.starred.is_some())?;
-        state.end()
-    }
-}
-
-pub(crate) struct TrackRows<'a> {
-    pub(crate) songs: &'a [crate::library::SongRow],
-    pub(crate) client: &'a SubsonicClient,
-    pub(crate) covers: &'a HashMap<String, String>,
-    pub(crate) media: &'a HashMap<String, PathBuf>,
-}
-
-impl Serialize for TrackRows<'_> {
-    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        let mut seq = serializer.serialize_seq(Some(self.songs.len()))?;
-        for song in self.songs {
-            let url = track_url(self.client, song, self.media).map_err(S::Error::custom)?;
-            let cover_url = crate::covers::url_for_ref(song.cover_art.as_deref(), self.covers);
-            let cover_remote = song
+/// The old path streamed a bespoke 16-field JSON shape and every consumer
+/// decoded it straight back into this struct; the queue events carry
+/// `Vec<Track>` themselves, so the mapping happens once, here.
+pub(crate) fn build_tracks(
+    client: &SubsonicClient,
+    songs: &[crate::library::SongRow],
+    covers: &HashMap<String, String>,
+    media: &HashMap<String, PathBuf>,
+) -> anyhow::Result<Vec<crate::player::Track>> {
+    let mut tracks = Vec::with_capacity(songs.len());
+    for song in songs {
+        tracks.push(crate::player::Track {
+            id: song.id.clone(),
+            title: song.title.clone(),
+            artist: song.artist.clone().unwrap_or_default(),
+            album: song.album.clone().unwrap_or_default(),
+            album_id: song.album_id.clone().unwrap_or_default(),
+            favorite: song.starred.is_some(),
+            duration: song.duration.unwrap_or(0) as f64,
+            url: track_url(client, song, media)?,
+            cover_art: song.cover_art.clone().unwrap_or_default(),
+            cover_url: crate::covers::url_for(song.cover_art.as_deref(), covers),
+            cover_remote: song
                 .cover_art
                 .as_deref()
-                .map(|id| crate::covers::provider_cover_url(self.client, id))
-                .unwrap_or_default();
-            seq.serialize_element(&TrackElement {
-                song,
-                url: &url,
-                cover_url,
-                cover_remote,
-            })?;
-        }
-        seq.end()
+                .map(|id| crate::covers::provider_cover_url(client, id))
+                .unwrap_or_default(),
+        });
     }
+    Ok(tracks)
+}
+
+/// Resolve the cached/stream URL map for `songs` and build their queue rows.
+pub(crate) async fn tracks(
+    dbs: &crate::db::Dbs,
+    songs: Vec<crate::library::SongRow>,
+) -> anyhow::Result<Vec<crate::player::Track>> {
+    let client = crate::session::client(dbs).await?;
+    let covers = crate::covers::url_map_for(dbs, songs.iter().map(|song| &song.cover_art)).await?;
+    let song_ids: Vec<String> = songs.iter().map(|song| song.id.clone()).collect();
+    let media = crate::media::path_map_of(&dbs.media, &song_ids)
+        .await
+        .unwrap_or_default();
+    build_tracks(&client, &songs, &covers, &media)
 }
 
 /// CACHE-9: while offline, only downloaded songs are playable — drop the
 /// rest from a queue that is about to be built.
-pub async fn album_tracks_json(
+pub async fn album_tracks(
     dbs: &crate::db::Dbs,
     album_id: &str,
     offline: bool,
-) -> anyhow::Result<String> {
+) -> anyhow::Result<Vec<crate::player::Track>> {
     let mut songs = crate::library::album_songs(&dbs.library, album_id).await?;
     crate::offline::retain_songs(dbs, offline, &mut songs).await?;
-    tracks_json(dbs, songs).await
+    tracks(dbs, songs).await
 }
 
 /// The playlist queue: playlist order preserved, duplicate tracks kept,
 /// missing/offline rows skipped, and the clicked row translated to its
 /// playable queue index.
-pub async fn playlist_tracks_json(
+pub async fn playlist_tracks(
     dbs: &crate::db::Dbs,
     playlist_id: &str,
     offline: bool,
     start_row: i64,
-) -> anyhow::Result<(String, i64)> {
+) -> anyhow::Result<(Vec<crate::player::Track>, i64)> {
     #[derive(sqlx::FromRow)]
     struct PlaylistSong {
         position: i64,
@@ -196,18 +168,18 @@ pub async fn playlist_tracks_json(
         }
         songs.push(song);
     }
-    Ok((tracks_json(dbs, songs).await?, start))
+    Ok((tracks(dbs, songs).await?, start))
 }
 
 /// The artist's shuffle queue: the artist's albums (the albums table's
 /// mapping) Fisher–Yates shuffled, each expanding to its tracklist — one
 /// album after another until the array ends. The queue holds the songs of
 /// that order, header first.
-pub async fn artist_shuffle_json(
+pub async fn artist_shuffle_tracks(
     dbs: &crate::db::Dbs,
     artist_id: &str,
     offline: bool,
-) -> anyhow::Result<String> {
+) -> anyhow::Result<Vec<crate::player::Track>> {
     let mut albums = crate::library::artist_album_ids(&dbs.library, artist_id).await?;
     if albums.is_empty() {
         return Err(anyhow::anyhow!("this artist has no albums to shuffle"));
@@ -219,22 +191,22 @@ pub async fn artist_shuffle_json(
         songs.extend(crate::library::album_songs(&dbs.library, album).await?);
     }
     crate::offline::retain_songs(dbs, offline, &mut songs).await?;
-    tracks_json(dbs, songs).await
+    tracks(dbs, songs).await
 }
 
 /// Shuffle one album's tracklist for an explicit "Shuffle Album" action.
-pub async fn album_shuffle_json(
+pub async fn album_shuffle_tracks(
     dbs: &crate::db::Dbs,
     album_id: &str,
     offline: bool,
-) -> anyhow::Result<String> {
+) -> anyhow::Result<Vec<crate::player::Track>> {
     let mut songs = crate::library::album_songs(&dbs.library, album_id).await?;
     if songs.is_empty() {
         return Err(anyhow::anyhow!("this album has no tracks to shuffle"));
     }
     shuffle_songs(&mut songs, crate::consts::now_nanos());
     crate::offline::retain_songs(dbs, offline, &mut songs).await?;
-    tracks_json(dbs, songs).await
+    tracks(dbs, songs).await
 }
 
 pub(crate) fn shuffle_songs(songs: &mut [crate::library::SongRow], seed: u128) {
@@ -295,16 +267,16 @@ pub(crate) fn library_start(
 /// as the starting row. The whole index (not a forward window) is queued so
 /// the tracks before the clicked one stay reachable; the rows are local, so
 /// there is nothing to extend lazily.
-pub async fn library_queue_payload(
+pub async fn library_queue(
     dbs: &crate::db::Dbs,
     song_id: &str,
     order: &str,
     offline: bool,
-) -> anyhow::Result<(String, usize)> {
+) -> anyhow::Result<(Vec<crate::player::Track>, usize)> {
     let mut songs = crate::library::all_songs(&dbs.library, order).await?;
     crate::offline::retain_songs(dbs, offline, &mut songs).await?;
     let start = library_start(&songs, song_id)?;
-    Ok((tracks_json(dbs, songs).await?, start))
+    Ok((tracks(dbs, songs).await?, start))
 }
 
 /// Index of `song_id` in its album's track order (0 when it vanished from a
@@ -327,58 +299,6 @@ pub(crate) fn snapshot_start(ids: &[String], songs: &[crate::library::SongRow], 
     queue_start(songs, current)
 }
 
-/// Album metadata for UI pages (AlbumEntry header), cover resolved.
-fn queue_album_json(
-    album: &crate::library::AlbumRow,
-    covers: &HashMap<String, String>,
-) -> serde_json::Value {
-    crate::browse::album_json(album, covers, None)
-}
-
-/// Single pumped event for "play this song inside its album": the serialized
-/// queue and the start index. The album page is a separate `open_album`
-/// event (`song_album_page_json`) emitted first, so the page is not held back
-/// by the queue serialization. `album` stays in the payload as null for shape
-/// compatibility.
-pub async fn song_album_payload(
-    dbs: &crate::db::Dbs,
-    song_id: &str,
-    offline: bool,
-) -> anyhow::Result<String> {
-    let Some(song) = crate::library::song(&dbs.library, song_id).await? else {
-        return Err(anyhow::anyhow!("song not found in index"));
-    };
-    let Some(album_id) = song.album_id.as_deref().filter(|id| !id.is_empty()) else {
-        let mut songs = vec![song];
-        crate::offline::retain_songs(dbs, offline, &mut songs).await?;
-        if songs.is_empty() {
-            return Err(anyhow::anyhow!("song is not downloaded"));
-        }
-        let queue = tracks_json(dbs, songs).await?;
-        return Ok(serde_json::json!({
-            "queue": queue,
-            "start": 0,
-            "album": serde_json::Value::Null,
-        })
-        .to_string());
-    };
-
-    let mut songs = crate::library::album_songs(&dbs.library, album_id).await?;
-    crate::offline::retain_songs(dbs, offline, &mut songs).await?;
-    let start = queue_start(&songs, &song.id);
-    let queue = tracks_json(dbs, songs).await?;
-
-    // The album page is emitted first as `open_album`; the queue event
-    // carries only the tracks so the page is not held back by the cover
-    // lookup. The field stays for payload-shape compatibility.
-    Ok(serde_json::json!({
-        "queue": queue,
-        "start": start,
-        "album": serde_json::Value::Null,
-    })
-    .to_string())
-}
-
 /// Rows for the ARC-43 "Add to Queue" overlay: one song or a whole album.
 pub async fn quick_songs(
     dbs: &crate::db::Dbs,
@@ -396,19 +316,6 @@ pub async fn quick_songs(
     }
 }
 
-/// Serialized tracks for the ARC-43 "Add to Queue" overlay (the overlay is
-/// offline-filtered like every other queue).
-pub async fn quick_tracks_json(
-    dbs: &crate::db::Dbs,
-    kind: &str,
-    id: &str,
-    offline: bool,
-) -> anyhow::Result<String> {
-    let mut songs = quick_songs(dbs, kind, id).await?;
-    crate::offline::retain_songs(dbs, offline, &mut songs).await?;
-    tracks_json(dbs, songs).await
-}
-
 /// VI-4: expands one visual selection (same kind, several ids) to rows.
 pub(crate) async fn quick_songs_many(
     dbs: &crate::db::Dbs,
@@ -422,110 +329,53 @@ pub(crate) async fn quick_songs_many(
     Ok(songs)
 }
 
-/// Batch twin of [`quick_tracks_json`] for a visual selection (VI-4): the
-/// selected ids are resolved and offline-filtered as one queue append.
-pub async fn quick_tracks_json_many(
+/// Typed queue rows for the ARC-43 "Add to Queue" overlay (offline-filtered
+/// like every other queue).
+pub async fn quick_tracks(
+    dbs: &crate::db::Dbs,
+    kind: &str,
+    id: &str,
+    offline: bool,
+) -> anyhow::Result<Vec<crate::player::Track>> {
+    let mut songs = quick_songs(dbs, kind, id).await?;
+    crate::offline::retain_songs(dbs, offline, &mut songs).await?;
+    tracks(dbs, songs).await
+}
+
+/// Batch twin of [`quick_tracks`] for a visual selection (VI-4).
+pub async fn quick_tracks_many(
     dbs: &crate::db::Dbs,
     kind: &str,
     ids: &[String],
     offline: bool,
-) -> anyhow::Result<String> {
+) -> anyhow::Result<Vec<crate::player::Track>> {
     let mut songs = quick_songs_many(dbs, kind, ids).await?;
     crate::offline::retain_songs(dbs, offline, &mut songs).await?;
-    tracks_json(dbs, songs).await
+    tracks(dbs, songs).await
 }
 
-/// Album-page payload for ARC-43 "Go to Album" (navigation only, no queue):
-/// the same JSON shape [`queue_album_json`] gives the album page.
-pub async fn song_album_page_json(dbs: &crate::db::Dbs, song_id: &str) -> anyhow::Result<String> {
-    let song = crate::library::song(&dbs.library, song_id)
-        .await?
-        .ok_or_else(|| anyhow::anyhow!("song not found in index"))?;
-    let album_id = song
-        .album_id
-        .as_deref()
-        .filter(|id| !id.is_empty())
-        .ok_or_else(|| anyhow::anyhow!("song has no album"))?;
-    let album = crate::library::album(&dbs.library, album_id)
-        .await?
-        .ok_or_else(|| anyhow::anyhow!("album not found in index"))?;
-    let cover_ids: Vec<String> = album.cover_art.clone().into_iter().collect();
-    let covers = crate::covers::url_map_of(dbs, &cover_ids).await?;
-    let mut page = queue_album_json(&album, &covers);
-    // The page may open from a song hit or the Go to Album verb; carrying
-    // the song id lets AlbumEntry park its cursor on that row.
-    page["song_id"] = serde_json::json!(song_id);
-    Ok(page.to_string())
+/// Restored playback session: the queue rows, their start index and the
+/// remembered playhead (S2/S3 resume, P-6). The consumers used to decode a
+/// `{album, queue, start, position}` JSON envelope back into exactly this.
+pub struct Resume {
+    pub tracks: Vec<crate::player::Track>,
+    pub start: usize,
+    pub position: f64,
 }
 
-/// Artist-page payload for ARC-43 "Go to Artist" (navigation only).
-pub async fn album_artist_page_json(
-    dbs: &crate::db::Dbs,
-    album_id: &str,
-) -> anyhow::Result<String> {
-    let artist_id = crate::library::album_artist_id(&dbs.library, album_id)
-        .await?
-        .ok_or_else(|| anyhow::anyhow!("album has no artist"))?;
-    let artist = crate::library::artist(&dbs.library, &artist_id)
-        .await?
-        .ok_or_else(|| anyhow::anyhow!("artist not found in index"))?;
-    let cover_ids: Vec<String> = artist.cover_art.clone().into_iter().collect();
-    let covers = crate::covers::url_map_of(dbs, &cover_ids).await?;
-    let cover = crate::covers::url_for(artist.cover_art.as_deref(), &covers);
-    Ok(serde_json::json!({
-        "id": artist.id,
-        "name": artist.name,
-        "album_count": artist.album_count,
-        "cover": cover,
-    })
-    .to_string())
-}
-
-/// S2/S3 resume payload (P-6): validates the remembered ids against the
-/// local index and returns `{album, queue, start, position}` — the album
-/// page to reopen (or null) and the restored queue (or ""), already pointing
-/// at the remembered track, plus the saved playhead. The S3 queue snapshot
-/// wins; pre-S3 rows fall back to the song's album queue. Unknown ids are
-/// dropped silently, exactly like a first launch.
-pub async fn resume_payload(
+/// S2/S3 resume (P-6): validates the remembered ids against the local index
+/// and returns the restored queue, already pointing at the remembered track,
+/// plus the saved playhead. The S3 queue snapshot wins; pre-S3 rows fall back
+/// to the song's album queue. Unknown ids are dropped silently, exactly like
+/// a first launch, and an unavailable stream client degrades to an empty
+/// queue instead of failing the login.
+pub async fn resume(
     dbs: &crate::db::Dbs,
     status: &crate::status::SessionStatus,
     offline: bool,
-) -> anyhow::Result<String> {
-    // CACHE-9: offline, only downloaded content comes back; the album page
-    // reopens only when it owns downloads.
-    let offline_albums = if offline {
-        let songs = crate::download::downloaded_song_ids(dbs).await?;
-        let ids: Vec<String> = songs.into_iter().collect();
-        Some(
-            crate::library::downloaded_owners(&dbs.library, &ids)
-                .await?
-                .0,
-        )
-    } else {
-        None
-    };
-
-    let album = match status.album_id.as_deref().filter(|id| !id.is_empty()) {
-        Some(album_id)
-            if offline_albums
-                .as_ref()
-                .is_none_or(|albums| albums.contains_key(album_id)) =>
-        {
-            match crate::library::album(&dbs.library, album_id).await? {
-                Some(album) => {
-                    let cover_ids: Vec<String> = album.cover_art.clone().into_iter().collect();
-                    let covers = crate::covers::url_map_of(dbs, &cover_ids).await?;
-                    Some(queue_album_json(&album, &covers))
-                }
-                None => None,
-            }
-        }
-        _ => None,
-    };
-
-    let mut queue = String::new();
-    let mut start = 0i64;
+) -> anyhow::Result<Resume> {
+    let mut queue = Vec::new();
+    let mut start = 0usize;
     // S3: the queue snapshot (exact order, manual edits included) wins over
     // the S2 song -> album rebuild. Stale ids are dropped and the index
     // follows the remembered current song.
@@ -535,12 +385,12 @@ pub async fn resume_payload(
         crate::offline::retain_songs(dbs, offline, &mut songs).await?;
         if !songs.is_empty() {
             let index = snapshot_start(&snapshot, &songs, status.queue_index);
-            // No credentials yet (or a stream URL failure) degrades to just
-            // the album page: resume must never fail the login.
-            match tracks_json(dbs, songs).await {
-                Ok(json) => {
-                    queue = json;
-                    start = index;
+            // No credentials yet (or a stream URL failure) degrades to an
+            // empty queue: resume must never fail the login.
+            match tracks(dbs, songs).await {
+                Ok(built) => {
+                    queue = built;
+                    start = index.max(0) as usize;
                 }
                 Err(err) => {
                     eprintln!("status: could not rebuild the resumed queue: {err:#}");
@@ -557,10 +407,10 @@ pub async fn resume_payload(
             };
             crate::offline::retain_songs(dbs, offline, &mut songs).await?;
             let index = queue_start(&songs, &song_id);
-            match tracks_json(dbs, songs).await {
-                Ok(json) => {
-                    queue = json;
-                    start = index;
+            match tracks(dbs, songs).await {
+                Ok(built) => {
+                    queue = built;
+                    start = index.max(0) as usize;
                 }
                 Err(err) => {
                     eprintln!("status: could not rebuild the resumed queue: {err:#}");
@@ -568,31 +418,9 @@ pub async fn resume_payload(
             }
         }
     }
-
-    Ok(serde_json::json!({
-        "album": album.unwrap_or(serde_json::Value::Null),
-        "queue": queue,
-        "start": start,
-        "position": status.position,
+    Ok(Resume {
+        tracks: queue,
+        start,
+        position: status.position,
     })
-    .to_string())
-}
-
-pub(crate) async fn tracks_json(
-    dbs: &crate::db::Dbs,
-    songs: Vec<crate::library::SongRow>,
-) -> anyhow::Result<String> {
-    let client = crate::session::client(dbs).await?;
-    let covers = crate::covers::url_map_for(dbs, songs.iter().map(|song| &song.cover_art)).await?;
-    let song_ids: Vec<String> = songs.iter().map(|song| song.id.clone()).collect();
-    let media = crate::media::path_map_of(&dbs.media, &song_ids)
-        .await
-        .unwrap_or_default();
-
-    Ok(serde_json::to_string(&TrackRows {
-        songs: &songs,
-        client: &client,
-        covers: &covers,
-        media: &media,
-    })?)
 }

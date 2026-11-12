@@ -10,19 +10,16 @@ impl Bridge {
             let Ok(Some(status)) = crate::status::load(&dbs.status).await else {
                 return;
             };
-            let resume = crate::queue::resume_payload(&dbs, &status, false)
-                .await
-                .ok();
-            let value: serde_json::Value = resume
-                .as_deref()
-                .and_then(|raw| serde_json::from_str(raw).ok())
-                .unwrap_or(serde_json::Value::Null);
-            let tracks = value["queue"]
-                .as_str()
-                .and_then(|json| serde_json::from_str::<Vec<crate::player::Track>>(json).ok())
+            let resume = crate::queue::resume(&dbs, &status, false).await.ok();
+            let tracks = resume
+                .as_ref()
+                .map(|resume| resume.tracks.clone())
                 .unwrap_or_default();
-            let start = value["start"].as_u64().unwrap_or(0) as usize;
-            let position = value["position"].as_f64().unwrap_or(status.position);
+            let start = resume.as_ref().map(|resume| resume.start).unwrap_or(0);
+            let position = resume
+                .as_ref()
+                .map(|resume| resume.position)
+                .unwrap_or(status.position);
             crate::debug_log!(
                 "GPUI: restore {} tracks start {} position {:.1}",
                 tracks.len(),
@@ -65,7 +62,7 @@ impl Bridge {
             let Some(dbs) = crate::app::dbs() else { return };
             emit_queue(
                 &tx,
-                crate::queue::album_tracks_json(&dbs, &album_id, offline).await,
+                crate::queue::album_tracks(&dbs, &album_id, offline).await,
                 start,
                 "Could not play album",
             );
@@ -93,28 +90,21 @@ impl Bridge {
                     return;
                 }
             };
-            match crate::queue::album_tracks_json(&dbs, &id, offline).await {
-                Ok(json) => match serde_json::from_str::<Vec<crate::player::Track>>(&json) {
-                    Ok(tracks) if !tracks.is_empty() => {
-                        let _ = tx.send(Event::Queue { tracks, start: 0 });
-                        let _ = tx.send(Event::OpenPage {
-                            descriptor: super::super::model::PageDescriptor::new(
-                                super::super::model::PageKind::Album,
-                                id,
-                            ),
-                        });
-                    }
-                    Ok(_) => {
-                        let _ = tx.send(Event::Error(
-                            "The random album has no playable tracks.".to_string(),
-                        ));
-                    }
-                    Err(err) => {
-                        let _ = tx.send(Event::Error(format!(
-                            "Could not read the random album: {err:#}"
-                        )));
-                    }
-                },
+            match crate::queue::album_tracks(&dbs, &id, offline).await {
+                Ok(tracks) if !tracks.is_empty() => {
+                    let _ = tx.send(Event::Queue { tracks, start: 0 });
+                    let _ = tx.send(Event::OpenPage {
+                        descriptor: crate::model::PageDescriptor::new(
+                            crate::model::PageKind::Album,
+                            id,
+                        ),
+                    });
+                }
+                Ok(_) => {
+                    let _ = tx.send(Event::Error(
+                        "The random album has no playable tracks.".to_string(),
+                    ));
+                }
                 Err(err) => {
                     let _ = tx.send(Event::Error(format!(
                         "Could not load the random album: {err:#}"
@@ -138,27 +128,20 @@ impl Bridge {
                 let _ = tx.send(Event::Error("That song has no album to open.".to_string()));
                 return;
             };
-            match crate::queue::album_tracks_json(&dbs, &album_id, offline).await {
-                Ok(json) => match serde_json::from_str::<Vec<crate::player::Track>>(&json) {
-                    Ok(tracks) => {
-                        let start = tracks
-                            .iter()
-                            .position(|track| track.id == song_id)
-                            .unwrap_or(0);
-                        let _ = tx.send(Event::Queue { tracks, start });
-                        let _ = tx.send(Event::OpenPage {
-                            descriptor: crate::model::PageDescriptor::new(
-                                crate::model::PageKind::Album,
-                                album_id,
-                            ),
-                        });
-                    }
-                    Err(err) => {
-                        let _ = tx.send(Event::Error(format!(
-                            "Could not play the song's album: {err:#}"
-                        )));
-                    }
-                },
+            match crate::queue::album_tracks(&dbs, &album_id, offline).await {
+                Ok(tracks) => {
+                    let start = tracks
+                        .iter()
+                        .position(|track| track.id == song_id)
+                        .unwrap_or(0);
+                    let _ = tx.send(Event::Queue { tracks, start });
+                    let _ = tx.send(Event::OpenPage {
+                        descriptor: crate::model::PageDescriptor::new(
+                            crate::model::PageKind::Album,
+                            album_id,
+                        ),
+                    });
+                }
                 Err(err) => {
                     let _ = tx.send(Event::Error(format!(
                         "Could not play the song's album: {err:#}"

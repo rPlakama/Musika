@@ -17,7 +17,7 @@ fn song_row(id: &str) -> crate::library::SongRow {
 }
 
 #[test]
-fn track_rows_stream_the_player_track_shape() {
+fn typed_tracks_carry_the_player_track_shape() {
     let client =
         crate::http_client::SubsonicClient::new("https://music.example", "alice", "secret");
     let mut song = song_row("s1");
@@ -26,14 +26,7 @@ fn track_rows_stream_the_player_track_shape() {
     let covers = HashMap::from([("cov1".to_string(), "file:///covers/cov1.jpg".to_string())]);
     let media = HashMap::from([("s1".to_string(), PathBuf::from("/media/s1.flac"))]);
 
-    let json = serde_json::to_string(&TrackRows {
-        songs: std::slice::from_ref(&song),
-        client: &client,
-        covers: &covers,
-        media: &media,
-    })
-    .unwrap();
-    let tracks: Vec<crate::player::Track> = serde_json::from_str(&json).unwrap();
+    let tracks = build_tracks(&client, std::slice::from_ref(&song), &covers, &media).unwrap();
     assert_eq!(tracks.len(), 1);
     let track = &tracks[0];
     assert_eq!(track.id, "s1");
@@ -44,6 +37,7 @@ fn track_rows_stream_the_player_track_shape() {
     assert_eq!(track.duration, 200.0);
     assert_eq!(track.cover_art, "cov1");
     assert_eq!(track.cover_url, "file:///covers/cov1.jpg");
+    assert!(track.cover_remote.contains("getCoverArt"));
     assert_eq!(
         track.url,
         reqwest::Url::from_file_path("/media/s1.flac")
@@ -51,86 +45,21 @@ fn track_rows_stream_the_player_track_shape() {
             .to_string()
     );
 
-    // No cached blob and no art: the stream URL is used and the
-    // cover fields are empty, matching the old `build_track` defaults.
+    // No cached blob and no art: the stream URL is used and the cover fields
+    // are empty.
     let plain = song_row("s2");
-    let json = serde_json::to_string(&TrackRows {
-        songs: std::slice::from_ref(&plain),
-        client: &client,
-        covers: &HashMap::new(),
-        media: &HashMap::new(),
-    })
+    let tracks = build_tracks(
+        &client,
+        std::slice::from_ref(&plain),
+        &HashMap::new(),
+        &HashMap::new(),
+    )
     .unwrap();
-    let tracks: Vec<crate::player::Track> = serde_json::from_str(&json).unwrap();
     assert!(tracks[0].url.contains("stream"));
     assert_eq!(tracks[0].cover_art, "");
     assert_eq!(tracks[0].cover_url, "");
+    assert_eq!(tracks[0].cover_remote, "");
     assert!(!tracks[0].favorite);
-}
-
-/// Memory probe: a 50k-track queue payload through the old
-/// `Vec<Track>` + serialize path vs the borrowing `TrackRows`.
-///
-/// `cargo test test::queue::bench_track_rows_streaming -- --ignored --nocapture`
-#[test]
-#[ignore = "memory probe, run explicitly"]
-fn bench_track_rows_streaming() {
-    let client =
-        crate::http_client::SubsonicClient::new("https://music.example", "alice", "secret");
-    let songs: Vec<crate::library::SongRow> = (0..50_000)
-        .map(|i| {
-            let mut song = song_row(&format!("s{i}"));
-            song.cover_art = Some(format!("cov{}", i % 2000));
-            song.starred = (i % 5 == 0).then(|| "2026-10-14T00:00:00Z".to_string());
-            song
-        })
-        .collect();
-    let covers: HashMap<String, String> = (0..2000)
-        .map(|i| (format!("cov{i}"), format!("file:///covers/cov{i}.jpg")))
-        .collect();
-    let media = HashMap::new();
-
-    let (_, vec_peak) = crate::test_alloc::measure(|| {
-        let tracks: Vec<crate::player::Track> = songs
-            .iter()
-            .map(|song| {
-                let url = track_url(&client, song, &media).expect("url");
-                crate::player::Track {
-                    id: song.id.clone(),
-                    title: song.title.clone(),
-                    artist: song.artist.clone().unwrap_or_default(),
-                    album: song.album.clone().unwrap_or_default(),
-                    album_id: song.album_id.clone().unwrap_or_default(),
-                    favorite: song.starred.is_some(),
-                    duration: song.duration.unwrap_or(0) as f64,
-                    url,
-                    cover_art: song.cover_art.clone().unwrap_or_default(),
-                    cover_url: crate::covers::url_for(song.cover_art.as_deref(), &covers),
-                    cover_remote: String::new(),
-                }
-            })
-            .collect();
-        serde_json::to_string(&tracks).expect("queue json")
-    });
-    let (_, stream_peak) = crate::test_alloc::measure(|| {
-        serde_json::to_string(&TrackRows {
-            songs: &songs,
-            client: &client,
-            covers: &covers,
-            media: &media,
-        })
-        .expect("streamed queue json")
-    });
-
-    eprintln!(
-        "queue JSON (50k tracks): streamed {} KiB | Vec<Track> {} KiB",
-        stream_peak / 1024,
-        vec_peak / 1024,
-    );
-    assert!(
-        stream_peak < vec_peak,
-        "the streamed queue must not build a Track vector first"
-    );
 }
 
 #[test]
@@ -210,7 +139,7 @@ async fn offline_filter_keeps_only_downloaded_songs() {
 }
 
 #[tokio::test]
-async fn resume_payload_validates_ids_against_the_index() {
+async fn resume_validates_ids_against_the_index() {
     let dbs = test_dbs().await;
     for (id, artist_id, name, artist, year, songs) in [
         ("al1", "ar1", "Kid A", "Radiohead", 2000, 2),
@@ -245,21 +174,18 @@ async fn resume_payload_validates_ids_against_the_index() {
         .unwrap();
     }
 
-    // Known ids: the album page comes back; without credentials the
-    // queue degrades to empty instead of failing the restore.
+    // Known ids: without credentials the queue degrades to empty instead of
+    // failing the restore; the saved playhead still comes back.
     let status = crate::status::SessionStatus {
         album_id: Some("al1".to_string()),
         song_id: Some("s2".to_string()),
         position: 12.5,
         ..crate::status::SessionStatus::default()
     };
-    let payload = resume_payload(&dbs, &status, false).await.unwrap();
-    let value: serde_json::Value = serde_json::from_str(&payload).unwrap();
-    assert_eq!(value["album"]["id"], "al1");
-    assert_eq!(value["album"]["tracks"], 2);
-    assert_eq!(value["queue"], "");
-    assert_eq!(value["start"], 0);
-    assert_eq!(value["position"], 12.5);
+    let restored = resume(&dbs, &status, false).await.unwrap();
+    assert!(restored.tracks.is_empty());
+    assert_eq!(restored.start, 0);
+    assert_eq!(restored.position, 12.5);
 
     // Unknown ids behave exactly like a first launch.
     let status = crate::status::SessionStatus {
@@ -267,12 +193,10 @@ async fn resume_payload_validates_ids_against_the_index() {
         song_id: Some("gone".to_string()),
         ..crate::status::SessionStatus::default()
     };
-    let payload = resume_payload(&dbs, &status, false).await.unwrap();
-    let value: serde_json::Value = serde_json::from_str(&payload).unwrap();
-    assert!(value["album"].is_null());
-    assert_eq!(value["queue"], "");
-    assert_eq!(value["start"], 0);
-    assert_eq!(value["position"], 0.0);
+    let first_launch = resume(&dbs, &status, false).await.unwrap();
+    assert!(first_launch.tracks.is_empty());
+    assert_eq!(first_launch.start, 0);
+    assert_eq!(first_launch.position, 0.0);
 }
 
 #[tokio::test]
@@ -353,19 +277,6 @@ async fn quick_actions_resolve_songs_albums_and_pages() {
     .unwrap();
     assert_eq!(albums.get("s1").map(String::as_str), Some("al1"));
     assert!(!albums.contains_key("gone"));
-
-    // Navigation payloads carry the shape the pages consume.
-    let json = song_album_page_json(&dbs, "s1").await.unwrap();
-    let value: serde_json::Value = serde_json::from_str(&json).unwrap();
-    assert_eq!(value["id"], "al1");
-    assert_eq!(value["tracks"], 2);
-    assert!(song_album_page_json(&dbs, "gone").await.is_err());
-
-    let json = album_artist_page_json(&dbs, "al1").await.unwrap();
-    let value: serde_json::Value = serde_json::from_str(&json).unwrap();
-    assert_eq!(value["id"], "ar1");
-    assert_eq!(value["name"], "Radiohead");
-    assert!(album_artist_page_json(&dbs, "al2").await.is_err());
 }
 
 #[test]

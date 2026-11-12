@@ -344,24 +344,15 @@ async fn restore_status(playback: &PlaybackControl, page: &mut LastPage) {
     };
     page.kind = status.page_kind.clone();
     page.id = status.page_id.clone();
-    let Ok(payload) = crate::queue::resume_payload(&dbs, &status, false).await else {
+    let Ok(resume) = crate::queue::resume(&dbs, &status, false).await else {
         return;
     };
-    let Ok(value) = serde_json::from_str::<serde_json::Value>(&payload) else {
-        return;
-    };
-    let tracks = value["queue"]
-        .as_str()
-        .and_then(|json| serde_json::from_str::<Vec<Track>>(json).ok())
-        .unwrap_or_default();
-    let start = value["start"].as_u64().unwrap_or(0) as usize;
-    let position = value["position"].as_f64().unwrap_or(status.position);
-    if !tracks.is_empty() {
+    if !resume.tracks.is_empty() {
         let _ = playback.send(PlaybackInput::Load {
-            tracks,
-            start,
+            tracks: resume.tracks,
+            start: resume.start,
             paused: true,
-            position: Some(position),
+            position: Some(resume.position),
             volume: Some(status.volume),
             muted: Some(status.muted),
         });

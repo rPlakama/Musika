@@ -1,0 +1,50 @@
+name: CI
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+    branches: [master, main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint-and-test:
+    name: clippy + lib tests (nix dev shell)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Nix
+        uses: cachix/install-nix-action@v31
+        with:
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+            accept-flake-config = true
+
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@v2
+        with:
+          # The rust toolchain itself comes from the flake; this cache only
+          # persists ~/.cargo registry data and the target/ directory.
+          workspaces: ". -> target"
+          key: clippy-${{ hashFiles('Cargo.lock') }}
+
+      # The flake dev shell is the single source of truth for the PipeWire,
+      # FFmpeg, clang/bindgen and GPUI (wayland/vulkan/fontconfig) toolchain,
+      # so CI builds exactly the same dependency set as `nix develop`.
+      - name: Clippy (warnings are errors)
+        env:
+          XDG_CACHE_HOME: ${{ github.workspace }}/.nix-cache
+        run: |
+          mkdir -p "$XDG_CACHE_HOME"
+          nix develop --command cargo clippy --all-targets -- -D warnings
+
+      - name: Lib tests
+        env:
+          XDG_CACHE_HOME: ${{ github.workspace }}/.nix-cache
+        run: nix develop --command cargo test --lib

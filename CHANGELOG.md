@@ -15,8 +15,9 @@ open work; this file is the release history.
 - **ReplayGain normalization:** `Ctrl+Shift+N` cycles off → track → album
   (`Ctrl+N` stays next-track). The decoder reads track/album gain tags at open
   and the worker applies the linear gain with S16 clipping; default off. A
-  bold `N` chip sits on the top bar and right of the fullscreen repeat
-  insight, and the crossfade icon appears beside repeat when enabled. Mode
+  bold `N` chip sits on the top bar, in the bottom bar left of the volume
+  meter, and right of the fullscreen repeat insight; the crossfade icon
+  appears beside repeat and left of the volume meter when enabled. Mode
   changes are echoed as toasts.
 - **IPC commands:** `crossfade [on|off]`, `normalize [off|track|album]` work
   from `ipc.sock` and the `:` line through the same registry; `status` now

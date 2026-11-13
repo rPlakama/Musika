@@ -764,6 +764,32 @@ impl AppRoot {
                                         .child(repeat_label(self.repeat)),
                                 )
                             })
+                            // The audio insights sit in the free space left of
+                            // the volume meter: crossfade glyph and the bold N
+                            // normalization mark, matching the fullscreen row.
+                            .when(self.player.crossfade(), |this| {
+                                this.child(
+                                    div()
+                                        .flex_none()
+                                        .flex()
+                                        .items_center()
+                                        .child(icon(
+                                            "transition-fade-sharp.svg",
+                                            (m.time_size * 1.35).clamp(13.0, 18.0),
+                                            palette::primary(),
+                                        )),
+                                )
+                            })
+                            .when(self.player.normalization().enabled(), |this| {
+                                this.child(
+                                    div()
+                                        .flex_none()
+                                        .text_size(px(m.time_size + 1.0))
+                                        .font_weight(gpui::FontWeight::BOLD)
+                                        .text_color(rgb(palette::primary()))
+                                        .child("N"),
+                                )
+                            })
                             .child(
                                 div()
                                     .w(px(m.volume_bar))

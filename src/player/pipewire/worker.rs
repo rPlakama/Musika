@@ -410,8 +410,8 @@ fn worker_thread(
         rate: sink.ring().rate(),
         ..Current::default()
     };
-    let mut pcm = vec![0i16; MAX_CHUNK_FRAMES * ring::CHANNELS];
-    let mut next_pcm = vec![0i16; MAX_CHUNK_FRAMES * ring::CHANNELS];
+    let mut pcm = vec![0.0f32; MAX_CHUNK_FRAMES * ring::CHANNELS];
+    let mut next_pcm = vec![0.0f32; MAX_CHUNK_FRAMES * ring::CHANNELS];
     let mut pending_command = None;
     loop {
         // A blocking wait is used whenever the loop has nothing to decode:
@@ -901,7 +901,7 @@ fn start_decoder(
             }
             crate::startup::trace("fetch.first_chunk");
             // Adopt the track's native rate before any PCM is written for it:
-            // the sink rebuilds its PipeWire stream to S16LE/stereo/<rate>.
+            // the sink rebuilds its PipeWire stream to F32LE/stereo/<rate>.
             let rate = decoder.sample_rate();
             if rate != current.rate {
                 match sink.set_format(rate) {
@@ -1019,8 +1019,8 @@ fn maybe_start_crossfade(current: &mut Current, shared: &Shared) {
 /// any frame when `next_failed`) contribute silence, so a short next track
 /// cannot underflow the buffer.
 fn mix_crossfade(
-    pcm: &mut [i16],
-    next: &[i16],
+    pcm: &mut [f32],
+    next: &[f32],
     frames: usize,
     next_frames: usize,
     next_failed: bool,
@@ -1032,15 +1032,13 @@ fn mix_crossfade(
         let next_available = !next_failed && frame < next_frames;
         for channel in 0..ring::CHANNELS {
             let index = frame * ring::CHANNELS + channel;
-            let current_sample = f32::from(pcm[index]) * gain_out;
+            let current_sample = pcm[index] * gain_out;
             let next_sample = if next_available {
-                f32::from(next[index]) * gain_in
+                next[index] * gain_in
             } else {
                 0.0
             };
-            pcm[index] = (current_sample + next_sample)
-                .round()
-                .clamp(f32::from(i16::MIN), f32::from(i16::MAX)) as i16;
+            pcm[index] = current_sample + next_sample;
         }
     }
 }
@@ -1052,8 +1050,8 @@ fn run_crossfade_chunk(
     current: &mut Current,
     shared: &Shared,
     sink: &Sink,
-    pcm: &mut [i16],
-    next_pcm: &mut [i16],
+    pcm: &mut [f32],
+    next_pcm: &mut [f32],
 ) {
     let chunk = chunk_frames(current.rate);
     let cur_frames = {
@@ -1375,17 +1373,15 @@ fn normalization_gain(
     (10f64.powf(db / 20.0)).is_finite().then(|| 10f64.powf(db / 20.0))
 }
 
-/// Applies a linear normalization gain to interleaved S16 stereo, clipping
+/// Applies a linear normalization gain to interleaved F32 stereo.
 /// instead of wrapping.
-fn apply_normalization(pcm: &mut [i16], gain: f64) {
+fn apply_normalization(pcm: &mut [f32], gain: f64) {
     if !gain.is_finite() || (gain - 1.0).abs() < 1e-6 {
         return;
     }
+    let gain = gain as f32;
     for sample in pcm {
-        let scaled = f64::from(*sample) * gain;
-        *sample = scaled
-            .round()
-            .clamp(f64::from(i16::MIN), f64::from(i16::MAX)) as i16;
+        *sample *= gain;
     }
 }
 
@@ -1399,28 +1395,28 @@ mod tests {
 
     #[test]
     fn crossfade_mix_keeps_the_old_track_at_the_start_and_new_at_the_end() {
-        let mut pcm = [10_000i16; 2 * 4];
-        let next = [20_000i16; 2 * 4];
+        let mut pcm = [0.25f32; 2 * 4];
+        let next = [0.5f32; 2 * 4];
         mix_crossfade(&mut pcm, &next, 4, 4, false, 1.0, 0.0);
-        assert_eq!(pcm, [10_000; 8]);
-        let mut pcm = [10_000i16; 2 * 4];
+        assert_eq!(pcm, [0.25; 8]);
+        let mut pcm = [0.25f32; 2 * 4];
         mix_crossfade(&mut pcm, &next, 4, 4, false, 0.0, 1.0);
-        assert_eq!(pcm, [20_000; 8]);
-        let mut pcm = [10_000i16; 2 * 4];
+        assert_eq!(pcm, [0.5; 8]);
+        let mut pcm = [0.25f32; 2 * 4];
         mix_crossfade(&mut pcm, &next, 4, 4, false, 0.5, 0.5);
-        assert_eq!(pcm, [15_000; 8]);
+        assert_eq!(pcm, [0.375; 8]);
     }
 
     #[test]
     fn crossfade_mix_pads_a_short_or_failed_next_stream() {
-        let mut pcm = [9_000i16; 2 * 4];
-        let next = [18_000i16; 2 * 2];
+        let mut pcm = [0.25f32; 2 * 4];
+        let next = [0.5f32; 2 * 2];
         mix_crossfade(&mut pcm, &next, 4, 2, false, 0.5, 0.5);
-        assert_eq!(&pcm[..4], &[13_500; 4]);
-        assert_eq!(&pcm[4..], &[4_500; 4], "past EOF only the old tail");
-        let mut pcm = [9_000i16; 2 * 4];
+        assert_eq!(&pcm[..4], &[0.375; 4]);
+        assert_eq!(&pcm[4..], &[0.125; 4], "past EOF only the old tail");
+        let mut pcm = [0.25f32; 2 * 4];
         mix_crossfade(&mut pcm, &next, 4, 2, true, 1.0, 1.0);
-        assert_eq!(pcm, [9_000; 8], "a failed next stream is silent");
+        assert_eq!(pcm, [0.25; 8], "a failed next stream is silent");
     }
 
     #[test]
@@ -1443,12 +1439,12 @@ mod tests {
 
     #[test]
     fn normalization_scales_and_clips_samples() {
-        let mut pcm = [1000i16, -1000, i16::MAX, i16::MIN];
+        let mut pcm = [0.1f32, -0.1, 0.9, -0.9];
         apply_normalization(&mut pcm, 2.0);
-        assert_eq!(pcm, [2000, -2000, i16::MAX, i16::MIN]);
-        let mut unharmed = [123i16; 4];
+        assert_eq!(pcm, [0.2, -0.2, 1.8, -1.8]);
+        let mut unharmed = [0.5f32; 4];
         apply_normalization(&mut unharmed, 1.0);
-        assert_eq!(unharmed, [123; 4]);
+        assert_eq!(unharmed, [0.5; 4]);
     }
 
     struct WavFile {

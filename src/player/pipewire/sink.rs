@@ -2,7 +2,7 @@
 //!
 //! A dedicated thread owns every `!Send` PipeWire object and runs the main
 //! loop. The decoder thread writes PCM into [`Ring`]; the RT process callback
-//! drains it into the negotiated S16LE/stereo stream at the current pipeline
+//! drains it into the negotiated F32LE/stereo stream at the current pipeline
 //! rate. [`Sink::set_format`] lets the decode worker renegotiate that rate
 //! before it writes a track: the loop thread rebuilds the stream (destroy,
 //! reconnect, re-register the listener) and acknowledges, because changing the
@@ -118,7 +118,7 @@ impl FadeState {
     /// Multiplies `frames` stereo frames by the ramp, advancing one step per
     /// frame. A zero-frame callback (paused/empty ring) leaves the ramp where
     /// it is unless the caller forces completion.
-    fn apply(&mut self, out: &mut [i16], frames: usize) {
+    fn apply(&mut self, out: &mut [f32], frames: usize) {
         if !self.active() || frames == 0 {
             return;
         }
@@ -126,10 +126,7 @@ impl FadeState {
         for index in 0..frames {
             let gain = self.current();
             for channel in 0..ring::CHANNELS {
-                let sample = f32::from(out[index * ring::CHANNELS + channel]) * gain;
-                out[index * ring::CHANNELS + channel] = sample
-                    .round()
-                    .clamp(f32::from(i16::MIN), f32::from(i16::MAX)) as i16;
+                out[index * ring::CHANNELS + channel] *= gain;
             }
             self.remaining = self.remaining.saturating_sub(1);
         }
@@ -199,7 +196,7 @@ impl Sink {
         self.ring.rate()
     }
 
-    /// Renegotiates the PipeWire stream to S16LE/stereo at `rate` (Hz).
+    /// Renegotiates the PipeWire stream to F32LE/stereo at `rate` (Hz).
     ///
     /// Called by the decode worker before it writes PCM for a track whose rate
     /// differs from the current pipeline rate. Blocks until the sink loop
@@ -217,7 +214,7 @@ impl Sink {
         }
     }
 
-    pub(crate) fn write(&self, pcm: &[i16], epoch: u64) {
+    pub(crate) fn write(&self, pcm: &[f32], epoch: u64) {
         self.ring.write(pcm, epoch);
     }
 
@@ -391,7 +388,7 @@ fn build_stream<'c>(
         .map_err(|error| format!("cannot register PipeWire listener: {error}"))?;
 
     let mut audio_info = spa::param::audio::AudioInfoRaw::new();
-    audio_info.set_format(spa::param::audio::AudioFormat::S16LE);
+    audio_info.set_format(spa::param::audio::AudioFormat::F32LE);
     audio_info.set_rate(rate);
     audio_info.set_channels(ring::CHANNELS as u32);
     let mut position = [0; spa::param::audio::MAX_CHANNELS];
@@ -576,7 +573,7 @@ fn process(stream: &pw::stream::Stream, ctx: &mut RtContext) {
     let Some(bytes) = data.data() else {
         return;
     };
-    let max_frames = bytes.len() / (ring::CHANNELS * std::mem::size_of::<i16>());
+    let max_frames = bytes.len() / (ring::CHANNELS * std::mem::size_of::<f32>());
     let frames = if requested > 0 {
         requested.min(max_frames)
     } else {
@@ -585,8 +582,8 @@ fn process(stream: &pw::stream::Stream, ctx: &mut RtContext) {
     if frames == 0 {
         return;
     }
-    let ptr = bytes.as_mut_ptr() as *mut i16;
-    if !(ptr as usize).is_multiple_of(std::mem::align_of::<i16>()) {
+    let ptr = bytes.as_mut_ptr() as *mut f32;
+    if !(ptr as usize).is_multiple_of(std::mem::align_of::<f32>()) {
         return;
     }
     // SAFETY: the PipeWire buffer is at least `max_frames * 2` samples long and
@@ -607,10 +604,10 @@ fn process(stream: &pw::stream::Stream, ctx: &mut RtContext) {
     // stream is deactivated and the fade-in audible on resume.
     if paused && !ctx.fade.active() {
         _ = ring.read_into(out, 0);
-        out.fill(0);
+        out.fill(0.0);
     } else {
         let written = ring.read_into(out, frames);
-        out[written * ring::CHANNELS..].fill(0);
+        out[written * ring::CHANNELS..].fill(0.0);
         ring::apply_gain(out, ring.muted(), ring.volume_milli(), frames);
         ctx.fade.apply(out, written);
         // A paused ring with nothing buffered cannot advance a fade-out: let
@@ -629,8 +626,8 @@ fn process(stream: &pw::stream::Stream, ctx: &mut RtContext) {
     }
     let chunk = data.chunk_mut();
     *chunk.offset_mut() = 0;
-    *chunk.stride_mut() = (ring::CHANNELS * std::mem::size_of::<i16>()) as i32;
-    *chunk.size_mut() = (frames * ring::CHANNELS * std::mem::size_of::<i16>()) as u32;
+    *chunk.stride_mut() = (ring::CHANNELS * std::mem::size_of::<f32>()) as i32;
+    *chunk.size_mut() = (frames * ring::CHANNELS * std::mem::size_of::<f32>()) as u32;
 }
 
 #[cfg(test)]
@@ -642,33 +639,33 @@ mod tests {
         let mut fade = FadeState::new();
         fade.start(0.0, 48_000);
         assert!(fade.active());
-        let mut first = vec![i16::MAX / 2; 240 * ring::CHANNELS];
+        let mut first = vec![0.5f32; 240 * ring::CHANNELS];
         fade.apply(&mut first, 240);
         assert!(
-            first.iter().all(|sample| *sample > 0),
+            first.iter().all(|sample| *sample > 0.0),
             "first fade-out block must be attenuated, not hard-zeroed"
         );
         assert!(fade.active());
-        let mut rest = vec![i16::MAX / 2; 960 * ring::CHANNELS];
+        let mut rest = vec![0.5f32; 960 * ring::CHANNELS];
         fade.apply(&mut rest, 720);
         assert!(!fade.active());
         assert_eq!(fade.current(), 0.0);
         assert!(
             rest[..720 * ring::CHANNELS]
                 .iter()
-                .all(|sample| *sample >= 0 && *sample <= i16::MAX / 2),
+                .all(|sample| (0.0..=0.5).contains(sample)),
             "the fade-out is monotonically attenuated"
         );
         assert!(
             rest[(720 - 8) * ring::CHANNELS..720 * ring::CHANNELS]
                 .iter()
-                .all(|sample| *sample <= 200),
+                .all(|sample| *sample <= 0.01),
             "the tail of the fade-out is near silence"
         );
-        let mut after = vec![i16::MAX / 2; 64 * ring::CHANNELS];
+        let mut after = vec![0.5f32; 64 * ring::CHANNELS];
         fade.apply(&mut after, 64);
         assert!(
-            after.iter().all(|sample| *sample == i16::MAX / 2),
+            after.iter().all(|sample| *sample == 0.5),
             "once the ramp is done, the (paused) callback emits silence separately"
         );
     }
@@ -677,17 +674,17 @@ mod tests {
     fn fade_in_starts_at_silence_and_reaches_unity() {
         let mut fade = FadeState::new();
         fade.start(0.0, 48_000);
-        let mut silence = vec![i16::MAX; 960 * ring::CHANNELS];
+        let mut silence = vec![1.0f32; 960 * ring::CHANNELS];
         fade.apply(&mut silence, 960);
         assert_eq!(fade.current(), 0.0);
 
         fade.start(1.0, 48_000);
-        let mut block = vec![i16::MAX; 960 * ring::CHANNELS];
+        let mut block = vec![1.0f32; 960 * ring::CHANNELS];
         fade.apply(&mut block, 960);
         assert!(!fade.active());
         assert_eq!(fade.current(), 1.0);
         assert!(
-            block[..10].iter().all(|sample| i32::from(*sample) < 32_000),
+            block[..10].iter().all(|sample| *sample < 0.99),
             "the first frames of a fade-in are near silence"
         );
     }
@@ -697,7 +694,7 @@ mod tests {
         let mut fade = FadeState::new();
         fade.start(0.0, 48_000);
         let before = fade.remaining;
-        let mut empty: [i16; 0] = [];
+        let mut empty: [f32; 0] = [];
         fade.apply(&mut empty, 0);
         assert_eq!(fade.remaining, before);
     }
@@ -712,7 +709,7 @@ mod tests {
         let sink = sink();
         sink.set_volume(0.25);
         let epoch = sink.epoch();
-        let pcm = vec![0i16; 4_800 * ring::CHANNELS];
+        let pcm = vec![0.0f32; 4_800 * ring::CHANNELS];
         sink.write(&pcm, epoch);
         let started = std::time::Instant::now();
         while started.elapsed() < std::time::Duration::from_secs(3) {
@@ -739,7 +736,7 @@ mod tests {
         );
 
         let epoch = sink.epoch();
-        let pcm = vec![0i16; 44_100 * ring::CHANNELS / 2];
+        let pcm = vec![0.0f32; 44_100 * ring::CHANNELS / 2];
         sink.write(&pcm, epoch);
         let started = std::time::Instant::now();
         while started.elapsed() < std::time::Duration::from_secs(3) {
@@ -764,7 +761,7 @@ mod tests {
     fn paused_sink_does_not_advance_played_frames() {
         let sink = Sink::new(Arc::new(Shared::new())).expect("PipeWire sink");
         let epoch = sink.epoch();
-        let pcm = vec![0i16; 48_000 * 2 * 2];
+        let pcm = vec![0.0f32; 48_000 * 2 * 2];
         sink.write(&pcm, epoch);
         let started = std::time::Instant::now();
         while started.elapsed() < std::time::Duration::from_secs(2) && sink.played_frames() == 0 {

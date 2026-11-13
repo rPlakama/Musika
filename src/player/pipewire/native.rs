@@ -204,7 +204,7 @@ impl Native {
         } else {
             FALLBACK_LOADING_REFERENCE
         };
-        let buffered_bytes = self.sink.buffered_frames() * 4;
+        let buffered_bytes = self.sink.buffered_frames() * 8;
         let start = self.shared.clock_start.load(Ordering::Acquire);
         let played = self.sink.played_frames();
         if buffered_bytes >= reference || (playing && played > start) {

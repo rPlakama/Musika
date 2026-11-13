@@ -14,7 +14,7 @@ system `libpipewire` and `libav*` implementations reached through the
 | `src/player/engine.rs` | `Engine`: std-thread actor over the PipeWire sink and FFmpeg workers; emits `EngineEvent`s |
 | `src/player/pipewire.rs` | module root / `Native` and `SinkState` re-export |
 | `src/player/pipewire/native.rs` | blocking transport façade over sink + worker + sink-driven clock, event accessors and wake descriptor |
-| `src/player/pipewire/decode.rs` | FFmpeg demux/decode/resample to interleaved S16 stereo at the track's native rate (capped at 192 kHz), seek/interrupt/stream-size |
+| `src/player/pipewire/decode.rs` | FFmpeg demux/decode/resample to interleaved F32 stereo at the track's native rate (capped at 192 kHz), seek/interrupt/stream-size |
 | `src/player/pipewire/worker.rs` | long-lived decode worker and preload worker; format adoption, pause parking, rate-aware chunking, rate-change gapless handoff, generation-based load superseding |
 | `src/player/pipewire/sink.rs` | PipeWire main-loop thread, per-track-rate stream (re)negotiation, RT process callback, gapless wake, stream-state reporting, mixer volume/mute |
 | `src/player/pipewire/ring.rs` | lock-free SPSC PCM ring with rate-scaled usable capacity, absolute frame counters, eventfd wakeup |
@@ -43,7 +43,7 @@ PlaybackCore ─► AudioCommand ─► Engine ─► Native (sink + decode/prel
      ▲                                                │
      └────── EngineEvent (boundary, EOF, failure) ◄───┘
                                                       │
-                ring (8 MiB S16 capacity) ─► PipeWire RT callback ─► DAC
+                ring (16 MiB F32 capacity) ─► PipeWire RT callback ─► DAC
 ```
 
 The sink keeps all PipeWire objects on its loop thread. Commands (pause,
@@ -55,10 +55,10 @@ seek.
 
 ## Format-aware PCM pipeline
 
-The transport is no longer fixed to S16 stereo 48 kHz. The decoder reports the
+The transport is no longer fixed to 48 kHz. The decoder reports the
 track's sample rate from the FFmpeg codec parameters (falling back to the first
 decoded frame and then 48 kHz), and swresample only converts the sample
-format/channel layout to packed S16 stereo. No sample-rate conversion happens
+format/channel layout to packed F32 stereo, normalised to [-1, 1]. No sample-rate conversion happens
 unless the source is above **192 kHz**: those are resampled down to 192 kHz,
 the highest rate the pipeline presents. Everything that derives from the rate
 scales with it:
@@ -68,7 +68,7 @@ scales with it:
   is sized for the largest chunk (20 ms at 192 kHz).
 - The parking low-water mark is 2 s of frames at the current rate and the
   parked/full threshold is 7/8 of the ring's rate-scaled usable capacity.
-- The sink rebuilds its PipeWire stream (S16LE, stereo) to the track's rate
+- The sink rebuilds its PipeWire stream (F32LE, stereo) to the track's rate
   before the worker writes any PCM for it. A rebuild is used because changing
   the format of a connected `pw_stream` in place is not supported by the
   binding; the old stream is destroyed only after the replacement connected.
@@ -87,8 +87,8 @@ A rate change flushes the queued PCM (it was produced at the previous rate).
 - HTTP I/O uses persistent connections for repeated requests and a **120 s**
   read/write timeout. Rapid skips discard superseded queued loads (a newer load
   generation is dropped before it reaches the decoder).
-- Sink PCM ring: reference budget of 524,288 frames = 2 MiB = 10.9 s at
-  48 kHz stereo S16 (**8 MiB** = 2,097,152 frames allocated up front so a
+- Sink PCM ring: reference budget of 524,288 frames = 4 MiB in F32 = 10.9 s
+  at 48 kHz stereo (**16 MiB** = 2,097,152 frames allocated up front so a
   192 kHz track keeps the same ~10.9 s without a reallocation under the RT
   callback). The atomic usable limit is `RING_FRAMES * rate / 192_000` frames,
   so the queue length is constant in time at every rate; the memory trade-off
@@ -215,10 +215,11 @@ the audit"); the remaining roadmap phases are still plans.
 
 ### What the engine has
 
-- PipeWire output as packed S16 stereo at the track's native rate. Sources
+- PipeWire output as packed F32 stereo at the track's native rate, with the
+  decoder/worker/RT gain math kept in float. Sources
   above **192 kHz** are resampled down to `MAX_PIPELINE_RATE`; the sink rebuilds
   its stream per track rate before PCM for that track is written.
-- A lock-free SPSC ring allocated with **8 MiB** (2,097,152 frames) up front,
+- A lock-free SPSC F32 ring allocated with **16 MiB** (2,097,152 frames) up front,
   so the rate-scaled usable limit stays a constant ~10.9 s at any rate.
 - An event-driven RT engine: the engine thread blocks on an eventfd written by
   the RT callback, the sink loop and the decode worker, with only a poll
@@ -265,9 +266,10 @@ underrun/dropout count or first-PCM/seek latency exposed. `Status` carries
 `level`/`peak` internally for metering, but they do not reach the snapshot, UI
 or IPC.
 
-**Output/format.** The pipeline presents packed S16 stereo only. There is no
-F32 path, no S24, no configurable resampler and no dither; swresample converts
-to S16 and the sink has no other sample format to negotiate.
+**Output/format.** The pipeline now presents packed F32 stereo end-to-end
+(decode → ring → PipeWire), which removes the S16-only quantization/headroom
+limit. S24, a configurable resampler and dither remain absent; the sink has no
+S16 fallback negotiation yet — the graph is assumed to accept F32LE.
 
 **OS/device integration.** Output is PipeWire-only. There is no output-device
 enumeration or selection (streams target the default node), no suspend/resume
@@ -278,9 +280,9 @@ exists.
 **Transitions/loudness.** Anti-click fades, optional crossfade and
 tag-driven ReplayGain normalization now ship (see below). Still missing: EBU
 R128 analysis/scan for untagged files, a user-configurable crossfade length,
-F32 processing headroom, and gapless closure of the rate-change gap when
-crossfade is off (the normal handoff still drains/renegotiates). Volume stays
-node-level with a fixed-point RT fallback. The animated lyric fades in the UI
+and gapless closure of the rate-change gap when crossfade is off (the normal
+handoff still drains/renegotiates). Volume stays node-level with a float RT
+fallback. The animated lyric fades in the UI
 remain visuals, not audio.
 
 **Safety net/CI.** Errors are strings (`PlaybackOutput::Error(String)`,
@@ -291,7 +293,7 @@ tests are ignored and `ci.yml` runs `cargo test --lib` on runners without an
 audio session, so graph-negotiation or RT regressions are only caught by
 manual runs.
 
-**Fixed latency-config.** Ring capacity (8 MiB / 2,097,152 frames), the ~20 ms
+**Fixed latency-config.** Ring capacity (16 MiB F32 / 2,097,152 frames), the ~20 ms
 worker chunk and the parking thresholds are compiled in. There is no
 configurable buffer size, target latency or clock policy for different
 machines and sinks.
@@ -299,8 +301,8 @@ machines and sinks.
 ### Recorded decisions (2026-11 questionnaire)
 
 These are the answers recorded for the roadmap. The transitions/loudness and
-UI-control answers landed in the 2026-11 pass; the reliability, F32 and CI
-items remain roadmap work.
+UI-control, F32 and normalization answers landed in the 2026-11 pass; the
+reliability and CI items remain roadmap work.
 
 - Reliability: the whole reliability list is in scope (network resilience,
   buffering visibility, structured errors + counters, safety-net tests and CI).
@@ -319,6 +321,11 @@ items remain roadmap work.
 
 ### Implemented after the audit (2026-11)
 
+- **F32 pipeline:** decoder/swresample emits packed F32 stereo (normalised to
+  `[-1, 1]`), the ring stores F32 (16 MiB for the same ~10.9 s at 192 kHz),
+  PipeWire negotiates `F32LE`, and volume/fades/normalization/crossfade all run
+  in float. Normalization no longer clips at S16 before the sink; the graph's
+  float path handles final headroom/clipping.
 - **Fades:** 20 ms linear output envelopes in the PipeWire RT callback for
   pause, resume, seek, manual track changes/stop and the start of a fresh
   track/load. The stream is still deactivated on pause, but only after the
@@ -333,8 +340,9 @@ items remain roadmap work.
   it off the old handoff behavior is unchanged.
 - **Normalization:** `Ctrl+Shift+N` cycles off → track → album. The decoder
   captures ReplayGain tags at open (format metadata first, stream metadata
-  fallback) and the worker applies the linear gain before the ring, clipping
-  at S16. Default off; no EBU R128 scan yet.
+  fallback) and the worker applies the linear gain before the ring in the F32
+  domain (final clipping is left to the graph/device). Default off; no EBU R128
+  scan yet.
 - **UI:** a bold `N` chip on the top bar and in fullscreen right of the repeat
   insight, plus `transition-fade-sharp.svg` beside the repeat insight when
   crossfade is on. Mode changes travel through `PlayerOp` and the existing
@@ -360,13 +368,14 @@ expected to land with tests and documentation; nothing is committed on a date.
 - **Phase 2 — device/system.** Output-device enumeration and selection,
   follow-default handling, suspend/resume and hotplug recovery, and an explicit
   wake/inhibit policy on top of the existing stream-error rebuild.
-- **Phase 3 — F32.** Move the decode -> ring -> PipeWire path to F32 (internal
-  and output only), keeping S16 only as the fallback where a sink cannot accept
-  F32; no S24, resampler configuration or dither.
+- **Phase 3 — F32 (landed 2026-11).** The whole pipeline is F32 now. Remaining
+  follow-up: an S16 fallback for a graph that refuses F32LE (not implemented;
+  PipeWire graphs normally accept F32). No S24, resampler configuration or
+  dither.
 - **Phase 4 — transitions/loudness/UI binds (landed 2026-11).** Shipped:
   fades, optional crossfade, tag-driven normalization and both UI controls.
-  Remaining follow-ups here: configurable crossfade length, EBU R128 fallback
-  analysis, and F32 headroom from Phase 3.
+  Remaining follow-ups here: configurable crossfade length and EBU R128
+  fallback analysis.
 - **Phase 5 — docs/measurements.** Update this document and
   `docs/Keybinds.md`, extend the measurement tables with transition, latency
   and RSS numbers for the new paths, and state what remains unimplemented.

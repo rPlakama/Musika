@@ -1,6 +1,6 @@
 //! SPSC PCM ring shared by the decoder worker and the PipeWire RT callback.
 //!
-//! `musika` presents interleaved S16 stereo at the current track's sample rate
+//! `musika` presents interleaved F32 stereo at the current track's sample rate
 //! (see [`super::decode`]). The producer (decoder) writes frames ahead; the
 //! consumer (PipeWire process callback) reads them. Both positions are absolute
 //! frame counters; the ring index is masked because the allocated capacity is a
@@ -9,10 +9,10 @@
 //! The storage is allocated once for the highest supported pipeline rate
 //! ([`MAX_RATE`]) so it is never reallocated or moved while the RT callback may
 //! be reading it: the 524,288-frame reference ring (2 MiB, ~10.9 s at 48 kHz)
-//! scaled to [`MAX_RATE`] is 2,097,152 frames, i.e. 8 MiB. The *usable* limit
+//! scaled to [`MAX_RATE`] is 2,097,152 frames, i.e. 16 MiB in F32. The *usable* limit
 //! is atomic and set by [`Ring::set_rate`], so a lower rate keeps roughly the
 //! same 10.9 s of queued audio in less of the buffer, and a 192 kHz track can
-//! use all of it. The 8 MiB is allocated for the whole sink lifetime; that is
+//! use all of it. The 16 MiB is allocated for the whole sink lifetime; that is
 //! the deliberate memory trade-off for a reallocation-free ring.
 //!
 //! The producer blocks on an eventfd when the ring is full instead of polling
@@ -37,11 +37,11 @@ const REFERENCE_FRAMES: usize = 524_288;
 /// `REFERENCE_FRAMES * (MAX_RATE / DEFAULT_RATE)` = 2,097,152 frames.
 pub(crate) const RING_FRAMES: usize =
     REFERENCE_FRAMES * (MAX_RATE as usize / DEFAULT_RATE as usize);
-pub(crate) const RING_BYTES: usize = RING_FRAMES * CHANNELS * std::mem::size_of::<i16>();
+pub(crate) const RING_BYTES: usize = RING_FRAMES * CHANNELS * std::mem::size_of::<f32>();
 const RING_MASK: u64 = (RING_FRAMES as u64) - 1;
 
 pub(crate) struct Ring {
-    samples: Box<[UnsafeCell<i16>]>,
+    samples: Box<[UnsafeCell<f32>]>,
     /// Frames handed to the consumer (absolute, monotonically increasing).
     write: AtomicU64,
     /// Frames consumed by the consumer (absolute, monotonically increasing).
@@ -93,7 +93,7 @@ impl Ring {
             return Err(format!("eventfd: {}", std::io::Error::last_os_error()));
         }
         let samples = (0..RING_FRAMES * CHANNELS)
-            .map(|_| UnsafeCell::new(0i16))
+            .map(|_| UnsafeCell::new(0.0f32))
             .collect::<Vec<_>>()
             .into_boxed_slice();
         Ok(Self {
@@ -293,7 +293,7 @@ impl Ring {
     ///
     /// Returns early when the sink was reset to a newer epoch or writes were
     /// closed. The caller owns `pcm` and may call again after a retry.
-    pub(crate) fn write(&self, pcm: &[i16], epoch: u64) {
+    pub(crate) fn write(&self, pcm: &[f32], epoch: u64) {
         let mut offset = 0usize;
         let total = pcm.len() / CHANNELS;
         while offset < total {
@@ -323,7 +323,7 @@ impl Ring {
             let source = &pcm[offset * CHANNELS..(offset + take) * CHANNELS];
             let destination = self.samples[start * CHANNELS..(start + first) * CHANNELS]
                 .as_ptr()
-                .cast::<i16>() as *mut i16;
+                .cast::<f32>() as *mut f32;
             // SAFETY: `start < RING_FRAMES` (masked) and `first <= RING_FRAMES -
             // start`, so the destination range lies inside the allocated
             // `samples` buffer; `source` lies inside the caller's `pcm` slice.
@@ -337,7 +337,7 @@ impl Ring {
                 let tail = &pcm[(offset + first) * CHANNELS..(offset + take) * CHANNELS];
                 let wrap_destination = self.samples[..(take - first) * CHANNELS]
                     .as_ptr()
-                    .cast::<i16>() as *mut i16;
+                    .cast::<f32>() as *mut f32;
                 // SAFETY: the wrapped write starts at the beginning of the
                 // buffer and `take - first < take <= RING_FRAMES`, so
                 // `[0, take - first)` is inside the allocation; `tail` lies in
@@ -359,7 +359,7 @@ impl Ring {
 
     /// RT callback side: fills `out` with at most `out.len()/2` frames.
     /// Returns the number of frames written (the rest are silence).
-    pub(crate) fn read_into(&self, out: &mut [i16], max_frames: usize) -> usize {
+    pub(crate) fn read_into(&self, out: &mut [f32], max_frames: usize) -> usize {
         let reset = self.reset.swap(false, Ordering::AcqRel);
         let flush = self.flush.swap(false, Ordering::AcqRel);
         if reset || flush {
@@ -380,7 +380,7 @@ impl Ring {
             let first = frames.min(RING_FRAMES - start);
             let source = self.samples[start * CHANNELS..(start + first) * CHANNELS]
                 .as_ptr()
-                .cast::<i16>();
+                .cast::<f32>();
             // SAFETY: `start < RING_FRAMES` (masked) and `first <= RING_FRAMES -
             // start`, so the source range lies inside the allocated `samples`
             // buffer; `out` has room for `frames * CHANNELS` samples and
@@ -396,7 +396,7 @@ impl Ring {
             if frames > first {
                 let wrap_source = self.samples[..(frames - first) * CHANNELS]
                     .as_ptr()
-                    .cast::<i16>();
+                    .cast::<f32>();
                 // SAFETY: the wrapped read starts at the beginning of the
                 // buffer and `frames - first < frames <= RING_FRAMES`, so
                 // `[0, frames - first)` is inside the allocation; `out` has
@@ -432,17 +432,17 @@ impl Drop for Ring {
 }
 
 /// Applies mute/gain to an interleaved stereo buffer.
-pub(crate) fn apply_gain(out: &mut [i16], muted: bool, volume_milli: u32, frames: usize) {
+pub(crate) fn apply_gain(out: &mut [f32], muted: bool, volume_milli: u32, frames: usize) {
     if muted {
-        out[..frames * CHANNELS].fill(0);
+        out[..frames * CHANNELS].fill(0.0);
         return;
     }
     if volume_milli == 1000 {
         return;
     }
-    let gain = volume_milli.min(1000) as i32;
+    let gain = volume_milli.min(1000) as f32 / 1000.0;
     for sample in &mut out[..frames * CHANNELS] {
-        *sample = ((i32::from(*sample) * gain) / 1000) as i16;
+        *sample *= gain;
     }
 }
 
@@ -458,12 +458,12 @@ mod tests {
         assert_eq!(ring.set_rate(MAX_RATE), DEFAULT_RATE);
         let epoch = ring.epoch();
         // Fill more than one ring to force a wrap; consume as we go.
-        let mut input = vec![0i16; RING_FRAMES * 2];
+        let mut input = vec![0.0f32; RING_FRAMES * 2];
         for (index, sample) in input.iter_mut().enumerate() {
-            *sample = index as i16;
+            *sample = index as f32;
         }
         ring.write(&input, epoch);
-        let mut out = vec![0i16; RING_FRAMES * 2];
+        let mut out = vec![0.0f32; RING_FRAMES * 2];
         assert_eq!(ring.read_into(&mut out, RING_FRAMES), RING_FRAMES);
         assert_eq!(&out[..16], &input[..16]);
         ring.write(&input, epoch);
@@ -487,7 +487,7 @@ mod tests {
         assert_eq!(ring.rate(), DEFAULT_RATE);
         assert_eq!(ring.usable_frames(), REFERENCE_FRAMES as u64);
         assert_eq!(RING_FRAMES, REFERENCE_FRAMES * 4);
-        assert_eq!(RING_BYTES, 8 * 1024 * 1024);
+        assert_eq!(RING_BYTES, 16 * 1024 * 1024);
 
         assert_eq!(ring.set_rate(96_000), DEFAULT_RATE);
         assert_eq!(ring.rate(), 96_000);
@@ -513,15 +513,15 @@ mod tests {
         assert_eq!(ring.set_rate(DEFAULT_RATE), DEFAULT_RATE);
         let usable = ring.usable_frames() as usize;
         let epoch = ring.epoch();
-        let mut input = vec![0i16; usable * CHANNELS];
+        let mut input = vec![0.0f32; usable * CHANNELS];
         for (index, sample) in input.iter_mut().enumerate() {
-            *sample = (index % 4096) as i16;
+            *sample = (index % 4096) as f32;
         }
         // Fill exactly the usable share, consume it, then fill again: the
         // second write starts past the old limit and wraps through the mask.
         ring.write(&input, epoch);
         assert_eq!(ring.buffered_frames(), usable as u64);
-        let mut out = vec![0i16; usable * CHANNELS];
+        let mut out = vec![0.0f32; usable * CHANNELS];
         assert_eq!(ring.read_into(&mut out, usable), usable);
         assert_eq!(&out[..16], &input[..16]);
         ring.write(&input, epoch);
@@ -531,12 +531,12 @@ mod tests {
     }
 
     #[test]
-    fn gain_is_fixed_point() {
-        let mut out = [1000i16, -1000, 32767, -32768];
+    fn gain_is_linear_float() {
+        let mut out = [0.5f32, -0.5, 1.0, -1.0];
         apply_gain(&mut out, false, 500, 2);
-        assert_eq!(out, [500, -500, 16383, -16384]);
+        assert_eq!(out, [0.25, -0.25, 0.5, -0.5]);
         apply_gain(&mut out, true, 1000, 2);
-        assert_eq!(out, [0, 0, 0, 0]);
+        assert_eq!(out, [0.0, 0.0, 0.0, 0.0]);
     }
 
     #[test]
@@ -545,7 +545,7 @@ mod tests {
         let old = ring.epoch();
         ring.reset();
         assert_ne!(ring.epoch(), old);
-        let pcm = vec![1i16; 2 * RING_FRAMES];
+        let pcm = vec![1.0f32; 2 * RING_FRAMES];
         ring.write(&pcm, old);
         assert_eq!(ring.buffered_frames(), 0);
     }

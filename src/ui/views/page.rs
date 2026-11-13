@@ -81,7 +81,7 @@ impl AppRoot {
                     .overflow_hidden()
                     .child(if profile.collage {
                         // Collage panes are hero-sized too: each pane paints the
-                        // full-resolution cover, falling back to the provider
+                        // original cover source, falling back to the provider
                         // URL when the local original is missing.
                         let sources = page
                             .header

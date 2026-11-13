@@ -18,7 +18,7 @@ use gpui::{
     IntoElement, LayoutId, ObjectFit, Pixels, RenderImage, Style, Window, fill, point, px, rgb,
 };
 
-use crate::ui::image_cache::BoundedImageCache;
+use crate::ui::image_cache::{BoundedImageCache, display_edge_for};
 use crate::ui::palette;
 use crate::ui::widgets::media::CoverSource;
 
@@ -113,14 +113,22 @@ impl Element for CoverImage {
             return;
         };
         let resource = source.resource();
-        let loaded = self
-            .cache
-            .update(cx, |cache, cx| cache.load(&resource, window, cx));
+        // Decode at the physical size this cover is painted at. The original
+        // cover file is untouched; a 400 pt hero decodes 400 px instead of a
+        // 4096 px (64 MiB) texture, which is what used to grow the renderer's
+        // texture pool on every album page.
+        let edge = display_edge_for(
+            self.width.max(self.height),
+            window.scale_factor(),
+        );
+        let loaded = self.cache.update(cx, |cache, cx| {
+            cache.load_display(&resource, edge, window, cx)
+        });
         self.image = match loaded {
             Some(Ok(image)) => Some(image),
             Some(Err(_)) => source.remote_resource().and_then(|resource| {
                 self.cache
-                    .update(cx, |cache, cx| cache.load(&resource, window, cx))
+                    .update(cx, |cache, cx| cache.load_display(&resource, edge, window, cx))
                     .and_then(Result::ok)
             }),
             None => None,

@@ -22,14 +22,16 @@
 //! app-wide cache entity is installed as the root render's image cache, so
 //! every cover `img()` in the tree inherits it.
 //!
-//! Decoding is edge-capped: hero surfaces paint full-resolution originals, and
-//! a pathological source (a 7200 px cover decodes to ~198 MiB RGBA on its own)
-//! would blow past the byte budget before the cache could react. Local image
-//! files therefore decode through a capped path (default 4096 px long edge,
-//! `MUSIKA_COVER_MAX_EDGE` overrides, clamped 512-8192): ordinary cover art is
-//! stored and decoded untouched; only absurd originals are downscaled, once,
-//! at decode time. Non-file resources (remote provider art, embedded assets)
-//! keep gpui's stock loader.
+//! Decoding is display-sized: local covers decode through a capped path whose
+//! long edge is the physical pixel size the cover is painted at (row covers
+//! ~64 px, hero/fullscreen covers their real on-screen pixels, scale factor
+//! included). The original file is never modified and never decoded to a huge
+//! texture just because the source is large: a 4096 px source painted into a
+//! 400 pt hero decodes 400 px, not 64 MiB. A 7200 px source still has a large
+//! transient decode inside `image`, so the absolute cap
+//! (`MUSIKA_COVER_MAX_EDGE`, default 4096, clamped 512-8192) remains a
+//! pathological-source guard. Non-file resources (remote provider art,
+//! embedded assets) keep gpui's stock loader.
 
 use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
@@ -40,10 +42,10 @@ use gpui::{
     ImageCacheItem, ImageLoadingTask, RenderImage, Resource, Window, hash,
 };
 
-/// Decoded RGBA budget for cover art. A full-resolution hero decodes to up to
-/// 64 MiB after the 4096 px decode cap; 96 MiB holds that hero plus the visible
-/// row thumbnails (320 px, ~0.4 MiB each) without letting a long page history
-/// accumulate.
+/// Decoded RGBA budget for cover art. Covers are now decoded at their painted
+/// size, so this is a backstop rather than the per-page peak: 96 MiB comfortably
+/// holds every visible cover (and a transiently re-decoded larger hero) while
+/// still refusing unbounded history.
 pub(crate) const DEFAULT_BUDGET_MIB: usize = 96;
 const MIN_BUDGET_MIB: usize = 8;
 const MAX_BUDGET_MIB: usize = 512;
@@ -56,12 +58,25 @@ const BYTES_PER_MIB: usize = 1024 * 1024;
 /// the cover it is showing.
 const STALE_FRAMES: u64 = 2;
 
-/// Longest edge decoded for a local cover file. Hero surfaces paint originals;
-/// this only guards pathological sources so one image cannot dominate the
-/// decoded-byte budget (4096 px RGBA is ~64 MiB, the budget itself).
+/// Absolute longest edge decoded for a local cover file, independent of the
+/// display size. This only guards pathological sources and huge transient
+/// decodes; painted covers normally decode at their physical screen size.
 const DECODE_MAX_EDGE: u32 = 4096;
 const DECODE_MIN_EDGE: u32 = 512;
 const DECODE_MAX_EDGE_LIMIT: u32 = 8192;
+
+/// Smallest long edge decoded for a painted cover. Row covers are ~40 logical
+/// pixels, so this is already generous; the decoded texture is sized for the
+/// screen, not for the source file.
+const DISPLAY_DECODE_MIN_EDGE: u32 = 64;
+
+/// Long edge (physical pixels) needed to paint a square cover at `logical`
+/// points on a `scale_factor` display. One texture pixel per screen pixel is
+/// enough for a static image; no supersampling is needed.
+pub(crate) fn display_edge_for(logical: f32, scale_factor: f32) -> u32 {
+    let edge = (logical.max(0.0) * scale_factor.max(1.0)).ceil();
+    edge.clamp(DISPLAY_DECODE_MIN_EDGE as f32, DECODE_MAX_EDGE as f32) as u32
+}
 
 /// Creates the single app-wide cover cache.
 ///
@@ -119,6 +134,9 @@ struct Entry {
     item: ImageCacheItem,
     /// Frame whose layout/paint last asked for this image.
     last_used: u64,
+    /// Long edge this local image was decoded for (0 for remote/stock images).
+    /// A later surface needing a bigger texture re-decodes once.
+    edge: u32,
 }
 
 impl BoundedImageCache {
@@ -168,7 +186,30 @@ impl BoundedImageCache {
     pub(crate) fn load(
         &mut self,
         resource: &Resource,
-        window: &Window,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> Option<Result<Arc<RenderImage>, ImageCacheError>> {
+        self.load_with_edge(resource, None, window, cx)
+    }
+
+    /// Loads a cover painted at `display_edge` physical pixels. Local files
+    /// smaller than that decode no further; local files decoded earlier for a
+    /// smaller surface are re-decoded once when a larger surface needs them.
+    pub(crate) fn load_display(
+        &mut self,
+        resource: &Resource,
+        display_edge: u32,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> Option<Result<Arc<RenderImage>, ImageCacheError>> {
+        self.load_with_edge(resource, Some(display_edge), window, cx)
+    }
+
+    fn load_with_edge(
+        &mut self,
+        resource: &Resource,
+        display_edge: Option<u32>,
+        window: &mut Window,
         cx: &mut App,
     ) -> Option<Result<Arc<RenderImage>, ImageCacheError>> {
         // Settle decodes that finished for an element that no longer asks for
@@ -177,43 +218,55 @@ impl BoundedImageCache {
         // bytes and never qualify for eviction.
         self.settle_loading();
         let key = hash(resource);
-        if self.entries.contains_key(&key) {
-            self.hits = self.hits.saturating_add(1);
+        let local = cappable_path(resource).is_some();
+        let edge = if local {
+            let requested = display_edge.unwrap_or_else(decode_max_edge);
+            requested
+                .min(decode_max_edge())
+                .max(DISPLAY_DECODE_MIN_EDGE)
         } else {
-            self.misses = self.misses.saturating_add(1);
-        }
+            0
+        };
         if let Some(entry) = self.entries.get_mut(&key) {
-            entry.last_used = self.frame;
-            let loaded = entry.item.get();
-            if let Some(Ok(image)) = loaded.as_ref() {
-                _ = self.lru.record(key, image_bytes(image));
+            // A same-size or larger decode already serves this request. A
+            // smaller one must grow once (the page hero at 400 px, then the
+            // fullscreen cover at 900 px).
+            if !(local && edge > entry.edge) {
+                self.hits = self.hits.saturating_add(1);
+                entry.last_used = self.frame;
+                let loaded = entry.item.get();
+                if let Some(Ok(image)) = loaded.as_ref() {
+                    _ = self.lru.record(key, image_bytes(image));
+                }
+                self.lru.touch(key);
+                return loaded;
             }
-            self.lru.touch(key);
-            loaded
-        } else {
-            let task = load_image_task(resource, cx);
-            self.entries.insert(
-                key,
-                Entry {
-                    item: ImageCacheItem::Loading(task.clone()),
-                    last_used: self.frame,
-                },
-            );
-            self.lru.touch(key);
-            // Wake the requesting view once the decode completes; without this
-            // the frame that first asked would stay blank until some other
-            // event repainted it.
-            let entity = window.current_view();
-            window
-                .spawn(cx, async move |cx| {
-                    _ = task.await;
-                    cx.on_next_frame(move |_, cx| {
-                        cx.notify(entity);
-                    });
-                })
-                .detach();
-            None
+            self.unload(key, window, cx);
         }
+        self.misses = self.misses.saturating_add(1);
+        let task = load_image_task(resource, cx, edge);
+        self.entries.insert(
+            key,
+            Entry {
+                item: ImageCacheItem::Loading(task.clone()),
+                last_used: self.frame,
+                edge,
+            },
+        );
+        self.lru.touch(key);
+        // Wake the requesting view once the decode completes; without this
+        // the frame that first asked would stay blank until some other event
+        // repainted it.
+        let entity = window.current_view();
+        window
+            .spawn(cx, async move |cx| {
+                _ = task.await;
+                cx.on_next_frame(move |_, cx| {
+                    cx.notify(entity);
+                });
+            })
+            .detach();
+        None
     }
 
     /// Polls every in-flight decode once and records the decoded size of the
@@ -238,6 +291,17 @@ impl BoundedImageCache {
             if loaded.is_some() {
                 _ = self.lru.record(key, bytes);
             }
+        }
+    }
+
+    /// Drops every resident cover immediately (decoded entry, byte accounting
+    /// and sprite-atlas texture). Called when the open page identity changes:
+    /// the retired page must not keep images (or their GPU atlas textures)
+    /// resident while the new page decodes its own covers.
+    pub(crate) fn purge_all(&mut self, window: &mut Window, cx: &mut App) {
+        let keys: Vec<u64> = self.entries.keys().copied().collect();
+        for key in keys {
+            self.unload(key, window, cx);
         }
     }
 
@@ -287,6 +351,7 @@ impl BoundedImageCache {
                     Some(Entry {
                         item: ImageCacheItem::Loaded(_),
                         last_used,
+                        ..
                     }) if *last_used < frame
                 )
             }) else {
@@ -333,12 +398,16 @@ fn is_stale(frame: u64, last_used: u64) -> bool {
 /// Builds the loading task for one image: local files decode through the
 /// edge-capped path; everything else (remote provider art, embedded assets)
 /// keeps gpui's stock loader.
-fn load_image_task(resource: &Resource, cx: &mut App) -> ImageLoadingTask {
+fn load_image_task(resource: &Resource, cx: &mut App, max_edge: u32) -> ImageLoadingTask {
     let Some(path) = cappable_path(resource) else {
         let future = AssetLogger::<ImageAssetLoader>::load(resource.clone(), cx);
         return cx.background_executor().spawn(future).shared();
     };
-    let max_edge = decode_max_edge();
+    let max_edge = if max_edge == 0 {
+        decode_max_edge()
+    } else {
+        max_edge
+    };
     cx.background_executor()
         .spawn(async move { decode_capped_file(&path, max_edge) })
         .shared()
@@ -471,6 +540,14 @@ impl LruBudget {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn display_edge_tracks_screen_pixels() {
+        assert_eq!(display_edge_for(40.0, 1.0), 64);
+        assert_eq!(display_edge_for(400.0, 1.0), 400);
+        assert_eq!(display_edge_for(400.0, 2.0), 800);
+        assert_eq!(display_edge_for(10_000.0, 2.0), DECODE_MAX_EDGE);
+    }
 
     #[test]
     fn evicts_least_recently_used_until_the_budget_holds() {

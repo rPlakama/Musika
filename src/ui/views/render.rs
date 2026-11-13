@@ -51,11 +51,21 @@ impl Render for AppRoot {
         // Page entries are virtual: only the open page exists. Drop the render
         // state keyed by the page just left as soon as the page identity moves,
         // so a travel session keeps one page's worth of row/cover bookkeeping.
-        if crate::ui::app::navigation::needs_page_prune(
+        let page_moved = crate::ui::app::navigation::needs_page_prune(
             self.page_state_marker,
             self.page_generation,
             self.page.is_some(),
-        ) {
+        );
+        if page_moved {
+            // Fully unload the retired page's covers *before* the new page is
+            // laid out and paints its own hero. Without this the outgoing
+            // outgoing hero texture and the incoming one can occupy the sprite
+            // atlas at the same time, and the renderer's texture pool keeps the
+            // extra atlas allocation even after the old image is evicted.
+            self.image_cache
+                .update(cx, |cache, cx| cache.purge_all(window, cx));
+        }
+        if page_moved {
             self.page_state_marker = Some((self.page_generation, self.page.is_some()));
             self.prune_page_state();
             // The released page's covers are unloaded on the next frame. Ask

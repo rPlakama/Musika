@@ -3,6 +3,41 @@
 All notable changes to Musika, newest first. `TASKLISTMAJOR.md` tracks the
 open work; this file is the release history.
 
+## 0.7.2 - _Goodies and more goodies_
+
+- **Audible polish:** pause, resume, seek, manual track changes and fresh
+  loads now use a 20 ms anti-click output envelope; `Ctrl+F` toggles an
+  optional 5 s equal-length crossfade (off by default) that preloads the next
+  decoder at the current pipeline rate, mixes the old tail with the new head,
+  and reports the next track's already-played offset through the boundary
+  event so position/MPRIS stay correct. Crossfade mode also closes the
+  rate-change gap by keeping the graph rate stable for that transition.
+- **ReplayGain normalization:** `Ctrl+Shift+N` cycles off → track → album
+  (`Ctrl+N` stays next-track). The decoder reads track/album gain tags at open
+  and the worker applies the linear gain with S16 clipping; default off. A
+  bold `N` chip sits on the top bar and right of the fullscreen repeat
+  insight, and the crossfade icon appears beside repeat when enabled. Mode
+  changes are echoed as toasts.
+- **IPC commands:** `crossfade [on|off]`, `normalize [off|track|album]` work
+  from `ipc.sock` and the `:` line through the same registry; `status` now
+  reports `normalization` and `crossfade`. Queue saving by command was added
+  as `playlist add queue; <name>`.
+- **Playlists never hold duplicates:** stale M3U/server/cached entries are
+  deduplicated keep-first, local files are physically rewritten, server lists
+  are rebuilt, and pages hide/persist the deduplicated rows even offline.
+  "Adding an existing song moves it to the end" is unchanged.
+- **Cover memory:** hero art still paints the original cover source, but it is
+  decoded at its on-screen physical size instead of a fixed 4096 px texture;
+  retired pages purge their cover entries/atlas textures immediately. The
+  virtual `CoverImage` element paints every cover surface through one shared
+  cache, and same-album track changes reuse the cover identity (no reload or
+  refade). Measured 20-page RSS plateau dropped from ~468 MiB peak to ~233 MiB
+  in the debug harness (release page-open 418 → 183 MiB).
+- **Responsiveness:** gzip is negotiated for JSON API responses (media/covers
+  keep identity encoding); BounceFX is a slight ~3 % overshoot instead of a
+  clamped bounce; long top-bar identities auto-marquee like the bottom bar;
+  the display-copy cover tier is gone.
+
 ## 0.7.1 - _Format-aware audio pipeline and strict lint gate_
 
 - Present every track at its own sample rate: the decoder now only converts

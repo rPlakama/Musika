@@ -180,6 +180,12 @@ with the server's `updatePlaylist` endpoint and refreshed afterwards. Local mix
 files use the sanitized origin/playlist name (`<name>.m3u`) and overwrite an
 existing mix of the same name instead of creating timestamped duplicates.
 
+Playlists never hold the same song twice: a rescan removes duplicates from an
+app-owned M3U file (the first occurrence stays, and duplicate unresolved path
+lines are cleaned by normalized path), a server playlist found with duplicates
+is rebuilt in deduplicated order, and an open playlist page never shows
+duplicate rows even when the cleanup has to wait for the network.
+
 `playlist rm; <playlist>` (the cutoff with no targets before it) deletes the
 whole playlist. The `;` is the declaration that what follows is a playlist, so
 the command line suggests playlist names after it. Local M3U files are removed

@@ -328,11 +328,11 @@ pub async fn save_radio(
     let dir = crate::playlists::m3u_dir()?;
     let path = write_radio_m3u(dbs, &dir, &name, &rows).await?;
 
-    let ids: Vec<String> = rows
-        .iter()
-        .map(|row| row.id.clone())
-        .filter(|id| !id.is_empty())
-        .collect();
+    // The server playlist carries the same invariant as every other playlist:
+    // no duplicate entries, even if the radio expansion ever repeats a song.
+    let ids = crate::playlists::dedup_keep_first_ids(
+        &rows.iter().map(|row| row.id.clone()).collect::<Vec<_>>(),
+    );
     let remote_error = match crate::session::client(dbs).await {
         Ok(client) => match client.create_playlist(&name, &ids).await {
             Ok(()) => {
